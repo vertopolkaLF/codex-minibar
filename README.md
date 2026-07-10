@@ -2,7 +2,7 @@
 
 Windows-first Rust desktop utility for displaying Codex limits in configurable tray icons, exploring usage statistics, and optionally activating a new five-hour limit window.
 
-The project is under active development. The current foundation contains versioned settings, the limit domain model, and a deduplicating activation scheduler.
+The UI is built with [windows-reactor](https://github.com/microsoft/windows-rs/pull/4479) (WinUI 3). Requires the Windows App SDK runtime (bundled via `windows-reactor-setup` self-contained deployment).
 
 ## Development
 

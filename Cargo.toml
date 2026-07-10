@@ -8,19 +8,22 @@ license = "MIT"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 directories = "6"
-eframe = { version = "0.35", default-features = false, features = ["default_fonts", "glow"] }
 font8x8 = "0.3"
 fontdue = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.9"
 tempfile = "3"
+windows-reactor = { git = "https://github.com/microsoft/windows-rs" }
 
 [target.'cfg(windows)'.dependencies]
-raw-window-handle = "0.6"
 tray-icon = { version = "0.24", default-features = false, features = ["common-controls-v6"] }
-windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+
+[build-dependencies]
+windows-reactor-setup = { git = "https://github.com/microsoft/windows-rs" }
 
 [profile.release]
 lto = "thin"
 strip = true
+panic = "abort"
