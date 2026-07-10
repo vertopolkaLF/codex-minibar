@@ -15,12 +15,12 @@ use windows_sys::Win32::{
         Dwm::{
             DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_EXTENDED_FRAME_BOUNDS,
             DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMSBT_NONE,
-            DWMSBT_TRANSIENTWINDOW, DwmExtendFrameIntoClientArea, DwmFlush,
-            DwmGetWindowAttribute, DwmSetWindowAttribute,
+            DwmExtendFrameIntoClientArea, DwmFlush, DwmGetWindowAttribute, DwmSetWindowAttribute,
         },
         Gdi::{
-            CreateRectRgn, GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO,
-            MonitorFromPoint, SetWindowRgn,
+            CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject,
+            GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
+            RGN_AND, SetWindowRgn,
         },
     },
     UI::{
@@ -28,28 +28,33 @@ use windows_sys::Win32::{
         HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
         Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON},
         WindowsAndMessaging::{
-            DispatchMessageW, FindWindowW, GWL_EXSTYLE, GWL_STYLE, GetCursorPos, GetWindowLongW,
-            GetWindowRect, HWND_TOPMOST, MSG, PM_REMOVE, PeekMessageW, SetForegroundWindow,
-            SetWindowLongW, SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-            SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, TranslateMessage, WS_CAPTION,
-            WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-            WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+            CS_DROPSHADOW, DispatchMessageW, FindWindowW, GCL_STYLE, GWL_EXSTYLE, GWL_STYLE,
+            GetClassLongPtrW, GetCursorPos, GetWindowLongW, GetWindowRect, HWND_TOPMOST, MSG,
+            PM_REMOVE, PeekMessageW, SetClassLongPtrW, SetForegroundWindow, SetWindowLongW,
+            SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+            SWP_SHOWWINDOW, TranslateMessage, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_LAYERED,
+            WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+            WS_SYSMENU, WS_THICKFRAME,
         },
     },
 };
 
 const WINDOW_TITLE: &str = "Codex Minibar";
 const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
-const DWMWCP_ROUND: u32 = 2;
+/// No DWM rounded-frame (its drop shadow always spills past the monitor seam).
+/// Shape comes from `CreateRoundRectRgn` + matching XAML `corner_radius`.
+const DWMWCP_DONOTROUND: u32 = 1;
 const SHOW_GRACE_MS: i64 = 450;
 /// Popup client size in DIP — must match `App::inner_size` / content stack.
 pub const POPUP_WIDTH: i32 = 380;
 pub const POPUP_HEIGHT: i32 = 434;
+/// Must match the root XAML `corner_radius` in `app.rs`.
+pub const WINDOW_CORNER_RADIUS_DIP: i32 = 8;
 const PARKED_X: i32 = -32_000;
 const PARKED_Y: i32 = -32_000;
 /// 30 compositor-synchronised frames at 60 Hz ≈ 500 ms.
 const ANIMATION_STEPS: i32 = 30;
-/// Final inset from the target monitor's right/bottom work-area edges.
+/// Gap from the monitor edge.
 const EDGE_MARGIN: i32 = 20;
 
 static HWND_BITS: AtomicIsize = AtomicIsize::new(0);
@@ -57,25 +62,34 @@ static CONFIGURED: AtomicBool = AtomicBool::new(false);
 static POPUP_VISIBLE: AtomicBool = AtomicBool::new(false);
 static BUTTON_WAS_DOWN: AtomicBool = AtomicBool::new(false);
 static IGNORE_OUTSIDE_UNTIL_MS: AtomicI64 = AtomicI64::new(0);
-static WORK_LEFT: AtomicI32 = AtomicI32::new(0);
-static WORK_TOP: AtomicI32 = AtomicI32::new(0);
-static WORK_RIGHT: AtomicI32 = AtomicI32::new(0);
+/// Physical monitor bounds (not work area) — right edge is the seam to the next display.
+static MONITOR_LEFT: AtomicI32 = AtomicI32::new(0);
+static MONITOR_TOP: AtomicI32 = AtomicI32::new(0);
+static MONITOR_RIGHT: AtomicI32 = AtomicI32::new(0);
+static MONITOR_BOTTOM: AtomicI32 = AtomicI32::new(0);
 static WORK_BOTTOM: AtomicI32 = AtomicI32::new(0);
+static CORNER_RADIUS_PX: AtomicI32 = AtomicI32::new(WINDOW_CORNER_RADIUS_DIP);
 
-fn store_work_area(work: RECT) {
-    WORK_LEFT.store(work.left, Ordering::SeqCst);
-    WORK_TOP.store(work.top, Ordering::SeqCst);
-    WORK_RIGHT.store(work.right, Ordering::SeqCst);
+fn store_bounds(monitor: RECT, work: RECT) {
+    MONITOR_LEFT.store(monitor.left, Ordering::SeqCst);
+    MONITOR_TOP.store(monitor.top, Ordering::SeqCst);
+    MONITOR_RIGHT.store(monitor.right, Ordering::SeqCst);
+    MONITOR_BOTTOM.store(monitor.bottom, Ordering::SeqCst);
+    // Taskbar sits on the bottom of `work`; keep that for vertical pinning.
     WORK_BOTTOM.store(work.bottom, Ordering::SeqCst);
 }
 
-fn loaded_work_area() -> RECT {
+fn loaded_monitor() -> RECT {
     RECT {
-        left: WORK_LEFT.load(Ordering::SeqCst),
-        top: WORK_TOP.load(Ordering::SeqCst),
-        right: WORK_RIGHT.load(Ordering::SeqCst),
-        bottom: WORK_BOTTOM.load(Ordering::SeqCst),
+        left: MONITOR_LEFT.load(Ordering::SeqCst),
+        top: MONITOR_TOP.load(Ordering::SeqCst),
+        right: MONITOR_RIGHT.load(Ordering::SeqCst),
+        bottom: MONITOR_BOTTOM.load(Ordering::SeqCst),
     }
+}
+
+fn loaded_work_bottom() -> i32 {
+    WORK_BOTTOM.load(Ordering::SeqCst)
 }
 
 fn now_ms() -> i64 {
@@ -209,58 +223,86 @@ fn move_hwnd(hwnd: HWND, x: i32, y: i32) {
     }
 }
 
-/// Shift the HWND so its visible frame sits inside `work` with EDGE_MARGIN.
-/// Never resizes — WinUI owns width/height; resizing here caused the window to
-/// grow back past the monitor edge.
-fn clamp_frame_to_work(hwnd: HWND, work: RECT) {
+/// Pin the HWND to the bottom-right of the target monitor.
+///
+/// Uses the union of `GetWindowRect` and DWM extended bounds so we never
+/// underestimate size, and clamps against `rcMonitor` (the real seam to the
+/// next display) — not just `rcWork`.
+fn pin_bottom_right(hwnd: HWND, monitor: RECT, work_bottom: i32) {
+    for _ in 0..6 {
+        let frame = frame_bounds(hwnd);
+        let win = window_rect(hwnd);
+        let left = frame.left.min(win.left);
+        let top = frame.top.min(win.top);
+        let right = frame.right.max(win.right);
+        let bottom = frame.bottom.max(win.bottom);
+        let width = (right - left).max(1);
+        let height = (bottom - top).max(1);
+
+        let target_x = monitor.right - width - EDGE_MARGIN;
+        let target_y = work_bottom - height - EDGE_MARGIN;
+
+        let dx = target_x - left;
+        let dy = target_y - top;
+        if dx == 0 && dy == 0 {
+            break;
+        }
+        move_hwnd(hwnd, win.left + dx, win.top + dy);
+        unsafe {
+            let _ = DwmFlush();
+        }
+    }
+
+    // Absolute hard stop: nothing past the monitor seam.
+    let win = window_rect(hwnd);
     let frame = frame_bounds(hwnd);
-    let width = (frame.right - frame.left).max(1);
-    let height = (frame.bottom - frame.top).max(1);
-
-    let mut x = work.right - width - EDGE_MARGIN;
-    let mut y = work.bottom - height - EDGE_MARGIN;
-    x = x.max(work.left + EDGE_MARGIN);
-    y = y.max(work.top + EDGE_MARGIN);
-
-    // Prefer keeping the right/bottom edges on-monitor even if that means
-    // overlapping the left/top margin on a tiny work area.
-    if x + width > work.right - EDGE_MARGIN {
-        x = work.right - width - EDGE_MARGIN;
-    }
-    if y + height > work.bottom - EDGE_MARGIN {
-        y = work.bottom - height - EDGE_MARGIN;
+    let right = frame.right.max(win.right);
+    if right > monitor.right - EDGE_MARGIN {
+        let dx = right - (monitor.right - EDGE_MARGIN);
+        move_hwnd(hwnd, win.left - dx, win.top);
     }
 
-    let current = window_rect(hwnd);
-    // frame vs window origin can differ; move by the frame delta.
-    let dx = x - frame.left;
-    let dy = y - frame.top;
-    if dx != 0 || dy != 0 {
-        move_hwnd(hwnd, current.left + dx, current.top + dy);
-    }
+    // Rounded region = window shape without the Win11 DWM frame shadow.
+    apply_window_region(hwnd, None);
 }
 
-/// Clip painted pixels to the work area. DWM Acrylic ignores this — disable
-/// the backdrop while the clip is active.
-fn clip_to_work_area(hwnd: HWND, work: RECT) {
+/// Rounded HWND shape (and optional monitor clip during slide-in).
+///
+/// `DWMWCP_ROUND` looks better but always paints a drop shadow past the
+/// monitor seam; a GDI round-rect region has no shadow and matches XAML.
+fn apply_window_region(hwnd: HWND, monitor_clip: Option<RECT>) {
     let window = window_rect(hwnd);
-    let width = (window.right - window.left).max(0);
-    let height = (window.bottom - window.top).max(0);
-
-    let left = (work.left - window.left).clamp(0, width);
-    let top = (work.top - window.top).clamp(0, height);
-    let right = (work.right - window.left).clamp(left, width);
-    let bottom = (work.bottom - window.top).clamp(top, height);
+    let width = (window.right - window.left).max(1);
+    let height = (window.bottom - window.top).max(1);
+    let radius = CORNER_RADIUS_PX.load(Ordering::SeqCst).max(1);
+    let arc = radius.saturating_mul(2);
 
     unsafe {
-        let region = CreateRectRgn(left, top, right, bottom);
-        SetWindowRgn(hwnd, region, 1);
+        let shape = CreateRoundRectRgn(0, 0, width + 1, height + 1, arc, arc);
+        if shape.is_null() {
+            return;
+        }
+
+        if let Some(mon) = monitor_clip {
+            let left = (mon.left - window.left).clamp(0, width);
+            let top = (mon.top - window.top).clamp(0, height);
+            let right = (mon.right - window.left).clamp(left, width);
+            let bottom = (mon.bottom - window.top).clamp(top, height);
+            let clip = CreateRectRgn(left, top, right, bottom);
+            if !clip.is_null() {
+                let _ = CombineRgn(shape, shape, clip, RGN_AND);
+                let _ = DeleteObject(clip as _);
+            }
+        }
+
+        SetWindowRgn(hwnd, shape, 1);
     }
 }
 
-fn clear_window_clip(hwnd: HWND) {
+fn hide_window_pixels(hwnd: HWND) {
     unsafe {
-        SetWindowRgn(hwnd, std::ptr::null_mut(), 1);
+        let empty = CreateRectRgn(0, 0, 0, 0);
+        SetWindowRgn(hwnd, empty, 1);
     }
 }
 
@@ -296,10 +338,21 @@ fn set_frame_margins(hwnd: HWND, fill: bool) {
     }
 }
 
+fn set_corner_preference(hwnd: HWND) {
+    unsafe {
+        let corner = DWMWCP_DONOTROUND;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &corner as *const u32 as *const _,
+            size_of::<u32>() as u32,
+        );
+    }
+}
+
 /// Prefer the monitor that owns the tray click; if that point sits on a shared
-/// edge, keep the primary-display work area so the popup never opens on the
-/// neighbor.
-fn resolve_work_area(anchor_x: i32, anchor_y: i32) -> (HMONITOR, RECT) {
+/// edge, pull inward so we don't open on the neighbor.
+fn resolve_monitor(anchor_x: i32, anchor_y: i32) -> (HMONITOR, RECT, RECT) {
     unsafe {
         let monitor = MonitorFromPoint(
             POINT {
@@ -326,8 +379,6 @@ fn resolve_work_area(anchor_x: i32, anchor_y: i32) -> (HMONITOR, RECT) {
         };
         GetMonitorInfoW(monitor, &mut info);
 
-        // If the click is exactly on the right edge, NEAREST can pick the
-        // display to the right. Pull back one pixel and resolve again.
         if anchor_x >= info.rcMonitor.right.saturating_sub(1) {
             let inward = MonitorFromPoint(
                 POINT {
@@ -339,16 +390,16 @@ fn resolve_work_area(anchor_x: i32, anchor_y: i32) -> (HMONITOR, RECT) {
             let mut inward_info = info;
             inward_info.cbSize = size_of::<MONITORINFO>() as u32;
             GetMonitorInfoW(inward, &mut inward_info);
-            return (inward, inward_info.rcWork);
+            return (inward, inward_info.rcMonitor, inward_info.rcWork);
         }
 
-        (monitor, info.rcWork)
+        (monitor, info.rcMonitor, info.rcWork)
     }
 }
 
-/// Apply Acrylic so the backdrop blurs whatever is behind the popup.
-/// WinUI `DesktopAcrylicBackdrop` owns the tint; DWM uses TRANSIENTWINDOW Acrylic.
-fn apply_acrylic(hwnd: HWND) {
+/// Shell chrome without SystemBackdrop (Acrylic ignores SetWindowRgn and
+/// paints square corners + a drop shadow onto the neighboring monitor).
+fn apply_popup_chrome(hwnd: HWND) {
     unsafe {
         let dark_mode = 1u32;
         let _ = DwmSetWindowAttribute(
@@ -357,9 +408,17 @@ fn apply_acrylic(hwnd: HWND) {
             &dark_mode as *const u32 as *const _,
             size_of::<u32>() as u32,
         );
+        let no_border = DWMWA_COLOR_NONE;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR as u32,
+            &no_border as *const u32 as *const _,
+            size_of::<u32>() as u32,
+        );
     }
-    set_system_backdrop(hwnd, DWMSBT_TRANSIENTWINDOW);
-    set_frame_margins(hwnd, true);
+    set_corner_preference(hwnd);
+    set_system_backdrop(hwnd, DWMSBT_NONE);
+    set_frame_margins(hwnd, false);
 }
 
 /// Find the WinUI window, restyle it as a tool popup, and park it off-screen.
@@ -385,23 +444,10 @@ pub fn ensure_configured() -> Option<HWND> {
             | WS_EX_TOPMOST;
         SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style as i32);
 
-        let corner = DWMWCP_ROUND;
-        let _ = DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_WINDOW_CORNER_PREFERENCE,
-            &corner as *const u32 as *const _,
-            size_of::<u32>() as u32,
-        );
+        let class_style = GetClassLongPtrW(hwnd, GCL_STYLE) as u32;
+        SetClassLongPtrW(hwnd, GCL_STYLE, (class_style & !CS_DROPSHADOW) as isize);
 
-        let border_color = DWMWA_COLOR_NONE;
-        let _ = DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_BORDER_COLOR as u32,
-            &border_color as *const u32 as *const _,
-            size_of::<u32>() as u32,
-        );
-
-        apply_acrylic(hwnd);
+        apply_popup_chrome(hwnd);
 
         SetWindowPos(
             hwnd,
@@ -440,7 +486,7 @@ pub fn hide() {
     park(hwnd);
 }
 
-/// Re-clamp if WinUI grows/moves the HWND past the stored work area.
+/// Re-clamp if WinUI grows/moves the HWND past the stored monitor.
 pub fn keep_on_monitor() {
     if !is_visible() {
         return;
@@ -449,24 +495,11 @@ pub fn keep_on_monitor() {
         return;
     };
 
-    let work = loaded_work_area();
-    if work.right <= work.left || work.bottom <= work.top {
+    let monitor = loaded_monitor();
+    if monitor.right <= monitor.left {
         return;
     }
-
-    let frame = frame_bounds(hwnd);
-    let overflow_x = frame.right - (work.right - EDGE_MARGIN);
-    let overflow_y = frame.bottom - (work.bottom - EDGE_MARGIN);
-    if overflow_x <= 0 && overflow_y <= 0 {
-        return;
-    }
-
-    let current = window_rect(hwnd);
-    move_hwnd(
-        hwnd,
-        current.left - overflow_x.max(0),
-        current.top - overflow_y.max(0),
-    );
+    pin_bottom_right(hwnd, monitor, loaded_work_bottom());
 }
 
 /// Show the popup near the tray click, anchored above the taskbar.
@@ -475,21 +508,29 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
         return;
     };
 
-    let (monitor, work) = resolve_work_area(anchor_x, anchor_y);
-    store_work_area(work);
+    let (hmonitor, monitor, work) = resolve_monitor(anchor_x, anchor_y);
+    store_bounds(monitor, work);
+
+    let dpi = monitor_dpi(hmonitor);
+    let corner_px = (i64::from(WINDOW_CORNER_RADIUS_DIP) * i64::from(dpi) / 96) as i32;
+    CORNER_RADIUS_PX.store(corner_px.max(1), Ordering::SeqCst);
 
     unsafe {
         // Acrylic ignores SetWindowRgn — kill it for the slide, restore after.
         set_system_backdrop(hwnd, DWMSBT_NONE);
         set_frame_margins(hwnd, false);
 
-        let (width, height) = popup_pixel_size(hwnd, monitor);
-        let target_x = work.right - width - EDGE_MARGIN;
+        let (width, height) = popup_pixel_size(hwnd, hmonitor);
+        let target_x = monitor.right - width - EDGE_MARGIN;
         let target_y = work.bottom - height - EDGE_MARGIN;
-        let start_x = work.right;
+        let start_x = monitor.right;
 
+        // Hide pixels *before* the first on-screen move so one frame can't
+        // flash the full window onto the neighboring monitor.
+        hide_window_pixels(hwnd);
         move_hwnd(hwnd, start_x, target_y);
-        clip_to_work_area(hwnd, work);
+        apply_window_region(hwnd, Some(monitor));
+        let _ = DwmFlush();
         let _ = SetForegroundWindow(hwnd);
 
         for step in 1..=ANIMATION_STEPS {
@@ -498,21 +539,15 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
             let animated_x =
                 start_x - ((f64::from(start_x - target_x) * eased).round() as i32);
             move_hwnd(hwnd, animated_x, target_y);
-            clip_to_work_area(hwnd, work);
+            apply_window_region(hwnd, Some(monitor));
             let _ = DwmFlush();
         }
 
-        clear_window_clip(hwnd);
-        apply_acrylic(hwnd);
+        apply_popup_chrome(hwnd);
         let _ = DwmFlush();
     }
 
-    // WinUI may still be settling size — clamp from the live DWM frame, twice.
-    clamp_frame_to_work(hwnd, work);
-    unsafe {
-        let _ = DwmFlush();
-    }
-    clamp_frame_to_work(hwnd, work);
+    pin_bottom_right(hwnd, monitor, work.bottom);
 
     POPUP_VISIBLE.store(true, Ordering::SeqCst);
     IGNORE_OUTSIDE_UNTIL_MS.store(now_ms() + SHOW_GRACE_MS, Ordering::SeqCst);

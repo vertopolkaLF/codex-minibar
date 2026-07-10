@@ -103,6 +103,8 @@ dependencies = [
  "tempfile",
  "toml",
  "tray-icon",
+ "windows-collections",
+ "windows-core 0.62.2 (git+https://github.com/microsoft/windows-rs)",
  "windows-reactor",
  "windows-reactor-setup",
  "windows-sys 0.59.0",
@@ -856,8 +858,8 @@ version = "0.62.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
 dependencies = [
- "windows-implement",
- "windows-interface",
+ "windows-implement 0.60.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "windows-interface 0.59.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "windows-link 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "windows-result 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "windows-strings 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -868,6 +870,8 @@ name = "windows-core"
 version = "0.62.2"
 source = "git+https://github.com/microsoft/windows-rs#07f344c019b8fdae4d398d4c2591596044cb416a"
 dependencies = [
+ "windows-implement 0.60.2 (git+https://github.com/microsoft/windows-rs)",
+ "windows-interface 0.59.3 (git+https://github.com/microsoft/windows-rs)",
  "windows-link 0.2.1 (git+https://github.com/microsoft/windows-rs)",
  "windows-result 0.4.1 (git+https://github.com/microsoft/windows-rs)",
  "windows-strings 0.5.1 (git+https://github.com/microsoft/windows-rs)",
@@ -895,10 +899,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-implement"
+version = "0.60.2"
+source = "git+https://github.com/microsoft/windows-rs#07f344c019b8fdae4d398d4c2591596044cb416a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "windows-interface"
 version = "0.59.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f316c4a2570ba26bbec722032c4099d8c8bc095efccdc15688708623367e358"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "windows-interface"
+version = "0.59.3"
+source = "git+https://github.com/microsoft/windows-rs#07f344c019b8fdae4d398d4c2591596044cb416a"
 dependencies = [
  "proc-macro2",
  "quote",

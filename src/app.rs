@@ -58,9 +58,17 @@ const DARK_SURFACE_FILL: Color = Color {
     g: 0,
     b: 0,
 };
-/// Window outline: CSS `#fff4` → `#ffffff44`.
+/// Semi-transparent chrome tint so the rounded `SystemBackdropElement`
+/// acrylic shows through. HWND rounding still comes from `CreateRoundRectRgn`.
+const WINDOW_FILL: Color = Color {
+    a: 160,
+    r: 32,
+    g: 32,
+    b: 36,
+};
+/// Window outline: soft light stroke drawn in XAML.
 const WINDOW_BORDER: Color = Color {
-    a: 10,
+    a: 68,
     r: 255,
     g: 255,
     b: 255,
@@ -108,8 +116,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         move || {
             // Convert the WinUI window into a hidden tray popup as soon as it exists.
             let _ = popup::ensure_configured();
-            // Restyling can detach SystemBackdrop — re-apply Acrylic on the UI thread.
-            set_backdrop(Some(Backdrop::Acrylic));
+            // SystemBackdrop paints square + shadow past SetWindowRgn — keep it off.
+            set_backdrop(None);
             start_background_bridge(state, set_ui);
         }
     });
@@ -183,7 +191,11 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     // Content on top (Auto), footer pinned to the bottom. Any leftover height
     // stays between them only if the window is taller than the stack — keep
     // POPUP_HEIGHT matched to content so that gap stays ~0.
-    border(
+    //
+    // Acrylic lives on an inner SystemBackdropElement (CornerRadius=8), not on
+    // Window.SystemBackdrop — so blur stays rounded and SetWindowRgn still
+    // clips the HWND without a square DWM shadow on the next monitor.
+    let chrome = border(
         grid((
             vstack(body)
                 .spacing(12.0)
@@ -206,10 +218,33 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     )
     .border_thickness(Thickness::uniform(1.0))
     .border_brush(WINDOW_BORDER)
-    .corner_radius(9.0)
-    .background(Color::transparent())
+    .corner_radius(8.0)
+    .background(WINDOW_FILL)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .vertical_alignment(VerticalAlignment::Stretch);
+
+    grid((
+        // Fills the popup; hosts SystemBackdropElement (CornerRadius=8).
+        // Reconciler does not manage this panel's children, so acrylic survives
+        // UI updates. Content border sits on top with a translucent tint.
+        {
+            let mut host = swap_chain_panel()
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .vertical_alignment(VerticalAlignment::Stretch);
+            host.mounted = Some(Callback::new(|native: Option<_>| {
+                if let Some(native) = native {
+                    crate::acrylic::install_into(native);
+                }
+            }));
+            host
+        },
+        chrome,
+    ))
+    .rows([GridLength::Star(1.0)])
+    .columns([GridLength::Star(1.0)])
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Stretch)
+    .background(Color::transparent())
     .into()
 }
 

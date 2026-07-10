@@ -60,7 +60,9 @@ fn run() -> Result<()> {
             max_width: Some(f64::from(POPUP_WIDTH)),
             max_height: Some(f64::from(POPUP_HEIGHT)),
         })
-        .backdrop(Backdrop::Acrylic)
+        // No SystemBackdrop on the window: Acrylic ignores SetWindowRgn and
+        // paints square corners + a DWM shadow onto the next monitor.
+        // Rounded acrylic is hosted on an inner SystemBackdropElement instead.
         .render(move |cx| app(cx, Arc::clone(&state)))
         .map_err(|error| anyhow!("windows-reactor failed: {error:?}"))
 }

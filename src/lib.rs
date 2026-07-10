@@ -1,3 +1,4 @@
+pub mod acrylic;
 pub mod app;
 pub mod codex;
 pub mod discovery;
