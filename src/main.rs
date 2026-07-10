@@ -52,18 +52,27 @@ fn run() -> Result<()> {
     });
 
     App::new()
-        .title("Codex Minibar")
-        .inner_size(f64::from(POPUP_WIDTH), f64::from(POPUP_HEIGHT))
-        .inner_constraints(InnerConstraints {
-            min_width: Some(f64::from(POPUP_WIDTH)),
-            min_height: Some(f64::from(POPUP_HEIGHT)),
-            max_width: Some(f64::from(POPUP_WIDTH)),
-            max_height: Some(f64::from(POPUP_HEIGHT)),
+        .run_custom(move |_| {
+            // Unlike `App::render`, this builds the WinUI host without calling
+            // `Window::Activate`. The tray popup is the sole code path that
+            // makes its HWND visible.
+            let _host = Box::leak(Box::new(ReactorHost::new_with_window_options(
+                "Codex Minibar",
+                Some(WindowSize {
+                    width: f64::from(POPUP_WIDTH),
+                    height: f64::from(POPUP_HEIGHT),
+                }),
+                InnerConstraints {
+                    min_width: Some(f64::from(POPUP_WIDTH)),
+                    min_height: Some(f64::from(POPUP_HEIGHT)),
+                    max_width: Some(f64::from(POPUP_WIDTH)),
+                    max_height: Some(f64::from(POPUP_HEIGHT)),
+                },
+                Box::new(move |_: &(), cx: &mut RenderCx| app(cx, Arc::clone(&state))),
+                |_| {},
+            )?));
+            Ok(())
         })
-        // No SystemBackdrop on the window: Acrylic ignores SetWindowRgn and
-        // paints square corners + a DWM shadow onto the next monitor.
-        // Rounded acrylic is hosted on an inner SystemBackdropElement instead.
-        .render(move |cx| app(cx, Arc::clone(&state)))
         .map_err(|error| anyhow!("windows-reactor failed: {error:?}"))
 }
 

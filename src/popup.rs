@@ -6,8 +6,10 @@
 //! Sizing is owned by WinUI (`inner_size` / constraints). This module only
 //! moves the HWND — never resizes it — so DPI and layout stay in sync.
 
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicIsize, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicIsize, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use windows_sys::Win32::{
     Foundation::{HWND, POINT, RECT},
@@ -32,7 +34,8 @@ use windows_sys::Win32::{
             GetClassLongPtrW, GetCursorPos, GetWindowLongW, GetWindowRect, HWND_TOPMOST, MSG,
             PM_REMOVE, PeekMessageW, SetClassLongPtrW, SetForegroundWindow, SetWindowLongW,
             SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-            SWP_SHOWWINDOW, TranslateMessage, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_LAYERED,
+            SWP_HIDEWINDOW, SWP_SHOWWINDOW, TranslateMessage, WS_CAPTION, WS_EX_APPWINDOW,
+            WS_EX_LAYERED,
             WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
             WS_SYSMENU, WS_THICKFRAME,
         },
@@ -164,7 +167,7 @@ fn park(hwnd: HWND) {
             PARKED_Y,
             0,
             0,
-            SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW,
+            SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_HIDEWINDOW,
         );
     }
     POPUP_VISIBLE.store(false, Ordering::SeqCst);
