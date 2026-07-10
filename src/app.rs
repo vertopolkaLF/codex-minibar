@@ -66,9 +66,9 @@ const WINDOW_FILL: Color = Color {
     g: 32,
     b: 36,
 };
-/// Window outline: soft light stroke drawn in XAML.
+/// Window outline: same soft white as content surfaces, alpha 10/255.
 const WINDOW_BORDER: Color = Color {
-    a: 68,
+    a: 10,
     r: 255,
     g: 255,
     b: 255,
