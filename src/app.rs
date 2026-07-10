@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
 use windows_reactor::*;
 
 use crate::{
@@ -17,6 +17,32 @@ use crate::{
     tray::TrayManager,
     worker::{WorkerCommand, WorkerEvent},
 };
+
+fn format_activation_at(at: DateTime<Utc>) -> String {
+    at.with_timezone(&Local)
+        .format("%H:%M:%S %d.%m.%Y")
+        .to_string()
+}
+
+/// Start of the current 5h window: resets_at minus duration.
+fn window_started_at(window: &LimitWindow) -> Option<DateTime<Utc>> {
+    match (window.resets_at, window.duration_minutes) {
+        (Some(reset), Some(minutes)) => {
+            Some(reset - ChronoDuration::minutes(i64::from(minutes)))
+        }
+        _ => None,
+    }
+}
+
+fn format_last_activation(
+    limits: &RateLimits,
+    fallback_attempt: Option<DateTime<Utc>>,
+) -> String {
+    window_started_at(&limits.primary)
+        .or(fallback_attempt)
+        .map(format_activation_at)
+        .unwrap_or_else(|| "Never".into())
+}
 
 /// Soft translucent fill so Acrylic shows through cards and the footer.
 const SURFACE_FILL: Color = Color {
@@ -46,6 +72,8 @@ pub struct AppState {
     pub commands: Option<Sender<WorkerCommand>>,
     pub events: Mutex<Option<Receiver<WorkerEvent>>>,
     pub startup_error: Option<String>,
+    /// Last activation attempt loaded from persisted activation state.
+    pub last_activation_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -59,7 +87,7 @@ impl Default for UiState {
     fn default() -> Self {
         Self {
             limits: RateLimits::default(),
-            last_activation: "No activation attempt in this session".into(),
+            last_activation: "Never".into(),
             error: None,
         }
     }
@@ -69,6 +97,7 @@ impl Default for UiState {
 pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let (ui, set_ui) = cx.use_async_state(UiState {
         error: state.startup_error.clone(),
+        last_activation: format_last_activation(&RateLimits::default(), state.last_activation_at),
         ..UiState::default()
     });
     let commands = state.commands.clone();
@@ -180,8 +209,10 @@ fn start_background_bridge(state: Arc<AppState>, set_ui: AsyncSetState<UiState>)
 
     thread::spawn(move || {
         let mut tray = TrayManager::new();
+        let fallback_attempt = state.last_activation_at;
         let mut ui = UiState {
             error: state.startup_error.clone(),
+            last_activation: format_last_activation(&RateLimits::default(), fallback_attempt),
             ..UiState::default()
         };
 
@@ -216,16 +247,18 @@ fn start_background_bridge(state: Arc<AppState>, set_ui: AsyncSetState<UiState>)
                     } else {
                         ui.error = None;
                     }
+                    ui.last_activation = format_last_activation(&limits, fallback_attempt);
                     ui.limits = limits;
                     set_ui.call(ui.clone());
                 }
                 Ok(WorkerEvent::ActivationSucceeded) => {
                     ui.last_activation =
-                        format!("Succeeded at {}", Local::now().format("%H:%M:%S %d.%m.%Y"));
+                        format!("Succeeded at {}", format_activation_at(Utc::now()));
                     set_ui.call(ui.clone());
                 }
                 Ok(WorkerEvent::ActivationFailed(error)) => {
-                    ui.last_activation = format!("Failed: {error}");
+                    ui.last_activation =
+                        format!("Failed at {}: {error}", format_activation_at(Utc::now()));
                     set_ui.call(ui.clone());
                 }
                 Ok(WorkerEvent::PollFailed(error)) => {
@@ -476,6 +509,25 @@ fn sample_freshness(sampled_at: DateTime<Utc>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn last_activation_uses_window_start() {
+        let primary = LimitWindow {
+            used_percent: Some(1),
+            resets_at: Some(
+                chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 7, 10, 16, 8, 0).unwrap(),
+            ),
+            duration_minutes: Some(300),
+        };
+        assert_eq!(
+            window_started_at(&primary),
+            Some(chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 7, 10, 11, 8, 0).unwrap())
+        );
+        assert_eq!(
+            format_last_activation(&RateLimits::default(), None),
+            "Never"
+        );
+    }
 
     #[test]
     fn unavailable_sample_has_clear_copy() {

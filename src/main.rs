@@ -6,9 +6,11 @@ use std::{
 };
 
 use anyhow::{Result, anyhow};
+use chrono::{DateTime, Utc};
 use codex_minibar::{
     app::{AppState, app},
     codex::{CodexActivator, CodexClient, first_available},
+    scheduler::ActivationState,
     settings::Settings,
     worker::start_worker,
 };
@@ -19,13 +21,18 @@ fn run() -> Result<()> {
     let settings = Settings::load_or_create(&path)?;
     let executable = first_available(settings.codex_path.as_deref());
 
+    let activation_path = path.with_file_name("activation.toml");
+    let last_activation_at: Option<DateTime<Utc>> =
+        ActivationState::load_or_default(&activation_path)
+            .ok()
+            .and_then(|state| state.last_attempt_at);
+
     let (commands, events, startup_error, _worker_join) = match executable {
         Ok(executable) => {
-            let state_path = path.with_file_name("activation.toml");
             let worker = start_worker(
                 CodexClient::new(&executable),
                 CodexActivator::new(executable),
-                state_path,
+                activation_path,
                 settings.automatic_activation,
                 Duration::from_secs(60),
             );
@@ -40,6 +47,7 @@ fn run() -> Result<()> {
         commands,
         events: Mutex::new(events),
         startup_error,
+        last_activation_at,
     });
 
     App::new()

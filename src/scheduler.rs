@@ -25,34 +25,16 @@ pub enum Decision {
 
 impl ActivationState {
     pub fn decide(&self, primary: &LimitWindow, now: DateTime<Utc>) -> Decision {
+        // Activate when the 5h window still has 99%+ remaining (nearly unused).
+        if primary.remaining_percent().unwrap_or_default() < 99 {
+            return Decision::AlreadyActivated;
+        }
         if let Some(last_attempt) = self.last_attempt_at {
-            if now - last_attempt < Duration::minutes(5) {
-                return Decision::AlreadyActivated;
-            }
-            // Some Codex versions may report a full window with a reset timestamp that
-            // moves with every request. Do not treat each moving timestamp as a new window.
-            if primary.used_percent.unwrap_or_default() >= 99
-                && now - last_attempt < Duration::hours(4)
-            {
+            if now - last_attempt < Duration::hours(1) {
                 return Decision::AlreadyActivated;
             }
         }
-        match primary.resets_at {
-            Some(reset) if self.last_activated_reset == Some(reset) => Decision::AlreadyActivated,
-            Some(reset) => {
-                let run_at = reset + Duration::minutes(1);
-                if now >= run_at {
-                    Decision::ActivateNow
-                } else {
-                    Decision::WaitUntil(run_at)
-                }
-            }
-            None => match self.missing_reset_activated_at {
-                // Missing data is retried only after a bounded cool-down, never every poll.
-                Some(at) if now - at < Duration::minutes(15) => Decision::AlreadyActivated,
-                _ => Decision::ActivateNow,
-            },
-        }
+        Decision::ActivateNow
     }
 
     pub fn record_attempt(&mut self, primary: &LimitWindow, now: DateTime<Utc>) {
@@ -102,64 +84,53 @@ mod tests {
         Utc.with_ymd_and_hms(2026, 7, 10, hour, minute, 0).unwrap()
     }
 
-    #[test]
-    fn waits_until_one_minute_after_reset() {
-        let window = LimitWindow {
-            used_percent: Some(100),
-            resets_at: Some(at(10, 0)),
+    fn fresh_window() -> LimitWindow {
+        LimitWindow {
+            used_percent: Some(1),
+            resets_at: Some(at(15, 0)),
             duration_minutes: Some(300),
+        }
+    }
+
+    #[test]
+    fn activates_when_remaining_is_at_least_99_and_no_recent_attempt() {
+        assert_eq!(
+            ActivationState::default().decide(&fresh_window(), at(10, 0)),
+            Decision::ActivateNow
+        );
+        let window = LimitWindow {
+            used_percent: Some(0),
+            ..fresh_window()
         };
         assert_eq!(
-            ActivationState::default().decide(&window, at(9, 0)),
-            Decision::WaitUntil(at(10, 1))
-        );
-        assert_eq!(
-            ActivationState::default().decide(&window, at(10, 1)),
+            ActivationState::default().decide(&window, at(10, 0)),
             Decision::ActivateNow
         );
     }
 
     #[test]
-    fn never_repeats_same_observed_window() {
+    fn skips_when_remaining_is_below_99() {
         let window = LimitWindow {
-            used_percent: Some(99),
-            resets_at: Some(at(10, 0)),
-            duration_minutes: Some(300),
+            used_percent: Some(2),
+            ..fresh_window()
         };
-        let mut state = ActivationState::default();
-        state.record_attempt(&window, at(10, 1));
-        state.record_success(&window, at(10, 1));
-        assert_eq!(state.decide(&window, at(11, 0)), Decision::AlreadyActivated);
-    }
-
-    #[test]
-    fn missing_reset_is_immediate_but_cooled_down() {
-        let window = LimitWindow::default();
-        let mut state = ActivationState::default();
-        assert_eq!(state.decide(&window, at(10, 0)), Decision::ActivateNow);
-        state.record_attempt(&window, at(10, 0));
-        assert_eq!(state.decide(&window, at(10, 1)), Decision::AlreadyActivated);
-        assert_eq!(state.decide(&window, at(10, 15)), Decision::ActivateNow);
-    }
-
-    #[test]
-    fn moving_reset_at_full_usage_does_not_repeat() {
-        let first = LimitWindow {
-            used_percent: Some(100),
-            resets_at: Some(at(10, 0)),
-            duration_minutes: Some(300),
-        };
-        let moving = LimitWindow {
-            used_percent: Some(99),
-            resets_at: Some(at(10, 2)),
-            duration_minutes: Some(300),
-        };
-        let mut state = ActivationState::default();
-        state.record_attempt(&first, at(10, 1));
         assert_eq!(
-            state.decide(&moving, at(10, 10)),
+            ActivationState::default().decide(&window, at(10, 0)),
             Decision::AlreadyActivated
         );
+        assert_eq!(
+            ActivationState::default().decide(&LimitWindow::default(), at(10, 0)),
+            Decision::AlreadyActivated
+        );
+    }
+
+    #[test]
+    fn skips_when_activation_happened_within_the_past_hour() {
+        let window = fresh_window();
+        let mut state = ActivationState::default();
+        state.record_attempt(&window, at(10, 0));
+        assert_eq!(state.decide(&window, at(10, 59)), Decision::AlreadyActivated);
+        assert_eq!(state.decide(&window, at(11, 0)), Decision::ActivateNow);
     }
 
     #[test]

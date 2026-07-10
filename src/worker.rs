@@ -150,15 +150,21 @@ mod tests {
         }
     }
 
-    #[test]
-    fn tick_activates_missing_reset_only_once() {
-        let limits = RateLimits {
-            primary: LimitWindow::default(),
+    fn fresh_primary() -> RateLimits {
+        RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(1),
+                ..LimitWindow::default()
+            },
             secondary: LimitWindow::default(),
             sampled_at: Utc::now(),
             ..RateLimits::default()
-        };
-        let mut provider = Provider(limits);
+        }
+    }
+
+    #[test]
+    fn tick_activates_fresh_window_only_once_per_hour() {
+        let mut provider = Provider(fresh_primary());
         let mut activator = CountingActivator(0);
         let mut state = ActivationState::default();
         tick(&mut provider, &mut activator, &mut state, true).unwrap();
@@ -175,12 +181,8 @@ mod tests {
 
     #[test]
     fn activation_failure_becomes_an_event() {
-        let limits = RateLimits {
-            sampled_at: Utc::now(),
-            ..RateLimits::default()
-        };
         let events = tick(
-            &mut Provider(limits),
+            &mut Provider(fresh_primary()),
             &mut FailingActivator,
             &mut ActivationState::default(),
             true,
