@@ -17,7 +17,7 @@ use crate::{
     popup,
     settings::Settings,
     theme::{DARK_SURFACE_FILL, SURFACE_FILL, WINDOW_BORDER, WINDOW_FILL},
-    tray::TrayManager,
+    tray::{TrayManager, TrayMenuAction},
     worker::{WorkerCommand, WorkerEvent},
 };
 
@@ -136,16 +136,18 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         ..UiState::default()
     });
     let commands = state.commands.clone();
+    let ui_dispatcher = cx.use_ui_marshaller();
 
     cx.use_effect((), {
         let state = Arc::clone(&state);
         let set_ui = set_ui.clone();
+        let ui_dispatcher = ui_dispatcher.clone();
         move || {
             // Convert the WinUI window into a hidden tray popup as soon as it exists.
             let _ = popup::ensure_configured();
             // SystemBackdrop paints square + shadow past SetWindowRgn — keep it off.
             set_backdrop(None);
-            start_background_bridge(state, set_ui);
+            start_background_bridge(state, set_ui, ui_dispatcher);
         }
     });
 
@@ -582,12 +584,17 @@ fn settings_row(label: impl Into<String>, value: impl Into<String>) -> Element {
     .into()
 }
 
-fn start_background_bridge(state: Arc<AppState>, set_ui: AsyncSetState<UiState>) {
+fn start_background_bridge(
+    state: Arc<AppState>,
+    set_ui: AsyncSetState<UiState>,
+    ui_dispatcher: UiMarshaller,
+) {
     let events = state.events.lock().ok().and_then(|mut slot| slot.take());
     let widgets = state.settings.tray_widgets.clone();
 
     thread::spawn(move || {
         let mut tray = TrayManager::new();
+        let settings = Arc::new(state.settings.clone());
         let fallback_attempt = state.last_activation_at;
         let mut ui = UiState {
             error: state.startup_error.clone(),
@@ -612,14 +619,14 @@ fn start_background_bridge(state: Arc<AppState>, set_ui: AsyncSetState<UiState>)
             set_ui.call(ui);
             loop {
                 popup::pump_messages();
-                pump_tray_and_dismiss(&tray);
+                pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings);
                 thread::sleep(Duration::from_millis(16));
             }
         };
 
         loop {
             popup::pump_messages();
-            pump_tray_and_dismiss(&tray);
+            pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings);
             match events.recv_timeout(Duration::from_millis(16)) {
                 Ok(WorkerEvent::LimitsUpdated(limits)) => {
                     if let Err(error) = tray.sync(&widgets, &limits) {
@@ -654,7 +661,11 @@ fn start_background_bridge(state: Arc<AppState>, set_ui: AsyncSetState<UiState>)
 }
 
 #[cfg(windows)]
-fn pump_tray_and_dismiss(tray: &TrayManager) {
+fn pump_tray_and_dismiss(
+    tray: &TrayManager,
+    ui_dispatcher: &UiMarshaller,
+    settings: &Arc<Settings>,
+) {
     use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
 
     while let Ok(event) = TrayIconEvent::receiver().try_recv() {
@@ -671,6 +682,20 @@ fn pump_tray_and_dismiss(tray: &TrayManager) {
         }
     }
 
+    for action in tray.drain_menu_actions() {
+        match action {
+            TrayMenuAction::Settings => {
+                let settings = Arc::clone(settings);
+                ui_dispatcher.dispatch(move || {
+                    if let Err(error) = crate::settings_window::open(settings) {
+                        eprintln!("Could not open settings window: {error:?}");
+                    }
+                });
+            }
+            TrayMenuAction::Exit => std::process::exit(0),
+        }
+    }
+
     popup::keep_on_monitor();
 
     if popup::clicked_outside() {
@@ -679,7 +704,12 @@ fn pump_tray_and_dismiss(tray: &TrayManager) {
 }
 
 #[cfg(not(windows))]
-fn pump_tray_and_dismiss(_tray: &TrayManager) {}
+fn pump_tray_and_dismiss(
+    _tray: &TrayManager,
+    _ui_dispatcher: &UiMarshaller,
+    _settings: &Arc<Settings>,
+) {
+}
 
 const ICON_BUTTON_SIZE: f64 = 36.0;
 

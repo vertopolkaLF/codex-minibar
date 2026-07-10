@@ -207,12 +207,21 @@ fn render_fallback(text: &str, rgb: [u8; 3]) -> Vec<u8> {
 #[cfg(windows)]
 mod platform {
     use anyhow::{Context, Result};
-    use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconId};
+    use tray_icon::{
+        Icon, TrayIcon, TrayIconBuilder, TrayIconId,
+        menu::{IconMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+    };
 
     use super::*;
 
     pub struct TrayManager {
         icons: Vec<TrayIcon>,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum TrayMenuAction {
+        Settings,
+        Exit,
     }
 
     impl TrayManager {
@@ -227,6 +236,7 @@ mod platform {
                 let icon = make_icon(&widgets[index], limits)?;
                 let tray = TrayIconBuilder::new()
                     .with_icon(icon)
+                    .with_menu(Box::new(make_menu()?))
                     .with_tooltip(tooltip(limits))
                     .with_menu_on_left_click(false)
                     .build()
@@ -252,6 +262,18 @@ mod platform {
         pub fn is_empty(&self) -> bool {
             self.icons.is_empty()
         }
+
+        pub fn drain_menu_actions(&self) -> Vec<TrayMenuAction> {
+            let mut actions = Vec::new();
+            while let Ok(event) = MenuEvent::receiver().try_recv() {
+                match event.id.as_ref() {
+                    "settings" => actions.push(TrayMenuAction::Settings),
+                    "exit" => actions.push(TrayMenuAction::Exit),
+                    _ => {}
+                }
+            }
+            actions
+        }
     }
 
     impl Default for TrayManager {
@@ -268,10 +290,30 @@ mod platform {
         )
         .context("create RGBA tray icon")
     }
+
+    fn make_menu() -> Result<Menu> {
+        let header = IconMenuItem::new(
+            format!("Codex Minibar - v{}", env!("CARGO_PKG_VERSION")),
+            false,
+            None,
+            None,
+        );
+        let settings = MenuItem::with_id("settings", "Settings", true, None);
+        let exit = MenuItem::with_id("exit", "Exit", true, None);
+        Menu::with_items(&[
+            &header,
+            &PredefinedMenuItem::separator(),
+            &settings,
+            &exit,
+        ])
+        .context("create tray menu")
+    }
 }
 
 #[cfg(windows)]
 pub use platform::TrayManager;
+#[cfg(windows)]
+pub use platform::TrayMenuAction;
 
 #[cfg(not(windows))]
 pub struct TrayManager;
@@ -293,6 +335,17 @@ impl TrayManager {
     pub fn is_empty(&self) -> bool {
         true
     }
+
+    pub fn drain_menu_actions(&self) -> Vec<TrayMenuAction> {
+        Vec::new()
+    }
+}
+
+#[cfg(not(windows))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrayMenuAction {
+    Settings,
+    Exit,
 }
 
 #[cfg(test)]

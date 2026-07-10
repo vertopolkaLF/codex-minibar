@@ -17,9 +17,17 @@ thread_local! {
 
 pub fn open(settings: Arc<Settings>) -> windows_core::Result<()> {
     HOST.with(|slot| {
-        if let Some(host) = slot.borrow().as_ref() {
-            return host.activate();
+        if settings_window_is_open() {
+            if let Some(host) = slot.borrow().as_ref() {
+                return host.activate();
+            }
         }
+
+        // A user can close the settings window using the title-bar button.
+        // ReactorHost then remains allocated but its HWND is gone, so discard
+        // that stale host before creating the next settings window.
+        slot.borrow_mut().take();
+
         let view_settings = Arc::clone(&settings);
         let host = Rc::new(ReactorHost::new_with_window_options(
             "Codex Minibar Settings",
@@ -41,6 +49,22 @@ pub fn open(settings: Arc<Settings>) -> windows_core::Result<()> {
         *slot.borrow_mut() = Some(host);
         Ok(())
     })
+}
+
+#[cfg(windows)]
+fn settings_window_is_open() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW;
+
+    let title: Vec<u16> = "Codex Minibar Settings"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    !unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) }.is_null()
+}
+
+#[cfg(not(windows))]
+fn settings_window_is_open() -> bool {
+    false
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]

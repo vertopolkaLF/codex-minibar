@@ -19,7 +19,7 @@ windows-core = { git = "https://github.com/microsoft/windows-rs" }
 windows-reactor = { path = ".vendor" }
 
 [target.'cfg(windows)'.dependencies]
-tray-icon = { version = "0.24", default-features = false, features = ["common-controls-v6"] }
+tray-icon = { version = "0.24", default-features = false }
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_Controls", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
 
 [build-dependencies]
