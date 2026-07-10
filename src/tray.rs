@@ -1,5 +1,11 @@
 use chrono::{DateTime, Local, Utc};
+use std::{fs, path::PathBuf, sync::OnceLock};
+
 use font8x8::{BASIC_FONTS, UnicodeFonts};
+use fontdue::{
+    Font, FontSettings,
+    layout::{CoordinateSystem, HorizontalAlign, Layout, LayoutSettings, TextStyle, VerticalAlign},
+};
 
 use crate::{
     limits::{LimitWindow, RateLimits},
@@ -43,15 +49,15 @@ fn label(widget: &TrayWidget, limits: &RateLimits) -> String {
             .remaining_percent()
             .map(|value| value.to_string())
             .unwrap_or_else(|| "?".into()),
-        TrayMetric::PrimaryReset => reset_label(limits.primary.resets_at),
+        TrayMetric::PrimaryReset => stacked_reset_label(limits.primary.resets_at),
         TrayMetric::SecondaryRemaining => limits
             .secondary
             .remaining_percent()
             .map(|value| value.to_string())
             .unwrap_or_else(|| "?".into()),
-        TrayMetric::SecondaryReset => reset_label(limits.secondary.resets_at),
+        TrayMetric::SecondaryReset => stacked_reset_label(limits.secondary.resets_at),
         TrayMetric::Combined => format!(
-            "{}|{}",
+            "{}\n{}",
             limits
                 .primary
                 .remaining_percent()
@@ -66,38 +72,111 @@ fn label(widget: &TrayWidget, limits: &RateLimits) -> String {
     }
 }
 
-fn reset_label(reset: Option<DateTime<Utc>>) -> String {
+fn stacked_reset_label(reset: Option<DateTime<Utc>>) -> String {
     reset
-        .map(|value| value.with_timezone(&Local).format("%H%M").to_string())
+        .map(|value| value.with_timezone(&Local).format("%H\n%M").to_string())
         .unwrap_or_else(|| "?".into())
 }
 
-fn color(widget: &TrayWidget, limits: &RateLimits) -> [u8; 4] {
+fn icon_color(widget: &TrayWidget, limits: &RateLimits) -> [u8; 3] {
     let remaining = match widget.metric {
-        TrayMetric::PrimaryRemaining | TrayMetric::PrimaryReset => {
-            limits.primary.remaining_percent()
-        }
-        TrayMetric::SecondaryRemaining | TrayMetric::SecondaryReset => {
-            limits.secondary.remaining_percent()
-        }
+        TrayMetric::PrimaryRemaining => limits.primary.remaining_percent(),
+        TrayMetric::SecondaryRemaining => limits.secondary.remaining_percent(),
         TrayMetric::Combined => limits.primary.remaining_percent(),
+        TrayMetric::PrimaryReset | TrayMetric::SecondaryReset => return [255, 255, 255],
     };
     match remaining {
-        Some(0..=15) => [230, 74, 72, 255],
-        Some(16..=50) => [245, 158, 11, 255],
-        Some(_) => [49, 196, 141, 255],
-        None => [180, 180, 180, 255],
+        Some(0..=15) => [230, 74, 72],
+        Some(16..=50) => [245, 158, 11],
+        Some(_) => [49, 196, 141],
+        None => [180, 180, 180],
     }
+}
+
+fn system_font() -> Option<&'static Font> {
+    static FONT: OnceLock<Option<Font>> = OnceLock::new();
+    FONT.get_or_init(|| {
+        font_candidates().into_iter().find_map(|path| {
+            fs::read(path)
+                .ok()
+                .and_then(|bytes| Font::from_bytes(bytes, FontSettings::default()).ok())
+        })
+    })
+    .as_ref()
 }
 
 pub fn render_widget(widget: &TrayWidget, limits: &RateLimits) -> Vec<u8> {
     let text = label(widget, limits);
+    let rgb = icon_color(widget, limits);
+    let Some(font) = system_font() else {
+        return render_fallback(&text, rgb);
+    };
+    let lines: Vec<_> = text.lines().collect();
+    let two_lines = lines.len() > 1;
+    let font_size = if two_lines {
+        15.0
+    } else if text.chars().count() <= 2 {
+        24.0
+    } else {
+        20.0
+    };
+    let fonts = [font.clone()];
+    let mut pixels = vec![0; ICON_SIZE * ICON_SIZE * 4];
+    let line_height = if two_lines { 15.0 } else { ICON_SIZE as f32 };
+    for (line_index, line) in lines.iter().enumerate() {
+        let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
+        layout.reset(&LayoutSettings {
+            y: line_index as f32 * line_height,
+            max_width: Some(ICON_SIZE as f32),
+            max_height: Some(line_height),
+            horizontal_align: HorizontalAlign::Center,
+            vertical_align: VerticalAlign::Middle,
+            ..LayoutSettings::default()
+        });
+        layout.append(&fonts, &TextStyle::new(line, font_size, 0));
+        for glyph in layout.glyphs() {
+            let (metrics, coverage) = fonts[glyph.font_index].rasterize_config(glyph.key);
+            for row in 0..metrics.height {
+                for column in 0..metrics.width {
+                    let x = glyph.x.round() as isize + column as isize;
+                    let y = glyph.y.round() as isize + row as isize;
+                    if x < 0 || y < 0 || x >= ICON_SIZE as isize || y >= ICON_SIZE as isize {
+                        continue;
+                    }
+                    let alpha = coverage[row * metrics.width + column];
+                    let offset = (y as usize * ICON_SIZE + x as usize) * 4;
+                    pixels[offset..offset + 4].copy_from_slice(&[rgb[0], rgb[1], rgb[2], alpha]);
+                }
+            }
+        }
+    }
+    pixels
+}
+
+fn font_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(windows) = std::env::var_os("WINDIR") {
+        let fonts = PathBuf::from(windows).join("Fonts");
+        candidates.extend([
+            fonts.join("seguisb.ttf"),
+            fonts.join("segoeuib.ttf"),
+            fonts.join("arialbd.ttf"),
+        ]);
+    }
+    candidates.extend([
+        PathBuf::from("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+        PathBuf::from("/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
+    ]);
+    candidates
+}
+
+fn render_fallback(text: &str, rgb: [u8; 3]) -> Vec<u8> {
+    let text = text.replace('\n', "");
     let scale = if text.chars().count() <= 2 { 3 } else { 1 };
     let glyph_width = 8 * scale;
     let total_width = glyph_width * text.chars().count();
     let start_x = ICON_SIZE.saturating_sub(total_width) / 2;
     let start_y = ICON_SIZE.saturating_sub(8 * scale) / 2;
-    let rgba = color(widget, limits);
     let mut pixels = vec![0; ICON_SIZE * ICON_SIZE * 4];
     for (index, character) in text.chars().enumerate() {
         let Some(glyph) = BASIC_FONTS.get(character) else {
@@ -114,7 +193,8 @@ pub fn render_widget(widget: &TrayWidget, limits: &RateLimits) -> Vec<u8> {
                         let y = start_y + row * scale + dy;
                         if x < ICON_SIZE && y < ICON_SIZE {
                             let offset = (y * ICON_SIZE + x) * 4;
-                            pixels[offset..offset + 4].copy_from_slice(&rgba);
+                            pixels[offset..offset + 4]
+                                .copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
                         }
                     }
                 }
@@ -253,5 +333,17 @@ mod tests {
         let value = tooltip(&limits());
         assert!(value.contains("5h  |  73%"));
         assert!(value.contains("7d  |  39%"));
+    }
+
+    #[test]
+    fn reset_icons_are_white_and_percentage_icons_are_colored() {
+        let reset = TrayWidget {
+            metric: TrayMetric::PrimaryReset,
+        };
+        let percentage = TrayWidget {
+            metric: TrayMetric::PrimaryRemaining,
+        };
+        assert_eq!(icon_color(&reset, &limits()), [255, 255, 255]);
+        assert_eq!(icon_color(&percentage, &limits()), [49, 196, 141]);
     }
 }
