@@ -381,11 +381,6 @@ fn settings_window(cx: &mut RenderCx, settings: Arc<Settings>) -> Element {
     // activation. The second pass covers the first-frame compositor path.
     cx.use_effect((), disable_settings_redirection_bitmap);
     let (selected, set_selected) = cx.use_state(SettingsTab::default());
-    let (content_offset, set_content_offset) = cx.use_state(0.0_f64);
-    cx.use_effect((selected,), {
-        let set_content_offset = set_content_offset.clone();
-        move || set_content_offset.call(0.0)
-    });
     let content = settings_tab_content(&settings, selected);
 
     let menu = [
@@ -408,15 +403,9 @@ fn settings_window(cx: &mut RenderCx, settings: Arc<Settings>) -> Element {
     let navigation = NavigationView::new(menu, Element::Empty)
     .selected_tag(selected.tag())
     .on_selection_changed({
-        let set_content_offset = set_content_offset.clone();
         move |tag: String| {
             let next = SettingsTab::from_tag(&tag);
             if next != selected {
-                // Navigate forward from the right and back from the left, so
-                // the slide communicates the sidebar order instead of merely
-                // decorating the page change.
-                let entering_from_right = next.index() > selected.index();
-                set_content_offset.call(if entering_from_right { 48.0 } else { -48.0 });
                 set_selected.call(next);
             }
         }
@@ -433,22 +422,9 @@ fn settings_window(cx: &mut RenderCx, settings: Arc<Settings>) -> Element {
     .horizontal_alignment(HorizontalAlignment::Left)
     .vertical_alignment(VerticalAlignment::Stretch);
 
-    // The page surface is intentionally static. Only the keyed page inside it
-    // moves, so the Mica wash, corner, and padding never jump during a tab
-    // change.
     let page = border(
         border(content)
             .with_key(format!("settings-page-{}", selected.tag()))
-            // Start the new page just to the right or left, then `use_effect`
-            // returns it to zero. The composition transition animates only
-            // this content offset.
-            .margin(Thickness {
-                left: content_offset,
-                top: 0.0,
-                right: 0.0,
-                bottom: 0.0,
-            })
-            .with_translation_transition(Duration::from_millis(220))
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .vertical_alignment(VerticalAlignment::Stretch),
     )

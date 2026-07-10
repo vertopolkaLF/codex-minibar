@@ -8,8 +8,6 @@ use std::{
     rc::Rc,
     sync::Arc,
 };
-use std::time::Duration;
-
 use crate::settings::Settings;
 use crate::theme::SETTINGS_CONTENT_FILL;
 use windows_reactor::*;
@@ -38,32 +36,10 @@ pub fn open(settings: Arc<Settings>) -> windows_core::Result<()> {
         )?);
         host.set_backdrop(Backdrop::Mica);
         host.activate()?;
-        disable_redirection_bitmap();
         *slot.borrow_mut() = Some(host);
         Ok(())
     })
 }
-
-#[cfg(windows)]
-fn disable_redirection_bitmap() {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, GetWindowLongW, SetWindowLongW, SetWindowPos, GWL_EXSTYLE,
-        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-        WS_EX_NOREDIRECTIONBITMAP,
-    };
-    let title: Vec<u16> = "Codex Minibar Settings".encode_utf16().chain(std::iter::once(0)).collect();
-    let hwnd = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
-    if hwnd.is_null() { return; }
-    unsafe {
-        let style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-        SetWindowLongW(hwnd, GWL_EXSTYLE, (style | WS_EX_NOREDIRECTIONBITMAP) as i32);
-        SetWindowPos(hwnd, std::ptr::null_mut(), 0, 0, 0, 0,
-            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
-    }
-}
-
-#[cfg(not(windows))]
-fn disable_redirection_bitmap() {}
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 enum Tab {
@@ -84,10 +60,6 @@ impl Tab {
         }
     }
 
-    fn index(self) -> u8 {
-        match self { Self::General => 0, Self::Tray => 1, Self::Notifications => 2, Self::Advanced => 3 }
-    }
-
     fn from_tag(tag: &str) -> Self {
         match tag { "tray" => Self::Tray, "notifications" => Self::Notifications, "advanced" => Self::Advanced, _ => Self::General }
     }
@@ -96,11 +68,6 @@ impl Tab {
 /// Root content for the independent WinUI settings window.
 pub fn render(cx: &mut RenderCx, settings: Arc<Settings>) -> Element {
     let (selected, set_selected) = cx.use_state(Tab::default());
-    let (offset, set_offset) = cx.use_state(0.0_f64);
-    cx.use_effect((selected,), {
-        let set_offset = set_offset.clone();
-        move || set_offset.call(0.0)
-    });
 
     let navigation = NavigationView::new(
         [
@@ -113,11 +80,9 @@ pub fn render(cx: &mut RenderCx, settings: Arc<Settings>) -> Element {
     )
     .selected_tag(selected.tag())
     .on_selection_changed({
-        let set_offset = set_offset.clone();
         move |tag: String| {
             let next = Tab::from_tag(&tag);
             if next != selected {
-                set_offset.call(if next.index() > selected.index() { 48.0 } else { -48.0 });
                 set_selected.call(next);
             }
         }
@@ -137,8 +102,6 @@ pub fn render(cx: &mut RenderCx, settings: Arc<Settings>) -> Element {
     let page = border(
         border(tab_content(&settings, selected))
             .with_key(format!("settings-page-{}", selected.tag()))
-            .margin(Thickness { left: offset, top: 0.0, right: 0.0, bottom: 0.0 })
-            .with_translation_transition(Duration::from_millis(220))
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .vertical_alignment(VerticalAlignment::Stretch),
     )
