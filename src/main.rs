@@ -10,6 +10,7 @@ use chrono::{DateTime, Utc};
 use codex_minibar::{
     app::{AppState, app},
     codex::{CodexActivator, CodexClient, first_available},
+    popup::{POPUP_HEIGHT, POPUP_WIDTH},
     scheduler::ActivationState,
     settings::Settings,
     worker::start_worker,
@@ -52,12 +53,12 @@ fn run() -> Result<()> {
 
     App::new()
         .title("Codex Minibar")
-        .inner_size(380.0, 460.0)
+        .inner_size(f64::from(POPUP_WIDTH), f64::from(POPUP_HEIGHT))
         .inner_constraints(InnerConstraints {
-            min_width: Some(360.0),
-            min_height: Some(420.0),
-            max_width: Some(420.0),
-            max_height: Some(520.0),
+            min_width: Some(f64::from(POPUP_WIDTH)),
+            min_height: Some(f64::from(POPUP_HEIGHT)),
+            max_width: Some(f64::from(POPUP_WIDTH)),
+            max_height: Some(f64::from(POPUP_HEIGHT)),
         })
         .backdrop(Backdrop::Acrylic)
         .render(move |cx| app(cx, Arc::clone(&state)))

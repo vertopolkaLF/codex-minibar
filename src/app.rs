@@ -167,7 +167,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         left: 24.0,
         top: 10.0,
         right: 18.0,
-        bottom: 10.0,
+        // Extra bottom padding so content clears the rounded window corners.
+        bottom: 12.0,
     })
     .background(DARK_SURFACE_FILL)
     .border_thickness(Thickness {
@@ -179,20 +180,29 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     .border_brush(ThemeRef::CardStroke)
     .horizontal_alignment(HorizontalAlignment::Stretch);
 
+    // Content on top (Auto), footer pinned to the bottom. Any leftover height
+    // stays between them only if the window is taller than the stack — keep
+    // POPUP_HEIGHT matched to content so that gap stays ~0.
     border(
         grid((
             vstack(body)
                 .spacing(12.0)
-                .padding(Thickness::uniform(16.0))
+                .padding(Thickness {
+                    left: 16.0,
+                    top: 16.0,
+                    right: 16.0,
+                    bottom: 16.0,
+                })
                 .horizontal_alignment(HorizontalAlignment::Stretch)
+                .vertical_alignment(VerticalAlignment::Top)
                 .grid_row(0),
             footer.grid_row(1),
         ))
-        .rows([GridLength::Star(1.0), GridLength::Auto])
+        .rows([GridLength::Auto, GridLength::Auto])
         .columns([GridLength::Star(1.0)])
-        .background(Color::transparent())
         .horizontal_alignment(HorizontalAlignment::Stretch)
-        .vertical_alignment(VerticalAlignment::Stretch),
+        .vertical_alignment(VerticalAlignment::Stretch)
+        .background(Color::transparent()),
     )
     .border_thickness(Thickness::uniform(1.0))
     .border_brush(WINDOW_BORDER)

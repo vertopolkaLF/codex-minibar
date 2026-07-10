@@ -2,6 +2,9 @@
 //!
 //! The WinUI window is parked off-screen instead of being closed. Closing it
 //! would trigger `windows-reactor`'s `Closed -> process::exit` handler.
+//!
+//! Sizing is owned by WinUI (`inner_size` / constraints). This module only
+//! moves the HWND — never resizes it — so DPI and layout stay in sync.
 
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -24,10 +27,10 @@ use windows_sys::Win32::{
         WindowsAndMessaging::{
             DispatchMessageW, FindWindowW, GWL_EXSTYLE, GWL_STYLE, GetCursorPos, GetWindowLongW,
             GetWindowRect, HWND_TOPMOST, MSG, PM_REMOVE, PeekMessageW, SetForegroundWindow,
-            SetWindowLongW, SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER,
-            SWP_SHOWWINDOW, TranslateMessage, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_LAYERED,
-            WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
-            WS_SYSMENU, WS_THICKFRAME,
+            SetWindowLongW, SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+            SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, TranslateMessage, WS_CAPTION,
+            WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+            WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
         },
     },
 };
@@ -36,8 +39,9 @@ const WINDOW_TITLE: &str = "Codex Minibar";
 const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
 const DWMWCP_ROUND: u32 = 2;
 const SHOW_GRACE_MS: i64 = 450;
-const POPUP_WIDTH: i32 = 380;
-const POPUP_HEIGHT: i32 = 460;
+/// Popup client size in DIP — must match `App::inner_size` / content stack.
+pub const POPUP_WIDTH: i32 = 380;
+pub const POPUP_HEIGHT: i32 = 434;
 const PARKED_X: i32 = -32_000;
 const PARKED_Y: i32 = -32_000;
 /// 30 compositor-synchronised frames at 60 Hz ≈ 500 ms.
@@ -92,15 +96,15 @@ fn current_hwnd() -> Option<HWND> {
 
 fn park(hwnd: HWND) {
     unsafe {
-        // Park off-screen. Do not use layered alpha — it breaks system backdrops.
+        // Park off-screen. Never touch size — WinUI owns width/height.
         SetWindowPos(
             hwnd,
             HWND_TOPMOST,
             PARKED_X,
             PARKED_Y,
-            POPUP_WIDTH,
-            POPUP_HEIGHT,
-            SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW,
         );
     }
     POPUP_VISIBLE.store(false, Ordering::SeqCst);
@@ -186,7 +190,7 @@ pub fn ensure_configured() -> Option<HWND> {
             0,
             0,
             0,
-            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER,
+            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOSIZE | SWP_NOMOVE,
         );
     }
 
@@ -230,8 +234,8 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
             bottom: 0,
         };
         GetWindowRect(hwnd, &mut rect);
-        let width = (rect.right - rect.left).abs().max(POPUP_WIDTH);
-        let height = (rect.bottom - rect.top).abs().max(POPUP_HEIGHT);
+        let width = (rect.right - rect.left).abs().max(1);
+        let height = (rect.bottom - rect.top).abs().max(1);
         let monitor = MonitorFromPoint(
             POINT {
                 x: anchor_x,
@@ -273,9 +277,9 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
             HWND_TOPMOST,
             start_x,
             y,
-            width,
-            height,
-            SWP_SHOWWINDOW,
+            0,
+            0,
+            SWP_NOSIZE | SWP_SHOWWINDOW,
         );
         let _ = SetForegroundWindow(hwnd);
 
@@ -284,7 +288,15 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
             let eased = ease_in_out_cubic(progress);
             let animated_x =
                 start_x - ((f64::from(start_x - target_x) * eased).round() as i32);
-            SetWindowPos(hwnd, HWND_TOPMOST, animated_x, y, width, height, 0);
+            SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                animated_x,
+                y,
+                0,
+                0,
+                SWP_NOSIZE,
+            );
             // Synchronize each property update with the DWM compositor rather
             // than relying on a coarse `thread::sleep` timer.
             let _ = DwmFlush();
