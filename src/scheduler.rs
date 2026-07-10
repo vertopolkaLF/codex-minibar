@@ -129,7 +129,10 @@ mod tests {
         let window = fresh_window();
         let mut state = ActivationState::default();
         state.record_attempt(&window, at(10, 0));
-        assert_eq!(state.decide(&window, at(10, 59)), Decision::AlreadyActivated);
+        assert_eq!(
+            state.decide(&window, at(10, 59)),
+            Decision::AlreadyActivated
+        );
         assert_eq!(state.decide(&window, at(11, 0)), Decision::ActivateNow);
     }
 

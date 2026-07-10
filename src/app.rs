@@ -103,6 +103,12 @@ impl Default for UiState {
 
 /// Root WinUI view for Codex Minibar (hosted in a tray popup shell).
 pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
+    let dpi = cx.use_dpi().max(1);
+    let window_corner_radius = f64::from(popup::WINDOW_CORNER_RADIUS_DIP);
+    // Keep the visual stroke one physical pixel inside the HWND clip so GDI's
+    // aliased region cannot trim its anti-aliased XAML corner pixels.
+    let border_inset = 96.0 / f64::from(dpi);
+    let inner_corner_radius = (window_corner_radius - border_inset).max(0.0);
     let (ui, set_ui) = cx.use_async_state(UiState {
         error: state.startup_error.clone(),
         last_activation: format_last_activation(&RateLimits::default(), state.last_activation_at),
@@ -133,10 +139,9 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let quit = move || std::process::exit(0);
 
     let mut body: Vec<Element> = vec![
-        limit_card("5 hour window", &ui.limits.primary),
-        limit_card("7 day window", &ui.limits.secondary),
+        limit_card("5h Session", &ui.limits.primary),
+        limit_card("Weekly", &ui.limits.secondary),
         meta_row(&ui.limits),
-        status_card(&ui),
     ];
 
     if let Some(error) = &ui.error {
@@ -152,11 +157,18 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
 
     let footer = border(
         grid((
-            body_strong("Codex Minibar")
-                .foreground(ThemeRef::SecondaryText)
-                .vertical_alignment(VerticalAlignment::Center)
-                .horizontal_alignment(HorizontalAlignment::Left)
-                .grid_column(0),
+            vstack((
+                body_strong("Codex Minibar").foreground(ThemeRef::SecondaryText),
+                caption(format!(
+                    "Updated {}",
+                    sample_freshness(ui.limits.sampled_at).to_lowercase()
+                ))
+                .foreground(ThemeRef::TertiaryText),
+            ))
+            .spacing(0.0)
+            .vertical_alignment(VerticalAlignment::Center)
+            .horizontal_alignment(HorizontalAlignment::Left)
+            .grid_column(0),
             hstack((
                 icon_button("\u{E72C}", "Refresh", 16.0, refresh),
                 icon_button("\u{E713}", "Settings", 16.0, || {}),
@@ -176,7 +188,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         top: 10.0,
         right: 18.0,
         // Extra bottom padding so content clears the rounded window corners.
-        bottom: 12.0,
+        bottom: 14.0,
     })
     .background(DARK_SURFACE_FILL)
     .border_thickness(Thickness {
@@ -195,7 +207,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     // Acrylic lives on an inner SystemBackdropElement (CornerRadius=8), not on
     // Window.SystemBackdrop — so blur stays rounded and SetWindowRgn still
     // clips the HWND without a square DWM shadow on the next monitor.
-    let chrome = border(
+    let chrome_content = border(
         grid((
             vstack(body)
                 .spacing(12.0)
@@ -203,14 +215,14 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     left: 16.0,
                     top: 16.0,
                     right: 16.0,
-                    bottom: 16.0,
+                    bottom: 20.0,
                 })
                 .horizontal_alignment(HorizontalAlignment::Stretch)
                 .vertical_alignment(VerticalAlignment::Top)
                 .grid_row(0),
             footer.grid_row(1),
         ))
-        .rows([GridLength::Auto, GridLength::Auto])
+        .rows([GridLength::Star(1.0), GridLength::Auto])
         .columns([GridLength::Star(1.0)])
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .vertical_alignment(VerticalAlignment::Stretch)
@@ -218,7 +230,14 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     )
     .border_thickness(Thickness::uniform(1.0))
     .border_brush(WINDOW_BORDER)
-    .corner_radius(8.0)
+    .corner_radius(inner_corner_radius)
+    .background(WINDOW_FILL)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .vertical_alignment(VerticalAlignment::Stretch);
+
+    let chrome = border(chrome_content)
+    .padding(Thickness::uniform(border_inset))
+    .corner_radius(window_corner_radius)
     .background(WINDOW_FILL)
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Stretch);
@@ -418,40 +437,44 @@ fn limit_card(title: &str, window: &LimitWindow) -> Element {
         .map(|value| format!("{value}% left"))
         .unwrap_or_else(|| "Unavailable".into());
     let progress = f64::from(remaining.unwrap_or(0));
-    let used = window
-        .used_percent
-        .map(|value| format!("{value}%"))
-        .unwrap_or_else(|| "?".into());
-    let reset = format_reset(window.resets_at);
-    let duration = window
-        .duration_minutes
-        .map(format_duration)
-        .unwrap_or_default();
+    let reset = format_reset_in(window.resets_at);
 
     border(
         vstack((
-            hstack((
+            grid((
                 caption(title.to_uppercase()).foreground(ThemeRef::SecondaryText),
-                text_block(remaining_label)
-                    .bold()
-                    .foreground(color.clone())
-                    .horizontal_alignment(HorizontalAlignment::Right),
             ))
-            .spacing(8.0),
-            rounded_progress(progress, color),
-            hstack((
-                caption("Used").foreground(ThemeRef::TertiaryText),
-                text_block(used),
-                text_block("·").foreground(ThemeRef::TertiaryText),
-                caption("Resets").foreground(ThemeRef::TertiaryText),
-                text_block(reset),
-                text_block(duration).foreground(ThemeRef::SecondaryText),
+            .columns([GridLength::Star(1.0)])
+            .rows([GridLength::Auto])
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .vertical_alignment(VerticalAlignment::Center),
+            rounded_progress(progress, color.clone()),
+            grid((
+                hstack((
+                    text_block(remaining_label)
+                        .bold()
+                        .foreground(color.clone())
+                        .vertical_alignment(VerticalAlignment::Center),
+                ))
+                .vertical_alignment(VerticalAlignment::Center),
+                hstack((
+                    text_block("Resets in")
+                        .foreground(ThemeRef::TertiaryText)
+                        .vertical_alignment(VerticalAlignment::Center),
+                    text_block(reset).vertical_alignment(VerticalAlignment::Center),
+                ))
+                .spacing(6.0)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .vertical_alignment(VerticalAlignment::Center),
             ))
-            .spacing(6.0),
+            .columns([GridLength::Star(1.0), GridLength::Auto])
+            .rows([GridLength::Auto])
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .vertical_alignment(VerticalAlignment::Center),
         ))
         .spacing(8.0),
     )
-    .corner_radius(8.0)
+    .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
     .padding(Thickness::uniform(12.0))
     .background(SURFACE_FILL)
     .border_thickness(Thickness::uniform(1.0))
@@ -460,39 +483,39 @@ fn limit_card(title: &str, window: &LimitWindow) -> Element {
 }
 
 fn meta_row(limits: &RateLimits) -> Element {
-    hstack((
-        caption("PLAN").foreground(ThemeRef::TertiaryText),
-        text_block(
-            limits
-                .plan_type
-                .as_deref()
-                .unwrap_or("Unavailable")
-                .to_uppercase(),
-        )
-        .bold(),
-        text_block("·").foreground(ThemeRef::TertiaryText),
-        caption("CREDITS").foreground(ThemeRef::TertiaryText),
-        text_block(credits_label(limits)).bold(),
-    ))
-    .spacing(8.0)
-    .into()
-}
-
-fn status_card(ui: &UiState) -> Element {
-    border(
-        vstack((
-            caption("LATEST SAMPLE").foreground(ThemeRef::TertiaryText),
-            text_block(sample_freshness(ui.limits.sampled_at)),
-            caption("LAST ACTIVATION").foreground(ThemeRef::TertiaryText),
-            text_block(ui.last_activation.clone()),
+    grid((
+        hstack((
+            text_block("PLAN")
+                .foreground(ThemeRef::TertiaryText)
+                .vertical_alignment(VerticalAlignment::Center),
+            text_block(
+                limits
+                    .plan_type
+                    .as_deref()
+                    .unwrap_or("Unavailable")
+                    .to_uppercase(),
+            )
+            .bold()
+            .vertical_alignment(VerticalAlignment::Center),
         ))
-        .spacing(6.0),
-    )
-    .corner_radius(8.0)
-    .padding(Thickness::uniform(12.0))
-    .background(SURFACE_FILL)
-    .border_thickness(Thickness::uniform(1.0))
-    .border_brush(ThemeRef::CardStroke)
+        .spacing(8.0)
+        .vertical_alignment(VerticalAlignment::Center),
+        hstack((
+            text_block("CREDITS")
+                .foreground(ThemeRef::TertiaryText)
+                .vertical_alignment(VerticalAlignment::Center),
+            text_block(credits_label(limits))
+                .bold()
+                .vertical_alignment(VerticalAlignment::Center),
+        ))
+        .spacing(8.0)
+        .vertical_alignment(VerticalAlignment::Center)
+        .horizontal_alignment(HorizontalAlignment::Right),
+    ))
+    .columns([GridLength::Star(1.0), GridLength::Auto])
+    .rows([GridLength::Auto])
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .vertical_alignment(VerticalAlignment::Center)
     .into()
 }
 
@@ -510,16 +533,6 @@ fn credits_label(limits: &RateLimits) -> String {
     }
 }
 
-fn format_duration(minutes: u32) -> String {
-    if minutes.is_multiple_of(1_440) {
-        format!("{}d window", minutes / 1_440)
-    } else if minutes.is_multiple_of(60) {
-        format!("{}h window", minutes / 60)
-    } else {
-        format!("{minutes}m window")
-    }
-}
-
 fn remaining_theme(remaining: Option<u8>) -> ThemeRef {
     match remaining {
         Some(0..=15) => ThemeRef::SystemCritical,
@@ -529,15 +542,21 @@ fn remaining_theme(remaining: Option<u8>) -> ThemeRef {
     }
 }
 
-fn format_reset(reset: Option<DateTime<Utc>>) -> String {
-    reset
-        .map(|value| {
-            value
-                .with_timezone(&Local)
-                .format("%H:%M, %d %b")
-                .to_string()
-        })
-        .unwrap_or_else(|| "Unavailable".into())
+fn format_reset_in(reset: Option<DateTime<Utc>>) -> String {
+    let Some(reset) = reset else {
+        return "Unavailable".into();
+    };
+
+    let remaining_minutes = (reset - Utc::now()).num_minutes().max(0);
+    let days = remaining_minutes / 1_440;
+    let hours = (remaining_minutes % 1_440) / 60;
+    let minutes = remaining_minutes % 60;
+
+    if days > 0 {
+        format!("{days}d {hours}h")
+    } else {
+        format!("{hours}h {minutes}m")
+    }
 }
 
 fn sample_freshness(sampled_at: DateTime<Utc>) -> String {
@@ -581,7 +600,7 @@ mod tests {
             sample_freshness(DateTime::default()),
             "Waiting for Codex..."
         );
-        assert_eq!(format_reset(None), "Unavailable");
+        assert_eq!(format_reset_in(None), "Unavailable");
     }
 
     #[test]

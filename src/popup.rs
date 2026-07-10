@@ -47,7 +47,7 @@ const DWMWCP_DONOTROUND: u32 = 1;
 const SHOW_GRACE_MS: i64 = 450;
 /// Popup client size in DIP — must match `App::inner_size` / content stack.
 pub const POPUP_WIDTH: i32 = 380;
-pub const POPUP_HEIGHT: i32 = 434;
+pub const POPUP_HEIGHT: i32 = 300;
 /// Must match the root XAML `corner_radius` in `app.rs`.
 pub const WINDOW_CORNER_RADIUS_DIP: i32 = 8;
 const PARKED_X: i32 = -32_000;

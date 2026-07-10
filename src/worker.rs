@@ -56,10 +56,7 @@ impl WorkerHandle {
 
     /// Split into command sender, event receiver, and join handle.
     pub fn into_parts(mut self) -> (Sender<WorkerCommand>, Receiver<WorkerEvent>, JoinHandle<()>) {
-        let join = self
-            .join
-            .take()
-            .expect("worker join handle missing");
+        let join = self.join.take().expect("worker join handle missing");
         (self.commands, self.events, join)
     }
 }

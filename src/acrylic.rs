@@ -9,22 +9,25 @@
 
 #![allow(non_snake_case)]
 
-use windows_core::{
-    self, Interface, Result, RuntimeName, RuntimeType, Type, imp::FactoryCache,
-};
+use windows_core::{self, Interface, Result, RuntimeName, RuntimeType, Type, imp::FactoryCache};
 
 /// XAML host: acrylic clipped to the same radius as the popup chrome.
-const ACRYLIC_XAML: &str = r#"
+fn acrylic_xaml() -> String {
+    format!(
+        r#"
 <SystemBackdropElement
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    CornerRadius="8"
+    CornerRadius="{}"
     HorizontalAlignment="Stretch"
     VerticalAlignment="Stretch">
     <SystemBackdropElement.SystemBackdrop>
         <DesktopAcrylicBackdrop />
     </SystemBackdropElement.SystemBackdrop>
 </SystemBackdropElement>
-"#;
+"#,
+        crate::popup::WINDOW_CORNER_RADIUS_DIP
+    )
+}
 
 /// Host a rounded `SystemBackdropElement` inside `mount` (a `Panel`).
 pub fn install_into(mount: windows_core::IInspectable) {
@@ -37,7 +40,7 @@ fn install_into_inner(mount: windows_core::IInspectable) -> Result<()> {
     if children.Size()? > 0 {
         return Ok(());
     }
-    let backdrop = XamlReader::Load(ACRYLIC_XAML)?;
+    let backdrop = XamlReader::Load(acrylic_xaml())?;
     let element: UIElement = backdrop.cast()?;
     children.Append(&element)?;
     Ok(())
@@ -88,11 +91,7 @@ impl XamlReader {
     }
 }
 
-windows_core::imp::define_interface!(
-    IPanel,
-    IPanel_Vtbl,
-    0x27a1b418_56f3_525e_b883_cefed905eed3
-);
+windows_core::imp::define_interface!(IPanel, IPanel_Vtbl, 0x27a1b418_56f3_525e_b883_cefed905eed3);
 impl RuntimeType for IPanel {
     const SIGNATURE: windows_core::imp::ConstBuffer =
         windows_core::imp::ConstBuffer::for_interface::<Self>();
@@ -156,13 +155,13 @@ struct UIElementCollection(windows_core::IUnknown);
 
 impl RuntimeType for UIElementCollection {
     const SIGNATURE: windows_core::imp::ConstBuffer =
-        windows_core::imp::ConstBuffer::for_class::<Self, windows_collections::IVector<UIElement>>();
+        windows_core::imp::ConstBuffer::for_class::<Self, windows_collections::IVector<UIElement>>(
+        );
 }
 
 unsafe impl Interface for UIElementCollection {
     type Vtable = <windows_collections::IVector<UIElement> as Interface>::Vtable;
-    const IID: windows_core::GUID =
-        <windows_collections::IVector<UIElement> as Interface>::IID;
+    const IID: windows_core::GUID = <windows_collections::IVector<UIElement> as Interface>::IID;
 }
 
 impl RuntimeName for UIElementCollection {
