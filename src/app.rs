@@ -250,6 +250,7 @@ fn start_background_bridge(state: Arc<AppState>, set_ui: AsyncSetState<UiState>)
 
         loop {
             popup::pump_messages();
+            pump_tray_and_dismiss(&tray);
             match events.recv_timeout(Duration::from_millis(16)) {
                 Ok(WorkerEvent::LimitsUpdated(limits)) => {
                     if let Err(error) = tray.sync(&widgets, &limits) {
@@ -276,9 +277,7 @@ fn start_background_bridge(state: Arc<AppState>, set_ui: AsyncSetState<UiState>)
                     set_ui.call(ui.clone());
                 }
                 Ok(WorkerEvent::Stopped) => break,
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    pump_tray_and_dismiss(&tray);
-                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
@@ -302,6 +301,8 @@ fn pump_tray_and_dismiss(tray: &TrayManager) {
             popup::toggle_near(position.x as i32, position.y as i32);
         }
     }
+
+    popup::keep_on_monitor();
 
     if popup::clicked_outside() {
         popup::hide();
