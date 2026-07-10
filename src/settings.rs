@@ -95,15 +95,31 @@ impl Settings {
             return Ok(settings);
         }
         let raw = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-        let settings: Self = toml::from_str(&raw).context("parse settings TOML")?;
+        let mut document: toml::Value = toml::from_str(&raw).context("parse settings TOML")?;
+        let original_version = document
+            .get("version")
+            .and_then(toml::Value::as_integer)
+            .unwrap_or(0);
         anyhow::ensure!(
-            settings.version <= SETTINGS_VERSION,
+            original_version <= i64::from(SETTINGS_VERSION),
             "settings were created by a newer Codex Minibar"
         );
+        migrate(&mut document, original_version as u32)?;
+        let settings: Self = document.try_into().context("decode migrated settings")?;
+        settings.validate()?;
+        if original_version != i64::from(SETTINGS_VERSION) {
+            settings.save(path)?;
+        }
         Ok(settings)
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
+        self.validate()?;
+        anyhow::ensure!(
+            self.version == SETTINGS_VERSION,
+            "refusing to save unsupported settings version {}",
+            self.version
+        );
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
         }
@@ -125,6 +141,32 @@ impl Settings {
             .with_context(|| format!("commit {}", path.display()))?;
         Ok(())
     }
+
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            (1..=365).contains(&self.history_retention_days),
+            "history retention must be between 1 and 365 days"
+        );
+        Ok(())
+    }
+}
+
+fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
+    while version < SETTINGS_VERSION {
+        match version {
+            // Version 0 was the pre-versioned format. All its property names remain
+            // compatible; serde defaults fill newly introduced notification/update fields.
+            0 => {
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .insert("version".into(), toml::Value::Integer(1));
+                version = 1;
+            }
+            unsupported => anyhow::bail!("no migration path from settings version {unsupported}"),
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -147,5 +189,46 @@ mod tests {
         let expected = Settings::default();
         expected.save(&path).unwrap();
         assert_eq!(Settings::load_or_create(&path).unwrap(), expected);
+    }
+
+    #[test]
+    fn migrates_pre_versioned_settings_and_rewrites_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(
+            &path,
+            r#"
+automatic_activation = false
+start_at_login = true
+history_retention_days = 30
+check_for_updates = false
+tray_widgets = []
+"#,
+        )
+        .unwrap();
+
+        let migrated = Settings::load_or_create(&path).unwrap();
+        assert_eq!(migrated.version, SETTINGS_VERSION);
+        assert!(!migrated.automatic_activation);
+        assert!(migrated.start_at_login);
+        assert_eq!(migrated.history_retention_days, 30);
+        assert!(fs::read_to_string(path).unwrap().contains("version = 1"));
+    }
+
+    #[test]
+    fn rejects_newer_settings_versions() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(&path, "version = 999\n").unwrap();
+        assert!(Settings::load_or_create(&path).is_err());
+    }
+
+    #[test]
+    fn validates_retention_range() {
+        let settings = Settings {
+            history_retention_days: 0,
+            ..Settings::default()
+        };
+        assert!(settings.validate().is_err());
     }
 }

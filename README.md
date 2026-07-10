@@ -10,3 +10,6 @@ The project is under active development. The current foundation contains version
 cargo test
 cargo clippy --all-targets -- -D warnings
 ```
+
+CI runs the same formatting, linting, test, and release-build gates on Windows with the
+toolchain pinned in `rust-toolchain.toml`.
