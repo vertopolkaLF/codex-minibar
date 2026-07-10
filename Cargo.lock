@@ -289,11 +289,13 @@ dependencies = [
  "eframe",
  "font8x8",
  "fontdue",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "tempfile",
  "toml",
  "tray-icon",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

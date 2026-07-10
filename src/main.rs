@@ -36,14 +36,26 @@ fn run() -> Result<()> {
             .with_inner_size([380.0, 420.0])
             .with_min_inner_size([340.0, 380.0])
             .with_resizable(false)
+            // The popup supplies its own rounded chrome, so do not let Windows
+            // draw a title bar or frame around it.
+            .with_decorations(false)
+            .with_transparent(true)
+            .with_taskbar(false)
+            .with_active(false)
+            .with_always_on_top()
             .with_visible(false),
         ..Default::default()
     };
     eframe::run_native(
         "Codex Minibar",
         native_options,
-        Box::new(move |_creation_context| {
-            Ok(Box::new(MinibarApp::new(settings, worker, startup_error)))
+        Box::new(move |creation_context| {
+            Ok(Box::new(MinibarApp::new(
+                creation_context,
+                settings,
+                worker,
+                startup_error,
+            )))
         }),
     )
     .map_err(|error| anyhow!(error.to_string()))
