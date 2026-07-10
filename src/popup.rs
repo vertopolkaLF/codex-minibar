@@ -99,13 +99,35 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// WinUI-like ease-in-out: soft departure, quick middle, gentle arrival.
-fn ease_in_out_cubic(progress: f64) -> f64 {
-    if progress < 0.5 {
-        4.0 * progress.powi(3)
-    } else {
-        1.0 - (-2.0 * progress + 2.0).powi(3) / 2.0
+/// CSS `cubic-bezier(x1, y1, x2, y2)` sample for unit progress in `[0, 1]`.
+fn cubic_bezier(x1: f64, y1: f64, x2: f64, y2: f64, progress: f64) -> f64 {
+    let x = progress.clamp(0.0, 1.0);
+    if x <= 0.0 {
+        return 0.0;
     }
+    if x >= 1.0 {
+        return 1.0;
+    }
+
+    // Solve cubic Bezier x(t) = x for t via Newton, then sample y(t).
+    let mut t = x;
+    for _ in 0..8 {
+        let u = 1.0 - t;
+        let x_t = 3.0 * u * u * t * x1 + 3.0 * u * t * t * x2 + t * t * t;
+        let dx = 3.0 * u * u * x1 + 6.0 * u * t * (x2 - x1) + 3.0 * t * t * (1.0 - x2);
+        if dx.abs() < 1e-9 {
+            break;
+        }
+        t = (t - (x_t - x) / dx).clamp(0.0, 1.0);
+    }
+
+    let u = 1.0 - t;
+    3.0 * u * u * t * y1 + 3.0 * u * t * t * y2 + t * t * t
+}
+
+/// Popup slide-in easing: `cubic-bezier(1, 0, 0, 1)`.
+fn ease_appear(progress: f64) -> f64 {
+    cubic_bezier(0.0, 0.5, 0.0, 1.0, progress)
 }
 
 fn encode_wide(value: &str) -> Vec<u16> {
@@ -535,7 +557,7 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
 
         for step in 1..=ANIMATION_STEPS {
             let progress = f64::from(step) / f64::from(ANIMATION_STEPS);
-            let eased = ease_in_out_cubic(progress);
+            let eased = ease_appear(progress);
             let animated_x =
                 start_x - ((f64::from(start_x - target_x) * eased).round() as i32);
             move_hwnd(hwnd, animated_x, target_y);
