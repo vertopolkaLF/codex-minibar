@@ -1,0 +1,17 @@
+[package]
+name = "codex-minibar"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+directories = "6"
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+strip = true
