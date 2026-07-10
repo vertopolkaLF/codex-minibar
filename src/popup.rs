@@ -53,8 +53,8 @@ pub const POPUP_HEIGHT: i32 = 300;
 pub const WINDOW_CORNER_RADIUS_DIP: i32 = 8;
 const PARKED_X: i32 = -32_000;
 const PARKED_Y: i32 = -32_000;
-/// 30 compositor-synchronised frames at 60 Hz ≈ 500 ms.
-const ANIMATION_STEPS: i32 = 30;
+/// 24 compositor-synchronised frames at 60 Hz ≈ 400 ms.
+const ANIMATION_STEPS: i32 = 24;
 /// Gap from the monitor edge.
 const EDGE_MARGIN: i32 = 20;
 
