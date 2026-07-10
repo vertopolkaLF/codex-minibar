@@ -339,9 +339,8 @@ pub(crate) fn open_settings_window(settings: Arc<Settings>) -> windows_core::Res
 #[cfg(windows)]
 fn disable_settings_redirection_bitmap() {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, GetWindowLongW, SetWindowLongW, SetWindowPos, GWL_EXSTYLE,
-        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-        WS_EX_NOREDIRECTIONBITMAP,
+        FindWindowW, GWL_EXSTYLE, GetWindowLongW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOSIZE, SWP_NOZORDER, SetWindowLongW, SetWindowPos, WS_EX_NOREDIRECTIONBITMAP,
     };
 
     let title: Vec<u16> = "Codex Minibar Settings"
@@ -401,26 +400,26 @@ fn settings_window(cx: &mut RenderCx, settings: Arc<Settings>) -> Element {
     // is opaque in the current WinUI template, so rendering the page inside it
     // would blend our `#FFFFFF05` wash over white instead of Mica.
     let navigation = NavigationView::new(menu, Element::Empty)
-    .selected_tag(selected.tag())
-    .on_selection_changed({
-        move |tag: String| {
-            let next = SettingsTab::from_tag(&tag);
-            if next != selected {
-                set_selected.call(next);
+        .selected_tag(selected.tag())
+        .on_selection_changed({
+            move |tag: String| {
+                let next = SettingsTab::from_tag(&tag);
+                if next != selected {
+                    set_selected.call(next);
+                }
             }
-        }
-    })
-    .pane_display_mode(NavigationViewPaneDisplayMode::Left)
-    .pane_open(true)
-    .open_pane_length(220.0)
-    .pane_title("Settings")
-    .settings_visible(false)
-    .back_button_visible(false)
-    .pane_toggle_button_visible(false)
-    .background(Color::transparent())
-    .width(220.0)
-    .horizontal_alignment(HorizontalAlignment::Left)
-    .vertical_alignment(VerticalAlignment::Stretch);
+        })
+        .pane_display_mode(NavigationViewPaneDisplayMode::Left)
+        .pane_open(true)
+        .open_pane_length(220.0)
+        .pane_title("Settings")
+        .settings_visible(false)
+        .back_button_visible(false)
+        .pane_toggle_button_visible(false)
+        .background(Color::transparent())
+        .width(220.0)
+        .horizontal_alignment(HorizontalAlignment::Left)
+        .vertical_alignment(VerticalAlignment::Stretch);
 
     let page = border(
         border(content)

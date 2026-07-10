@@ -952,7 +952,6 @@ dependencies = [
 [[package]]
 name = "windows-reactor"
 version = "0.0.0"
-source = "git+https://github.com/microsoft/windows-rs#07f344c019b8fdae4d398d4c2591596044cb416a"
 dependencies = [
  "rustc-hash",
  "windows-collections",

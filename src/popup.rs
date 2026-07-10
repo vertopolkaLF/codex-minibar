@@ -15,14 +15,13 @@ use windows_sys::Win32::{
     Foundation::{HWND, POINT, RECT},
     Graphics::{
         Dwm::{
-            DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_EXTENDED_FRAME_BOUNDS,
-            DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMSBT_NONE,
-            DwmExtendFrameIntoClientArea, DwmFlush, DwmGetWindowAttribute, DwmSetWindowAttribute,
+            DWMSBT_NONE, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_EXTENDED_FRAME_BOUNDS,
+            DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DwmExtendFrameIntoClientArea,
+            DwmFlush, DwmGetWindowAttribute, DwmSetWindowAttribute,
         },
         Gdi::{
-            CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject,
-            GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
-            RGN_AND, SetWindowRgn,
+            CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, GetMonitorInfoW, HMONITOR,
+            MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, RGN_AND, SetWindowRgn,
         },
     },
     UI::{
@@ -32,12 +31,11 @@ use windows_sys::Win32::{
         WindowsAndMessaging::{
             CS_DROPSHADOW, DispatchMessageW, FindWindowW, GCL_STYLE, GWL_EXSTYLE, GWL_STYLE,
             GetClassLongPtrW, GetCursorPos, GetWindowLongW, GetWindowRect, HWND_TOPMOST, MSG,
-            PM_REMOVE, PeekMessageW, SetClassLongPtrW, SetForegroundWindow, SetWindowLongW,
-            SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-            SWP_HIDEWINDOW, SWP_SHOWWINDOW, TranslateMessage, WS_CAPTION, WS_EX_APPWINDOW,
-            WS_EX_LAYERED,
-            WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
-            WS_SYSMENU, WS_THICKFRAME,
+            PM_REMOVE, PeekMessageW, SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
+            SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetClassLongPtrW, SetForegroundWindow,
+            SetWindowLongW, SetWindowPos, TranslateMessage, WS_CAPTION, WS_EX_APPWINDOW,
+            WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX,
+            WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
         },
     },
 };
@@ -140,11 +138,7 @@ fn encode_wide(value: &str) -> Vec<u16> {
 fn find_hwnd() -> Option<HWND> {
     let title = encode_wide(WINDOW_TITLE);
     let hwnd = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
-    if hwnd.is_null() {
-        None
-    } else {
-        Some(hwnd)
-    }
+    if hwnd.is_null() { None } else { Some(hwnd) }
 }
 
 fn current_hwnd() -> Option<HWND> {
@@ -214,11 +208,7 @@ fn monitor_dpi(monitor: HMONITOR) -> u32 {
     let mut dpi_x = 0u32;
     let mut dpi_y = 0u32;
     let ok = unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) };
-    if ok == 0 && dpi_x > 0 {
-        dpi_x
-    } else {
-        96
-    }
+    if ok == 0 && dpi_x > 0 { dpi_x } else { 96 }
 }
 
 /// Estimate outer size without ever writing it back through SetWindowPos.
@@ -231,20 +221,15 @@ fn popup_pixel_size(hwnd: HWND, monitor: HMONITOR) -> (i32, i32) {
     let expected_w = (i64::from(POPUP_WIDTH) * i64::from(dpi) / 96) as i32;
     let expected_h = (i64::from(POPUP_HEIGHT) * i64::from(dpi) / 96) as i32;
 
-    (measured_w.max(expected_w).max(1), measured_h.max(expected_h).max(1))
+    (
+        measured_w.max(expected_w).max(1),
+        measured_h.max(expected_h).max(1),
+    )
 }
 
 fn move_hwnd(hwnd: HWND, x: i32, y: i32) {
     unsafe {
-        SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            x,
-            y,
-            0,
-            0,
-            SWP_NOSIZE | SWP_SHOWWINDOW,
-        );
+        SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_SHOWWINDOW);
     }
 }
 
@@ -561,8 +546,7 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
         for step in 1..=ANIMATION_STEPS {
             let progress = f64::from(step) / f64::from(ANIMATION_STEPS);
             let eased = ease_appear(progress);
-            let animated_x =
-                start_x - ((f64::from(start_x - target_x) * eased).round() as i32);
+            let animated_x = start_x - ((f64::from(start_x - target_x) * eased).round() as i32);
             move_hwnd(hwnd, animated_x, target_y);
             apply_window_region(hwnd, Some(monitor));
             let _ = DwmFlush();

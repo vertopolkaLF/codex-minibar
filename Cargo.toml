@@ -16,7 +16,7 @@ toml = "0.9"
 tempfile = "3"
 windows-collections = { git = "https://github.com/microsoft/windows-rs", features = ["std"] }
 windows-core = { git = "https://github.com/microsoft/windows-rs" }
-windows-reactor = { git = "https://github.com/microsoft/windows-rs" }
+windows-reactor = { path = ".vendor" }
 
 [target.'cfg(windows)'.dependencies]
 tray-icon = { version = "0.24", default-features = false, features = ["common-controls-v6"] }

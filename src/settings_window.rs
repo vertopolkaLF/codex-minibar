@@ -3,13 +3,9 @@
 //! The host is exposed here so callers do not depend on popup implementation
 //! details; both surfaces share tokens from [`crate::theme`].
 
-use std::{
-    cell::RefCell,
-    rc::Rc,
-    sync::Arc,
-};
 use crate::settings::Settings;
 use crate::theme::SETTINGS_CONTENT_FILL;
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 use windows_reactor::*;
 
 const WINDOW_WIDTH: f64 = 760.0;
@@ -27,9 +23,15 @@ pub fn open(settings: Arc<Settings>) -> windows_core::Result<()> {
         let view_settings = Arc::clone(&settings);
         let host = Rc::new(ReactorHost::new_with_window_options(
             "Codex Minibar Settings",
-            Some(WindowSize { width: WINDOW_WIDTH, height: WINDOW_HEIGHT }),
+            Some(WindowSize {
+                width: WINDOW_WIDTH,
+                height: WINDOW_HEIGHT,
+            }),
             InnerConstraints {
-                min_width: Some(560.0), min_height: Some(400.0), max_width: None, max_height: None,
+                min_width: Some(560.0),
+                min_height: Some(400.0),
+                max_width: None,
+                max_height: None,
             },
             Box::new(move |_: &(), cx: &mut RenderCx| render(cx, Arc::clone(&view_settings))),
             |_| {},
@@ -61,7 +63,12 @@ impl Tab {
     }
 
     fn from_tag(tag: &str) -> Self {
-        match tag { "tray" => Self::Tray, "notifications" => Self::Notifications, "advanced" => Self::Advanced, _ => Self::General }
+        match tag {
+            "tray" => Self::Tray,
+            "notifications" => Self::Notifications,
+            "advanced" => Self::Advanced,
+            _ => Self::General,
+        }
     }
 }
 
@@ -71,10 +78,16 @@ pub fn render(cx: &mut RenderCx, settings: Arc<Settings>) -> Element {
 
     let navigation = NavigationView::new(
         [
-            NavViewItem::new("General").tag("general").icon(Symbol::Home),
+            NavViewItem::new("General")
+                .tag("general")
+                .icon(Symbol::Home),
             NavViewItem::new("Tray").tag("tray").icon(Symbol::More),
-            NavViewItem::new("Notifications").tag("notifications").icon(Symbol::Flag),
-            NavViewItem::new("Advanced").tag("advanced").icon(Symbol::Edit),
+            NavViewItem::new("Notifications")
+                .tag("notifications")
+                .icon(Symbol::Flag),
+            NavViewItem::new("Advanced")
+                .tag("advanced")
+                .icon(Symbol::Edit),
         ],
         Element::Empty,
     )
@@ -90,7 +103,6 @@ pub fn render(cx: &mut RenderCx, settings: Arc<Settings>) -> Element {
     .pane_display_mode(NavigationViewPaneDisplayMode::Left)
     .pane_open(true)
     .open_pane_length(220.0)
-    .pane_title("Settings")
     .settings_visible(false)
     .back_button_visible(false)
     .pane_toggle_button_visible(false)
@@ -105,9 +117,17 @@ pub fn render(cx: &mut RenderCx, settings: Arc<Settings>) -> Element {
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .vertical_alignment(VerticalAlignment::Stretch),
     )
-    .padding(Thickness { left: 32.0, top: 24.0, right: 32.0, bottom: 32.0 })
+    .padding(Thickness {
+        left: 32.0,
+        top: 24.0,
+        right: 32.0,
+        bottom: 32.0,
+    })
     .background(SETTINGS_CONTENT_FILL)
-    .corner_radius(12.0)
+    .corner_radii(CornerRadii {
+        top_left: 12.0,
+        ..Default::default()
+    })
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Stretch);
 
@@ -127,26 +147,99 @@ pub fn render(cx: &mut RenderCx, settings: Arc<Settings>) -> Element {
 
 fn tab_content(settings: &Settings, tab: Tab) -> Element {
     let (title, subtitle, rows) = match tab {
-        Tab::General => ("General", "Core behavior for Codex Minibar.", vec![row("Automatic activation", on_off(settings.automatic_activation)), row("Start at sign-in", on_off(settings.start_at_login)), row("Check for updates", on_off(settings.check_for_updates))]),
-        Tab::Tray => ("Tray", "Choose what Codex Minibar shows in the notification area.", vec![row("Active tray widgets", format!("{} configured", settings.tray_widgets.len()))]),
-        Tab::Notifications => ("Notifications", "Decide which important events deserve your attention.", vec![row("Activation failures", on_off(settings.notifications.activation_failure)), row("Codex unavailable", on_off(settings.notifications.codex_unavailable)), row("Activation successes", on_off(settings.notifications.activation_success))]),
-        Tab::Advanced => ("Advanced", "Storage and integration settings that should stay out of the way.", vec![row("History retention", format!("{} days", settings.history_retention_days)), row("Codex executable", settings.codex_path.as_ref().map_or("Automatic".into(), |path| path.display().to_string()))]),
+        Tab::General => (
+            "General",
+            "Core behavior for Codex Minibar.",
+            vec![
+                row(
+                    "Automatic activation",
+                    on_off(settings.automatic_activation),
+                ),
+                row("Start at sign-in", on_off(settings.start_at_login)),
+                row("Check for updates", on_off(settings.check_for_updates)),
+            ],
+        ),
+        Tab::Tray => (
+            "Tray",
+            "Choose what Codex Minibar shows in the notification area.",
+            vec![row(
+                "Active tray widgets",
+                format!("{} configured", settings.tray_widgets.len()),
+            )],
+        ),
+        Tab::Notifications => (
+            "Notifications",
+            "Decide which important events deserve your attention.",
+            vec![
+                row(
+                    "Activation failures",
+                    on_off(settings.notifications.activation_failure),
+                ),
+                row(
+                    "Codex unavailable",
+                    on_off(settings.notifications.codex_unavailable),
+                ),
+                row(
+                    "Activation successes",
+                    on_off(settings.notifications.activation_success),
+                ),
+            ],
+        ),
+        Tab::Advanced => (
+            "Advanced",
+            "Storage and integration settings that should stay out of the way.",
+            vec![
+                row(
+                    "History retention",
+                    format!("{} days", settings.history_retention_days),
+                ),
+                row(
+                    "Codex executable",
+                    settings
+                        .codex_path
+                        .as_ref()
+                        .map_or("Automatic".into(), |path| path.display().to_string()),
+                ),
+            ],
+        ),
     };
-    vstack((text_block(title).font_size(28.0).bold(), text_block(subtitle).foreground(ThemeRef::SecondaryText), vstack(rows).spacing(8.0)))
-        .spacing(10.0)
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .vertical_alignment(VerticalAlignment::Top)
-        .into()
+    vstack((
+        text_block(title).font_size(28.0).bold(),
+        text_block(subtitle).foreground(ThemeRef::SecondaryText),
+        vstack(rows).spacing(8.0),
+    ))
+    .spacing(10.0)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .vertical_alignment(VerticalAlignment::Top)
+    .into()
 }
 
-fn on_off(value: bool) -> &'static str { if value { "On" } else { "Off" } }
+fn on_off(value: bool) -> &'static str {
+    if value { "On" } else { "Off" }
+}
 
 fn row(label: impl Into<String>, value: impl Into<String>) -> Element {
-    border(grid((
-        text_block(label).grid_column(0).vertical_alignment(VerticalAlignment::Center),
-        text_block(value).foreground(ThemeRef::SecondaryText).grid_column(1).horizontal_alignment(HorizontalAlignment::Right).vertical_alignment(VerticalAlignment::Center),
-    )).columns([GridLength::Star(1.0), GridLength::Auto]).rows([GridLength::Auto]).horizontal_alignment(HorizontalAlignment::Stretch))
-    .padding(Thickness { left: 12.0, top: 10.0, right: 12.0, bottom: 10.0 })
+    border(
+        grid((
+            text_block(label)
+                .grid_column(0)
+                .vertical_alignment(VerticalAlignment::Center),
+            text_block(value)
+                .foreground(ThemeRef::SecondaryText)
+                .grid_column(1)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .vertical_alignment(VerticalAlignment::Center),
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Auto])
+        .rows([GridLength::Auto])
+        .horizontal_alignment(HorizontalAlignment::Stretch),
+    )
+    .padding(Thickness {
+        left: 12.0,
+        top: 10.0,
+        right: 12.0,
+        bottom: 10.0,
+    })
     .background(ThemeRef::CardBackground)
     .corner_radius(6.0)
     .border_thickness(Thickness::uniform(1.0))
