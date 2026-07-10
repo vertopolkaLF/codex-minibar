@@ -51,7 +51,7 @@ fn run() -> Result<()> {
             max_width: Some(420.0),
             max_height: Some(520.0),
         })
-        .backdrop(Backdrop::Mica)
+        .backdrop(Backdrop::Acrylic)
         .render(move |cx| app(cx, Arc::clone(&state)))
         .map_err(|error| anyhow!("windows-reactor failed: {error:?}"))
 }

@@ -9,20 +9,25 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use windows_sys::Win32::{
     Foundation::{HWND, POINT, RECT},
     Graphics::{
-        Dwm::{DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DwmFlush, DwmSetWindowAttribute},
+        Dwm::{
+            DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_SYSTEMBACKDROP_TYPE,
+            DWMWA_USE_IMMERSIVE_DARK_MODE, DWMSBT_TRANSIENTWINDOW, DwmExtendFrameIntoClientArea,
+            DwmFlush, DwmSetWindowAttribute,
+        },
         Gdi::{
             GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
         },
     },
     UI::{
+        Controls::MARGINS,
         Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON},
         WindowsAndMessaging::{
             DispatchMessageW, FindWindowW, GWL_EXSTYLE, GWL_STYLE, GetCursorPos, GetWindowLongW,
-            GetWindowRect, HWND_TOPMOST, MSG, PM_REMOVE, PeekMessageW, SetLayeredWindowAttributes,
-            SetWindowLongW, SetWindowPos, LWA_ALPHA, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-            SWP_NOZORDER, SWP_SHOWWINDOW, TranslateMessage, WS_CAPTION, WS_EX_APPWINDOW,
-            WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX,
-            WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+            GetWindowRect, HWND_TOPMOST, MSG, PM_REMOVE, PeekMessageW, SetForegroundWindow,
+            SetWindowLongW, SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER,
+            SWP_SHOWWINDOW, TranslateMessage, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_LAYERED,
+            WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+            WS_SYSMENU, WS_THICKFRAME,
         },
     },
 };
@@ -87,7 +92,7 @@ fn current_hwnd() -> Option<HWND> {
 
 fn park(hwnd: HWND) {
     unsafe {
-        let _ = SetLayeredWindowAttributes(hwnd, 0, 0, LWA_ALPHA);
+        // Park off-screen. Do not use layered alpha — it breaks system backdrops.
         SetWindowPos(
             hwnd,
             HWND_TOPMOST,
@@ -101,6 +106,38 @@ fn park(hwnd: HWND) {
     POPUP_VISIBLE.store(false, Ordering::SeqCst);
 }
 
+/// Apply Acrylic so the backdrop blurs whatever is behind the popup.
+/// WinUI `DesktopAcrylicBackdrop` owns the tint; DWM uses TRANSIENTWINDOW Acrylic.
+fn apply_acrylic(hwnd: HWND) {
+    unsafe {
+        let dark_mode = 1u32;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
+            &dark_mode as *const u32 as *const _,
+            size_of::<u32>() as u32,
+        );
+
+        // TRANSIENTWINDOW = Acrylic blur for popups/flyouts.
+        let backdrop = DWMSBT_TRANSIENTWINDOW;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_SYSTEMBACKDROP_TYPE as u32,
+            &backdrop as *const i32 as *const _,
+            size_of::<i32>() as u32,
+        );
+
+        // Let DWM draw the backdrop into the full client area.
+        let margins = MARGINS {
+            cxLeftWidth: -1,
+            cxRightWidth: -1,
+            cyTopHeight: -1,
+            cyBottomHeight: -1,
+        };
+        let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
+    }
+}
+
 /// Find the WinUI window, restyle it as a tool popup, and park it off-screen.
 pub fn ensure_configured() -> Option<HWND> {
     let hwnd = find_hwnd()?;
@@ -110,18 +147,18 @@ pub fn ensure_configured() -> Option<HWND> {
     }
 
     unsafe {
+        // Strip chrome, but do NOT force WS_POPUP — that breaks WinUI SystemBackdrop.
         let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
-        let style = (style
-            & !(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU))
-            | WS_POPUP;
+        let style =
+            style & !(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU);
         SetWindowLongW(hwnd, GWL_STYLE, style as i32);
 
+        // Tool/topmost popup shell. Avoid layered alpha and permanent no-activate:
+        // both force solid backdrop fallbacks.
         let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-        let ex_style = (ex_style & !WS_EX_APPWINDOW)
+        let ex_style = (ex_style & !(WS_EX_APPWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE))
             | WS_EX_TOOLWINDOW
-            | WS_EX_TOPMOST
-            | WS_EX_LAYERED
-            | WS_EX_NOACTIVATE;
+            | WS_EX_TOPMOST;
         SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style as i32);
 
         let corner = DWMWCP_ROUND;
@@ -139,6 +176,8 @@ pub fn ensure_configured() -> Option<HWND> {
             &border_color as *const u32 as *const _,
             size_of::<u32>() as u32,
         );
+
+        apply_acrylic(hwnd);
 
         SetWindowPos(
             hwnd,
@@ -223,12 +262,12 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
         let y = (monitor_info.rcWork.bottom - height - EDGE_MARGIN)
             .max(monitor_info.rcWork.top + EDGE_MARGIN);
 
-        // Start immediately beyond the selected monitor's right edge at zero
-        // opacity, then slide left while fading in.
+        // Start beyond the monitor's right edge, then slide left.
+        // Activate so Acrylic uses the live blur path, not the solid fallback.
         let target_x = (monitor_info.rcWork.right - width - EDGE_MARGIN)
             .max(monitor_info.rcWork.left + EDGE_MARGIN);
         let start_x = monitor_info.rcWork.right;
-        let _ = SetLayeredWindowAttributes(hwnd, 0, 0, LWA_ALPHA);
+        apply_acrylic(hwnd);
         SetWindowPos(
             hwnd,
             HWND_TOPMOST,
@@ -236,25 +275,16 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
             y,
             width,
             height,
-            SWP_SHOWWINDOW | SWP_NOACTIVATE,
+            SWP_SHOWWINDOW,
         );
+        let _ = SetForegroundWindow(hwnd);
 
         for step in 1..=ANIMATION_STEPS {
             let progress = f64::from(step) / f64::from(ANIMATION_STEPS);
             let eased = ease_in_out_cubic(progress);
             let animated_x =
                 start_x - ((f64::from(start_x - target_x) * eased).round() as i32);
-            let opacity = (f64::from(u8::MAX) * eased).round() as u8;
-            let _ = SetLayeredWindowAttributes(hwnd, 0, opacity, LWA_ALPHA);
-            SetWindowPos(
-                hwnd,
-                HWND_TOPMOST,
-                animated_x,
-                y,
-                width,
-                height,
-                SWP_NOACTIVATE,
-            );
+            SetWindowPos(hwnd, HWND_TOPMOST, animated_x, y, width, height, 0);
             // Synchronize each property update with the DWM compositor rather
             // than relying on a coarse `thread::sleep` timer.
             let _ = DwmFlush();

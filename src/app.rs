@@ -18,6 +18,28 @@ use crate::{
     worker::{WorkerCommand, WorkerEvent},
 };
 
+/// Soft translucent fill so Acrylic shows through cards and the footer.
+const SURFACE_FILL: Color = Color {
+    a: 10,
+    r: 255,
+    g: 255,
+    b: 255,
+};
+/// Soft translucent fill so Acrylic shows through cards and the footer.
+const DARK_SURFACE_FILL: Color = Color {
+    a: 70,
+    r: 0,
+    g: 0,
+    b: 0,
+};
+/// Window outline: CSS `#fff4` → `#ffffff44`.
+const WINDOW_BORDER: Color = Color {
+    a: 10,
+    r: 255,
+    g: 255,
+    b: 255,
+};
+
 /// Shared startup state handed from `main` into the reactor render tree.
 pub struct AppState {
     pub settings: Settings,
@@ -57,6 +79,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         move || {
             // Convert the WinUI window into a hidden tray popup as soon as it exists.
             let _ = popup::ensure_configured();
+            // Restyling can detach SystemBackdrop — re-apply Acrylic on the UI thread.
+            set_backdrop(Some(Backdrop::Acrylic));
             start_background_bridge(state, set_ui);
         }
     });
@@ -71,18 +95,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     };
     let quit = move || std::process::exit(0);
 
-    let mut children: Vec<Element> = vec![
-        hstack((
-            subtitle("Codex Minibar"),
-            hstack((
-                button("Refresh").on_click(refresh),
-                button("Quit").subtle().on_click(quit),
-            ))
-            .spacing(8.0)
-            .horizontal_alignment(HorizontalAlignment::Right),
-        ))
-        .spacing(8.0)
-        .into(),
+    let mut body: Vec<Element> = vec![
         limit_card("5 hour window", &ui.limits.primary),
         limit_card("7 day window", &ui.limits.secondary),
         meta_row(&ui.limits),
@@ -90,8 +103,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     ];
 
     if let Some(error) = &ui.error {
-        children.insert(
-            1,
+        body.insert(
+            0,
             InfoBar::new("Something went wrong")
                 .message(error.clone())
                 .error()
@@ -100,10 +113,65 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         );
     }
 
-    vstack(children)
-        .spacing(12.0)
-        .padding(Thickness::uniform(16.0))
-        .into()
+    let footer = border(
+        grid((
+            body_strong("Codex Minibar")
+                .foreground(ThemeRef::SecondaryText)
+                .vertical_alignment(VerticalAlignment::Center)
+                .horizontal_alignment(HorizontalAlignment::Left)
+                .grid_column(0),
+            hstack((
+                icon_button("\u{E72C}", "Refresh", 16.0, refresh),
+                icon_button("\u{E713}", "Settings", 16.0, || {}),
+                icon_button("\u{E7E8}", "Quit", 16.0, quit),
+            ))
+            .spacing(4.0)
+            .horizontal_alignment(HorizontalAlignment::Right)
+            .vertical_alignment(VerticalAlignment::Center)
+            .grid_column(1),
+        ))
+        .rows([GridLength::Auto])
+        .columns([GridLength::Star(1.0), GridLength::Auto])
+        .horizontal_alignment(HorizontalAlignment::Stretch),
+    )
+    .padding(Thickness {
+        left: 24.0,
+        top: 12.0,
+        right: 18.0,
+        bottom: 12.0,
+    })
+    .background(DARK_SURFACE_FILL)
+    .border_thickness(Thickness {
+        left: 0.0,
+        top: 1.0,
+        right: 0.0,
+        bottom: 0.0,
+    })
+    .border_brush(ThemeRef::CardStroke)
+    .horizontal_alignment(HorizontalAlignment::Stretch);
+
+    border(
+        grid((
+            vstack(body)
+                .spacing(12.0)
+                .padding(Thickness::uniform(16.0))
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .grid_row(0),
+            footer.grid_row(1),
+        ))
+        .rows([GridLength::Star(1.0), GridLength::Auto])
+        .columns([GridLength::Star(1.0)])
+        .background(Color::transparent())
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Stretch),
+    )
+    .border_thickness(Thickness::uniform(1.0))
+    .border_brush(WINDOW_BORDER)
+    .corner_radius(9.0)
+    .background(Color::transparent())
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .vertical_alignment(VerticalAlignment::Stretch)
+    .into()
 }
 
 fn start_background_bridge(state: Arc<AppState>, set_ui: AsyncSetState<UiState>) {
@@ -200,6 +268,31 @@ fn pump_tray_and_dismiss(tray: &TrayManager) {
 #[cfg(not(windows))]
 fn pump_tray_and_dismiss(_tray: &TrayManager) {}
 
+const ICON_BUTTON_SIZE: f64 = 32.0;
+
+/// Icon-only button using Segoe Fluent Icons glyphs.
+/// `font_size` is tuned per glyph so they look optically equal.
+fn icon_button(
+    glyph: &str,
+    tip: &str,
+    font_size: f64,
+    on_click: impl IntoUnitCallback,
+) -> Button {
+    button(glyph)
+        .subtle()
+        .tooltip(tip)
+        .font_family("Segoe Fluent Icons")
+        .font_size(font_size)
+        .width(ICON_BUTTON_SIZE)
+        .height(ICON_BUTTON_SIZE)
+        .min_width(ICON_BUTTON_SIZE)
+        .min_height(ICON_BUTTON_SIZE)
+        .max_width(ICON_BUTTON_SIZE)
+        .max_height(ICON_BUTTON_SIZE)
+        .padding(Thickness::uniform(0.0))
+        .on_click(on_click)
+}
+
 fn limit_card(title: &str, window: &LimitWindow) -> Element {
     let remaining = window.remaining_percent();
     let color = remaining_theme(remaining);
@@ -242,7 +335,7 @@ fn limit_card(title: &str, window: &LimitWindow) -> Element {
     )
     .corner_radius(8.0)
     .padding(Thickness::uniform(12.0))
-    .background(ThemeRef::CardBackground)
+    .background(SURFACE_FILL)
     .border_thickness(Thickness::uniform(1.0))
     .border_brush(ThemeRef::CardStroke)
     .into()
@@ -279,7 +372,7 @@ fn status_card(ui: &UiState) -> Element {
     )
     .corner_radius(8.0)
     .padding(Thickness::uniform(12.0))
-    .background(ThemeRef::CardBackground)
+    .background(SURFACE_FILL)
     .border_thickness(Thickness::uniform(1.0))
     .border_brush(ThemeRef::CardStroke)
     .into()
