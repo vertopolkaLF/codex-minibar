@@ -57,10 +57,24 @@ thread_local! {
 pub struct AppState {
     pub settings: Settings,
     pub commands: Option<Sender<WorkerCommand>>,
-    pub events: Mutex<Option<Receiver<WorkerEvent>>>,
+    pub worker: Mutex<Option<crate::worker::WorkerHandle>>,
     pub startup_error: Option<String>,
     /// Last activation attempt loaded from persisted activation state.
     pub last_activation_at: Option<DateTime<Utc>>,
+}
+
+impl AppState {
+    fn take_worker_events(&self) -> Option<Receiver<WorkerEvent>> {
+        self.worker.lock().ok()?.as_mut()?.take_events()
+    }
+
+    fn shutdown_worker(&self) {
+        if let Ok(mut worker) = self.worker.lock()
+            && let Some(worker) = worker.take()
+        {
+            worker.shutdown();
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -589,7 +603,7 @@ fn start_background_bridge(
     set_ui: AsyncSetState<UiState>,
     ui_dispatcher: UiMarshaller,
 ) {
-    let events = state.events.lock().ok().and_then(|mut slot| slot.take());
+    let events = state.take_worker_events();
     let widgets = state.settings.tray_widgets.clone();
 
     thread::spawn(move || {
@@ -619,14 +633,22 @@ fn start_background_bridge(
             set_ui.call(ui);
             loop {
                 popup::pump_messages();
-                pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings);
+                if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings) {
+                    drop(tray);
+                    state.shutdown_worker();
+                    std::process::exit(0);
+                }
                 thread::sleep(Duration::from_millis(16));
             }
         };
 
         loop {
             popup::pump_messages();
-            pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings);
+            if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings) {
+                drop(tray);
+                state.shutdown_worker();
+                std::process::exit(0);
+            }
             match events.recv_timeout(Duration::from_millis(16)) {
                 Ok(WorkerEvent::LimitsUpdated(limits)) => {
                     if let Err(error) = tray.sync(&widgets, &limits) {
@@ -665,7 +687,7 @@ fn pump_tray_and_dismiss(
     tray: &TrayManager,
     ui_dispatcher: &UiMarshaller,
     settings: &Arc<Settings>,
-) {
+) -> bool {
     use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
 
     while let Ok(event) = TrayIconEvent::receiver().try_recv() {
@@ -692,7 +714,7 @@ fn pump_tray_and_dismiss(
                     }
                 });
             }
-            TrayMenuAction::Exit => std::process::exit(0),
+            TrayMenuAction::Exit => return true,
         }
     }
 
@@ -701,6 +723,7 @@ fn pump_tray_and_dismiss(
     if popup::clicked_outside() {
         popup::hide();
     }
+    false
 }
 
 #[cfg(not(windows))]
@@ -708,7 +731,8 @@ fn pump_tray_and_dismiss(
     _tray: &TrayManager,
     _ui_dispatcher: &UiMarshaller,
     _settings: &Arc<Settings>,
-) {
+) -> bool {
+    false
 }
 
 const ICON_BUTTON_SIZE: f64 = 36.0;

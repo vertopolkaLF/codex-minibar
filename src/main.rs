@@ -13,6 +13,7 @@ use codex_minibar::{
     popup::{POPUP_HEIGHT, POPUP_WIDTH},
     scheduler::ActivationState,
     settings::Settings,
+    single_instance::SingleInstance,
     worker::start_worker,
 };
 use windows_reactor::*;
@@ -28,7 +29,7 @@ fn run() -> Result<()> {
             .ok()
             .and_then(|state| state.last_attempt_at);
 
-    let (commands, events, startup_error, _worker_join) = match executable {
+    let (commands, worker, startup_error) = match executable {
         Ok(executable) => {
             let worker = start_worker(
                 CodexClient::new(&executable),
@@ -37,16 +38,15 @@ fn run() -> Result<()> {
                 settings.automatic_activation,
                 Duration::from_secs(60),
             );
-            let (commands, events, join) = worker.into_parts();
-            (Some(commands), Some(events), None, Some(join))
+            (Some(worker.commands.clone()), Some(worker), None)
         }
-        Err(error) => (None, None, Some(error.to_string()), None),
+        Err(error) => (None, None, Some(error.to_string())),
     };
 
     let state = Arc::new(AppState {
         settings,
         commands,
-        events: Mutex::new(events),
+        worker: Mutex::new(worker),
         startup_error,
         last_activation_at,
     });
@@ -107,7 +107,18 @@ fn show_error(message: &str) {
 }
 
 fn main() {
+    let instance = match SingleInstance::acquire_or_activate_existing() {
+        Ok(Some(instance)) => instance,
+        Ok(None) => return,
+        Err(error) => {
+            show_error(&format!(
+                "Codex Minibar could not enforce a single instance: {error:#}"
+            ));
+            return;
+        }
+    };
     if let Err(error) = run() {
         show_error(&format!("Codex Minibar failed: {error:#}"));
     }
+    drop(instance);
 }

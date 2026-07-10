@@ -8,6 +8,7 @@ pub mod popup_window;
 pub mod scheduler;
 pub mod settings;
 pub mod settings_window;
+pub mod single_instance;
 pub mod theme;
 pub mod tray;
 pub mod worker;

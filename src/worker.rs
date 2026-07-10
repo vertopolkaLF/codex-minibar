@@ -38,7 +38,7 @@ pub enum WorkerEvent {
 
 pub struct WorkerHandle {
     pub commands: Sender<WorkerCommand>,
-    pub events: Receiver<WorkerEvent>,
+    events: Option<Receiver<WorkerEvent>>,
     join: Option<JoinHandle<()>>,
 }
 
@@ -48,16 +48,26 @@ impl WorkerHandle {
     }
 
     pub fn shutdown(mut self) {
+        self.stop();
+    }
+
+    fn stop(&mut self) {
         let _ = self.commands.send(WorkerCommand::Shutdown);
         if let Some(join) = self.join.take() {
             let _ = join.join();
         }
     }
 
-    /// Split into command sender, event receiver, and join handle.
-    pub fn into_parts(mut self) -> (Sender<WorkerCommand>, Receiver<WorkerEvent>, JoinHandle<()>) {
-        let join = self.join.take().expect("worker join handle missing");
-        (self.commands, self.events, join)
+    /// Hands the UI bridge the sole event receiver while this handle remains
+    /// the owner responsible for joining the worker during shutdown.
+    pub fn take_events(&mut self) -> Option<Receiver<WorkerEvent>> {
+        self.events.take()
+    }
+}
+
+impl Drop for WorkerHandle {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -98,7 +108,7 @@ pub fn start_worker(
     });
     WorkerHandle {
         commands: command_sender,
-        events: event_receiver,
+        events: Some(event_receiver),
         join: Some(join),
     }
 }
