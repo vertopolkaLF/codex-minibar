@@ -136,9 +136,9 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     )
     .padding(Thickness {
         left: 24.0,
-        top: 12.0,
+        top: 10.0,
         right: 18.0,
-        bottom: 12.0,
+        bottom: 10.0,
     })
     .background(DARK_SURFACE_FILL)
     .border_thickness(Thickness {
@@ -268,7 +268,7 @@ fn pump_tray_and_dismiss(tray: &TrayManager) {
 #[cfg(not(windows))]
 fn pump_tray_and_dismiss(_tray: &TrayManager) {}
 
-const ICON_BUTTON_SIZE: f64 = 32.0;
+const ICON_BUTTON_SIZE: f64 = 36.0;
 
 /// Icon-only button using Segoe Fluent Icons glyphs.
 /// `font_size` is tuned per glyph so they look optically equal.
@@ -291,6 +291,45 @@ fn icon_button(
         .max_height(ICON_BUTTON_SIZE)
         .padding(Thickness::uniform(0.0))
         .on_click(on_click)
+}
+
+/// Thin pill progress track with a rounded fill (no thumb).
+fn rounded_progress(value: f64, fill: ThemeRef) -> Element {
+    const HEIGHT: f64 = 6.0;
+    let radius = HEIGHT / 2.0;
+    let filled = value.clamp(0.0, 100.0);
+    let (fill_star, rest_star) = if filled <= 0.0 {
+        (0.0001, 100.0)
+    } else if filled >= 100.0 {
+        (100.0, 0.0001)
+    } else {
+        (filled, 100.0 - filled)
+    };
+
+    border(
+        grid((
+            border(Element::Empty)
+                .background(fill)
+                .corner_radius(radius)
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .vertical_alignment(VerticalAlignment::Stretch)
+                .grid_column(0),
+        ))
+        .columns([GridLength::Star(fill_star), GridLength::Star(rest_star)])
+        .rows([GridLength::Star(1.0)])
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Stretch),
+    )
+    .background(Color {
+        a: 70,
+        r: 255,
+        g: 255,
+        b: 255,
+    })
+    .corner_radius(radius)
+    .height(HEIGHT)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .into()
 }
 
 fn limit_card(title: &str, window: &LimitWindow) -> Element {
@@ -316,11 +355,11 @@ fn limit_card(title: &str, window: &LimitWindow) -> Element {
                 caption(title.to_uppercase()).foreground(ThemeRef::SecondaryText),
                 text_block(remaining_label)
                     .bold()
-                    .foreground(color)
+                    .foreground(color.clone())
                     .horizontal_alignment(HorizontalAlignment::Right),
             ))
             .spacing(8.0),
-            ProgressBar::new(progress).range(0.0, 100.0),
+            rounded_progress(progress, color),
             hstack((
                 caption("Used").foreground(ThemeRef::TertiaryText),
                 text_block(used),
