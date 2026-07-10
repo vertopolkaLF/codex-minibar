@@ -73,7 +73,6 @@ const WINDOW_BORDER: Color = Color {
     g: 255,
     b: 255,
 };
-
 /// Shared startup state handed from `main` into the reactor render tree.
 pub struct AppState {
     pub settings: Settings,
@@ -432,7 +431,7 @@ fn rounded_progress(value: f64, fill: ThemeRef) -> Element {
 
 fn limit_card(title: &str, window: &LimitWindow) -> Element {
     let remaining = window.remaining_percent();
-    let color = remaining_theme(remaining);
+    let accent = ThemeRef::SystemAttention;
     let remaining_label = remaining
         .map(|value| format!("{value}% left"))
         .unwrap_or_else(|| "Unavailable".into());
@@ -448,12 +447,12 @@ fn limit_card(title: &str, window: &LimitWindow) -> Element {
             .rows([GridLength::Auto])
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .vertical_alignment(VerticalAlignment::Center),
-            rounded_progress(progress, color.clone()),
+            rounded_progress(progress, accent.clone()),
             grid((
                 hstack((
                     text_block(remaining_label)
                         .bold()
-                        .foreground(color.clone())
+                        .foreground(accent)
                         .vertical_alignment(VerticalAlignment::Center),
                 ))
                 .vertical_alignment(VerticalAlignment::Center),
@@ -533,15 +532,6 @@ fn credits_label(limits: &RateLimits) -> String {
     }
 }
 
-fn remaining_theme(remaining: Option<u8>) -> ThemeRef {
-    match remaining {
-        Some(0..=15) => ThemeRef::SystemCritical,
-        Some(16..=50) => ThemeRef::SystemCaution,
-        Some(_) => ThemeRef::SystemSuccess,
-        None => ThemeRef::TertiaryText,
-    }
-}
-
 fn format_reset_in(reset: Option<DateTime<Utc>>) -> String {
     let Some(reset) = reset else {
         return "Unavailable".into();
@@ -553,9 +543,19 @@ fn format_reset_in(reset: Option<DateTime<Utc>>) -> String {
     let minutes = remaining_minutes % 60;
 
     if days > 0 {
-        format!("{days}d {hours}h")
+        if hours > 0 {
+            format!("{days}d {hours}h")
+        } else {
+            format!("{days}d")
+        }
+    } else if hours > 0 {
+        if minutes > 0 {
+            format!("{hours}h {minutes}m")
+        } else {
+            format!("{hours}h")
+        }
     } else {
-        format!("{hours}h {minutes}m")
+        format!("{minutes}m")
     }
 }
 
@@ -603,10 +603,4 @@ mod tests {
         assert_eq!(format_reset_in(None), "Unavailable");
     }
 
-    #[test]
-    fn themes_follow_remaining_thresholds() {
-        assert_eq!(remaining_theme(Some(10)), ThemeRef::SystemCritical);
-        assert_eq!(remaining_theme(Some(30)), ThemeRef::SystemCaution);
-        assert_eq!(remaining_theme(Some(80)), ThemeRef::SystemSuccess);
-    }
 }
