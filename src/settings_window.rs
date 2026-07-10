@@ -5,7 +5,7 @@
 
 use crate::settings::Settings;
 use crate::theme::SETTINGS_CONTENT_FILL;
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::{cell::RefCell, rc::Rc, sync::Arc, time::Duration};
 use windows_reactor::*;
 
 const WINDOW_WIDTH: f64 = 760.0;
@@ -75,6 +75,8 @@ impl Tab {
 /// Root content for the independent WinUI settings window.
 pub fn render(cx: &mut RenderCx, settings: Arc<Settings>) -> Element {
     let (selected, set_selected) = cx.use_state(Tab::default());
+    let (rendered_tab, set_rendered_tab) = cx.use_async_state(Tab::default());
+    let (page_visible, set_page_visible) = cx.use_async_state(true);
 
     let navigation = NavigationView::new(
         [
@@ -93,10 +95,20 @@ pub fn render(cx: &mut RenderCx, settings: Arc<Settings>) -> Element {
     )
     .selected_tag(selected.tag())
     .on_selection_changed({
+        let set_rendered_tab = set_rendered_tab.clone();
+        let set_page_visible = set_page_visible.clone();
         move |tag: String| {
             let next = Tab::from_tag(&tag);
             if next != selected {
+                set_page_visible.call(false);
                 set_selected.call(next);
+                let set_rendered_tab = set_rendered_tab.clone();
+                let set_page_visible = set_page_visible.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(180));
+                    set_rendered_tab.call(next);
+                    set_page_visible.call(true);
+                });
             }
         }
     })
@@ -111,25 +123,31 @@ pub fn render(cx: &mut RenderCx, settings: Arc<Settings>) -> Element {
     .horizontal_alignment(HorizontalAlignment::Left)
     .vertical_alignment(VerticalAlignment::Stretch);
 
-    let page = border(
-        border(tab_content(&settings, selected))
-            .with_key(format!("settings-page-{}", selected.tag()))
+    let page_content = border(
+        border(tab_content(&settings, rendered_tab))
+            .with_key(format!("settings-page-{}", rendered_tab.tag()))
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .vertical_alignment(VerticalAlignment::Stretch),
     )
-    .padding(Thickness {
-        left: 32.0,
-        top: 24.0,
-        right: 32.0,
-        bottom: 32.0,
-    })
-    .background(SETTINGS_CONTENT_FILL)
-    .corner_radii(CornerRadii {
-        top_left: 12.0,
-        ..Default::default()
-    })
+    .opacity(if page_visible { 1.0 } else { 0.0 })
+    .with_opacity_transition(Duration::from_millis(180))
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Stretch);
+
+    let page = border(page_content)
+        .padding(Thickness {
+            left: 32.0,
+            top: 24.0,
+            right: 32.0,
+            bottom: 32.0,
+        })
+        .background(SETTINGS_CONTENT_FILL)
+        .corner_radii(CornerRadii {
+            top_left: 12.0,
+            ..Default::default()
+        })
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Stretch);
 
     let title_bar = TitleBar::new("Codex Minibar Settings")
         .back_button_visible(false)

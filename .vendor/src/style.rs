@@ -181,6 +181,7 @@ impl LayoutAnimationConfig {
 /// `Backend::run_property_animation`.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct AnimationConfig {
+    pub from_opacity: Option<f64>,
     pub opacity: Option<f64>,
     pub scale: Option<f64>,
     pub duration: Duration,
@@ -190,6 +191,7 @@ pub struct AnimationConfig {
 impl Default for AnimationConfig {
     fn default() -> Self {
         Self {
+            from_opacity: None,
             opacity: None,
             scale: None,
             duration: Duration::from_millis(300),
@@ -201,6 +203,7 @@ impl Default for AnimationConfig {
 impl AnimationConfig {
     pub fn fade_in(duration: Duration) -> Self {
         Self {
+            from_opacity: Some(0.0),
             opacity: Some(1.0),
             duration,
             easing: Easing::EaseOut,
@@ -210,6 +213,7 @@ impl AnimationConfig {
 
     pub fn fade_out(duration: Duration) -> Self {
         Self {
+            from_opacity: Some(1.0),
             opacity: Some(0.0),
             duration,
             easing: Easing::EaseIn,

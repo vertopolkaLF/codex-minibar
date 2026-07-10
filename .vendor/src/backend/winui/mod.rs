@@ -675,6 +675,9 @@ fn run_property_animation_inner(ui: &bindings::UIElement, cfg: AnimationConfig) 
         a.cast::<bindings::IKeyFrameAnimation>()?
             .SetDuration(anim_duration_to_timespan(cfg.duration))?;
         let easing = easing_for(&icomp, cfg.easing)?;
+        if let Some(from_opacity) = cfg.from_opacity {
+            ia.InsertKeyFrameWithEasingFunction(0.0, from_opacity as f32, &easing)?;
+        }
         ia.InsertKeyFrameWithEasingFunction(1.0, opacity as f32, &easing)?;
         let anim = a.cast::<bindings::CompositionAnimation>()?;
         visual_obj.StartAnimation("Opacity", &anim)?;
