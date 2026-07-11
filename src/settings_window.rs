@@ -4,6 +4,7 @@
 //! details; both surfaces share tokens from [`crate::theme`].
 
 use crate::settings::Settings;
+use crate::settings_controls::settings_toggle_card;
 use crate::theme::SETTINGS_CONTENT_FILL;
 use std::{cell::RefCell, rc::Rc, sync::Arc, time::Duration};
 use windows_reactor::*;
@@ -15,7 +16,7 @@ thread_local! {
     static HOST: RefCell<Option<Rc<ReactorHost>>> = const { RefCell::new(None) };
 }
 
-pub fn open(settings: Arc<Settings>) -> windows_core::Result<()> {
+pub fn open(settings: Arc<Settings>, apply_runtime: AsyncSetState<Settings>) -> windows_core::Result<()> {
     HOST.with(|slot| {
         if settings_window_is_open() {
             if let Some(host) = slot.borrow().as_ref() {
@@ -41,7 +42,9 @@ pub fn open(settings: Arc<Settings>) -> windows_core::Result<()> {
                 max_width: None,
                 max_height: None,
             },
-            Box::new(move |_: &(), cx: &mut RenderCx| render(cx, Arc::clone(&view_settings))),
+            Box::new(move |_: &(), cx: &mut RenderCx| {
+                render(cx, Arc::clone(&view_settings), apply_runtime.clone())
+            }),
             |_| {},
         )?);
         host.set_backdrop(Backdrop::Mica);
@@ -97,7 +100,7 @@ impl Tab {
 }
 
 /// Root content for the independent WinUI settings window.
-pub fn render(cx: &mut RenderCx, settings: Arc<Settings>) -> Element {
+pub fn render(cx: &mut RenderCx, settings: Arc<Settings>, apply_runtime: AsyncSetState<Settings>) -> Element {
     let (selected, set_selected) = cx.use_state(Tab::default());
     let (rendered_tab, set_rendered_tab) = cx.use_async_state(Tab::default());
     let (page_visible, set_page_visible) = cx.use_async_state(true);
@@ -147,11 +150,26 @@ pub fn render(cx: &mut RenderCx, settings: Arc<Settings>) -> Element {
     .horizontal_alignment(HorizontalAlignment::Left)
     .vertical_alignment(VerticalAlignment::Stretch);
 
+    let (start_at_login, set_start_at_login) = cx.use_state(settings.start_at_login);
+    let (show_used_percentage, set_show_used_percentage) =
+        cx.use_state(settings.show_used_percentage);
+    let (hide_plan_credits, set_hide_plan_credits) = cx.use_state(settings.hide_plan_credits);
+
     let page_content = border(
-        border(tab_content(&settings, rendered_tab))
-            .with_key(format!("settings-page-{}", rendered_tab.tag()))
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .vertical_alignment(VerticalAlignment::Stretch),
+        border(tab_content(
+            &settings,
+            rendered_tab,
+            start_at_login,
+            show_used_percentage,
+            hide_plan_credits,
+            set_start_at_login,
+            set_show_used_percentage,
+            set_hide_plan_credits,
+            apply_runtime,
+        ))
+        .with_key(format!("settings-page-{}", rendered_tab.tag()))
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Stretch),
     )
     .opacity(if page_visible { 1.0 } else { 0.0 })
     .with_opacity_transition(Duration::from_millis(180))
@@ -187,18 +205,53 @@ pub fn render(cx: &mut RenderCx, settings: Arc<Settings>) -> Element {
         .into()
 }
 
-fn tab_content(settings: &Settings, tab: Tab) -> Element {
+fn tab_content(
+    settings: &Settings,
+    tab: Tab,
+    start_at_login: bool,
+    show_used_percentage: bool,
+    hide_plan_credits: bool,
+    set_start_at_login: SetState<bool>,
+    set_show_used_percentage: SetState<bool>,
+    set_hide_plan_credits: SetState<bool>,
+    apply_runtime: AsyncSetState<Settings>,
+) -> Element {
+    let apply_start_at_login = apply_runtime.clone();
+    let apply_show_used_percentage = apply_runtime.clone();
+    let apply_hide_plan_credits = apply_runtime;
     let (title, subtitle, rows) = match tab {
         Tab::General => (
             "General",
-            "Core behavior for Codex Minibar.",
+            "Configure how Codex Minibar starts and displays usage.",
             vec![
-                row(
-                    "Automatic activation",
-                    on_off(settings.automatic_activation),
+                settings_toggle_card("Automatic Startup", start_at_login, move |value| {
+                    persist_setting(set_start_at_login.clone(), apply_start_at_login.clone(), value, |settings, value| {
+                        settings.start_at_login = value;
+                    });
+                }),
+                settings_toggle_card(
+                    "Show \"% used\" instead of \"% left\"",
+                    show_used_percentage,
+                    move |value| {
+                        persist_setting(
+                            set_show_used_percentage.clone(),
+                            apply_show_used_percentage.clone(),
+                            value,
+                            |settings, value| {
+                                settings.show_used_percentage = value;
+                            },
+                        );
+                    },
                 ),
-                row("Start at sign-in", on_off(settings.start_at_login)),
-                row("Check for updates", on_off(settings.check_for_updates)),
+                settings_toggle_card(
+                    "Hide row with plan/credits",
+                    hide_plan_credits,
+                    move |value| {
+                        persist_setting(set_hide_plan_credits.clone(), apply_hide_plan_credits.clone(), value, |settings, value| {
+                            settings.hide_plan_credits = value;
+                        });
+                    },
+                ),
             ],
         ),
         Tab::Tray => (
@@ -245,12 +298,29 @@ fn tab_content(settings: &Settings, tab: Tab) -> Element {
             ],
         ),
     };
-    vstack((
-        text_block(title).font_size(28.0).bold(),
-        text_block(subtitle).foreground(ThemeRef::SecondaryText),
-        vstack(rows).spacing(8.0),
+    let row_count = rows.len();
+    let card_rows: Vec<Element> = rows
+        .into_iter()
+        .enumerate()
+        .map(|(index, row)| row.grid_row(index as i32))
+        .collect();
+    let cards = grid(card_rows)
+        .columns([GridLength::Star(1.0)])
+        .rows(std::iter::repeat_n(GridLength::Auto, row_count))
+        .row_spacing(8.0)
+        .grid_row(2)
+        .horizontal_alignment(HorizontalAlignment::Stretch);
+
+    grid((
+        text_block(title).font_size(28.0).bold().grid_row(0),
+        text_block(subtitle)
+            .foreground(ThemeRef::SecondaryText)
+            .grid_row(1),
+        cards,
     ))
-    .spacing(10.0)
+    .columns([GridLength::Star(1.0)])
+    .rows([GridLength::Auto, GridLength::Auto, GridLength::Auto])
+    .row_spacing(10.0)
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Top)
     .into()
@@ -288,4 +358,19 @@ fn row(label: impl Into<String>, value: impl Into<String>) -> Element {
     .border_brush(ThemeRef::CardStroke)
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .into()
+}
+
+fn persist_setting(setter: SetState<bool>, apply_runtime: AsyncSetState<Settings>, value: bool, update: impl FnOnce(&mut Settings, bool)) {
+    setter.call(value);
+    let result = Settings::default_path().and_then(|path| {
+        let mut settings = Settings::load_or_create(&path)?;
+        update(&mut settings, value);
+        settings.apply_runtime_effects()?;
+        settings.save(&path)?;
+        apply_runtime.call(settings);
+        Ok(())
+    });
+    if let Err(error) = result {
+        eprintln!("failed to save settings: {error:#}");
+    }
 }

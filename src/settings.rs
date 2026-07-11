@@ -52,6 +52,8 @@ pub struct Settings {
     pub version: u32,
     pub automatic_activation: bool,
     pub start_at_login: bool,
+    pub show_used_percentage: bool,
+    pub hide_plan_credits: bool,
     pub codex_path: Option<PathBuf>,
     pub tray_widgets: Vec<TrayWidget>,
     pub notifications: NotificationSettings,
@@ -64,7 +66,9 @@ impl Default for Settings {
         Self {
             version: SETTINGS_VERSION,
             automatic_activation: true,
-            start_at_login: false,
+            start_at_login: true,
+            show_used_percentage: false,
+            hide_plan_credits: false,
             codex_path: None,
             tray_widgets: vec![
                 TrayWidget {
@@ -149,6 +153,78 @@ impl Settings {
         );
         Ok(())
     }
+
+    /// Applies settings whose effect lives outside the render tree.
+    pub fn apply_runtime_effects(&self) -> Result<()> {
+        apply_startup_registration(self.start_at_login)
+    }
+}
+
+#[cfg(windows)]
+fn apply_startup_registration(enabled: bool) -> Result<()> {
+    use windows_sys::Win32::{
+        Foundation::ERROR_SUCCESS,
+        System::Registry::{
+            HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
+            RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegSetValueExW,
+        },
+    };
+
+    let subkey: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let value_name: Vec<u16> = "Codex Minibar"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut key: HKEY = std::ptr::null_mut();
+    let status = unsafe {
+        RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            0,
+            std::ptr::null_mut(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_SET_VALUE,
+            std::ptr::null(),
+            &mut key,
+            std::ptr::null_mut(),
+        )
+    };
+    anyhow::ensure!(status == ERROR_SUCCESS, "open Windows startup registry key: {status}");
+
+    let result = if enabled {
+        let executable = std::env::current_exe().context("resolve current executable for startup")?;
+        let command = format!("\"{}\"", executable.display());
+        let data: Vec<u16> = command
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        unsafe {
+            RegSetValueExW(
+                key,
+                value_name.as_ptr(),
+                0,
+                REG_SZ,
+                data.as_ptr().cast(),
+                (data.len() * size_of::<u16>()) as u32,
+            )
+        }
+    } else {
+        unsafe { RegDeleteValueW(key, value_name.as_ptr()) }
+    };
+    unsafe { RegCloseKey(key) };
+    anyhow::ensure!(
+        result == ERROR_SUCCESS,
+        "update Windows startup registration: {result}"
+    );
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn apply_startup_registration(_enabled: bool) -> Result<()> {
+    Ok(())
 }
 
 fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
@@ -177,7 +253,9 @@ mod tests {
     fn defaults_match_product_decisions() {
         let value = Settings::default();
         assert!(value.automatic_activation);
-        assert!(!value.start_at_login);
+        assert!(value.start_at_login);
+        assert!(!value.show_used_percentage);
+        assert!(!value.hide_plan_credits);
         assert_eq!(value.history_retention_days, 90);
         assert_eq!(value.tray_widgets.len(), 2);
     }

@@ -149,8 +149,10 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         last_activation: format_last_activation(&RateLimits::default(), state.last_activation_at),
         ..UiState::default()
     });
+    let (runtime_settings, set_runtime_settings) = cx.use_async_state(state.settings.clone());
     let commands = state.commands.clone();
     let ui_dispatcher = cx.use_ui_marshaller();
+    let bridge_runtime_settings = set_runtime_settings.clone();
 
     cx.use_effect((), {
         let state = Arc::clone(&state);
@@ -161,7 +163,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             let _ = popup::ensure_configured();
             // SystemBackdrop paints square + shadow past SetWindowRgn — keep it off.
             set_backdrop(None);
-            start_background_bridge(state, set_ui, ui_dispatcher);
+            start_background_bridge(state, set_ui, ui_dispatcher, bridge_runtime_settings.clone());
         }
     });
 
@@ -176,10 +178,21 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let quit = move || std::process::exit(0);
 
     let mut body: Vec<Element> = vec![
-        limit_card("5h Session", &ui.limits.primary),
-        limit_card("Weekly", &ui.limits.secondary),
-        meta_row(&ui.limits),
+        limit_card(
+            "5h Session",
+            &ui.limits.primary,
+            runtime_settings.show_used_percentage,
+        ),
+        limit_card(
+            "Weekly",
+            &ui.limits.secondary,
+            runtime_settings.show_used_percentage,
+        ),
     ];
+
+    if !runtime_settings.hide_plan_credits {
+        body.push(meta_row(&ui.limits));
+    }
 
     if let Some(error) = &ui.error {
         body.insert(
@@ -209,9 +222,10 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             hstack((
                 icon_button("\u{E72C}", "Refresh", 16.0, refresh),
                 icon_button("\u{E713}", "Settings", 16.0, {
-                    let settings = Arc::new(state.settings.clone());
+                    let settings = Arc::new(runtime_settings.clone());
+                    let apply_runtime = set_runtime_settings.clone();
                     move || {
-                        if let Err(error) = crate::settings_window::open(Arc::clone(&settings)) {
+                        if let Err(error) = crate::settings_window::open(Arc::clone(&settings), apply_runtime.clone()) {
                             eprintln!("Could not open settings window: {error:?}");
                         }
                     }
@@ -315,7 +329,10 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
 /// sidebar on the left, focused tab content on the right. Persistence wiring
 /// follows once every setting has its final interaction model.
 #[allow(dead_code)]
-pub(crate) fn open_settings_window(settings: Arc<Settings>) -> windows_core::Result<()> {
+pub(crate) fn open_settings_window(
+    settings: Arc<Settings>,
+    apply_runtime: AsyncSetState<Settings>,
+) -> windows_core::Result<()> {
     SETTINGS_HOST.with(|slot| {
         if let Some(host) = slot.borrow().as_ref() {
             return host.activate();
@@ -335,7 +352,11 @@ pub(crate) fn open_settings_window(settings: Arc<Settings>) -> windows_core::Res
                 max_height: None,
             },
             Box::new(move |_: &(), cx: &mut RenderCx| {
-                crate::settings_window::render(cx, Arc::clone(&settings_for_view))
+                crate::settings_window::render(
+                    cx,
+                    Arc::clone(&settings_for_view),
+                    apply_runtime.clone(),
+                )
             }),
             |_| {},
         )?);
@@ -602,6 +623,7 @@ fn start_background_bridge(
     state: Arc<AppState>,
     set_ui: AsyncSetState<UiState>,
     ui_dispatcher: UiMarshaller,
+    apply_runtime: AsyncSetState<Settings>,
 ) {
     let events = state.take_worker_events();
     let widgets = state.settings.tray_widgets.clone();
@@ -633,7 +655,7 @@ fn start_background_bridge(
             set_ui.call(ui);
             loop {
                 popup::pump_messages();
-                if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings) {
+                if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings, &apply_runtime) {
                     drop(tray);
                     state.shutdown_worker();
                     std::process::exit(0);
@@ -644,7 +666,7 @@ fn start_background_bridge(
 
         loop {
             popup::pump_messages();
-            if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings) {
+            if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings, &apply_runtime) {
                 drop(tray);
                 state.shutdown_worker();
                 std::process::exit(0);
@@ -687,6 +709,7 @@ fn pump_tray_and_dismiss(
     tray: &TrayManager,
     ui_dispatcher: &UiMarshaller,
     settings: &Arc<Settings>,
+    apply_runtime: &AsyncSetState<Settings>,
 ) -> bool {
     use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
 
@@ -708,8 +731,9 @@ fn pump_tray_and_dismiss(
         match action {
             TrayMenuAction::Settings => {
                 let settings = Arc::clone(settings);
+                let apply_runtime = apply_runtime.clone();
                 ui_dispatcher.dispatch(move || {
-                    if let Err(error) = crate::settings_window::open(settings) {
+                    if let Err(error) = crate::settings_window::open(settings, apply_runtime) {
                         eprintln!("Could not open settings window: {error:?}");
                     }
                 });
@@ -731,6 +755,7 @@ fn pump_tray_and_dismiss(
     _tray: &TrayManager,
     _ui_dispatcher: &UiMarshaller,
     _settings: &Arc<Settings>,
+    _apply_runtime: &AsyncSetState<Settings>,
 ) -> bool {
     false
 }
@@ -792,13 +817,19 @@ fn rounded_progress(value: f64, fill: ThemeRef) -> Element {
     .into()
 }
 
-fn limit_card(title: &str, window: &LimitWindow) -> Element {
+fn limit_card(title: &str, window: &LimitWindow, show_used_percentage: bool) -> Element {
     let remaining = window.remaining_percent();
     let accent = ThemeRef::SystemAttention;
-    let remaining_label = remaining
-        .map(|value| format!("{value}% left"))
+    let percentage = if show_used_percentage {
+        window.used_percent
+    } else {
+        remaining
+    };
+    let suffix = if show_used_percentage { "used" } else { "left" };
+    let remaining_label = percentage
+        .map(|value| format!("{value}% {suffix}"))
         .unwrap_or_else(|| "Unavailable".into());
-    let progress = f64::from(remaining.unwrap_or(0));
+    let progress = f64::from(percentage.unwrap_or(0));
     let reset = format_reset_in(window.resets_at);
 
     border(
