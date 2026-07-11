@@ -142,14 +142,16 @@ impl Settings {
             .get("version")
             .and_then(toml::Value::as_integer)
             .unwrap_or(0);
-        anyhow::ensure!(
-            original_version <= i64::from(SETTINGS_VERSION),
-            "settings were created by a newer Codex Minibar"
-        );
-        migrate(&mut document, original_version as u32)?;
+        // A settings file must never prevent the application from starting.
+        // Serde intentionally ignores unknown fields, so a newer file can still
+        // supply every option this build understands. Only migrate older files.
+        let original_version = u32::try_from(original_version).unwrap_or(u32::MAX);
+        if original_version < SETTINGS_VERSION {
+            migrate(&mut document, original_version)?;
+        }
         let settings: Self = document.try_into().context("decode migrated settings")?;
         settings.validate()?;
-        if original_version != i64::from(SETTINGS_VERSION) {
+        if original_version < SETTINGS_VERSION {
             settings.save(path)?;
         }
         Ok(settings)
@@ -158,8 +160,8 @@ impl Settings {
     pub fn save(&self, path: &Path) -> Result<()> {
         self.validate()?;
         anyhow::ensure!(
-            self.version == SETTINGS_VERSION,
-            "refusing to save unsupported settings version {}",
+            self.version >= SETTINGS_VERSION,
+            "refusing to save obsolete settings version {}",
             self.version
         );
         if let Some(parent) = path.parent() {
@@ -367,11 +369,17 @@ tray_widgets = []
     }
 
     #[test]
-    fn rejects_newer_settings_versions() {
+    fn accepts_newer_settings_versions_and_ignores_unknown_options() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.toml");
-        fs::write(&path, "version = 999\n").unwrap();
-        assert!(Settings::load_or_create(&path).is_err());
+        fs::write(
+            &path,
+            "version = 999\nfuture_option = true\nhistory_retention_days = 30\n",
+        )
+        .unwrap();
+        let settings = Settings::load_or_create(&path).unwrap();
+        assert_eq!(settings.version, 999);
+        assert_eq!(settings.history_retention_days, 30);
     }
 
     #[test]

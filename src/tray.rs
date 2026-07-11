@@ -313,7 +313,7 @@ mod platform {
             self.icons.truncate(icon_count);
             while self.icons.len() < icon_count {
                 let index = self.icons.len();
-                let icon = make_icon(widgets.get(index), limits)?;
+                let icon = make_icon(widget_for_icon(index, widgets), limits)?;
                 let tray = TrayIconBuilder::new()
                     .with_icon(icon)
                     .with_menu(Box::new(make_menu()?))
@@ -325,10 +325,17 @@ mod platform {
             }
             let tooltip = tooltip(limits);
             for (index, tray) in self.icons.iter().enumerate() {
-                tray.set_icon(Some(make_icon(widgets.get(index), limits)?))?;
+                tray.set_icon(Some(make_icon(widget_for_icon(index, widgets), limits)?))?;
                 tray.set_tooltip(Some(&tooltip))?;
             }
             Ok(())
+        }
+
+        /// Recreate after an order change: Windows assigns the newest icon next
+        /// to the clock, so creation is intentionally reversed below.
+        pub fn rebuild(&mut self, widgets: &[TrayWidget], limits: &RateLimits) -> Result<()> {
+            self.icons.clear();
+            self.sync(widgets, limits)
         }
 
         pub fn contains(&self, id: &TrayIconId) -> bool {
@@ -353,6 +360,14 @@ mod platform {
                 }
             }
             actions
+        }
+    }
+
+    fn widget_for_icon(index: usize, widgets: &[TrayWidget]) -> Option<&TrayWidget> {
+        if widgets.is_empty() {
+            None
+        } else {
+            widgets.get(widgets.len() - 1 - index)
         }
     }
 
@@ -400,6 +415,10 @@ impl TrayManager {
     }
 
     pub fn sync(&mut self, _widgets: &[TrayWidget], _limits: &RateLimits) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    pub fn rebuild(&mut self, _widgets: &[TrayWidget], _limits: &RateLimits) -> anyhow::Result<()> {
         Ok(())
     }
 

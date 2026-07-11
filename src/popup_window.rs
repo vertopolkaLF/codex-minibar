@@ -620,6 +620,8 @@ fn start_background_bridge(
             ui.hide_plan_credits = settings.hide_plan_credits;
             *notification_settings = settings.notifications;
             *widgets = settings.tray_widgets;
+            // Repaint the existing native icons in place. Recreating them makes
+            // Explorer animate a remove/add sequence and causes a visible flash.
             if let Err(error) = tray.sync(widgets, &ui.limits) {
                 ui.error = Some(error.to_string());
             }

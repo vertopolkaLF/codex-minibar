@@ -672,7 +672,7 @@ fn tab_content(
     };
     let row_count = rows.len();
     let cards = vstack(rows)
-        .spacing(4.0)
+        .spacing(if tab == Tab::Tray { 12.0 } else { 4.0 })
         .grid_row(1)
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .with_key(format!("{}-cards-{row_count}", tab.tag()));
@@ -726,6 +726,12 @@ fn tray_settings_cards(
         let widgets_for_remove = widgets.to_vec();
         let remove_setter = set_widgets.clone();
         let remove_tx = settings_tx.clone();
+        let widgets_for_left = widgets.to_vec();
+        let left_setter = set_widgets.clone();
+        let left_tx = settings_tx.clone();
+        let widgets_for_right = widgets.to_vec();
+        let right_setter = set_widgets.clone();
+        let right_tx = settings_tx.clone();
 
         let mut fields: Vec<Element> = vec![
             text_block(format!("Tray widget {}", index + 1)).font_size(16.0).bold().into(),
@@ -775,7 +781,29 @@ fn tray_settings_cards(
             );
         }
         fields.push(
-            Button::new("Remove widget")
+            hstack((
+                Button::new("Move left")
+                    .enabled(index > 0)
+                    .on_click(move || {
+                        if index == 0 { return; }
+                        let mut next = widgets_for_left.clone();
+                        next.swap(index, index - 1);
+                        persist_tray_widgets(left_setter.clone(), left_tx.clone(), next);
+                    }),
+                Button::new("Move right")
+                    .enabled(index + 1 < widgets_for_right.len())
+                    .on_click(move || {
+                        if index + 1 >= widgets_for_right.len() { return; }
+                        let mut next = widgets_for_right.clone();
+                        next.swap(index, index + 1);
+                        persist_tray_widgets(right_setter.clone(), right_tx.clone(), next);
+                    }),
+            ))
+            .spacing(8.0)
+            .into(),
+        );
+        fields.push(
+            Button::new(format!("Remove widget {}", index + 1))
                 .on_click(move || {
                     let mut next = widgets_for_remove.clone();
                     next.remove(index);
