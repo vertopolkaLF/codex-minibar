@@ -307,14 +307,23 @@ pub fn render(
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .vertical_alignment(VerticalAlignment::Stretch);
 
+    // Match NavigationView item icons: 16px glyph centered in the 48px leading column.
     let title_bar_icon = hstack((Image::new_with_uri(settings_title_icon_uri())
-        .width(20.0)
-        .height(20.0),))
+        .width(16.0)
+        .height(16.0),))
+    .margin(Thickness {
+        left: 16.0,
+        top: 0.0,
+        right: 0.0,
+        bottom: 0.0,
+    })
     .vertical_alignment(VerticalAlignment::Center);
     let title_bar = TitleBar::new("Codex Minibar Settings")
         .content(title_bar_icon)
         .back_button_visible(false)
-        .pane_toggle_button_visible(false);
+        .pane_toggle_button_visible(false)
+        // Tall caption buttons so min/max/close fill the TitleBar height.
+        .tall(true);
     let shell = grid((navigation.grid_column(0), page.grid_column(1)))
         .columns([GridLength::Pixel(220.0), GridLength::Star(1.0)])
         .rows([GridLength::Star(1.0)])
@@ -354,10 +363,9 @@ fn tab_content(
     let apply_start_at_login = settings_tx.clone();
     let apply_show_used_percentage = settings_tx.clone();
     let apply_hide_plan_credits = settings_tx;
-    let (title, subtitle, rows) = match tab {
+    let (title, rows) = match tab {
         Tab::General => (
             "General",
-            "Configure how Codex Minibar starts and displays usage.",
             vec![
                 settings_toggle_card("Automatic Startup", start_at_login, move |value| {
                     persist_setting(
@@ -401,7 +409,6 @@ fn tab_content(
         ),
         Tab::Tray => (
             "Tray",
-            "Choose what Codex Minibar shows in the notification area.",
             vec![row(
                 "Active tray widgets",
                 format!("{} configured", settings.tray_widgets.len()),
@@ -409,7 +416,6 @@ fn tab_content(
         ),
         Tab::Notifications => (
             "Notifications",
-            "Decide which important events deserve your attention.",
             vec![
                 row(
                     "Activation failures",
@@ -427,7 +433,6 @@ fn tab_content(
         ),
         Tab::Advanced => (
             "Advanced",
-            "Storage and integration settings that should stay out of the way.",
             vec![
                 row(
                     "History retention",
@@ -453,18 +458,15 @@ fn tab_content(
         .columns([GridLength::Star(1.0)])
         .rows(std::iter::repeat_n(GridLength::Auto, row_count))
         .row_spacing(4.0)
-        .grid_row(2)
+        .grid_row(1)
         .horizontal_alignment(HorizontalAlignment::Stretch);
 
     grid((
         text_block(title).font_size(28.0).bold().grid_row(0),
-        text_block(subtitle)
-            .foreground(ThemeRef::SecondaryText)
-            .grid_row(1),
         cards,
     ))
     .columns([GridLength::Star(1.0)])
-    .rows([GridLength::Auto, GridLength::Auto, GridLength::Auto])
+    .rows([GridLength::Auto, GridLength::Auto])
     .row_spacing(10.0)
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Top)
