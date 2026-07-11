@@ -330,37 +330,51 @@ pub fn render(
     let (hovered_card_id, set_hovered_card_id) = cx.use_state(None::<String>);
     let (tray_widgets, set_tray_widgets) = cx.use_state(settings.tray_widgets.clone());
 
+    // Padding lives on tab content (inside the scroller), not on this pane, so
+    // LayerFill crops flush to the window edge while long tabs stay scrollable.
     let page_content = border(
-        border(tab_content(
-            &settings,
-            rendered_tab,
-            automatic_activation,
-            start_at_login,
-            show_used_percentage,
-            hide_plan_credits,
-            activation_failure,
-            limits_reset,
-            low_usage_enabled,
-            low_usage_threshold,
-            low_usage_expanded,
-            low_usage_expand_progress,
-            &tray_widgets,
-            &hovered_card_id,
-            set_automatic_activation,
-            set_start_at_login,
-            set_show_used_percentage,
-            set_hide_plan_credits,
-            set_activation_failure,
-            set_limits_reset,
-            set_low_usage_enabled,
-            set_low_usage_threshold,
-            set_low_usage_expanded,
-            set_low_usage_expand_progress,
-            set_tray_widgets,
-            set_hovered_card_id,
-            settings_tx,
-        ))
-        .with_key(format!("settings-page-{}", rendered_tab.tag()))
+        scroll_viewer(
+            border(tab_content(
+                &settings,
+                rendered_tab,
+                automatic_activation,
+                start_at_login,
+                show_used_percentage,
+                hide_plan_credits,
+                activation_failure,
+                limits_reset,
+                low_usage_enabled,
+                low_usage_threshold,
+                low_usage_expanded,
+                low_usage_expand_progress,
+                &tray_widgets,
+                &hovered_card_id,
+                set_automatic_activation,
+                set_start_at_login,
+                set_show_used_percentage,
+                set_hide_plan_credits,
+                set_activation_failure,
+                set_limits_reset,
+                set_low_usage_enabled,
+                set_low_usage_threshold,
+                set_low_usage_expanded,
+                set_low_usage_expand_progress,
+                set_tray_widgets,
+                set_hovered_card_id,
+                settings_tx,
+            ))
+            .padding(Thickness {
+                left: 32.0,
+                top: 24.0,
+                right: 32.0,
+                bottom: 32.0,
+            })
+            .with_key(format!("settings-page-{}", rendered_tab.tag()))
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .vertical_alignment(VerticalAlignment::Top),
+        )
+        .horizontal_scroll_bar_visibility(ScrollBarVisibility::Disabled)
+        .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .vertical_alignment(VerticalAlignment::Stretch),
     )
@@ -370,12 +384,6 @@ pub fn render(
     .vertical_alignment(VerticalAlignment::Stretch);
 
     let page = border(page_content)
-        .padding(Thickness {
-            left: 32.0,
-            top: 24.0,
-            right: 32.0,
-            bottom: 32.0,
-        })
         // Standard Mica on the window; content gets Fluent LayerFill — a light
         // translucent lift so the pane reads slightly whiter than raw Mica chrome.
         .background(ThemeRef::LayerFill)
