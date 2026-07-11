@@ -3,14 +3,18 @@
 //! The WinUI window is parked off-screen instead of being closed. Closing it
 //! would trigger `windows-reactor`'s `Closed -> process::exit` handler.
 //!
-//! Sizing is owned by WinUI (`inner_size` / constraints). This module only
-//! moves the HWND — never resizes it — so DPI and layout stay in sync.
+//! Width is fixed; height is updated via [`set_client_height_dip`] when popup
+//! content changes. Positioning still never fights WinUI layout — we only
+//! move (and occasionally resize) the HWND.
 
 use std::{
+    cell::RefCell,
+    rc::Rc,
     sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicIsize, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use windows_reactor::ReactorHost;
 use windows_sys::Win32::{
     Foundation::{HWND, POINT, RECT},
     Graphics::{
@@ -46,9 +50,23 @@ const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
 /// Shape comes from `CreateRoundRectRgn` + matching XAML `corner_radius`.
 const DWMWCP_DONOTROUND: u32 = 1;
 const SHOW_GRACE_MS: i64 = 450;
-/// Popup client size in DIP — must match `App::inner_size` / content stack.
+/// Popup client width in DIP — fixed; height adapts to content.
 pub const POPUP_WIDTH: i32 = 380;
-pub const POPUP_HEIGHT: i32 = 300;
+/// Layout pieces used by [`height_for`] (must stay in sync with `popup_window`).
+const LIMIT_CARD_HEIGHT: i32 = 82;
+const META_ROW_HEIGHT: i32 = 22;
+const BODY_PAD_Y: i32 = 36; // top 16 + bottom 20
+const BODY_SPACING: i32 = 12;
+const FOOTER_HEIGHT: i32 = 61; // padding + icon row + top border
+const CHROME_HEIGHT: i32 = 4; // outer border + inset
+/// Baseline height when both limit cards, plan/credits, and footer are shown.
+pub const POPUP_HEIGHT: i32 =
+    BODY_PAD_Y + LIMIT_CARD_HEIGHT * 2 + META_ROW_HEIGHT + BODY_SPACING * 2 + FOOTER_HEIGHT + CHROME_HEIGHT;
+/// Smallest popup: two limit cards + footer (plan/credits row hidden).
+pub const POPUP_HEIGHT_MIN: i32 =
+    BODY_PAD_Y + LIMIT_CARD_HEIGHT * 2 + BODY_SPACING + FOOTER_HEIGHT + CHROME_HEIGHT;
+/// Upper bound for long error InfoBars; keeps OverlappedPresenter flexible.
+pub const POPUP_HEIGHT_MAX: i32 = 640;
 /// Must match the root XAML `corner_radius` in `app.rs`.
 pub const WINDOW_CORNER_RADIUS_DIP: i32 = 8;
 const PARKED_X: i32 = -32_000;
@@ -63,6 +81,8 @@ static CONFIGURED: AtomicBool = AtomicBool::new(false);
 static POPUP_VISIBLE: AtomicBool = AtomicBool::new(false);
 static BUTTON_WAS_DOWN: AtomicBool = AtomicBool::new(false);
 static IGNORE_OUTSIDE_UNTIL_MS: AtomicI64 = AtomicI64::new(0);
+/// Current client height in DIP (updated when content changes).
+static CLIENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(POPUP_HEIGHT);
 /// Physical monitor bounds (not work area) — right edge is the seam to the next display.
 static MONITOR_LEFT: AtomicI32 = AtomicI32::new(0);
 static MONITOR_TOP: AtomicI32 = AtomicI32::new(0);
@@ -70,6 +90,10 @@ static MONITOR_RIGHT: AtomicI32 = AtomicI32::new(0);
 static MONITOR_BOTTOM: AtomicI32 = AtomicI32::new(0);
 static WORK_BOTTOM: AtomicI32 = AtomicI32::new(0);
 static CORNER_RADIUS_PX: AtomicI32 = AtomicI32::new(WINDOW_CORNER_RADIUS_DIP);
+
+thread_local! {
+    static POPUP_HOST: RefCell<Option<Rc<ReactorHost>>> = const { RefCell::new(None) };
+}
 
 fn store_bounds(monitor: RECT, work: RECT) {
     MONITOR_LEFT.store(monitor.left, Ordering::SeqCst);
@@ -211,6 +235,84 @@ fn monitor_dpi(monitor: HMONITOR) -> u32 {
     if ok == 0 && dpi_x > 0 { dpi_x } else { 96 }
 }
 
+/// Client height in DIP for the current popup contents.
+pub fn height_for(hide_plan_credits: bool, error: Option<&str>) -> i32 {
+    let mut blocks = vec![LIMIT_CARD_HEIGHT, LIMIT_CARD_HEIGHT];
+    if !hide_plan_credits {
+        blocks.push(META_ROW_HEIGHT);
+    }
+    if let Some(message) = error {
+        blocks.insert(0, info_bar_height(message));
+    }
+    let spacings = BODY_SPACING * (blocks.len().saturating_sub(1) as i32);
+    let height = BODY_PAD_Y + blocks.iter().sum::<i32>() + spacings + FOOTER_HEIGHT + CHROME_HEIGHT;
+    height.clamp(POPUP_HEIGHT_MIN, POPUP_HEIGHT_MAX)
+}
+
+fn info_bar_height(message: &str) -> i32 {
+    // Body padding leaves ~348 DIP; InfoBar chrome eats more, so wrap early.
+    const CHARS_PER_LINE: usize = 42;
+    let lines = message.chars().count().div_ceil(CHARS_PER_LINE).max(1);
+    const BASE: i32 = 48;
+    const LINE: i32 = 18;
+    BASE + LINE * lines as i32
+}
+
+/// Keep the WinUI host so content-driven resizes can call `AppWindow.ResizeClient`.
+pub fn register_host(host: Rc<ReactorHost>) {
+    let _ = host.relax_height_constraints(f64::from(POPUP_HEIGHT_MAX));
+    POPUP_HOST.with(|slot| *slot.borrow_mut() = Some(host));
+}
+
+/// Resize from a measured content height (DIPs). Ignores bogus zero-size layout passes.
+pub fn set_client_height_from_content(height_dip: f64) {
+    if !height_dip.is_finite() || height_dip < 32.0 {
+        return;
+    }
+    set_client_height_dip(height_dip.ceil() as i32);
+}
+
+/// Resize the WinUI client to `height_dip` and re-pin if the popup is open.
+pub fn set_client_height_dip(height_dip: i32) {
+    let height_dip = height_dip.clamp(80, POPUP_HEIGHT_MAX);
+    if CLIENT_HEIGHT_DIP.swap(height_dip, Ordering::SeqCst) == height_dip {
+        return;
+    }
+    apply_client_height(height_dip);
+}
+
+/// Re-apply size constraints after Win32 chrome is stripped (stale NC metrics).
+pub fn sync_host_constraints() {
+    POPUP_HOST.with(|slot| {
+        if let Some(host) = slot.borrow().as_ref() {
+            let _ = host.relax_height_constraints(f64::from(POPUP_HEIGHT_MAX));
+            let height = CLIENT_HEIGHT_DIP.load(Ordering::SeqCst);
+            let _ = host.resize_client(f64::from(POPUP_WIDTH), f64::from(height));
+        }
+    });
+}
+
+fn apply_client_height(height_dip: i32) {
+    POPUP_HOST.with(|slot| {
+        if let Some(host) = slot.borrow().as_ref() {
+            let _ = host.relax_height_constraints(f64::from(POPUP_HEIGHT_MAX));
+            let _ = host.resize_client(f64::from(POPUP_WIDTH), f64::from(height_dip));
+        }
+    });
+
+    if !is_visible() {
+        return;
+    }
+    let Some(hwnd) = current_hwnd().or_else(find_hwnd) else {
+        return;
+    };
+    HWND_BITS.store(hwnd as isize, Ordering::SeqCst);
+    let monitor = loaded_monitor();
+    if monitor.right > monitor.left {
+        pin_bottom_right(hwnd, monitor, loaded_work_bottom());
+    }
+}
+
 /// Estimate outer size without ever writing it back through SetWindowPos.
 fn popup_pixel_size(hwnd: HWND, monitor: HMONITOR) -> (i32, i32) {
     let rect = frame_bounds(hwnd);
@@ -218,8 +320,9 @@ fn popup_pixel_size(hwnd: HWND, monitor: HMONITOR) -> (i32, i32) {
     let measured_h = (rect.bottom - rect.top).abs();
 
     let dpi = monitor_dpi(monitor);
+    let height_dip = CLIENT_HEIGHT_DIP.load(Ordering::SeqCst);
     let expected_w = (i64::from(POPUP_WIDTH) * i64::from(dpi) / 96) as i32;
-    let expected_h = (i64::from(POPUP_HEIGHT) * i64::from(dpi) / 96) as i32;
+    let expected_h = (i64::from(height_dip) * i64::from(dpi) / 96) as i32;
 
     (
         measured_w.max(expected_w).max(1),

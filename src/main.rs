@@ -5,6 +5,7 @@ use std::{
         mpsc,
         Arc, Mutex,
     },
+    rc::Rc,
     time::Duration,
 };
 
@@ -13,7 +14,7 @@ use chrono::{DateTime, Utc};
 use codex_minibar::{
     app::{AppState, app},
     codex::{CodexActivator, CodexClient, first_available},
-    popup::{POPUP_HEIGHT, POPUP_WIDTH},
+    popup::{self, POPUP_HEIGHT_MAX, POPUP_WIDTH},
     scheduler::ActivationState,
     settings::Settings,
     single_instance::SingleInstance,
@@ -47,6 +48,15 @@ fn run() -> Result<()> {
     };
 
     let (settings_tx, settings_rx) = mpsc::channel();
+    let initial_height = popup::height_for(
+        settings.hide_plan_credits,
+        startup_error.as_deref(),
+    )
+    // Oversize the first frame so Auto content can measure without clipping;
+    // SizeChanged then shrinks the HWND to the real content height.
+    .saturating_add(80)
+    .min(popup::POPUP_HEIGHT_MAX);
+    popup::set_client_height_dip(initial_height);
     let state = Arc::new(AppState {
         settings,
         commands,
@@ -62,21 +72,24 @@ fn run() -> Result<()> {
             // Unlike `App::render`, this builds the WinUI host without calling
             // `Window::Activate`. The tray popup is the sole code path that
             // makes its HWND visible.
-            let _host = Box::leak(Box::new(ReactorHost::new_with_window_options(
+            let host = Rc::new(ReactorHost::new_with_window_options(
                 "Codex Minibar",
                 Some(WindowSize {
                     width: f64::from(POPUP_WIDTH),
-                    height: f64::from(POPUP_HEIGHT),
+                    height: f64::from(initial_height),
                 }),
                 InnerConstraints {
                     min_width: Some(f64::from(POPUP_WIDTH)),
-                    min_height: Some(f64::from(POPUP_HEIGHT)),
+                    // Keep min tiny — OverlappedPresenter preferred-min was blocking shrink.
+                    min_height: Some(80.0),
                     max_width: Some(f64::from(POPUP_WIDTH)),
-                    max_height: Some(f64::from(POPUP_HEIGHT)),
+                    max_height: Some(f64::from(POPUP_HEIGHT_MAX)),
                 },
                 Box::new(move |_: &(), cx: &mut RenderCx| app(cx, Arc::clone(&state))),
                 |_| {},
-            )?));
+            )?);
+            popup::register_host(Rc::clone(&host));
+            let _host = Box::leak(Box::new(host));
             Ok(())
         })
         .map_err(|error| anyhow!("windows-reactor failed: {error:?}"))

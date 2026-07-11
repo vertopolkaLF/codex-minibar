@@ -159,6 +159,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         move || {
             // Convert the WinUI window into a hidden tray popup as soon as it exists.
             let _ = popup::ensure_configured();
+            popup::sync_host_constraints();
             // SystemBackdrop paints square + shadow past SetWindowRgn — keep it off.
             set_backdrop(None);
             start_background_bridge(state, set_ui, ui_dispatcher);
@@ -255,14 +256,10 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     .border_brush(ThemeRef::CardStroke)
     .horizontal_alignment(HorizontalAlignment::Stretch);
 
-    // Content on top (Auto), footer pinned to the bottom. Any leftover height
-    // stays between them only if the window is taller than the stack — keep
-    // POPUP_HEIGHT matched to content so that gap stays ~0.
-    //
-    // Acrylic lives on an inner SystemBackdropElement (CornerRadius=8), not on
-    // Window.SystemBackdrop — so blur stays rounded and SetWindowRgn still
-    // clips the HWND without a square DWM shadow on the next monitor.
-    let chrome_content = border(
+    // Content + footer are Auto-sized. Acrylic shares that Auto row so its
+    // SizeChanged reports the real content height — then we ResizeClient to match.
+    // Guessing DIP constants fought WinUI and left a beer gut under the footer.
+    let body_panel = border(
         grid((
             vstack(body)
                 .spacing(12.0)
@@ -277,10 +274,10 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 .grid_row(0),
             footer.grid_row(1),
         ))
-        .rows([GridLength::Star(1.0), GridLength::Auto])
+        .rows([GridLength::Auto, GridLength::Auto])
         .columns([GridLength::Star(1.0)])
         .horizontal_alignment(HorizontalAlignment::Stretch)
-        .vertical_alignment(VerticalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Top)
         .background(Color::transparent()),
     )
     .border_thickness(Thickness::uniform(1.0))
@@ -288,38 +285,39 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     .corner_radius(inner_corner_radius)
     .background(WINDOW_FILL)
     .horizontal_alignment(HorizontalAlignment::Stretch)
-    .vertical_alignment(VerticalAlignment::Stretch);
+    .vertical_alignment(VerticalAlignment::Top);
 
-    let chrome = border(chrome_content)
-        .padding(Thickness::uniform(border_inset))
-        .corner_radius(window_corner_radius)
-        .background(WINDOW_FILL)
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .vertical_alignment(VerticalAlignment::Stretch);
+    // Acrylic behind content; reconciler does not manage this panel's children.
+    // on_resize fires with the Auto-row height (= content), which drives the HWND.
+    let acrylic = {
+        let mut host = swap_chain_panel()
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .vertical_alignment(VerticalAlignment::Stretch);
+        host.mounted = Some(Callback::new(|native: Option<_>| {
+            if let Some(native) = native {
+                crate::acrylic::install_into(native);
+            }
+        }));
+        host.on_resize(|_width, height| {
+            popup::set_client_height_from_content(height);
+        })
+    };
 
-    grid((
-        // Fills the popup; hosts SystemBackdropElement (CornerRadius=8).
-        // Reconciler does not manage this panel's children, so acrylic survives
-        // UI updates. Content border sits on top with a translucent tint.
-        {
-            let mut host = swap_chain_panel()
-                .horizontal_alignment(HorizontalAlignment::Stretch)
-                .vertical_alignment(VerticalAlignment::Stretch);
-            host.mounted = Some(Callback::new(|native: Option<_>| {
-                if let Some(native) = native {
-                    crate::acrylic::install_into(native);
-                }
-            }));
-            host
-        },
-        chrome,
-    ))
-    .rows([GridLength::Star(1.0)])
-    .columns([GridLength::Star(1.0)])
+    let chrome = border(
+        grid((acrylic, body_panel))
+            .rows([GridLength::Auto])
+            .columns([GridLength::Star(1.0)])
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .vertical_alignment(VerticalAlignment::Top)
+            .background(Color::transparent()),
+    )
+    .padding(Thickness::uniform(border_inset))
+    .corner_radius(window_corner_radius)
+    .background(WINDOW_FILL)
     .horizontal_alignment(HorizontalAlignment::Stretch)
-    .vertical_alignment(VerticalAlignment::Stretch)
-    .background(Color::transparent())
-    .into()
+    .vertical_alignment(VerticalAlignment::Top);
+
+    chrome.into()
 }
 
 /// The first settings surface is deliberately a native WinUI shell: persistent

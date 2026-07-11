@@ -349,6 +349,44 @@ impl ReactorHost {
         &self.window
     }
 
+    /// Resize the window client area to the given DIP size via `AppWindow.ResizeClient`.
+    /// Prefer this over Win32 `SetWindowPos` — WinUI owns sizing through AppWindow.
+    pub fn resize_client(&self, width_dip: f64, height_dip: f64) -> Result<()> {
+        let dpi = self.render_host.dpi().max(1);
+        let dip_to_px = |dips: f64| (dips * dpi as f64 / 96.0).round() as i32;
+        let window_2 = self.window.cast::<IWindow2>()?;
+        let app_window = window_2.AppWindow()?;
+        let app_window_2 = app_window.cast::<IAppWindow2>()?;
+        app_window_2.ResizeClient(SizeInt32 {
+            width: dip_to_px(width_dip).max(1),
+            height: dip_to_px(height_dip).max(1),
+        })?;
+        self.render_host.set_inner_size(WindowSize {
+            width: width_dip,
+            height: height_dip,
+        });
+        Ok(())
+    }
+
+    /// Drop inflated preferred min height so content-driven `ResizeClient` can shrink.
+    /// Call after stripping Win32 chrome — NC metrics from create-time are stale.
+    pub fn relax_height_constraints(&self, max_height_dip: f64) -> Result<()> {
+        let dpi = self.render_host.dpi().max(1);
+        let dip_to_px = |dips: f64| (dips * dpi as f64 / 96.0).round() as i32;
+        let window_2 = self.window.cast::<IWindow2>()?;
+        let app_window = window_2.AppWindow()?;
+        let app_window_2 = app_window.cast::<IAppWindow2>()?;
+        let outer_size = app_window.Size()?;
+        let inner_size = app_window_2.ClientSize()?;
+        let nc_height_px = outer_size.height.saturating_sub(inner_size.height);
+        let presenter = app_window.Presenter()?.cast::<IOverlappedPresenter3>()?;
+        presenter.SetPreferredMinimumHeight(Some(1))?;
+        presenter.SetPreferredMaximumHeight(Some(
+            dip_to_px(max_height_dip).saturating_add(nc_height_px).max(1),
+        ))?;
+        Ok(())
+    }
+
     pub fn stats(&self) -> RenderStats {
         self.render_host.stats()
     }
