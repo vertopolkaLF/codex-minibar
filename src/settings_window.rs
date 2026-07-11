@@ -53,14 +53,75 @@ pub fn open(settings_tx: Sender<Settings>) -> windows_core::Result<()> {
             Box::new(move |_: &(), cx: &mut RenderCx| {
                 render(cx, Arc::clone(&view_settings), settings_tx.clone())
             }),
-            |_| {},
+            |recon| {
+                // Realize NavigationView/templates on the first paint so the
+                // window does not appear and then fill in controls afterward.
+                recon.eager_templated_realization = true;
+            },
         )?);
         host.set_backdrop(Backdrop::Mica);
+        // Hide the HWND before WinUI tears content down so close does not flash
+        // empty black chrome (default title bar + no Mica/content).
+        install_settings_close_hide();
         host.activate()?;
         *slot.borrow_mut() = Some(host);
         Ok(())
     })
 }
+
+/// On WM_CLOSE / SC_CLOSE, hide the window while it still looks correct, then
+/// let the default close path destroy it. Without this, content is dismantled
+/// while the HWND is still visible → black flash with OS chrome.
+#[cfg(windows)]
+fn install_settings_close_hide() {
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        FindWindowW, SC_CLOSE, SW_HIDE, ShowWindow, WM_CLOSE, WM_NCDESTROY, WM_SYSCOMMAND,
+    };
+
+    const SUBCLASS_ID: usize = 0xC0DE_5E77;
+
+    let title: Vec<u16> = "Codex Minibar Settings"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let hwnd = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
+    if hwnd.is_null() {
+        return;
+    }
+
+    unsafe extern "system" fn subclass_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        _uid: usize,
+        _data: usize,
+    ) -> LRESULT {
+        let is_close =
+            msg == WM_CLOSE || (msg == WM_SYSCOMMAND && (wparam & 0xFFF0) as u32 == SC_CLOSE);
+        if is_close {
+            // Hide while fully painted; default processing then destroys.
+            unsafe {
+                ShowWindow(hwnd, SW_HIDE);
+            }
+        }
+        if msg == WM_NCDESTROY {
+            unsafe {
+                RemoveWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID);
+            }
+        }
+        unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+    }
+
+    unsafe {
+        let _ = SetWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID, 0);
+    }
+}
+
+#[cfg(not(windows))]
+fn install_settings_close_hide() {}
 
 fn load_settings_for_window() -> Settings {
     match Settings::default_path().and_then(|path| Settings::load_or_create(&path)) {

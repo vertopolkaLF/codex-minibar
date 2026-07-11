@@ -157,14 +157,23 @@ impl Backdrop {
     }
 }
 
+/// Presenter / backdrop / icon applied at Activate time (or deferred until the
+/// first XAML content attach so the HWND never flashes empty chrome).
+struct ActivateChrome {
+    presenter: Cell<PresenterKind>,
+    backdrop: Cell<Option<Backdrop>>,
+    icon: RefCell<Option<String>>,
+}
+
 /// WinUI-bound [`RenderHost`] hosting a single root [`Component`] inside
 /// a `Microsoft.UI.Xaml.Window`.
 pub struct ReactorHost {
     render_host: RenderHost<WinUIBackend, WinUIDispatcher>,
     window: Window,
-    presenter: Cell<PresenterKind>,
-    backdrop: Cell<Option<Backdrop>>,
-    icon: RefCell<Option<String>>,
+    /// When set, the next successful content attach runs chrome setup +
+    /// `Window::Activate` so the HWND never appears empty/black.
+    pending_activate: Rc<Cell<bool>>,
+    chrome: Rc<ActivateChrome>,
 }
 
 impl ReactorHost {
@@ -198,6 +207,16 @@ impl ReactorHost {
         render_host.set_dpi(initial_dpi);
         render_host.with_reconciler_mut(configure);
 
+        let pending_activate = Rc::new(Cell::new(false));
+        let pending_activate_for_post = Rc::clone(&pending_activate);
+        // Shared with post_render so first-show chrome (backdrop/presenter/icon)
+        // can be applied after content is attached, not before.
+        let chrome = Rc::new(ActivateChrome {
+            presenter: Cell::new(PresenterKind::Default),
+            backdrop: Cell::new(None),
+            icon: RefCell::new(None),
+        });
+        let chrome_for_post = Rc::clone(&chrome);
         let attach_for_post_render = AttachState {
             window: window.clone(),
             render_host: render_host.clone_inner(),
@@ -257,6 +276,14 @@ impl ReactorHost {
                                 set_titlebar_height(tall);
                             }
                         }
+
+                        // First show: content + custom title bar are in place —
+                        // apply chrome and Activate only now (never an empty HWND).
+                        if pending_activate_for_post.replace(false) {
+                            apply_activate_chrome(&state.window, &chrome_for_post);
+                            let _ = state.window.Activate();
+                            clear_app_starting_cursor(&state.window);
+                        }
                     }
                 }
                 None => {
@@ -270,76 +297,51 @@ impl ReactorHost {
         Ok(Self {
             render_host,
             window,
-            presenter: Cell::new(PresenterKind::Default),
-            backdrop: Cell::new(None),
-            icon: RefCell::new(None),
+            pending_activate,
+            chrome,
         })
     }
 
     /// Set the window presenter (full-screen / compact overlay / default).
     /// Must be called before [`Self::activate`].
     pub fn set_presenter(&self, kind: PresenterKind) {
-        self.presenter.set(kind);
+        self.chrome.presenter.set(kind);
     }
 
     /// Set the window backdrop material (Mica, Mica Alt, or Acrylic).
     /// Must be called before [`Self::activate`].
     pub fn set_backdrop(&self, backdrop: Backdrop) {
-        self.backdrop.set(Some(backdrop));
+        self.chrome.backdrop.set(Some(backdrop));
     }
 
     /// Set the window icon from a path to an `.ico` file, used for the
     /// title-bar and taskbar. Must be called before [`Self::activate`].
     pub fn set_icon(&self, path: impl Into<String>) {
-        *self.icon.borrow_mut() = Some(path.into());
+        *self.chrome.icon.borrow_mut() = Some(path.into());
     }
 
     pub fn activate(&self) -> Result<()> {
-        let presenter = self.presenter.get();
-        let backdrop = self.backdrop.get();
-        let icon = self.icon.borrow().clone();
-        let window = self.window.clone();
-        let handler = DispatcherQueueHandler::new(move || {
-            fault::catch("activate", || {
-                let mut hwnd: HWND = HWND::default();
-                if let Ok(native) = window.cast::<IWindowNative>() {
-                    let _ = unsafe { native.WindowHandle(&mut hwnd) };
-                }
-
-                let app_window = window.cast::<IWindow2>().and_then(|w| w.AppWindow()).ok();
-                if let Some(app_window) = &app_window {
-                    if let Some(native_kind) = presenter.to_native()
-                        && let Err(err) = app_window.SetPresenterByKind(native_kind)
-                    {
-                        fault::report("window presenter", format!("{err}"));
-                    }
-                    if let Some(icon) = &icon
-                        && let Err(err) = app_window.SetIcon(icon)
-                    {
-                        fault::report("window icon", format!("{err}"));
-                    }
-                }
-                if let Some(bd) = backdrop
-                    && let Err(err) = bd.apply_to(&window)
-                {
-                    fault::report("backdrop", format!("{err}"));
-                }
-                let _ = window.Activate();
-
-                // Clear the OS-supplied AppStarting cursor by posting a synthetic
-                // WM_SETCURSOR; otherwise the spinner persists until the first
-                // mouse move. PostMessageW (not SendMessageW) avoids flicker.
-                if !hwnd.is_null() {
-                    let lparam: LPARAM =
-                        (((WM_MOUSEMOVE) << 16) | (HTCLIENT & 0xFFFF)) as i32 as LPARAM;
-                    unsafe {
-                        let _ = PostMessageW(hwnd, WM_SETCURSOR, hwnd as WPARAM, lparam);
-                    }
-                }
+        // Content is attached asynchronously by the first Normal-priority
+        // render. Prefer activating from `post_render` after SetContent +
+        // TitleBar wiring so the HWND never flashes empty black OS chrome.
+        //
+        // If the root is already attached (re-show / late activate), run on a
+        // Low tick so any in-flight Normal paint still finishes first.
+        if self.render_host.root_id().is_some() {
+            let window = self.window.clone();
+            let chrome = Rc::clone(&self.chrome);
+            let handler = DispatcherQueueHandler::new(move || {
+                fault::catch("activate", || {
+                    apply_activate_chrome(&window, &chrome);
+                    let _ = window.Activate();
+                    clear_app_starting_cursor(&window);
+                });
             });
-        });
-        let queue = DispatcherQueue::GetForCurrentThread()?;
-        queue.TryEnqueueWithPriority(DispatcherQueuePriority::High, &handler)?;
+            let queue = DispatcherQueue::GetForCurrentThread()?;
+            queue.TryEnqueueWithPriority(DispatcherQueuePriority::Low, &handler)?;
+        } else {
+            self.pending_activate.set(true);
+        }
         Ok(())
     }
 
@@ -593,6 +595,47 @@ fn update_color_scheme_from(fe: &FrameworkElement) {
             _ => ColorScheme::Light,
         };
         set_current_color_scheme(scheme);
+    }
+}
+
+fn apply_activate_chrome(window: &Window, chrome: &ActivateChrome) {
+    let presenter = chrome.presenter.get();
+    let backdrop = chrome.backdrop.get();
+    let icon = chrome.icon.borrow().clone();
+
+    let app_window = window.cast::<IWindow2>().and_then(|w| w.AppWindow()).ok();
+    if let Some(app_window) = &app_window {
+        if let Some(native_kind) = presenter.to_native()
+            && let Err(err) = app_window.SetPresenterByKind(native_kind)
+        {
+            fault::report("window presenter", format!("{err}"));
+        }
+        if let Some(icon) = &icon
+            && let Err(err) = app_window.SetIcon(icon)
+        {
+            fault::report("window icon", format!("{err}"));
+        }
+    }
+    if let Some(bd) = backdrop
+        && let Err(err) = bd.apply_to(window)
+    {
+        fault::report("backdrop", format!("{err}"));
+    }
+}
+
+fn clear_app_starting_cursor(window: &Window) {
+    let mut hwnd: HWND = HWND::default();
+    if let Ok(native) = window.cast::<IWindowNative>() {
+        let _ = unsafe { native.WindowHandle(&mut hwnd) };
+    }
+    // Clear the OS-supplied AppStarting cursor by posting a synthetic
+    // WM_SETCURSOR; otherwise the spinner persists until the first mouse move.
+    // PostMessageW (not SendMessageW) avoids flicker.
+    if !hwnd.is_null() {
+        let lparam: LPARAM = (((WM_MOUSEMOVE) << 16) | (HTCLIENT & 0xFFFF)) as i32 as LPARAM;
+        unsafe {
+            let _ = PostMessageW(hwnd, WM_SETCURSOR, hwnd as WPARAM, lparam);
+        }
     }
 }
 
