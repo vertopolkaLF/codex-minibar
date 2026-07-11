@@ -14,6 +14,7 @@ use chrono::{DateTime, Utc};
 use codex_minibar::{
     app::{AppState, app},
     codex::{CodexActivator, CodexClient, first_available},
+    notifications,
     popup::{self, POPUP_HEIGHT_MAX, POPUP_WIDTH},
     scheduler::ActivationState,
     settings::Settings,
@@ -23,6 +24,7 @@ use codex_minibar::{
 use windows_reactor::*;
 
 fn run() -> Result<()> {
+    notifications::initialize();
     let path = Settings::default_path()?;
     let settings = Settings::load_or_create(&path)?;
     let executable = first_available(settings.codex_path.as_deref());

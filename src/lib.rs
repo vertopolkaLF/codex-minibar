@@ -3,6 +3,7 @@ pub mod app;
 pub mod codex;
 pub mod discovery;
 pub mod limits;
+pub mod notifications;
 pub mod popup;
 pub mod popup_window;
 pub mod scheduler;

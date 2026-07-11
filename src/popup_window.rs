@@ -12,8 +12,9 @@ use windows_reactor::*;
 
 use crate::{
     limits::{LimitWindow, RateLimits},
+    notifications::LimitNotificationTracker,
     popup,
-    settings::Settings,
+    settings::{NotificationSettings, Settings},
     theme::{DARK_SURFACE_FILL, SURFACE_FILL, WINDOW_BORDER, WINDOW_FILL},
     tray::{TrayManager, TrayMenuAction},
     worker::{WorkerCommand, WorkerEvent},
@@ -589,6 +590,8 @@ fn start_background_bridge(
     thread::spawn(move || {
         let mut tray = TrayManager::new();
         let fallback_attempt = state.last_activation_at;
+        let mut notification_settings = state.settings.notifications.clone();
+        let mut limit_notifications = LimitNotificationTracker::default();
         let mut ui = UiState {
             error: state.startup_error.clone(),
             last_activation: format_last_activation(&RateLimits::default(), fallback_attempt),
@@ -610,19 +613,24 @@ fn start_background_bridge(
             thread::sleep(Duration::from_millis(50));
         }
 
-        let apply_settings =
-            |ui: &mut UiState, set_ui: &AsyncSetState<UiState>, settings: Settings| {
-                ui.show_used_percentage = settings.show_used_percentage;
-                ui.hide_plan_credits = settings.hide_plan_credits;
-                set_ui.call(ui.clone());
-            };
+        let apply_settings = |ui: &mut UiState,
+                              set_ui: &AsyncSetState<UiState>,
+                              notification_settings: &mut NotificationSettings,
+                              settings: Settings| {
+            ui.show_used_percentage = settings.show_used_percentage;
+            ui.hide_plan_credits = settings.hide_plan_credits;
+            *notification_settings = settings.notifications;
+            set_ui.call(ui.clone());
+        };
 
-        let drain_settings = |ui: &mut UiState, set_ui: &AsyncSetState<UiState>| {
+        let drain_settings = |ui: &mut UiState,
+                              set_ui: &AsyncSetState<UiState>,
+                              notification_settings: &mut NotificationSettings| {
             let Some(settings_rx) = settings_rx.as_ref() else {
                 return;
             };
             while let Ok(settings) = settings_rx.try_recv() {
-                apply_settings(ui, set_ui, settings);
+                apply_settings(ui, set_ui, notification_settings, settings);
             }
         };
 
@@ -630,7 +638,7 @@ fn start_background_bridge(
             set_ui.call(ui.clone());
             loop {
                 popup::pump_messages();
-                drain_settings(&mut ui, &set_ui);
+                drain_settings(&mut ui, &set_ui, &mut notification_settings);
                 if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings_tx) {
                     drop(tray);
                     state.shutdown_worker();
@@ -642,7 +650,7 @@ fn start_background_bridge(
 
         loop {
             popup::pump_messages();
-            drain_settings(&mut ui, &set_ui);
+            drain_settings(&mut ui, &set_ui, &mut notification_settings);
             if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings_tx) {
                 drop(tray);
                 state.shutdown_worker();
@@ -650,6 +658,7 @@ fn start_background_bridge(
             }
             match events.recv_timeout(Duration::from_millis(16)) {
                 Ok(WorkerEvent::LimitsUpdated(limits)) => {
+                    limit_notifications.observe(&limits, &notification_settings);
                     if let Err(error) = tray.sync(&widgets, &limits) {
                         ui.error = Some(error.to_string());
                     } else {

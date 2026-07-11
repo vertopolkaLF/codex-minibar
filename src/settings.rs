@@ -31,7 +31,12 @@ pub struct NotificationSettings {
     pub activation_failure: bool,
     pub codex_unavailable: bool,
     pub approaching_reset: bool,
+    /// Notify when a rate-limit window resets (`resets_at` changes).
     pub limits_changed: bool,
+    /// Notify when remaining usage drops to [`Self::low_usage_threshold_percent`].
+    pub low_usage_enabled: bool,
+    /// Remaining-percent threshold for low-usage notifications (1–99).
+    pub low_usage_threshold_percent: u8,
 }
 
 impl Default for NotificationSettings {
@@ -42,6 +47,8 @@ impl Default for NotificationSettings {
             codex_unavailable: true,
             approaching_reset: false,
             limits_changed: false,
+            low_usage_enabled: false,
+            low_usage_threshold_percent: 20,
         }
     }
 }
@@ -150,6 +157,10 @@ impl Settings {
         anyhow::ensure!(
             (1..=365).contains(&self.history_retention_days),
             "history retention must be between 1 and 365 days"
+        );
+        anyhow::ensure!(
+            (1..=99).contains(&self.notifications.low_usage_threshold_percent),
+            "low usage threshold must be between 1 and 99 percent"
         );
         Ok(())
     }
@@ -261,6 +272,9 @@ mod tests {
         assert!(!value.hide_plan_credits);
         assert_eq!(value.history_retention_days, 90);
         assert_eq!(value.tray_widgets.len(), 2);
+        assert!(!value.notifications.limits_changed);
+        assert!(!value.notifications.low_usage_enabled);
+        assert_eq!(value.notifications.low_usage_threshold_percent, 20);
     }
 
     #[test]

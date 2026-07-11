@@ -4,7 +4,7 @@
 //! details; both surfaces share tokens from [`crate::theme`].
 
 use crate::settings::Settings;
-use crate::settings_controls::settings_toggle_card;
+use crate::settings_controls::{settings_slider_card, settings_toggle_card};
 use crate::theme::SETTINGS_CONTENT_FILL;
 use anyhow::Context;
 use std::{
@@ -270,6 +270,14 @@ pub fn render(
     let (show_used_percentage, set_show_used_percentage) =
         cx.use_state(settings.show_used_percentage);
     let (hide_plan_credits, set_hide_plan_credits) = cx.use_state(settings.hide_plan_credits);
+    let (activation_failure, set_activation_failure) =
+        cx.use_state(settings.notifications.activation_failure);
+    let (limits_reset, set_limits_reset) =
+        cx.use_state(settings.notifications.limits_changed);
+    let (low_usage_enabled, set_low_usage_enabled) =
+        cx.use_state(settings.notifications.low_usage_enabled);
+    let (low_usage_threshold, set_low_usage_threshold) =
+        cx.use_state(settings.notifications.low_usage_threshold_percent);
 
     let page_content = border(
         border(tab_content(
@@ -278,9 +286,17 @@ pub fn render(
             start_at_login,
             show_used_percentage,
             hide_plan_credits,
+            activation_failure,
+            limits_reset,
+            low_usage_enabled,
+            low_usage_threshold,
             set_start_at_login,
             set_show_used_percentage,
             set_hide_plan_credits,
+            set_activation_failure,
+            set_limits_reset,
+            set_low_usage_enabled,
+            set_low_usage_threshold,
             settings_tx,
         ))
         .with_key(format!("settings-page-{}", rendered_tab.tag()))
@@ -355,20 +371,32 @@ fn tab_content(
     start_at_login: bool,
     show_used_percentage: bool,
     hide_plan_credits: bool,
+    activation_failure: bool,
+    limits_reset: bool,
+    low_usage_enabled: bool,
+    low_usage_threshold: u8,
     set_start_at_login: SetState<bool>,
     set_show_used_percentage: SetState<bool>,
     set_hide_plan_credits: SetState<bool>,
+    set_activation_failure: SetState<bool>,
+    set_limits_reset: SetState<bool>,
+    set_low_usage_enabled: SetState<bool>,
+    set_low_usage_threshold: SetState<u8>,
     settings_tx: Sender<Settings>,
 ) -> Element {
     let apply_start_at_login = settings_tx.clone();
     let apply_show_used_percentage = settings_tx.clone();
-    let apply_hide_plan_credits = settings_tx;
+    let apply_hide_plan_credits = settings_tx.clone();
+    let apply_activation_failure = settings_tx.clone();
+    let apply_limits_reset = settings_tx.clone();
+    let apply_low_usage_enabled = settings_tx.clone();
+    let apply_low_usage_threshold = settings_tx;
     let (title, rows) = match tab {
         Tab::General => (
             "General",
             vec![
                 settings_toggle_card("Automatic Startup", start_at_login, move |value| {
-                    persist_setting(
+                    persist_bool(
                         set_start_at_login.clone(),
                         apply_start_at_login.clone(),
                         value,
@@ -376,12 +404,13 @@ fn tab_content(
                             settings.start_at_login = value;
                         },
                     );
-                }),
+                })
+                .with_key("general-startup"),
                 settings_toggle_card(
                     "Show \"% used\" instead of \"% left\"",
                     show_used_percentage,
                     move |value| {
-                        persist_setting(
+                        persist_bool(
                             set_show_used_percentage.clone(),
                             apply_show_used_percentage.clone(),
                             value,
@@ -390,12 +419,13 @@ fn tab_content(
                             },
                         );
                     },
-                ),
+                )
+                .with_key("general-show-used"),
                 settings_toggle_card(
                     "Hide row with plan/credits",
                     hide_plan_credits,
                     move |value| {
-                        persist_setting(
+                        persist_bool(
                             set_hide_plan_credits.clone(),
                             apply_hide_plan_credits.clone(),
                             value,
@@ -404,7 +434,8 @@ fn tab_content(
                             },
                         );
                     },
-                ),
+                )
+                .with_key("general-hide-credits"),
             ],
         ),
         Tab::Tray => (
@@ -412,54 +443,99 @@ fn tab_content(
             vec![row(
                 "Active tray widgets",
                 format!("{} configured", settings.tray_widgets.len()),
-            )],
+            )
+            .with_key("tray-widgets")],
         ),
-        Tab::Notifications => (
-            "Notifications",
-            vec![
-                row(
-                    "Activation failures",
-                    on_off(settings.notifications.activation_failure),
-                ),
-                row(
-                    "Codex unavailable",
-                    on_off(settings.notifications.codex_unavailable),
-                ),
-                row(
-                    "Activation successes",
-                    on_off(settings.notifications.activation_success),
-                ),
-            ],
-        ),
+        Tab::Notifications => {
+            let mut rows = vec![
+                settings_toggle_card("Activation failures", activation_failure, move |value| {
+                    persist_bool(
+                        set_activation_failure.clone(),
+                        apply_activation_failure.clone(),
+                        value,
+                        |settings, value| {
+                            settings.notifications.activation_failure = value;
+                        },
+                    );
+                })
+                .with_key("notif-activation-failure"),
+                settings_toggle_card("When limits got reset", limits_reset, move |value| {
+                    persist_bool(
+                        set_limits_reset.clone(),
+                        apply_limits_reset.clone(),
+                        value,
+                        |settings, value| {
+                            settings.notifications.limits_changed = value;
+                        },
+                    );
+                })
+                .with_key("notif-limits-reset"),
+                settings_toggle_card(
+                    format!("When usage is down to {low_usage_threshold}%"),
+                    low_usage_enabled,
+                    move |value| {
+                        persist_bool(
+                            set_low_usage_enabled.clone(),
+                            apply_low_usage_enabled.clone(),
+                            value,
+                            |settings, value| {
+                                settings.notifications.low_usage_enabled = value;
+                            },
+                        );
+                    },
+                )
+                .with_key("notif-low-usage"),
+            ];
+            if low_usage_enabled {
+                rows.push(
+                    settings_slider_card(
+                        "Notify when remaining usage reaches",
+                        low_usage_threshold,
+                        5,
+                        50,
+                        5,
+                        move |value: f64| {
+                            let percent = value.round().clamp(5.0, 50.0) as u8;
+                            persist_u8(
+                                set_low_usage_threshold.clone(),
+                                apply_low_usage_threshold.clone(),
+                                percent,
+                                |settings, value| {
+                                    settings.notifications.low_usage_threshold_percent = value;
+                                },
+                            );
+                        },
+                    )
+                    .with_key("notif-low-usage-slider"),
+                );
+            }
+            ("Notifications", rows)
+        }
         Tab::Advanced => (
             "Advanced",
             vec![
                 row(
                     "History retention",
                     format!("{} days", settings.history_retention_days),
-                ),
+                )
+                .with_key("advanced-retention"),
                 row(
                     "Codex executable",
                     settings
                         .codex_path
                         .as_ref()
                         .map_or("Automatic".into(), |path| path.display().to_string()),
-                ),
+                )
+                .with_key("advanced-codex-path"),
             ],
         ),
     };
     let row_count = rows.len();
-    let card_rows: Vec<Element> = rows
-        .into_iter()
-        .enumerate()
-        .map(|(index, row)| row.grid_row(index as i32))
-        .collect();
-    let cards = grid(card_rows)
-        .columns([GridLength::Star(1.0)])
-        .rows(std::iter::repeat_n(GridLength::Auto, row_count))
-        .row_spacing(4.0)
+    let cards = vstack(rows)
+        .spacing(4.0)
         .grid_row(1)
-        .horizontal_alignment(HorizontalAlignment::Stretch);
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .with_key(format!("{}-cards-{row_count}", tab.tag()));
 
     grid((
         text_block(title).font_size(28.0).bold().grid_row(0),
@@ -471,10 +547,6 @@ fn tab_content(
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Top)
     .into()
-}
-
-fn on_off(value: bool) -> &'static str {
-    if value { "On" } else { "Off" }
 }
 
 fn row(label: impl Into<String>, value: impl Into<String>) -> Element {
@@ -507,16 +579,30 @@ fn row(label: impl Into<String>, value: impl Into<String>) -> Element {
     .into()
 }
 
-fn persist_setting(
+fn persist_bool(
     setter: SetState<bool>,
     settings_tx: Sender<Settings>,
     value: bool,
     update: impl FnOnce(&mut Settings, bool),
 ) {
     setter.call(value);
+    persist_update(settings_tx, |settings| update(settings, value));
+}
+
+fn persist_u8(
+    setter: SetState<u8>,
+    settings_tx: Sender<Settings>,
+    value: u8,
+    update: impl FnOnce(&mut Settings, u8),
+) {
+    setter.call(value);
+    persist_update(settings_tx, |settings| update(settings, value));
+}
+
+fn persist_update(settings_tx: Sender<Settings>, update: impl FnOnce(&mut Settings)) {
     let result = Settings::default_path().and_then(|path| {
         let mut settings = Settings::load_or_create(&path)?;
-        update(&mut settings, value);
+        update(&mut settings);
         // Persist first so a flaky side effect cannot block live UI updates.
         settings.save(&path)?;
         if let Err(error) = settings.apply_runtime_effects() {
