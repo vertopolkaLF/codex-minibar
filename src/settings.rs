@@ -215,8 +215,11 @@ fn apply_startup_registration(enabled: bool) -> Result<()> {
         unsafe { RegDeleteValueW(key, value_name.as_ptr()) }
     };
     unsafe { RegCloseKey(key) };
+    // Deleting an already-absent Run value is success: the desired end state is
+    // "not registered", whether we removed it now or it was never there.
+    const ERROR_FILE_NOT_FOUND: u32 = 2;
     anyhow::ensure!(
-        result == ERROR_SUCCESS,
+        result == ERROR_SUCCESS || (!enabled && result == ERROR_FILE_NOT_FOUND),
         "update Windows startup registration: {result}"
     );
     Ok(())

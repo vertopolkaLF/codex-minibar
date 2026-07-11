@@ -1,6 +1,4 @@
 use std::{
-    cell::RefCell,
-    rc::Rc,
     sync::{
         Arc, Mutex,
         mpsc::{Receiver, Sender},
@@ -42,17 +40,9 @@ fn format_last_activation(limits: &RateLimits, fallback_attempt: Option<DateTime
         .unwrap_or_else(|| "Never".into())
 }
 
-const SETTINGS_WINDOW_WIDTH: f64 = 760.0;
-const SETTINGS_WINDOW_HEIGHT: f64 = 520.0;
 /// `#FFFFFF05`: a barely perceptible content wash over Mica, matching the
 /// settings-window appearance without making the page look like a card.
 use crate::theme::SETTINGS_CONTENT_FILL;
-
-thread_local! {
-    /// The settings host must outlive its visible Window. It stays on the
-    /// WinUI UI thread, so thread-local storage is the natural owner.
-    static SETTINGS_HOST: RefCell<Option<Rc<ReactorHost>>> = const { RefCell::new(None) };
-}
 /// Shared startup state handed from `main` into the reactor render tree.
 pub struct AppState {
     pub settings: Settings,
@@ -61,6 +51,9 @@ pub struct AppState {
     pub startup_error: Option<String>,
     /// Last activation attempt loaded from persisted activation state.
     pub last_activation_at: Option<DateTime<Utc>>,
+    /// Live settings pushes from the settings window; drained by the tray bridge.
+    pub settings_rx: Mutex<Option<Receiver<Settings>>>,
+    pub settings_tx: Sender<Settings>,
 }
 
 impl AppState {
@@ -82,6 +75,8 @@ struct UiState {
     limits: RateLimits,
     last_activation: String,
     error: Option<String>,
+    show_used_percentage: bool,
+    hide_plan_credits: bool,
 }
 
 /// Sections of the settings window. Keeping this as a small enum makes the
@@ -132,6 +127,8 @@ impl Default for UiState {
             limits: RateLimits::default(),
             last_activation: "Never".into(),
             error: None,
+            show_used_percentage: false,
+            hide_plan_credits: false,
         }
     }
 }
@@ -147,12 +144,13 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let (ui, set_ui) = cx.use_async_state(UiState {
         error: state.startup_error.clone(),
         last_activation: format_last_activation(&RateLimits::default(), state.last_activation_at),
+        show_used_percentage: state.settings.show_used_percentage,
+        hide_plan_credits: state.settings.hide_plan_credits,
         ..UiState::default()
     });
-    let (runtime_settings, set_runtime_settings) = cx.use_async_state(state.settings.clone());
     let commands = state.commands.clone();
     let ui_dispatcher = cx.use_ui_marshaller();
-    let bridge_runtime_settings = set_runtime_settings.clone();
+    let settings_tx = state.settings_tx.clone();
 
     cx.use_effect((), {
         let state = Arc::clone(&state);
@@ -163,7 +161,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             let _ = popup::ensure_configured();
             // SystemBackdrop paints square + shadow past SetWindowRgn — keep it off.
             set_backdrop(None);
-            start_background_bridge(state, set_ui, ui_dispatcher, bridge_runtime_settings.clone());
+            start_background_bridge(state, set_ui, ui_dispatcher);
         }
     });
 
@@ -181,16 +179,16 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         limit_card(
             "5h Session",
             &ui.limits.primary,
-            runtime_settings.show_used_percentage,
+            ui.show_used_percentage,
         ),
         limit_card(
             "Weekly",
             &ui.limits.secondary,
-            runtime_settings.show_used_percentage,
+            ui.show_used_percentage,
         ),
     ];
 
-    if !runtime_settings.hide_plan_credits {
+    if !ui.hide_plan_credits {
         body.push(meta_row(&ui.limits));
     }
 
@@ -222,10 +220,9 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             hstack((
                 icon_button("\u{E72C}", "Refresh", 16.0, refresh),
                 icon_button("\u{E713}", "Settings", 16.0, {
-                    let settings = Arc::new(runtime_settings.clone());
-                    let apply_runtime = set_runtime_settings.clone();
+                    let settings_tx = settings_tx.clone();
                     move || {
-                        if let Err(error) = crate::settings_window::open(Arc::clone(&settings), apply_runtime.clone()) {
+                        if let Err(error) = crate::settings_window::open(settings_tx.clone()) {
                             eprintln!("Could not open settings window: {error:?}");
                         }
                     }
@@ -330,42 +327,9 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
 /// follows once every setting has its final interaction model.
 #[allow(dead_code)]
 pub(crate) fn open_settings_window(
-    settings: Arc<Settings>,
-    apply_runtime: AsyncSetState<Settings>,
+    settings_tx: Sender<Settings>,
 ) -> windows_core::Result<()> {
-    SETTINGS_HOST.with(|slot| {
-        if let Some(host) = slot.borrow().as_ref() {
-            return host.activate();
-        }
-
-        let settings_for_view = Arc::clone(&settings);
-        let host = Rc::new(ReactorHost::new_with_window_options(
-            "Codex Minibar Settings",
-            Some(WindowSize {
-                width: SETTINGS_WINDOW_WIDTH,
-                height: SETTINGS_WINDOW_HEIGHT,
-            }),
-            InnerConstraints {
-                min_width: Some(560.0),
-                min_height: Some(400.0),
-                max_width: None,
-                max_height: None,
-            },
-            Box::new(move |_: &(), cx: &mut RenderCx| {
-                crate::settings_window::render(
-                    cx,
-                    Arc::clone(&settings_for_view),
-                    apply_runtime.clone(),
-                )
-            }),
-            |_| {},
-        )?);
-        host.set_backdrop(Backdrop::Mica);
-        host.activate()?;
-        disable_settings_redirection_bitmap();
-        *slot.borrow_mut() = Some(host);
-        Ok(())
-    })
+    crate::settings_window::open(settings_tx)
 }
 
 /// A transparent WinUI/Mica window can retain a stale white DWM redirection
@@ -623,18 +587,24 @@ fn start_background_bridge(
     state: Arc<AppState>,
     set_ui: AsyncSetState<UiState>,
     ui_dispatcher: UiMarshaller,
-    apply_runtime: AsyncSetState<Settings>,
 ) {
     let events = state.take_worker_events();
     let widgets = state.settings.tray_widgets.clone();
+    let settings_rx = state
+        .settings_rx
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take());
+    let settings_tx = state.settings_tx.clone();
 
     thread::spawn(move || {
         let mut tray = TrayManager::new();
-        let settings = Arc::new(state.settings.clone());
         let fallback_attempt = state.last_activation_at;
         let mut ui = UiState {
             error: state.startup_error.clone(),
             last_activation: format_last_activation(&RateLimits::default(), fallback_attempt),
+            show_used_percentage: state.settings.show_used_percentage,
+            hide_plan_credits: state.settings.hide_plan_credits,
             ..UiState::default()
         };
 
@@ -651,11 +621,27 @@ fn start_background_bridge(
             thread::sleep(Duration::from_millis(50));
         }
 
+        let apply_settings = |ui: &mut UiState, set_ui: &AsyncSetState<UiState>, settings: Settings| {
+            ui.show_used_percentage = settings.show_used_percentage;
+            ui.hide_plan_credits = settings.hide_plan_credits;
+            set_ui.call(ui.clone());
+        };
+
+        let drain_settings = |ui: &mut UiState, set_ui: &AsyncSetState<UiState>| {
+            let Some(settings_rx) = settings_rx.as_ref() else {
+                return;
+            };
+            while let Ok(settings) = settings_rx.try_recv() {
+                apply_settings(ui, set_ui, settings);
+            }
+        };
+
         let Some(events) = events else {
-            set_ui.call(ui);
+            set_ui.call(ui.clone());
             loop {
                 popup::pump_messages();
-                if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings, &apply_runtime) {
+                drain_settings(&mut ui, &set_ui);
+                if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings_tx) {
                     drop(tray);
                     state.shutdown_worker();
                     std::process::exit(0);
@@ -666,7 +652,8 @@ fn start_background_bridge(
 
         loop {
             popup::pump_messages();
-            if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings, &apply_runtime) {
+            drain_settings(&mut ui, &set_ui);
+            if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings_tx) {
                 drop(tray);
                 state.shutdown_worker();
                 std::process::exit(0);
@@ -708,8 +695,7 @@ fn start_background_bridge(
 fn pump_tray_and_dismiss(
     tray: &TrayManager,
     ui_dispatcher: &UiMarshaller,
-    settings: &Arc<Settings>,
-    apply_runtime: &AsyncSetState<Settings>,
+    settings_tx: &Sender<Settings>,
 ) -> bool {
     use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
 
@@ -730,10 +716,9 @@ fn pump_tray_and_dismiss(
     for action in tray.drain_menu_actions() {
         match action {
             TrayMenuAction::Settings => {
-                let settings = Arc::clone(settings);
-                let apply_runtime = apply_runtime.clone();
+                let settings_tx = settings_tx.clone();
                 ui_dispatcher.dispatch(move || {
-                    if let Err(error) = crate::settings_window::open(settings, apply_runtime) {
+                    if let Err(error) = crate::settings_window::open(settings_tx) {
                         eprintln!("Could not open settings window: {error:?}");
                     }
                 });
@@ -754,8 +739,7 @@ fn pump_tray_and_dismiss(
 fn pump_tray_and_dismiss(
     _tray: &TrayManager,
     _ui_dispatcher: &UiMarshaller,
-    _settings: &Arc<Settings>,
-    _apply_runtime: &AsyncSetState<Settings>,
+    _settings_tx: &Sender<Settings>,
 ) -> bool {
     false
 }

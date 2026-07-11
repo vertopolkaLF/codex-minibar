@@ -6,7 +6,13 @@
 use crate::settings::Settings;
 use crate::settings_controls::settings_toggle_card;
 use crate::theme::SETTINGS_CONTENT_FILL;
-use std::{cell::RefCell, rc::Rc, sync::Arc, time::Duration};
+use anyhow::Context;
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    sync::{mpsc::Sender, Arc},
+    time::Duration,
+};
 use windows_reactor::*;
 
 const WINDOW_WIDTH: f64 = 760.0;
@@ -16,7 +22,7 @@ thread_local! {
     static HOST: RefCell<Option<Rc<ReactorHost>>> = const { RefCell::new(None) };
 }
 
-pub fn open(settings: Arc<Settings>, apply_runtime: AsyncSetState<Settings>) -> windows_core::Result<()> {
+pub fn open(settings_tx: Sender<Settings>) -> windows_core::Result<()> {
     HOST.with(|slot| {
         if settings_window_is_open() {
             if let Some(host) = slot.borrow().as_ref() {
@@ -29,7 +35,9 @@ pub fn open(settings: Arc<Settings>, apply_runtime: AsyncSetState<Settings>) -> 
         // that stale host before creating the next settings window.
         slot.borrow_mut().take();
 
-        let view_settings = Arc::clone(&settings);
+        // Always reload from disk so tray/popup open paths share the same live
+        // values after an earlier toggle, without depending on a stale snapshot.
+        let view_settings = Arc::new(load_settings_for_window());
         let host = Rc::new(ReactorHost::new_with_window_options(
             "Codex Minibar Settings",
             Some(WindowSize {
@@ -43,7 +51,7 @@ pub fn open(settings: Arc<Settings>, apply_runtime: AsyncSetState<Settings>) -> 
                 max_height: None,
             },
             Box::new(move |_: &(), cx: &mut RenderCx| {
-                render(cx, Arc::clone(&view_settings), apply_runtime.clone())
+                render(cx, Arc::clone(&view_settings), settings_tx.clone())
             }),
             |_| {},
         )?);
@@ -52,6 +60,16 @@ pub fn open(settings: Arc<Settings>, apply_runtime: AsyncSetState<Settings>) -> 
         *slot.borrow_mut() = Some(host);
         Ok(())
     })
+}
+
+fn load_settings_for_window() -> Settings {
+    match Settings::default_path().and_then(|path| Settings::load_or_create(&path)) {
+        Ok(settings) => settings,
+        Err(error) => {
+            eprintln!("failed to load settings for window: {error:#}");
+            Settings::default()
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -100,7 +118,7 @@ impl Tab {
 }
 
 /// Root content for the independent WinUI settings window.
-pub fn render(cx: &mut RenderCx, settings: Arc<Settings>, apply_runtime: AsyncSetState<Settings>) -> Element {
+pub fn render(cx: &mut RenderCx, settings: Arc<Settings>, settings_tx: Sender<Settings>) -> Element {
     let (selected, set_selected) = cx.use_state(Tab::default());
     let (rendered_tab, set_rendered_tab) = cx.use_async_state(Tab::default());
     let (page_visible, set_page_visible) = cx.use_async_state(true);
@@ -165,7 +183,7 @@ pub fn render(cx: &mut RenderCx, settings: Arc<Settings>, apply_runtime: AsyncSe
             set_start_at_login,
             set_show_used_percentage,
             set_hide_plan_credits,
-            apply_runtime,
+            settings_tx,
         ))
         .with_key(format!("settings-page-{}", rendered_tab.tag()))
         .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -214,20 +232,25 @@ fn tab_content(
     set_start_at_login: SetState<bool>,
     set_show_used_percentage: SetState<bool>,
     set_hide_plan_credits: SetState<bool>,
-    apply_runtime: AsyncSetState<Settings>,
+    settings_tx: Sender<Settings>,
 ) -> Element {
-    let apply_start_at_login = apply_runtime.clone();
-    let apply_show_used_percentage = apply_runtime.clone();
-    let apply_hide_plan_credits = apply_runtime;
+    let apply_start_at_login = settings_tx.clone();
+    let apply_show_used_percentage = settings_tx.clone();
+    let apply_hide_plan_credits = settings_tx;
     let (title, subtitle, rows) = match tab {
         Tab::General => (
             "General",
             "Configure how Codex Minibar starts and displays usage.",
             vec![
                 settings_toggle_card("Automatic Startup", start_at_login, move |value| {
-                    persist_setting(set_start_at_login.clone(), apply_start_at_login.clone(), value, |settings, value| {
-                        settings.start_at_login = value;
-                    });
+                    persist_setting(
+                        set_start_at_login.clone(),
+                        apply_start_at_login.clone(),
+                        value,
+                        |settings, value| {
+                            settings.start_at_login = value;
+                        },
+                    );
                 }),
                 settings_toggle_card(
                     "Show \"% used\" instead of \"% left\"",
@@ -247,9 +270,14 @@ fn tab_content(
                     "Hide row with plan/credits",
                     hide_plan_credits,
                     move |value| {
-                        persist_setting(set_hide_plan_credits.clone(), apply_hide_plan_credits.clone(), value, |settings, value| {
-                            settings.hide_plan_credits = value;
-                        });
+                        persist_setting(
+                            set_hide_plan_credits.clone(),
+                            apply_hide_plan_credits.clone(),
+                            value,
+                            |settings, value| {
+                                settings.hide_plan_credits = value;
+                            },
+                        );
                     },
                 ),
             ],
@@ -360,14 +388,24 @@ fn row(label: impl Into<String>, value: impl Into<String>) -> Element {
     .into()
 }
 
-fn persist_setting(setter: SetState<bool>, apply_runtime: AsyncSetState<Settings>, value: bool, update: impl FnOnce(&mut Settings, bool)) {
+fn persist_setting(
+    setter: SetState<bool>,
+    settings_tx: Sender<Settings>,
+    value: bool,
+    update: impl FnOnce(&mut Settings, bool),
+) {
     setter.call(value);
     let result = Settings::default_path().and_then(|path| {
         let mut settings = Settings::load_or_create(&path)?;
         update(&mut settings, value);
-        settings.apply_runtime_effects()?;
+        // Persist first so a flaky side effect cannot block live UI updates.
         settings.save(&path)?;
-        apply_runtime.call(settings);
+        if let Err(error) = settings.apply_runtime_effects() {
+            eprintln!("failed to apply runtime settings effects: {error:#}");
+        }
+        settings_tx
+            .send(settings)
+            .context("notify live settings listeners")?;
         Ok(())
     });
     if let Err(error) = result {

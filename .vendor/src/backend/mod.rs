@@ -570,26 +570,30 @@ pub trait SendDispatcher: Send + Sync + 'static {
 }
 
 thread_local! {
-    // UI thread's rerender hook, installed by `RenderHost::set_marshaller`.
-    // Single-host-per-thread; replace with a per-host registry if
-    // multi-host-per-thread is added.
-    static UI_RERENDER: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
+    // Rerender hooks for every `RenderHost` on this UI thread.
+    // Popup + settings (and any future hosts) share one dispatcher, so a
+    // single slot would steal updates from earlier hosts.
+    static UI_RERENDER: RefCell<Vec<Rc<dyn Fn()>>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Install (or clear) the UI thread's rerender hook.
+/// Register (or clear) UI-thread rerender hooks.
+///
+/// `Some(hook)` appends a host; `None` clears every registered host. Prefer
+/// appending so multi-window apps keep delivering `AsyncSetState` updates to
+/// every live surface.
 pub fn set_ui_rerender(rerender: Option<Rc<dyn Fn()>>) {
-    UI_RERENDER.with(|r| {
-        *r.borrow_mut() = rerender;
+    UI_RERENDER.with(|r| match rerender {
+        Some(hook) => r.borrow_mut().push(hook),
+        None => r.borrow_mut().clear(),
     });
 }
 
-/// Request a rerender on the UI thread the marshaller targets.
+/// Request a rerender on every host registered for this UI thread.
 pub fn request_ui_rerender_on_ui_thread() {
-    UI_RERENDER.with(|r| {
-        if let Some(rr) = r.borrow().as_ref() {
-            rr();
-        }
-    });
+    let hooks = UI_RERENDER.with(|r| r.borrow().clone());
+    for hook in hooks {
+        hook();
+    }
 }
 
 /// RAII guard around `set_ui_rerender`; clears the thread-local on drop.

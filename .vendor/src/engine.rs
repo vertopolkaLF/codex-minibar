@@ -1312,8 +1312,8 @@ impl<B: Backend + 'static, D: Dispatcher + 'static> RenderHost<B, D> {
 
     /// Install (or replace) the [`UiMarshaller`] used to support
     /// off-UI-thread state writes via [`RenderCx::use_async_state`], and
-    /// publish the host's rerender hook to the UI thread's `UI_RERENDER`
-    /// slot. Passing `None` clears both.
+    /// register the host's rerender hook on the UI thread's `UI_RERENDER`
+    /// list. Passing `None` clears every registered host hook.
     pub fn set_marshaller(&self, marshaller: Option<UiMarshaller>) {
         self.inner.marshaller.borrow_mut().clone_from(&marshaller);
         self.inner

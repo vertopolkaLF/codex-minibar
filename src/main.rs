@@ -1,7 +1,10 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 use std::{
-    sync::{Arc, Mutex},
+    sync::{
+        mpsc,
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -43,12 +46,15 @@ fn run() -> Result<()> {
         Err(error) => (None, None, Some(error.to_string())),
     };
 
+    let (settings_tx, settings_rx) = mpsc::channel();
     let state = Arc::new(AppState {
         settings,
         commands,
         worker: Mutex::new(worker),
         startup_error,
         last_activation_at,
+        settings_tx,
+        settings_rx: Mutex::new(Some(settings_rx)),
     });
 
     App::new()
