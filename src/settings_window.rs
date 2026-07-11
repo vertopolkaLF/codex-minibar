@@ -7,7 +7,7 @@ use crate::notifications;
 use crate::settings::Settings;
 use crate::settings_controls::{
     settings_action_card, settings_info_card, settings_slider_content, settings_toggle_card,
-    settings_toggle_expander,
+    settings_toggle_card_with_description, settings_toggle_expander,
 };
 use crate::theme::CONTROL_FAST_ANIMATION;
 use anyhow::Context;
@@ -312,6 +312,8 @@ pub fn render(
     .vertical_alignment(VerticalAlignment::Stretch);
 
     let (start_at_login, set_start_at_login) = cx.use_state(settings.start_at_login);
+    let (automatic_activation, set_automatic_activation) =
+        cx.use_state(settings.automatic_activation);
     let (show_used_percentage, set_show_used_percentage) =
         cx.use_state(settings.show_used_percentage);
     let (hide_plan_credits, set_hide_plan_credits) = cx.use_state(settings.hide_plan_credits);
@@ -331,6 +333,7 @@ pub fn render(
         border(tab_content(
             &settings,
             rendered_tab,
+            automatic_activation,
             start_at_login,
             show_used_percentage,
             hide_plan_credits,
@@ -341,6 +344,7 @@ pub fn render(
             low_usage_expanded,
             low_usage_expand_progress,
             &hovered_card_id,
+            set_automatic_activation,
             set_start_at_login,
             set_show_used_percentage,
             set_hide_plan_credits,
@@ -424,6 +428,7 @@ fn settings_title_icon_uri() -> String {
 fn tab_content(
     settings: &Settings,
     tab: Tab,
+    automatic_activation: bool,
     start_at_login: bool,
     show_used_percentage: bool,
     hide_plan_credits: bool,
@@ -434,6 +439,7 @@ fn tab_content(
     low_usage_expanded: bool,
     low_usage_expand_progress: f64,
     hovered_card_id: &Option<String>,
+    set_automatic_activation: SetState<bool>,
     set_start_at_login: SetState<bool>,
     set_show_used_percentage: SetState<bool>,
     set_hide_plan_credits: SetState<bool>,
@@ -446,6 +452,7 @@ fn tab_content(
     set_hovered_card_id: SetState<Option<String>>,
     settings_tx: Sender<Settings>,
 ) -> Element {
+    let apply_automatic_activation = settings_tx.clone();
     let apply_start_at_login = settings_tx.clone();
     let apply_show_used_percentage = settings_tx.clone();
     let apply_hide_plan_credits = settings_tx.clone();
@@ -457,6 +464,25 @@ fn tab_content(
         Tab::General => (
             "General",
             vec![
+                settings_toggle_card_with_description(
+                    "Automatic limit activation",
+                    Some("Automatically sends short message to start 5h limit"),
+                    automatic_activation,
+                    move |value| {
+                        persist_bool(
+                            set_automatic_activation.clone(),
+                            apply_automatic_activation.clone(),
+                            value,
+                            |settings, value| {
+                                settings.automatic_activation = value;
+                            },
+                        );
+                    },
+                    "general-automatic-activation",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("general-automatic-activation"),
                 settings_toggle_card(
                     "Automatic Startup",
                     start_at_login,

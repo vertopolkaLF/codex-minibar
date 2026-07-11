@@ -617,6 +617,11 @@ fn start_background_bridge(
             ui.show_used_percentage = settings.show_used_percentage;
             ui.hide_plan_credits = settings.hide_plan_credits;
             *notification_settings = settings.notifications;
+            if let Some(commands) = &state.commands {
+                let _ = commands.send(WorkerCommand::SetAutomaticActivation(
+                    settings.automatic_activation,
+                ));
+            }
             set_ui.call(ui.clone());
         };
 

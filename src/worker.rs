@@ -24,6 +24,7 @@ pub trait Activator: Send + 'static {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkerCommand {
     Refresh,
+    SetAutomaticActivation(bool),
     Shutdown,
 }
 
@@ -82,6 +83,7 @@ pub fn start_worker(
     let (event_sender, event_receiver) = mpsc::channel();
     let join = thread::spawn(move || {
         let mut state = ActivationState::load_or_default(&state_path).unwrap_or_default();
+        let mut automatic_activation = automatic_activation;
         loop {
             match tick(
                 &mut provider,
@@ -101,6 +103,9 @@ pub fn start_worker(
             }
             match command_receiver.recv_timeout(poll_interval) {
                 Ok(WorkerCommand::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
+                Ok(WorkerCommand::SetAutomaticActivation(enabled)) => {
+                    automatic_activation = enabled;
+                }
                 Ok(WorkerCommand::Refresh) | Err(RecvTimeoutError::Timeout) => {}
             }
         }

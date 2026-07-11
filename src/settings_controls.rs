@@ -80,10 +80,40 @@ pub(crate) fn settings_toggle_card(
     hovered_id: &Option<String>,
     set_hovered_id: SetState<Option<String>>,
 ) -> Element {
+    settings_toggle_card_with_description(
+        label,
+        None,
+        value,
+        on_toggled,
+        card_id,
+        hovered_id,
+        set_hovered_id,
+    )
+}
+
+/// Fluent settings card with an optional explanatory line beneath its label.
+pub(crate) fn settings_toggle_card_with_description(
+    label: impl Into<String>,
+    description: Option<&str>,
+    value: bool,
+    on_toggled: impl IntoCallback<bool>,
+    card_id: &'static str,
+    hovered_id: &Option<String>,
+    set_hovered_id: SetState<Option<String>>,
+) -> Element {
     let hovered = card_is_hovered(hovered_id, card_id);
     let (on_enter, on_exit) = card_hover_handlers(card_id, set_hovered_id);
     let (base, hover) = card_background_layers(hovered);
     let on_toggled = on_toggled.into_callback();
+    let label = label.into();
+    let label_content: Element = match description {
+        Some(description) => vstack((
+            text_block(label).font_size(14.0),
+            text_block(description).font_size(12.0).opacity(0.72),
+        ))
+        .into(),
+        None => text_block(label).into(),
+    };
     let toggle_card = {
         let on_toggled = on_toggled.clone();
         move || on_toggled.invoke(!value)
@@ -104,7 +134,7 @@ pub(crate) fn settings_toggle_card(
                 move || toggle_card()
             })
             .into(),
-        text_block(label)
+        label_content
             .margin(Thickness {
                 left: CARD_PADDING_X,
                 top: 0.0,
