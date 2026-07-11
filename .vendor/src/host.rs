@@ -25,7 +25,8 @@ pub enum RequestedTheme {
     Dark,
 }
 
-/// Set the application theme. Queued if the root element isn't attached yet.
+/// Set the application theme. Always queued for the next root attach, and
+/// applied immediately when a root element already exists.
 pub fn set_requested_theme(theme: RequestedTheme) {
     let element_theme = match theme {
         RequestedTheme::Light => ElementTheme::Light,
@@ -33,12 +34,14 @@ pub fn set_requested_theme(theme: RequestedTheme) {
         _ => ElementTheme::Default,
     };
 
+    // Queue for the next SetContent attach (e.g. a second window on this thread)
+    // so create_window's Default does not stick on a later host's first paint.
+    PENDING_THEME.with(|p| p.set(Some(element_theme)));
+
     ROOT_FRAMEWORK_ELEMENT.with(|cell| {
         if let Some(ife) = cell.borrow().as_ref() {
             let _ = ife.SetRequestedTheme(element_theme);
             update_titlebar_theme();
-        } else {
-            PENDING_THEME.with(|p| p.set(Some(element_theme)));
         }
     });
 }

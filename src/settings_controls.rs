@@ -41,7 +41,7 @@ fn card_hover_handlers(
     (enter, exit)
 }
 
-/// Base card fill + WinUI-timed hover tint (ControlFasterAnimationDuration).
+/// Base card fill + stroke (Fluent card chrome) and WinUI-timed hover tint.
 fn card_background_layers(hovered: bool) -> (Element, Element) {
     let base = border(Element::Empty)
         .background(ThemeRef::CardBackground)

@@ -38,8 +38,8 @@ use windows_sys::Win32::{
             PM_REMOVE, PeekMessageW, SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
             SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetClassLongPtrW, SetForegroundWindow,
             SetWindowLongW, SetWindowPos, TranslateMessage, WS_CAPTION, WS_EX_APPWINDOW,
-            WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX,
-            WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+            WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
+            WS_EX_TOPMOST, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
         },
     },
 };
@@ -550,11 +550,14 @@ pub fn ensure_configured() -> Option<HWND> {
         SetWindowLongW(hwnd, GWL_STYLE, style as i32);
 
         // Tool/topmost popup shell. Avoid layered alpha and permanent no-activate:
-        // both force solid backdrop fallbacks.
+        // both force solid backdrop fallbacks. Drop the GDI redirection bitmap so
+        // acrylic / soft white strokes do not AA against a stale white surface
+        // (bright fringes that eyes see and screenshots often miss).
         let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
         let ex_style = (ex_style & !(WS_EX_APPWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE))
             | WS_EX_TOOLWINDOW
-            | WS_EX_TOPMOST;
+            | WS_EX_TOPMOST
+            | WS_EX_NOREDIRECTIONBITMAP;
         SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style as i32);
 
         let class_style = GetClassLongPtrW(hwnd, GCL_STYLE) as u32;

@@ -9,7 +9,7 @@ use crate::settings_controls::{
     settings_action_card, settings_info_card, settings_slider_content, settings_toggle_card,
     settings_toggle_expander,
 };
-use crate::theme::{CONTROL_FAST_ANIMATION, SETTINGS_CONTENT_FILL};
+use crate::theme::CONTROL_FAST_ANIMATION;
 use anyhow::Context;
 use std::{
     cell::RefCell,
@@ -64,7 +64,10 @@ pub fn open(settings_tx: Sender<Settings>) -> windows_core::Result<()> {
             },
         )?);
         host.set_backdrop(Backdrop::Mica);
+        // Force Dark so the XAML island clear color is black, not white.
+        set_requested_theme(RequestedTheme::Dark);
         set_settings_window_icon();
+        apply_settings_dark_chrome();
         // Hide the HWND before WinUI tears content down so close does not flash
         // empty black chrome (default title bar + no Mica/content).
         install_settings_close_hide();
@@ -160,6 +163,41 @@ fn set_settings_window_icon() {}
 #[cfg(not(windows))]
 fn install_settings_close_hide() {}
 
+/// Immersive dark mode + Dark requested theme for the settings HWND.
+#[cfg(windows)]
+fn apply_settings_dark_chrome() {
+    use windows_sys::Win32::{
+        Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute},
+        UI::WindowsAndMessaging::FindWindowW,
+    };
+
+    set_requested_theme(RequestedTheme::Dark);
+
+    let title: Vec<u16> = "Codex Minibar Settings"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let hwnd = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
+    if hwnd.is_null() {
+        return;
+    }
+
+    let dark_mode = 1u32;
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
+            &dark_mode as *const u32 as *const _,
+            size_of::<u32>() as u32,
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn apply_settings_dark_chrome() {
+    set_requested_theme(RequestedTheme::Dark);
+}
+
 fn load_settings_for_window() -> Settings {
     match Settings::default_path().and_then(|path| Settings::load_or_create(&path)) {
         Ok(settings) => settings,
@@ -221,6 +259,9 @@ pub fn render(
     settings: Arc<Settings>,
     settings_tx: Sender<Settings>,
 ) -> Element {
+    // After the tree mounts, pin Dark so the island clear color stays black
+    // (white clear washes every translucent Fluent layer on a real display).
+    cx.use_effect((), apply_settings_dark_chrome);
     let (selected, set_selected) = cx.use_state(Tab::default());
     let (rendered_tab, set_rendered_tab) = cx.use_async_state(Tab::default());
     let (page_visible, set_page_visible) = cx.use_async_state(true);
@@ -328,7 +369,9 @@ pub fn render(
             right: 32.0,
             bottom: 32.0,
         })
-        .background(SETTINGS_CONTENT_FILL)
+        // Standard Mica on the window; content gets Fluent LayerFill — a light
+        // translucent lift so the pane reads slightly whiter than raw Mica chrome.
+        .background(ThemeRef::LayerFill)
         .corner_radii(CornerRadii {
             top_left: 12.0,
             ..Default::default()

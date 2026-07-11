@@ -29,14 +29,6 @@ pub const WINDOW_BORDER: Color = Color {
     b: 255,
 };
 
-/// `#FFFFFF05`: the static settings-page wash that composites over Mica.
-pub const SETTINGS_CONTENT_FILL: Color = Color {
-    a: 0x05,
-    r: 255,
-    g: 255,
-    b: 255,
-};
-
 /// WinUI `ControlFasterAnimationDuration` — pointer-over / micro-interactions.
 pub const CONTROL_FASTER_ANIMATION: Duration = Duration::from_millis(83);
 /// WinUI `ControlFastAnimationDuration`.

@@ -41,9 +41,6 @@ fn format_last_activation(limits: &RateLimits, fallback_attempt: Option<DateTime
         .unwrap_or_else(|| "Never".into())
 }
 
-/// `#FFFFFF05`: a barely perceptible content wash over Mica, matching the
-/// settings-window appearance without making the page look like a card.
-use crate::theme::SETTINGS_CONTENT_FILL;
 /// Shared startup state handed from `main` into the reactor render tree.
 pub struct AppState {
     pub settings: Settings,
@@ -424,8 +421,8 @@ fn settings_window(cx: &mut RenderCx, settings: Arc<Settings>) -> Element {
         right: 32.0,
         bottom: 32.0,
     })
-    .background(SETTINGS_CONTENT_FILL)
-    .corner_radius(12.0)
+        .background(ThemeRef::LayerFill)
+        .corner_radius(12.0)
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Stretch);
 
