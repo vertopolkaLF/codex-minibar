@@ -56,6 +56,11 @@ impl<B: Backend> Reconciler<B> {
     }
 
     pub fn diff_props(&mut self, id: ControlId, old: &[Binding], new: &[Binding]) {
+        let items_changed = match (find_prop(old, Prop::Items), find_prop(new, Prop::Items)) {
+            (Some(ov), Some(nv)) => ov != nv,
+            (None, Some(_)) | (Some(_), None) => true,
+            (None, None) => false,
+        };
         for b in new {
             match b {
                 Binding::Prop(p, v) => match find_prop(old, *p) {
@@ -86,6 +91,13 @@ impl<B: Backend> Reconciler<B> {
                         self.backend.detach_event(id, *e);
                     }
                 }
+            }
+        }
+        // Replacing Items clears WinUI Selector selection. If SelectedIndex did
+        // not change in our tree, the skip above would leave a blank ComboBox.
+        if items_changed {
+            if let Some(v) = find_prop(new, Prop::SelectedIndex) {
+                self.backend.set_prop(id, Prop::SelectedIndex, v);
             }
         }
     }

@@ -721,6 +721,8 @@ fn pump_tray_and_dismiss(
             && tray.contains(&id)
         {
             popup::toggle_near(position.x as i32, position.y as i32);
+            // AppWindow.IsShownInSwitchers must be set on the UI thread.
+            ui_dispatcher.dispatch(popup::hide_from_switchers);
         }
     }
 

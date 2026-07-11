@@ -56,10 +56,11 @@ impl Widget for ListBox {
     widget_header!(ControlKind::ListBox);
     fn bindings(&self) -> PropBindings {
         let mut out = generated::list_box_bindings(self);
-        out.push(Binding::Prop(
-            Prop::Items,
-            PropValue::StrList(self.items.clone()),
-        ));
+        // Items before SelectedIndex — same WinUI ordering requirement as ComboBox.
+        out.insert(
+            0,
+            Binding::Prop(Prop::Items, PropValue::StrList(self.items.clone())),
+        );
         out
     }
 }

@@ -752,6 +752,9 @@ fn tray_settings_cards(
             ComboBox::new(presentation_items.iter().map(|(label, _)| *label))
                 .header("Appearance")
                 .selected_index(presentation_index)
+                // Remount when Information changes so item labels cannot stick
+                // to a stale ComboBox selection header.
+                .with_key(format!("tray-appearance-{index}-{source_index}"))
                 .on_selection_changed(move |choice: i32| {
                     let mut next = widgets_for_presentation.clone();
                     if let Some((_, presentation)) = presentation_options(&widget_for_presentation.source)

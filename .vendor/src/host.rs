@@ -352,6 +352,14 @@ impl ReactorHost {
         &self.window
     }
 
+    /// Control whether this window appears on the taskbar / Alt+Tab switcher.
+    /// Tray popups must pass `false` so they never register as a normal app window.
+    pub fn set_shown_in_switchers(&self, shown: bool) -> Result<()> {
+        let window_2 = self.window.cast::<IWindow2>()?;
+        let app_window = window_2.AppWindow()?;
+        app_window.SetIsShownInSwitchers(shown)
+    }
+
     /// Resize the window client area to the given DIP size via `AppWindow.ResizeClient`.
     /// Prefer this over Win32 `SetWindowPos` — WinUI owns sizing through AppWindow.
     pub fn resize_client(&self, width_dip: f64, height_dip: f64) -> Result<()> {

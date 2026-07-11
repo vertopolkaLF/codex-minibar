@@ -58,10 +58,13 @@ impl Widget for ComboBox {
     widget_header!(ControlKind::ComboBox);
     fn bindings(&self) -> PropBindings {
         let mut out = generated::combo_box_bindings(self);
-        out.push(Binding::Prop(
-            Prop::Items,
-            PropValue::StrList(self.items.clone()),
-        ));
+        // Items must be applied before SelectedIndex. Setting the index on an
+        // empty ComboBox is a no-op, and WinUI clears the selection when the
+        // item list is replaced — leaving a blank closed header.
+        out.insert(
+            0,
+            Binding::Prop(Prop::Items, PropValue::StrList(self.items.clone())),
+        );
         out
     }
 }

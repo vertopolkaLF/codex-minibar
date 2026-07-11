@@ -263,6 +263,8 @@ fn info_bar_height(message: &str) -> i32 {
 /// Keep the WinUI host so content-driven resizes can call `AppWindow.ResizeClient`.
 pub fn register_host(host: Rc<ReactorHost>) {
     let _ = host.relax_height_constraints(f64::from(POPUP_HEIGHT_MAX));
+    // Pin taskbar exclusion as early as possible — before the first show.
+    let _ = host.set_shown_in_switchers(false);
     POPUP_HOST.with(|slot| *slot.borrow_mut() = Some(host));
 }
 
@@ -545,11 +547,49 @@ fn apply_popup_chrome(hwnd: HWND) {
     set_frame_margins(hwnd, false);
 }
 
+/// Keep the popup out of the taskbar and Alt+Tab forever.
+///
+/// WinUI's AppWindow still defaults to `IsShownInSwitchers = true`, which puts a
+/// normal taskbar button even when `WS_EX_TOOLWINDOW` is set — so both paths are
+/// applied, and re-applied on every show in case AppWindow / Explorer reset them.
+fn hide_from_taskbar(hwnd: HWND) {
+    hide_from_switchers();
+
+    unsafe {
+        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        let ex_style = (ex_style & !(WS_EX_APPWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE))
+            | WS_EX_TOOLWINDOW
+            | WS_EX_TOPMOST
+            | WS_EX_NOREDIRECTIONBITMAP;
+        SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style as i32);
+        SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOSIZE | SWP_NOMOVE,
+        );
+    }
+}
+
+/// AppWindow taskbar exclusion — must run on the UI thread that owns the host.
+pub fn hide_from_switchers() {
+    POPUP_HOST.with(|slot| {
+        if let Some(host) = slot.borrow().as_ref() {
+            let _ = host.set_shown_in_switchers(false);
+        }
+    });
+}
+
 /// Find the WinUI window, restyle it as a tool popup, and park it off-screen.
 pub fn ensure_configured() -> Option<HWND> {
     let hwnd = find_hwnd()?;
     HWND_BITS.store(hwnd as isize, Ordering::SeqCst);
     if CONFIGURED.swap(true, Ordering::SeqCst) {
+        // Styles can be reset by AppWindow / shell — keep taskbar exclusion sticky.
+        hide_from_taskbar(hwnd);
         return Some(hwnd);
     }
 
@@ -564,27 +604,12 @@ pub fn ensure_configured() -> Option<HWND> {
         // both force solid backdrop fallbacks. Drop the GDI redirection bitmap so
         // acrylic / soft white strokes do not AA against a stale white surface
         // (bright fringes that eyes see and screenshots often miss).
-        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-        let ex_style = (ex_style & !(WS_EX_APPWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE))
-            | WS_EX_TOOLWINDOW
-            | WS_EX_TOPMOST
-            | WS_EX_NOREDIRECTIONBITMAP;
-        SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style as i32);
+        hide_from_taskbar(hwnd);
 
         let class_style = GetClassLongPtrW(hwnd, GCL_STYLE) as u32;
         SetClassLongPtrW(hwnd, GCL_STYLE, (class_style & !CS_DROPSHADOW) as isize);
 
         apply_popup_chrome(hwnd);
-
-        SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOSIZE | SWP_NOMOVE,
-        );
     }
 
     park(hwnd);
@@ -634,6 +659,8 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
     let Some(hwnd) = ensure_configured() else {
         return;
     };
+    // Re-assert before SWP_SHOWWINDOW — Explorer / AppWindow can resurrect the button.
+    hide_from_taskbar(hwnd);
 
     let (hmonitor, monitor, work) = resolve_monitor(anchor_x, anchor_y);
     store_bounds(monitor, work);
@@ -671,6 +698,7 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
         }
 
         apply_popup_chrome(hwnd);
+        hide_from_taskbar(hwnd);
         let _ = DwmFlush();
         // Drop any leftover keyboard focus from a previous show cycle.
         let _ = SetFocus(std::ptr::null_mut());

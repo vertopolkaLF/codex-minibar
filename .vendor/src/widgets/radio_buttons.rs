@@ -59,10 +59,11 @@ impl Widget for RadioButtons {
     widget_header!(ControlKind::RadioButtons);
     fn bindings(&self) -> PropBindings {
         let mut out = generated::radio_buttons_bindings(self);
-        out.push(Binding::Prop(
-            Prop::Items,
-            PropValue::StrList(self.items.clone()),
-        ));
+        // Items before SelectedIndex — same WinUI ordering requirement as ComboBox.
+        out.insert(
+            0,
+            Binding::Prop(Prop::Items, PropValue::StrList(self.items.clone())),
+        );
         out
     }
 }

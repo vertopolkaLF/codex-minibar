@@ -3919,6 +3919,15 @@ impl IAppWindow {
             .ok()
         }
     }
+    pub(crate) fn SetIsShownInSwitchers(&self, value: bool) -> windows_core::Result<()> {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetIsShownInSwitchers)(
+                windows_core::Interface::as_raw(self),
+                value,
+            )
+            .ok()
+        }
+    }
     pub(crate) fn SetPresenterByKind(
         &self,
         appwindowpresenterkind: AppWindowPresenterKind,
@@ -3937,7 +3946,10 @@ pub struct IAppWindow_Vtbl {
     pub base__: windows_core::IInspectable_Vtbl,
     Id: usize,
     IsShownInSwitchers: usize,
-    SetIsShownInSwitchers: usize,
+    pub SetIsShownInSwitchers: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        bool,
+    ) -> windows_core::HRESULT,
     IsVisible: usize,
     OwnerWindowId: usize,
     Position: usize,
