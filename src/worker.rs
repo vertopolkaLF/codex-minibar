@@ -119,33 +119,59 @@ fn tick(
     state: &mut ActivationState,
     automatic_activation: bool,
 ) -> Result<Vec<WorkerEvent>> {
-    let limits = provider.read_limits()?;
-    let mut events = vec![WorkerEvent::LimitsUpdated(limits.clone())];
-    if automatic_activation && state.decide(&limits.primary, Utc::now()) == Decision::ActivateNow {
-        let now = Utc::now();
-        state.record_attempt(&limits.primary, now);
+    let mut limits = provider.read_limits()?;
+    let mut events = Vec::new();
+
+    if automatic_activation && state.decide(&limits.primary) == Decision::ActivateNow {
+        state.record_attempt(Utc::now());
         match activator.activate() {
             Ok(()) => {
-                state.record_success(&limits.primary, now);
+                // Re-read so `observe` baselines the post-activation reset time
+                // and we do not immediately fire again on the next tick.
+                if let Ok(fresh) = provider.read_limits() {
+                    limits = fresh;
+                }
+                state.observe(&limits.primary);
                 events.push(WorkerEvent::ActivationSucceeded);
             }
-            Err(error) => events.push(WorkerEvent::ActivationFailed(error.to_string())),
+            Err(error) => {
+                // Keep the previous baseline so a stable post-reset timestamp
+                // still retries on the next poll instead of being forgotten.
+                events.push(WorkerEvent::ActivationFailed(error.to_string()));
+            }
         }
+    } else {
+        state.observe(&limits.primary);
     }
+
+    events.insert(0, WorkerEvent::LimitsUpdated(limits));
     Ok(events)
 }
 
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
+    use chrono::TimeZone;
 
     use super::*;
     use crate::limits::LimitWindow;
 
-    struct Provider(RateLimits);
-    impl LimitProvider for Provider {
+    struct ScriptedProvider {
+        samples: Vec<RateLimits>,
+        index: usize,
+    }
+
+    impl ScriptedProvider {
+        fn new(samples: Vec<RateLimits>) -> Self {
+            Self { samples, index: 0 }
+        }
+    }
+
+    impl LimitProvider for ScriptedProvider {
         fn read_limits(&mut self) -> Result<RateLimits> {
-            Ok(self.0.clone())
+            let sample = self.samples[self.index.min(self.samples.len() - 1)].clone();
+            self.index += 1;
+            Ok(sample)
         }
     }
 
@@ -157,11 +183,12 @@ mod tests {
         }
     }
 
-    fn fresh_primary() -> RateLimits {
+    fn limits_at(hour: u32, minute: u32) -> RateLimits {
         RateLimits {
             primary: LimitWindow {
-                used_percent: Some(1),
-                ..LimitWindow::default()
+                used_percent: Some(0),
+                resets_at: Some(Utc.with_ymd_and_hms(2026, 7, 10, hour, minute, 0).unwrap()),
+                duration_minutes: Some(300),
             },
             secondary: LimitWindow::default(),
             sampled_at: Utc::now(),
@@ -170,11 +197,31 @@ mod tests {
     }
 
     #[test]
-    fn tick_activates_fresh_window_only_once_per_hour() {
-        let mut provider = Provider(fresh_primary());
+    fn tick_baselines_then_activates_only_when_reset_changes() {
+        let mut provider = ScriptedProvider::new(vec![
+            limits_at(15, 0),
+            limits_at(15, 0),
+            limits_at(15, 1),
+            // Post-activation refresh inside the activating tick.
+            limits_at(20, 1),
+            limits_at(20, 1),
+        ]);
         let mut activator = CountingActivator(0);
         let mut state = ActivationState::default();
+
         tick(&mut provider, &mut activator, &mut state, true).unwrap();
+        assert_eq!(activator.0, 0);
+
+        tick(&mut provider, &mut activator, &mut state, true).unwrap();
+        assert_eq!(activator.0, 0);
+
+        tick(&mut provider, &mut activator, &mut state, true).unwrap();
+        assert_eq!(activator.0, 1);
+        assert_eq!(
+            state.last_seen_resets_at,
+            limits_at(20, 1).primary.resets_at
+        );
+
         tick(&mut provider, &mut activator, &mut state, true).unwrap();
         assert_eq!(activator.0, 1);
     }
@@ -188,16 +235,24 @@ mod tests {
 
     #[test]
     fn activation_failure_becomes_an_event() {
+        let mut state = ActivationState {
+            last_seen_resets_at: limits_at(15, 0).primary.resets_at,
+            ..ActivationState::default()
+        };
         let events = tick(
-            &mut Provider(fresh_primary()),
+            &mut ScriptedProvider::new(vec![limits_at(15, 1)]),
             &mut FailingActivator,
-            &mut ActivationState::default(),
+            &mut state,
             true,
         )
         .unwrap();
         assert!(matches!(
-            events.last(),
+            events
+                .iter()
+                .find(|event| matches!(event, WorkerEvent::ActivationFailed(_))),
             Some(WorkerEvent::ActivationFailed(_))
         ));
+        // Keep the old baseline so the next poll retries the same change.
+        assert_eq!(state.last_seen_resets_at, limits_at(15, 0).primary.resets_at);
     }
 }
