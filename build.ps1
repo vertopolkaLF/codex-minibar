@@ -102,6 +102,10 @@ foreach ($name in $RuntimeDirs) {
     Copy-RuntimeItem -Source $src -Destination $dst
 }
 
+# Custom title-bar images are resolved through ms-appx:///assets in the
+# unpackaged WinUI host, so keep them beside the portable executable.
+Copy-RuntimeItem -Source (Join-Path $Root "assets") -Destination (Join-Path $PackageDir "assets")
+
 # Locale folders (af-ZA, en-us, ru-RU, ca-Es-VALENCIA, ...)
 $skipDirs = @("deps", "build", "incremental", "examples", ".fingerprint", "Microsoft.UI.Xaml")
 $localeDirs = Get-ChildItem -LiteralPath $ReleaseDir -Directory | Where-Object {

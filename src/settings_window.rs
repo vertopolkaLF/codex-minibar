@@ -10,7 +10,7 @@ use anyhow::Context;
 use std::{
     cell::RefCell,
     rc::Rc,
-    sync::{mpsc::Sender, Arc},
+    sync::{Arc, mpsc::Sender},
     time::Duration,
 };
 use windows_reactor::*;
@@ -60,6 +60,7 @@ pub fn open(settings_tx: Sender<Settings>) -> windows_core::Result<()> {
             },
         )?);
         host.set_backdrop(Backdrop::Mica);
+        set_settings_window_icon();
         // Hide the HWND before WinUI tears content down so close does not flash
         // empty black chrome (default title bar + no Mica/content).
         install_settings_close_hide();
@@ -120,6 +121,38 @@ fn install_settings_close_hide() {
     }
 }
 
+#[cfg(windows)]
+fn set_settings_window_icon() {
+    use windows_sys::Win32::{
+        System::LibraryLoader::GetModuleHandleW,
+        UI::WindowsAndMessaging::{
+            FindWindowW, ICON_BIG, ICON_SMALL, LoadIconW, SendMessageW, WM_SETICON,
+        },
+    };
+
+    let title: Vec<u16> = "Codex Minibar Settings"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let hwnd = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
+    if hwnd.is_null() {
+        return;
+    }
+
+    // `winresource` embeds the application icon as resource 1.
+    let module = unsafe { GetModuleHandleW(std::ptr::null()) };
+    let icon = unsafe { LoadIconW(module, 1usize as *const u16) };
+    if !icon.is_null() {
+        unsafe {
+            SendMessageW(hwnd, WM_SETICON, ICON_SMALL as usize, icon as isize);
+            SendMessageW(hwnd, WM_SETICON, ICON_BIG as usize, icon as isize);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn set_settings_window_icon() {}
+
 #[cfg(not(windows))]
 fn install_settings_close_hide() {}
 
@@ -179,7 +212,11 @@ impl Tab {
 }
 
 /// Root content for the independent WinUI settings window.
-pub fn render(cx: &mut RenderCx, settings: Arc<Settings>, settings_tx: Sender<Settings>) -> Element {
+pub fn render(
+    cx: &mut RenderCx,
+    settings: Arc<Settings>,
+    settings_tx: Sender<Settings>,
+) -> Element {
     let (selected, set_selected) = cx.use_state(Tab::default());
     let (rendered_tab, set_rendered_tab) = cx.use_async_state(Tab::default());
     let (page_visible, set_page_visible) = cx.use_async_state(true);
@@ -270,7 +307,12 @@ pub fn render(cx: &mut RenderCx, settings: Arc<Settings>, settings_tx: Sender<Se
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .vertical_alignment(VerticalAlignment::Stretch);
 
+    let title_bar_icon = hstack((Image::new_with_uri(settings_title_icon_uri())
+        .width(20.0)
+        .height(20.0),))
+    .vertical_alignment(VerticalAlignment::Center);
     let title_bar = TitleBar::new("Codex Minibar Settings")
+        .content(title_bar_icon)
         .back_button_visible(false)
         .pane_toggle_button_visible(false);
     let shell = grid((navigation.grid_column(0), page.grid_column(1)))
@@ -282,6 +324,20 @@ pub fn render(cx: &mut RenderCx, settings: Arc<Settings>, settings_tx: Sender<Se
         .columns([GridLength::Star(1.0)])
         .background(Color::transparent())
         .into()
+}
+
+fn settings_title_icon_uri() -> String {
+    let packaged = std::env::current_exe()
+        .ok()
+        .and_then(|path| {
+            path.parent()
+                .map(|parent| parent.join("assets/icons/app-icon-32.png"))
+        })
+        .filter(|path| path.exists());
+    let path = packaged.unwrap_or_else(|| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/icons/app-icon-32.png")
+    });
+    format!("file:///{}", path.to_string_lossy().replace('\\', "/"))
 }
 
 fn tab_content(
@@ -396,7 +452,7 @@ fn tab_content(
     let cards = grid(card_rows)
         .columns([GridLength::Star(1.0)])
         .rows(std::iter::repeat_n(GridLength::Auto, row_count))
-        .row_spacing(8.0)
+        .row_spacing(4.0)
         .grid_row(2)
         .horizontal_alignment(HorizontalAlignment::Stretch);
 

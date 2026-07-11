@@ -12,7 +12,7 @@ pub struct TitleBar {
     pub on_back_requested: Option<Callback<()>>,
     pub on_pane_toggle_requested: Option<Callback<()>>,
     pub is_tall: bool,
-    /// Element placed in the TitleBar's center `Content` slot.
+    /// Element placed in the TitleBar's leading `LeftHeader` slot.
     pub content_element: Option<Box<Element>>,
     /// Element placed in the TitleBar's `RightHeader` slot (trailing area).
     pub footer_element: Option<Box<Element>>,
@@ -66,13 +66,10 @@ impl Widget for TitleBar {
     widget_header!(ControlKind::TitleBar);
     fn bindings(&self) -> PropBindings {
         let mut out = generated::title_bar_bindings(self);
-        out.push(Binding::Prop(
-            Prop::Tall,
-            PropValue::Bool(self.is_tall),
-        ));
+        out.push(Binding::Prop(Prop::Tall, PropValue::Bool(self.is_tall)));
         out
     }
-    /// Maps to WinUI `TitleBar.Content`.
+    /// Maps to WinUI `TitleBar.LeftHeader`.
     fn header_element(&self) -> Option<&Element> {
         self.content_element.as_deref()
     }

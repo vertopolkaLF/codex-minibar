@@ -106,6 +106,9 @@ fn system_font() -> Option<&'static Font> {
 }
 
 pub fn render_widget(widget: &TrayWidget, limits: &RateLimits) -> Vec<u8> {
+    if !has_real_data(limits) {
+        return app_icon_pixels().to_vec();
+    }
     let text = label(widget, limits);
     let rgb = icon_color(widget, limits);
     let Some(font) = system_font() else {
@@ -151,6 +154,36 @@ pub fn render_widget(widget: &TrayWidget, limits: &RateLimits) -> Vec<u8> {
         }
     }
     pixels
+}
+
+fn has_real_data(limits: &RateLimits) -> bool {
+    limits.primary.used_percent.is_some()
+        || limits.primary.resets_at.is_some()
+        || limits.secondary.used_percent.is_some()
+        || limits.secondary.resets_at.is_some()
+}
+
+fn app_icon_pixels() -> &'static [u8] {
+    static PIXELS: OnceLock<Vec<u8>> = OnceLock::new();
+    PIXELS.get_or_init(|| {
+        let decoder = png::Decoder::new(
+            &include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/assets/icons/app-icon-32.png"
+            ))[..],
+        );
+        let mut reader = decoder.read_info().expect("decode embedded tray icon");
+        let mut buffer = vec![0; reader.output_buffer_size()];
+        let info = reader
+            .next_frame(&mut buffer)
+            .expect("read embedded tray icon");
+        assert_eq!(
+            (info.width, info.height),
+            (ICON_SIZE as u32, ICON_SIZE as u32)
+        );
+        buffer.truncate(info.buffer_size());
+        buffer
+    })
 }
 
 fn font_candidates() -> Vec<PathBuf> {
@@ -300,13 +333,8 @@ mod platform {
         );
         let settings = MenuItem::with_id("settings", "Settings", true, None);
         let exit = MenuItem::with_id("exit", "Exit", true, None);
-        Menu::with_items(&[
-            &header,
-            &PredefinedMenuItem::separator(),
-            &settings,
-            &exit,
-        ])
-        .context("create tray menu")
+        Menu::with_items(&[&header, &PredefinedMenuItem::separator(), &settings, &exit])
+            .context("create tray menu")
     }
 }
 
@@ -398,5 +426,16 @@ mod tests {
         };
         assert_eq!(icon_color(&reset, &limits()), [255, 255, 255]);
         assert_eq!(icon_color(&percentage, &limits()), [49, 196, 141]);
+    }
+
+    #[test]
+    fn uses_app_icon_until_rate_limit_data_arrives() {
+        let widget = TrayWidget {
+            metric: TrayMetric::PrimaryRemaining,
+        };
+        let pixels = render_widget(&widget, &RateLimits::default());
+        assert_eq!(pixels.len(), ICON_SIZE * ICON_SIZE * 4);
+        assert!(pixels.chunks_exact(4).any(|pixel| pixel[3] != 0));
+        assert_eq!(pixels, app_icon_pixels());
     }
 }

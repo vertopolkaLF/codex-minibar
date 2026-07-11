@@ -1334,14 +1334,13 @@ impl Backend for WinUIBackend {
                         bottom_left: *v,
                     })
                 }
-                (Prop::CornerRadius, PropValue::CornerRadii(v), Handle::Border(b)) => {
-                    b.SetCornerRadius(bindings::CornerRadius {
+                (Prop::CornerRadius, PropValue::CornerRadii(v), Handle::Border(b)) => b
+                    .SetCornerRadius(bindings::CornerRadius {
                         top_left: v.top_left,
                         top_right: v.top_right,
                         bottom_right: v.bottom_right,
                         bottom_left: v.bottom_left,
-                    })
-                }
+                    }),
                 (Prop::CornerRadius, PropValue::Unset, Handle::Border(b)) => {
                     b.SetCornerRadius(bindings::CornerRadius::default())
                 }
@@ -1954,10 +1953,10 @@ impl Backend for WinUIBackend {
             if let Some(hdr_id) = header_id {
                 if let Some(hdr_handle) = map.get(&hdr_id) {
                     let ui_elem = hdr_handle.as_ui_element();
-                    diag::dropped(tb.SetContent(&ui_elem));
+                    diag::dropped(tb.SetLeftHeader(&ui_elem));
                 }
             } else {
-                diag::dropped(tb.SetContent(None));
+                diag::dropped(tb.SetLeftHeader(None));
             }
         }
     }
