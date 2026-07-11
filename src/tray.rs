@@ -9,7 +9,7 @@ use fontdue::{
 
 use crate::{
     limits::{LimitWindow, RateLimits},
-    settings::{TrayMetric, TrayWidget},
+    settings::{LimitValue, TrayPresentation, TraySource, TrayWidget},
 };
 
 const ICON_SIZE: usize = 32;
@@ -42,50 +42,34 @@ fn format_reset(reset: Option<DateTime<Utc>>) -> String {
         .unwrap_or_else(|| "?".into())
 }
 
-fn label(widget: &TrayWidget, limits: &RateLimits) -> String {
-    match widget.metric {
-        TrayMetric::PrimaryRemaining => limits
-            .primary
-            .remaining_percent()
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "?".into()),
-        TrayMetric::PrimaryReset => stacked_reset_label(limits.primary.resets_at),
-        TrayMetric::SecondaryRemaining => limits
-            .secondary
-            .remaining_percent()
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "?".into()),
-        TrayMetric::SecondaryReset => stacked_reset_label(limits.secondary.resets_at),
-        TrayMetric::Combined => format!(
-            "{}\n{}",
-            limits
-                .primary
-                .remaining_percent()
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "?".into()),
-            limits
-                .secondary
-                .remaining_percent()
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "?".into())
-        ),
+fn percent(window: &LimitWindow, value: LimitValue) -> Option<u8> {
+    match value {
+        LimitValue::Remaining => window.remaining_percent(),
+        LimitValue::Used => window.used_percent.map(|value| value.min(100)),
     }
 }
 
-fn stacked_reset_label(reset: Option<DateTime<Utc>>) -> String {
+fn stacked_reset_label(reset: Option<DateTime<Utc>>, countdown: bool) -> String {
+    if countdown {
+        return reset.map_or_else(
+            || "?".into(),
+            |value| {
+                let minutes = (value - Utc::now()).num_minutes().max(0);
+                if minutes < 60 {
+                    format!("{minutes}m")
+                } else {
+                    format!("{}\n{:02}", minutes / 60, minutes % 60)
+                }
+            },
+        );
+    }
     reset
         .map(|value| value.with_timezone(&Local).format("%H\n%M").to_string())
         .unwrap_or_else(|| "?".into())
 }
 
-fn icon_color(widget: &TrayWidget, limits: &RateLimits) -> [u8; 3] {
-    let remaining = match widget.metric {
-        TrayMetric::PrimaryRemaining => limits.primary.remaining_percent(),
-        TrayMetric::SecondaryRemaining => limits.secondary.remaining_percent(),
-        TrayMetric::Combined => limits.primary.remaining_percent(),
-        TrayMetric::PrimaryReset | TrayMetric::SecondaryReset => return [255, 255, 255],
-    };
-    match remaining {
+fn icon_color(value: Option<u8>) -> [u8; 3] {
+    match value {
         Some(0..=15) => [230, 74, 72],
         Some(16..=50) => [245, 158, 11],
         Some(_) => [49, 196, 141],
@@ -109,8 +93,28 @@ pub fn render_widget(widget: &TrayWidget, limits: &RateLimits) -> Vec<u8> {
     if !has_real_data(limits) {
         return app_icon_pixels().to_vec();
     }
-    let text = label(widget, limits);
-    let rgb = icon_color(widget, limits);
+    let primary = percent(&limits.primary, widget.limit_value);
+    let secondary = percent(&limits.secondary, widget.limit_value);
+    if matches!(widget.presentation, TrayPresentation::StackedBars) {
+        return render_bars(&[primary, secondary]);
+    }
+    if matches!(widget.presentation, TrayPresentation::NestedRings) {
+        return render_rings(&[primary, secondary]);
+    }
+    if matches!(widget.presentation, TrayPresentation::Bar) {
+        let value = match widget.source { TraySource::Secondary => secondary, _ => primary };
+        return render_bars(&[value]);
+    }
+    if matches!(widget.presentation, TrayPresentation::Ring) {
+        let value = match widget.source { TraySource::Secondary => secondary, _ => primary };
+        return render_rings(&[value]);
+    }
+    let (text, rgb) = match widget.source {
+        TraySource::Combined => (format!("{}\n{}", primary.map_or_else(|| "?".into(), |v| v.to_string()), secondary.map_or_else(|| "?".into(), |v| v.to_string())), icon_color(primary)),
+        TraySource::Primary => (primary.map_or_else(|| "?".into(), |v| v.to_string()), icon_color(primary)),
+        TraySource::Secondary => (secondary.map_or_else(|| "?".into(), |v| v.to_string()), icon_color(secondary)),
+        TraySource::PrimaryReset => (stacked_reset_label(limits.primary.resets_at, matches!(widget.presentation, TrayPresentation::ResetCountdown)), [255, 255, 255]),
+    };
     let Some(font) = system_font() else {
         return render_fallback(&text, rgb);
     };
@@ -150,6 +154,47 @@ pub fn render_widget(widget: &TrayWidget, limits: &RateLimits) -> Vec<u8> {
                     let offset = (y as usize * ICON_SIZE + x as usize) * 4;
                     pixels[offset..offset + 4].copy_from_slice(&[rgb[0], rgb[1], rgb[2], alpha]);
                 }
+            }
+        }
+    }
+    pixels
+}
+
+fn render_bars(values: &[Option<u8>]) -> Vec<u8> {
+    let mut pixels = vec![0; ICON_SIZE * ICON_SIZE * 4];
+    let count = values.len();
+    for (index, value) in values.iter().enumerate() {
+        let height = if count == 1 { 8 } else { 6 };
+        let y = if count == 1 { 12 } else { 7 + index * 13 };
+        let filled = value.unwrap_or(0) as usize * 24 / 100;
+        let color = icon_color(*value);
+        for yy in y..y + height {
+            for x in 4..28 {
+                let offset = (yy * ICON_SIZE + x) * 4;
+                let rgb = if x - 4 < filled { color } else { [70, 70, 70] };
+                pixels[offset..offset + 4].copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+            }
+        }
+    }
+    pixels
+}
+
+fn render_rings(values: &[Option<u8>]) -> Vec<u8> {
+    let mut pixels = vec![0; ICON_SIZE * ICON_SIZE * 4];
+    let radii: &[f32] = if values.len() == 1 { &[11.0] } else { &[12.0, 7.5] };
+    for (value, radius) in values.iter().zip(radii) {
+        let filled = value.unwrap_or(0) as f32 / 100.0;
+        let color = icon_color(*value);
+        for y in 0..ICON_SIZE {
+            for x in 0..ICON_SIZE {
+                let dx = x as f32 + 0.5 - 16.0;
+                let dy = y as f32 + 0.5 - 16.0;
+                let distance = (dx * dx + dy * dy).sqrt();
+                if (distance - radius).abs() > 2.0 { continue; }
+                let angle = (dy.atan2(dx) + std::f32::consts::FRAC_PI_2).rem_euclid(std::f32::consts::TAU);
+                let rgb = if angle <= filled * std::f32::consts::TAU { color } else { [70, 70, 70] };
+                let offset = (y * ICON_SIZE + x) * 4;
+                pixels[offset..offset + 4].copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
             }
         }
     }
@@ -263,10 +308,12 @@ mod platform {
         }
 
         pub fn sync(&mut self, widgets: &[TrayWidget], limits: &RateLimits) -> Result<()> {
-            self.icons.truncate(widgets.len());
-            while self.icons.len() < widgets.len() {
+            // No configured widgets is a deliberate state: retain one ordinary app icon.
+            let icon_count = widgets.len().max(1);
+            self.icons.truncate(icon_count);
+            while self.icons.len() < icon_count {
                 let index = self.icons.len();
-                let icon = make_icon(&widgets[index], limits)?;
+                let icon = make_icon(widgets.get(index), limits)?;
                 let tray = TrayIconBuilder::new()
                     .with_icon(icon)
                     .with_menu(Box::new(make_menu()?))
@@ -277,8 +324,8 @@ mod platform {
                 self.icons.push(tray);
             }
             let tooltip = tooltip(limits);
-            for (tray, widget) in self.icons.iter().zip(widgets) {
-                tray.set_icon(Some(make_icon(widget, limits)?))?;
+            for (index, tray) in self.icons.iter().enumerate() {
+                tray.set_icon(Some(make_icon(widgets.get(index), limits)?))?;
                 tray.set_tooltip(Some(&tooltip))?;
             }
             Ok(())
@@ -315,9 +362,9 @@ mod platform {
         }
     }
 
-    fn make_icon(widget: &TrayWidget, limits: &RateLimits) -> Result<Icon> {
+    fn make_icon(widget: Option<&TrayWidget>, limits: &RateLimits) -> Result<Icon> {
         Icon::from_rgba(
-            render_widget(widget, limits),
+            widget.map_or_else(|| app_icon_pixels().to_vec(), |widget| render_widget(widget, limits)),
             ICON_SIZE as u32,
             ICON_SIZE as u32,
         )
@@ -401,9 +448,7 @@ mod tests {
 
     #[test]
     fn renders_rgba_icon_with_visible_pixels() {
-        let widget = TrayWidget {
-            metric: TrayMetric::PrimaryRemaining,
-        };
+        let widget = TrayWidget { source: TraySource::Primary, presentation: TrayPresentation::Number, limit_value: LimitValue::Remaining };
         let pixels = render_widget(&widget, &limits());
         assert_eq!(pixels.len(), ICON_SIZE * ICON_SIZE * 4);
         assert!(pixels.chunks_exact(4).any(|pixel| pixel[3] != 0));
@@ -418,21 +463,13 @@ mod tests {
 
     #[test]
     fn reset_icons_are_white_and_percentage_icons_are_colored() {
-        let reset = TrayWidget {
-            metric: TrayMetric::PrimaryReset,
-        };
-        let percentage = TrayWidget {
-            metric: TrayMetric::PrimaryRemaining,
-        };
-        assert_eq!(icon_color(&reset, &limits()), [255, 255, 255]);
-        assert_eq!(icon_color(&percentage, &limits()), [49, 196, 141]);
+        assert_eq!(icon_color(None), [180, 180, 180]);
+        assert_eq!(icon_color(Some(80)), [49, 196, 141]);
     }
 
     #[test]
     fn uses_app_icon_until_rate_limit_data_arrives() {
-        let widget = TrayWidget {
-            metric: TrayMetric::PrimaryRemaining,
-        };
+        let widget = TrayWidget { source: TraySource::Primary, presentation: TrayPresentation::Number, limit_value: LimitValue::Remaining };
         let pixels = render_widget(&widget, &RateLimits::default());
         assert_eq!(pixels.len(), ICON_SIZE * ICON_SIZE * 4);
         assert!(pixels.chunks_exact(4).any(|pixel| pixel[3] != 0));

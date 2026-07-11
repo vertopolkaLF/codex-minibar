@@ -7,21 +7,58 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 1;
+pub const SETTINGS_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum TrayMetric {
-    PrimaryRemaining,
-    PrimaryReset,
-    SecondaryRemaining,
-    SecondaryReset,
+pub enum TraySource {
     Combined,
+    Primary,
+    Secondary,
+    PrimaryReset,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrayPresentation {
+    StackedNumbers,
+    StackedBars,
+    NestedRings,
+    Number,
+    Bar,
+    Ring,
+    ResetTime,
+    ResetCountdown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LimitValue {
+    #[default]
+    Remaining,
+    Used,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrayWidget {
-    pub metric: TrayMetric,
+    pub source: TraySource,
+    pub presentation: TrayPresentation,
+    #[serde(default)]
+    pub limit_value: LimitValue,
+}
+
+impl TrayWidget {
+    pub fn default_user_widget() -> Self {
+        Self {
+            source: TraySource::Combined,
+            presentation: TrayPresentation::StackedNumbers,
+            limit_value: LimitValue::Remaining,
+        }
+    }
+
+    pub fn uses_limit_value(&self) -> bool {
+        !matches!(self.source, TraySource::PrimaryReset)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,14 +114,8 @@ impl Default for Settings {
             show_used_percentage: false,
             hide_plan_credits: false,
             codex_path: None,
-            tray_widgets: vec![
-                TrayWidget {
-                    metric: TrayMetric::PrimaryRemaining,
-                },
-                TrayWidget {
-                    metric: TrayMetric::PrimaryReset,
-                },
-            ],
+            // An empty list intentionally means "show the ordinary app icon".
+            tray_widgets: Vec::new(),
             notifications: NotificationSettings::default(),
             history_retention_days: 90,
             check_for_updates: true,
@@ -253,6 +284,31 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     .insert("version".into(), toml::Value::Integer(1));
                 version = 1;
             }
+            1 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                if let Some(toml::Value::Array(widgets)) = root.get_mut("tray_widgets") {
+                    for widget in widgets {
+                        let Some(widget) = widget.as_table_mut() else {
+                            continue;
+                        };
+                        let metric = widget.remove("metric").and_then(|value| value.as_str().map(str::to_owned));
+                        let (source, presentation) = match metric.as_deref() {
+                            Some("primary_remaining") => ("primary", "number"),
+                            Some("secondary_remaining") => ("secondary", "number"),
+                            Some("primary_reset") => ("primary_reset", "reset_time"),
+                            Some("secondary_reset") => ("primary_reset", "reset_time"),
+                            Some("combined") | _ => ("combined", "stacked_numbers"),
+                        };
+                        widget.insert("source".into(), toml::Value::String(source.into()));
+                        widget.insert("presentation".into(), toml::Value::String(presentation.into()));
+                        widget.insert("limit_value".into(), toml::Value::String("remaining".into()));
+                    }
+                }
+                root.insert("version".into(), toml::Value::Integer(2));
+                version = 2;
+            }
             unsupported => anyhow::bail!("no migration path from settings version {unsupported}"),
         }
     }
@@ -271,7 +327,7 @@ mod tests {
         assert!(!value.show_used_percentage);
         assert!(!value.hide_plan_credits);
         assert_eq!(value.history_retention_days, 90);
-        assert_eq!(value.tray_widgets.len(), 2);
+        assert!(value.tray_widgets.is_empty());
         assert!(!value.notifications.limits_changed);
         assert!(!value.notifications.low_usage_enabled);
         assert_eq!(value.notifications.low_usage_threshold_percent, 20);
@@ -307,7 +363,7 @@ tray_widgets = []
         assert!(!migrated.automatic_activation);
         assert!(migrated.start_at_login);
         assert_eq!(migrated.history_retention_days, 30);
-        assert!(fs::read_to_string(path).unwrap().contains("version = 1"));
+        assert!(fs::read_to_string(path).unwrap().contains("version = 2"));
     }
 
     #[test]

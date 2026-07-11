@@ -14,7 +14,7 @@ use crate::{
     limits::{LimitWindow, RateLimits},
     notifications::LimitNotificationTracker,
     popup,
-    settings::{NotificationSettings, Settings},
+    settings::{NotificationSettings, Settings, TrayWidget},
     theme::{DARK_SURFACE_FILL, SURFACE_FILL, WINDOW_BORDER, WINDOW_FILL},
     tray::{TrayManager, TrayMenuAction},
     worker::{WorkerCommand, WorkerEvent},
@@ -576,7 +576,7 @@ fn start_background_bridge(
     ui_dispatcher: UiMarshaller,
 ) {
     let events = state.take_worker_events();
-    let widgets = state.settings.tray_widgets.clone();
+    let mut widgets = state.settings.tray_widgets.clone();
     let settings_rx = state
         .settings_rx
         .lock()
@@ -613,10 +613,16 @@ fn start_background_bridge(
         let apply_settings = |ui: &mut UiState,
                               set_ui: &AsyncSetState<UiState>,
                               notification_settings: &mut NotificationSettings,
+                              widgets: &mut Vec<TrayWidget>,
+                              tray: &mut TrayManager,
                               settings: Settings| {
             ui.show_used_percentage = settings.show_used_percentage;
             ui.hide_plan_credits = settings.hide_plan_credits;
             *notification_settings = settings.notifications;
+            *widgets = settings.tray_widgets;
+            if let Err(error) = tray.sync(widgets, &ui.limits) {
+                ui.error = Some(error.to_string());
+            }
             if let Some(commands) = &state.commands {
                 let _ = commands.send(WorkerCommand::SetAutomaticActivation(
                     settings.automatic_activation,
@@ -627,12 +633,14 @@ fn start_background_bridge(
 
         let drain_settings = |ui: &mut UiState,
                               set_ui: &AsyncSetState<UiState>,
-                              notification_settings: &mut NotificationSettings| {
+                              notification_settings: &mut NotificationSettings,
+                              widgets: &mut Vec<TrayWidget>,
+                              tray: &mut TrayManager| {
             let Some(settings_rx) = settings_rx.as_ref() else {
                 return;
             };
             while let Ok(settings) = settings_rx.try_recv() {
-                apply_settings(ui, set_ui, notification_settings, settings);
+                apply_settings(ui, set_ui, notification_settings, widgets, tray, settings);
             }
         };
 
@@ -640,7 +648,7 @@ fn start_background_bridge(
             set_ui.call(ui.clone());
             loop {
                 popup::pump_messages();
-                drain_settings(&mut ui, &set_ui, &mut notification_settings);
+                drain_settings(&mut ui, &set_ui, &mut notification_settings, &mut widgets, &mut tray);
                 if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings_tx) {
                     drop(tray);
                     state.shutdown_worker();
@@ -652,7 +660,7 @@ fn start_background_bridge(
 
         loop {
             popup::pump_messages();
-            drain_settings(&mut ui, &set_ui, &mut notification_settings);
+            drain_settings(&mut ui, &set_ui, &mut notification_settings, &mut widgets, &mut tray);
             if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings_tx) {
                 drop(tray);
                 state.shutdown_worker();

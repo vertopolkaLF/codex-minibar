@@ -4,7 +4,7 @@
 //! details; both surfaces share tokens from [`crate::theme`].
 
 use crate::notifications;
-use crate::settings::Settings;
+use crate::settings::{LimitValue, Settings, TrayPresentation, TraySource, TrayWidget};
 use crate::settings_controls::{
     settings_action_card, settings_info_card, settings_slider_content, settings_toggle_card,
     settings_toggle_card_with_description, settings_toggle_expander,
@@ -328,6 +328,7 @@ pub fn render(
     let (low_usage_expanded, set_low_usage_expanded) = cx.use_state(true);
     let (low_usage_expand_progress, set_low_usage_expand_progress) = cx.use_async_state(1.0_f64);
     let (hovered_card_id, set_hovered_card_id) = cx.use_state(None::<String>);
+    let (tray_widgets, set_tray_widgets) = cx.use_state(settings.tray_widgets.clone());
 
     let page_content = border(
         border(tab_content(
@@ -343,6 +344,7 @@ pub fn render(
             low_usage_threshold,
             low_usage_expanded,
             low_usage_expand_progress,
+            &tray_widgets,
             &hovered_card_id,
             set_automatic_activation,
             set_start_at_login,
@@ -354,6 +356,7 @@ pub fn render(
             set_low_usage_threshold,
             set_low_usage_expanded,
             set_low_usage_expand_progress,
+            set_tray_widgets,
             set_hovered_card_id,
             settings_tx,
         ))
@@ -438,6 +441,7 @@ fn tab_content(
     low_usage_threshold: u8,
     low_usage_expanded: bool,
     low_usage_expand_progress: f64,
+    tray_widgets: &[TrayWidget],
     hovered_card_id: &Option<String>,
     set_automatic_activation: SetState<bool>,
     set_start_at_login: SetState<bool>,
@@ -449,6 +453,7 @@ fn tab_content(
     set_low_usage_threshold: SetState<u8>,
     set_low_usage_expanded: SetState<bool>,
     set_low_usage_expand_progress: AsyncSetState<f64>,
+    set_tray_widgets: SetState<Vec<TrayWidget>>,
     set_hovered_card_id: SetState<Option<String>>,
     settings_tx: Sender<Settings>,
 ) -> Element {
@@ -459,7 +464,7 @@ fn tab_content(
     let apply_activation_failure = settings_tx.clone();
     let apply_limits_reset = settings_tx.clone();
     let apply_low_usage_enabled = settings_tx.clone();
-    let apply_low_usage_threshold = settings_tx;
+    let apply_low_usage_threshold = settings_tx.clone();
     let (title, rows) = match tab {
         Tab::General => (
             "General",
@@ -541,11 +546,7 @@ fn tab_content(
         ),
         Tab::Tray => (
             "Tray",
-            vec![settings_info_card(
-                "Active tray widgets",
-                format!("{} configured", settings.tray_widgets.len()),
-            )
-            .with_key("tray-widgets")],
+            tray_settings_cards(tray_widgets, set_tray_widgets, settings_tx.clone()),
         ),
         Tab::Notifications => (
             "Notifications",
@@ -678,6 +679,178 @@ fn tab_content(
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Top)
     .into()
+}
+
+fn tray_settings_cards(
+    widgets: &[TrayWidget],
+    set_widgets: SetState<Vec<TrayWidget>>,
+    settings_tx: Sender<Settings>,
+) -> Vec<Element> {
+    let mut cards = Vec::new();
+    if widgets.is_empty() {
+        cards.push(
+            settings_info_card(
+                "Tray icon",
+                "App icon (add a widget to replace it)",
+            )
+            .with_key("tray-empty"),
+        );
+    }
+    for (index, widget) in widgets.iter().cloned().enumerate() {
+        let source_items = vec!["5h + week", "5h limit", "Weekly limit", "5h reset"];
+        let source_index = source_index(&widget.source);
+        let presentation_items = presentation_options(&widget.source);
+        let presentation_index = presentation_items
+            .iter()
+            .position(|(_, presentation)| *presentation == widget.presentation)
+            .unwrap_or(0) as i32;
+        let widget_for_source = widget.clone();
+        let widgets_for_source = widgets.to_vec();
+        let source_setter = set_widgets.clone();
+        let source_tx = settings_tx.clone();
+        let widget_for_presentation = widget.clone();
+        let widgets_for_presentation = widgets.to_vec();
+        let presentation_setter = set_widgets.clone();
+        let presentation_tx = settings_tx.clone();
+        let widgets_for_value = widgets.to_vec();
+        let value_setter = set_widgets.clone();
+        let value_tx = settings_tx.clone();
+        let widgets_for_remove = widgets.to_vec();
+        let remove_setter = set_widgets.clone();
+        let remove_tx = settings_tx.clone();
+
+        let mut fields: Vec<Element> = vec![
+            text_block(format!("Tray widget {}", index + 1)).font_size(16.0).bold().into(),
+            ComboBox::new(source_items)
+                .header("Information")
+                .selected_index(source_index)
+                .on_selection_changed(move |choice: i32| {
+                    let mut next = widgets_for_source.clone();
+                    let source = source_from_index(choice);
+                    next[index] = TrayWidget {
+                        source: source.clone(),
+                        presentation: default_presentation(&source),
+                        limit_value: widget_for_source.limit_value,
+                    };
+                    persist_tray_widgets(source_setter.clone(), source_tx.clone(), next);
+                })
+                .into(),
+            ComboBox::new(presentation_items.iter().map(|(label, _)| *label))
+                .header("Appearance")
+                .selected_index(presentation_index)
+                .on_selection_changed(move |choice: i32| {
+                    let mut next = widgets_for_presentation.clone();
+                    if let Some((_, presentation)) = presentation_options(&widget_for_presentation.source)
+                        .get(choice.max(0) as usize)
+                    {
+                        next[index].presentation = presentation.clone();
+                        persist_tray_widgets(
+                            presentation_setter.clone(),
+                            presentation_tx.clone(),
+                            next,
+                        );
+                    }
+                })
+                .into(),
+        ];
+        if widget.uses_limit_value() {
+            fields.push(
+                ComboBox::new(["Remaining", "Used"])
+                    .header("Limit value")
+                    .selected_index(if widget.limit_value == LimitValue::Remaining { 0 } else { 1 })
+                    .on_selection_changed(move |choice| {
+                        let mut next = widgets_for_value.clone();
+                        next[index].limit_value = if choice == 1 { LimitValue::Used } else { LimitValue::Remaining };
+                        persist_tray_widgets(value_setter.clone(), value_tx.clone(), next);
+                    })
+                    .into(),
+            );
+        }
+        fields.push(
+            Button::new("Remove widget")
+                .on_click(move || {
+                    let mut next = widgets_for_remove.clone();
+                    next.remove(index);
+                    persist_tray_widgets(remove_setter.clone(), remove_tx.clone(), next);
+                })
+                .into(),
+        );
+        cards.push(
+            border(vstack(fields).spacing(8.0))
+                .padding(Thickness::uniform(16.0))
+                .background(ThemeRef::CardBackground)
+                .corner_radius(8.0)
+                .border_thickness(Thickness::uniform(1.0))
+                .border_brush(ThemeRef::CardStroke)
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .with_key(format!("tray-widget-{index}"))
+                .into(),
+        );
+    }
+    let add_setter = set_widgets;
+    let widgets_for_add = widgets.to_vec();
+    cards.push(
+        Button::new("Add tray widget")
+            .accent()
+            .on_click(move || {
+                let mut next = widgets_for_add.clone();
+                next.push(TrayWidget::default_user_widget());
+                persist_tray_widgets(add_setter.clone(), settings_tx.clone(), next);
+            })
+            .with_key("tray-add-widget")
+            .into(),
+    );
+    cards
+}
+
+fn source_index(source: &TraySource) -> i32 {
+    match source {
+        TraySource::Combined => 0,
+        TraySource::Primary => 1,
+        TraySource::Secondary => 2,
+        TraySource::PrimaryReset => 3,
+    }
+}
+
+fn source_from_index(index: i32) -> TraySource {
+    match index {
+        1 => TraySource::Primary,
+        2 => TraySource::Secondary,
+        3 => TraySource::PrimaryReset,
+        _ => TraySource::Combined,
+    }
+}
+
+fn presentation_options(source: &TraySource) -> Vec<(&'static str, TrayPresentation)> {
+    match source {
+        TraySource::Combined => vec![
+            ("Two numbers", TrayPresentation::StackedNumbers),
+            ("Two progress bars", TrayPresentation::StackedBars),
+            ("Nested rings", TrayPresentation::NestedRings),
+        ],
+        TraySource::Primary | TraySource::Secondary => vec![
+            ("Number", TrayPresentation::Number),
+            ("Progress bar", TrayPresentation::Bar),
+            ("Ring", TrayPresentation::Ring),
+        ],
+        TraySource::PrimaryReset => vec![
+            ("Reset time", TrayPresentation::ResetTime),
+            ("Time remaining", TrayPresentation::ResetCountdown),
+        ],
+    }
+}
+
+fn default_presentation(source: &TraySource) -> TrayPresentation {
+    presentation_options(source)[0].1.clone()
+}
+
+fn persist_tray_widgets(
+    setter: SetState<Vec<TrayWidget>>,
+    settings_tx: Sender<Settings>,
+    widgets: Vec<TrayWidget>,
+) {
+    setter.call(widgets.clone());
+    persist_update(settings_tx, move |settings| settings.tray_widgets = widgets);
 }
 
 fn persist_bool(
