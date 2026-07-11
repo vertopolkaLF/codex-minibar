@@ -152,10 +152,19 @@ mod windows_impl {
     }
 
     pub(super) fn show(title: &str, body: &str) -> Result<()> {
+        let logo = notification_icon_path()
+            .map(|path| {
+                format!(
+                    r#"<image placement="appLogoOverride" hint-crop="circle" src="{}"/>"#,
+                    escape_xml(&path_to_file_uri(&path))
+                )
+            })
+            .unwrap_or_default();
         let xml = format!(
-            r#"<toast><visual><binding template="ToastGeneric"><text>{title}</text><text>{body}</text></binding></visual></toast>"#,
+            r#"<toast><visual><binding template="ToastGeneric"><text>{title}</text><text>{body}</text>{logo}</binding></visual></toast>"#,
             title = escape_xml(title),
             body = escape_xml(body),
+            logo = logo,
         );
         let document = XmlDocument::new()?;
         document.LoadXml(&HSTRING::from(xml))?;
@@ -178,24 +187,50 @@ mod windows_impl {
         let key = format!(r"Software\Classes\AppUserModelId\{AUMID}");
         set_reg_sz(&key, "DisplayName", "Codex Minibar")?;
         if let Some(icon) = notification_icon_path() {
-            set_reg_sz(&key, "IconUri", &icon.to_string_lossy())?;
+            // Shell IconUri wants a normal Windows path with backslashes.
+            set_reg_sz(&key, "IconUri", &path_to_windows_path(&icon))?;
         }
         Ok(())
     }
 
     fn notification_icon_path() -> Option<PathBuf> {
-        let packaged = std::env::current_exe()
-            .ok()
-            .and_then(|path| {
+        let candidates = [
+            std::env::current_exe().ok().and_then(|path| {
                 path.parent()
-                    .map(|parent| parent.join("assets/icons/app-icon-64.png"))
-            })
-            .filter(|path| path.exists());
-        packaged.or_else(|| {
-            let path =
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/icons/app-icon-64.png");
-            path.exists().then_some(path)
-        })
+                    .map(|parent| parent.join("assets").join("icons").join("app-icon-64.png"))
+            }),
+            Some(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("assets")
+                    .join("icons")
+                    .join("app-icon-64.png"),
+            ),
+        ];
+        candidates
+            .into_iter()
+            .flatten()
+            .find(|path| path.exists())
+            .and_then(|path| path.canonicalize().ok().or(Some(path)))
+            .map(strip_extended_path_prefix)
+    }
+
+    /// `\\?\C:\...` → `C:\...` so toast/shell APIs accept the path.
+    fn strip_extended_path_prefix(path: PathBuf) -> PathBuf {
+        let raw = path.to_string_lossy();
+        if let Some(stripped) = raw.strip_prefix(r"\\?\") {
+            PathBuf::from(stripped)
+        } else {
+            path
+        }
+    }
+
+    fn path_to_windows_path(path: &std::path::Path) -> String {
+        path.to_string_lossy().replace('/', "\\")
+    }
+
+    fn path_to_file_uri(path: &std::path::Path) -> String {
+        let windows = path_to_windows_path(path);
+        format!("file:///{}", windows.replace('\\', "/"))
     }
 
     fn set_reg_sz(subkey: &str, name: &str, value: &str) -> Result<()> {
