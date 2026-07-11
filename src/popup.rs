@@ -51,7 +51,9 @@ const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
 /// No DWM rounded-frame (its drop shadow always spills past the monitor seam).
 /// Shape comes from `CreateRoundRectRgn` + matching XAML `corner_radius`.
 const DWMWCP_DONOTROUND: u32 = 1;
-const SHOW_GRACE_MS: i64 = 450;
+/// Ignore outside presses briefly after open so the tray click that showed us
+/// cannot immediately dismiss. Counted from the moment the slide starts.
+const SHOW_GRACE_MS: i64 = 200;
 /// Popup client width in DIP — fixed; height adapts to content.
 pub const POPUP_WIDTH: i32 = 380;
 /// Layout pieces used by [`height_for`] (must stay in sync with `popup_window`).
@@ -633,9 +635,29 @@ pub fn is_visible() -> bool {
 
 pub fn hide() {
     let Some(hwnd) = current_hwnd() else {
+        // Still clear the flag — a missing HWND must not sticky-lock toggle.
+        POPUP_VISIBLE.store(false, Ordering::SeqCst);
         return;
     };
     park(hwnd);
+}
+
+/// Wake XAML composition after a Win32 park. Must run on the UI thread.
+///
+/// `SWP_HIDEWINDOW` leaves `AppWindow` thinking the window is gone; the next
+/// `SWP_SHOWWINDOW` alone will not paint until something activates the Window
+/// again. Opening Settings accidentally did that via shared `ROOT_*` theme
+/// globals — do it explicitly here instead.
+pub fn prepare_show_on_ui_thread() {
+    POPUP_HOST.with(|slot| {
+        if let Some(host) = slot.borrow().as_ref() {
+            let _ = host.activate();
+        }
+    });
+    hide_from_switchers();
+    unsafe {
+        let _ = SetFocus(std::ptr::null_mut());
+    }
 }
 
 /// Re-clamp if WinUI grows/moves the HWND past the stored monitor.
@@ -685,8 +707,14 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
         move_hwnd(hwnd, start_x, target_y);
         apply_window_region(hwnd, Some(monitor));
         let _ = DwmFlush();
-        // Do not SetForegroundWindow / Activate — that gives keyboard focus to
+        // Do not SetForegroundWindow here — that gives keyboard focus to
         // the first footer button (Refresh) and paints its Subtle highlight.
+
+        // Mark visible + start grace before the blocking slide so mid-anim
+        // outside clicks can dismiss without waiting for the last frame.
+        POPUP_VISIBLE.store(true, Ordering::SeqCst);
+        IGNORE_OUTSIDE_UNTIL_MS.store(now_ms() + SHOW_GRACE_MS, Ordering::SeqCst);
+        BUTTON_WAS_DOWN.store(true, Ordering::SeqCst);
 
         for step in 1..=ANIMATION_STEPS {
             let progress = f64::from(step) / f64::from(ANIMATION_STEPS);
@@ -695,6 +723,11 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
             move_hwnd(hwnd, animated_x, target_y);
             apply_window_region(hwnd, Some(monitor));
             let _ = DwmFlush();
+
+            if clicked_outside() {
+                park(hwnd);
+                return;
+            }
         }
 
         apply_popup_chrome(hwnd);
@@ -706,7 +739,8 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
 
     pin_bottom_right(hwnd, monitor, work.bottom);
 
-    POPUP_VISIBLE.store(true, Ordering::SeqCst);
+    // Anim is longer than SHOW_GRACE_MS — re-arm so the same pump tick that
+    // called us cannot immediately dismiss on a stale edge.
     IGNORE_OUTSIDE_UNTIL_MS.store(now_ms() + SHOW_GRACE_MS, Ordering::SeqCst);
     BUTTON_WAS_DOWN.store(true, Ordering::SeqCst);
 }
@@ -719,32 +753,15 @@ pub fn toggle_near(anchor_x: i32, anchor_y: i32) {
     }
 }
 
-/// Detect a new mouse press that lands outside the popup.
-pub fn clicked_outside() -> bool {
-    if !is_visible() || now_ms() < IGNORE_OUTSIDE_UNTIL_MS.load(Ordering::SeqCst) {
-        let button_is_down = unsafe {
-            [VK_LBUTTON, VK_MBUTTON, VK_RBUTTON]
-                .into_iter()
-                .any(|button| GetAsyncKeyState(button as i32) < 0)
-        };
-        BUTTON_WAS_DOWN.store(button_is_down, Ordering::SeqCst);
-        return false;
-    }
-    let Some(hwnd) = current_hwnd() else {
-        return false;
-    };
-
-    let button_is_down = unsafe {
+fn any_mouse_button_down() -> bool {
+    unsafe {
         [VK_LBUTTON, VK_MBUTTON, VK_RBUTTON]
             .into_iter()
             .any(|button| GetAsyncKeyState(button as i32) < 0)
-    };
-    let was_down = BUTTON_WAS_DOWN.swap(button_is_down, Ordering::SeqCst);
-    let is_new_click = button_is_down && !was_down;
-    if !is_new_click {
-        return false;
     }
+}
 
+fn cursor_outside_hwnd(hwnd: HWND) -> bool {
     unsafe {
         let mut cursor = POINT { x: 0, y: 0 };
         let mut popup = RECT {
@@ -760,4 +777,23 @@ pub fn clicked_outside() -> bool {
             || cursor.y < popup.top
             || cursor.y >= popup.bottom
     }
+}
+
+/// Rising edge of a mouse button while the cursor is outside the popup.
+fn new_press_outside(hwnd: HWND) -> bool {
+    let button_is_down = any_mouse_button_down();
+    let was_down = BUTTON_WAS_DOWN.swap(button_is_down, Ordering::SeqCst);
+    button_is_down && !was_down && cursor_outside_hwnd(hwnd)
+}
+
+/// Detect a new mouse press that lands outside the popup.
+pub fn clicked_outside() -> bool {
+    if !is_visible() || now_ms() < IGNORE_OUTSIDE_UNTIL_MS.load(Ordering::SeqCst) {
+        BUTTON_WAS_DOWN.store(any_mouse_button_down(), Ordering::SeqCst);
+        return false;
+    }
+    let Some(hwnd) = current_hwnd() else {
+        return false;
+    };
+    new_press_outside(hwnd)
 }

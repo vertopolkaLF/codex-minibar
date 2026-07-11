@@ -720,8 +720,21 @@ fn pump_tray_and_dismiss(
         } = event
             && tray.contains(&id)
         {
-            popup::toggle_near(position.x as i32, position.y as i32);
-            // AppWindow.IsShownInSwitchers must be set on the UI thread.
+            let x = position.x as i32;
+            let y = position.y as i32;
+            if popup::is_visible() {
+                popup::hide();
+            } else {
+                // WinUI must Activate on the UI thread before a post-park show
+                // will actually paint — wait briefly so that runs first.
+                let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+                ui_dispatcher.dispatch(move || {
+                    popup::prepare_show_on_ui_thread();
+                    let _ = ready_tx.send(());
+                });
+                let _ = ready_rx.recv_timeout(std::time::Duration::from_millis(500));
+                popup::show_near(x, y);
+            }
             ui_dispatcher.dispatch(popup::hide_from_switchers);
         }
     }
