@@ -177,16 +177,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let quit = move || std::process::exit(0);
 
     let mut body: Vec<Element> = vec![
-        limit_card(
-            "5h Session",
-            &ui.limits.primary,
-            ui.show_used_percentage,
-        ),
-        limit_card(
-            "Weekly",
-            &ui.limits.secondary,
-            ui.show_used_percentage,
-        ),
+        limit_card("5h Session", &ui.limits.primary, ui.show_used_percentage),
+        limit_card("Weekly", &ui.limits.secondary, ui.show_used_percentage),
     ];
 
     if !ui.hide_plan_credits {
@@ -288,7 +280,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     .vertical_alignment(VerticalAlignment::Top);
 
     // Acrylic behind content; reconciler does not manage this panel's children.
-    // on_resize fires with the Auto-row height (= content), which drives the HWND.
+    // on_resize reports the Auto-row height (body + border). Add chrome padding
+    // (border_inset on top and bottom) so the HWND does not clip the bottom stroke.
     let acrylic = {
         let mut host = swap_chain_panel()
             .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -298,8 +291,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 crate::acrylic::install_into(native);
             }
         }));
-        host.on_resize(|_width, height| {
-            popup::set_client_height_from_content(height);
+        host.on_resize(move |_width, height| {
+            popup::set_client_height_from_content(height + 2.0 * border_inset);
         })
     };
 
@@ -324,9 +317,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
 /// sidebar on the left, focused tab content on the right. Persistence wiring
 /// follows once every setting has its final interaction model.
 #[allow(dead_code)]
-pub(crate) fn open_settings_window(
-    settings_tx: Sender<Settings>,
-) -> windows_core::Result<()> {
+pub(crate) fn open_settings_window(settings_tx: Sender<Settings>) -> windows_core::Result<()> {
     crate::settings_window::open(settings_tx)
 }
 
@@ -619,11 +610,12 @@ fn start_background_bridge(
             thread::sleep(Duration::from_millis(50));
         }
 
-        let apply_settings = |ui: &mut UiState, set_ui: &AsyncSetState<UiState>, settings: Settings| {
-            ui.show_used_percentage = settings.show_used_percentage;
-            ui.hide_plan_credits = settings.hide_plan_credits;
-            set_ui.call(ui.clone());
-        };
+        let apply_settings =
+            |ui: &mut UiState, set_ui: &AsyncSetState<UiState>, settings: Settings| {
+                ui.show_used_percentage = settings.show_used_percentage;
+                ui.hide_plan_credits = settings.hide_plan_credits;
+                set_ui.call(ui.clone());
+            };
 
         let drain_settings = |ui: &mut UiState, set_ui: &AsyncSetState<UiState>| {
             let Some(settings_rx) = settings_rx.as_ref() else {
@@ -824,7 +816,7 @@ fn limit_card(title: &str, window: &LimitWindow, show_used_percentage: bool) -> 
             rounded_progress(progress, accent.clone()),
             grid((
                 hstack((text_block(remaining_label)
-                    .bold()
+                    .font_weight(600)
                     .foreground(accent)
                     .vertical_alignment(VerticalAlignment::Center),))
                 .vertical_alignment(VerticalAlignment::Center),
