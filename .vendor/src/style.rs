@@ -475,6 +475,7 @@ pub struct Modifiers {
     pub horizontal_alignment: Option<HorizontalAlignment>,
     pub vertical_alignment: Option<VerticalAlignment>,
     pub opacity: Option<f64>,
+    pub rotation: Option<f64>,
     pub background: Option<Color>,
     pub foreground: Option<Color>,
     pub font_family: Option<String>,
@@ -507,6 +508,7 @@ impl Modifiers {
             && self.horizontal_alignment.is_none()
             && self.vertical_alignment.is_none()
             && self.opacity.is_none()
+            && self.rotation.is_none()
             && self.background.is_none()
             && self.foreground.is_none()
             && self.font_family.is_none()

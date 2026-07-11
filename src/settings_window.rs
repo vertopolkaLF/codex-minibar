@@ -3,9 +3,13 @@
 //! The host is exposed here so callers do not depend on popup implementation
 //! details; both surfaces share tokens from [`crate::theme`].
 
+use crate::notifications;
 use crate::settings::Settings;
-use crate::settings_controls::{settings_slider_card, settings_toggle_card};
-use crate::theme::SETTINGS_CONTENT_FILL;
+use crate::settings_controls::{
+    settings_action_card, settings_info_card, settings_slider_content, settings_toggle_card,
+    settings_toggle_expander,
+};
+use crate::theme::{CONTROL_FAST_ANIMATION, SETTINGS_CONTENT_FILL};
 use anyhow::Context;
 use std::{
     cell::RefCell,
@@ -278,6 +282,9 @@ pub fn render(
         cx.use_state(settings.notifications.low_usage_enabled);
     let (low_usage_threshold, set_low_usage_threshold) =
         cx.use_state(settings.notifications.low_usage_threshold_percent);
+    let (low_usage_expanded, set_low_usage_expanded) = cx.use_state(true);
+    let (low_usage_expand_progress, set_low_usage_expand_progress) = cx.use_async_state(1.0_f64);
+    let (hovered_card_id, set_hovered_card_id) = cx.use_state(None::<String>);
 
     let page_content = border(
         border(tab_content(
@@ -290,6 +297,9 @@ pub fn render(
             limits_reset,
             low_usage_enabled,
             low_usage_threshold,
+            low_usage_expanded,
+            low_usage_expand_progress,
+            &hovered_card_id,
             set_start_at_login,
             set_show_used_percentage,
             set_hide_plan_credits,
@@ -297,6 +307,9 @@ pub fn render(
             set_limits_reset,
             set_low_usage_enabled,
             set_low_usage_threshold,
+            set_low_usage_expanded,
+            set_low_usage_expand_progress,
+            set_hovered_card_id,
             settings_tx,
         ))
         .with_key(format!("settings-page-{}", rendered_tab.tag()))
@@ -304,7 +317,7 @@ pub fn render(
         .vertical_alignment(VerticalAlignment::Stretch),
     )
     .opacity(if page_visible { 1.0 } else { 0.0 })
-    .with_opacity_transition(Duration::from_millis(180))
+    .with_opacity_transition(CONTROL_FAST_ANIMATION)
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Stretch);
 
@@ -375,6 +388,9 @@ fn tab_content(
     limits_reset: bool,
     low_usage_enabled: bool,
     low_usage_threshold: u8,
+    low_usage_expanded: bool,
+    low_usage_expand_progress: f64,
+    hovered_card_id: &Option<String>,
     set_start_at_login: SetState<bool>,
     set_show_used_percentage: SetState<bool>,
     set_hide_plan_credits: SetState<bool>,
@@ -382,6 +398,9 @@ fn tab_content(
     set_limits_reset: SetState<bool>,
     set_low_usage_enabled: SetState<bool>,
     set_low_usage_threshold: SetState<u8>,
+    set_low_usage_expanded: SetState<bool>,
+    set_low_usage_expand_progress: AsyncSetState<f64>,
+    set_hovered_card_id: SetState<Option<String>>,
     settings_tx: Sender<Settings>,
 ) -> Element {
     let apply_start_at_login = settings_tx.clone();
@@ -395,16 +414,23 @@ fn tab_content(
         Tab::General => (
             "General",
             vec![
-                settings_toggle_card("Automatic Startup", start_at_login, move |value| {
-                    persist_bool(
-                        set_start_at_login.clone(),
-                        apply_start_at_login.clone(),
-                        value,
-                        |settings, value| {
-                            settings.start_at_login = value;
-                        },
-                    );
-                })
+                settings_toggle_card(
+                    "Automatic Startup",
+                    start_at_login,
+                    move |value| {
+                        persist_bool(
+                            set_start_at_login.clone(),
+                            apply_start_at_login.clone(),
+                            value,
+                            |settings, value| {
+                                settings.start_at_login = value;
+                            },
+                        );
+                    },
+                    "general-startup",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
                 .with_key("general-startup"),
                 settings_toggle_card(
                     "Show \"% used\" instead of \"% left\"",
@@ -419,6 +445,9 @@ fn tab_content(
                             },
                         );
                     },
+                    "general-show-used",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
                 )
                 .with_key("general-show-used"),
                 settings_toggle_card(
@@ -434,43 +463,61 @@ fn tab_content(
                             },
                         );
                     },
+                    "general-hide-credits",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
                 )
                 .with_key("general-hide-credits"),
             ],
         ),
         Tab::Tray => (
             "Tray",
-            vec![row(
+            vec![settings_info_card(
                 "Active tray widgets",
                 format!("{} configured", settings.tray_widgets.len()),
             )
             .with_key("tray-widgets")],
         ),
-        Tab::Notifications => {
-            let mut rows = vec![
-                settings_toggle_card("Activation failures", activation_failure, move |value| {
-                    persist_bool(
-                        set_activation_failure.clone(),
-                        apply_activation_failure.clone(),
-                        value,
-                        |settings, value| {
-                            settings.notifications.activation_failure = value;
-                        },
-                    );
-                })
-                .with_key("notif-activation-failure"),
-                settings_toggle_card("When limits got reset", limits_reset, move |value| {
-                    persist_bool(
-                        set_limits_reset.clone(),
-                        apply_limits_reset.clone(),
-                        value,
-                        |settings, value| {
-                            settings.notifications.limits_changed = value;
-                        },
-                    );
-                })
-                .with_key("notif-limits-reset"),
+        Tab::Notifications => (
+            "Notifications",
+            vec![
                 settings_toggle_card(
+                    "Activation failures",
+                    activation_failure,
+                    move |value| {
+                        persist_bool(
+                            set_activation_failure.clone(),
+                            apply_activation_failure.clone(),
+                            value,
+                            |settings, value| {
+                                settings.notifications.activation_failure = value;
+                            },
+                        );
+                    },
+                    "notif-activation-failure",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("notif-activation-failure"),
+                settings_toggle_card(
+                    "When limits got reset",
+                    limits_reset,
+                    move |value| {
+                        persist_bool(
+                            set_limits_reset.clone(),
+                            apply_limits_reset.clone(),
+                            value,
+                            |settings, value| {
+                                settings.notifications.limits_changed = value;
+                            },
+                        );
+                    },
+                    "notif-limits-reset",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("notif-limits-reset"),
+                settings_toggle_expander(
                     format!("When usage is down to {low_usage_threshold}%"),
                     low_usage_enabled,
                     move |value| {
@@ -483,12 +530,14 @@ fn tab_content(
                             },
                         );
                     },
-                )
-                .with_key("notif-low-usage"),
-            ];
-            if low_usage_enabled {
-                rows.push(
-                    settings_slider_card(
+                    low_usage_expanded,
+                    low_usage_expand_progress,
+                    set_low_usage_expanded,
+                    set_low_usage_expand_progress,
+                    "notif-low-usage",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                    settings_slider_content(
                         "Notify when remaining usage reaches",
                         low_usage_threshold,
                         5,
@@ -505,21 +554,34 @@ fn tab_content(
                                 },
                             );
                         },
-                    )
-                    .with_key("notif-low-usage-slider"),
-                );
-            }
-            ("Notifications", rows)
-        }
+                    ),
+                )
+                .with_key("notif-low-usage"),
+                settings_action_card(
+                    "Send a test toast to Windows",
+                    "Test notification",
+                    || {
+                        notifications::show(
+                            "Codex Minibar",
+                            "Test notification — if you can read this, toasts work.",
+                        );
+                    },
+                    "notif-test",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("notif-test"),
+            ],
+        ),
         Tab::Advanced => (
             "Advanced",
             vec![
-                row(
+                settings_info_card(
                     "History retention",
                     format!("{} days", settings.history_retention_days),
                 )
                 .with_key("advanced-retention"),
-                row(
+                settings_info_card(
                     "Codex executable",
                     settings
                         .codex_path
@@ -546,36 +608,6 @@ fn tab_content(
     .row_spacing(10.0)
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Top)
-    .into()
-}
-
-fn row(label: impl Into<String>, value: impl Into<String>) -> Element {
-    border(
-        grid((
-            text_block(label)
-                .grid_column(0)
-                .vertical_alignment(VerticalAlignment::Center),
-            text_block(value)
-                .foreground(ThemeRef::SecondaryText)
-                .grid_column(1)
-                .horizontal_alignment(HorizontalAlignment::Right)
-                .vertical_alignment(VerticalAlignment::Center),
-        ))
-        .columns([GridLength::Star(1.0), GridLength::Auto])
-        .rows([GridLength::Auto])
-        .horizontal_alignment(HorizontalAlignment::Stretch),
-    )
-    .padding(Thickness {
-        left: 12.0,
-        top: 10.0,
-        right: 12.0,
-        bottom: 10.0,
-    })
-    .background(ThemeRef::CardBackground)
-    .corner_radius(6.0)
-    .border_thickness(Thickness::uniform(1.0))
-    .border_brush(ThemeRef::CardStroke)
-    .horizontal_alignment(HorizontalAlignment::Stretch)
     .into()
 }
 

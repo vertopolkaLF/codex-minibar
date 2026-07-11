@@ -227,6 +227,7 @@ pub enum Prop {
     PrimaryButtonText,
     PrimaryCommands,
     Resources,
+    Rotation,
     Rows,
     RowSpacing,
     SecondaryButtonText,

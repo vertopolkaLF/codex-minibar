@@ -484,6 +484,9 @@ impl<B: Backend + 'static> Reconciler<B> {
         if let Some(v) = mods.opacity {
             self.backend.set_prop(id, Prop::Opacity, &PropValue::F64(v));
         }
+        if let Some(v) = mods.rotation {
+            self.backend.set_prop(id, Prop::Rotation, &PropValue::F64(v));
+        }
         if let Some(v) = &mods.background {
             self.backend
                 .set_prop(id, Prop::Background, &PropValue::Color(*v));
@@ -671,6 +674,7 @@ impl<B: Backend + 'static> Reconciler<B> {
             |v: VerticalAlignment| PropValue::I32(v.0),
         );
         self.diff_opt_f64(id, Prop::Opacity, old.opacity, new.opacity);
+        self.diff_opt_f64(id, Prop::Rotation, old.rotation, new.rotation);
         self.diff_opt_clone(
             id,
             Prop::Background,

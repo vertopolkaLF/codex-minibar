@@ -725,6 +725,49 @@ fn run_property_animation_inner(ui: &bindings::UIElement, cfg: AnimationConfig) 
     Ok(())
 }
 
+/// Size used as the composition rotation pivot.
+///
+/// `ActualWidth`/`ActualHeight` are 0 until the first layout pass; fall back to
+/// the declared `Width`/`Height` (Auto is `NaN` and ignored).
+fn rotation_pivot_size(fe: &bindings::IFrameworkElement) -> (f32, f32) {
+    let mut w = fe.ActualWidth().unwrap_or(0.0);
+    let mut h = fe.ActualHeight().unwrap_or(0.0);
+    if w <= 0.0 {
+        let declared = fe.Width().unwrap_or(f64::NAN);
+        if declared.is_finite() && declared > 0.0 {
+            w = declared;
+        }
+    }
+    if h <= 0.0 {
+        let declared = fe.Height().unwrap_or(f64::NAN);
+        if declared.is_finite() && declared > 0.0 {
+            h = declared;
+        }
+    }
+    (w as f32, h as f32)
+}
+
+fn sync_rotation_center(handle: &Handle) {
+    let ui = handle.as_ui_element();
+    let Ok(visual) = bindings::ElementCompositionPreview::GetElementVisual(&ui) else {
+        return;
+    };
+    let Ok(iv) = visual.cast::<bindings::IVisual>() else {
+        return;
+    };
+    let Ok(fe) = ui.cast::<bindings::IFrameworkElement>() else {
+        return;
+    };
+    let (w, h) = rotation_pivot_size(&fe);
+    if w > 0.0 && h > 0.0 {
+        diag::dropped(iv.SetCenterPoint(windows_numerics::Vector3 {
+            x: w * 0.5,
+            y: h * 0.5,
+            z: 0.0,
+        }));
+    }
+}
+
 /// Handle props that apply to any control via base-class interfaces
 /// (`IFrameworkElement`, `IUIElement`, `IControl`, `IPanel`, `IShape`, etc.).
 /// Each prop is dispatched by trying interface casts in priority order.
@@ -758,6 +801,7 @@ fn try_universal_prop(handle: &Handle, prop: Prop, value: &PropValue) -> Result<
         }
         (Prop::Width, PropValue::F64(v)) => {
             handle.as_framework_element().SetWidth(*v)?;
+            sync_rotation_center(handle);
             Ok(true)
         }
         (Prop::Width, PropValue::Unset) => {
@@ -766,6 +810,7 @@ fn try_universal_prop(handle: &Handle, prop: Prop, value: &PropValue) -> Result<
         }
         (Prop::Height, PropValue::F64(v)) => {
             handle.as_framework_element().SetHeight(*v)?;
+            sync_rotation_center(handle);
             Ok(true)
         }
         (Prop::Height, PropValue::Unset) => {
@@ -834,6 +879,24 @@ fn try_universal_prop(handle: &Handle, prop: Prop, value: &PropValue) -> Result<
         }
         (Prop::Opacity, PropValue::Unset) => {
             handle.as_ui_element().SetOpacity(1.0)?;
+            Ok(true)
+        }
+        (Prop::Rotation, PropValue::F64(v)) => {
+            let ui = handle.as_ui_element();
+            let visual = bindings::ElementCompositionPreview::GetElementVisual(&ui)?;
+            let iv = visual.cast::<bindings::IVisual>()?;
+            // Pivot around the visual centre before applying the angle so the
+            // glyph does not orbit (0,0) on first paint / first expand.
+            sync_rotation_center(handle);
+            iv.SetRotationAngleInDegrees(*v as f32)?;
+            Ok(true)
+        }
+        (Prop::Rotation, PropValue::Unset) => {
+            let ui = handle.as_ui_element();
+            let visual = bindings::ElementCompositionPreview::GetElementVisual(&ui)?;
+            visual
+                .cast::<bindings::IVisual>()?
+                .SetRotationAngleInDegrees(0.0)?;
             Ok(true)
         }
         (Prop::AllowDrop, PropValue::Bool(v)) => {

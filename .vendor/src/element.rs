@@ -670,6 +670,7 @@ pub trait ElementExt: Sized {
     }
 
     simple_setter!(opacity, opacity, f64);
+    simple_setter!(rotation, rotation, f64);
     simple_setter!(font_family, font_family, String, into);
     simple_setter!(font_size, font_size, f64);
     simple_setter!(
@@ -685,6 +686,15 @@ pub trait ElementExt: Sized {
         if let Some(m) = self.modifiers_mut() {
             with_implicit_transition(m, |it| {
                 it.opacity = Some(ScalarTransition::new(duration));
+            });
+        }
+        self
+    }
+
+    fn with_rotation_transition(mut self, duration: Duration) -> Self {
+        if let Some(m) = self.modifiers_mut() {
+            with_implicit_transition(m, |it| {
+                it.rotation = Some(ScalarTransition::new(duration));
             });
         }
         self

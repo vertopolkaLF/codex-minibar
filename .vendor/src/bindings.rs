@@ -7968,6 +7968,16 @@ impl IFrameworkElement {
             .ok()
         }
     }
+    pub(crate) fn Width(&self) -> windows_core::Result<f64> {
+        unsafe {
+            let mut result__ = core::mem::zeroed();
+            (windows_core::Interface::vtable(self).Width)(
+                windows_core::Interface::as_raw(self),
+                &mut result__,
+            )
+            .map(|| result__)
+        }
+    }
     pub(crate) fn SetHeight(&self, value: f64) -> windows_core::Result<()> {
         unsafe {
             (windows_core::Interface::vtable(self).SetHeight)(
@@ -7975,6 +7985,16 @@ impl IFrameworkElement {
                 value,
             )
             .ok()
+        }
+    }
+    pub(crate) fn Height(&self) -> windows_core::Result<f64> {
+        unsafe {
+            let mut result__ = core::mem::zeroed();
+            (windows_core::Interface::vtable(self).Height)(
+                windows_core::Interface::as_raw(self),
+                &mut result__,
+            )
+            .map(|| result__)
         }
     }
     pub(crate) fn SetMinWidth(&self, value: f64) -> windows_core::Result<()> {
@@ -8166,9 +8186,11 @@ pub struct IFrameworkElement_Vtbl {
         unsafe extern "system" fn(*mut core::ffi::c_void, *mut f64) -> windows_core::HRESULT,
     pub ActualHeight:
         unsafe extern "system" fn(*mut core::ffi::c_void, *mut f64) -> windows_core::HRESULT,
-    Width: usize,
+    pub Width:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut f64) -> windows_core::HRESULT,
     pub SetWidth: unsafe extern "system" fn(*mut core::ffi::c_void, f64) -> windows_core::HRESULT,
-    Height: usize,
+    pub Height:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut f64) -> windows_core::HRESULT,
     pub SetHeight: unsafe extern "system" fn(*mut core::ffi::c_void, f64) -> windows_core::HRESULT,
     MinWidth: usize,
     pub SetMinWidth:
@@ -16596,6 +16618,15 @@ impl IVisual {
             .map(|| result__)
         }
     }
+    pub(crate) fn SetRotationAngleInDegrees(&self, value: f32) -> windows_core::Result<()> {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetRotationAngleInDegrees)(
+                windows_core::Interface::as_raw(self),
+                value,
+            )
+            .ok()
+        }
+    }
 }
 #[repr(C)]
 pub struct IVisual_Vtbl {
@@ -16627,7 +16658,8 @@ pub struct IVisual_Vtbl {
     RotationAngle: usize,
     SetRotationAngle: usize,
     RotationAngleInDegrees: usize,
-    SetRotationAngleInDegrees: usize,
+    pub SetRotationAngleInDegrees:
+        unsafe extern "system" fn(*mut core::ffi::c_void, f32) -> windows_core::HRESULT,
     RotationAxis: usize,
     SetRotationAxis: usize,
     pub Scale: unsafe extern "system" fn(
