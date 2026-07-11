@@ -31,15 +31,17 @@ use windows_sys::Win32::{
     UI::{
         Controls::MARGINS,
         HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
-        Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON},
+        Input::KeyboardAndMouse::{
+            GetAsyncKeyState, SetFocus, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
+        },
         WindowsAndMessaging::{
             CS_DROPSHADOW, DispatchMessageW, FindWindowW, GCL_STYLE, GWL_EXSTYLE, GWL_STYLE,
             GetClassLongPtrW, GetCursorPos, GetWindowLongW, GetWindowRect, HWND_TOPMOST, MSG,
             PM_REMOVE, PeekMessageW, SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
-            SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetClassLongPtrW, SetForegroundWindow,
-            SetWindowLongW, SetWindowPos, TranslateMessage, WS_CAPTION, WS_EX_APPWINDOW,
-            WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
-            WS_EX_TOPMOST, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+            SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetClassLongPtrW, SetWindowLongW,
+            SetWindowPos, TranslateMessage, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_LAYERED,
+            WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+            WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
         },
     },
 };
@@ -332,7 +334,16 @@ fn popup_pixel_size(hwnd: HWND, monitor: HMONITOR) -> (i32, i32) {
 
 fn move_hwnd(hwnd: HWND, x: i32, y: i32) {
     unsafe {
-        SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_SHOWWINDOW);
+        // Never activate while moving — WinUI would focus the first button.
+        SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            x,
+            y,
+            0,
+            0,
+            SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE,
+        );
     }
 }
 
@@ -647,7 +658,8 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
         move_hwnd(hwnd, start_x, target_y);
         apply_window_region(hwnd, Some(monitor));
         let _ = DwmFlush();
-        let _ = SetForegroundWindow(hwnd);
+        // Do not SetForegroundWindow / Activate — that gives keyboard focus to
+        // the first footer button (Refresh) and paints its Subtle highlight.
 
         for step in 1..=ANIMATION_STEPS {
             let progress = f64::from(step) / f64::from(ANIMATION_STEPS);
@@ -660,6 +672,8 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
 
         apply_popup_chrome(hwnd);
         let _ = DwmFlush();
+        // Drop any leftover keyboard focus from a previous show cycle.
+        let _ = SetFocus(std::ptr::null_mut());
     }
 
     pin_bottom_right(hwnd, monitor, work.bottom);
