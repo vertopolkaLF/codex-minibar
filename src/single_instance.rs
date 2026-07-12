@@ -3,6 +3,7 @@
 #[cfg(windows)]
 mod platform {
     use std::ptr;
+    use std::sync::{Mutex, OnceLock};
 
     use anyhow::{Context, Result};
     use windows_sys::Win32::{
@@ -19,6 +20,8 @@ mod platform {
     const POPUP_TITLE: &str = "Codex Minibar";
     const SETTINGS_TITLE: &str = "Codex Minibar Settings";
     const EDGE_MARGIN: i32 = 20;
+
+    static HOLDER: OnceLock<Mutex<Option<isize>>> = OnceLock::new();
 
     pub struct SingleInstance(HANDLE);
 
@@ -38,11 +41,32 @@ mod platform {
             }
             Ok(Some(Self(handle)))
         }
+
+        /// Keeps the mutex alive for the process lifetime.
+        pub fn hold(instance: Self) {
+            let handle = instance.0 as isize;
+            std::mem::forget(instance);
+            HOLDER
+                .get_or_init(|| Mutex::new(None))
+                .lock()
+                .expect("single-instance holder lock")
+                .replace(handle);
+        }
     }
 
     impl Drop for SingleInstance {
         fn drop(&mut self) {
             unsafe { CloseHandle(self.0) };
+        }
+    }
+
+    /// Releases the single-instance mutex before a relaunching update exit.
+    pub fn release_for_update() {
+        if let Some(holder) = HOLDER.get()
+            && let Ok(mut slot) = holder.lock()
+            && let Some(handle) = slot.take()
+        {
+            unsafe { CloseHandle(handle as HANDLE) };
         }
     }
 
@@ -119,7 +143,7 @@ mod platform {
 }
 
 #[cfg(windows)]
-pub use platform::SingleInstance;
+pub use platform::{SingleInstance, release_for_update};
 
 #[cfg(not(windows))]
 pub struct SingleInstance;
@@ -129,4 +153,9 @@ impl SingleInstance {
     pub fn acquire_or_activate_existing() -> anyhow::Result<Option<Self>> {
         Ok(Some(Self))
     }
+
+    pub fn hold(_instance: Self) {}
 }
+
+#[cfg(not(windows))]
+pub fn release_for_update() {}

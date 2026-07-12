@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 2;
+pub const SETTINGS_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -74,6 +74,8 @@ pub struct NotificationSettings {
     pub low_usage_enabled: bool,
     /// Remaining-percent threshold for low-usage notifications (1–99).
     pub low_usage_threshold_percent: u8,
+    /// Toast when a newer application release is discovered.
+    pub update_available: bool,
 }
 
 impl Default for NotificationSettings {
@@ -86,6 +88,7 @@ impl Default for NotificationSettings {
             limits_changed: false,
             low_usage_enabled: false,
             low_usage_threshold_percent: 20,
+            update_available: true,
         }
     }
 }
@@ -373,6 +376,21 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.insert("version".into(), toml::Value::Integer(2));
                 version = 2;
             }
+            2 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                let notifications = root
+                    .entry("notifications")
+                    .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+                if let Some(table) = notifications.as_table_mut() {
+                    table
+                        .entry("update_available")
+                        .or_insert(toml::Value::Boolean(true));
+                }
+                root.insert("version".into(), toml::Value::Integer(3));
+                version = 3;
+            }
             unsupported => anyhow::bail!("no migration path from settings version {unsupported}"),
         }
     }
@@ -395,6 +413,7 @@ mod tests {
         assert!(!value.notifications.limits_changed);
         assert!(!value.notifications.low_usage_enabled);
         assert_eq!(value.notifications.low_usage_threshold_percent, 20);
+        assert!(value.notifications.update_available);
     }
 
     #[test]
@@ -427,7 +446,7 @@ tray_widgets = []
         assert!(!migrated.automatic_activation);
         assert!(migrated.start_at_login);
         assert_eq!(migrated.history_retention_days, 30);
-        assert!(fs::read_to_string(path).unwrap().contains("version = 2"));
+        assert!(fs::read_to_string(path).unwrap().contains("version = 3"));
     }
 
     #[test]

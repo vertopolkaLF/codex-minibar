@@ -11,7 +11,7 @@ Name "{{PRODUCT_NAME}}"
 BrandingText "{{PRODUCT_NAME}} {{VERSION}}"
 OutFile "{{OUT_FILE}}"
 InstallDir "{{INSTALL_DIR}}"
-RequestExecutionLevel admin
+RequestExecutionLevel user
 SetCompressor /SOLID lzma
 
 VIProductVersion "{{VERSION}}.0"

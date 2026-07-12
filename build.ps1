@@ -288,20 +288,10 @@ function New-NsisInstaller {
     }
 
     $iconFile = Join-Path $Root "assets\app-icon.ico"
-    if ($ArchName -eq "x86") {
-        $installDir = "`$PROGRAMFILES\$ProductName"
-        $regView = ""
-        $regViewOnInit = ""
-    }
-    else {
-        $installDir = "`$PROGRAMFILES64\$ProductName"
-        $regView = "SetRegView 64"
-        $regViewOnInit = @"
-Function .onInit
-  SetRegView 64
-FunctionEnd
-"@
-    }
+    # Per-user install so in-place zip updates work without elevation.
+    $installDir = "`$LOCALAPPDATA\$ProductName"
+    $regView = ""
+    $regViewOnInit = ""
 
     $nsiPath = Join-Path $WorkDir "installer-$ArchName.nsi"
     $rendered = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8

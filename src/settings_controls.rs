@@ -472,6 +472,17 @@ pub(crate) fn settings_info_card(label: impl Into<String>, value: impl Into<Stri
     .into()
 }
 
+/// Accent button with the standard download glyph used for update actions.
+pub(crate) fn update_accent_button(
+    label: impl Into<String>,
+    on_click: impl IntoUnitCallback,
+) -> Button {
+    Button::new(label)
+        .icon(Symbol::Download)
+        .accent()
+        .on_click(on_click)
+}
+
 /// Action card with trailing button + WinUI-timed hover.
 pub(crate) fn settings_action_card(
     label: impl Into<String>,
@@ -480,10 +491,16 @@ pub(crate) fn settings_action_card(
     card_id: &'static str,
     hovered_id: &Option<String>,
     set_hovered_id: SetState<Option<String>>,
+    button_icon: Option<Symbol>,
 ) -> Element {
     let hovered = card_is_hovered(hovered_id, card_id);
     let (on_enter, on_exit) = card_hover_handlers(card_id, set_hovered_id);
     let (base, hover) = card_background_layers(hovered);
+
+    let mut action_button = Button::new(button_label).accent().on_click(on_click);
+    if let Some(icon) = button_icon {
+        action_button = action_button.icon(icon);
+    }
 
     let children: Vec<Element> = vec![
         base,
@@ -498,9 +515,7 @@ pub(crate) fn settings_action_card(
             .relative_align_left()
             .relative_align_v_center()
             .into(),
-        Button::new(button_label)
-            .accent()
-            .on_click(on_click)
+        action_button
             .margin(Thickness {
                 left: 0.0,
                 top: 0.0,

@@ -20,12 +20,24 @@ pub fn initialize() {
 /// Shows a Windows toast. Failures are logged; callers should not abort on them.
 pub fn show(title: &str, body: &str) {
     #[cfg(windows)]
-    if let Err(error) = windows_impl::show(title, body) {
+    if let Err(error) = windows_impl::show(title, body, None) {
         eprintln!("failed to show Windows notification: {error:#}");
     }
     #[cfg(not(windows))]
     {
         let _ = (title, body);
+    }
+}
+
+/// Toast for a discovered app update with action buttons.
+pub fn show_update_available(version: &str, release_url: &str) {
+    #[cfg(windows)]
+    if let Err(error) = windows_impl::show_update_available(version, release_url) {
+        eprintln!("failed to show update notification: {error:#}");
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (version, release_url);
     }
 }
 
@@ -129,9 +141,11 @@ mod windows_impl {
     use anyhow::{Context, Result};
     use windows::{
         Data::Xml::Dom::XmlDocument,
-        UI::Notifications::{ToastNotification, ToastNotificationManager},
-        core::HSTRING,
+        UI::Notifications::{
+            ToastActivatedEventArgs, ToastNotification, ToastNotificationManager,
+        },
     };
+    use windows_core::Interface;
     use windows_sys::Win32::{
         Foundation::ERROR_SUCCESS,
         System::Registry::{
@@ -151,7 +165,7 @@ mod windows_impl {
         Ok(())
     }
 
-    pub(super) fn show(title: &str, body: &str) -> Result<()> {
+    pub(super) fn show(title: &str, body: &str, actions: Option<&[(&str, &str, &str)]>) -> Result<()> {
         let logo = notification_icon_path()
             .map(|path| {
                 format!(
@@ -160,16 +174,73 @@ mod windows_impl {
                 )
             })
             .unwrap_or_default();
+        let action_xml = actions
+            .map(|items| {
+                let mut out = String::from("<actions>");
+                for (label, activation_type, arguments) in items {
+                    out.push_str(&format!(
+                        r#"<action content="{}" activationType="{}" arguments="{}"/>"#,
+                        escape_xml(label),
+                        escape_xml(activation_type),
+                        escape_xml(arguments),
+                    ));
+                }
+                out.push_str("</actions>");
+                out
+            })
+            .unwrap_or_default();
         let xml = format!(
-            r#"<toast><visual><binding template="ToastGeneric"><text>{title}</text><text>{body}</text>{logo}</binding></visual></toast>"#,
+            r#"<toast><visual><binding template="ToastGeneric"><text>{title}</text><text>{body}</text>{logo}</binding></visual>{actions}</toast>"#,
             title = escape_xml(title),
             body = escape_xml(body),
             logo = logo,
+            actions = action_xml,
         );
+        show_toast_xml(&xml, actions.is_some())
+    }
+
+    pub(super) fn show_update_available(version: &str, release_url: &str) -> Result<()> {
+        let body = format!("Codex Minibar v{version} is ready to install.");
+        let actions = [
+            (
+                "Update Now",
+                "foreground",
+                crate::updater::TOAST_ACTION_UPDATE_NOW,
+            ),
+            ("What's New", "protocol", release_url),
+        ];
+        show("Update available", &body, Some(&actions))
+    }
+
+    fn show_toast_xml(xml: &str, interactive: bool) -> Result<()> {
         let document = XmlDocument::new()?;
-        document.LoadXml(&HSTRING::from(xml))?;
+        document.LoadXml(&windows::core::HSTRING::from(xml))?;
         let toast = ToastNotification::CreateToastNotification(&document)?;
-        let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(AUMID))?;
+        if interactive {
+            let _ = toast.Activated(|_sender, args| {
+                let Some(args) = args.as_ref() else {
+                    return;
+                };
+                let Ok(activated) = args.cast::<ToastActivatedEventArgs>() else {
+                    return;
+                };
+                let Ok(arguments) = activated.Arguments() else {
+                    return;
+                };
+                if arguments == crate::updater::TOAST_ACTION_UPDATE_NOW {
+                    std::thread::spawn(|| {
+                        if let Err(error) = crate::updater::apply_pending_update() {
+                            eprintln!("failed to apply update from toast: {error:#}");
+                            let _ = show("Update failed", &format!("{error:#}"), None);
+                        }
+                    });
+                }
+            })?;
+        }
+        let notifier =
+            ToastNotificationManager::CreateToastNotifierWithId(&windows::core::HSTRING::from(
+                super::AUMID,
+            ))?;
         notifier.Show(&toast)?;
         Ok(())
     }

@@ -12,11 +12,14 @@ use windows_reactor::*;
 
 use crate::{
     limits::{LimitWindow, RateLimits},
+    notifications,
     notifications::LimitNotificationTracker,
     popup,
     settings::{NotificationSettings, Settings, TrayWidget},
+    settings_controls::update_accent_button,
     theme::{DARK_SURFACE_FILL, SURFACE_FILL, WINDOW_BORDER, WINDOW_FILL},
     tray::{TrayManager, TrayMenuAction},
+    updater::{UpdateController, UpdatePhase},
     worker::{WorkerCommand, WorkerEvent},
 };
 
@@ -52,6 +55,7 @@ pub struct AppState {
     /// Live settings pushes from the settings window; drained by the tray bridge.
     pub settings_rx: Mutex<Option<Receiver<Settings>>>,
     pub settings_tx: Sender<Settings>,
+    pub updates: Arc<UpdateController>,
 }
 
 impl AppState {
@@ -59,7 +63,7 @@ impl AppState {
         self.worker.lock().ok()?.as_mut()?.take_events()
     }
 
-    fn shutdown_worker(&self) {
+    pub fn shutdown_worker(&self) {
         if let Ok(mut worker) = self.worker.lock()
             && let Some(worker) = worker.take()
         {
@@ -75,6 +79,7 @@ struct UiState {
     error: Option<String>,
     show_used_percentage: bool,
     hide_plan_credits: bool,
+    update_version: Option<String>,
 }
 
 /// Sections of the settings window. Keeping this as a small enum makes the
@@ -127,6 +132,7 @@ impl Default for UiState {
             error: None,
             show_used_percentage: false,
             hide_plan_credits: false,
+            update_version: None,
         }
     }
 }
@@ -144,6 +150,10 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         last_activation: format_last_activation(&RateLimits::default(), state.last_activation_at),
         show_used_percentage: state.settings.show_used_percentage,
         hide_plan_credits: state.settings.hide_plan_credits,
+        update_version: state
+            .updates
+            .available_update()
+            .map(|update| update.version),
         ..UiState::default()
     });
     let commands = state.commands.clone();
@@ -194,6 +204,19 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         );
     }
 
+    if let Some(version) = &ui.update_version {
+        body.push(
+            update_accent_button(format!("Update to v{version}"), || {
+                if let Err(error) = crate::updater::apply_pending_update() {
+                    eprintln!("failed to apply update: {error:#}");
+                    notifications::show("Update failed", &format!("{error:#}"));
+                }
+            })
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .into(),
+        );
+    }
+
     let footer = border(
         grid((
             vstack((
@@ -212,8 +235,11 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 icon_button("\u{E72C}", "Refresh", 16.0, refresh),
                 icon_button("\u{E713}", "Settings", 16.0, {
                     let settings_tx = settings_tx.clone();
+                    let updates = Arc::clone(&state.updates);
                     move || {
-                        if let Err(error) = crate::settings_window::open(settings_tx.clone()) {
+                        if let Err(error) =
+                            crate::settings_window::open(settings_tx.clone(), updates.clone())
+                        {
                             eprintln!("Could not open settings window: {error:?}");
                         }
                     }
@@ -315,8 +341,22 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
 /// sidebar on the left, focused tab content on the right. Persistence wiring
 /// follows once every setting has its final interaction model.
 #[allow(dead_code)]
-pub(crate) fn open_settings_window(settings_tx: Sender<Settings>) -> windows_core::Result<()> {
-    crate::settings_window::open(settings_tx)
+pub(crate) fn open_settings_window(
+    settings_tx: Sender<Settings>,
+    updates: Arc<UpdateController>,
+) -> windows_core::Result<()> {
+    crate::settings_window::open(settings_tx, updates)
+}
+
+fn update_available_from_phase(phase: &UpdatePhase) -> bool {
+    matches!(phase, UpdatePhase::Available(_))
+}
+
+fn update_version_from_phase(phase: &UpdatePhase) -> Option<String> {
+    match phase {
+        UpdatePhase::Available(update) => Some(update.version.clone()),
+        _ => None,
+    }
 }
 
 /// A transparent WinUI/Mica window can retain a stale white DWM redirection
@@ -583,21 +623,30 @@ fn start_background_bridge(
         .ok()
         .and_then(|mut slot| slot.take());
     let settings_tx = state.settings_tx.clone();
+    let updates = Arc::clone(&state.updates);
+    let mut check_for_updates = state.settings.check_for_updates;
+    let mut notify_on_update = state.settings.notifications.update_available;
 
     thread::spawn(move || {
         let mut tray = TrayManager::new();
         let fallback_attempt = state.last_activation_at;
         let mut notification_settings = state.settings.notifications.clone();
         let mut limit_notifications = LimitNotificationTracker::default();
+        let mut update_phase = updates.snapshot();
         let mut ui = UiState {
             error: state.startup_error.clone(),
             last_activation: format_last_activation(&RateLimits::default(), fallback_attempt),
             show_used_percentage: state.settings.show_used_percentage,
             hide_plan_credits: state.settings.hide_plan_credits,
+            update_version: update_version_from_phase(&update_phase),
             ..UiState::default()
         };
 
-        if let Err(error) = tray.sync(&widgets, &ui.limits) {
+        if let Err(error) = tray.sync(
+            &widgets,
+            &ui.limits,
+            update_available_from_phase(&update_phase),
+        ) {
             ui.error = Some(error.to_string());
             set_ui.call(ui.clone());
         }
@@ -616,13 +665,19 @@ fn start_background_bridge(
                               widgets: &mut Vec<TrayWidget>,
                               tray: &mut TrayManager,
                               settings: Settings| {
+            let phase = updates.snapshot();
             ui.show_used_percentage = settings.show_used_percentage;
             ui.hide_plan_credits = settings.hide_plan_credits;
             *notification_settings = settings.notifications;
             *widgets = settings.tray_widgets;
+            ui.update_version = update_version_from_phase(&phase);
             // Repaint the existing native icons in place. Recreating them makes
             // Explorer animate a remove/add sequence and causes a visible flash.
-            if let Err(error) = tray.sync(widgets, &ui.limits) {
+            if let Err(error) = tray.sync(
+                widgets,
+                &ui.limits,
+                update_available_from_phase(&phase),
+            ) {
                 ui.error = Some(error.to_string());
             }
             if let Some(commands) = &state.commands {
@@ -637,21 +692,71 @@ fn start_background_bridge(
                               set_ui: &AsyncSetState<UiState>,
                               notification_settings: &mut NotificationSettings,
                               widgets: &mut Vec<TrayWidget>,
-                              tray: &mut TrayManager| {
+                              tray: &mut TrayManager,
+                              check_for_updates: &mut bool,
+                              notify_on_update: &mut bool| {
             let Some(settings_rx) = settings_rx.as_ref() else {
                 return;
             };
             while let Ok(settings) = settings_rx.try_recv() {
-                apply_settings(ui, set_ui, notification_settings, widgets, tray, settings);
+                if settings.check_for_updates && !*check_for_updates {
+                    updates.check_async(false, settings.notifications.update_available);
+                }
+                *check_for_updates = settings.check_for_updates;
+                *notify_on_update = settings.notifications.update_available;
+                apply_settings(
+                    ui,
+                    set_ui,
+                    notification_settings,
+                    widgets,
+                    tray,
+                    settings,
+                );
             }
+        };
+
+        let drain_updates = |ui: &mut UiState,
+                             set_ui: &AsyncSetState<UiState>,
+                             tray: &mut TrayManager,
+                             update_phase: &mut UpdatePhase,
+                             widgets: &mut Vec<TrayWidget>| {
+            let next = updates.snapshot();
+            if next == *update_phase {
+                return;
+            }
+            *update_phase = next;
+            ui.update_version = update_version_from_phase(update_phase);
+            if let Err(error) = tray.sync(
+                widgets,
+                &ui.limits,
+                update_available_from_phase(update_phase),
+            ) {
+                ui.error = Some(error.to_string());
+            }
+            set_ui.call(ui.clone());
         };
 
         let Some(events) = events else {
             set_ui.call(ui.clone());
             loop {
                 popup::pump_messages();
-                drain_settings(&mut ui, &set_ui, &mut notification_settings, &mut widgets, &mut tray);
-                if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings_tx) {
+                drain_settings(
+                    &mut ui,
+                    &set_ui,
+                    &mut notification_settings,
+                    &mut widgets,
+                    &mut tray,
+                    &mut check_for_updates,
+                    &mut notify_on_update,
+                );
+                drain_updates(
+                    &mut ui,
+                    &set_ui,
+                    &mut tray,
+                    &mut update_phase,
+                    &mut widgets,
+                );
+                if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings_tx, &state) {
                     drop(tray);
                     state.shutdown_worker();
                     std::process::exit(0);
@@ -662,8 +767,23 @@ fn start_background_bridge(
 
         loop {
             popup::pump_messages();
-            drain_settings(&mut ui, &set_ui, &mut notification_settings, &mut widgets, &mut tray);
-            if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings_tx) {
+            drain_settings(
+                &mut ui,
+                &set_ui,
+                &mut notification_settings,
+                &mut widgets,
+                &mut tray,
+                &mut check_for_updates,
+                &mut notify_on_update,
+            );
+            drain_updates(
+                &mut ui,
+                &set_ui,
+                &mut tray,
+                &mut update_phase,
+                &mut widgets,
+            );
+            if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings_tx, &state) {
                 drop(tray);
                 state.shutdown_worker();
                 std::process::exit(0);
@@ -671,7 +791,11 @@ fn start_background_bridge(
             match events.recv_timeout(Duration::from_millis(16)) {
                 Ok(WorkerEvent::LimitsUpdated(limits)) => {
                     limit_notifications.observe(&limits, &notification_settings);
-                    if let Err(error) = tray.sync(&widgets, &limits) {
+                    if let Err(error) = tray.sync(
+                        &widgets,
+                        &limits,
+                        update_available_from_phase(&update_phase),
+                    ) {
                         ui.error = Some(error.to_string());
                     } else {
                         ui.error = None;
@@ -707,6 +831,7 @@ fn pump_tray_and_dismiss(
     tray: &TrayManager,
     ui_dispatcher: &UiMarshaller,
     settings_tx: &Sender<Settings>,
+    state: &AppState,
 ) -> bool {
     use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
 
@@ -741,10 +866,19 @@ fn pump_tray_and_dismiss(
 
     for action in tray.drain_menu_actions() {
         match action {
+            TrayMenuAction::Update => {
+                if let Err(error) = crate::updater::apply_pending_update() {
+                    eprintln!("failed to apply update: {error:#}");
+                    notifications::show("Update failed", &format!("{error:#}"));
+                }
+            }
             TrayMenuAction::Settings => {
                 let settings_tx = settings_tx.clone();
+                let updates = Arc::clone(&state.updates);
                 ui_dispatcher.dispatch(move || {
-                    if let Err(error) = crate::settings_window::open(settings_tx) {
+                    if let Err(error) =
+                        crate::settings_window::open(settings_tx, updates)
+                    {
                         eprintln!("Could not open settings window: {error:?}");
                     }
                 });
@@ -766,6 +900,7 @@ fn pump_tray_and_dismiss(
     _tray: &TrayManager,
     _ui_dispatcher: &UiMarshaller,
     _settings_tx: &Sender<Settings>,
+    _state: &AppState,
 ) -> bool {
     false
 }

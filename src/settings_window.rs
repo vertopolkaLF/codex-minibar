@@ -7,9 +7,12 @@ use crate::notifications;
 use crate::settings::{LimitValue, Settings, TrayPresentation, TraySource, TrayWidget};
 use crate::settings_controls::{
     settings_action_card, settings_info_card, settings_slider_content, settings_toggle_card,
-    settings_toggle_card_with_description, settings_toggle_expander,
+    settings_toggle_card_with_description, settings_toggle_expander, update_accent_button,
 };
 use crate::theme::CONTROL_FAST_ANIMATION;
+use crate::updater::{
+    ISSUES_URL, RELEASES_URL, REPO_URL, UpdateController, UpdatePhase, current_version,
+};
 use anyhow::Context;
 use std::{
     cell::RefCell,
@@ -26,7 +29,10 @@ thread_local! {
     static HOST: RefCell<Option<Rc<ReactorHost>>> = const { RefCell::new(None) };
 }
 
-pub fn open(settings_tx: Sender<Settings>) -> windows_core::Result<()> {
+pub fn open(
+    settings_tx: Sender<Settings>,
+    updates: Arc<UpdateController>,
+) -> windows_core::Result<()> {
     HOST.with(|slot| {
         if settings_window_is_open() {
             if let Some(host) = slot.borrow().as_ref() {
@@ -55,7 +61,12 @@ pub fn open(settings_tx: Sender<Settings>) -> windows_core::Result<()> {
                 max_height: None,
             },
             Box::new(move |_: &(), cx: &mut RenderCx| {
-                render(cx, Arc::clone(&view_settings), settings_tx.clone())
+                render(
+                    cx,
+                    Arc::clone(&view_settings),
+                    settings_tx.clone(),
+                    Arc::clone(&updates),
+                )
             }),
             |recon| {
                 // Realize NavigationView/templates on the first paint so the
@@ -231,6 +242,7 @@ enum Tab {
     Tray,
     Notifications,
     Advanced,
+    About,
 }
 
 impl Tab {
@@ -240,6 +252,7 @@ impl Tab {
             Self::Tray => "tray",
             Self::Notifications => "notifications",
             Self::Advanced => "advanced",
+            Self::About => "about",
         }
     }
 
@@ -248,6 +261,7 @@ impl Tab {
             "tray" => Self::Tray,
             "notifications" => Self::Notifications,
             "advanced" => Self::Advanced,
+            "about" => Self::About,
             _ => Self::General,
         }
     }
@@ -258,10 +272,21 @@ pub fn render(
     cx: &mut RenderCx,
     settings: Arc<Settings>,
     settings_tx: Sender<Settings>,
+    updates: Arc<UpdateController>,
 ) -> Element {
     // After the tree mounts, pin Dark so the island clear color stays black
     // (white clear washes every translucent Fluent layer on a real display).
     cx.use_effect((), apply_settings_dark_chrome);
+    let (update_phase, set_update_phase) = cx.use_async_state(updates.snapshot());
+    let updates_for_poll = updates.clone();
+    cx.use_effect((), move || {
+        let updates = updates_for_poll.clone();
+        let set_update_phase = set_update_phase.clone();
+        std::thread::spawn(move || loop {
+            set_update_phase.call(updates.snapshot());
+            std::thread::sleep(Duration::from_millis(500));
+        });
+    });
     let (selected, set_selected) = cx.use_state(Tab::default());
     let (rendered_tab, set_rendered_tab) = cx.use_async_state(Tab::default());
     let (page_visible, set_page_visible) = cx.use_async_state(true);
@@ -278,6 +303,9 @@ pub fn render(
             NavViewItem::new("Advanced")
                 .tag("advanced")
                 .icon(Symbol::Edit),
+            NavViewItem::new("About & Updates")
+                .tag("about")
+                .icon(Symbol::Important),
         ],
         Element::Empty,
     )
@@ -329,6 +357,9 @@ pub fn render(
     let (low_usage_expand_progress, set_low_usage_expand_progress) = cx.use_async_state(1.0_f64);
     let (hovered_card_id, set_hovered_card_id) = cx.use_state(None::<String>);
     let (tray_widgets, set_tray_widgets) = cx.use_state(settings.tray_widgets.clone());
+    let (check_for_updates, set_check_for_updates) = cx.use_state(settings.check_for_updates);
+    let (notify_on_update, set_notify_on_update) =
+        cx.use_state(settings.notifications.update_available);
 
     // Padding lives on tab content (inside the scroller), not on this pane, so
     // LayerFill crops flush to the window edge while long tabs stay scrollable.
@@ -349,6 +380,9 @@ pub fn render(
                 low_usage_expand_progress,
                 &tray_widgets,
                 &hovered_card_id,
+                check_for_updates,
+                notify_on_update,
+                &update_phase,
                 set_automatic_activation,
                 set_start_at_login,
                 set_show_used_percentage,
@@ -361,7 +395,10 @@ pub fn render(
                 set_low_usage_expand_progress,
                 set_tray_widgets,
                 set_hovered_card_id,
-                settings_tx,
+                set_check_for_updates,
+                set_notify_on_update,
+                settings_tx.clone(),
+                updates.clone(),
             ))
             .padding(Thickness {
                 left: 32.0,
@@ -405,12 +442,28 @@ pub fn render(
         bottom: 0.0,
     })
     .vertical_alignment(VerticalAlignment::Center);
-    let title_bar = TitleBar::new("Codex Minibar Settings")
+    let mut title_bar = TitleBar::new("Codex Minibar Settings")
         .content(title_bar_icon)
         .back_button_visible(false)
         .pane_toggle_button_visible(false)
         // Tall caption buttons so min/max/close fill the TitleBar height.
         .tall(true);
+    if matches!(update_phase, UpdatePhase::Available(_)) {
+        title_bar = title_bar.footer(
+            update_accent_button("Update", || {
+                if let Err(error) = crate::updater::apply_pending_update() {
+                    eprintln!("failed to apply update: {error:#}");
+                    notifications::show("Update failed", &format!("{error:#}"));
+                }
+            })
+                .margin(Thickness {
+                    left: 0.0,
+                    top: 0.0,
+                    right: 12.0,
+                    bottom: 0.0,
+                }),
+        );
+    }
     let shell = grid((navigation.grid_column(0), page.grid_column(1)))
         .columns([GridLength::Pixel(220.0), GridLength::Star(1.0)])
         .rows([GridLength::Star(1.0)])
@@ -451,6 +504,9 @@ fn tab_content(
     low_usage_expand_progress: f64,
     tray_widgets: &[TrayWidget],
     hovered_card_id: &Option<String>,
+    check_for_updates: bool,
+    notify_on_update: bool,
+    update_phase: &UpdatePhase,
     set_automatic_activation: SetState<bool>,
     set_start_at_login: SetState<bool>,
     set_show_used_percentage: SetState<bool>,
@@ -463,7 +519,10 @@ fn tab_content(
     set_low_usage_expand_progress: AsyncSetState<f64>,
     set_tray_widgets: SetState<Vec<TrayWidget>>,
     set_hovered_card_id: SetState<Option<String>>,
+    set_check_for_updates: SetState<bool>,
+    set_notify_on_update: SetState<bool>,
     settings_tx: Sender<Settings>,
+    updates: Arc<UpdateController>,
 ) -> Element {
     let apply_automatic_activation = settings_tx.clone();
     let apply_start_at_login = settings_tx.clone();
@@ -473,6 +532,8 @@ fn tab_content(
     let apply_limits_reset = settings_tx.clone();
     let apply_low_usage_enabled = settings_tx.clone();
     let apply_low_usage_threshold = settings_tx.clone();
+    let apply_check_for_updates = settings_tx.clone();
+    let apply_notify_on_update = settings_tx.clone();
     let (title, rows) = match tab {
         Tab::General => (
             "General",
@@ -647,6 +708,7 @@ fn tab_content(
                     "notif-test",
                     hovered_card_id,
                     set_hovered_card_id.clone(),
+                    None,
                 )
                 .with_key("notif-test"),
             ],
@@ -669,6 +731,22 @@ fn tab_content(
                 .with_key("advanced-codex-path"),
             ],
         ),
+        Tab::About => (
+            "About & Updates",
+            about_settings_cards(
+                check_for_updates,
+                notify_on_update,
+                update_phase,
+                set_check_for_updates,
+                set_notify_on_update,
+                apply_check_for_updates,
+                apply_notify_on_update,
+                hovered_card_id,
+                set_hovered_card_id.clone(),
+                settings_tx.clone(),
+                updates,
+            ),
+        ),
     };
     let row_count = rows.len();
     let cards = vstack(rows)
@@ -687,6 +765,167 @@ fn tab_content(
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Top)
     .into()
+}
+
+fn update_status_label(phase: &UpdatePhase) -> String {
+    match phase {
+        UpdatePhase::Idle => "Not checked yet".into(),
+        UpdatePhase::Checking => "Checking for updates...".into(),
+        UpdatePhase::UpToDate => "Up to date".into(),
+        UpdatePhase::Available(update) => format!("Update v{} available", update.version),
+        UpdatePhase::Applying => "Installing update...".into(),
+        UpdatePhase::Failed(message) => message.clone(),
+    }
+}
+
+fn about_settings_cards(
+    check_for_updates: bool,
+    notify_on_update: bool,
+    update_phase: &UpdatePhase,
+    set_check_for_updates: SetState<bool>,
+    set_notify_on_update: SetState<bool>,
+    apply_check_for_updates: Sender<Settings>,
+    apply_notify_on_update: Sender<Settings>,
+    hovered_card_id: &Option<String>,
+    set_hovered_card_id: SetState<Option<String>>,
+    settings_tx: Sender<Settings>,
+    updates: Arc<UpdateController>,
+) -> Vec<Element> {
+    let version = current_version().to_string();
+    let status = update_status_label(&update_phase);
+    let updates_for_check = updates.clone();
+    let notify_for_check = notify_on_update;
+
+    let mut cards = vec![
+        settings_info_card("Application", "Codex Minibar")
+            .with_key("about-app-name"),
+        settings_info_card("Version", format!("v{version}"))
+            .with_key("about-version"),
+        settings_info_card(
+            "Description",
+            "A lightweight Windows tray companion for Codex rate limits.",
+        )
+        .with_key("about-description"),
+        border(
+            vstack((
+                text_block("Links").font_size(16.0).bold(),
+                HyperlinkButton::new("GitHub repository")
+                    .navigate_uri(REPO_URL)
+                    .on_click(|| {
+                        let _ = crate::updater::open_url(REPO_URL);
+                    }),
+                HyperlinkButton::new("Releases")
+                    .navigate_uri(RELEASES_URL)
+                    .on_click(|| {
+                        let _ = crate::updater::open_url(RELEASES_URL);
+                    }),
+                HyperlinkButton::new("Issues")
+                    .navigate_uri(ISSUES_URL)
+                    .on_click(|| {
+                        let _ = crate::updater::open_url(ISSUES_URL);
+                    }),
+            ))
+            .spacing(8.0),
+        )
+        .padding(Thickness::uniform(16.0))
+        .background(ThemeRef::CardBackground)
+        .corner_radius(8.0)
+        .border_thickness(Thickness::uniform(1.0))
+        .border_brush(ThemeRef::CardStroke)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .with_key("about-links")
+        .into(),
+        settings_info_card("Update status", status).with_key("about-update-status"),
+        settings_toggle_card(
+            "Check for updates on startup",
+            check_for_updates,
+            move |value| {
+                persist_bool(
+                    set_check_for_updates.clone(),
+                    apply_check_for_updates.clone(),
+                    value,
+                    |settings, value| {
+                        settings.check_for_updates = value;
+                    },
+                );
+            },
+            "about-check-updates",
+            hovered_card_id,
+            set_hovered_card_id.clone(),
+        )
+        .with_key("about-check-updates"),
+        settings_toggle_card(
+            "Notify when a new version is found",
+            notify_on_update,
+            move |value| {
+                persist_bool(
+                    set_notify_on_update.clone(),
+                    apply_notify_on_update.clone(),
+                    value,
+                    |settings, value| {
+                        settings.notifications.update_available = value;
+                    },
+                );
+            },
+            "about-notify-updates",
+            hovered_card_id,
+            set_hovered_card_id.clone(),
+        )
+        .with_key("about-notify-updates"),
+        settings_action_card(
+            "Look for the latest release on GitHub",
+            "Check now",
+            move || {
+                updates_for_check.check_async(false, notify_for_check);
+            },
+            "about-check-now",
+            hovered_card_id,
+            set_hovered_card_id.clone(),
+            None,
+        )
+        .with_key("about-check-now"),
+    ];
+
+    if matches!(update_phase, UpdatePhase::Available(_)) {
+        cards.push(
+            settings_action_card(
+                "Download and install the latest portable release",
+                "Update",
+                || {
+                    if let Err(error) = crate::updater::apply_pending_update() {
+                        eprintln!("failed to apply update: {error:#}");
+                        notifications::show("Update failed", &format!("{error:#}"));
+                    }
+                },
+                "about-update-apply",
+                hovered_card_id,
+                set_hovered_card_id.clone(),
+                Some(Symbol::Download),
+            )
+            .with_key("about-update-apply")
+            .into(),
+        );
+        cards.push(
+            settings_action_card(
+                "Read the release notes on GitHub",
+                "What's New",
+                || {
+                    if let Err(error) = crate::updater::open_release_notes() {
+                        eprintln!("failed to open release notes: {error:#}");
+                    }
+                },
+                "about-whats-new",
+                hovered_card_id,
+                set_hovered_card_id,
+                None,
+            )
+            .with_key("about-whats-new")
+            .into(),
+        );
+    }
+
+    let _ = settings_tx;
+    cards
 }
 
 fn tray_settings_cards(

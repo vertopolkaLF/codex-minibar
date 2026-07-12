@@ -18,13 +18,15 @@ use codex_minibar::{
     popup::{self, POPUP_HEIGHT_MAX, POPUP_WIDTH},
     scheduler::ActivationState,
     settings::Settings,
-    single_instance::SingleInstance,
+    single_instance::{self, SingleInstance},
+    updater::{UpdateController, show_post_update_success_if_needed},
     worker::start_worker,
 };
 use windows_reactor::*;
 
 fn run() -> Result<()> {
     notifications::initialize();
+    show_post_update_success_if_needed();
     let path = Settings::default_path()?;
     let mut settings = Settings::load_or_create(&path)?;
     if let Err(error) = settings.reconcile_startup_from_registry(&path) {
@@ -56,9 +58,17 @@ fn run() -> Result<()> {
     };
 
     let (settings_tx, settings_rx) = mpsc::channel();
+    let updates = UpdateController::new();
+    if settings.check_for_updates {
+        updates.check_async(
+            true,
+            settings.notifications.update_available,
+        );
+    }
     let initial_height = popup::height_for(
         settings.hide_plan_credits,
         startup_error.as_deref(),
+        false,
     )
     // Oversize the first frame so Auto content can measure without clipping;
     // SizeChanged then shrinks the HWND to the real content height.
@@ -73,6 +83,11 @@ fn run() -> Result<()> {
         last_activation_at,
         settings_tx,
         settings_rx: Mutex::new(Some(settings_rx)),
+        updates: Arc::clone(&updates),
+    });
+    codex_minibar::updater::install_runtime(Arc::clone(&updates), {
+        let state = Arc::clone(&state);
+        move || state.shutdown_worker()
     });
 
     App::new()
@@ -144,8 +159,9 @@ fn main() {
             return;
         }
     };
+    single_instance::SingleInstance::hold(instance);
     if let Err(error) = run() {
         show_error(&format!("Codex Minibar failed: {error:#}"));
     }
-    drop(instance);
+    single_instance::release_for_update();
 }

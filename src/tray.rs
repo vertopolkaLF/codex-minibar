@@ -56,7 +56,7 @@ fn stacked_reset_label(reset: Option<DateTime<Utc>>, countdown: bool) -> String 
             |value| {
                 let minutes = (value - Utc::now()).num_minutes().max(0);
                 if minutes < 60 {
-                    format!("{minutes}m")
+                    minutes.to_string()
                 } else {
                     format!("{}\n{:02}", minutes / 60, minutes % 60)
                 }
@@ -294,20 +294,32 @@ mod platform {
 
     pub struct TrayManager {
         icons: Vec<TrayIcon>,
+        update_available: bool,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum TrayMenuAction {
+        Update,
         Settings,
         Exit,
     }
 
     impl TrayManager {
         pub fn new() -> Self {
-            Self { icons: Vec::new() }
+            Self {
+                icons: Vec::new(),
+                update_available: false,
+            }
         }
 
-        pub fn sync(&mut self, widgets: &[TrayWidget], limits: &RateLimits) -> Result<()> {
+        pub fn sync(
+            &mut self,
+            widgets: &[TrayWidget],
+            limits: &RateLimits,
+            update_available: bool,
+        ) -> Result<()> {
+            let menu_changed = self.update_available != update_available;
+            self.update_available = update_available;
             // No configured widgets is a deliberate state: retain one ordinary app icon.
             let icon_count = widgets.len().max(1);
             self.icons.truncate(icon_count);
@@ -316,7 +328,7 @@ mod platform {
                 let icon = make_icon(widget_for_icon(index, widgets), limits)?;
                 let tray = TrayIconBuilder::new()
                     .with_icon(icon)
-                    .with_menu(Box::new(make_menu()?))
+                    .with_menu(Box::new(make_menu(update_available)?))
                     .with_tooltip(tooltip(limits))
                     .with_menu_on_left_click(false)
                     .build()
@@ -327,15 +339,23 @@ mod platform {
             for (index, tray) in self.icons.iter().enumerate() {
                 tray.set_icon(Some(make_icon(widget_for_icon(index, widgets), limits)?))?;
                 tray.set_tooltip(Some(&tooltip))?;
+                if menu_changed {
+                    tray.set_menu(Some(Box::new(make_menu(update_available)?)));
+                }
             }
             Ok(())
         }
 
         /// Recreate after an order change: Windows assigns the newest icon next
         /// to the clock, so creation is intentionally reversed below.
-        pub fn rebuild(&mut self, widgets: &[TrayWidget], limits: &RateLimits) -> Result<()> {
+        pub fn rebuild(
+            &mut self,
+            widgets: &[TrayWidget],
+            limits: &RateLimits,
+            update_available: bool,
+        ) -> Result<()> {
             self.icons.clear();
-            self.sync(widgets, limits)
+            self.sync(widgets, limits, update_available)
         }
 
         pub fn contains(&self, id: &TrayIconId) -> bool {
@@ -354,6 +374,7 @@ mod platform {
             let mut actions = Vec::new();
             while let Ok(event) = MenuEvent::receiver().try_recv() {
                 match event.id.as_ref() {
+                    "update" => actions.push(TrayMenuAction::Update),
                     "settings" => actions.push(TrayMenuAction::Settings),
                     "exit" => actions.push(TrayMenuAction::Exit),
                     _ => {}
@@ -386,7 +407,7 @@ mod platform {
         .context("create RGBA tray icon")
     }
 
-    fn make_menu() -> Result<Menu> {
+    fn make_menu(update_available: bool) -> Result<Menu> {
         let header = IconMenuItem::new(
             format!("Codex Minibar - v{}", env!("CARGO_PKG_VERSION")),
             false,
@@ -395,6 +416,17 @@ mod platform {
         );
         let settings = MenuItem::with_id("settings", "Settings", true, None);
         let exit = MenuItem::with_id("exit", "Exit", true, None);
+        if update_available {
+            let update = MenuItem::with_id("update", "Update Available", true, None);
+            return Menu::with_items(&[
+                &header,
+                &PredefinedMenuItem::separator(),
+                &update,
+                &settings,
+                &exit,
+            ])
+            .context("create tray menu");
+        }
         Menu::with_items(&[&header, &PredefinedMenuItem::separator(), &settings, &exit])
             .context("create tray menu")
     }
@@ -414,11 +446,21 @@ impl TrayManager {
         Self
     }
 
-    pub fn sync(&mut self, _widgets: &[TrayWidget], _limits: &RateLimits) -> anyhow::Result<()> {
+    pub fn sync(
+        &mut self,
+        _widgets: &[TrayWidget],
+        _limits: &RateLimits,
+        _update_available: bool,
+    ) -> anyhow::Result<()> {
         Ok(())
     }
 
-    pub fn rebuild(&mut self, _widgets: &[TrayWidget], _limits: &RateLimits) -> anyhow::Result<()> {
+    pub fn rebuild(
+        &mut self,
+        _widgets: &[TrayWidget],
+        _limits: &RateLimits,
+        _update_available: bool,
+    ) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -438,6 +480,7 @@ impl TrayManager {
 #[cfg(not(windows))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayMenuAction {
+    Update,
     Settings,
     Exit,
 }
