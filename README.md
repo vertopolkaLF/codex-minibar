@@ -76,4 +76,4 @@ Codex installation type, and clear reproduction steps when reporting a problem.
 
 ## License
 
-Licensed under the [MIT License](LICENSE).
+Licensed under the [Apache License, Version 2.0](LICENSE).

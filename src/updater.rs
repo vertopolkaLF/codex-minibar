@@ -79,6 +79,67 @@ pub fn show_post_update_success_if_needed() {
     }
 }
 
+/// Keeps Windows "Installed apps" DisplayVersion in sync with this binary.
+/// Zip updates replace files but do not rewrite the NSIS uninstall registry.
+pub fn sync_installed_display_version() {
+    #[cfg(windows)]
+    if let Err(error) = sync_uninstall_display_version(env!("CARGO_PKG_VERSION")) {
+        eprintln!("failed to sync installed display version: {error:#}");
+    }
+}
+
+#[cfg(windows)]
+fn sync_uninstall_display_version(version: &str) -> Result<()> {
+    use windows_sys::Win32::{
+        Foundation::ERROR_SUCCESS,
+        System::Registry::{
+            HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ, RegCloseKey, RegOpenKeyExW,
+            RegSetValueExW,
+        },
+    };
+
+    // Installer writes HKCU (RequestExecutionLevel user) for each arch package.
+    for arch in ["x86", "x64", "arm64"] {
+        let subkey = format!(
+            r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Codex Minibar {arch}"
+        );
+        let subkey_w: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut key: HKEY = std::ptr::null_mut();
+        let status = unsafe {
+            RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                subkey_w.as_ptr(),
+                0,
+                KEY_SET_VALUE,
+                &mut key,
+            )
+        };
+        if status != ERROR_SUCCESS {
+            continue;
+        }
+        let name_w: Vec<u16> = "DisplayVersion"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let data: Vec<u16> = version.encode_utf16().chain(std::iter::once(0)).collect();
+        let status = unsafe {
+            RegSetValueExW(
+                key,
+                name_w.as_ptr(),
+                0,
+                REG_SZ,
+                data.as_ptr().cast(),
+                (data.len() * size_of::<u16>()) as u32,
+            )
+        };
+        unsafe { RegCloseKey(key) };
+        if status != ERROR_SUCCESS {
+            bail!("RegSetValueExW(DisplayVersion) for {arch}: {status}");
+        }
+    }
+    Ok(())
+}
+
 fn take_post_update_success_marker() -> Result<Option<String>> {
     let path = install_dir()?.join(UPDATE_SUCCESS_MARKER);
     if !path.exists() {
@@ -349,6 +410,12 @@ try {{
         Copy-Item -LiteralPath $_.FullName -Destination $install -Recurse -Force
     }}
     Set-Content -LiteralPath (Join-Path $install '{marker}') -Value '{version}' -Encoding utf8 -NoNewline
+    foreach ($arch in @('x86', 'x64', 'arm64')) {{
+        $key = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Codex Minibar $arch"
+        if (Test-Path -LiteralPath $key) {{
+            Set-ItemProperty -LiteralPath $key -Name DisplayVersion -Value '{version}'
+        }}
+    }}
     Start-Process -FilePath $exe -WorkingDirectory $install
 }} finally {{
     Start-Sleep -Seconds 2

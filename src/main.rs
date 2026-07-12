@@ -19,13 +19,14 @@ use codex_minibar::{
     scheduler::ActivationState,
     settings::Settings,
     single_instance::{self, SingleInstance},
-    updater::{UpdateController, show_post_update_success_if_needed},
+    updater::{UpdateController, show_post_update_success_if_needed, sync_installed_display_version},
     worker::start_worker,
 };
 use windows_reactor::*;
 
 fn run() -> Result<()> {
     notifications::initialize();
+    sync_installed_display_version();
     show_post_update_success_if_needed();
     let path = Settings::default_path()?;
     let mut settings = Settings::load_or_create(&path)?;
