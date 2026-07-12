@@ -12,6 +12,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use semver::Version;
 use serde::Deserialize;
+use ureq::Agent;
 use zip::ZipArchive;
 
 use crate::notifications;
@@ -28,6 +29,21 @@ const LATEST_RELEASE_API: &str =
 const APP_EXE: &str = "codex-minibar.exe";
 const USER_AGENT: &str = "codex-minibar-updater";
 const UPDATE_SUCCESS_MARKER: &str = ".update-success-pending";
+
+fn http_agent() -> Agent {
+    static AGENT: OnceLock<Agent> = OnceLock::new();
+    AGENT
+        .get_or_init(|| {
+            // ureq's `native-tls` feature is not auto-selected for `ureq::get`;
+            // build an agent that uses the OS TLS stack (schannel on Windows).
+            let tls = ureq::native_tls::TlsConnector::new()
+                .expect("create native-tls connector");
+            ureq::AgentBuilder::new()
+                .tls_connector(Arc::new(tls))
+                .build()
+        })
+        .clone()
+}
 
 struct UpdateRuntime {
     updates: Arc<UpdateController>,
@@ -338,7 +354,8 @@ fn parse_release_version(tag: &str) -> Result<Version> {
 }
 
 fn github_get(url: &str) -> Result<GhRelease> {
-    let response = ureq::get(url)
+    let response = http_agent()
+        .get(url)
         .set("User-Agent", USER_AGENT)
         .set("Accept", "application/vnd.github+json")
         .call()
@@ -483,7 +500,8 @@ fn escape_ps_single_quoted_str(value: &str) -> String {
 }
 
 fn download_file(url: &str, destination: &Path) -> Result<()> {
-    let response = ureq::get(url)
+    let response = http_agent()
+        .get(url)
         .set("User-Agent", USER_AGENT)
         .call()
         .with_context(|| format!("download {url}"))?;
