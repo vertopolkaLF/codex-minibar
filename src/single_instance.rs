@@ -35,6 +35,9 @@ mod platform {
                     .context("create single-instance mutex");
             }
             if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+                if crate::notifications::launched_via_toast_update() {
+                    let _ = crate::notifications::publish_toast_update_request();
+                }
                 focus_existing_window();
                 unsafe { CloseHandle(handle) };
                 return Ok(None);

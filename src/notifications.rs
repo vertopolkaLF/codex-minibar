@@ -8,6 +8,86 @@ use crate::settings::NotificationSettings;
 /// App User Model ID used for Action Center toasts.
 pub const AUMID: &str = "dev.CodexMinibar";
 
+/// Custom URL protocol used by the update toast action button.
+pub const TOAST_PROTOCOL_UPDATE: &str = "codex-minibar:update";
+
+const TOAST_ACTION_TRIGGER: &str = ".toast-action";
+const TOAST_ACTION_UPDATE_NOW: &str = "update_now";
+
+/// Returns true when this process was spawned by the update toast protocol link.
+pub fn launched_via_toast_update() -> bool {
+    std::env::args().any(|arg| {
+        arg.to_ascii_lowercase()
+            .contains("codex-minibar:update")
+    })
+}
+
+#[cfg(windows)]
+pub fn publish_toast_update_request() -> anyhow::Result<()> {
+    toast_activation::publish()
+}
+
+#[cfg(not(windows))]
+pub fn publish_toast_update_request() -> anyhow::Result<()> {
+    Ok(())
+}
+
+/// Returns true once when the primary instance should apply a toast update request.
+#[cfg(windows)]
+pub fn take_toast_update_request() -> bool {
+    toast_activation::take()
+}
+
+#[cfg(not(windows))]
+pub fn take_toast_update_request() -> bool {
+    false
+}
+
+#[cfg(windows)]
+mod toast_activation {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    use anyhow::{Context, Result};
+
+    use super::{TOAST_ACTION_TRIGGER, TOAST_ACTION_UPDATE_NOW};
+
+    pub fn publish() -> Result<()> {
+        let path = trigger_path()?;
+        fs::write(&path, TOAST_ACTION_UPDATE_NOW)
+            .with_context(|| format!("write {}", path.display()))?;
+        Ok(())
+    }
+
+    pub fn take() -> bool {
+        let Ok(path) = trigger_path() else {
+            return false;
+        };
+        if !path.exists() {
+            return false;
+        }
+        let Ok(content) = fs::read_to_string(&path) else {
+            return false;
+        };
+        let _ = fs::remove_file(&path);
+        content.trim() == TOAST_ACTION_UPDATE_NOW
+    }
+
+    fn trigger_path() -> Result<PathBuf> {
+        Ok(install_dir()?.join(TOAST_ACTION_TRIGGER))
+    }
+
+    fn install_dir() -> Result<PathBuf> {
+        std::env::current_exe()
+            .context("resolve current executable")
+            .and_then(|path| {
+                path.parent()
+                    .map(Path::to_path_buf)
+                    .context("executable has no parent directory")
+            })
+    }
+}
+
 /// Registers the process AUMID and notification identity so Windows can show
 /// toasts under "Codex Minibar" instead of a nameless host.
 pub fn initialize() {
@@ -141,11 +221,8 @@ mod windows_impl {
     use anyhow::{Context, Result};
     use windows::{
         Data::Xml::Dom::XmlDocument,
-        UI::Notifications::{
-            ToastActivatedEventArgs, ToastNotification, ToastNotificationManager,
-        },
+        UI::Notifications::{ToastNotification, ToastNotificationManager},
     };
-    use windows_core::Interface;
     use windows_sys::Win32::{
         Foundation::ERROR_SUCCESS,
         System::Registry::{
@@ -159,6 +236,7 @@ mod windows_impl {
 
     pub(super) fn initialize() -> Result<()> {
         register_aumid().context("register notification AUMID")?;
+        register_update_protocol().context("register update protocol")?;
         let aumid: Vec<u16> = AUMID.encode_utf16().chain(std::iter::once(0)).collect();
         let status = unsafe { SetCurrentProcessExplicitAppUserModelID(aumid.as_ptr()) };
         anyhow::ensure!(status == 0, "SetCurrentProcessExplicitAppUserModelID: 0x{status:08X}");
@@ -196,47 +274,22 @@ mod windows_impl {
             logo = logo,
             actions = action_xml,
         );
-        show_toast_xml(&xml, actions.is_some())
+        show_toast_xml(&xml)
     }
 
     pub(super) fn show_update_available(version: &str, release_url: &str) -> Result<()> {
         let body = format!("Codex Minibar v{version} is ready to install.");
         let actions = [
-            (
-                "Update Now",
-                "foreground",
-                crate::updater::TOAST_ACTION_UPDATE_NOW,
-            ),
+            ("Update Now", "protocol", super::TOAST_PROTOCOL_UPDATE),
             ("What's New", "protocol", release_url),
         ];
         show("Update available", &body, Some(&actions))
     }
 
-    fn show_toast_xml(xml: &str, interactive: bool) -> Result<()> {
+    fn show_toast_xml(xml: &str) -> Result<()> {
         let document = XmlDocument::new()?;
         document.LoadXml(&windows::core::HSTRING::from(xml))?;
         let toast = ToastNotification::CreateToastNotification(&document)?;
-        if interactive {
-            let _ = toast.Activated(|_sender, args| {
-                let Some(args) = args.as_ref() else {
-                    return;
-                };
-                let Ok(activated) = args.cast::<ToastActivatedEventArgs>() else {
-                    return;
-                };
-                let Ok(arguments) = activated.Arguments() else {
-                    return;
-                };
-                if arguments == crate::updater::TOAST_ACTION_UPDATE_NOW {
-                    std::thread::spawn(|| {
-                        if let Err(error) = crate::updater::apply_pending_update() {
-                            eprintln!("failed to apply update from toast: {error:#}");
-                            let _ = show("Update failed", &format!("{error:#}"), None);
-                        }
-                    });
-                }
-            })?;
-        }
         let notifier =
             ToastNotificationManager::CreateToastNotifierWithId(&windows::core::HSTRING::from(
                 super::AUMID,
@@ -261,6 +314,16 @@ mod windows_impl {
             // Shell IconUri wants a normal Windows path with backslashes.
             set_reg_sz(&key, "IconUri", &path_to_windows_path(&icon))?;
         }
+        Ok(())
+    }
+
+    fn register_update_protocol() -> Result<()> {
+        let exe = std::env::current_exe().context("resolve executable for protocol registration")?;
+        let command = format!("\"{}\" \"%1\"", exe.display());
+        let root = r"Software\Classes\codex-minibar";
+        set_reg_sz(root, "", "URL:codex-minibar Protocol")?;
+        set_reg_sz(root, "URL Protocol", "")?;
+        set_reg_sz(&format!(r"{root}\shell\open\command"), "", &command)?;
         Ok(())
     }
 

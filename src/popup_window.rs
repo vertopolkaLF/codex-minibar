@@ -736,10 +736,20 @@ fn start_background_bridge(
             set_ui.call(ui.clone());
         };
 
+        let drain_toast_update = || {
+            if crate::notifications::take_toast_update_request()
+                && let Err(error) = crate::updater::apply_pending_update()
+            {
+                eprintln!("failed to apply update from toast: {error:#}");
+                notifications::show("Update failed", &format!("{error:#}"));
+            }
+        };
+
         let Some(events) = events else {
             set_ui.call(ui.clone());
             loop {
                 popup::pump_messages();
+                drain_toast_update();
                 drain_settings(
                     &mut ui,
                     &set_ui,
@@ -767,6 +777,7 @@ fn start_background_bridge(
 
         loop {
             popup::pump_messages();
+            drain_toast_update();
             drain_settings(
                 &mut ui,
                 &set_ui,

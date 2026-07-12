@@ -47,6 +47,29 @@ VIAddVersionKey "LegalCopyright" "Copyright (C) {{PUBLISHER}}"
 
 {{INIT_REG_VIEW}}
 
+!macro KillRunningAppBody
+  ; Ignore exit code — the process may not be running.
+  ClearErrors
+  ExecWait 'taskkill /F /IM "codex-minibar.exe" /T' $0
+  Sleep 500
+!macroend
+
+Function KillRunningApp
+  !insertmacro KillRunningAppBody
+FunctionEnd
+
+Function un.KillRunningApp
+  !insertmacro KillRunningAppBody
+FunctionEnd
+
+Function .onInit
+  Call KillRunningApp
+FunctionEnd
+
+Function un.onInit
+  Call un.KillRunningApp
+FunctionEnd
+
 Function StartupCheckboxNoop
 FunctionEnd
 

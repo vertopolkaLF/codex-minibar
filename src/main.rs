@@ -160,6 +160,9 @@ fn main() {
         }
     };
     single_instance::SingleInstance::hold(instance);
+    if notifications::launched_via_toast_update() {
+        let _ = notifications::publish_toast_update_request();
+    }
     if let Err(error) = run() {
         show_error(&format!("Codex Minibar failed: {error:#}"));
     }

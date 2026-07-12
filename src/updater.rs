@@ -28,7 +28,6 @@ const LATEST_RELEASE_API: &str =
 const APP_EXE: &str = "codex-minibar.exe";
 const USER_AGENT: &str = "codex-minibar-updater";
 const UPDATE_SUCCESS_MARKER: &str = ".update-success-pending";
-pub const TOAST_ACTION_UPDATE_NOW: &str = "update_now";
 
 struct UpdateRuntime {
     updates: Arc<UpdateController>,
