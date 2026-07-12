@@ -13611,6 +13611,45 @@ pub struct ISurfaceImageSourceNativeWithD2D_Vtbl {
     pub ResumeDraw: unsafe extern "system" fn(*mut core::ffi::c_void) -> windows_core::HRESULT,
 }
 windows_core::imp::define_interface!(
+    ISvgImageSource,
+    ISvgImageSource_Vtbl,
+    0xd5b61d3c_b68d_53a2_b07b_ba6adfdd5887
+);
+impl windows_core::RuntimeType for ISvgImageSource {
+    const SIGNATURE: windows_core::imp::ConstBuffer =
+        windows_core::imp::ConstBuffer::for_interface::<Self>();
+}
+#[repr(C)]
+pub struct ISvgImageSource_Vtbl {
+    pub base__: windows_core::IInspectable_Vtbl,
+}
+windows_core::imp::define_interface!(
+    ISvgImageSourceFactory,
+    ISvgImageSourceFactory_Vtbl,
+    0x2f85673f_ac64_570d_9bda_94fa082eead9
+);
+impl windows_core::RuntimeType for ISvgImageSourceFactory {
+    const SIGNATURE: windows_core::imp::ConstBuffer =
+        windows_core::imp::ConstBuffer::for_interface::<Self>();
+}
+#[repr(C)]
+pub struct ISvgImageSourceFactory_Vtbl {
+    pub base__: windows_core::IInspectable_Vtbl,
+    pub CreateInstance: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+    pub CreateInstanceWithUriSource: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+}
+windows_core::imp::define_interface!(
     ISwapChainPanel,
     ISwapChainPanel_Vtbl,
     0x08844f85_aa1b_540d_bef2_b2bb7b257f8c
@@ -21539,6 +21578,59 @@ impl windows_core::RuntimeName for SurfaceImageSource {
 }
 unsafe impl Send for SurfaceImageSource {}
 unsafe impl Sync for SurfaceImageSource {}
+#[repr(transparent)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SvgImageSource(windows_core::IUnknown);
+windows_core::imp::interface_hierarchy!(
+    SvgImageSource,
+    windows_core::IUnknown,
+    windows_core::IInspectable
+);
+windows_core::imp::required_hierarchy!(SvgImageSource, ImageSource, DependencyObject);
+impl SvgImageSource {
+    pub(crate) fn CreateInstanceWithUriSource<P0>(urisource: P0) -> windows_core::Result<Self>
+    where
+        P0: windows_core::Param<Uri>,
+    {
+        Self::ISvgImageSourceFactory(|this| unsafe {
+            let mut result__ = core::mem::zeroed();
+            (windows_core::Interface::vtable(this).CreateInstanceWithUriSource)(
+                windows_core::Interface::as_raw(this),
+                urisource.param().abi(),
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+                &mut result__,
+            )
+            .and_then(|| windows_core::Type::from_abi(result__))
+        })
+    }
+    fn ISvgImageSourceFactory<R, F: FnOnce(&ISvgImageSourceFactory) -> windows_core::Result<R>>(
+        callback: F,
+    ) -> windows_core::Result<R> {
+        static SHARED: windows_core::imp::FactoryCache<SvgImageSource, ISvgImageSourceFactory> =
+            windows_core::imp::FactoryCache::new();
+        SHARED.call(callback)
+    }
+}
+impl windows_core::RuntimeType for SvgImageSource {
+    const SIGNATURE: windows_core::imp::ConstBuffer =
+        windows_core::imp::ConstBuffer::for_class::<Self, ISvgImageSource>();
+}
+unsafe impl windows_core::Interface for SvgImageSource {
+    type Vtable = <ISvgImageSource as windows_core::Interface>::Vtable;
+    const IID: windows_core::GUID = <ISvgImageSource as windows_core::Interface>::IID;
+}
+impl core::ops::Deref for SvgImageSource {
+    type Target = ISvgImageSource;
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+impl windows_core::RuntimeName for SvgImageSource {
+    const NAME: &'static str = "Microsoft.UI.Xaml.Media.Imaging.SvgImageSource";
+}
+unsafe impl Send for SvgImageSource {}
+unsafe impl Sync for SvgImageSource {}
 #[repr(transparent)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SwapChainPanel(windows_core::IUnknown);

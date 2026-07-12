@@ -495,6 +495,38 @@ fn settings_title_icon_uri() -> String {
     format!("file:///{}", path.to_string_lossy().replace('\\', "/"))
 }
 
+/// The title bar uses a compact 32px asset, while About intentionally uses a
+/// high-resolution source so its larger presentation stays crisp on HiDPI.
+fn settings_about_icon_uri() -> String {
+    let packaged = std::env::current_exe()
+        .ok()
+        .and_then(|path| {
+            path.parent()
+                .map(|parent| parent.join("assets/icons/app-icon-512.png"))
+        })
+        .filter(|path| path.exists());
+    let path = packaged.unwrap_or_else(|| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/icons/app-icon-512.png")
+    });
+    format!("file:///{}", path.to_string_lossy().replace('\\', "/"))
+}
+
+fn settings_github_icon_uri() -> String {
+    let packaged = std::env::current_exe()
+        .ok()
+        .and_then(|path| {
+            path.parent()
+                .map(|parent| parent.join("assets/icons/github-iconify.svg"))
+        })
+        .filter(|path| path.exists());
+    let path = packaged.unwrap_or_else(|| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/icons/github-iconify.svg")
+    });
+    format!("file:///{}", path.to_string_lossy().replace('\\', "/"))
+}
+
 fn tab_content(
     settings: &Settings,
     tab: Tab,
@@ -761,10 +793,16 @@ fn tab_content(
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .with_key(format!("{}-cards-{row_count}", tab.tag()));
 
-    grid((text_block(title).font_size(28.0).bold().grid_row(0), cards))
+    let heading: Element = if tab == Tab::About {
+        Element::Empty
+    } else {
+        text_block(title).font_size(28.0).bold().grid_row(0).into()
+    };
+
+    grid((heading, cards))
         .columns([GridLength::Star(1.0)])
         .rows([GridLength::Auto, GridLength::Auto])
-        .row_spacing(10.0)
+        .row_spacing(if tab == Tab::About { 0.0 } else { 10.0 })
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .vertical_alignment(VerticalAlignment::Top)
         .into()
@@ -799,44 +837,62 @@ fn about_settings_cards(
     let updates_for_check = updates.clone();
     let notify_for_check = notify_on_update;
 
-    let mut cards = vec![
-        settings_info_card("Application", "Codex Minibar").with_key("about-app-name"),
-        settings_info_card("Version", format!("v{version}")).with_key("about-version"),
-        settings_info_card(
-            "Description",
-            "A lightweight Windows tray companion for Codex rate limits.",
-        )
-        .with_key("about-description"),
-        border(
+    let hero = border(
+        grid((
+            Image::new_with_uri(settings_about_icon_uri())
+                .width(72.0)
+                .height(72.0)
+                .grid_column(0)
+                .vertical_alignment(VerticalAlignment::Top),
             vstack((
-                text_block("Links").font_size(16.0).bold(),
-                HyperlinkButton::new("GitHub repository")
-                    .navigate_uri(REPO_URL)
-                    .on_click(|| {
-                        let _ = crate::updater::open_url(REPO_URL);
-                    }),
-                HyperlinkButton::new("Releases")
-                    .navigate_uri(RELEASES_URL)
-                    .on_click(|| {
-                        let _ = crate::updater::open_url(RELEASES_URL);
-                    }),
-                HyperlinkButton::new("Issues")
-                    .navigate_uri(ISSUES_URL)
-                    .on_click(|| {
-                        let _ = crate::updater::open_url(ISSUES_URL);
-                    }),
+                grid((
+                    text_block("Codex Minibar")
+                        .font_size(26.0)
+                        .bold()
+                        .grid_column(0)
+                        .vertical_alignment(VerticalAlignment::Center),
+                    border(text_block(format!("v{version}")).font_size(13.0).bold())
+                        .padding(Thickness {
+                            left: 10.0,
+                            top: 4.0,
+                            right: 10.0,
+                            bottom: 4.0,
+                        })
+                        .background(Color { a: 72, r: 255, g: 137, b: 83 })
+                        .corner_radius(8.0)
+                        .grid_column(1)
+                        .vertical_alignment(VerticalAlignment::Center),
+                ))
+                .columns([GridLength::Auto, GridLength::Auto])
+                .rows([GridLength::Auto])
+                .column_spacing(12.0),
+                text_block("A lightweight Windows tray companion for Codex rate limits.")
+                    .font_size(15.0)
+                    .wrap()
+                    .foreground(ThemeRef::SecondaryText),
             ))
-            .spacing(8.0),
-        )
-        .padding(Thickness::uniform(16.0))
-        .background(ThemeRef::CardBackground)
-        .corner_radius(8.0)
-        .border_thickness(Thickness::uniform(1.0))
-        .border_brush(ThemeRef::CardStroke)
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .with_key("about-links")
-        .into(),
-        settings_info_card("Update status", status).with_key("about-update-status"),
+            .spacing(6.0)
+            .grid_column(1)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .vertical_alignment(VerticalAlignment::Center),
+        ))
+        .columns([GridLength::Pixel(72.0), GridLength::Star(1.0)])
+        .rows([GridLength::Auto])
+        .column_spacing(18.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch),
+    )
+    .padding(Thickness {
+        left: 0.0,
+        top: 8.0,
+        right: 0.0,
+        bottom: 22.0,
+    })
+    .background(Color::transparent())
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .with_key("about-hero")
+    .into();
+
+    let update_options = vstack((
         settings_toggle_card(
             "Check for updates on startup",
             check_for_updates,
@@ -873,24 +929,29 @@ fn about_settings_cards(
             set_hovered_card_id.clone(),
         )
         .with_key("about-notify-updates"),
-        settings_action_card(
-            "Look for the latest release on GitHub",
-            "Check now",
-            move || {
-                updates_for_check.check_async(false, notify_for_check);
-            },
-            "about-check-now",
-            hovered_card_id,
-            set_hovered_card_id.clone(),
-            None,
-        )
-        .with_key("about-check-now"),
-    ];
+    ))
+    .spacing(4.0);
 
-    if matches!(update_phase, UpdatePhase::Available(_)) {
-        cards.push(
+    let update_settings_separator = border(Element::Empty)
+        .height(1.0)
+        .background(Color {
+            a: 17,
+            r: 255,
+            g: 255,
+            b: 255,
+        })
+        .margin(Thickness {
+            left: 0.0,
+            top: 4.0,
+            right: 0.0,
+            bottom: 4.0,
+        })
+        .horizontal_alignment(HorizontalAlignment::Stretch);
+
+    let update_actions: Element = if matches!(update_phase, UpdatePhase::Available(_)) {
+        vstack((
             settings_action_card(
-                "Download and install the latest portable release",
+                "Download and install the latest release",
                 "Update",
                 || {
                     if let Err(error) = crate::updater::apply_pending_update() {
@@ -903,10 +964,7 @@ fn about_settings_cards(
                 set_hovered_card_id.clone(),
                 Some(UPDATE_SYMBOL),
             )
-            .with_key("about-update-apply")
-            .into(),
-        );
-        cards.push(
+            .with_key("about-update-apply"),
             settings_action_card(
                 "Read the release notes on GitHub",
                 "What's New",
@@ -917,16 +975,211 @@ fn about_settings_cards(
                 },
                 "about-whats-new",
                 hovered_card_id,
-                set_hovered_card_id,
+                set_hovered_card_id.clone(),
                 None,
             )
-            .with_key("about-whats-new")
-            .into(),
-        );
-    }
+            .with_key("about-whats-new"),
+        ))
+        .spacing(4.0)
+        .into()
+    } else {
+        about_action_card(
+            "Check for updates",
+            "Look for the latest release on GitHub",
+            AboutCardIcon::Glyph("↻"),
+            move || {
+                updates_for_check.check_async(false, notify_for_check);
+            },
+            "about-check-now",
+            hovered_card_id,
+            set_hovered_card_id.clone(),
+        )
+    };
+
+    let updates_card = about_section_with_header(
+        grid((
+            text_block("Updates")
+                .font_size(18.0)
+                .bold()
+                .grid_column(0)
+                .vertical_alignment(VerticalAlignment::Center),
+            text_block(status)
+                .font_size(14.0)
+                .foreground(ThemeRef::SecondaryText)
+                .grid_column(1)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .vertical_alignment(VerticalAlignment::Center),
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Auto])
+        .rows([GridLength::Auto])
+        .horizontal_alignment(HorizontalAlignment::Stretch),
+        vstack((
+            update_actions,
+            update_settings_separator,
+            update_options,
+        ))
+        .spacing(4.0),
+    )
+    .with_key("about-updates");
+
+    let resources = about_section(
+        "Resources",
+        grid((
+            about_action_card("GitHub", "Browse the source code", AboutCardIcon::GitHub, || {
+                let _ = crate::updater::open_url(REPO_URL);
+            }, "about-github", hovered_card_id, set_hovered_card_id.clone())
+            .grid_row(0)
+            .grid_column(0),
+            about_action_card("Releases", "See what's new", AboutCardIcon::Glyph("▤"), || {
+                let _ = crate::updater::open_url(RELEASES_URL);
+            }, "about-releases", hovered_card_id, set_hovered_card_id.clone())
+            .grid_row(0)
+            .grid_column(1),
+            about_action_card("Report an issue", "Found a bug?", AboutCardIcon::Glyph("⚑"), || {
+                let _ = crate::updater::open_url(ISSUES_URL);
+            }, "about-issues", hovered_card_id, set_hovered_card_id.clone())
+            .grid_row(1)
+            .grid_column(0),
+            about_action_card("Author", "@vertopolkaLF", AboutCardIcon::Glyph("@"), || {
+                let _ = crate::updater::open_url("https://github.com/vertopolkaLF");
+            }, "about-author", hovered_card_id, set_hovered_card_id.clone())
+            .grid_row(1)
+            .grid_column(1),
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
+        .rows([GridLength::Auto, GridLength::Auto])
+        .column_spacing(12.0)
+        .row_spacing(12.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch),
+    )
+    .with_key("about-resources");
+
+    let cards = vec![hero, updates_card.into(), resources.into()];
 
     let _ = settings_tx;
     cards
+}
+
+fn about_section(title: impl Into<String>, content: impl Into<Element>) -> Element {
+    about_section_with_header(text_block(title).font_size(18.0).bold(), content)
+}
+
+fn about_section_with_header(header: impl Into<Element>, content: impl Into<Element>) -> Element {
+    border(
+        vstack((header.into(), content.into()))
+            .spacing(14.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch),
+    )
+    .padding(Thickness::uniform(18.0))
+    .background(ThemeRef::CardBackground)
+    .corner_radius(14.0)
+    .border_thickness(Thickness::uniform(1.0))
+    .border_brush(ThemeRef::CardStroke)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .into()
+}
+
+/// Full-surface action card used by the About page.  The panel, not a nested
+/// button, owns the click target so it feels like one intentional control.
+#[derive(Clone, Copy)]
+enum AboutCardIcon {
+    GitHub,
+    Glyph(&'static str),
+}
+
+fn about_action_card(
+    title: impl Into<String>,
+    description: impl Into<String>,
+    icon: AboutCardIcon,
+    on_click: impl IntoUnitCallback,
+    card_id: &'static str,
+    hovered_id: &Option<String>,
+    set_hovered_id: SetState<Option<String>>,
+) -> Element {
+    let hovered = hovered_id.as_deref() == Some(card_id);
+    let on_click = on_click.into_unit_callback();
+    let on_enter = {
+        let set_hovered_id = set_hovered_id.clone();
+        move |_: PointerEventInfo| set_hovered_id.call(Some(card_id.to_string()))
+    };
+    let on_exit = move || set_hovered_id.call(None);
+
+    let base: Element = border(Element::Empty)
+        .background(Color { a: 48, r: 255, g: 137, b: 83 })
+        .corner_radius(10.0)
+        .relative_align_left()
+        .relative_align_right()
+        .relative_align_top()
+        .relative_align_bottom()
+        .into();
+    let hover: Element = border(Element::Empty)
+        .background(Color { a: 78, r: 255, g: 137, b: 83 })
+        .opacity(if hovered { 1.0 } else { 0.0 })
+        .with_opacity_transition(CONTROL_FAST_ANIMATION)
+        .corner_radius(10.0)
+        .relative_align_left()
+        .relative_align_right()
+        .relative_align_top()
+        .relative_align_bottom()
+        .into();
+    let icon: Element = match icon {
+        AboutCardIcon::GitHub => Image::new_with_uri(settings_github_icon_uri())
+            .width(16.0)
+            .height(16.0)
+            .vertical_alignment(VerticalAlignment::Center)
+            .into(),
+        AboutCardIcon::Glyph(value) => text_block(value)
+            .font_size(16.0)
+            .foreground(Color {
+                a: 255,
+                r: 255,
+                g: 170,
+                b: 89,
+            })
+            .width(16.0)
+            .vertical_alignment(VerticalAlignment::Center)
+            .into(),
+    };
+    let heading = grid((
+        icon.grid_column(0),
+        text_block(title)
+            .font_size(15.0)
+            .semibold()
+            .grid_column(1)
+            .vertical_alignment(VerticalAlignment::Center),
+    ))
+    .columns([GridLength::Pixel(16.0), GridLength::Star(1.0)])
+    .column_spacing(8.0)
+    .rows([GridLength::Auto]);
+
+    relative_panel(vec![
+        base,
+        hover,
+        vstack((
+            heading,
+            text_block(description)
+                .font_size(13.0)
+                .foreground(ThemeRef::SecondaryText),
+        ))
+        .spacing(5.0)
+        .margin(Thickness {
+            left: 14.0,
+            top: 12.0,
+            right: 14.0,
+            bottom: 12.0,
+        })
+        .relative_align_left()
+        .relative_align_top()
+        .into(),
+    ])
+    .min_height(82.0)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .background(Color::transparent())
+    .on_pointer_entered(on_enter)
+    .on_pointer_exited(on_exit)
+    .on_tapped(move || on_click.invoke(()))
+    .with_key(card_id)
+    .into()
 }
 
 fn tray_settings_cards(

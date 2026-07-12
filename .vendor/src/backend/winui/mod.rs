@@ -1424,9 +1424,14 @@ impl Backend for WinUIBackend {
                     .and_then(|_| l.SetY2(p.y2)),
                 (Prop::ImageSource, PropValue::Str(s), Handle::Image(img)) => {
                     let uri = bindings::Uri::CreateUri(s.as_str())?;
-                    let bmp = bindings::BitmapImage::new()?;
-                    bmp.SetUriSource(&uri)?;
-                    img.SetSource(&bmp.cast::<bindings::ImageSource>()?)
+                    if is_svg_uri(s) {
+                        let svg = bindings::SvgImageSource::CreateInstanceWithUriSource(&uri)?;
+                        img.SetSource(&svg.cast::<bindings::ImageSource>()?)
+                    } else {
+                        let bmp = bindings::BitmapImage::new()?;
+                        bmp.SetUriSource(&uri)?;
+                        img.SetSource(&bmp.cast::<bindings::ImageSource>()?)
+                    }
                 }
                 (Prop::ImageSource, PropValue::SurfaceImageSource(sis), Handle::Image(img)) => {
                     img.SetSource(&sis.image_source()?)
@@ -3351,11 +3356,18 @@ fn mount_static_tooltip_element(el: &Element) -> Option<bindings::UIElement> {
             match &img.source {
                 ImageSource::Uri(uri_str) => {
                     if let Ok(uri) = bindings::Uri::CreateUri(uri_str.as_str())
-                        && let Ok(bmp) = bindings::BitmapImage::new()
                     {
-                        diag::dropped(bmp.SetUriSource(&uri));
-                        if let Ok(src) = bmp.cast::<bindings::ImageSource>() {
-                            diag::dropped(i.SetSource(&src));
+                        if is_svg_uri(uri_str) {
+                            if let Ok(svg) = bindings::SvgImageSource::CreateInstanceWithUriSource(&uri)
+                                && let Ok(src) = svg.cast::<bindings::ImageSource>()
+                            {
+                                diag::dropped(i.SetSource(&src));
+                            }
+                        } else if let Ok(bmp) = bindings::BitmapImage::new() {
+                            diag::dropped(bmp.SetUriSource(&uri));
+                            if let Ok(src) = bmp.cast::<bindings::ImageSource>() {
+                                diag::dropped(i.SetSource(&src));
+                            }
                         }
                     }
                 }
@@ -3376,4 +3388,10 @@ fn mount_static_tooltip_element(el: &Element) -> Option<bindings::UIElement> {
             tb.cast::<bindings::UIElement>().ok()
         }
     }
+}
+
+fn is_svg_uri(uri: &str) -> bool {
+    uri.split('?')
+        .next()
+        .is_some_and(|path| path.to_ascii_lowercase().ends_with(".svg"))
 }
