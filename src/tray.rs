@@ -78,8 +78,13 @@ fn stacked_reset_label(reset: Option<DateTime<Utc>>, countdown: bool) -> String 
         .unwrap_or_else(|| "?".into())
 }
 
-fn icon_color(value: Option<u8>) -> [u8; 3] {
-    match value {
+fn icon_color(value: Option<u8>, limit_value: LimitValue) -> [u8; 3] {
+    // Remaining: low is bad. Used: high is bad — color against remaining-equivalent.
+    let severity = match limit_value {
+        LimitValue::Used => value.map(|used| 100u8.saturating_sub(used.min(100))),
+        LimitValue::Remaining => value,
+    };
+    match severity {
         Some(0..=15) => [230, 74, 72],
         Some(16..=50) => [245, 158, 11],
         Some(_) => [49, 196, 141],
@@ -108,6 +113,7 @@ pub fn render_widget(widget: &TrayWidget, limits: &RateLimits) -> Vec<u8> {
     let primary = percent(primary_window, widget.limit_value);
     let secondary = percent(&limits.secondary, widget.limit_value);
     // When the 5h window is gone, primary-oriented widgets show weekly instead.
+    let limit_value = widget.limit_value;
     if five_hour_disabled
         && matches!(widget.source, TraySource::Combined | TraySource::Primary)
         && matches!(
@@ -118,32 +124,32 @@ pub fn render_widget(widget: &TrayWidget, limits: &RateLimits) -> Vec<u8> {
         )
     {
         return match widget.presentation {
-            TrayPresentation::StackedBars => render_bars(&[secondary]),
-            TrayPresentation::NestedRings => render_rings(&[secondary]),
+            TrayPresentation::StackedBars => render_bars(&[secondary], limit_value),
+            TrayPresentation::NestedRings => render_rings(&[secondary], limit_value),
             _ => {
                 let text = secondary.map_or_else(|| "?".into(), |v| v.to_string());
-                render_text_icon(&text, icon_color(secondary))
+                render_text_icon(&text, icon_color(secondary, limit_value))
             }
         };
     }
     if matches!(widget.presentation, TrayPresentation::StackedBars) {
-        return render_bars(&[primary, secondary]);
+        return render_bars(&[primary, secondary], limit_value);
     }
     if matches!(widget.presentation, TrayPresentation::NestedRings) {
-        return render_rings(&[primary, secondary]);
+        return render_rings(&[primary, secondary], limit_value);
     }
     if matches!(widget.presentation, TrayPresentation::Bar) {
         let value = match widget.source { TraySource::Secondary => secondary, _ => primary };
-        return render_bars(&[value]);
+        return render_bars(&[value], limit_value);
     }
     if matches!(widget.presentation, TrayPresentation::Ring) {
         let value = match widget.source { TraySource::Secondary => secondary, _ => primary };
-        return render_rings(&[value]);
+        return render_rings(&[value], limit_value);
     }
     let (text, rgb) = match widget.source {
-        TraySource::Combined => (format!("{}\n{}", primary.map_or_else(|| "?".into(), |v| v.to_string()), secondary.map_or_else(|| "?".into(), |v| v.to_string())), icon_color(primary)),
-        TraySource::Primary => (primary.map_or_else(|| "?".into(), |v| v.to_string()), icon_color(primary)),
-        TraySource::Secondary => (secondary.map_or_else(|| "?".into(), |v| v.to_string()), icon_color(secondary)),
+        TraySource::Combined => (format!("{}\n{}", primary.map_or_else(|| "?".into(), |v| v.to_string()), secondary.map_or_else(|| "?".into(), |v| v.to_string())), icon_color(primary, limit_value)),
+        TraySource::Primary => (primary.map_or_else(|| "?".into(), |v| v.to_string()), icon_color(primary, limit_value)),
+        TraySource::Secondary => (secondary.map_or_else(|| "?".into(), |v| v.to_string()), icon_color(secondary, limit_value)),
         TraySource::PrimaryReset => (
             stacked_reset_label(
                 primary_window.resets_at,
@@ -201,14 +207,14 @@ fn render_text_icon(text: &str, rgb: [u8; 3]) -> Vec<u8> {
     pixels
 }
 
-fn render_bars(values: &[Option<u8>]) -> Vec<u8> {
+fn render_bars(values: &[Option<u8>], limit_value: LimitValue) -> Vec<u8> {
     let mut pixels = vec![0; ICON_SIZE * ICON_SIZE * 4];
     let count = values.len();
     for (index, value) in values.iter().enumerate() {
         let height = if count == 1 { 8 } else { 6 };
         let y = if count == 1 { 12 } else { 7 + index * 13 };
         let filled = value.unwrap_or(0) as usize * 24 / 100;
-        let color = icon_color(*value);
+        let color = icon_color(*value, limit_value);
         for yy in y..y + height {
             for x in 4..28 {
                 let offset = (yy * ICON_SIZE + x) * 4;
@@ -220,12 +226,12 @@ fn render_bars(values: &[Option<u8>]) -> Vec<u8> {
     pixels
 }
 
-fn render_rings(values: &[Option<u8>]) -> Vec<u8> {
+fn render_rings(values: &[Option<u8>], limit_value: LimitValue) -> Vec<u8> {
     let mut pixels = vec![0; ICON_SIZE * ICON_SIZE * 4];
     let radii: &[f32] = if values.len() == 1 { &[11.0] } else { &[12.0, 7.5] };
     for (value, radius) in values.iter().zip(radii) {
         let filled = value.unwrap_or(0) as f32 / 100.0;
-        let color = icon_color(*value);
+        let color = icon_color(*value, limit_value);
         for y in 0..ICON_SIZE {
             for x in 0..ICON_SIZE {
                 let dx = x as f32 + 0.5 - 16.0;
@@ -607,8 +613,11 @@ mod tests {
 
     #[test]
     fn reset_icons_are_white_and_percentage_icons_are_colored() {
-        assert_eq!(icon_color(None), [180, 180, 180]);
-        assert_eq!(icon_color(Some(80)), [49, 196, 141]);
+        assert_eq!(icon_color(None, LimitValue::Remaining), [180, 180, 180]);
+        assert_eq!(icon_color(Some(80), LimitValue::Remaining), [49, 196, 141]);
+        // Used inverts severity: low used is healthy, high used is critical.
+        assert_eq!(icon_color(Some(1), LimitValue::Used), [49, 196, 141]);
+        assert_eq!(icon_color(Some(99), LimitValue::Used), [230, 74, 72]);
     }
 
     #[test]
