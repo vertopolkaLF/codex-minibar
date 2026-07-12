@@ -2,7 +2,13 @@
 name = "codex-minibar"
 version = "0.1.0"
 edition = "2024"
+description = "Windows tray companion for monitoring Codex usage limits"
 license = "MIT"
+repository = "https://github.com/vertopolkaLF/codex-minibar"
+homepage = "https://github.com/vertopolkaLF/codex-minibar"
+readme = "README.md"
+keywords = ["codex", "windows", "tray", "usage", "winui"]
+categories = ["command-line-utilities", "gui"]
 
 [dependencies]
 anyhow = "1"

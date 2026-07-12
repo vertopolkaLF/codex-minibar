@@ -1,15 +1,79 @@
 # Codex Minibar
 
-Windows-first Rust desktop utility for displaying Codex limits in configurable tray icons, exploring usage statistics, and optionally activating a new five-hour limit window.
+**A Windows tray companion for keeping an eye on your Codex rate limits.**
 
-The UI is built with [windows-reactor](https://github.com/microsoft/windows-rs/pull/4479) (WinUI 3). Requires the Windows App SDK runtime (bundled via `windows-reactor-setup` self-contained deployment).
+Codex Minibar reads the usage data exposed by a locally installed, authenticated Codex
+CLI/Desktop installation and keeps your five-hour and weekly limits visible in the
+notification area. It is a native WinUI 3 application written in Rust.
+
+> Codex Minibar is an independent project. It is not affiliated with, endorsed by, or sponsored by OpenAI.
+
+## Features
+
+- Show five-hour and weekly usage in one or more configurable tray icons.
+- Choose numbers, bars, rings, reset times, or reset countdowns; show remaining or used
+  percentage as appropriate.
+- Open a compact native popup for the current plan, credits, limit windows, and usage
+  history.
+- Receive Windows notifications when a limit resets, usage becomes low, Codex cannot be
+  reached, or an update is available.
+- Optionally start Codex automatically to activate a fresh five-hour window.
+- Start with Windows, update in place from GitHub Releases, and retain history locally.
+- Detect Codex installations automatically, with an override for a custom executable path.
+
+## Requirements
+
+- Windows 10 or Windows 11 (64-bit ARM or x64).
+- A locally installed and authenticated Codex CLI or Codex desktop application.
+
+The app does not ask for, store, or transmit your Codex credentials. It talks to the local
+Codex app server and stores its own settings and usage history in your Windows user profile.
+
+## Install
+
+1. Open the [latest release](https://github.com/vertopolkaLF/codex-minibar/releases/latest).
+2. Download the installer matching your Windows architecture (`x64` or `arm64`) and run it.
+   The installer is per-user and does not require administrator rights.
+3. Alternatively, download the matching `portable.zip`, extract it, and run
+   `codex-minibar.exe`.
+4. Find the icon in the notification area. If it is hidden, Windows may have tucked it under
+   the `^` overflow menu, because apparently that is where delightful UX goes to die.
+
+On first run, Codex Minibar discovers Codex automatically. Open **Settings** from the tray
+menu if you need to choose another executable or adjust the tray widgets and notifications.
+
+## Updating
+
+By default, Codex Minibar checks GitHub Releases for updates and can install a matching
+portable package in place. You can disable update checks in Settings at any time.
+
+## Build from source
+
+Install the Rust toolchain pinned in [`rust-toolchain.toml`](rust-toolchain.toml), then run:
+
+```powershell
+cargo check --locked
+cargo test --all-targets --all-features --locked
+cargo clippy --all-targets --all-features --locked -- -D warnings
+```
+
+To build distributable Windows packages, run:
+
+```powershell
+.\build.ps1
+```
+
+This produces architecture-specific portable ZIP files and NSIS installers under `dist/`.
 
 ## Development
 
-```powershell
-cargo test
-cargo clippy --all-targets -- -D warnings
-```
+The UI uses [windows-reactor](https://github.com/microsoft/windows-rs/pull/4479) with WinUI 3;
+the Windows App SDK runtime is bundled through `windows-reactor-setup` self-contained deployment.
+CI checks formatting, lints, tests, and a release build on Windows.
 
-CI runs the same formatting, linting, test, and release-build gates on Windows with the
-toolchain pinned in `rust-toolchain.toml`.
+Bug reports and focused pull requests are welcome. Please include your Windows version,
+Codex installation type, and clear reproduction steps when reporting a problem.
+
+## License
+
+Licensed under the [MIT License](LICENSE).
