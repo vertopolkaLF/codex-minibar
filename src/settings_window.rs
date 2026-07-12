@@ -810,12 +810,13 @@ fn tab_content(
 
 fn update_status_label(phase: &UpdatePhase) -> String {
     match phase {
-        UpdatePhase::Idle => "Not checked yet".into(),
-        UpdatePhase::Checking => "Checking for updates...".into(),
-        UpdatePhase::UpToDate => "Up to date".into(),
-        UpdatePhase::Available(update) => format!("Update v{} available", update.version),
+        UpdatePhase::Idle => "Look for the latest release on GitHub".into(),
+        UpdatePhase::Checking => "Checking updates".into(),
+        UpdatePhase::UpToDate => "No updates found".into(),
+        UpdatePhase::Available(update) => format!("Update {} available", update.version),
         UpdatePhase::Applying => "Installing update...".into(),
-        UpdatePhase::Failed(message) => message.clone(),
+        // Never surface raw transport errors (e.g. "GET https://...").
+        UpdatePhase::Failed(_) => "Couldn't check for updates".into(),
     }
 }
 
@@ -833,7 +834,6 @@ fn about_settings_cards(
     updates: Arc<UpdateController>,
 ) -> Vec<Element> {
     let version = current_version().to_string();
-    let status = update_status_label(&update_phase);
     let updates_for_check = updates.clone();
     let notify_for_check = notify_on_update;
 
@@ -851,7 +851,7 @@ fn about_settings_cards(
                         .bold()
                         .grid_column(0)
                         .vertical_alignment(VerticalAlignment::Center),
-                    border(text_block(format!("v{version}")).font_size(13.0).bold())
+                    border(text_block(version.clone()).font_size(13.0).bold())
                         .padding(Thickness {
                             left: 10.0,
                             top: 4.0,
@@ -983,36 +983,22 @@ fn about_settings_cards(
         .spacing(4.0)
         .into()
     } else {
-        about_action_card(
+        settings_action_card(
+            update_status_label(update_phase),
             "Check for updates",
-            "Look for the latest release on GitHub",
-            AboutCardIcon::Glyph("↻"),
             move || {
                 updates_for_check.check_async(false, notify_for_check);
             },
             "about-check-now",
             hovered_card_id,
             set_hovered_card_id.clone(),
+            None,
         )
+        .with_key("about-check-now")
     };
 
-    let updates_card = about_section_with_header(
-        grid((
-            text_block("Updates")
-                .font_size(18.0)
-                .bold()
-                .grid_column(0)
-                .vertical_alignment(VerticalAlignment::Center),
-            text_block(status)
-                .font_size(14.0)
-                .foreground(ThemeRef::SecondaryText)
-                .grid_column(1)
-                .horizontal_alignment(HorizontalAlignment::Right)
-                .vertical_alignment(VerticalAlignment::Center),
-        ))
-        .columns([GridLength::Star(1.0), GridLength::Auto])
-        .rows([GridLength::Auto])
-        .horizontal_alignment(HorizontalAlignment::Stretch),
+    let updates_card = about_section(
+        "Updates",
         vstack((
             update_actions,
             update_settings_separator,

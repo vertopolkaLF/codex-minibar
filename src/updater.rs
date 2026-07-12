@@ -72,7 +72,7 @@ pub fn show_post_update_success_if_needed() {
     match take_post_update_success_marker() {
         Ok(Some(version)) => notifications::show(
             "Update complete",
-            &format!("Codex Minibar was updated to v{version} and is running again."),
+            &format!("Codex Minibar was updated to {version} and is running again."),
         ),
         Ok(None) => {}
         Err(error) => eprintln!("failed to read post-update marker: {error:#}"),
@@ -325,8 +325,16 @@ fn check_for_update() -> Result<Option<AvailableUpdate>> {
 }
 
 fn parse_release_version(tag: &str) -> Result<Version> {
-    let trimmed = tag.trim().trim_start_matches('v').trim_start_matches('V');
-    Version::parse(trimmed).with_context(|| format!("parse release tag {tag:?}"))
+    let trimmed = tag.trim();
+    // Accept "v1.2.3", "V1.2.3", "v.1.2.3", "V.1.2.3", and bare "1.2.3".
+    let without_prefix = trimmed
+        .strip_prefix("v.")
+        .or_else(|| trimmed.strip_prefix("V."))
+        .or_else(|| trimmed.strip_prefix('v'))
+        .or_else(|| trimmed.strip_prefix('V'))
+        .unwrap_or(trimmed)
+        .trim_start_matches('.');
+    Version::parse(without_prefix).with_context(|| format!("parse release tag {tag:?}"))
 }
 
 fn github_get(url: &str) -> Result<GhRelease> {
@@ -577,8 +585,24 @@ mod tests {
             Version::new(1, 2, 3)
         );
         assert_eq!(
+            parse_release_version("V1.2.3").unwrap(),
+            Version::new(1, 2, 3)
+        );
+        assert_eq!(
+            parse_release_version("v.1.2.3").unwrap(),
+            Version::new(1, 2, 3)
+        );
+        assert_eq!(
+            parse_release_version("V.0.1.0").unwrap(),
+            Version::new(0, 1, 0)
+        );
+        assert_eq!(
             parse_release_version("1.2.3").unwrap(),
             Version::new(1, 2, 3)
+        );
+        assert_eq!(
+            parse_release_version("  v.2.0.0  ").unwrap(),
+            Version::new(2, 0, 0)
         );
     }
 }

@@ -450,7 +450,7 @@ mod platform {
 
     fn make_menu(update_available: bool) -> Result<Menu> {
         let header = IconMenuItem::new(
-            format!("Codex Minibar - v{}", env!("CARGO_PKG_VERSION")),
+            format!("Codex Minibar - {}", env!("CARGO_PKG_VERSION")),
             false,
             None,
             None,

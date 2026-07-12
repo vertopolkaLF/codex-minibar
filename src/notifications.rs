@@ -278,7 +278,7 @@ mod windows_impl {
     }
 
     pub(super) fn show_update_available(version: &str, release_url: &str) -> Result<()> {
-        let body = format!("Codex Minibar v{version} is ready to install.");
+        let body = format!("Codex Minibar {version} is ready to install.");
         let actions = [
             ("Update Now", "protocol", super::TOAST_PROTOCOL_UPDATE),
             ("What's New", "protocol", release_url),

@@ -48,9 +48,44 @@ VIAddVersionKey "LegalCopyright" "Copyright (C) {{PUBLISHER}}"
 {{INIT_REG_VIEW}}
 
 !macro KillRunningAppBody
-  ; Ignore exit code — the process may not be running.
-  ClearErrors
-  ExecWait 'taskkill /F /IM "codex-minibar.exe" /T' $0
+  ; Kill via Win32 APIs only — no cmd/taskkill/powershell console flash.
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+
+  ; TH32CS_SNAPPROCESS = 2. NSIS installer is 32-bit → PROCESSENTRY32W is 556 bytes.
+  System::Call 'kernel32::CreateToolhelp32Snapshot(i 2, i 0) i .r0'
+  ${If} $0 <> -1
+    System::Alloc 556
+    Pop $1
+    System::Call '*$1(i 556)'
+    System::Call 'kernel32::Process32FirstW(i r0, i r1) i .r2'
+    ${While} $2 <> 0
+      ; th32ProcessID -> $3, szExeFile -> $4
+      System::Call '*$1(i,i,i.r3,i,i,i,i,i,i,&w260.r4)'
+      ${If} $4 == "codex-minibar.exe"
+        ; PROCESS_TERMINATE = 0x0001
+        System::Call 'kernel32::OpenProcess(i 0x0001, i 0, i r3) i .r5'
+        ${If} $5 <> 0
+          System::Call 'kernel32::TerminateProcess(i r5, i 0)'
+          System::Call 'kernel32::CloseHandle(i r5)'
+        ${EndIf}
+      ${EndIf}
+      System::Call 'kernel32::Process32NextW(i r0, i r1) i .r2'
+    ${EndWhile}
+    System::Free $1
+    System::Call 'kernel32::CloseHandle(i r0)'
+  ${EndIf}
+
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
   Sleep 500
 !macroend
 

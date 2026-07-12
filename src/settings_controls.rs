@@ -493,7 +493,7 @@ pub(crate) fn update_available_nav_card(
 ) -> Element {
     border(
         vstack((
-            text_block(format!("v{} available!", version.as_ref()))
+            text_block(format!("{} available!", version.as_ref()))
                 .font_size(13.0)
                 .horizontal_alignment(HorizontalAlignment::Center),
             update_accent_button("Update", on_click)
