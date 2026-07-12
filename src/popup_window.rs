@@ -11,7 +11,7 @@ use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
 use windows_reactor::*;
 
 use crate::{
-    limits::{LimitWindow, RateLimits},
+    limits::{LimitWindow, PaceTip, RateLimits},
     notifications,
     notifications::LimitNotificationTracker,
     popup,
@@ -954,8 +954,8 @@ fn icon_button(glyph: &str, tip: &str, font_size: f64, on_click: impl IntoUnitCa
         .on_click(on_click)
 }
 
-/// Thin pill progress track with a rounded fill (no thumb).
-fn rounded_progress(value: f64, fill: ThemeRef) -> Element {
+/// Thin pill progress track with a rounded fill and optional pace marker.
+fn rounded_progress(value: f64, fill: ThemeRef, pace: Option<PaceTip>) -> Element {
     const HEIGHT: f64 = 6.0;
     let radius = HEIGHT / 2.0;
     let filled = value.clamp(0.0, 100.0);
@@ -967,17 +967,30 @@ fn rounded_progress(value: f64, fill: ThemeRef) -> Element {
         (filled, 100.0 - filled)
     };
 
-    border(
-        grid((border(Element::Empty)
-            .background(fill)
-            .corner_radius(radius)
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .vertical_alignment(VerticalAlignment::Stretch)
-            .grid_column(0),))
-        .columns([GridLength::Star(fill_star), GridLength::Star(rest_star)])
-        .rows([GridLength::Star(1.0)])
+    let fill_layer = grid((border(Element::Empty)
+        .background(fill)
+        .corner_radius(radius)
         .horizontal_alignment(HorizontalAlignment::Stretch)
-        .vertical_alignment(VerticalAlignment::Stretch),
+        .vertical_alignment(VerticalAlignment::Stretch)
+        .grid_column(0),))
+    .columns([GridLength::Star(fill_star), GridLength::Star(rest_star)])
+    .rows([GridLength::Star(1.0)])
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .vertical_alignment(VerticalAlignment::Stretch)
+    .grid_column(0)
+    .grid_row(0);
+
+    let mut layers: Vec<Element> = vec![fill_layer.into()];
+    if let Some(pace) = pace {
+        layers.push(pace_marker_layer(pace));
+    }
+
+    border(
+        grid(layers)
+            .columns([GridLength::Star(1.0)])
+            .rows([GridLength::Star(1.0)])
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .vertical_alignment(VerticalAlignment::Stretch),
     )
     .background(Color {
         a: 70,
@@ -991,6 +1004,44 @@ fn rounded_progress(value: f64, fill: ThemeRef) -> Element {
     .into()
 }
 
+/// Vertical pace tick (`#0003`) so expected burn rate is easy to spot on the bar.
+fn pace_marker_layer(pace: PaceTip) -> Element {
+    const LINE_WIDTH: f64 = 1.0;
+    // CSS `#0003` → rgba(0, 0, 0, 0x33/255).
+    const PACE_LINE: Color = Color {
+        a: 0x33,
+        r: 0,
+        g: 0,
+        b: 0,
+    };
+    let percent = pace.percent.clamp(0.0, 100.0);
+    let (left_star, right_star) = if percent <= 0.0 {
+        (0.0001, 100.0)
+    } else if percent >= 100.0 {
+        (100.0, 0.0001)
+    } else {
+        (percent, 100.0 - percent)
+    };
+
+    grid((border(Element::Empty)
+        .width(LINE_WIDTH)
+        .background(PACE_LINE)
+        .horizontal_alignment(HorizontalAlignment::Left)
+        .vertical_alignment(VerticalAlignment::Stretch)
+        .grid_column(1),))
+    .columns([
+        GridLength::Star(left_star),
+        GridLength::Auto,
+        GridLength::Star(right_star),
+    ])
+    .rows([GridLength::Star(1.0)])
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .vertical_alignment(VerticalAlignment::Stretch)
+    .grid_column(0)
+    .grid_row(0)
+    .into()
+}
+
 fn limit_card(
     title: &str,
     window: &LimitWindow,
@@ -998,8 +1049,8 @@ fn limit_card(
     disabled: bool,
 ) -> Element {
     let accent = ThemeRef::SystemAttention;
-    let (remaining_label, progress, show_reset) = if disabled {
-        ("Disabled".into(), 100.0, false)
+    let (remaining_label, progress, show_reset, pace) = if disabled {
+        ("Disabled".into(), 100.0, false, None)
     } else {
         let remaining = window.remaining_percent();
         let percentage = if show_used_percentage {
@@ -1011,7 +1062,8 @@ fn limit_card(
         let label = percentage
             .map(|value| format!("{value}% {suffix}"))
             .unwrap_or_else(|| "Unavailable".into());
-        (label, f64::from(percentage.unwrap_or(0)), true)
+        let pace = window.pace_tip(show_used_percentage, Utc::now());
+        (label, f64::from(percentage.unwrap_or(0)), true, pace)
     };
     let reset = format_reset_in(window.resets_at);
 
@@ -1053,7 +1105,7 @@ fn limit_card(
                 .rows([GridLength::Auto])
                 .horizontal_alignment(HorizontalAlignment::Stretch)
                 .vertical_alignment(VerticalAlignment::Center),
-            rounded_progress(progress, accent),
+            rounded_progress(progress, accent, pace),
             footer,
         ))
         .spacing(8.0),

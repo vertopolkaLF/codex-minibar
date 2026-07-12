@@ -11,6 +11,13 @@ pub struct LimitWindow {
     pub duration_minutes: Option<u32>,
 }
 
+/// Pace tip on a usage progress bar (even-burn marker position).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PaceTip {
+    /// Marker position on the bar in the same units as the fill (used or remaining).
+    pub percent: f64,
+}
+
 impl LimitWindow {
     pub fn remaining_percent(&self) -> Option<u8> {
         self.used_percent
@@ -29,6 +36,41 @@ impl LimitWindow {
         self.resets_at
             .map(|reset| (reset - now).num_minutes() > i64::from(SHORT_WINDOW_MAX_MINUTES))
             .unwrap_or(false)
+    }
+
+    /// Expected used % for an even burn across the current window.
+    ///
+    /// With 1h left in a 5h window this is 80%; when the bar shows remaining,
+    /// the tip is mirrored to 20%.
+    pub fn expected_used_percent(&self, now: DateTime<Utc>) -> Option<f64> {
+        let duration_minutes = self.duration_minutes.filter(|&minutes| minutes > 0)?;
+        let resets_at = self.resets_at?;
+        let duration_secs = f64::from(duration_minutes) * 60.0;
+        let time_until_reset = (resets_at - now).num_milliseconds() as f64 / 1000.0;
+        if time_until_reset <= 0.0 || time_until_reset > duration_secs {
+            return None;
+        }
+        let elapsed = (duration_secs - time_until_reset).clamp(0.0, duration_secs);
+        Some(((elapsed / duration_secs) * 100.0).clamp(0.0, 100.0))
+    }
+
+    /// Progress-bar pace tip for session and weekly bars.
+    pub fn pace_tip(&self, show_used: bool, now: DateTime<Utc>) -> Option<PaceTip> {
+        let expected_used = self.expected_used_percent(now)?;
+        // Hide until ~3% of the window has elapsed (too noisy at the start).
+        if expected_used < 3.0 {
+            return None;
+        }
+        // Need a real usage sample; otherwise the bar itself is empty/unavailable.
+        self.used_percent?;
+        let percent = if show_used {
+            expected_used
+        } else {
+            100.0 - expected_used
+        };
+        Some(PaceTip {
+            percent: percent.clamp(0.0, 100.0),
+        })
     }
 }
 
@@ -74,4 +116,54 @@ pub struct Credits {
     pub has_credits: bool,
     pub unlimited: bool,
     pub balance: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn window_with_hour_left(used: u8) -> (LimitWindow, DateTime<Utc>) {
+        let now = Utc.with_ymd_and_hms(2026, 7, 12, 15, 0, 0).unwrap();
+        let window = LimitWindow {
+            used_percent: Some(used),
+            resets_at: Some(now + chrono::Duration::hours(1)),
+            duration_minutes: Some(300),
+        };
+        (window, now)
+    }
+
+    #[test]
+    fn one_hour_left_of_five_is_twenty_percent_remaining_pace() {
+        let (window, now) = window_with_hour_left(40);
+        assert!((window.expected_used_percent(now).unwrap() - 80.0).abs() < 0.01);
+        let tip = window.pace_tip(false, now).unwrap();
+        assert!((tip.percent - 20.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn pace_tip_uses_expected_used_when_showing_used() {
+        let (window, now) = window_with_hour_left(40);
+        let tip = window.pace_tip(true, now).unwrap();
+        assert!((tip.percent - 80.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn pace_tip_still_shown_when_on_track() {
+        let (window, now) = window_with_hour_left(80);
+        let tip = window.pace_tip(false, now).unwrap();
+        assert!((tip.percent - 20.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn weekly_bar_also_gets_pace_tip() {
+        let now = Utc.with_ymd_and_hms(2026, 7, 12, 15, 0, 0).unwrap();
+        let weekly = LimitWindow {
+            used_percent: Some(30),
+            resets_at: Some(now + chrono::Duration::days(3)),
+            duration_minutes: Some(10_080),
+        };
+        let tip = weekly.pace_tip(false, now).unwrap();
+        assert!((tip.percent - (100.0 - weekly.expected_used_percent(now).unwrap())).abs() < 0.01);
+    }
 }
