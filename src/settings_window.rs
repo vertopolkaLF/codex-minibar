@@ -6,8 +6,9 @@
 use crate::notifications;
 use crate::settings::{LimitValue, Settings, TrayPresentation, TraySource, TrayWidget};
 use crate::settings_controls::{
-    settings_action_card, settings_info_card, settings_slider_content, settings_toggle_card,
-    settings_toggle_card_with_description, settings_toggle_expander, update_accent_button,
+    UPDATE_SYMBOL, settings_action_card, settings_info_card, settings_slider_content,
+    settings_toggle_card, settings_toggle_card_with_description, settings_toggle_expander,
+    update_available_nav_card,
 };
 use crate::theme::CONTROL_FAST_ANIMATION;
 use crate::updater::{
@@ -282,16 +283,18 @@ pub fn render(
     cx.use_effect((), move || {
         let updates = updates_for_poll.clone();
         let set_update_phase = set_update_phase.clone();
-        std::thread::spawn(move || loop {
-            set_update_phase.call(updates.snapshot());
-            std::thread::sleep(Duration::from_millis(500));
+        std::thread::spawn(move || {
+            loop {
+                set_update_phase.call(updates.snapshot());
+                std::thread::sleep(Duration::from_millis(500));
+            }
         });
     });
     let (selected, set_selected) = cx.use_state(Tab::default());
     let (rendered_tab, set_rendered_tab) = cx.use_async_state(Tab::default());
     let (page_visible, set_page_visible) = cx.use_async_state(true);
 
-    let navigation = NavigationView::new(
+    let mut navigation = NavigationView::new(
         [
             NavViewItem::new("General")
                 .tag("general")
@@ -338,6 +341,26 @@ pub fn render(
     .width(220.0)
     .horizontal_alignment(HorizontalAlignment::Left)
     .vertical_alignment(VerticalAlignment::Stretch);
+    if let UpdatePhase::Available(update) = &update_phase {
+        let version = update.version.clone();
+        navigation = navigation.pane_footer(
+            border(update_available_nav_card(version, || {
+                if let Err(error) = crate::updater::apply_pending_update() {
+                    eprintln!("failed to apply update: {error:#}");
+                    notifications::show("Update failed", &format!("{error:#}"));
+                }
+            }))
+            // L/R inset is ours; PaneFooter already reserves bottom chrome,
+            // so keep bottom padding at 0 or the card floats too high off the edge.
+            .padding(Thickness {
+                left: 12.0,
+                top: 0.0,
+                right: 12.0,
+                bottom: 2.0,
+            })
+            .background(Color::transparent()),
+        );
+    }
 
     let (start_at_login, set_start_at_login) = cx.use_state(settings.start_at_login);
     let (automatic_activation, set_automatic_activation) =
@@ -347,8 +370,7 @@ pub fn render(
     let (hide_plan_credits, set_hide_plan_credits) = cx.use_state(settings.hide_plan_credits);
     let (activation_failure, set_activation_failure) =
         cx.use_state(settings.notifications.activation_failure);
-    let (limits_reset, set_limits_reset) =
-        cx.use_state(settings.notifications.limits_changed);
+    let (limits_reset, set_limits_reset) = cx.use_state(settings.notifications.limits_changed);
     let (low_usage_enabled, set_low_usage_enabled) =
         cx.use_state(settings.notifications.low_usage_enabled);
     let (low_usage_threshold, set_low_usage_threshold) =
@@ -442,28 +464,12 @@ pub fn render(
         bottom: 0.0,
     })
     .vertical_alignment(VerticalAlignment::Center);
-    let mut title_bar = TitleBar::new("Codex Minibar Settings")
+    let title_bar = TitleBar::new("Codex Minibar Settings")
         .content(title_bar_icon)
         .back_button_visible(false)
         .pane_toggle_button_visible(false)
         // Tall caption buttons so min/max/close fill the TitleBar height.
         .tall(true);
-    if matches!(update_phase, UpdatePhase::Available(_)) {
-        title_bar = title_bar.footer(
-            update_accent_button("Update", || {
-                if let Err(error) = crate::updater::apply_pending_update() {
-                    eprintln!("failed to apply update: {error:#}");
-                    notifications::show("Update failed", &format!("{error:#}"));
-                }
-            })
-                .margin(Thickness {
-                    left: 0.0,
-                    top: 0.0,
-                    right: 12.0,
-                    bottom: 0.0,
-                }),
-        );
-    }
     let shell = grid((navigation.grid_column(0), page.grid_column(1)))
         .columns([GridLength::Pixel(220.0), GridLength::Star(1.0)])
         .rows([GridLength::Star(1.0)])
@@ -755,16 +761,13 @@ fn tab_content(
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .with_key(format!("{}-cards-{row_count}", tab.tag()));
 
-    grid((
-        text_block(title).font_size(28.0).bold().grid_row(0),
-        cards,
-    ))
-    .columns([GridLength::Star(1.0)])
-    .rows([GridLength::Auto, GridLength::Auto])
-    .row_spacing(10.0)
-    .horizontal_alignment(HorizontalAlignment::Stretch)
-    .vertical_alignment(VerticalAlignment::Top)
-    .into()
+    grid((text_block(title).font_size(28.0).bold().grid_row(0), cards))
+        .columns([GridLength::Star(1.0)])
+        .rows([GridLength::Auto, GridLength::Auto])
+        .row_spacing(10.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Top)
+        .into()
 }
 
 fn update_status_label(phase: &UpdatePhase) -> String {
@@ -797,10 +800,8 @@ fn about_settings_cards(
     let notify_for_check = notify_on_update;
 
     let mut cards = vec![
-        settings_info_card("Application", "Codex Minibar")
-            .with_key("about-app-name"),
-        settings_info_card("Version", format!("v{version}"))
-            .with_key("about-version"),
+        settings_info_card("Application", "Codex Minibar").with_key("about-app-name"),
+        settings_info_card("Version", format!("v{version}")).with_key("about-version"),
         settings_info_card(
             "Description",
             "A lightweight Windows tray companion for Codex rate limits.",
@@ -900,7 +901,7 @@ fn about_settings_cards(
                 "about-update-apply",
                 hovered_card_id,
                 set_hovered_card_id.clone(),
-                Some(Symbol::Download),
+                Some(UPDATE_SYMBOL),
             )
             .with_key("about-update-apply")
             .into(),
@@ -936,11 +937,8 @@ fn tray_settings_cards(
     let mut cards = Vec::new();
     if widgets.is_empty() {
         cards.push(
-            settings_info_card(
-                "Tray icon",
-                "App icon (add a widget to replace it)",
-            )
-            .with_key("tray-empty"),
+            settings_info_card("Tray icon", "App icon (add a widget to replace it)")
+                .with_key("tray-empty"),
         );
     }
     for (index, widget) in widgets.iter().cloned().enumerate() {
@@ -973,7 +971,10 @@ fn tray_settings_cards(
         let right_tx = settings_tx.clone();
 
         let mut fields: Vec<Element> = vec![
-            text_block(format!("Tray widget {}", index + 1)).font_size(16.0).bold().into(),
+            text_block(format!("Tray widget {}", index + 1))
+                .font_size(16.0)
+                .bold()
+                .into(),
             ComboBox::new(source_items)
                 .header("Information")
                 .selected_index(source_index)
@@ -996,8 +997,9 @@ fn tray_settings_cards(
                 .with_key(format!("tray-appearance-{index}-{source_index}"))
                 .on_selection_changed(move |choice: i32| {
                     let mut next = widgets_for_presentation.clone();
-                    if let Some((_, presentation)) = presentation_options(&widget_for_presentation.source)
-                        .get(choice.max(0) as usize)
+                    if let Some((_, presentation)) =
+                        presentation_options(&widget_for_presentation.source)
+                            .get(choice.max(0) as usize)
                     {
                         next[index].presentation = presentation.clone();
                         persist_tray_widgets(
@@ -1013,10 +1015,18 @@ fn tray_settings_cards(
             fields.push(
                 ComboBox::new(["Remaining", "Used"])
                     .header("Limit value")
-                    .selected_index(if widget.limit_value == LimitValue::Remaining { 0 } else { 1 })
+                    .selected_index(if widget.limit_value == LimitValue::Remaining {
+                        0
+                    } else {
+                        1
+                    })
                     .on_selection_changed(move |choice| {
                         let mut next = widgets_for_value.clone();
-                        next[index].limit_value = if choice == 1 { LimitValue::Used } else { LimitValue::Remaining };
+                        next[index].limit_value = if choice == 1 {
+                            LimitValue::Used
+                        } else {
+                            LimitValue::Remaining
+                        };
                         persist_tray_widgets(value_setter.clone(), value_tx.clone(), next);
                     })
                     .into(),
@@ -1027,7 +1037,9 @@ fn tray_settings_cards(
                 Button::new("Move left")
                     .enabled(index > 0)
                     .on_click(move || {
-                        if index == 0 { return; }
+                        if index == 0 {
+                            return;
+                        }
                         let mut next = widgets_for_left.clone();
                         next.swap(index, index - 1);
                         persist_tray_widgets(left_setter.clone(), left_tx.clone(), next);
@@ -1035,7 +1047,9 @@ fn tray_settings_cards(
                 Button::new("Move right")
                     .enabled(index + 1 < widgets_for_right.len())
                     .on_click(move || {
-                        if index + 1 >= widgets_for_right.len() { return; }
+                        if index + 1 >= widgets_for_right.len() {
+                            return;
+                        }
                         let mut next = widgets_for_right.clone();
                         next.swap(index, index + 1);
                         persist_tray_widgets(right_setter.clone(), right_tx.clone(), next);

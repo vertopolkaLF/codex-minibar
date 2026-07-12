@@ -472,15 +472,48 @@ pub(crate) fn settings_info_card(label: impl Into<String>, value: impl Into<Stri
     .into()
 }
 
-/// Accent button with the standard download glyph used for update actions.
+/// Segoe Fluent Icons SyncBadge12 (`\u{EDAB}`) for update actions.
+pub(crate) const UPDATE_SYMBOL: Symbol = Symbol(0xEDAB);
+
+/// Accent button with the SyncBadge12 glyph used for update actions.
 pub(crate) fn update_accent_button(
     label: impl Into<String>,
     on_click: impl IntoUnitCallback,
 ) -> Button {
     Button::new(label)
-        .icon(Symbol::Download)
+        .icon(UPDATE_SYMBOL)
         .accent()
         .on_click(on_click)
+}
+
+/// Compact nav-pane card: version label stacked above the update action.
+pub(crate) fn update_available_nav_card(
+    version: impl AsRef<str>,
+    on_click: impl IntoUnitCallback,
+) -> Element {
+    border(
+        vstack((
+            text_block(format!("v{} available!", version.as_ref()))
+                .font_size(13.0)
+                .horizontal_alignment(HorizontalAlignment::Center),
+            update_accent_button("Update", on_click)
+                .horizontal_alignment(HorizontalAlignment::Stretch),
+        ))
+        .spacing(10.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch),
+    )
+    .padding(Thickness {
+        left: 12.0,
+        top: 12.0,
+        right: 12.0,
+        bottom: 12.0,
+    })
+    .background(ThemeRef::CardBackground)
+    .corner_radius(CARD_RADIUS)
+    .border_thickness(Thickness::uniform(1.0))
+    .border_brush(ThemeRef::CardStroke)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .into()
 }
 
 /// Action card with trailing button + WinUI-timed hover.

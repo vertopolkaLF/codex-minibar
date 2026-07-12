@@ -273,13 +273,10 @@ fn monitor_dpi(monitor: HMONITOR) -> u32 {
 }
 
 /// Client height in DIP for the current popup contents.
-pub fn height_for(hide_plan_credits: bool, error: Option<&str>, update_available: bool) -> i32 {
+pub fn height_for(hide_plan_credits: bool, error: Option<&str>) -> i32 {
     let mut blocks = vec![LIMIT_CARD_HEIGHT, LIMIT_CARD_HEIGHT];
     if !hide_plan_credits {
         blocks.push(META_ROW_HEIGHT);
-    }
-    if update_available {
-        blocks.push(44);
     }
     if let Some(message) = error {
         blocks.insert(0, info_bar_height(message));

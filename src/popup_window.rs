@@ -204,18 +204,26 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         );
     }
 
-    if let Some(version) = &ui.update_version {
-        body.push(
-            update_accent_button(format!("Update to v{version}"), || {
-                if let Err(error) = crate::updater::apply_pending_update() {
-                    eprintln!("failed to apply update: {error:#}");
-                    notifications::show("Update failed", &format!("{error:#}"));
-                }
-            })
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .into(),
-        );
-    }
+    let quit_or_update = if ui.update_version.is_some() {
+        update_accent_button("Update", || {
+            if let Err(error) = crate::updater::apply_pending_update() {
+                eprintln!("failed to apply update: {error:#}");
+                notifications::show("Update failed", &format!("{error:#}"));
+            }
+        })
+        .height(ICON_BUTTON_SIZE)
+        .min_height(ICON_BUTTON_SIZE)
+        .max_height(ICON_BUTTON_SIZE)
+        .padding(Thickness {
+            left: 12.0,
+            top: 0.0,
+            right: 12.0,
+            bottom: 0.0,
+        })
+        .vertical_alignment(VerticalAlignment::Center)
+    } else {
+        icon_button("\u{E7E8}", "Quit", 16.0, quit)
+    };
 
     let footer = border(
         grid((
@@ -244,7 +252,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                         }
                     }
                 }),
-                icon_button("\u{E7E8}", "Quit", 16.0, quit),
+                quit_or_update,
             ))
             .spacing(4.0)
             .horizontal_alignment(HorizontalAlignment::Right)
