@@ -26,7 +26,13 @@ use windows_reactor::*;
 fn run() -> Result<()> {
     notifications::initialize();
     let path = Settings::default_path()?;
-    let settings = Settings::load_or_create(&path)?;
+    let mut settings = Settings::load_or_create(&path)?;
+    if let Err(error) = settings.reconcile_startup_from_registry(&path) {
+        eprintln!("failed to reconcile startup setting: {error:#}");
+    }
+    if let Err(error) = settings.apply_runtime_effects() {
+        eprintln!("failed to apply startup registration: {error:#}");
+    }
     let executable = first_available(settings.codex_path.as_deref());
 
     let activation_path = path.with_file_name("activation.toml");

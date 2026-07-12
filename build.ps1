@@ -306,14 +306,14 @@ FunctionEnd
     $nsiPath = Join-Path $WorkDir "installer-$ArchName.nsi"
     $rendered = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8
     $replacements = [ordered]@{
-        "{{PRODUCT_NAME}}" = $ProductName
-        "{{VERSION}}"      = $Version
-        "{{PUBLISHER}}"    = $Publisher
-        "{{ARCH}}"         = $ArchName
-        "{{OUT_FILE}}"     = ($OutFile -replace '\\', '/')
-        "{{SOURCE_DIR}}"   = ($PackageDir -replace '\\', '/')
-        "{{ICON_FILE}}"    = ($iconFile -replace '\\', '/')
-        "{{INSTALL_DIR}}"  = $installDir
+        "{{PRODUCT_NAME}}"  = $ProductName
+        "{{VERSION}}"       = $Version
+        "{{PUBLISHER}}"     = $Publisher
+        "{{ARCH}}"          = $ArchName
+        "{{OUT_FILE}}"      = ($OutFile -replace '\\', '/')
+        "{{SOURCE_DIR}}"    = ($PackageDir -replace '\\', '/')
+        "{{ICON_FILE}}"     = ($iconFile -replace '\\', '/')
+        "{{INSTALL_DIR}}"   = $installDir
         "{{INIT_REG_VIEW}}" = $regViewOnInit
         "{{SET_REG_VIEW}}"  = $regView
     }

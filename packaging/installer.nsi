@@ -5,6 +5,7 @@ ManifestDPIAware true
 
 !include "MUI2.nsh"
 !include "x64.nsh"
+!include "LogicLib.nsh"
 
 Name "{{PRODUCT_NAME}}"
 BrandingText "{{PRODUCT_NAME}} {{VERSION}}"
@@ -27,11 +28,47 @@ VIAddVersionKey "LegalCopyright" "Copyright (C) {{PUBLISHER}}"
 
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
+
+; Finish page: both checkboxes checked by default (do not set *_NOTCHECKED).
+; Custom leave runs BEFORE MUI launches the app so the Run key exists first.
+; The app then reconciles start_at_login from that key (NSIS must not rewrite
+; UTF-8 settings.toml — Unicode FileWrite would corrupt it).
+!define MUI_FINISHPAGE_RUN "$INSTDIR\codex-minibar.exe"
+!define MUI_FINISHPAGE_RUN_TEXT "Launch Codex Minibar"
+!define MUI_FINISHPAGE_SHOWREADME ""
+!define MUI_FINISHPAGE_SHOWREADME_TEXT "Add to Startup"
+!define MUI_FINISHPAGE_SHOWREADME_FUNCTION StartupCheckboxNoop
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE FinishLeave
+!insertmacro MUI_PAGE_FINISH
+
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
 
 {{INIT_REG_VIEW}}
+
+Function StartupCheckboxNoop
+FunctionEnd
+
+; $R0 must be "true" or "false".
+Function SyncStartAtLogin
+  ${If} $R0 == "true"
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" \
+      "Codex Minibar" '"$INSTDIR\codex-minibar.exe"'
+  ${Else}
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Codex Minibar"
+  ${EndIf}
+FunctionEnd
+
+Function FinishLeave
+  ${NSD_GetState} $mui.FinishPage.ShowReadme $0
+  ${If} $0 == ${BST_CHECKED}
+    StrCpy $R0 "true"
+  ${Else}
+    StrCpy $R0 "false"
+  ${EndIf}
+  Call SyncStartAtLogin
+FunctionEnd
 
 Section "Install"
   {{SET_REG_VIEW}}
@@ -68,6 +105,7 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\{{PRODUCT_NAME}}\{{PRODUCT_NAME}}.lnk"
   RMDir "$SMPROGRAMS\{{PRODUCT_NAME}}"
 
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Codex Minibar"
   DeleteRegKey SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\{{PRODUCT_NAME}} {{ARCH}}"
 
   RMDir /r "$INSTDIR"

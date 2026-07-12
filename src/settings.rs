@@ -202,6 +202,68 @@ impl Settings {
     pub fn apply_runtime_effects(&self) -> Result<()> {
         apply_startup_registration(self.start_at_login)
     }
+
+    /// If the installer (or another tool) registered us in HKCU Run while
+    /// settings still say off, adopt that into settings before we apply them —
+    /// otherwise `apply_runtime_effects` would delete the Run value on launch.
+    pub fn reconcile_startup_from_registry(&mut self, path: &Path) -> Result<()> {
+        if self.start_at_login || !startup_registration_present()? {
+            return Ok(());
+        }
+        self.start_at_login = true;
+        self.save(path)
+    }
+}
+
+#[cfg(windows)]
+fn startup_registration_present() -> Result<bool> {
+    use windows_sys::Win32::{
+        Foundation::ERROR_SUCCESS,
+        System::Registry::{
+            HKEY, HKEY_CURRENT_USER, KEY_READ, RegCloseKey, RegGetValueW, RegOpenKeyExW, RRF_RT_REG_SZ,
+        },
+    };
+
+    let subkey: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let value_name: Vec<u16> = "Codex Minibar"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut key: HKEY = std::ptr::null_mut();
+    let status = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            0,
+            KEY_READ,
+            &mut key,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return Ok(false);
+    }
+    let mut data_size = 0u32;
+    let result = unsafe {
+        RegGetValueW(
+            key,
+            std::ptr::null(),
+            value_name.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut data_size,
+        )
+    };
+    unsafe { RegCloseKey(key) };
+    Ok(result == ERROR_SUCCESS)
+}
+
+#[cfg(not(windows))]
+fn startup_registration_present() -> Result<bool> {
+    Ok(false)
 }
 
 #[cfg(windows)]
