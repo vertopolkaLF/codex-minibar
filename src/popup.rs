@@ -36,15 +36,48 @@ use windows_sys::Win32::{
         },
         WindowsAndMessaging::{
             CS_DROPSHADOW, DispatchMessageW, FindWindowW, GCL_STYLE, GWL_EXSTYLE, GWL_STYLE,
-            GetClassLongPtrW, GetCursorPos, GetWindowLongW, GetWindowRect, HWND_TOPMOST, MSG,
-            PM_REMOVE, PeekMessageW, SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
-            SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetClassLongPtrW, SetWindowLongW,
-            SetWindowPos, TranslateMessage, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_LAYERED,
-            WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-            WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+            GetCursorPos, GetWindowLongW, GetWindowRect, HWND_TOPMOST, MSG, PM_REMOVE,
+            PeekMessageW, SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
+            SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowLongW, SetWindowPos,
+            TranslateMessage, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+            WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX,
+            WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
         },
     },
 };
+
+#[cfg(target_pointer_width = "64")]
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetClassLongPtrW, SetClassLongPtrW};
+
+#[cfg(target_pointer_width = "32")]
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    GetClassLongW as GetClassLongPtrW, SetClassLongW as SetClassLongPtrW,
+};
+
+/// `SetClassLongPtrW` is a macro to `SetClassLongW` on 32-bit; keep one call site.
+#[inline]
+unsafe fn set_class_long_ptr(hwnd: HWND, index: i32, value: isize) -> isize {
+    #[cfg(target_pointer_width = "64")]
+    unsafe {
+        SetClassLongPtrW(hwnd, index, value) as isize
+    }
+    #[cfg(target_pointer_width = "32")]
+    unsafe {
+        SetClassLongPtrW(hwnd, index, value as i32) as isize
+    }
+}
+
+#[inline]
+unsafe fn get_class_long_ptr(hwnd: HWND, index: i32) -> usize {
+    #[cfg(target_pointer_width = "64")]
+    unsafe {
+        GetClassLongPtrW(hwnd, index)
+    }
+    #[cfg(target_pointer_width = "32")]
+    unsafe {
+        GetClassLongPtrW(hwnd, index) as usize
+    }
+}
 
 const WINDOW_TITLE: &str = "Codex Minibar";
 const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
@@ -608,8 +641,8 @@ pub fn ensure_configured() -> Option<HWND> {
         // (bright fringes that eyes see and screenshots often miss).
         hide_from_taskbar(hwnd);
 
-        let class_style = GetClassLongPtrW(hwnd, GCL_STYLE) as u32;
-        SetClassLongPtrW(hwnd, GCL_STYLE, (class_style & !CS_DROPSHADOW) as isize);
+        let class_style = get_class_long_ptr(hwnd, GCL_STYLE) as u32;
+        set_class_long_ptr(hwnd, GCL_STYLE, (class_style & !CS_DROPSHADOW) as isize);
 
         apply_popup_chrome(hwnd);
     }
