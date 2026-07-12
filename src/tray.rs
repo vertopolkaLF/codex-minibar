@@ -15,10 +15,20 @@ use crate::{
 const ICON_SIZE: usize = 32;
 
 pub fn tooltip(limits: &RateLimits) -> String {
+    let five_hour = if limits.five_hour_disabled() {
+        "Disabled".to_string()
+    } else {
+        format_remaining(&limits.primary)
+    };
+    let five_hour_reset = if limits.five_hour_disabled() {
+        "—".to_string()
+    } else {
+        format_reset(limits.primary.resets_at)
+    };
     format!(
         "5h  |  {}  |  {}\n7d  |  {}  |  {}",
-        format_remaining(&limits.primary),
-        format_reset(limits.primary.resets_at),
+        five_hour,
+        five_hour_reset,
         format_remaining(&limits.secondary),
         format_reset(limits.secondary.resets_at),
     )
@@ -93,8 +103,29 @@ pub fn render_widget(widget: &TrayWidget, limits: &RateLimits) -> Vec<u8> {
     if !has_real_data(limits) {
         return app_icon_pixels().to_vec();
     }
-    let primary = percent(&limits.primary, widget.limit_value);
+    let five_hour_disabled = limits.five_hour_disabled();
+    let primary_window = limits.effective_primary();
+    let primary = percent(primary_window, widget.limit_value);
     let secondary = percent(&limits.secondary, widget.limit_value);
+    // When the 5h window is gone, primary-oriented widgets show weekly instead.
+    if five_hour_disabled
+        && matches!(widget.source, TraySource::Combined | TraySource::Primary)
+        && matches!(
+            widget.presentation,
+            TrayPresentation::StackedBars
+                | TrayPresentation::NestedRings
+                | TrayPresentation::StackedNumbers
+        )
+    {
+        return match widget.presentation {
+            TrayPresentation::StackedBars => render_bars(&[secondary]),
+            TrayPresentation::NestedRings => render_rings(&[secondary]),
+            _ => {
+                let text = secondary.map_or_else(|| "?".into(), |v| v.to_string());
+                render_text_icon(&text, icon_color(secondary))
+            }
+        };
+    }
     if matches!(widget.presentation, TrayPresentation::StackedBars) {
         return render_bars(&[primary, secondary]);
     }
@@ -113,10 +144,20 @@ pub fn render_widget(widget: &TrayWidget, limits: &RateLimits) -> Vec<u8> {
         TraySource::Combined => (format!("{}\n{}", primary.map_or_else(|| "?".into(), |v| v.to_string()), secondary.map_or_else(|| "?".into(), |v| v.to_string())), icon_color(primary)),
         TraySource::Primary => (primary.map_or_else(|| "?".into(), |v| v.to_string()), icon_color(primary)),
         TraySource::Secondary => (secondary.map_or_else(|| "?".into(), |v| v.to_string()), icon_color(secondary)),
-        TraySource::PrimaryReset => (stacked_reset_label(limits.primary.resets_at, matches!(widget.presentation, TrayPresentation::ResetCountdown)), [255, 255, 255]),
+        TraySource::PrimaryReset => (
+            stacked_reset_label(
+                primary_window.resets_at,
+                matches!(widget.presentation, TrayPresentation::ResetCountdown),
+            ),
+            [255, 255, 255],
+        ),
     };
+    render_text_icon(&text, rgb)
+}
+
+fn render_text_icon(text: &str, rgb: [u8; 3]) -> Vec<u8> {
     let Some(font) = system_font() else {
-        return render_fallback(&text, rgb);
+        return render_fallback(text, rgb);
     };
     let lines: Vec<_> = text.lines().collect();
     let two_lines = lines.len() > 1;
@@ -521,6 +562,47 @@ mod tests {
         let value = tooltip(&limits());
         assert!(value.contains("5h  |  73%"));
         assert!(value.contains("7d  |  39%"));
+    }
+
+    #[test]
+    fn tooltip_marks_disabled_five_hour_window() {
+        let limits = RateLimits {
+            primary: LimitWindow::default(),
+            secondary: LimitWindow {
+                used_percent: Some(40),
+                resets_at: Some(Utc.timestamp_opt(1_700_475_600, 0).unwrap()),
+                duration_minutes: Some(10_080),
+            },
+            sampled_at: Utc::now(),
+            ..RateLimits::default()
+        };
+        let value = tooltip(&limits);
+        assert!(value.contains("5h  |  Disabled  |  —"));
+        assert!(value.contains("7d  |  60%"));
+    }
+
+    #[test]
+    fn primary_tray_falls_back_to_weekly_when_five_hour_disabled() {
+        let limits = RateLimits {
+            primary: LimitWindow::default(),
+            secondary: LimitWindow {
+                used_percent: Some(40),
+                resets_at: None,
+                duration_minutes: Some(10_080),
+            },
+            sampled_at: Utc::now(),
+            ..RateLimits::default()
+        };
+        assert_eq!(limits.effective_primary().remaining_percent(), Some(60));
+        let widget = TrayWidget {
+            source: TraySource::Primary,
+            presentation: TrayPresentation::Number,
+            limit_value: LimitValue::Remaining,
+        };
+        let pixels = render_widget(&widget, &limits);
+        assert_eq!(pixels.len(), ICON_SIZE * ICON_SIZE * 4);
+        assert!(pixels.chunks_exact(4).any(|pixel| pixel[3] != 0));
+        assert_ne!(pixels, app_icon_pixels());
     }
 
     #[test]

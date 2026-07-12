@@ -185,8 +185,18 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let quit = move || std::process::exit(0);
 
     let mut body: Vec<Element> = vec![
-        limit_card("5h Session", &ui.limits.primary, ui.show_used_percentage),
-        limit_card("Weekly", &ui.limits.secondary, ui.show_used_percentage),
+        limit_card(
+            "5h Session",
+            &ui.limits.primary,
+            ui.show_used_percentage,
+            ui.limits.five_hour_disabled(),
+        ),
+        limit_card(
+            "Weekly",
+            &ui.limits.secondary,
+            ui.show_used_percentage,
+            false,
+        ),
     ];
 
     if !ui.hide_plan_credits {
@@ -981,20 +991,60 @@ fn rounded_progress(value: f64, fill: ThemeRef) -> Element {
     .into()
 }
 
-fn limit_card(title: &str, window: &LimitWindow, show_used_percentage: bool) -> Element {
-    let remaining = window.remaining_percent();
+fn limit_card(
+    title: &str,
+    window: &LimitWindow,
+    show_used_percentage: bool,
+    disabled: bool,
+) -> Element {
     let accent = ThemeRef::SystemAttention;
-    let percentage = if show_used_percentage {
-        window.used_percent
+    let (remaining_label, progress, show_reset) = if disabled {
+        ("Disabled".into(), 100.0, false)
     } else {
-        remaining
+        let remaining = window.remaining_percent();
+        let percentage = if show_used_percentage {
+            window.used_percent
+        } else {
+            remaining
+        };
+        let suffix = if show_used_percentage { "used" } else { "left" };
+        let label = percentage
+            .map(|value| format!("{value}% {suffix}"))
+            .unwrap_or_else(|| "Unavailable".into());
+        (label, f64::from(percentage.unwrap_or(0)), true)
     };
-    let suffix = if show_used_percentage { "used" } else { "left" };
-    let remaining_label = percentage
-        .map(|value| format!("{value}% {suffix}"))
-        .unwrap_or_else(|| "Unavailable".into());
-    let progress = f64::from(percentage.unwrap_or(0));
     let reset = format_reset_in(window.resets_at);
+
+    let footer: Element = if show_reset {
+        grid((
+            hstack((text_block(remaining_label)
+                .font_weight(600)
+                .foreground(accent.clone())
+                .vertical_alignment(VerticalAlignment::Center),))
+            .vertical_alignment(VerticalAlignment::Center),
+            hstack((
+                text_block("Resets in")
+                    .foreground(ThemeRef::TertiaryText)
+                    .vertical_alignment(VerticalAlignment::Center),
+                text_block(reset).vertical_alignment(VerticalAlignment::Center),
+            ))
+            .spacing(6.0)
+            .horizontal_alignment(HorizontalAlignment::Right)
+            .vertical_alignment(VerticalAlignment::Center),
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Auto])
+        .rows([GridLength::Auto])
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Center)
+        .into()
+    } else {
+        hstack((text_block(remaining_label)
+            .font_weight(600)
+            .foreground(accent.clone())
+            .vertical_alignment(VerticalAlignment::Center),))
+        .vertical_alignment(VerticalAlignment::Center)
+        .into()
+    };
 
     border(
         vstack((
@@ -1003,27 +1053,8 @@ fn limit_card(title: &str, window: &LimitWindow, show_used_percentage: bool) -> 
                 .rows([GridLength::Auto])
                 .horizontal_alignment(HorizontalAlignment::Stretch)
                 .vertical_alignment(VerticalAlignment::Center),
-            rounded_progress(progress, accent.clone()),
-            grid((
-                hstack((text_block(remaining_label)
-                    .font_weight(600)
-                    .foreground(accent)
-                    .vertical_alignment(VerticalAlignment::Center),))
-                .vertical_alignment(VerticalAlignment::Center),
-                hstack((
-                    text_block("Resets in")
-                        .foreground(ThemeRef::TertiaryText)
-                        .vertical_alignment(VerticalAlignment::Center),
-                    text_block(reset).vertical_alignment(VerticalAlignment::Center),
-                ))
-                .spacing(6.0)
-                .horizontal_alignment(HorizontalAlignment::Right)
-                .vertical_alignment(VerticalAlignment::Center),
-            ))
-            .columns([GridLength::Star(1.0), GridLength::Auto])
-            .rows([GridLength::Auto])
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .vertical_alignment(VerticalAlignment::Center),
+            rounded_progress(progress, accent),
+            footer,
         ))
         .spacing(8.0),
     )

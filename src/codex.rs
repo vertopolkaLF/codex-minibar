@@ -218,7 +218,8 @@ pub fn parse_rate_limits(
             .and_then(Value::as_str)
             .map(str::to_owned),
         credits: parse_credits(limits.get("credits")),
-    })
+    }
+    .normalized(sampled_at))
 }
 
 fn parse_window(value: Option<&Value>) -> LimitWindow {
@@ -333,6 +334,26 @@ mod tests {
         assert_eq!(parsed.primary.remaining_percent(), Some(73));
         assert_eq!(parsed.primary.duration_minutes, Some(300));
         assert_eq!(parsed.secondary, LimitWindow::default());
+        assert!(!parsed.five_hour_disabled());
+    }
+
+    #[test]
+    fn remaps_weekly_primary_when_five_hour_is_gone() {
+        let now = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
+        let value = json!({"result": {"rateLimits": {
+            "primary": {
+                "usedPercent": 14,
+                "resetsAt": 1_700_475_600,
+                "windowDurationMins": 10080
+            },
+            "secondary": null
+        }}});
+        let parsed = parse_rate_limits(&value, now).unwrap();
+        assert!(parsed.five_hour_disabled());
+        assert_eq!(parsed.primary, LimitWindow::default());
+        assert_eq!(parsed.secondary.used_percent, Some(14));
+        assert_eq!(parsed.secondary.duration_minutes, Some(10_080));
+        assert_eq!(parsed.effective_primary().used_percent, Some(14));
     }
 
     #[test]
