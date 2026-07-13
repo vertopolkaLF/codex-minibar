@@ -112,10 +112,7 @@ pub(crate) fn settings_toggle_card_with_description(
     let label_content: Element = match description {
         Some(description) => vstack((
             text_block(label).font_size(14.0).wrap(),
-            text_block(description)
-                .font_size(12.0)
-                .opacity(0.72)
-                .wrap(),
+            text_block(description).font_size(12.0).opacity(0.72).wrap(),
         ))
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .into(),

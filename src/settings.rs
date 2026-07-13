@@ -236,7 +236,8 @@ fn startup_registration_present() -> Result<bool> {
     use windows_sys::Win32::{
         Foundation::ERROR_SUCCESS,
         System::Registry::{
-            HKEY, HKEY_CURRENT_USER, KEY_READ, RegCloseKey, RegGetValueW, RegOpenKeyExW, RRF_RT_REG_SZ,
+            HKEY, HKEY_CURRENT_USER, KEY_READ, RRF_RT_REG_SZ, RegCloseKey, RegGetValueW,
+            RegOpenKeyExW,
         },
     };
 
@@ -249,15 +250,8 @@ fn startup_registration_present() -> Result<bool> {
         .chain(std::iter::once(0))
         .collect();
     let mut key: HKEY = std::ptr::null_mut();
-    let status = unsafe {
-        RegOpenKeyExW(
-            HKEY_CURRENT_USER,
-            subkey.as_ptr(),
-            0,
-            KEY_READ,
-            &mut key,
-        )
-    };
+    let status =
+        unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, subkey.as_ptr(), 0, KEY_READ, &mut key) };
     if status != ERROR_SUCCESS {
         return Ok(false);
     }
@@ -287,8 +281,8 @@ fn apply_startup_registration(enabled: bool) -> Result<()> {
     use windows_sys::Win32::{
         Foundation::ERROR_SUCCESS,
         System::Registry::{
-            HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
-            RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegSetValueExW,
+            HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
+            RegCreateKeyExW, RegDeleteValueW, RegSetValueExW,
         },
     };
 
@@ -314,15 +308,16 @@ fn apply_startup_registration(enabled: bool) -> Result<()> {
             std::ptr::null_mut(),
         )
     };
-    anyhow::ensure!(status == ERROR_SUCCESS, "open Windows startup registry key: {status}");
+    anyhow::ensure!(
+        status == ERROR_SUCCESS,
+        "open Windows startup registry key: {status}"
+    );
 
     let result = if enabled {
-        let executable = std::env::current_exe().context("resolve current executable for startup")?;
+        let executable =
+            std::env::current_exe().context("resolve current executable for startup")?;
         let command = format!("\"{}\"", executable.display());
-        let data: Vec<u16> = command
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
+        let data: Vec<u16> = command.encode_utf16().chain(std::iter::once(0)).collect();
         unsafe {
             RegSetValueExW(
                 key,
@@ -373,7 +368,9 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                         let Some(widget) = widget.as_table_mut() else {
                             continue;
                         };
-                        let metric = widget.remove("metric").and_then(|value| value.as_str().map(str::to_owned));
+                        let metric = widget
+                            .remove("metric")
+                            .and_then(|value| value.as_str().map(str::to_owned));
                         let (source, presentation) = match metric.as_deref() {
                             Some("primary_remaining") => ("primary", "number"),
                             Some("secondary_remaining") => ("secondary", "number"),
@@ -382,8 +379,14 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                             Some("combined") | _ => ("combined", "stacked_numbers"),
                         };
                         widget.insert("source".into(), toml::Value::String(source.into()));
-                        widget.insert("presentation".into(), toml::Value::String(presentation.into()));
-                        widget.insert("limit_value".into(), toml::Value::String("remaining".into()));
+                        widget.insert(
+                            "presentation".into(),
+                            toml::Value::String(presentation.into()),
+                        );
+                        widget.insert(
+                            "limit_value".into(),
+                            toml::Value::String("remaining".into()),
+                        );
                     }
                 }
                 root.insert("version".into(), toml::Value::Integer(2));

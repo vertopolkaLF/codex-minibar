@@ -101,14 +101,18 @@ fn desktop_app_locations_from_registry() -> Vec<PathBuf> {
     use windows_sys::Win32::{
         Foundation::ERROR_SUCCESS,
         System::Registry::{
-            HKEY, HKEY_CURRENT_USER, KEY_READ, RegCloseKey, RegEnumKeyExW, RegGetValueW,
-            RegOpenKeyExW, RRF_RT_REG_SZ,
+            HKEY, HKEY_CURRENT_USER, KEY_READ, RRF_RT_REG_SZ, RegCloseKey, RegEnumKeyExW,
+            RegGetValueW, RegOpenKeyExW,
         },
     };
 
-    const KEY: &str =
-        "Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Repository\\Packages";
-    let wide = |value: &str| value.encode_utf16().chain(std::iter::once(0)).collect::<Vec<_>>();
+    const KEY: &str = "Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Repository\\Packages";
+    let wide = |value: &str| {
+        value
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>()
+    };
     let mut key: HKEY = std::ptr::null_mut();
     if unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, wide(KEY).as_ptr(), 0, KEY_READ, &mut key) }
         != ERROR_SUCCESS
@@ -148,8 +152,15 @@ fn desktop_app_locations_from_registry() -> Vec<PathBuf> {
             .copied()
             .chain(std::iter::once(0))
             .collect::<Vec<_>>();
-        if unsafe { RegOpenKeyExW(key, package_name_wide.as_ptr(), 0, KEY_READ, &mut package_key) }
-            != ERROR_SUCCESS
+        if unsafe {
+            RegOpenKeyExW(
+                key,
+                package_name_wide.as_ptr(),
+                0,
+                KEY_READ,
+                &mut package_key,
+            )
+        } != ERROR_SUCCESS
         {
             continue;
         }
@@ -168,7 +179,10 @@ fn desktop_app_locations_from_registry() -> Vec<PathBuf> {
         };
         unsafe { RegCloseKey(package_key) };
         if status == ERROR_SUCCESS {
-            let len = root.iter().position(|&unit| unit == 0).unwrap_or(root.len());
+            let len = root
+                .iter()
+                .position(|&unit| unit == 0)
+                .unwrap_or(root.len());
             let source =
                 PathBuf::from(OsString::from_wide(&root[..len])).join("app/resources/codex.exe");
             if let Some(cached) = cache_desktop_cli(&source, &package_name.to_string_lossy()) {
@@ -189,9 +203,7 @@ fn cache_desktop_cli(source: &Path, package_name: &str) -> Option<PathBuf> {
         .join(package_name);
     let destination = directory.join("codex.exe");
     let source_len = std::fs::metadata(source).ok()?.len();
-    if std::fs::metadata(&destination)
-        .is_ok_and(|metadata| metadata.len() == source_len)
-    {
+    if std::fs::metadata(&destination).is_ok_and(|metadata| metadata.len() == source_len) {
         return Some(destination);
     }
 

@@ -214,22 +214,32 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     };
     let quit = move || std::process::exit(0);
 
-    let mut body: Vec<Element> = vec![
-        limit_card(
-            "5h Session",
-            &limits.primary,
-            ui.show_used_percentage,
-            ui.show_usage_pace,
-            limits.five_hour_disabled(),
-        ),
-        limit_card(
-            "Weekly",
+    let mut body: Vec<Element> = if limits.is_free_plan() {
+        vec![limit_card(
+            "Monthly",
             &limits.secondary,
             ui.show_used_percentage,
             ui.show_usage_pace,
             false,
-        ),
-    ];
+        )]
+    } else {
+        vec![
+            limit_card(
+                "5h Session",
+                &limits.primary,
+                ui.show_used_percentage,
+                ui.show_usage_pace,
+                limits.five_hour_disabled(),
+            ),
+            limit_card(
+                "Weekly",
+                &limits.secondary,
+                ui.show_used_percentage,
+                ui.show_usage_pace,
+                false,
+            ),
+        ]
+    };
 
     if limits.available_reset_count() > 0 {
         body.push(reset_credits_card(&limits));
@@ -519,8 +529,8 @@ fn settings_window(cx: &mut RenderCx, settings: Arc<Settings>) -> Element {
         right: 32.0,
         bottom: 32.0,
     })
-        .background(ThemeRef::LayerFill)
-        .corner_radius(12.0)
+    .background(ThemeRef::LayerFill)
+    .corner_radius(12.0)
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Stretch);
 
@@ -764,14 +774,7 @@ fn start_background_bridge(
                 }
                 *check_for_updates = settings.check_for_updates;
                 *notify_on_update = settings.notifications.update_available;
-                apply_settings(
-                    ui,
-                    set_ui,
-                    notification_settings,
-                    widgets,
-                    tray,
-                    settings,
-                );
+                apply_settings(ui, set_ui, notification_settings, widgets, tray, settings);
             }
         };
 
@@ -819,13 +822,7 @@ fn start_background_bridge(
                     &mut check_for_updates,
                     &mut notify_on_update,
                 );
-                drain_updates(
-                    &mut ui,
-                    &set_ui,
-                    &mut tray,
-                    &mut update_phase,
-                    &mut widgets,
-                );
+                drain_updates(&mut ui, &set_ui, &mut tray, &mut update_phase, &mut widgets);
                 if pump_tray_and_dismiss(
                     &tray,
                     &ui_dispatcher,
@@ -854,13 +851,7 @@ fn start_background_bridge(
                 &mut check_for_updates,
                 &mut notify_on_update,
             );
-            drain_updates(
-                &mut ui,
-                &set_ui,
-                &mut tray,
-                &mut update_phase,
-                &mut widgets,
-            );
+            drain_updates(&mut ui, &set_ui, &mut tray, &mut update_phase, &mut widgets);
             if pump_tray_and_dismiss(
                 &tray,
                 &ui_dispatcher,
@@ -979,9 +970,7 @@ fn pump_tray_and_dismiss(
                 let settings_tx = settings_tx.clone();
                 let updates = Arc::clone(&state.updates);
                 ui_dispatcher.dispatch(move || {
-                    if let Err(error) =
-                        crate::settings_window::open(settings_tx, updates)
-                    {
+                    if let Err(error) = crate::settings_window::open(settings_tx, updates) {
                         eprintln!("Could not open settings window: {error:?}");
                     }
                 });
@@ -1198,20 +1187,13 @@ fn limit_card(
         .into()
     };
 
-    border(
-        vstack((
-            header,
-            rounded_progress(progress, accent, pace),
-            footer,
-        ))
-        .spacing(8.0),
-    )
-    .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
-    .padding(Thickness::uniform(12.0))
-    .background(SURFACE_FILL)
-    .border_thickness(Thickness::uniform(1.0))
-    .border_brush(ThemeRef::CardStroke)
-    .into()
+    border(vstack((header, rounded_progress(progress, accent, pace), footer)).spacing(8.0))
+        .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+        .padding(Thickness::uniform(12.0))
+        .background(SURFACE_FILL)
+        .border_thickness(Thickness::uniform(1.0))
+        .border_brush(ThemeRef::CardStroke)
+        .into()
 }
 
 fn meta_row(limits: &RateLimits) -> Element {

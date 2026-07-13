@@ -394,70 +394,70 @@ pub fn render(
     // LayerFill crops flush to the window edge while long tabs stay scrollable.
     let page_scroller = scroll_viewer(
         border(tab_content(
-                &settings,
-                rendered_tab,
-                automatic_activation,
-                start_at_login,
-                show_used_percentage,
-                show_usage_pace,
-                hide_plan_credits,
-                activation_failure,
-                limits_reset,
-                low_usage_enabled,
-                low_usage_threshold,
-                low_usage_expanded,
-                low_usage_expand_progress,
-                weekly_low_usage_enabled,
-                weekly_low_usage_threshold,
-                weekly_low_usage_expanded,
-                weekly_low_usage_expand_progress,
-                &tray_widgets,
-                &hovered_card_id,
-                check_for_updates,
-                notify_on_update,
-                &update_phase,
-                set_automatic_activation,
-                set_start_at_login,
-                set_show_used_percentage,
-                set_show_usage_pace,
-                set_hide_plan_credits,
-                set_activation_failure,
-                set_limits_reset,
-                set_low_usage_enabled,
-                set_low_usage_threshold,
-                set_low_usage_expanded,
-                set_low_usage_expand_progress,
-                set_weekly_low_usage_enabled,
-                set_weekly_low_usage_threshold,
-                set_weekly_low_usage_expanded,
-                set_weekly_low_usage_expand_progress,
-                set_tray_widgets,
-                set_hovered_card_id,
-                set_check_for_updates,
-                set_notify_on_update,
-                settings_tx.clone(),
-                updates.clone(),
-            ))
-            .padding(Thickness {
-                left: 32.0,
-                top: 24.0,
-                right: 32.0,
-                bottom: 32.0,
-            })
-            .with_key(format!("settings-page-{}", rendered_tab.tag()))
-            .horizontal_alignment(HorizontalAlignment::Stretch)
+            &settings,
+            rendered_tab,
+            automatic_activation,
+            start_at_login,
+            show_used_percentage,
+            show_usage_pace,
+            hide_plan_credits,
+            activation_failure,
+            limits_reset,
+            low_usage_enabled,
+            low_usage_threshold,
+            low_usage_expanded,
+            low_usage_expand_progress,
+            weekly_low_usage_enabled,
+            weekly_low_usage_threshold,
+            weekly_low_usage_expanded,
+            weekly_low_usage_expand_progress,
+            &tray_widgets,
+            &hovered_card_id,
+            check_for_updates,
+            notify_on_update,
+            &update_phase,
+            set_automatic_activation,
+            set_start_at_login,
+            set_show_used_percentage,
+            set_show_usage_pace,
+            set_hide_plan_credits,
+            set_activation_failure,
+            set_limits_reset,
+            set_low_usage_enabled,
+            set_low_usage_threshold,
+            set_low_usage_expanded,
+            set_low_usage_expand_progress,
+            set_weekly_low_usage_enabled,
+            set_weekly_low_usage_threshold,
+            set_weekly_low_usage_expanded,
+            set_weekly_low_usage_expand_progress,
+            set_tray_widgets,
+            set_hovered_card_id,
+            set_check_for_updates,
+            set_notify_on_update,
+            settings_tx.clone(),
+            updates.clone(),
+        ))
+        .padding(Thickness {
+            left: 32.0,
+            top: 24.0,
+            right: 32.0,
+            bottom: 32.0,
+        })
+        .with_key(format!("settings-page-{}", rendered_tab.tag()))
+        .horizontal_alignment(HorizontalAlignment::Stretch)
         .vertical_alignment(VerticalAlignment::Top),
     )
-        // Keys are honored only in multi-child containers by windows-reactor.
-        // The Grid below therefore remounts this native ScrollViewer on every
-        // rendered-tab change, guaranteeing a fresh zero scroll offset.
-        .with_key(format!("settings-scroll-{}", rendered_tab.tag()))
-        .horizontal_scroll_bar_visibility(ScrollBarVisibility::Disabled)
-        .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .vertical_alignment(VerticalAlignment::Stretch)
-        .grid_row(0)
-        .grid_column(0);
+    // Keys are honored only in multi-child containers by windows-reactor.
+    // The Grid below therefore remounts this native ScrollViewer on every
+    // rendered-tab change, guaranteeing a fresh zero scroll offset.
+    .with_key(format!("settings-scroll-{}", rendered_tab.tag()))
+    .horizontal_scroll_bar_visibility(ScrollBarVisibility::Disabled)
+    .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .vertical_alignment(VerticalAlignment::Stretch)
+    .grid_row(0)
+    .grid_column(0);
 
     let page_content = border(
         grid((page_scroller,))

@@ -16,10 +16,7 @@ const TOAST_ACTION_UPDATE_NOW: &str = "update_now";
 
 /// Returns true when this process was spawned by the update toast protocol link.
 pub fn launched_via_toast_update() -> bool {
-    std::env::args().any(|arg| {
-        arg.to_ascii_lowercase()
-            .contains("codex-minibar:update")
-    })
+    std::env::args().any(|arg| arg.to_ascii_lowercase().contains("codex-minibar:update"))
 }
 
 #[cfg(windows)]
@@ -153,7 +150,9 @@ impl LimitNotificationTracker {
                 );
             }
         }
-        if secondary_reset {
+        // Free plans have no weekly limit. Their single monthly quota may shift
+        // while the Codex API refreshes, which must not create a reset toast.
+        if secondary_reset && can_notify_weekly(limits) {
             if settings.limits_changed {
                 show(
                     "Weekly limit reset",
@@ -172,7 +171,7 @@ impl LimitNotificationTracker {
                 &mut self.low_usage_notified_primary,
             );
         }
-        if settings.weekly_low_usage_enabled {
+        if settings.weekly_low_usage_enabled && can_notify_weekly(limits) {
             let threshold = settings.weekly_low_usage_threshold_percent;
             maybe_notify_low_usage(
                 "Weekly",
@@ -190,6 +189,10 @@ impl LimitNotificationTracker {
         self.primary_resets_at = limits.primary.resets_at;
         self.secondary_resets_at = limits.secondary.resets_at;
     }
+}
+
+fn can_notify_weekly(limits: &RateLimits) -> bool {
+    !limits.is_free_plan()
 }
 
 fn maybe_notify_low_usage(
@@ -253,6 +256,17 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
+
+    #[test]
+    fn free_plan_suppresses_weekly_notifications() {
+        let limits = RateLimits {
+            plan_type: Some("free".into()),
+            ..Default::default()
+        };
+
+        assert!(!can_notify_weekly(&limits));
+        assert!(can_notify_weekly(&RateLimits::default()));
+    }
 
     #[test]
     fn low_usage_notification_is_claimed_once_per_limit_window() {
@@ -326,8 +340,8 @@ mod windows_impl {
     use windows_sys::Win32::{
         Foundation::ERROR_SUCCESS,
         System::Registry::{
-            HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
-            RegCloseKey, RegCreateKeyExW, RegSetValueExW,
+            HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
+            RegCreateKeyExW, RegSetValueExW,
         },
         UI::Shell::SetCurrentProcessExplicitAppUserModelID,
     };
@@ -339,11 +353,18 @@ mod windows_impl {
         register_update_protocol().context("register update protocol")?;
         let aumid: Vec<u16> = AUMID.encode_utf16().chain(std::iter::once(0)).collect();
         let status = unsafe { SetCurrentProcessExplicitAppUserModelID(aumid.as_ptr()) };
-        anyhow::ensure!(status == 0, "SetCurrentProcessExplicitAppUserModelID: 0x{status:08X}");
+        anyhow::ensure!(
+            status == 0,
+            "SetCurrentProcessExplicitAppUserModelID: 0x{status:08X}"
+        );
         Ok(())
     }
 
-    pub(super) fn show(title: &str, body: &str, actions: Option<&[(&str, &str, &str)]>) -> Result<()> {
+    pub(super) fn show(
+        title: &str,
+        body: &str,
+        actions: Option<&[(&str, &str, &str)]>,
+    ) -> Result<()> {
         let logo = notification_icon_path()
             .map(|path| {
                 format!(
@@ -390,10 +411,9 @@ mod windows_impl {
         let document = XmlDocument::new()?;
         document.LoadXml(&windows::core::HSTRING::from(xml))?;
         let toast = ToastNotification::CreateToastNotification(&document)?;
-        let notifier =
-            ToastNotificationManager::CreateToastNotifierWithId(&windows::core::HSTRING::from(
-                super::AUMID,
-            ))?;
+        let notifier = ToastNotificationManager::CreateToastNotifierWithId(
+            &windows::core::HSTRING::from(super::AUMID),
+        )?;
         notifier.Show(&toast)?;
         Ok(())
     }
@@ -418,7 +438,8 @@ mod windows_impl {
     }
 
     fn register_update_protocol() -> Result<()> {
-        let exe = std::env::current_exe().context("resolve executable for protocol registration")?;
+        let exe =
+            std::env::current_exe().context("resolve executable for protocol registration")?;
         let command = format!("\"{}\" \"%1\"", exe.display());
         let root = r"Software\Classes\codex-minibar";
         set_reg_sz(root, "", "URL:codex-minibar Protocol")?;
@@ -485,7 +506,10 @@ mod windows_impl {
                 std::ptr::null_mut(),
             )
         };
-        anyhow::ensure!(status == ERROR_SUCCESS, "RegCreateKeyExW({subkey}): {status}");
+        anyhow::ensure!(
+            status == ERROR_SUCCESS,
+            "RegCreateKeyExW({subkey}): {status}"
+        );
         let status = unsafe {
             RegSetValueExW(
                 key,

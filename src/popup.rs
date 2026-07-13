@@ -31,17 +31,15 @@ use windows_sys::Win32::{
     UI::{
         Controls::MARGINS,
         HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
-        Input::KeyboardAndMouse::{
-            GetAsyncKeyState, SetFocus, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
-        },
+        Input::KeyboardAndMouse::{GetAsyncKeyState, SetFocus, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON},
         WindowsAndMessaging::{
             CS_DROPSHADOW, DispatchMessageW, FindWindowW, GCL_STYLE, GWL_EXSTYLE, GWL_STYLE,
             GetCursorPos, GetWindowLongW, GetWindowRect, HWND_TOPMOST, MSG, PM_REMOVE,
-            PeekMessageW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-            SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowLongW, SetWindowPos,
-            TranslateMessage, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-            WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX,
-            WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+            PeekMessageW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+            SWP_SHOWWINDOW, SetWindowLongW, SetWindowPos, TranslateMessage, WS_CAPTION,
+            WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
+            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU,
+            WS_THICKFRAME,
         },
     },
 };
@@ -97,8 +95,12 @@ const BODY_SPACING: i32 = 12;
 const FOOTER_HEIGHT: i32 = 61; // padding + icon row + top border
 const CHROME_HEIGHT: i32 = 4; // outer border + inset
 /// Baseline height when both limit cards, plan/credits, and footer are shown.
-pub const POPUP_HEIGHT: i32 =
-    BODY_PAD_Y + LIMIT_CARD_HEIGHT * 2 + META_ROW_HEIGHT + BODY_SPACING * 2 + FOOTER_HEIGHT + CHROME_HEIGHT;
+pub const POPUP_HEIGHT: i32 = BODY_PAD_Y
+    + LIMIT_CARD_HEIGHT * 2
+    + META_ROW_HEIGHT
+    + BODY_SPACING * 2
+    + FOOTER_HEIGHT
+    + CHROME_HEIGHT;
 /// Smallest popup: two limit cards + footer (plan/credits row hidden).
 pub const POPUP_HEIGHT_MIN: i32 =
     BODY_PAD_Y + LIMIT_CARD_HEIGHT * 2 + BODY_SPACING + FOOTER_HEIGHT + CHROME_HEIGHT;

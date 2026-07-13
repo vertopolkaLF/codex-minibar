@@ -139,17 +139,36 @@ pub fn render_widget(widget: &TrayWidget, limits: &RateLimits) -> Vec<u8> {
         return render_rings(&[primary, secondary], limit_value);
     }
     if matches!(widget.presentation, TrayPresentation::Bar) {
-        let value = match widget.source { TraySource::Secondary => secondary, _ => primary };
+        let value = match widget.source {
+            TraySource::Secondary => secondary,
+            _ => primary,
+        };
         return render_bars(&[value], limit_value);
     }
     if matches!(widget.presentation, TrayPresentation::Ring) {
-        let value = match widget.source { TraySource::Secondary => secondary, _ => primary };
+        let value = match widget.source {
+            TraySource::Secondary => secondary,
+            _ => primary,
+        };
         return render_rings(&[value], limit_value);
     }
     let (text, rgb) = match widget.source {
-        TraySource::Combined => (format!("{}\n{}", primary.map_or_else(|| "?".into(), |v| v.to_string()), secondary.map_or_else(|| "?".into(), |v| v.to_string())), icon_color(primary, limit_value)),
-        TraySource::Primary => (primary.map_or_else(|| "?".into(), |v| v.to_string()), icon_color(primary, limit_value)),
-        TraySource::Secondary => (secondary.map_or_else(|| "?".into(), |v| v.to_string()), icon_color(secondary, limit_value)),
+        TraySource::Combined => (
+            format!(
+                "{}\n{}",
+                primary.map_or_else(|| "?".into(), |v| v.to_string()),
+                secondary.map_or_else(|| "?".into(), |v| v.to_string())
+            ),
+            icon_color(primary, limit_value),
+        ),
+        TraySource::Primary => (
+            primary.map_or_else(|| "?".into(), |v| v.to_string()),
+            icon_color(primary, limit_value),
+        ),
+        TraySource::Secondary => (
+            secondary.map_or_else(|| "?".into(), |v| v.to_string()),
+            icon_color(secondary, limit_value),
+        ),
         TraySource::PrimaryReset => (
             stacked_reset_label(
                 primary_window.resets_at,
@@ -228,7 +247,11 @@ fn render_bars(values: &[Option<u8>], limit_value: LimitValue) -> Vec<u8> {
 
 fn render_rings(values: &[Option<u8>], limit_value: LimitValue) -> Vec<u8> {
     let mut pixels = vec![0; ICON_SIZE * ICON_SIZE * 4];
-    let radii: &[f32] = if values.len() == 1 { &[11.0] } else { &[12.0, 7.5] };
+    let radii: &[f32] = if values.len() == 1 {
+        &[11.0]
+    } else {
+        &[12.0, 7.5]
+    };
     for (value, radius) in values.iter().zip(radii) {
         let filled = value.unwrap_or(0) as f32 / 100.0;
         let color = icon_color(*value, limit_value);
@@ -237,9 +260,16 @@ fn render_rings(values: &[Option<u8>], limit_value: LimitValue) -> Vec<u8> {
                 let dx = x as f32 + 0.5 - 16.0;
                 let dy = y as f32 + 0.5 - 16.0;
                 let distance = (dx * dx + dy * dy).sqrt();
-                if (distance - radius).abs() > 2.0 { continue; }
-                let angle = (dy.atan2(dx) + std::f32::consts::FRAC_PI_2).rem_euclid(std::f32::consts::TAU);
-                let rgb = if angle <= filled * std::f32::consts::TAU { color } else { [70, 70, 70] };
+                if (distance - radius).abs() > 2.0 {
+                    continue;
+                }
+                let angle =
+                    (dy.atan2(dx) + std::f32::consts::FRAC_PI_2).rem_euclid(std::f32::consts::TAU);
+                let rgb = if angle <= filled * std::f32::consts::TAU {
+                    color
+                } else {
+                    [70, 70, 70]
+                };
                 let offset = (y * ICON_SIZE + x) * 4;
                 pixels[offset..offset + 4].copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
             }
@@ -447,7 +477,10 @@ mod platform {
 
     fn make_icon(widget: Option<&TrayWidget>, limits: &RateLimits) -> Result<Icon> {
         Icon::from_rgba(
-            widget.map_or_else(|| app_icon_pixels().to_vec(), |widget| render_widget(widget, limits)),
+            widget.map_or_else(
+                || app_icon_pixels().to_vec(),
+                |widget| render_widget(widget, limits),
+            ),
             ICON_SIZE as u32,
             ICON_SIZE as u32,
         )
@@ -557,7 +590,11 @@ mod tests {
 
     #[test]
     fn renders_rgba_icon_with_visible_pixels() {
-        let widget = TrayWidget { source: TraySource::Primary, presentation: TrayPresentation::Number, limit_value: LimitValue::Remaining };
+        let widget = TrayWidget {
+            source: TraySource::Primary,
+            presentation: TrayPresentation::Number,
+            limit_value: LimitValue::Remaining,
+        };
         let pixels = render_widget(&widget, &limits());
         assert_eq!(pixels.len(), ICON_SIZE * ICON_SIZE * 4);
         assert!(pixels.chunks_exact(4).any(|pixel| pixel[3] != 0));
@@ -622,7 +659,11 @@ mod tests {
 
     #[test]
     fn uses_app_icon_until_rate_limit_data_arrives() {
-        let widget = TrayWidget { source: TraySource::Primary, presentation: TrayPresentation::Number, limit_value: LimitValue::Remaining };
+        let widget = TrayWidget {
+            source: TraySource::Primary,
+            presentation: TrayPresentation::Number,
+            limit_value: LimitValue::Remaining,
+        };
         let pixels = render_widget(&widget, &RateLimits::default());
         assert_eq!(pixels.len(), ICON_SIZE * ICON_SIZE * 4);
         assert!(pixels.chunks_exact(4).any(|pixel| pixel[3] != 0));

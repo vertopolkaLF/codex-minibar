@@ -258,6 +258,9 @@ mod tests {
             Some(WorkerEvent::ActivationFailed(_))
         ));
         // Keep the old baseline so the next poll retries the same change.
-        assert_eq!(state.last_seen_resets_at, limits_at(15, 0).primary.resets_at);
+        assert_eq!(
+            state.last_seen_resets_at,
+            limits_at(15, 0).primary.resets_at
+        );
     }
 }

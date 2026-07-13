@@ -36,8 +36,7 @@ fn http_agent() -> Agent {
         .get_or_init(|| {
             // ureq's `native-tls` feature is not auto-selected for `ureq::get`;
             // build an agent that uses the OS TLS stack (schannel on Windows).
-            let tls = ureq::native_tls::TlsConnector::new()
-                .expect("create native-tls connector");
+            let tls = ureq::native_tls::TlsConnector::new().expect("create native-tls connector");
             ureq::AgentBuilder::new()
                 .tls_connector(Arc::new(tls))
                 .build()
@@ -116,9 +115,8 @@ fn sync_uninstall_display_version(version: &str) -> Result<()> {
 
     // Installer writes HKCU (RequestExecutionLevel user) for each arch package.
     for arch in ["x86", "x64", "arm64"] {
-        let subkey = format!(
-            r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Codex Minibar {arch}"
-        );
+        let subkey =
+            format!(r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Codex Minibar {arch}");
         let subkey_w: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
         let mut key: HKEY = std::ptr::null_mut();
         let status = unsafe {
@@ -209,7 +207,11 @@ impl UpdateController {
     }
 
     pub fn snapshot(&self) -> UpdatePhase {
-        self.inner.lock().expect("update controller lock").phase.clone()
+        self.inner
+            .lock()
+            .expect("update controller lock")
+            .phase
+            .clone()
     }
 
     pub fn is_update_available(&self) -> bool {
@@ -510,14 +512,15 @@ fn download_file(url: &str, destination: &Path) -> Result<()> {
         bail!("download failed with status {status}");
     }
     let mut reader = response.into_reader();
-    let mut file =
-        fs::File::create(destination).with_context(|| format!("create {}", destination.display()))?;
+    let mut file = fs::File::create(destination)
+        .with_context(|| format!("create {}", destination.display()))?;
     copy(&mut reader, &mut file).context("write downloaded update package")?;
     Ok(())
 }
 
 fn extract_portable_zip(archive_path: &Path, destination: &Path) -> Result<PathBuf> {
-    let file = fs::File::open(archive_path).with_context(|| format!("open {}", archive_path.display()))?;
+    let file =
+        fs::File::open(archive_path).with_context(|| format!("open {}", archive_path.display()))?;
     let mut archive = ZipArchive::new(file).context("open update zip archive")?;
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).context("read zip entry")?;

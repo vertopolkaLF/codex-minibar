@@ -122,6 +122,14 @@ impl RateLimits {
         self.primary.is_empty()
     }
 
+    /// Free plans expose a single monthly window instead of a 5-hour session
+    /// plus a weekly window.
+    pub fn is_free_plan(&self) -> bool {
+        self.plan_type
+            .as_deref()
+            .is_some_and(|plan| plan.trim().eq_ignore_ascii_case("free"))
+    }
+
     /// Window used by tray widgets that target the 5h/primary source.
     pub fn effective_primary(&self) -> &LimitWindow {
         if self.five_hour_disabled() {
@@ -213,10 +221,16 @@ mod tests {
     #[test]
     fn pace_tip_summarizes_reserve_and_deficit_like_codexbar() {
         let (reserve, now) = window_with_hour_left(70);
-        assert_eq!(reserve.pace_tip(false, now).unwrap().summary(), "10% in reserve");
+        assert_eq!(
+            reserve.pace_tip(false, now).unwrap().summary(),
+            "10% in reserve"
+        );
 
         let (deficit, now) = window_with_hour_left(92);
-        assert_eq!(deficit.pace_tip(false, now).unwrap().summary(), "12% in deficit");
+        assert_eq!(
+            deficit.pace_tip(false, now).unwrap().summary(),
+            "12% in deficit"
+        );
     }
 
     #[test]
@@ -229,5 +243,16 @@ mod tests {
         };
         let tip = weekly.pace_tip(false, now).unwrap();
         assert!((tip.percent - (100.0 - weekly.expected_used_percent(now).unwrap())).abs() < 0.01);
+    }
+
+    #[test]
+    fn identifies_free_plan_case_insensitively() {
+        let limits = RateLimits {
+            plan_type: Some(" FREE ".into()),
+            ..Default::default()
+        };
+
+        assert!(limits.is_free_plan());
+        assert!(!RateLimits::default().is_free_plan());
     }
 }
