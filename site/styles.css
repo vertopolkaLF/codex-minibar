@@ -13,11 +13,11 @@
   --btn-text: #0a0a0a;
   --surface: #111111;
   --accent-soft: #2a2a2a;
-  --header-bg: rgba(10, 10, 10, 0.86);
+  --header-bg: transparent;
   --radius: 10px;
   --radius-sm: 6px;
   --radius-pill: 9999px;
-  --shell: 1120px;
+  --shell: 1400px;
   --font: "Archivo", "Inter", "Roboto", sans-serif;
   --mono: "Roboto Mono", "SF Mono", "Cascadia Mono", ui-monospace, monospace;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
@@ -88,12 +88,38 @@ ul {
 
 /* Header */
 
+.screen-stage {
+  position: relative;
+  height: 100dvh;
+  min-height: 680px;
+  padding: 0 clamp(0.75rem, 1.2vw, 1.5rem) clamp(0.75rem, 2.2vh, 1.5rem) 0;
+  background: #020305;
+  overflow: hidden;
+}
+
+.screen-shell {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+  border: 0 solid #2b3340;
+  border-right-width: 8px;
+  border-bottom-width: 8px;
+  border-radius: 0 0 clamp(1.25rem, 1.7vw, 2rem) 0;
+  background: #080b0f;
+  box-shadow:
+    8px 8px 0 #11151b,
+    18px 18px 60px rgba(28, 40, 58, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
 .site-header {
-  position: sticky;
+  position: absolute;
   top: 0;
+  left: 0;
+  right: 0;
   z-index: 50;
   background: var(--header-bg);
-  backdrop-filter: blur(12px);
+  backdrop-filter: none;
   border-bottom: 1px solid transparent;
   transition: border-color 200ms ease;
 }
@@ -261,10 +287,11 @@ ul {
 .hero {
   position: relative;
   isolation: isolate;
-  min-height: min(92vh, 860px);
+  min-height: 100%;
+  height: 100%;
   display: flex;
   align-items: center;
-  padding: 5rem 0 6rem;
+  padding: 4rem 0 3rem;
   overflow: clip;
 }
 
@@ -273,65 +300,80 @@ ul {
   inset: 0;
   z-index: -1;
   background:
-    radial-gradient(ellipse 70% 60% at 78% 42%, rgba(255, 255, 255, 0.05), transparent 68%),
-    linear-gradient(105deg, var(--bg) 0%, var(--bg) 46%, #111111 46%, #111111 100%);
+    radial-gradient(ellipse 58% 70% at 78% 45%, rgba(72, 118, 164, 0.16), transparent 66%),
+    radial-gradient(ellipse 38% 52% at 86% 18%, rgba(255, 255, 255, 0.055), transparent 70%),
+    linear-gradient(135deg, #080b0f 0%, #0b0e12 48%, #10151b 100%);
 }
 
 .hero-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
-  gap: 3rem;
+  display: flex;
   align-items: center;
+  min-height: 100%;
+  padding-bottom: 3rem;
   width: min(100% - 2.5rem, var(--shell));
   margin-inline: auto;
 }
 
-.brand-mark {
-  font-size: clamp(2.5rem, 5vw, 3.75rem);
-  font-weight: 600;
-  letter-spacing: -0.045em;
-  line-height: 1.05;
-  margin-bottom: 1.25rem;
+.hero-copy {
+  position: relative;
+  z-index: 2;
+  width: min(100%, 43rem);
+}
+
+.hero-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-bottom: 1.45rem;
+  color: var(--text-secondary);
+  font-size: 1rem;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+}
+
+.hero-eyebrow img {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
 }
 
 .hero h1 {
-  max-width: 14ch;
-  font-size: clamp(1.75rem, 3.2vw, 2.35rem);
-  font-weight: 500;
-  letter-spacing: -0.03em;
-  line-height: 1.2;
+  max-width: 12.5ch;
+  font-size: clamp(3.4rem, 4.2vw, 4.65rem);
+  font-weight: 560;
+  letter-spacing: -0.055em;
+  line-height: 1.02;
   color: var(--text);
 }
 
 .lede {
-  max-width: 34rem;
-  margin-top: 1.1rem;
-  margin-bottom: 1.75rem;
+  max-width: 37rem;
+  margin-top: 1.55rem;
+  margin-bottom: 2rem;
   color: var(--text-secondary);
-  font-size: 1.0625rem;
+  font-size: 1.18rem;
+  line-height: 1.55;
 }
 
 .hero-visual {
-  position: relative;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  min-height: 460px;
-  padding: 1.25rem 0.5rem 0;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
 }
 
 .desk {
-  width: min(100%, 520px);
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.55rem;
+  position: absolute;
+  inset: 0;
+  width: 100%;
 }
 
 .popup-mock {
-  width: min(100%, 320px);
-  margin-right: 0.35rem;
-  padding: 0.7rem;
+  position: absolute;
+  right: max(1.25rem, calc((100% - var(--shell)) / 2));
+  bottom: 4.9rem;
+  width: min(100%, 400px);
+  padding: 0.85rem;
   border-radius: 14px;
   background: rgba(32, 32, 32, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -340,11 +382,11 @@ ul {
     0 2px 0 rgba(255, 255, 255, 0.04) inset;
   backdrop-filter: blur(20px);
   display: grid;
-  gap: 0.55rem;
+  gap: 0.7rem;
 }
 
 .popup-card {
-  padding: 0.8rem 0.85rem 0.75rem;
+  padding: 1rem 1rem 0.9rem;
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.04);
@@ -453,17 +495,22 @@ ul {
 }
 
 .win-taskbar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
   width: 100%;
-  border-radius: 8px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 40%),
-    rgba(32, 32, 32, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0;
+  background: rgba(243, 243, 243, 0.96);
+  border: 0;
+  border-top: 1px solid rgba(0, 0, 0, 0.1);
   box-shadow:
-    0 12px 32px rgba(0, 0, 0, 0.4),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(24px);
-  color: rgba(255, 255, 255, 0.88);
+    0 -8px 24px rgba(0, 0, 0, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(36px) saturate(140%);
+  -webkit-backdrop-filter: blur(36px) saturate(140%);
+  color: #1a1a1a;
+  font-family: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", sans-serif;
   overflow: hidden;
 }
 
@@ -472,8 +519,42 @@ ul {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  min-height: 48px;
-  padding: 0 0.2rem 0 0.45rem;
+  height: 60px;
+  min-height: 60px;
+  padding: 0 0 0 0.75rem;
+}
+
+.win-weather {
+  position: absolute;
+  left: 0.75rem;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 9.5rem;
+  padding: 0 0.65rem;
+  border-radius: 4px;
+}
+
+.win-weather-icon {
+  width: 28px;
+  height: 28px;
+}
+
+.win-weather-copy {
+  display: grid;
+  line-height: 1.05;
+}
+
+.win-weather-copy strong {
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.win-weather-copy span {
+  color: #4f4f4f;
+  font-size: 11px;
 }
 
 .win-pinned {
@@ -482,27 +563,70 @@ ul {
   transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 0.15rem;
+  gap: 2px;
 }
 
 .win-pin {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 48px;
+  height: 48px;
   border-radius: 4px;
-  color: rgba(255, 255, 255, 0.92);
+  color: #1a1a1a;
+}
+
+.win-pin svg,
+.win-pin img {
+  width: 27px;
+  height: 27px;
+}
+
+.win-pin-app:last-child::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 1px;
+  width: 6px;
+  height: 3px;
+  border-radius: 999px;
+  background: #1674d1;
 }
 
 .win-start {
-  color: #fff;
+  color: #087cd5;
+}
+
+.win-search {
+  justify-content: flex-start;
+  width: 214px;
+  height: 36px;
+  margin-inline: 2px;
+  padding: 0 0.85rem;
+  gap: 0.7rem;
+  border: 1px solid rgba(0, 0, 0, 0.11);
+  border-bottom-color: rgba(0, 0, 0, 0.18);
+  border-radius: 17px;
+  background: rgba(255, 255, 255, 0.74);
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+}
+
+.win-search img {
+  width: 18px;
+  height: 18px;
+}
+
+.win-search-label {
+  color: #353535;
+  font-size: 14px;
+  font-weight: 400;
 }
 
 .win-tray-cluster {
   display: flex;
   align-items: center;
-  gap: 0.15rem;
+  gap: 0;
   margin-left: auto;
   z-index: 1;
 }
@@ -511,61 +635,92 @@ ul {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 36px;
-  color: rgba(255, 255, 255, 0.75);
+  width: 28px;
+  height: 48px;
+  color: #1a1a1a;
+}
+
+.win-hidden img {
+  width: 12px;
+  height: 12px;
 }
 
 .tray-widgets {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
-  min-height: 36px;
-  padding: 0 0.35rem;
+  gap: 0.2rem;
+  min-height: 48px;
+  padding: 0 0.3rem;
   border-radius: 4px;
 }
 
 .win-tray-system {
   display: flex;
   align-items: center;
-  gap: 0.15rem;
-  min-height: 36px;
-  padding: 0 0.2rem 0 0.35rem;
+  gap: 0;
+  min-height: 48px;
+  padding: 0 0 0 0.2rem;
   border-radius: 4px;
 }
 
 .win-lang {
-  padding: 0 0.35rem;
-  font-size: 0.6875rem;
-  letter-spacing: 0.04em;
-  color: rgba(255, 255, 255, 0.86);
+  padding: 0 0.5rem;
+  font-size: 12px;
+  letter-spacing: 0;
+  color: #1a1a1a;
 }
 
 .win-sys-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 36px;
-  color: rgba(255, 255, 255, 0.86);
+  width: 25px;
+  height: 48px;
+  color: #1a1a1a;
+}
+
+.win-sys-icon img {
+  width: 16px;
+  height: 16px;
 }
 
 .win-clock {
   display: grid;
   justify-items: end;
-  min-width: 4.4rem;
-  padding: 0 0.45rem;
-  line-height: 1.15;
-  font-size: 0.6875rem;
+  min-width: 4.9rem;
+  padding: 0 1rem 0.25rem 1rem;
+  line-height: 1.18;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
-  color: rgba(255, 255, 255, 0.9);
+  color: #1a1a1a;
 }
 
 .win-show-desktop {
-  width: 6px;
+  width: 8px;
   align-self: stretch;
-  margin: 0.35rem 0 0.35rem 0.15rem;
-  border-left: 1px solid rgba(255, 255, 255, 0.22);
+  margin-left: 0.15rem;
+  border-left: 1px solid rgba(0, 0, 0, 0.2);
+}
+
+.win-taskbar .widget {
+  color: #1a1a1a;
+  font-family: "Segor UI", "Segoe UI Variable Text", monospace;
+}
+
+.win-taskbar .widget-bars i {
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.win-taskbar .widget-bars i::after {
+  background: #1a1a1a;
+}
+
+.win-taskbar .widget-rings circle {
+  stroke: rgba(0, 0, 0, 0.18);
+}
+
+.win-taskbar .widget-rings circle[style] {
+  stroke: #1a1a1a;
 }
 
 /* Tray widget mocks */
@@ -996,8 +1151,28 @@ ul {
 
 /* Responsive */
 
+@media (max-width: 1100px) {
+  .win-weather {
+    display: none;
+  }
+
+  .win-search {
+    justify-content: center;
+    width: 44px;
+    padding: 0;
+    gap: 0;
+    border-color: transparent;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .win-search-label {
+    display: none;
+  }
+}
+
 @media (max-width: 900px) {
-  .hero-grid,
+
   .feature-wide,
   .privacy-grid,
   .footer-row {
@@ -1005,36 +1180,40 @@ ul {
   }
 
   .hero {
-    min-height: auto;
-    padding: 3rem 0 4rem;
+    min-height: 100%;
+    height: 100%;
+    padding: 4rem 0 3rem;
   }
 
   .hero-plane {
     background:
-      radial-gradient(ellipse 90% 50% at 50% 0%, rgba(255, 255, 255, 0.05), transparent 70%),
-      linear-gradient(180deg, #111111 0%, var(--bg) 55%);
+      radial-gradient(ellipse 80% 55% at 85% 70%, rgba(72, 118, 164, 0.14), transparent 72%),
+      linear-gradient(155deg, #080b0f 0%, #10151b 100%);
   }
 
   .hero-grid {
     width: min(100% - 1.5rem, var(--shell));
-    gap: 2rem;
+    margin-inline: auto;
+    align-items: flex-start;
+    padding-top: clamp(4rem, 11vh, 7rem);
+    padding-bottom: 3rem;
   }
 
   .hero-visual {
-    min-height: 380px;
-    align-items: center;
+    inset: 0;
   }
 
   .desk {
-    width: min(100%, 100%);
+    width: 100%;
   }
 
-  .win-pinned .win-pin-app:nth-child(n + 5) {
+  .tray-widgets .widget:not(.widget-numbers) {
     display: none;
   }
 
   .popup-mock {
-    margin-right: 0;
+    right: 0.65rem;
+    bottom: 3.7rem;
   }
 
   .feature-split,
@@ -1049,6 +1228,14 @@ ul {
 
   .site-footer p {
     order: 3;
+  }
+}
+
+@media (max-width: 800px) {
+
+  .win-hidden,
+  .win-lang {
+    display: none;
   }
 }
 
@@ -1069,12 +1256,43 @@ ul {
     width: min(100% - 1.5rem, var(--shell));
   }
 
-  .brand-mark {
-    font-size: 2.25rem;
+  .screen-stage {
+    min-height: 620px;
+    padding: 0 0.4rem 0.5rem 0;
+  }
+
+  .screen-shell {
+    border-width: 0 5px 5px 0;
+    border-radius: 0 0 1.25rem 0;
+    box-shadow: 5px 5px 0 #11151b;
+  }
+
+  .hero-eyebrow {
+    margin-bottom: 1rem;
+    font-size: 0.875rem;
   }
 
   .hero h1 {
-    max-width: none;
+    max-width: 12ch;
+    font-size: clamp(2.25rem, 10vw, 3rem);
+  }
+
+  .hero-grid {
+    padding-top: 3.25rem;
+  }
+
+  .hero-copy {
+    width: 100%;
+  }
+
+  .lede {
+    max-width: 31rem;
+  }
+
+  .popup-mock {
+    right: 0.5rem;
+    bottom: 3.55rem;
+    width: min(calc(100% - 1rem), 320px);
   }
 
   .feature-split,
@@ -1103,5 +1321,25 @@ ul {
 
   .footer-links {
     flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 720px) and (max-height: 760px) {
+  .popup-mock {
+    transform: scale(0.84);
+    transform-origin: right bottom;
+  }
+
+  .hero-grid {
+    padding-top: 2.25rem;
+  }
+
+  .hero-eyebrow {
+    margin-bottom: 0.75rem;
+  }
+
+  .lede {
+    margin-top: 0.8rem;
+    margin-bottom: 1rem;
   }
 }
