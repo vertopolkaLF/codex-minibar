@@ -37,7 +37,7 @@ use windows_sys::Win32::{
         WindowsAndMessaging::{
             CS_DROPSHADOW, DispatchMessageW, FindWindowW, GCL_STYLE, GWL_EXSTYLE, GWL_STYLE,
             GetCursorPos, GetWindowLongW, GetWindowRect, HWND_TOPMOST, MSG, PM_REMOVE,
-            PeekMessageW, SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
+            PeekMessageW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
             SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowLongW, SetWindowPos,
             TranslateMessage, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
             WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX,
@@ -213,7 +213,10 @@ fn current_hwnd() -> Option<HWND> {
 
 fn park(hwnd: HWND) {
     unsafe {
-        SetWindowRgn(hwnd, std::ptr::null_mut(), 0);
+        // Preserve the HWND/XAML compositor between shows. An empty region and
+        // an off-screen position are invisible without `SWP_HIDEWINDOW`, which
+        // can suspend composition until an unrelated WinUI window activates.
+        hide_window_pixels(hwnd);
         // Park off-screen. Never touch size — WinUI owns width/height.
         SetWindowPos(
             hwnd,
@@ -222,7 +225,7 @@ fn park(hwnd: HWND) {
             PARKED_Y,
             0,
             0,
-            SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_HIDEWINDOW,
+            SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER,
         );
     }
     POPUP_VISIBLE.store(false, Ordering::SeqCst);
@@ -675,22 +678,22 @@ pub fn hide() {
     park(hwnd);
 }
 
-/// Wake XAML composition after a Win32 park. Must run on the UI thread.
+/// Synchronize XAML composition before a native show. Must run on the UI thread.
 ///
-/// `SWP_HIDEWINDOW` leaves `AppWindow` thinking the window is gone; the next
-/// `SWP_SHOWWINDOW` alone will not paint until something activates the Window
-/// again. Opening Settings accidentally did that via shared `ROOT_*` theme
-/// globals — do it explicitly here instead.
-pub fn prepare_show_on_ui_thread() {
-    POPUP_HOST.with(|slot| {
-        if let Some(host) = slot.borrow().as_ref() {
-            let _ = host.activate();
-        }
+/// This path must stay synchronous: acknowledging a queued activation before
+/// it actually ran caused the popup to remain dormant until Settings happened
+/// to activate another WinUI window.
+pub fn prepare_show_on_ui_thread() -> bool {
+    let activated = POPUP_HOST.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|host| host.activate_now().is_ok())
     });
     hide_from_switchers();
     unsafe {
         let _ = SetFocus(std::ptr::null_mut());
     }
+    activated
 }
 
 /// Re-clamp if WinUI grows/moves the HWND past the stored monitor.

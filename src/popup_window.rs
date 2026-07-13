@@ -231,6 +231,10 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         ),
     ];
 
+    if limits.available_reset_count() > 0 {
+        body.push(reset_credits_card(&limits));
+    }
+
     if !ui.hide_plan_credits {
         body.push(meta_row(&limits));
     }
@@ -945,15 +949,19 @@ fn pump_tray_and_dismiss(
                     ui.refreshing = true;
                     set_ui.call(ui.clone());
                 }
-                // WinUI must Activate on the UI thread before a post-park show
-                // will actually paint — wait briefly so that runs first.
+                // Native showing is allowed only after synchronous WinUI
+                // reactivation; otherwise XAML can remain dormant indefinitely.
                 let (ready_tx, ready_rx) = std::sync::mpsc::channel();
                 ui_dispatcher.dispatch(move || {
-                    popup::prepare_show_on_ui_thread();
-                    let _ = ready_tx.send(());
+                    let _ = ready_tx.send(popup::prepare_show_on_ui_thread());
                 });
-                let _ = ready_rx.recv_timeout(std::time::Duration::from_millis(500));
-                popup::show_near(x, y);
+                match ready_rx.recv_timeout(std::time::Duration::from_millis(500)) {
+                    Ok(true) => popup::show_near(x, y),
+                    Ok(false) => {
+                        eprintln!("popup host was unavailable during synchronous reactivation");
+                    }
+                    Err(error) => eprintln!("popup reactivation timed out: {error}"),
+                }
             }
             ui_dispatcher.dispatch(popup::hide_from_switchers);
         }
@@ -1243,6 +1251,61 @@ fn meta_row(limits: &RateLimits) -> Element {
     .into()
 }
 
+fn reset_credits_card(limits: &RateLimits) -> Element {
+    let count = limits.available_reset_count();
+    let count_label = if count == 1 {
+        "1 available".into()
+    } else {
+        format!("{count} available")
+    };
+    let expiration = limits.next_reset_credit_expiration();
+    let expiration_label = expiration
+        .map(|expires_at| format!("Expires in {}", format_reset_in(Some(expires_at))))
+        .unwrap_or_else(|| "No expiration date".into());
+    let expiration_date = expiration
+        .map(|expires_at| {
+            expires_at
+                .with_timezone(&Local)
+                .format("%b %-d, %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|| "Available to use".into());
+
+    border(
+        vstack((
+            caption("BANKED RESETS").foreground(ThemeRef::SecondaryText),
+            grid((
+                vstack((
+                    text_block(count_label)
+                        .font_weight(600)
+                        .foreground(ThemeRef::SystemAttention),
+                    caption("Full rate-limit reset").foreground(ThemeRef::TertiaryText),
+                ))
+                .spacing(1.0)
+                .vertical_alignment(VerticalAlignment::Center),
+                vstack((
+                    text_block(expiration_label),
+                    caption(expiration_date).foreground(ThemeRef::TertiaryText),
+                ))
+                .spacing(1.0)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .vertical_alignment(VerticalAlignment::Center)
+                .grid_column(1),
+            ))
+            .columns([GridLength::Star(1.0), GridLength::Auto])
+            .rows([GridLength::Auto])
+            .horizontal_alignment(HorizontalAlignment::Stretch),
+        ))
+        .spacing(8.0),
+    )
+    .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+    .padding(Thickness::uniform(12.0))
+    .background(SURFACE_FILL)
+    .border_thickness(Thickness::uniform(1.0))
+    .border_brush(ThemeRef::CardStroke)
+    .into()
+}
+
 fn credits_label(limits: &RateLimits) -> String {
     if limits.credits.unlimited {
         "Unlimited".into()
@@ -1326,5 +1389,15 @@ mod tests {
             "Waiting for Codex..."
         );
         assert_eq!(format_reset_in(None), "Unavailable");
+    }
+
+    #[test]
+    fn banked_reset_count_and_expiration_are_formatted() {
+        assert_eq!(
+            format_reset_in(Some(
+                Utc::now() + ChronoDuration::days(2) + ChronoDuration::minutes(1),
+            )),
+            "2d"
+        );
     }
 }

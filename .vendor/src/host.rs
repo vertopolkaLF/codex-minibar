@@ -348,6 +348,19 @@ impl ReactorHost {
         Ok(())
     }
 
+    /// Reactivate an already-mounted window before a native re-show.
+    ///
+    /// Unlike [`Self::activate`], this call is synchronous. Tray popup hosts
+    /// need that guarantee: acknowledging a queued low-priority activation and
+    /// immediately issuing `SWP_SHOWWINDOW` can leave XAML composition parked
+    /// until another WinUI window happens to activate.
+    pub fn activate_now(&self) -> Result<()> {
+        apply_activate_chrome(&self.window, &self.chrome);
+        self.window.Activate()?;
+        clear_app_starting_cursor(&self.window);
+        Ok(())
+    }
+
     pub fn window(&self) -> &Window {
         &self.window
     }

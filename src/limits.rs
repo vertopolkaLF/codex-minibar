@@ -102,6 +102,7 @@ pub struct RateLimits {
     pub plan_type: Option<String>,
     pub limit_name: Option<String>,
     pub credits: Credits,
+    pub reset_credits: Option<RateLimitResetCreditsSummary>,
 }
 
 impl RateLimits {
@@ -129,6 +130,23 @@ impl RateLimits {
             &self.primary
         }
     }
+
+    pub fn available_reset_count(&self) -> u32 {
+        self.reset_credits
+            .as_ref()
+            .map(|summary| summary.available_count)
+            .unwrap_or(0)
+    }
+
+    pub fn next_reset_credit_expiration(&self) -> Option<DateTime<Utc>> {
+        self.reset_credits
+            .as_ref()?
+            .credits
+            .iter()
+            .filter(|credit| credit.status.eq_ignore_ascii_case("available"))
+            .filter_map(|credit| credit.expires_at)
+            .min()
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -136,6 +154,22 @@ pub struct Credits {
     pub has_credits: bool,
     pub unlimited: bool,
     pub balance: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RateLimitResetCreditsSummary {
+    pub available_count: u32,
+    pub credits: Vec<RateLimitResetCredit>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RateLimitResetCredit {
+    pub reset_type: Option<String>,
+    pub status: String,
+    pub granted_at: Option<DateTime<Utc>>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub title: Option<String>,
+    pub description: Option<String>,
 }
 
 #[cfg(test)]

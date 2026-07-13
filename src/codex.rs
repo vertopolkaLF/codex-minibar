@@ -11,7 +11,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use chrono::{TimeZone, Utc};
 use serde_json::{Value, json};
 
-use crate::limits::{Credits, LimitWindow, RateLimits};
+use crate::limits::{
+    Credits, LimitWindow, RateLimitResetCredit, RateLimitResetCreditsSummary, RateLimits,
+};
 use crate::worker::{Activator, LimitProvider};
 
 pub const ACTIVATION_MODEL: &str = "gpt-5.4-mini";
@@ -218,6 +220,7 @@ pub fn parse_rate_limits(
             .and_then(Value::as_str)
             .map(str::to_owned),
         credits: parse_credits(limits.get("credits")),
+        reset_credits: parse_reset_credits(response.pointer("/result/rateLimitResetCredits")),
     }
     .normalized(sampled_at))
 }
@@ -257,6 +260,52 @@ fn parse_credits(value: Option<&Value>) -> Credits {
             .and_then(Value::as_str)
             .map(str::to_owned),
     }
+}
+
+fn parse_reset_credits(value: Option<&Value>) -> Option<RateLimitResetCreditsSummary> {
+    let value = value?;
+    let available_count = value
+        .get("availableCount")
+        .and_then(Value::as_u64)
+        .and_then(|count| u32::try_from(count).ok())
+        .unwrap_or(0);
+    let credits = value
+        .get("credits")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|credit| RateLimitResetCredit {
+            reset_type: credit
+                .get("resetType")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            status: credit
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            granted_at: parse_timestamp(credit.get("grantedAt")),
+            expires_at: parse_timestamp(credit.get("expiresAt")),
+            title: credit
+                .get("title")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            description: credit
+                .get("description")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        })
+        .collect();
+    Some(RateLimitResetCreditsSummary {
+        available_count,
+        credits,
+    })
+}
+
+fn parse_timestamp(value: Option<&Value>) -> Option<chrono::DateTime<Utc>> {
+    value
+        .and_then(Value::as_i64)
+        .and_then(|timestamp| Utc.timestamp_opt(timestamp, 0).single())
 }
 
 fn spawn_codex(executable: &Path, args: &[&str]) -> Result<Child> {
@@ -361,6 +410,34 @@ mod tests {
         let value = json!({"result": {"rateLimits": {"primary": {"usedPercent": 999}}}});
         let parsed = parse_rate_limits(&value, Utc::now()).unwrap();
         assert_eq!(parsed.primary.used_percent, Some(100));
+    }
+
+    #[test]
+    fn parses_banked_reset_credits_and_expiration() {
+        let value = json!({"result": {
+            "rateLimits": {"primary": null, "secondary": null},
+            "rateLimitResetCredits": {
+                "availableCount": 1,
+                "credits": [{
+                    "resetType": "codexRateLimits",
+                    "status": "available",
+                    "grantedAt": 1_783_965_251_i64,
+                    "expiresAt": 1_786_557_251_i64,
+                    "title": "Full reset",
+                    "description": "One free rate limit reset."
+                }]
+            }
+        }});
+
+        let parsed = parse_rate_limits(&value, Utc::now()).unwrap();
+        let summary = parsed.reset_credits.as_ref().unwrap();
+        assert_eq!(summary.available_count, 1);
+        assert_eq!(summary.credits[0].status, "available");
+        assert_eq!(summary.credits[0].title.as_deref(), Some("Full reset"));
+        assert_eq!(
+            parsed.next_reset_credit_expiration(),
+            Utc.timestamp_opt(1_786_557_251, 0).single()
+        );
     }
 
     #[test]
