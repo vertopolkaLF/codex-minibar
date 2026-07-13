@@ -11,6 +11,8 @@
 <p align="center">
   <a href="https://github.com/vertopolkaLF/codex-minibar/releases">Download</a>
   |
+  <a href="https://vertopolkalf.github.io/codex-minibar/">Website</a>
+  |
   <a href="https://github.com/vertopolkaLF/codex-minibar/issues">Issues</a>
 </p>
 
