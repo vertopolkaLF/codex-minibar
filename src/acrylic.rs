@@ -29,18 +29,39 @@ fn acrylic_xaml() -> String {
     )
 }
 
-/// Host a rounded `SystemBackdropElement` inside `mount` (a `Panel`).
-pub fn install_into(mount: windows_core::IInspectable) {
-    let _ = install_into_inner(mount);
+/// Full-window Mica hosted inside the XAML visual tree. Unlike
+/// `Window.SystemBackdrop`, this is composed with the rest of the UI instead
+/// of being presented as a separate window backdrop surface.
+fn mica_xaml() -> &'static str {
+    r#"
+<SystemBackdropElement
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    HorizontalAlignment="Stretch"
+    VerticalAlignment="Stretch">
+    <SystemBackdropElement.SystemBackdrop>
+        <MicaBackdrop />
+    </SystemBackdropElement.SystemBackdrop>
+</SystemBackdropElement>
+"#
 }
 
-fn install_into_inner(mount: windows_core::IInspectable) -> Result<()> {
+/// Host a rounded `SystemBackdropElement` inside `mount` (a `Panel`).
+pub fn install_into(mount: windows_core::IInspectable) {
+    let _ = install_into_inner(mount, &acrylic_xaml());
+}
+
+/// Host Mica inside `mount` as part of the XAML composition tree.
+pub fn install_mica_into(mount: windows_core::IInspectable) -> Result<()> {
+    install_into_inner(mount, mica_xaml())
+}
+
+fn install_into_inner(mount: windows_core::IInspectable, xaml: &str) -> Result<()> {
     let panel: IPanel = mount.cast()?;
     let children = panel.Children()?;
     if children.Size()? > 0 {
         return Ok(());
     }
-    let backdrop = XamlReader::Load(acrylic_xaml())?;
+    let backdrop = XamlReader::Load(xaml)?;
     let element: UIElement = backdrop.cast()?;
     children.Append(&element)?;
     Ok(())

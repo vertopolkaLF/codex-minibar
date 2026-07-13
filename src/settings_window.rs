@@ -75,7 +75,6 @@ pub fn open(
                 recon.eager_templated_realization = true;
             },
         )?);
-        host.set_backdrop(Backdrop::Mica);
         // Force Dark so the XAML island clear color is black, not white.
         set_requested_theme(RequestedTheme::Dark);
         set_settings_window_icon();
@@ -443,8 +442,7 @@ pub fn render(
     .vertical_alignment(VerticalAlignment::Stretch);
 
     let page = border(page_content)
-        // Standard Mica on the window; content gets Fluent LayerFill — a light
-        // translucent lift so the pane reads slightly whiter than raw Mica chrome.
+        // Standard Fluent content layer over the element-level Mica base.
         .background(ThemeRef::LayerFill)
         .corner_radii(CornerRadii {
             top_left: 12.0,
@@ -474,7 +472,21 @@ pub fn render(
         .columns([GridLength::Pixel(220.0), GridLength::Star(1.0)])
         .rows([GridLength::Star(1.0)])
         .background(Color::transparent());
-    grid((title_bar.grid_row(0), shell.grid_row(1)))
+    let mica = {
+        let mut host = swap_chain_panel()
+            .grid_row_span(2)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .vertical_alignment(VerticalAlignment::Stretch);
+        host.mounted = Some(Callback::new(|native: Option<_>| {
+            if let Some(native) = native
+                && let Err(error) = crate::acrylic::install_mica_into(native)
+            {
+                eprintln!("Could not install settings Mica element: {error:?}");
+            }
+        }));
+        host
+    };
+    grid((mica, title_bar.grid_row(0), shell.grid_row(1)))
         .rows([GridLength::Auto, GridLength::Star(1.0)])
         .columns([GridLength::Star(1.0)])
         .background(Color::transparent())

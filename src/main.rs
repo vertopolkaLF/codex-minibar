@@ -74,6 +74,7 @@ fn run() -> Result<()> {
     popup::set_client_height_dip(initial_height);
     let state = Arc::new(AppState {
         settings,
+        limits: Mutex::new(Default::default()),
         commands,
         worker: Mutex::new(worker),
         startup_error,

@@ -47,6 +47,10 @@ fn format_last_activation(limits: &RateLimits, fallback_attempt: Option<DateTime
 /// Shared startup state handed from `main` into the reactor render tree.
 pub struct AppState {
     pub settings: Settings,
+    /// The sole live rate-limit snapshot. Both the tray and popup read this
+    /// store, and worker results replace it atomically before either surface
+    /// is repainted.
+    pub limits: Mutex<RateLimits>,
     pub commands: Option<Sender<WorkerCommand>>,
     pub worker: Mutex<Option<crate::worker::WorkerHandle>>,
     pub startup_error: Option<String>,
@@ -59,6 +63,19 @@ pub struct AppState {
 }
 
 impl AppState {
+    fn current_limits(&self) -> RateLimits {
+        self.limits
+            .lock()
+            .map(|limits| limits.clone())
+            .unwrap_or_default()
+    }
+
+    fn replace_limits(&self, limits: RateLimits) {
+        if let Ok(mut current) = self.limits.lock() {
+            *current = limits;
+        }
+    }
+
     fn take_worker_events(&self) -> Option<Receiver<WorkerEvent>> {
         self.worker.lock().ok()?.as_mut()?.take_events()
     }
@@ -74,9 +91,10 @@ impl AppState {
 
 #[derive(Clone, Debug, PartialEq)]
 struct UiState {
-    limits: RateLimits,
     last_activation: String,
     error: Option<String>,
+    /// A refresh has been requested and is waiting for the worker's next sample.
+    refreshing: bool,
     show_used_percentage: bool,
     hide_plan_credits: bool,
     update_version: Option<String>,
@@ -127,9 +145,9 @@ impl SettingsTab {
 impl Default for UiState {
     fn default() -> Self {
         Self {
-            limits: RateLimits::default(),
             last_activation: "Never".into(),
             error: None,
+            refreshing: false,
             show_used_percentage: false,
             hide_plan_credits: false,
             update_version: None,
@@ -156,6 +174,9 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             .map(|update| update.version),
         ..UiState::default()
     });
+    // Rendering observes the same snapshot that the tray consumes; UiState
+    // deliberately contains only view metadata, never a second copy of limits.
+    let limits = state.current_limits();
     let commands = state.commands.clone();
     let ui_dispatcher = cx.use_ui_marshaller();
     let settings_tx = state.settings_tx.clone();
@@ -176,9 +197,15 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
 
     let refresh = {
         let commands = commands.clone();
+        let set_ui = set_ui.clone();
+        let ui = ui.clone();
         move || {
             if let Some(commands) = &commands {
-                let _ = commands.send(WorkerCommand::Refresh);
+                if commands.send(WorkerCommand::Refresh).is_ok() {
+                    let mut ui = ui.clone();
+                    ui.refreshing = true;
+                    set_ui.call(ui);
+                }
             }
         }
     };
@@ -187,20 +214,20 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let mut body: Vec<Element> = vec![
         limit_card(
             "5h Session",
-            &ui.limits.primary,
+            &limits.primary,
             ui.show_used_percentage,
-            ui.limits.five_hour_disabled(),
+            limits.five_hour_disabled(),
         ),
         limit_card(
             "Weekly",
-            &ui.limits.secondary,
+            &limits.secondary,
             ui.show_used_percentage,
             false,
         ),
     ];
 
     if !ui.hide_plan_credits {
-        body.push(meta_row(&ui.limits));
+        body.push(meta_row(&limits));
     }
 
     if let Some(error) = &ui.error {
@@ -239,10 +266,14 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         grid((
             vstack((
                 body_strong("Codex Minibar").foreground(ThemeRef::SecondaryText),
-                caption(format!(
-                    "Updated {}",
-                    sample_freshness(ui.limits.sampled_at).to_lowercase()
-                ))
+                caption(if ui.refreshing {
+                    "Refreshing…".into()
+                } else {
+                    format!(
+                        "Updated {}",
+                        sample_freshness(limits.sampled_at).to_lowercase()
+                    )
+                })
                 .foreground(ThemeRef::TertiaryText),
             ))
             .spacing(0.0)
@@ -662,7 +693,7 @@ fn start_background_bridge(
 
         if let Err(error) = tray.sync(
             &widgets,
-            &ui.limits,
+            &state.current_limits(),
             update_available_from_phase(&update_phase),
         ) {
             ui.error = Some(error.to_string());
@@ -693,7 +724,7 @@ fn start_background_bridge(
             // Explorer animate a remove/add sequence and causes a visible flash.
             if let Err(error) = tray.sync(
                 widgets,
-                &ui.limits,
+                &state.current_limits(),
                 update_available_from_phase(&phase),
             ) {
                 ui.error = Some(error.to_string());
@@ -746,7 +777,7 @@ fn start_background_bridge(
             ui.update_version = update_version_from_phase(update_phase);
             if let Err(error) = tray.sync(
                 widgets,
-                &ui.limits,
+                &state.current_limits(),
                 update_available_from_phase(update_phase),
             ) {
                 ui.error = Some(error.to_string());
@@ -784,7 +815,14 @@ fn start_background_bridge(
                     &mut update_phase,
                     &mut widgets,
                 );
-                if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings_tx, &state) {
+                if pump_tray_and_dismiss(
+                    &tray,
+                    &ui_dispatcher,
+                    &settings_tx,
+                    &state,
+                    &mut ui,
+                    &set_ui,
+                ) {
                     drop(tray);
                     state.shutdown_worker();
                     std::process::exit(0);
@@ -812,13 +850,24 @@ fn start_background_bridge(
                 &mut update_phase,
                 &mut widgets,
             );
-            if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings_tx, &state) {
+            if pump_tray_and_dismiss(
+                &tray,
+                &ui_dispatcher,
+                &settings_tx,
+                &state,
+                &mut ui,
+                &set_ui,
+            ) {
                 drop(tray);
                 state.shutdown_worker();
                 std::process::exit(0);
             }
             match events.recv_timeout(Duration::from_millis(16)) {
                 Ok(WorkerEvent::LimitsUpdated(limits)) => {
+                    // Publish once, then let both native tray and WinUI render
+                    // from that exact snapshot.
+                    state.replace_limits(limits);
+                    let limits = state.current_limits();
                     limit_notifications.observe(&limits, &notification_settings);
                     if let Err(error) = tray.sync(
                         &widgets,
@@ -830,7 +879,7 @@ fn start_background_bridge(
                         ui.error = None;
                     }
                     ui.last_activation = format_last_activation(&limits, fallback_attempt);
-                    ui.limits = limits;
+                    ui.refreshing = false;
                     set_ui.call(ui.clone());
                 }
                 Ok(WorkerEvent::ActivationSucceeded) => {
@@ -845,6 +894,7 @@ fn start_background_bridge(
                 }
                 Ok(WorkerEvent::PollFailed(error)) => {
                     ui.error = Some(error);
+                    ui.refreshing = false;
                     set_ui.call(ui.clone());
                 }
                 Ok(WorkerEvent::Stopped) => break,
@@ -861,6 +911,8 @@ fn pump_tray_and_dismiss(
     ui_dispatcher: &UiMarshaller,
     settings_tx: &Sender<Settings>,
     state: &AppState,
+    ui: &mut UiState,
+    set_ui: &AsyncSetState<UiState>,
 ) -> bool {
     use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
 
@@ -879,6 +931,13 @@ fn pump_tray_and_dismiss(
             if popup::is_visible() {
                 popup::hide();
             } else {
+                // Opening the popup should always fetch a current snapshot.
+                if let Some(commands) = &state.commands
+                    && commands.send(WorkerCommand::Refresh).is_ok()
+                {
+                    ui.refreshing = true;
+                    set_ui.call(ui.clone());
+                }
                 // WinUI must Activate on the UI thread before a post-park show
                 // will actually paint — wait briefly so that runs first.
                 let (ready_tx, ready_rx) = std::sync::mpsc::channel();
@@ -930,6 +989,8 @@ fn pump_tray_and_dismiss(
     _ui_dispatcher: &UiMarshaller,
     _settings_tx: &Sender<Settings>,
     _state: &AppState,
+    _ui: &mut UiState,
+    _set_ui: &AsyncSetState<UiState>,
 ) -> bool {
     false
 }
