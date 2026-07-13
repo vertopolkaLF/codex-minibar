@@ -99,7 +99,8 @@ ul {
 
 .screen-shell {
   position: relative;
-  height: 100%;
+  height: 98%;
+  width: 99%;
   overflow: hidden;
   border: 0 solid #2b3340;
   border-right-width: 8px;
@@ -108,6 +109,8 @@ ul {
   background: #080b0f;
   box-shadow:
     8px 8px 0 #11151b,
+    8px 0px 0 #11151b,
+    0px 8px 0 #11151b,
     18px 18px 60px rgba(28, 40, 58, 0.22),
     inset 0 1px 0 rgba(255, 255, 255, 0.035);
 }
