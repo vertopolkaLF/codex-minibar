@@ -30,7 +30,7 @@ jobs:
         run: |
           mkdir -p _site/assets
           cp site/index.html site/styles.css site/script.js _site/
-          cp site/assets/app-icon.png _site/assets/
+          cp -a site/assets/. _site/assets/
           touch _site/.nojekyll
       - name: Configure Pages
         uses: actions/configure-pages@v5
