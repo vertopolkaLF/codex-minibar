@@ -16,6 +16,25 @@ pub struct LimitWindow {
 pub struct PaceTip {
     /// Marker position on the bar in the same units as the fill (used or remaining).
     pub percent: f64,
+    /// Actual used percentage minus the expected even-burn percentage.
+    pub delta_percent: f64,
+}
+
+impl PaceTip {
+    /// Compact CodexBar-style description for the usage-card header.
+    pub fn summary(self) -> String {
+        const ON_PACE_TOLERANCE: f64 = 2.0;
+        if self.delta_percent.abs() <= ON_PACE_TOLERANCE {
+            return "On pace".into();
+        }
+
+        let delta = self.delta_percent.abs().round() as u32;
+        if self.delta_percent > 0.0 {
+            format!("{delta}% in deficit")
+        } else {
+            format!("{delta}% in reserve")
+        }
+    }
 }
 
 impl LimitWindow {
@@ -62,7 +81,7 @@ impl LimitWindow {
             return None;
         }
         // Need a real usage sample; otherwise the bar itself is empty/unavailable.
-        self.used_percent?;
+        let actual_used = f64::from(self.used_percent?);
         let percent = if show_used {
             expected_used
         } else {
@@ -70,6 +89,7 @@ impl LimitWindow {
         };
         Some(PaceTip {
             percent: percent.clamp(0.0, 100.0),
+            delta_percent: actual_used - expected_used,
         })
     }
 }
@@ -153,6 +173,16 @@ mod tests {
         let (window, now) = window_with_hour_left(80);
         let tip = window.pace_tip(false, now).unwrap();
         assert!((tip.percent - 20.0).abs() < 0.01);
+        assert_eq!(tip.summary(), "On pace");
+    }
+
+    #[test]
+    fn pace_tip_summarizes_reserve_and_deficit_like_codexbar() {
+        let (reserve, now) = window_with_hour_left(70);
+        assert_eq!(reserve.pace_tip(false, now).unwrap().summary(), "10% in reserve");
+
+        let (deficit, now) = window_with_hour_left(92);
+        assert_eq!(deficit.pace_tip(false, now).unwrap().summary(), "12% in deficit");
     }
 
     #[test]

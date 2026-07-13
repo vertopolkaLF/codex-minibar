@@ -1124,6 +1124,31 @@ fn limit_card(
     };
     let reset = format_reset_in(window.resets_at);
 
+    let header: Element = if let Some(pace) = pace {
+        grid((
+            caption(title.to_uppercase())
+                .foreground(ThemeRef::SecondaryText)
+                .vertical_alignment(VerticalAlignment::Center),
+            caption(pace.summary())
+                .foreground(ThemeRef::SecondaryText)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .vertical_alignment(VerticalAlignment::Center)
+                .grid_column(1),
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Auto])
+        .rows([GridLength::Auto])
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Center)
+        .into()
+    } else {
+        grid((caption(title.to_uppercase()).foreground(ThemeRef::SecondaryText),))
+            .columns([GridLength::Star(1.0)])
+            .rows([GridLength::Auto])
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .vertical_alignment(VerticalAlignment::Center)
+            .into()
+    };
+
     let footer: Element = if show_reset {
         grid((
             hstack((text_block(remaining_label)
@@ -1157,11 +1182,7 @@ fn limit_card(
 
     border(
         vstack((
-            grid((caption(title.to_uppercase()).foreground(ThemeRef::SecondaryText),))
-                .columns([GridLength::Star(1.0)])
-                .rows([GridLength::Auto])
-                .horizontal_alignment(HorizontalAlignment::Stretch)
-                .vertical_alignment(VerticalAlignment::Center),
+            header,
             rounded_progress(progress, accent, pace),
             footer,
         ))
