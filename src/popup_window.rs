@@ -1065,16 +1065,12 @@ fn rounded_progress(value: f64, fill: ThemeRef, pace: Option<PaceTip>) -> Elemen
     .into()
 }
 
-/// Vertical pace tick (`#0003`) so expected burn rate is easy to spot on the bar.
+/// High-contrast vertical tick showing the expected even-burn position.
 fn pace_marker_layer(pace: PaceTip) -> Element {
-    const LINE_WIDTH: f64 = 1.0;
-    // CSS `#0003` → rgba(0, 0, 0, 0x33/255).
-    const PACE_LINE: Color = Color {
-        a: 0x33,
-        r: 0,
-        g: 0,
-        b: 0,
-    };
+    // Keep this wider than a physical pixel and use the theme's primary text
+    // brush. The old 1 DIP, 20%-opaque black tick effectively disappeared on
+    // the dark track (and became even harder to see on high-DPI displays).
+    const LINE_WIDTH: f64 = 2.0;
     let percent = pace.percent.clamp(0.0, 100.0);
     let (left_star, right_star) = if percent <= 0.0 {
         (0.0001, 100.0)
@@ -1086,7 +1082,7 @@ fn pace_marker_layer(pace: PaceTip) -> Element {
 
     grid((border(Element::Empty)
         .width(LINE_WIDTH)
-        .background(PACE_LINE)
+        .background(ThemeRef::PrimaryText)
         .horizontal_alignment(HorizontalAlignment::Left)
         .vertical_alignment(VerticalAlignment::Stretch)
         .grid_column(1),))
