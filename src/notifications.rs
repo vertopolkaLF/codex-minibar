@@ -146,7 +146,6 @@ impl LimitNotificationTracker {
             && limits.secondary.resets_at.is_some();
 
         if primary_reset {
-            self.low_usage_notified_primary = None;
             if settings.limits_changed {
                 show(
                     "5-hour limit reset",
@@ -155,7 +154,6 @@ impl LimitNotificationTracker {
             }
         }
         if secondary_reset {
-            self.low_usage_notified_secondary = None;
             if settings.limits_changed {
                 show(
                     "Weekly limit reset",
@@ -206,6 +204,7 @@ fn maybe_notify_low_usage(
         resets_at,
         threshold,
         already_notified_for,
+        Utc::now(),
     ) {
         return;
     }
@@ -222,6 +221,7 @@ fn take_low_usage_notification(
     resets_at: Option<DateTime<Utc>>,
     threshold: u8,
     already_notified_for: &mut Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
 ) -> bool {
     let Some(remaining) = remaining else {
         return false;
@@ -229,9 +229,21 @@ fn take_low_usage_notification(
     let Some(resets_at) = resets_at else {
         return false;
     };
-    if remaining > threshold || *already_notified_for == Some(resets_at) {
+    if remaining > threshold {
         return false;
     }
+
+    // `resets_at` is not a reliable window identifier by itself: it can move or
+    // disappear temporarily while Codex refreshes its rate-limit snapshot. Once
+    // a low-usage toast has fired, keep it latched until that window's original
+    // deadline has actually passed. This prevents timestamp corrections from
+    // producing duplicate notifications during the same reset period.
+    if let Some(notified_reset) = *already_notified_for
+        && (now < notified_reset || resets_at <= notified_reset)
+    {
+        return false;
+    }
+
     *already_notified_for = Some(resets_at);
     true
 }
@@ -253,36 +265,51 @@ mod tests {
             Some(first_reset),
             20,
             &mut notified_for,
+            first_reset - chrono::Duration::hours(1),
         ));
         assert!(take_low_usage_notification(
             Some(20),
             Some(first_reset),
             20,
             &mut notified_for,
+            first_reset - chrono::Duration::hours(1),
         ));
         assert!(!take_low_usage_notification(
             Some(19),
             Some(first_reset),
             20,
             &mut notified_for,
+            first_reset - chrono::Duration::minutes(30),
         ));
         assert!(!take_low_usage_notification(
             Some(75),
             Some(first_reset),
             20,
             &mut notified_for,
+            first_reset - chrono::Duration::minutes(30),
         ));
         assert!(!take_low_usage_notification(
             Some(20),
             Some(first_reset),
             20,
             &mut notified_for,
+            first_reset + chrono::Duration::minutes(1),
+        ));
+        // A corrected reset timestamp is still the same active period until the
+        // reset we notified for has elapsed.
+        assert!(!take_low_usage_notification(
+            Some(19),
+            Some(next_reset),
+            20,
+            &mut notified_for,
+            first_reset - chrono::Duration::minutes(1),
         ));
         assert!(take_low_usage_notification(
             Some(20),
             Some(next_reset),
             20,
             &mut notified_for,
+            first_reset + chrono::Duration::minutes(1),
         ));
     }
 }
