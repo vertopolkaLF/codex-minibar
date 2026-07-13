@@ -366,6 +366,7 @@ pub fn render(
         cx.use_state(settings.automatic_activation);
     let (show_used_percentage, set_show_used_percentage) =
         cx.use_state(settings.show_used_percentage);
+    let (show_usage_pace, set_show_usage_pace) = cx.use_state(settings.show_usage_pace);
     let (hide_plan_credits, set_hide_plan_credits) = cx.use_state(settings.hide_plan_credits);
     let (activation_failure, set_activation_failure) =
         cx.use_state(settings.notifications.activation_failure);
@@ -376,6 +377,13 @@ pub fn render(
         cx.use_state(settings.notifications.low_usage_threshold_percent);
     let (low_usage_expanded, set_low_usage_expanded) = cx.use_state(true);
     let (low_usage_expand_progress, set_low_usage_expand_progress) = cx.use_async_state(1.0_f64);
+    let (weekly_low_usage_enabled, set_weekly_low_usage_enabled) =
+        cx.use_state(settings.notifications.weekly_low_usage_enabled);
+    let (weekly_low_usage_threshold, set_weekly_low_usage_threshold) =
+        cx.use_state(settings.notifications.weekly_low_usage_threshold_percent);
+    let (weekly_low_usage_expanded, set_weekly_low_usage_expanded) = cx.use_state(false);
+    let (weekly_low_usage_expand_progress, set_weekly_low_usage_expand_progress) =
+        cx.use_async_state(0.0_f64);
     let (hovered_card_id, set_hovered_card_id) = cx.use_state(None::<String>);
     let (tray_widgets, set_tray_widgets) = cx.use_state(settings.tray_widgets.clone());
     let (check_for_updates, set_check_for_updates) = cx.use_state(settings.check_for_updates);
@@ -384,14 +392,14 @@ pub fn render(
 
     // Padding lives on tab content (inside the scroller), not on this pane, so
     // LayerFill crops flush to the window edge while long tabs stay scrollable.
-    let page_content = border(
-        scroll_viewer(
-            border(tab_content(
+    let page_scroller = scroll_viewer(
+        border(tab_content(
                 &settings,
                 rendered_tab,
                 automatic_activation,
                 start_at_login,
                 show_used_percentage,
+                show_usage_pace,
                 hide_plan_credits,
                 activation_failure,
                 limits_reset,
@@ -399,6 +407,10 @@ pub fn render(
                 low_usage_threshold,
                 low_usage_expanded,
                 low_usage_expand_progress,
+                weekly_low_usage_enabled,
+                weekly_low_usage_threshold,
+                weekly_low_usage_expanded,
+                weekly_low_usage_expand_progress,
                 &tray_widgets,
                 &hovered_card_id,
                 check_for_updates,
@@ -407,6 +419,7 @@ pub fn render(
                 set_automatic_activation,
                 set_start_at_login,
                 set_show_used_percentage,
+                set_show_usage_pace,
                 set_hide_plan_credits,
                 set_activation_failure,
                 set_limits_reset,
@@ -414,6 +427,10 @@ pub fn render(
                 set_low_usage_threshold,
                 set_low_usage_expanded,
                 set_low_usage_expand_progress,
+                set_weekly_low_usage_enabled,
+                set_weekly_low_usage_threshold,
+                set_weekly_low_usage_expanded,
+                set_weekly_low_usage_expand_progress,
                 set_tray_widgets,
                 set_hovered_card_id,
                 set_check_for_updates,
@@ -429,12 +446,25 @@ pub fn render(
             })
             .with_key(format!("settings-page-{}", rendered_tab.tag()))
             .horizontal_alignment(HorizontalAlignment::Stretch)
-            .vertical_alignment(VerticalAlignment::Top),
-        )
+        .vertical_alignment(VerticalAlignment::Top),
+    )
+        // Keys are honored only in multi-child containers by windows-reactor.
+        // The Grid below therefore remounts this native ScrollViewer on every
+        // rendered-tab change, guaranteeing a fresh zero scroll offset.
+        .with_key(format!("settings-scroll-{}", rendered_tab.tag()))
         .horizontal_scroll_bar_visibility(ScrollBarVisibility::Disabled)
         .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
         .horizontal_alignment(HorizontalAlignment::Stretch)
-        .vertical_alignment(VerticalAlignment::Stretch),
+        .vertical_alignment(VerticalAlignment::Stretch)
+        .grid_row(0)
+        .grid_column(0);
+
+    let page_content = border(
+        grid((page_scroller,))
+            .columns([GridLength::Star(1.0)])
+            .rows([GridLength::Star(1.0)])
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .vertical_alignment(VerticalAlignment::Stretch),
     )
     .opacity(if page_visible { 1.0 } else { 0.0 })
     .with_opacity_transition(CONTROL_FAST_ANIMATION)
@@ -507,19 +537,18 @@ fn settings_title_icon_uri() -> String {
     format!("file:///{}", path.to_string_lossy().replace('\\', "/"))
 }
 
-/// The title bar uses a compact 32px asset, while About intentionally uses a
-/// high-resolution source so its larger presentation stays crisp on HiDPI.
+/// About mirrors the README hero with the high-resolution app icon including
+/// its rounded background.
 fn settings_about_icon_uri() -> String {
     let packaged = std::env::current_exe()
         .ok()
         .and_then(|path| {
             path.parent()
-                .map(|parent| parent.join("assets/icons/app-icon-512.png"))
+                .map(|parent| parent.join("assets/app-icon.png"))
         })
         .filter(|path| path.exists());
     let path = packaged.unwrap_or_else(|| {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("assets/icons/app-icon-512.png")
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/app-icon.png")
     });
     format!("file:///{}", path.to_string_lossy().replace('\\', "/"))
 }
@@ -533,8 +562,7 @@ fn settings_github_icon_uri() -> String {
         })
         .filter(|path| path.exists());
     let path = packaged.unwrap_or_else(|| {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("assets/icons/github-iconify.svg")
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/icons/github-iconify.svg")
     });
     format!("file:///{}", path.to_string_lossy().replace('\\', "/"))
 }
@@ -545,6 +573,7 @@ fn tab_content(
     automatic_activation: bool,
     start_at_login: bool,
     show_used_percentage: bool,
+    show_usage_pace: bool,
     hide_plan_credits: bool,
     activation_failure: bool,
     limits_reset: bool,
@@ -552,6 +581,10 @@ fn tab_content(
     low_usage_threshold: u8,
     low_usage_expanded: bool,
     low_usage_expand_progress: f64,
+    weekly_low_usage_enabled: bool,
+    weekly_low_usage_threshold: u8,
+    weekly_low_usage_expanded: bool,
+    weekly_low_usage_expand_progress: f64,
     tray_widgets: &[TrayWidget],
     hovered_card_id: &Option<String>,
     check_for_updates: bool,
@@ -560,6 +593,7 @@ fn tab_content(
     set_automatic_activation: SetState<bool>,
     set_start_at_login: SetState<bool>,
     set_show_used_percentage: SetState<bool>,
+    set_show_usage_pace: SetState<bool>,
     set_hide_plan_credits: SetState<bool>,
     set_activation_failure: SetState<bool>,
     set_limits_reset: SetState<bool>,
@@ -567,6 +601,10 @@ fn tab_content(
     set_low_usage_threshold: SetState<u8>,
     set_low_usage_expanded: SetState<bool>,
     set_low_usage_expand_progress: AsyncSetState<f64>,
+    set_weekly_low_usage_enabled: SetState<bool>,
+    set_weekly_low_usage_threshold: SetState<u8>,
+    set_weekly_low_usage_expanded: SetState<bool>,
+    set_weekly_low_usage_expand_progress: AsyncSetState<f64>,
     set_tray_widgets: SetState<Vec<TrayWidget>>,
     set_hovered_card_id: SetState<Option<String>>,
     set_check_for_updates: SetState<bool>,
@@ -577,11 +615,14 @@ fn tab_content(
     let apply_automatic_activation = settings_tx.clone();
     let apply_start_at_login = settings_tx.clone();
     let apply_show_used_percentage = settings_tx.clone();
+    let apply_show_usage_pace = settings_tx.clone();
     let apply_hide_plan_credits = settings_tx.clone();
     let apply_activation_failure = settings_tx.clone();
     let apply_limits_reset = settings_tx.clone();
     let apply_low_usage_enabled = settings_tx.clone();
     let apply_low_usage_threshold = settings_tx.clone();
+    let apply_weekly_low_usage_enabled = settings_tx.clone();
+    let apply_weekly_low_usage_threshold = settings_tx.clone();
     let apply_check_for_updates = settings_tx.clone();
     let apply_notify_on_update = settings_tx.clone();
     let (title, rows) = match tab {
@@ -589,26 +630,8 @@ fn tab_content(
             "General",
             vec![
                 settings_toggle_card_with_description(
-                    "Automatic limit activation",
-                    Some("Automatically sends short message to start 5h limit"),
-                    automatic_activation,
-                    move |value| {
-                        persist_bool(
-                            set_automatic_activation.clone(),
-                            apply_automatic_activation.clone(),
-                            value,
-                            |settings, value| {
-                                settings.automatic_activation = value;
-                            },
-                        );
-                    },
-                    "general-automatic-activation",
-                    hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("general-automatic-activation"),
-                settings_toggle_card(
-                    "Automatic Startup",
+                    "Start with Windows",
+                    Some("Opens Codex Minibar automatically after you sign in."),
                     start_at_login,
                     move |value| {
                         persist_bool(
@@ -625,8 +648,30 @@ fn tab_content(
                     set_hovered_card_id.clone(),
                 )
                 .with_key("general-startup"),
-                settings_toggle_card(
-                    "Show \"% used\" instead of \"% left\"",
+                settings_section_heading("Features").with_key("general-features-heading"),
+                settings_toggle_card_with_description(
+                    "Activate limits automatically",
+                    Some("Sends a short message when needed to begin the 5-hour usage window."),
+                    automatic_activation,
+                    move |value| {
+                        persist_bool(
+                            set_automatic_activation.clone(),
+                            apply_automatic_activation.clone(),
+                            value,
+                            |settings, value| {
+                                settings.automatic_activation = value;
+                            },
+                        );
+                    },
+                    "general-automatic-activation",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("general-automatic-activation"),
+                settings_section_heading("Customization").with_key("general-customization-heading"),
+                settings_toggle_card_with_description(
+                    "Show used percentage",
+                    Some("Reports consumed usage instead of the amount remaining."),
                     show_used_percentage,
                     move |value| {
                         persist_bool(
@@ -643,8 +688,29 @@ fn tab_content(
                     set_hovered_card_id.clone(),
                 )
                 .with_key("general-show-used"),
+                settings_toggle_card_with_description(
+                    "Show usage pace",
+                    Some(
+                        "Shows the expected-use marker and whether consumption is ahead of or behind schedule.",
+                    ),
+                    show_usage_pace,
+                    move |value| {
+                        persist_bool(
+                            set_show_usage_pace.clone(),
+                            apply_show_usage_pace.clone(),
+                            value,
+                            |settings, value| {
+                                settings.show_usage_pace = value;
+                            },
+                        );
+                    },
+                    "general-show-usage-pace",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("general-show-usage-pace"),
                 settings_toggle_card(
-                    "Hide row with plan/credits",
+                    "Hide plan and credits from popup",
                     hide_plan_credits,
                     move |value| {
                         persist_bool(
@@ -707,7 +773,7 @@ fn tab_content(
                 )
                 .with_key("notif-limits-reset"),
                 settings_toggle_expander(
-                    format!("When usage is down to {low_usage_threshold}%"),
+                    format!("When session usage is down to {low_usage_threshold}%"),
                     low_usage_enabled,
                     move |value| {
                         persist_bool(
@@ -727,7 +793,7 @@ fn tab_content(
                     hovered_card_id,
                     set_hovered_card_id.clone(),
                     settings_slider_content(
-                        "Notify when remaining usage reaches",
+                        "Notify when remaining session usage reaches",
                         low_usage_threshold,
                         5,
                         50,
@@ -746,21 +812,49 @@ fn tab_content(
                     ),
                 )
                 .with_key("notif-low-usage"),
-                settings_action_card(
-                    "Send a test toast to Windows",
-                    "Test notification",
-                    || {
-                        notifications::show(
-                            "Codex Minibar",
-                            "Test notification — if you can read this, toasts work.",
+                settings_toggle_expander(
+                    format!(
+                        "When weekly usage is down to {weekly_low_usage_threshold}%"
+                    ),
+                    weekly_low_usage_enabled,
+                    move |value| {
+                        persist_bool(
+                            set_weekly_low_usage_enabled.clone(),
+                            apply_weekly_low_usage_enabled.clone(),
+                            value,
+                            |settings, value| {
+                                settings.notifications.weekly_low_usage_enabled = value;
+                            },
                         );
                     },
-                    "notif-test",
+                    weekly_low_usage_expanded,
+                    weekly_low_usage_expand_progress,
+                    set_weekly_low_usage_expanded,
+                    set_weekly_low_usage_expand_progress,
+                    "notif-weekly-low-usage",
                     hovered_card_id,
                     set_hovered_card_id.clone(),
-                    None,
+                    settings_slider_content(
+                        "Notify when remaining weekly usage reaches",
+                        weekly_low_usage_threshold,
+                        5,
+                        50,
+                        5,
+                        move |value: f64| {
+                            let percent = value.round().clamp(5.0, 50.0) as u8;
+                            persist_u8(
+                                set_weekly_low_usage_threshold.clone(),
+                                apply_weekly_low_usage_threshold.clone(),
+                                percent,
+                                |settings, value| {
+                                    settings.notifications.weekly_low_usage_threshold_percent =
+                                        value;
+                                },
+                            );
+                        },
+                    ),
                 )
-                .with_key("notif-test"),
+                .with_key("notif-weekly-low-usage"),
             ],
         ),
         Tab::Advanced => (
@@ -820,6 +914,19 @@ fn tab_content(
         .into()
 }
 
+fn settings_section_heading(title: impl Into<String>) -> Element {
+    text_block(title)
+        .font_size(16.0)
+        .semibold()
+        .margin(Thickness {
+            left: 0.0,
+            top: 16.0,
+            right: 0.0,
+            bottom: 4.0,
+        })
+        .into()
+}
+
 fn update_status_label(phase: &UpdatePhase) -> String {
     match phase {
         UpdatePhase::Idle => "Look for the latest release on GitHub".into(),
@@ -850,47 +957,42 @@ fn about_settings_cards(
     let notify_for_check = notify_on_update;
 
     let hero = border(
-        grid((
+        vstack((
             Image::new_with_uri(settings_about_icon_uri())
-                .width(72.0)
-                .height(72.0)
-                .grid_column(0)
-                .vertical_alignment(VerticalAlignment::Top),
+                .width(112.0)
+                .height(112.0)
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .margin(Thickness {
+                    left: 0.0,
+                    top: 0.0,
+                    right: 0.0,
+                    bottom: 10.0,
+                }),
             vstack((
-                grid((
-                    text_block("Codex Minibar")
-                        .font_size(26.0)
-                        .bold()
-                        .grid_column(0)
-                        .vertical_alignment(VerticalAlignment::Center),
-                    border(text_block(version.clone()).font_size(13.0).bold())
-                        .padding(Thickness {
-                            left: 10.0,
-                            top: 4.0,
-                            right: 10.0,
-                            bottom: 4.0,
-                        })
-                        .background(Color { a: 72, r: 255, g: 137, b: 83 })
-                        .corner_radius(8.0)
-                        .grid_column(1)
-                        .vertical_alignment(VerticalAlignment::Center),
-                ))
-                .columns([GridLength::Auto, GridLength::Auto])
-                .rows([GridLength::Auto])
-                .column_spacing(12.0),
-                text_block("A lightweight Windows tray companion for Codex rate limits.")
-                    .font_size(15.0)
-                    .wrap()
-                    .foreground(ThemeRef::SecondaryText),
+                text_block("Codex Minibar")
+                    .font_size(26.0)
+                    .bold()
+                    .horizontal_alignment(HorizontalAlignment::Center),
+                text_block(format!("Version {version}"))
+                    .font_size(13.0)
+                    .foreground(ThemeRef::SecondaryText)
+                    .horizontal_alignment(HorizontalAlignment::Center),
             ))
-            .spacing(6.0)
-            .grid_column(1)
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .vertical_alignment(VerticalAlignment::Center),
+            .spacing(2.0)
+            .horizontal_alignment(HorizontalAlignment::Center),
+            text_block("A lightweight Windows tray companion for Codex rate limits.")
+                .font_size(15.0)
+                .wrap()
+                .foreground(ThemeRef::SecondaryText)
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .margin(Thickness {
+                    left: 0.0,
+                    top: 10.0,
+                    right: 0.0,
+                    bottom: 0.0,
+                }),
         ))
-        .columns([GridLength::Pixel(72.0), GridLength::Star(1.0)])
-        .rows([GridLength::Auto])
-        .column_spacing(18.0)
+        .spacing(0.0)
         .horizontal_alignment(HorizontalAlignment::Stretch),
     )
     .padding(Thickness {
@@ -1011,36 +1113,63 @@ fn about_settings_cards(
 
     let updates_card = about_section(
         "Updates",
-        vstack((
-            update_actions,
-            update_settings_separator,
-            update_options,
-        ))
-        .spacing(4.0),
+        vstack((update_actions, update_settings_separator, update_options)).spacing(4.0),
     )
     .with_key("about-updates");
 
     let resources = about_section(
         "Resources",
         grid((
-            about_action_card("GitHub", "Browse the source code", AboutCardIcon::GitHub, || {
-                let _ = crate::updater::open_url(REPO_URL);
-            }, "about-github", hovered_card_id, set_hovered_card_id.clone())
+            about_action_card(
+                "GitHub",
+                "Browse the source code",
+                AboutCardIcon::GitHub,
+                || {
+                    let _ = crate::updater::open_url(REPO_URL);
+                },
+                "about-github",
+                hovered_card_id,
+                set_hovered_card_id.clone(),
+            )
             .grid_row(0)
             .grid_column(0),
-            about_action_card("Releases", "See what's new", AboutCardIcon::Glyph("▤"), || {
-                let _ = crate::updater::open_url(RELEASES_URL);
-            }, "about-releases", hovered_card_id, set_hovered_card_id.clone())
+            about_action_card(
+                "Releases",
+                "See what's new",
+                AboutCardIcon::Glyph("▤"),
+                || {
+                    let _ = crate::updater::open_url(RELEASES_URL);
+                },
+                "about-releases",
+                hovered_card_id,
+                set_hovered_card_id.clone(),
+            )
             .grid_row(0)
             .grid_column(1),
-            about_action_card("Report an issue", "Found a bug?", AboutCardIcon::Glyph("⚑"), || {
-                let _ = crate::updater::open_url(ISSUES_URL);
-            }, "about-issues", hovered_card_id, set_hovered_card_id.clone())
+            about_action_card(
+                "Report an issue",
+                "Found a bug?",
+                AboutCardIcon::Glyph("⚑"),
+                || {
+                    let _ = crate::updater::open_url(ISSUES_URL);
+                },
+                "about-issues",
+                hovered_card_id,
+                set_hovered_card_id.clone(),
+            )
             .grid_row(1)
             .grid_column(0),
-            about_action_card("Author", "@vertopolkaLF", AboutCardIcon::Glyph("@"), || {
-                let _ = crate::updater::open_url("https://github.com/vertopolkaLF");
-            }, "about-author", hovered_card_id, set_hovered_card_id.clone())
+            about_action_card(
+                "Author",
+                "@vertopolkaLF",
+                AboutCardIcon::Glyph("@"),
+                || {
+                    let _ = crate::updater::open_url("https://github.com/vertopolkaLF");
+                },
+                "about-author",
+                hovered_card_id,
+                set_hovered_card_id.clone(),
+            )
             .grid_row(1)
             .grid_column(1),
         ))
@@ -1103,7 +1232,12 @@ fn about_action_card(
     let on_exit = move || set_hovered_id.call(None);
 
     let base: Element = border(Element::Empty)
-        .background(Color { a: 48, r: 255, g: 137, b: 83 })
+        .background(Color {
+            a: 48,
+            r: 255,
+            g: 137,
+            b: 83,
+        })
         .corner_radius(10.0)
         .relative_align_left()
         .relative_align_right()
@@ -1111,7 +1245,12 @@ fn about_action_card(
         .relative_align_bottom()
         .into();
     let hover: Element = border(Element::Empty)
-        .background(Color { a: 78, r: 255, g: 137, b: 83 })
+        .background(Color {
+            a: 78,
+            r: 255,
+            g: 137,
+            b: 83,
+        })
         .opacity(if hovered { 1.0 } else { 0.0 })
         .with_opacity_transition(CONTROL_FAST_ANIMATION)
         .corner_radius(10.0)

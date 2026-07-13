@@ -13,6 +13,9 @@ use crate::theme::{CONTROL_FASTER_ANIMATION, CONTROL_NORMAL_ANIMATION};
 const CARD_RADIUS: f64 = 8.0;
 const CARD_PADDING_X: f64 = 16.0;
 const CARD_ROW_HEIGHT: f64 = 60.0;
+const CARD_CONTENT_PADDING_Y: f64 = 14.0;
+/// Keep wrapped labels clear of the status text and toggle switch.
+const CARD_TRAILING_RESERVE: f64 = 148.0;
 /// Space between the toggle and the expander chevron (Windows Settings ≈ 6px).
 const TOGGLE_CHEVRON_GAP: f64 = 6.0;
 const CHEVRON_SIZE: f64 = 28.0;
@@ -108,11 +111,15 @@ pub(crate) fn settings_toggle_card_with_description(
     let label = label.into();
     let label_content: Element = match description {
         Some(description) => vstack((
-            text_block(label).font_size(14.0),
-            text_block(description).font_size(12.0).opacity(0.72),
+            text_block(label).font_size(14.0).wrap(),
+            text_block(description)
+                .font_size(12.0)
+                .opacity(0.72)
+                .wrap(),
         ))
+        .horizontal_alignment(HorizontalAlignment::Stretch)
         .into(),
-        None => text_block(label).into(),
+        None => text_block(label).wrap().into(),
     };
     let toggle_card = {
         let on_toggled = on_toggled.clone();
@@ -137,11 +144,12 @@ pub(crate) fn settings_toggle_card_with_description(
         label_content
             .margin(Thickness {
                 left: CARD_PADDING_X,
-                top: 0.0,
-                right: 0.0,
-                bottom: 0.0,
+                top: CARD_CONTENT_PADDING_Y,
+                right: CARD_TRAILING_RESERVE,
+                bottom: CARD_CONTENT_PADDING_Y,
             })
             .relative_align_left()
+            .relative_align_right()
             .relative_align_v_center()
             .on_tapped({
                 let toggle_card = toggle_card.clone();
@@ -178,7 +186,7 @@ pub(crate) fn settings_toggle_card_with_description(
     ];
 
     relative_panel(children)
-        .height(CARD_ROW_HEIGHT)
+        .min_height(CARD_ROW_HEIGHT)
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .background(Color::transparent())
         .on_pointer_entered(on_enter)

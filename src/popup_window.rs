@@ -96,6 +96,7 @@ struct UiState {
     /// A refresh has been requested and is waiting for the worker's next sample.
     refreshing: bool,
     show_used_percentage: bool,
+    show_usage_pace: bool,
     hide_plan_credits: bool,
     update_version: Option<String>,
 }
@@ -149,6 +150,7 @@ impl Default for UiState {
             error: None,
             refreshing: false,
             show_used_percentage: false,
+            show_usage_pace: true,
             hide_plan_credits: false,
             update_version: None,
         }
@@ -167,6 +169,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         error: state.startup_error.clone(),
         last_activation: format_last_activation(&RateLimits::default(), state.last_activation_at),
         show_used_percentage: state.settings.show_used_percentage,
+        show_usage_pace: state.settings.show_usage_pace,
         hide_plan_credits: state.settings.hide_plan_credits,
         update_version: state
             .updates
@@ -216,12 +219,14 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             "5h Session",
             &limits.primary,
             ui.show_used_percentage,
+            ui.show_usage_pace,
             limits.five_hour_disabled(),
         ),
         limit_card(
             "Weekly",
             &limits.secondary,
             ui.show_used_percentage,
+            ui.show_usage_pace,
             false,
         ),
     ];
@@ -686,6 +691,7 @@ fn start_background_bridge(
             error: state.startup_error.clone(),
             last_activation: format_last_activation(&RateLimits::default(), fallback_attempt),
             show_used_percentage: state.settings.show_used_percentage,
+            show_usage_pace: state.settings.show_usage_pace,
             hide_plan_credits: state.settings.hide_plan_credits,
             update_version: update_version_from_phase(&update_phase),
             ..UiState::default()
@@ -716,6 +722,7 @@ fn start_background_bridge(
                               settings: Settings| {
             let phase = updates.snapshot();
             ui.show_used_percentage = settings.show_used_percentage;
+            ui.show_usage_pace = settings.show_usage_pace;
             ui.hide_plan_credits = settings.hide_plan_credits;
             *notification_settings = settings.notifications;
             *widgets = settings.tray_widgets;
@@ -1103,6 +1110,7 @@ fn limit_card(
     title: &str,
     window: &LimitWindow,
     show_used_percentage: bool,
+    show_usage_pace: bool,
     disabled: bool,
 ) -> Element {
     let accent = ThemeRef::SystemAttention;
@@ -1119,7 +1127,9 @@ fn limit_card(
         let label = percentage
             .map(|value| format!("{value}% {suffix}"))
             .unwrap_or_else(|| "Unavailable".into());
-        let pace = window.pace_tip(show_used_percentage, Utc::now());
+        let pace = show_usage_pace
+            .then(|| window.pace_tip(show_used_percentage, Utc::now()))
+            .flatten();
         (label, f64::from(percentage.unwrap_or(0)), true, pace)
     };
     let reset = format_reset_in(window.resets_at);

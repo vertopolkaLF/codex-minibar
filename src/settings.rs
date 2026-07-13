@@ -70,10 +70,15 @@ pub struct NotificationSettings {
     pub approaching_reset: bool,
     /// Notify when a rate-limit window resets (`resets_at` changes).
     pub limits_changed: bool,
-    /// Notify when remaining usage drops to [`Self::low_usage_threshold_percent`].
+    /// Notify when remaining session usage drops to [`Self::low_usage_threshold_percent`].
     pub low_usage_enabled: bool,
-    /// Remaining-percent threshold for low-usage notifications (1–99).
+    /// Remaining session-percent threshold for low-usage notifications (1–99).
     pub low_usage_threshold_percent: u8,
+    /// Notify when remaining weekly usage drops to
+    /// [`Self::weekly_low_usage_threshold_percent`].
+    pub weekly_low_usage_enabled: bool,
+    /// Remaining weekly-percent threshold for low-usage notifications (1–99).
+    pub weekly_low_usage_threshold_percent: u8,
     /// Toast when a newer application release is discovered.
     pub update_available: bool,
 }
@@ -88,6 +93,8 @@ impl Default for NotificationSettings {
             limits_changed: false,
             low_usage_enabled: false,
             low_usage_threshold_percent: 20,
+            weekly_low_usage_enabled: false,
+            weekly_low_usage_threshold_percent: 20,
             update_available: true,
         }
     }
@@ -100,6 +107,7 @@ pub struct Settings {
     pub automatic_activation: bool,
     pub start_at_login: bool,
     pub show_used_percentage: bool,
+    pub show_usage_pace: bool,
     pub hide_plan_credits: bool,
     pub codex_path: Option<PathBuf>,
     pub tray_widgets: Vec<TrayWidget>,
@@ -115,6 +123,7 @@ impl Default for Settings {
             automatic_activation: true,
             start_at_login: true,
             show_used_percentage: false,
+            show_usage_pace: true,
             hide_plan_credits: false,
             codex_path: None,
             // An empty list intentionally means "show the ordinary app icon".
@@ -196,7 +205,11 @@ impl Settings {
         );
         anyhow::ensure!(
             (1..=99).contains(&self.notifications.low_usage_threshold_percent),
-            "low usage threshold must be between 1 and 99 percent"
+            "session low usage threshold must be between 1 and 99 percent"
+        );
+        anyhow::ensure!(
+            (1..=99).contains(&self.notifications.weekly_low_usage_threshold_percent),
+            "weekly low usage threshold must be between 1 and 99 percent"
         );
         Ok(())
     }
@@ -407,12 +420,15 @@ mod tests {
         assert!(value.automatic_activation);
         assert!(value.start_at_login);
         assert!(!value.show_used_percentage);
+        assert!(value.show_usage_pace);
         assert!(!value.hide_plan_credits);
         assert_eq!(value.history_retention_days, 90);
         assert!(value.tray_widgets.is_empty());
         assert!(!value.notifications.limits_changed);
         assert!(!value.notifications.low_usage_enabled);
         assert_eq!(value.notifications.low_usage_threshold_percent, 20);
+        assert!(!value.notifications.weekly_low_usage_enabled);
+        assert_eq!(value.notifications.weekly_low_usage_threshold_percent, 20);
         assert!(value.notifications.update_available);
     }
 
@@ -445,6 +461,7 @@ tray_widgets = []
         assert_eq!(migrated.version, SETTINGS_VERSION);
         assert!(!migrated.automatic_activation);
         assert!(migrated.start_at_login);
+        assert!(migrated.show_usage_pace);
         assert_eq!(migrated.history_retention_days, 30);
         assert!(fs::read_to_string(path).unwrap().contains("version = 3"));
     }

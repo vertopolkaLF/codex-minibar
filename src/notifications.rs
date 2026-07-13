@@ -173,6 +173,9 @@ impl LimitNotificationTracker {
                 threshold,
                 &mut self.low_usage_notified_primary,
             );
+        }
+        if settings.weekly_low_usage_enabled {
+            let threshold = settings.weekly_low_usage_threshold_percent;
             maybe_notify_low_usage(
                 "Weekly",
                 limits.secondary.remaining_percent(),
@@ -198,20 +201,90 @@ fn maybe_notify_low_usage(
     threshold: u8,
     already_notified_for: &mut Option<DateTime<Utc>>,
 ) {
-    let Some(remaining) = remaining else {
-        return;
-    };
-    let Some(resets_at) = resets_at else {
-        return;
-    };
-    if remaining > threshold || *already_notified_for == Some(resets_at) {
+    if !take_low_usage_notification(
+        remaining,
+        resets_at,
+        threshold,
+        already_notified_for,
+    ) {
         return;
     }
+    let remaining = remaining.expect("notification requires a remaining percentage");
     show(
         &format!("{label} usage low"),
         &format!("Only {remaining}% remaining (alert at {threshold}%)."),
     );
+}
+
+/// Claims the one low-usage notification allowed for a rate-limit window.
+fn take_low_usage_notification(
+    remaining: Option<u8>,
+    resets_at: Option<DateTime<Utc>>,
+    threshold: u8,
+    already_notified_for: &mut Option<DateTime<Utc>>,
+) -> bool {
+    let Some(remaining) = remaining else {
+        return false;
+    };
+    let Some(resets_at) = resets_at else {
+        return false;
+    };
+    if remaining > threshold || *already_notified_for == Some(resets_at) {
+        return false;
+    }
     *already_notified_for = Some(resets_at);
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+
+    use super::*;
+
+    #[test]
+    fn low_usage_notification_is_claimed_once_per_limit_window() {
+        let first_reset = Utc.with_ymd_and_hms(2026, 7, 14, 12, 0, 0).unwrap();
+        let next_reset = Utc.with_ymd_and_hms(2026, 7, 21, 12, 0, 0).unwrap();
+        let mut notified_for = None;
+
+        assert!(!take_low_usage_notification(
+            Some(21),
+            Some(first_reset),
+            20,
+            &mut notified_for,
+        ));
+        assert!(take_low_usage_notification(
+            Some(20),
+            Some(first_reset),
+            20,
+            &mut notified_for,
+        ));
+        assert!(!take_low_usage_notification(
+            Some(19),
+            Some(first_reset),
+            20,
+            &mut notified_for,
+        ));
+        assert!(!take_low_usage_notification(
+            Some(75),
+            Some(first_reset),
+            20,
+            &mut notified_for,
+        ));
+        assert!(!take_low_usage_notification(
+            Some(20),
+            Some(first_reset),
+            20,
+            &mut notified_for,
+        ));
+        assert!(take_low_usage_notification(
+            Some(20),
+            Some(next_reset),
+            20,
+            &mut notified_for,
+        ));
+    }
 }
 
 #[cfg(windows)]
