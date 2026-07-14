@@ -1494,11 +1494,8 @@ fn usage_statistics_card(limits: &RateLimits) -> Element {
     let period = statistics.history_days;
     let total = format_token_count(statistics.history.total_tokens());
     let today = format_token_count(statistics.today.total_tokens());
-    let latest = statistics
-        .daily
-        .last()
-        .map(|entry| format_token_count(entry.usage.total_tokens()))
-        .unwrap_or_else(|| "—".into());
+    let today_value = format_usd(statistics.today.estimated_api_value_usd());
+    let history_value = format_usd(statistics.history.estimated_api_value_usd());
     let detail = format!(
         "{} in · {} out · {} cached · {} requests",
         format_token_count(statistics.history.input_tokens),
@@ -1508,7 +1505,7 @@ fn usage_statistics_card(limits: &RateLimits) -> Element {
     );
     let metrics = vstack((
         grid((
-            usage_stat_metric("Today", today),
+            usage_stat_metric("Today tokens", today),
             usage_stat_metric(&format!("Last {period} days tokens"), total).grid_column(1),
         ))
         .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
@@ -1516,10 +1513,10 @@ fn usage_statistics_card(limits: &RateLimits) -> Element {
         .horizontal_alignment(HorizontalAlignment::Stretch),
         grid((
             usage_stat_metric(
-                &format!("Last {period} days requests"),
-                statistics.history.requests.to_string(),
+                "Today API value",
+                today_value,
             ),
-            usage_stat_metric("Latest tokens", latest).grid_column(1),
+            usage_stat_metric(&format!("Last {period} days API value"), history_value).grid_column(1),
         ))
         .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
         .rows([GridLength::Auto])
@@ -1623,6 +1620,16 @@ fn format_token_count(tokens: u64) -> String {
         1_000..=999_999 => format!("{:.1}K", tokens as f64 / 1_000.0),
         1_000_000..=999_999_999 => format!("{:.1}M", tokens as f64 / 1_000_000.0),
         _ => format!("{:.1}B", tokens as f64 / 1_000_000_000.0),
+    }
+}
+
+fn format_usd(value: f64) -> String {
+    if value >= 1_000_000.0 {
+        format!("${:.1}M", value / 1_000_000.0)
+    } else if value >= 1_000.0 {
+        format!("${:.1}K", value / 1_000.0)
+    } else {
+        format!("${value:.2}")
     }
 }
 
