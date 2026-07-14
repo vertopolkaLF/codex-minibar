@@ -420,7 +420,7 @@ ul {
 .popup-banked-card {
   height: 66px;
   grid-template-rows: 42px;
-  padding: 8px 15px;
+  padding: 12px 16px;
 }
 
 .popup-card-title {

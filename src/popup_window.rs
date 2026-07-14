@@ -1438,7 +1438,12 @@ fn reset_credits_card(limits: &RateLimits) -> Element {
         .horizontal_alignment(HorizontalAlignment::Stretch),
     )
     .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
-    .padding(Thickness::xy(12.0, 8.0))
+    .padding(Thickness {
+        left: 16.0,
+        top: 12.0,
+        right: 16.0,
+        bottom: 12.0,
+    })
     .background(ThemeRef::CardBackground)
     .border_thickness(Thickness::uniform(1.0))
     .border_brush(ThemeRef::CardStroke)
