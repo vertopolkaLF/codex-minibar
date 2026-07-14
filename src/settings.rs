@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 4;
+pub const SETTINGS_VERSION: u32 = 5;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -131,7 +131,7 @@ impl Default for Settings {
             // An empty list intentionally means "show the ordinary app icon".
             tray_widgets: Vec::new(),
             notifications: NotificationSettings::default(),
-            history_retention_days: 90,
+            history_retention_days: 30,
             check_for_updates: true,
         }
     }
@@ -421,6 +421,18 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     .insert("version".into(), toml::Value::Integer(4));
                 version = 4;
             }
+            4 => {
+                // Usage activity is intentionally a compact recent view. This
+                // setting was previously informational-only, so migrate the
+                // former default rather than preserving an inaccessible 90-day
+                // value.
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.insert("history_retention_days".into(), toml::Value::Integer(30));
+                root.insert("version".into(), toml::Value::Integer(5));
+                version = 5;
+            }
             unsupported => anyhow::bail!("no migration path from settings version {unsupported}"),
         }
     }
@@ -440,7 +452,7 @@ mod tests {
         assert!(value.show_usage_pace);
         assert!(value.show_usage_stats);
         assert!(!value.hide_plan_credits);
-        assert_eq!(value.history_retention_days, 90);
+        assert_eq!(value.history_retention_days, 30);
         assert!(value.tray_widgets.is_empty());
         assert!(!value.notifications.limits_changed);
         assert!(!value.notifications.low_usage_enabled);
@@ -482,7 +494,18 @@ tray_widgets = []
         assert!(migrated.show_usage_pace);
         assert!(migrated.show_usage_stats);
         assert_eq!(migrated.history_retention_days, 30);
-        assert!(fs::read_to_string(path).unwrap().contains("version = 4"));
+        assert!(fs::read_to_string(path).unwrap().contains("version = 5"));
+    }
+
+    #[test]
+    fn migrates_the_previous_ninety_day_default_to_thirty_days() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(&path, "version = 4\nhistory_retention_days = 90\n").unwrap();
+
+        let migrated = Settings::load_or_create(&path).unwrap();
+        assert_eq!(migrated.version, SETTINGS_VERSION);
+        assert_eq!(migrated.history_retention_days, 30);
     }
 
     #[test]

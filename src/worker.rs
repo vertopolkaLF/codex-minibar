@@ -315,6 +315,27 @@ mod tests {
         }
     }
 
+    struct CountingUsageProvider {
+        refreshes: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl UsageProvider for CountingUsageProvider {
+        fn load_cached_usage_statistics(&mut self, _history_days: u16) -> Result<UsageStatistics> {
+            Ok(UsageStatistics::default())
+        }
+
+        fn refresh_usage_statistics(&mut self, _history_days: u16) -> Result<UsageStatistics> {
+            let requests = self.refreshes.fetch_add(1, Ordering::SeqCst) + 1;
+            Ok(UsageStatistics {
+                history: crate::usage::TokenUsage {
+                    requests: requests as u64,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+        }
+    }
+
     fn limits_at(hour: u32, minute: u32) -> RateLimits {
         RateLimits {
             primary: LimitWindow {
@@ -383,5 +404,31 @@ mod tests {
     #[test]
     fn usage_statistics_interval_is_ten_minutes() {
         assert_eq!(USAGE_STATS_INTERVAL, Duration::from_secs(600));
+    }
+
+    #[test]
+    fn manual_refresh_immediately_scans_for_missing_usage() {
+        let (commands_tx, commands_rx) = mpsc::channel();
+        let (events_tx, events_rx) = mpsc::channel();
+        let limits_ready = Arc::new(AtomicBool::new(true));
+        let refreshes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider = CountingUsageProvider {
+            refreshes: Arc::clone(&refreshes),
+        };
+        let task = thread::spawn(move || {
+            run_usage_task(provider, 30, commands_rx, events_tx, limits_ready);
+        });
+
+        // Cached snapshot, then the initial local-log scan.
+        assert!(matches!(events_rx.recv_timeout(Duration::from_secs(1)), Ok(WorkerEvent::UsageUpdated(_))));
+        assert!(matches!(events_rx.recv_timeout(Duration::from_secs(1)), Ok(WorkerEvent::UsageUpdated(_))));
+        assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+
+        commands_tx.send(WorkerCommand::Refresh).unwrap();
+        assert!(matches!(events_rx.recv_timeout(Duration::from_secs(1)), Ok(WorkerEvent::UsageUpdated(_))));
+        assert_eq!(refreshes.load(Ordering::SeqCst), 2);
+
+        commands_tx.send(WorkerCommand::Shutdown).unwrap();
+        task.join().unwrap();
     }
 }

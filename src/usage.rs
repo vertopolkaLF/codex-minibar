@@ -25,10 +25,36 @@ pub struct TokenUsage {
 }
 
 impl TokenUsage {
+    /// `cached_input_tokens` is a subset of `input_tokens` in Codex session
+    /// records, so it must not be counted twice in the displayed total.
     pub fn total_tokens(&self) -> u64 {
-        self.input_tokens
-            .saturating_add(self.cached_input_tokens)
-            .saturating_add(self.output_tokens)
+        self.input_tokens.saturating_add(self.output_tokens)
+    }
+
+    /// Approximate API value in USD using GPT-5.4 list pricing as of
+    /// 2026-07-14: $2.50/M input, $0.25/M cached input and $15.00/M output.
+    /// This deliberately describes an API-equivalent value, not a Codex plan
+    /// charge: subscription billing and included usage follow different rules.
+    pub fn estimated_api_value_usd(&self) -> f64 {
+        const NANODOLLARS_PER_DOLLAR: u64 = 1_000_000_000;
+        const INPUT_NANODOLLARS_PER_TOKEN: u64 = 2_500;
+        const CACHED_INPUT_NANODOLLARS_PER_TOKEN: u64 = 250;
+        const OUTPUT_NANODOLLARS_PER_TOKEN: u64 = 15_000;
+
+        let uncached_input = self
+            .input_tokens
+            .saturating_sub(self.cached_input_tokens);
+        let nanodollars = uncached_input
+            .saturating_mul(INPUT_NANODOLLARS_PER_TOKEN)
+            .saturating_add(
+                self.cached_input_tokens
+                    .saturating_mul(CACHED_INPUT_NANODOLLARS_PER_TOKEN),
+            )
+            .saturating_add(
+                self.output_tokens
+                    .saturating_mul(OUTPUT_NANODOLLARS_PER_TOKEN),
+            );
+        nanodollars as f64 / NANODOLLARS_PER_DOLLAR as f64
     }
 
     fn add(&mut self, other: &Self) {
@@ -295,8 +321,27 @@ mod tests {
     fn reads_per_request_token_usage() {
         let line = r#"{"timestamp":"2026-07-14T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":12,"cached_input_tokens":7,"output_tokens":4}}}}"#;
         let (_, usage) = token_usage_from_line(line).unwrap();
-        assert_eq!(usage.total_tokens(), 23);
+        assert_eq!(usage.total_tokens(), 16);
         assert_eq!(usage.requests, 1);
+    }
+
+    #[test]
+    fn estimates_gpt_5_4_api_value_without_double_counting_cache() {
+        let usage = TokenUsage {
+            input_tokens: 1_000_000,
+            cached_input_tokens: 1_000_000,
+            output_tokens: 1_000_000,
+            requests: 1,
+        };
+        assert!((usage.estimated_api_value_usd() - 15.25).abs() < f64::EPSILON);
+
+        let usage = TokenUsage {
+            input_tokens: 1_000_000,
+            cached_input_tokens: 0,
+            output_tokens: 1_000_000,
+            requests: 1,
+        };
+        assert!((usage.estimated_api_value_usd() - 17.5).abs() < f64::EPSILON);
     }
 
     #[test]
