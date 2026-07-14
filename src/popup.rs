@@ -36,10 +36,10 @@ use windows_sys::Win32::{
             CS_DROPSHADOW, DispatchMessageW, FindWindowW, GCL_STYLE, GWL_EXSTYLE, GWL_STYLE,
             GetCursorPos, GetWindowLongW, GetWindowRect, HWND_TOPMOST, MSG, PM_REMOVE,
             PeekMessageW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-            SWP_SHOWWINDOW, SetWindowLongW, SetWindowPos, TranslateMessage, WS_CAPTION,
-            WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
-            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU,
-            WS_THICKFRAME,
+            SWP_SHOWWINDOW, SetForegroundWindow, SetWindowLongW, SetWindowPos, TranslateMessage,
+            WS_CAPTION, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+            WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX,
+            WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
         },
     },
 };
@@ -685,9 +685,6 @@ pub fn prepare_show_on_ui_thread() -> bool {
             .is_some_and(|host| host.activate_now().is_ok())
     });
     hide_from_switchers();
-    unsafe {
-        let _ = SetFocus(std::ptr::null_mut());
-    }
     activated
 }
 
@@ -738,8 +735,9 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
         move_hwnd(hwnd, start_x, target_y);
         apply_window_region(hwnd, Some(monitor));
         let _ = DwmFlush();
-        // Do not SetForegroundWindow here — that gives keyboard focus to
-        // the first footer button (Refresh) and paints its Subtle highlight.
+        // Keep native moves non-activating. We activate once the final clipped
+        // frame is in place so element-level Mica uses its active wallpaper
+        // material instead of the dimmed inactive fallback.
 
         // Mark visible + start grace before the blocking slide so mid-anim
         // outside clicks can dismiss without waiting for the last frame.
@@ -763,9 +761,12 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
 
         apply_popup_chrome(hwnd);
         hide_from_taskbar(hwnd);
-        let _ = DwmFlush();
-        // Drop any leftover keyboard focus from a previous show cycle.
+        // A user tray click authorizes foreground activation. Clear keyboard
+        // focus immediately afterward so no footer button gains a focus ring;
+        // the HWND remains active, which is the state Mica observes.
+        let _ = SetForegroundWindow(hwnd);
         let _ = SetFocus(std::ptr::null_mut());
+        let _ = DwmFlush();
     }
 
     pin_bottom_right(hwnd, monitor, work.bottom);

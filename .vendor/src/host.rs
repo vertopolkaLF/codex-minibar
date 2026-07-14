@@ -53,20 +53,43 @@ fn update_titlebar_theme() {
         {
             let titlebar_theme = match theme {
                 ElementTheme::Dark => TitleBarTheme::Dark,
-                ElementTheme::Light => TitleBarTheme::Light,
-                _ => TitleBarTheme::UseDefaultAppMode,
+                // WinUI can report Default while resolving controls to the
+                // light palette. Using the app mode in that case leaves the
+                // native caption buttons white on a light title bar.
+                _ => TitleBarTheme::Light,
             };
 
             let _ = ROOT_WINDOW.with(|wcell| -> Option<()> {
                 let window = wcell.borrow();
                 let window_2 = window.as_ref()?.cast::<IWindow2>().ok()?;
                 let app_window = window_2.AppWindow().ok()?;
-                let titlebar = app_window
-                    .TitleBar()
-                    .ok()?
+                let titlebar = app_window.TitleBar().ok()?;
+                let button_foreground = match titlebar_theme {
+                    TitleBarTheme::Dark => Color {
+                        a: 255,
+                        r: 255,
+                        g: 255,
+                        b: 255,
+                    },
+                    _ => Color {
+                        a: 255,
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                    },
+                };
+                // PreferredTheme is only a hint on some WinAppSDK builds.
+                // Set the caption-button colors directly so a light title bar
+                // cannot retain white minimize/maximize/close glyphs.
+                let _ = titlebar.SetButtonForegroundColor(Some(button_foreground));
+                let _ = titlebar.SetButtonHoverForegroundColor(Some(button_foreground));
+                let _ = titlebar.SetButtonInactiveForegroundColor(Some(button_foreground));
+                let _ = titlebar.SetButtonPressedForegroundColor(Some(button_foreground));
+                titlebar
                     .cast::<IAppWindowTitleBar3>()
-                    .ok()?;
-                titlebar.SetPreferredTheme(titlebar_theme).ok()
+                    .ok()?
+                    .SetPreferredTheme(titlebar_theme)
+                    .ok()
             });
         }
     });
@@ -273,6 +296,9 @@ impl ReactorHost {
                             if let Ok(tb_ui) = tb.cast::<UIElement>() {
                                 let _ = state.window.SetTitleBar(&tb_ui);
                             }
+                            // SetTitleBar can reset caption-button colors;
+                            // apply the resolved XAML theme after wiring it.
+                            update_titlebar_theme();
                             // SetPreferredHeightOption is silently ignored unless
                             // ExtendsContentIntoTitleBar is already true.
                             if let Some(tall) = PENDING_TALL.with(|p| p.take()) {

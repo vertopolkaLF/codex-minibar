@@ -31,18 +31,24 @@ fn acrylic_xaml() -> String {
 
 /// Full-window Mica hosted inside the XAML visual tree. Unlike
 /// `Window.SystemBackdrop`, this is composed with the rest of the UI instead
-/// of being presented as a separate window backdrop surface.
-fn mica_xaml() -> &'static str {
-    r#"
+/// of being presented as a separate window backdrop surface. Keeping the
+/// radius on this element is important: the popup HWND is region-clipped and
+/// must not reveal square Mica corners while it slides in.
+fn mica_xaml() -> String {
+    format!(
+        r#"
 <SystemBackdropElement
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    CornerRadius="{}"
     HorizontalAlignment="Stretch"
     VerticalAlignment="Stretch">
     <SystemBackdropElement.SystemBackdrop>
         <MicaBackdrop />
     </SystemBackdropElement.SystemBackdrop>
 </SystemBackdropElement>
-"#
+"#,
+        crate::popup::WINDOW_CORNER_RADIUS_DIP
+    )
 }
 
 /// GitHub mark rendered as a XAML path rather than an `Image`-hosted SVG, so
@@ -66,7 +72,7 @@ pub fn install_into(mount: windows_core::IInspectable) {
 
 /// Host Mica inside `mount` as part of the XAML composition tree.
 pub fn install_mica_into(mount: windows_core::IInspectable) -> Result<()> {
-    install_into_inner(mount, mica_xaml())
+    install_into_inner(mount, &mica_xaml())
 }
 
 /// Host a GitHub SVG path whose color follows the current Windows accent.

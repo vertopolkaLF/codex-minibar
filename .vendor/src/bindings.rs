@@ -4045,9 +4045,135 @@ impl windows_core::RuntimeType for IAppWindowTitleBar {
     const SIGNATURE: windows_core::imp::ConstBuffer =
         windows_core::imp::ConstBuffer::for_interface::<Self>();
 }
+impl IAppWindowTitleBar {
+    pub(crate) fn SetButtonForegroundColor(&self, value: Option<Color>) -> windows_core::Result<()> {
+        let value = value.map(<windows_reference::IReference<Color> as From<_>>::from);
+        unsafe {
+            (windows_core::Interface::vtable(self).SetButtonForegroundColor)(
+                windows_core::Interface::as_raw(self),
+                windows_core::Param::param(value.as_ref()).abi(),
+            )
+            .ok()
+        }
+    }
+
+    pub(crate) fn SetButtonHoverForegroundColor(
+        &self,
+        value: Option<Color>,
+    ) -> windows_core::Result<()> {
+        let value = value.map(<windows_reference::IReference<Color> as From<_>>::from);
+        unsafe {
+            (windows_core::Interface::vtable(self).SetButtonHoverForegroundColor)(
+                windows_core::Interface::as_raw(self),
+                windows_core::Param::param(value.as_ref()).abi(),
+            )
+            .ok()
+        }
+    }
+
+    pub(crate) fn SetButtonInactiveForegroundColor(
+        &self,
+        value: Option<Color>,
+    ) -> windows_core::Result<()> {
+        let value = value.map(<windows_reference::IReference<Color> as From<_>>::from);
+        unsafe {
+            (windows_core::Interface::vtable(self).SetButtonInactiveForegroundColor)(
+                windows_core::Interface::as_raw(self),
+                windows_core::Param::param(value.as_ref()).abi(),
+            )
+            .ok()
+        }
+    }
+
+    pub(crate) fn SetButtonPressedForegroundColor(
+        &self,
+        value: Option<Color>,
+    ) -> windows_core::Result<()> {
+        let value = value.map(<windows_reference::IReference<Color> as From<_>>::from);
+        unsafe {
+            (windows_core::Interface::vtable(self).SetButtonPressedForegroundColor)(
+                windows_core::Interface::as_raw(self),
+                windows_core::Param::param(value.as_ref()).abi(),
+            )
+            .ok()
+        }
+    }
+}
 #[repr(C)]
 pub struct IAppWindowTitleBar_Vtbl {
     pub base__: windows_core::IInspectable_Vtbl,
+    pub BackgroundColor: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+    pub SetBackgroundColor: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+    pub ButtonBackgroundColor: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+    pub SetButtonBackgroundColor: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+    pub ButtonForegroundColor: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+    pub SetButtonForegroundColor: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+    pub ButtonHoverBackgroundColor: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+    pub SetButtonHoverBackgroundColor: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+    pub ButtonHoverForegroundColor: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+    pub SetButtonHoverForegroundColor: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+    pub ButtonInactiveBackgroundColor: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+    pub SetButtonInactiveBackgroundColor: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+    pub ButtonInactiveForegroundColor: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+    pub SetButtonInactiveForegroundColor: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+    pub ButtonPressedBackgroundColor: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+    pub SetButtonPressedBackgroundColor: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+    pub ButtonPressedForegroundColor: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+    pub SetButtonPressedForegroundColor: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
 }
 windows_core::imp::define_interface!(
     IAppWindowTitleBar2,

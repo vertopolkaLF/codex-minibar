@@ -226,6 +226,7 @@ fn popup_sections(
 /// Root WinUI view for Codex Minibar (hosted in a tray popup shell).
 pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let dpi = cx.use_dpi().max(1);
+    let color_scheme = cx.use_color_scheme();
     let window_corner_radius = f64::from(popup::WINDOW_CORNER_RADIUS_DIP);
     // Keep the visual stroke one physical pixel inside the HWND clip so GDI's
     // aliased region cannot trim its anti-aliased XAML corner pixels.
@@ -299,6 +300,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     ui.show_used_percentage,
                     ui.show_usage_pace,
                     false,
+                    color_scheme,
                 ),
                 PopupSection::FiveHour => limit_card(
                     "5h Session",
@@ -306,6 +308,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     ui.show_used_percentage,
                     ui.show_usage_pace,
                     limits.five_hour_disabled(),
+                    color_scheme,
                 ),
                 PopupSection::Weekly => limit_card(
                     "Weekly",
@@ -313,6 +316,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     ui.show_used_percentage,
                     ui.show_usage_pace,
                     false,
+                    color_scheme,
                 ),
                 PopupSection::BankedResets => reset_credits_card(&limits),
                 PopupSection::PlanCredits => meta_row(&limits),
@@ -340,6 +344,21 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         .vertical_alignment(VerticalAlignment::Center)
     } else {
         icon_button("\u{E7E8}", "Quit", 16.0, quit)
+    };
+    let footer_background = match color_scheme {
+        // CSS shorthand: #0002 = #00000022; #0001 = #00000011.
+        ColorScheme::Dark => Color {
+            a: 0x30,
+            r: 0,
+            g: 0,
+            b: 0,
+        },
+        ColorScheme::Light => Color {
+            a: 0x11,
+            r: 0,
+            g: 0,
+            b: 0,
+        },
     };
 
     let footer = border(
@@ -391,13 +410,13 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         // Extra bottom padding so content clears the rounded window corners.
         bottom: 14.0,
     })
-    .background(ThemeRef::LayerFill)
     .border_thickness(Thickness {
         left: 0.0,
         top: 1.0,
         right: 0.0,
         bottom: 0.0,
     })
+    .background(footer_background)
     .border_brush(ThemeRef::CardStroke)
     .horizontal_alignment(HorizontalAlignment::Stretch);
 
@@ -428,20 +447,23 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     .border_thickness(Thickness::uniform(1.0))
     .border_brush(ThemeRef::SurfaceStroke)
     .corner_radius(inner_corner_radius)
-    .background(ThemeRef::LayerFill)
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Top);
 
-    // Acrylic behind content; reconciler does not manage this panel's children.
+    // Mica behind content; reconciler does not manage this panel's children.
+    // It is element-level Mica rather than `Window.SystemBackdrop`: the latter
+    // ignores the popup's Win32 rounded region and paints past its edges.
     // on_resize reports the Auto-row height (body + border). Add chrome padding
     // (border_inset on top and bottom) so the HWND does not clip the bottom stroke.
-    let acrylic = {
+    let mica = {
         let mut host = swap_chain_panel()
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .vertical_alignment(VerticalAlignment::Stretch);
         host.mounted = Some(Callback::new(|native: Option<_>| {
             if let Some(native) = native {
-                crate::acrylic::install_into(native);
+                if let Err(error) = crate::acrylic::install_mica_into(native) {
+                    eprintln!("Could not install popup Mica element: {error:?}");
+                }
             }
         }));
         host.on_resize(move |_width, height| {
@@ -450,7 +472,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     };
 
     let chrome = border(
-        grid((acrylic, body_panel))
+        grid((mica, body_panel))
             .rows([GridLength::Auto])
             .columns([GridLength::Star(1.0)])
             .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -459,7 +481,6 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     )
     .padding(Thickness::uniform(border_inset))
     .corner_radius(window_corner_radius)
-    .background(ThemeRef::LayerFill)
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Top);
 
@@ -1090,7 +1111,12 @@ fn icon_button(glyph: &str, tip: &str, font_size: f64, on_click: impl IntoUnitCa
 }
 
 /// Thin pill progress track with a rounded fill and optional pace marker.
-fn rounded_progress(value: f64, fill: ThemeRef, pace: Option<PaceTip>) -> Element {
+fn rounded_progress(
+    value: f64,
+    fill: ThemeRef,
+    pace: Option<PaceTip>,
+    color_scheme: ColorScheme,
+) -> Element {
     const HEIGHT: f64 = 6.0;
     let radius = HEIGHT / 2.0;
     let filled = value.clamp(0.0, 100.0);
@@ -1126,7 +1152,7 @@ fn rounded_progress(value: f64, fill: ThemeRef, pace: Option<PaceTip>) -> Elemen
         .into();
     let mut layers: Vec<Element> = vec![track_layer, fill_layer.into()];
     if let Some(pace) = pace {
-        layers.push(pace_marker_layer(pace));
+        layers.push(pace_marker_layer(pace, color_scheme));
     }
 
     border(
@@ -1143,9 +1169,23 @@ fn rounded_progress(value: f64, fill: ThemeRef, pace: Option<PaceTip>) -> Elemen
 }
 
 /// High-contrast vertical tick showing the expected even-burn position.
-fn pace_marker_layer(pace: PaceTip) -> Element {
-    // The pace marker stays pure black for a crisp reference line.
+fn pace_marker_layer(pace: PaceTip, color_scheme: ColorScheme) -> Element {
+    // Keep the indicator legible against the theme-specific accent track.
     const LINE_WIDTH: f64 = 2.0;
+    let marker_color = match color_scheme {
+        ColorScheme::Light => Color {
+            a: 255,
+            r: 0,
+            g: 0,
+            b: 0,
+        },
+        ColorScheme::Dark => Color {
+            a: 255,
+            r: 255,
+            g: 255,
+            b: 255,
+        },
+    };
     let percent = pace.percent.clamp(0.0, 100.0);
     let (left_star, right_star) = if percent <= 0.0 {
         (0.0001, 100.0)
@@ -1157,12 +1197,7 @@ fn pace_marker_layer(pace: PaceTip) -> Element {
 
     grid((border(Element::Empty)
         .width(LINE_WIDTH)
-        .background(Color {
-            a: 255,
-            r: 0,
-            g: 0,
-            b: 0,
-        })
+        .background(marker_color)
         .horizontal_alignment(HorizontalAlignment::Left)
         .vertical_alignment(VerticalAlignment::Stretch)
         .grid_column(1),))
@@ -1185,6 +1220,7 @@ fn limit_card(
     show_used_percentage: bool,
     show_usage_pace: bool,
     disabled: bool,
+    color_scheme: ColorScheme,
 ) -> Element {
     let accent = ThemeRef::SystemAttention;
     let (remaining_label, progress, show_reset, pace) = if disabled {
@@ -1263,13 +1299,20 @@ fn limit_card(
         .into()
     };
 
-    border(vstack((header, rounded_progress(progress, accent, pace), footer)).spacing(8.0))
-        .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
-        .padding(Thickness::uniform(12.0))
-        .background(ThemeRef::CardBackground)
-        .border_thickness(Thickness::uniform(1.0))
-        .border_brush(ThemeRef::CardStroke)
-        .into()
+    border(
+        vstack((
+            header,
+            rounded_progress(progress, accent, pace, color_scheme),
+            footer,
+        ))
+        .spacing(8.0),
+    )
+    .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+    .padding(Thickness::uniform(12.0))
+    .background(ThemeRef::CardBackground)
+    .border_thickness(Thickness::uniform(1.0))
+    .border_brush(ThemeRef::CardStroke)
+    .into()
 }
 
 fn meta_row(limits: &RateLimits) -> Element {

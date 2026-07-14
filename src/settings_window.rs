@@ -165,6 +165,38 @@ fn set_settings_window_icon() {
     }
 }
 
+/// The caption buttons are painted by DWM, outside the XAML `TitleBar` tree.
+/// Keep their light/dark glyphs in lockstep with the live WinUI theme.
+#[cfg(windows)]
+fn sync_settings_caption_button_theme(color_scheme: ColorScheme) {
+    use windows_sys::Win32::{
+        Graphics::Dwm::DwmSetWindowAttribute, UI::WindowsAndMessaging::FindWindowW,
+    };
+
+    const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
+    let title: Vec<u16> = "Codex Minibar Settings"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let hwnd = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
+    if hwnd.is_null() {
+        return;
+    }
+
+    let use_dark_caption_buttons = i32::from(matches!(color_scheme, ColorScheme::Dark));
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            &use_dark_caption_buttons as *const i32 as *const _,
+            size_of::<i32>() as u32,
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn sync_settings_caption_button_theme(_color_scheme: ColorScheme) {}
+
 #[cfg(not(windows))]
 fn set_settings_window_icon() {}
 
@@ -236,6 +268,10 @@ pub fn render(
     settings_tx: Sender<Settings>,
     updates: Arc<UpdateController>,
 ) -> Element {
+    let color_scheme = cx.use_color_scheme();
+    cx.use_effect(color_scheme, move || {
+        sync_settings_caption_button_theme(color_scheme);
+    });
     let (update_phase, set_update_phase) = cx.use_async_state(updates.snapshot());
     let updates_for_poll = updates.clone();
     cx.use_effect((), move || {
