@@ -255,6 +255,32 @@ void main() {
     let pulseStartedAt = null;
     const PULSE_DURATION_MS = 1100;
     const introStartedAt = performance.now();
+    const palettes = {
+      dark: {
+        start: [0.031, 0.047, 0.078],
+        highlight: [0.082, 0.125, 0.196],
+      },
+      light: {
+        start: [0.73, 0.80, 0.92],
+        highlight: [0.12, 0.10, 0.06],
+      },
+    };
+    let targetPalette = palettes[document.documentElement.dataset.theme] || palettes.dark;
+    let palette = {
+      start: [...targetPalette.start],
+      highlight: [...targetPalette.highlight],
+    };
+
+    const setTheme = (theme) => {
+      targetPalette = palettes[theme] || palettes.dark;
+      if (reduceMotion.matches) {
+        palette = {
+          start: [...targetPalette.start],
+          highlight: [...targetPalette.highlight],
+        };
+        restart();
+      }
+    };
 
     const pulseWave = () => {
       if (reduceMotion.matches) return;
@@ -296,6 +322,13 @@ void main() {
       previousTime = reduced ? null : time;
 
       const pulse = pulseEnvelope(time);
+      const paletteBlend = reduced ? 1 : Math.min(1, delta * 4.8);
+      palette.start = palette.start.map((value, index) => (
+        value + (targetPalette.start[index] - value) * paletteBlend
+      ));
+      palette.highlight = palette.highlight.map((value, index) => (
+        value + (targetPalette.highlight[index] - value) * paletteBlend
+      ));
       // Idle crawl vs a rounded surge that still sweeps ~2π across the stripes.
       wavePhase += (0.42 + pulse * 9.5) * delta;
       secondaryWavePhase += (0.26 + pulse * 6) * delta;
@@ -318,9 +351,8 @@ void main() {
       set1("u_intro_elapsed", reduced ? 0 : time - introStartedAt - 700);
       set1("u_shine_progress", pulse);
 
-      // Helium's shader palette, shifted into a restrained graphite navy.
-      set3("u_start_color", 0.031, 0.047, 0.078);
-      set3("u_highlight_delta", 0.082, 0.125, 0.196);
+      set3("u_start_color", ...palette.start);
+      set3("u_highlight_delta", ...palette.highlight);
       set1("u_alpha", 0.7);
       set1("u_intro_alpha", 1);
       set1("u_speed_up_shine_boost", 0.28);
@@ -367,7 +399,7 @@ void main() {
     resize();
     render(performance.now());
 
-    return { pulseWave };
+    return { pulseWave, setTheme };
   };
 
   const heroShader = initHeroShader();
@@ -446,6 +478,40 @@ void main() {
   const header = document.querySelector(".site-header");
   const toggle = document.querySelector(".nav-toggle");
   const mobileNav = document.querySelector("#mobile-nav");
+  const themeToggle = document.querySelector("[data-theme-toggle]");
+  const systemTheme = window.matchMedia("(prefers-color-scheme: light)");
+  let themeTransitionTimer = 0;
+
+  const setTheme = (theme, persist = false) => {
+    const themeChanged = document.documentElement.dataset.theme !== theme;
+    if (themeChanged) {
+      document.documentElement.classList.add("is-theme-transitioning");
+      window.clearTimeout(themeTransitionTimer);
+      themeTransitionTimer = window.setTimeout(() => {
+        document.documentElement.classList.remove("is-theme-transitioning");
+      }, 360);
+    }
+    document.documentElement.dataset.theme = theme;
+    heroShader?.setTheme(theme);
+    if (persist) localStorage.setItem("codex-minibar-theme", theme);
+    if (!themeToggle) return;
+
+    const nextTheme = theme === "light" ? "dark" : "light";
+    themeToggle.setAttribute("aria-label", `Switch to ${nextTheme} theme`);
+    themeToggle.setAttribute("title", `Switch to ${nextTheme} theme`);
+  };
+
+  setTheme(document.documentElement.dataset.theme || (systemTheme.matches ? "light" : "dark"));
+
+  themeToggle?.addEventListener("click", () => {
+    const theme = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+    setTheme(theme, true);
+  });
+
+  systemTheme.addEventListener("change", (event) => {
+    if (localStorage.getItem("codex-minibar-theme")) return;
+    setTheme(event.matches ? "light" : "dark");
+  });
 
   const onScroll = () => {
     if (!header) return;

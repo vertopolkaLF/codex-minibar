@@ -16,6 +16,16 @@
   <meta property="og:type" content="website" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <script>
+    (() => {
+      try {
+        const savedTheme = localStorage.getItem("codex-minibar-theme");
+        document.documentElement.dataset.theme = savedTheme || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+      } catch {
+        document.documentElement.dataset.theme = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+      }
+    })();
+  </script>
   <link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,400..700;1,400..700&family=Inter:wght@400;500;600&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
   <meta name="google-site-verification" content="CN0KPL7OL2JQjfR8SxVWxJBgcG0YM13Ha_szf1kNfYs" />
@@ -33,7 +43,18 @@
               <img src="assets/app-icon.png" alt="" width="28" height="28" />
               <span>Codex Minibar</span>
             </a>
-            <p class="header-disclaimer">Independent project. Not affiliated with, endorsed by, or sponsored by OpenAI.</p>
+            <div class="header-meta">
+              <p class="header-disclaimer">Independent project. Not affiliated with, endorsed by, or sponsored by OpenAI.</p>
+              <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to light theme" title="Switch theme">
+                <svg class="theme-toggle-icon theme-toggle-sun" viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="12" r="4"></circle>
+                  <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+                </svg>
+                <svg class="theme-toggle-icon theme-toggle-moon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M20.6 15.79A9 9 0 0 1 8.21 3.4A9 9 0 1 0 20.6 15.79Z"></path>
+                </svg>
+              </button>
+            </div>
             <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="mobile-nav" aria-label="Open menu">
               <span></span>
               <span></span>
