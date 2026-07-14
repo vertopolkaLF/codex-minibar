@@ -389,7 +389,7 @@ ul {
   width: 475px;
   overflow: hidden;
   border: 1px solid #343434;
-  border-radius: 10px;
+  border-radius: 18px;
   background: #242427aa;
   backdrop-filter: blur(20px);
   box-shadow: none;
@@ -615,8 +615,8 @@ ul {
 }
 
 .popup-action img {
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   /* External SVGs do not inherit `currentColor` from their <img> host. */
   filter: invert(1);
 }
