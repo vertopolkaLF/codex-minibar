@@ -60,8 +60,7 @@
           <div class="hero-grid">
             <div class="hero-copy reveal">
               <p class="hero-eyebrow">
-                <img src="assets/app-icon.png" alt="" />
-                <span>Codexbar, but for Windows</span>
+                <span><a class="link" href="https://codexbar.app/" target="_blank">Codexbar</a> but for Windows</span>
               </p>
               <h1>Your Codex limits, one glance away.</h1>
               <p class="lede">
@@ -75,13 +74,22 @@
                   </svg>
                   Download for Windows
                 </a>
-                <a class="text-link" href="#features">See features</a>
+                <a class="text-link" href="https://github.com/vertopolkaLF/codex-minibar" target="_blank" rel="noopener noreferrer">
+                  <svg class="icon" viewBox="0 0 15 15" width="15" height="15" aria-hidden="true">
+                    <path fill="currentColor" d="M7.499.25a7.25 7.25 0 0 1 2.297 14.129c-.367.07-.498-.155-.498-.349c0-.237.009-1.02.009-1.989c0-.676-.233-1.119-.493-1.343c1.615-.18 3.311-.792 3.311-3.577c0-.792-.28-1.438-.745-1.945c.074-.184.322-.92-.073-1.92c-.015-.004-.625-.182-1.992.744A7 7 0 0 0 7.5 3.756A7 7 0 0 0 5.686 4C4.3 3.062 3.69 3.257 3.69 3.257c-.394.998-.146 1.735-.07 1.919a2.8 2.8 0 0 0-.747 1.945c0 2.778 1.693 3.4 3.303 3.583c-.207.181-.394.5-.46.969c-.413.185-1.464.506-2.11-.602c0 0-.383-.695-1.11-.747c0 0-.709-.009-.05.44c.014.008.48.237.804 1.061c.005.016.437 1.407 2.442.972c.004.605.01 1.061.01 1.233c0 .193-.132.416-.495.35A7.25 7.25 0 0 1 7.499.25" />
+                  </svg>
+                  View Source
+                </a>
               </div>
-              <p class="meta">Windows 10 / 11 · x64 and ARM64 · Apache-2.0</p>
+              <p class="meta">Free & Open Source · Windows 10 / 11</p>
             </div>
 
             <div class="hero-visual reveal" aria-label="Codex Minibar popup above the Windows 11 tray">
               <div class="desk">
+                <div class="demo-cursor" aria-hidden="true">
+                  <img src="assets/ph-cursor-fill.svg" alt="" width="28" height="28" />
+                </div>
+
                 <div class="popup-mock" role="img" aria-label="Codex Minibar usage popup">
                   <div class="popup-body">
                     <div class="popup-card">
@@ -150,30 +158,30 @@
                       </span>
                     </div>
 
-                    <div class="win-pinned" aria-hidden="true">
-                      <span class="win-pin win-start" title="Start">
+                    <div class="win-pinned">
+                      <span class="win-pin win-start" title="Start" aria-hidden="true">
                         <img src="assets/Start_Light_48.png" alt="" />
                       </span>
-                      <span class="win-pin win-search" title="Search">
+                      <span class="win-pin win-search" title="Search" aria-hidden="true">
                         <img src="assets/taskbar-search.svg" alt="" />
                         <span class="win-search-label">Search</span>
                       </span>
-                      <span class="win-pin win-pin-app" title="File Explorer">
+                      <span class="win-pin win-pin-app" title="File Explorer" aria-hidden="true">
                         <img src="assets/taskbar-explorer.svg" alt="" />
                       </span>
-                      <span class="win-pin win-pin-app" data-browser="chrome" title="Google Chrome">
+                      <span class="win-pin win-pin-app" data-browser="chrome" title="Google Chrome" aria-hidden="true">
                         <img src="assets/taskbar-chrome.svg" alt="" />
                       </span>
-                      <span class="win-pin win-pin-app" data-browser="edge" title="Microsoft Edge">
+                      <span class="win-pin win-pin-app" data-browser="edge" title="Microsoft Edge" aria-hidden="true">
                         <img src="assets/taskbar-edge.svg" alt="" />
                       </span>
-                      <span class="win-pin win-pin-app" data-browser="firefox" title="Firefox">
+                      <span class="win-pin win-pin-app" data-browser="firefox" title="Firefox" aria-hidden="true">
                         <img src="assets/taskbar-firefox.svg" alt="" />
                       </span>
-                      <span class="win-pin open win-pin-app" title="Codex">
+                      <a class="win-pin open win-pin-app" href="codex://" title="Open Codex" aria-label="Open Codex">
                         <img src="assets/taskbar-codex.svg" alt="" />
-                      </span>
-                      <span class="win-pin win-pin-app" title="Terminal">
+                      </a>
+                      <span class="win-pin win-pin-app" title="Terminal" aria-hidden="true">
                         <img src="assets/taskbar-terminal.svg" alt="" />
                       </span>
                     </div>
@@ -183,7 +191,7 @@
                         <img src="assets/taskbar-chevron-up.svg" alt="" />
                       </span>
 
-                      <div class="tray-widgets">
+                      <div class="tray-widgets" data-tray-target role="button" tabindex="0" aria-label="Toggle Codex Minibar popup" aria-expanded="false">
                         <span class="widget widget-numbers" title="Stacked numbers">84<br />62</span>
                         <span class="widget widget-bars" title="Stacked bars" aria-hidden="true">
                           <i style="--w: 84%"></i>
@@ -223,14 +231,6 @@
       </div>
     </div>
 
-    <section class="intro shell reveal">
-      <h2>Useful when quiet. Ready when needed.</h2>
-      <p>
-        Codex Minibar reads usage from a locally installed, authenticated Codex
-        CLI or Desktop app and keeps limits visible in the Windows notification
-        area. Native WinUI 3. No browser tab. No credential handoff.
-      </p>
-    </section>
 
     <section class="features" id="features">
       <div class="shell">
@@ -289,149 +289,6 @@
           </div>
         </article>
 
-        <div class="feature-split">
-          <article class="feature reveal">
-            <div class="feature-icon" aria-hidden="true">
-              <svg viewBox="0 0 15 15" width="18" height="18">
-                <path fill="currentColor" d="M13.878 2.007A1.25 1.25 0 0 1 15 3.25v7.5c0 .69-.56 1.25-1.25 1.25H9.927l.243 1.299l.01.125a.55.55 0 0 1-.55.526H5.37a.55.55 0 0 1-.54-.651L5.073 12H1.25C.56 12 0 11.44 0 10.75v-7.5C0 2.56.56 2 1.25 2h12.5zM5.989 12l-.196 1.05h3.414L9.011 12zM1.25 3a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.2-.245L13.75 3z" />
-              </svg>
-            </div>
-            <h3>Compact usage popup</h3>
-            <p>
-              Open a native popup for the current plan, credits, limit windows,
-              and local usage history — without digging through another app.
-            </p>
-          </article>
-
-          <article class="feature reveal">
-            <div class="feature-icon" aria-hidden="true">
-              <svg viewBox="0 0 15 15" width="18" height="18">
-                <path fill="currentColor" d="M7.5.15a1.1 1.1 0 0 1 .293 2.16A4.5 4.5 0 0 1 12 6.8v3.45c0 .806.033 1.457.724 1.803A.5.5 0 0 1 12.5 13H8.16a1 1 0 1 1-1.318 0H2.499a.5.5 0 0 1-.224-.947c.691-.346.724-.997.724-1.803V6.8a4.5 4.5 0 0 1 4.207-4.49A1.1 1.1 0 0 1 7.501.15m0 3.15A3.5 3.5 0 0 0 4 6.8v3.45c0 .445.013 1.136-.3 1.75h7.6c-.313-.614-.3-1.305-.3-1.75V6.8a3.5 3.5 0 0 0-3.5-3.5" />
-              </svg>
-            </div>
-            <h3>Smart notifications</h3>
-            <p>
-              Optional Windows toasts for limit resets, low session or weekly
-              remaining usage, approaching reset, activation results, Codex
-              unavailable, and new app updates.
-            </p>
-          </article>
-
-          <article class="feature reveal">
-            <h3>Automatic activation</h3>
-            <p>
-              Optionally start Codex to activate a fresh five-hour window when
-              a small nudge is all you need.
-            </p>
-          </article>
-
-          <article class="feature reveal">
-            <h3>Usage pace</h3>
-            <p>
-              See whether consumption is ahead of or behind a steady burn
-              across the current window, right where you already look.
-            </p>
-          </article>
-
-          <article class="feature reveal">
-            <h3>Start with Windows</h3>
-            <p>
-              Register for login startup so limits are already visible when
-              the session begins — toggle it off anytime in Settings.
-            </p>
-          </article>
-
-          <article class="feature reveal">
-            <div class="feature-icon" aria-hidden="true">
-              <svg viewBox="0 0 15 15" width="18" height="18">
-                <path fill="currentColor" d="M7.988 1.563a.52.52 0 0 1 .608-.417l.269.056c2.764.638 5.188 3.036 5.188 6.501c0 1.537-.7 2.745-1.515 3.663c-.585.659-1.255 1.193-1.793 1.602h1.637a.5.5 0 0 1 0 1h-3a.5.5 0 0 1-.5-.5v-3a.5.5 0 0 1 1 0v1.846l.182-.138c.534-.405 1.152-.892 1.694-1.502c.715-.804 1.252-1.776 1.252-2.97c0-3.012-2.16-5.073-4.606-5.533l-.102-.03a.52.52 0 0 1-.314-.578M.86 7.297c0-1.536.7-2.744 1.515-3.663c.585-.658 1.255-1.192 1.793-1.602H2.532a.5.5 0 0 1 0-1h3a.5.5 0 0 1 .5.5v3a.5.5 0 0 1-1 0V2.687l-.182.137c-.534.405-1.152.892-1.694 1.502c-.715.804-1.252 1.776-1.252 2.971c0 3.044 2.207 5.118 4.685 5.547a.522.522 0 0 1-.177 1.027C3.5 13.367.86 10.913.86 7.297" />
-              </svg>
-            </div>
-            <h3>In-place updates</h3>
-            <p>
-              Check GitHub Releases on startup and install a matching portable
-              package without rebuilding your setup. Disable checks whenever
-              you want.
-            </p>
-          </article>
-
-          <article class="feature reveal">
-            <h3>Local history</h3>
-            <p>
-              Keep usage history on disk with retention from 1 to 365 days.
-              Settings and history stay in your Windows user profile.
-            </p>
-          </article>
-
-          <article class="feature reveal">
-            <h3>Codex discovery</h3>
-            <p>
-              Detects Codex CLI or Desktop automatically. Override with a
-              custom executable path when your install lives somewhere unusual.
-            </p>
-          </article>
-        </div>
-
-        <div class="detail-row reveal">
-          <div>
-            <h3>Popup preferences</h3>
-            <p>
-              Show used percentage, surface usage pace, or hide plan and
-              credits from the popup when you want a quieter view.
-            </p>
-          </div>
-          <div>
-            <h3>Install options</h3>
-            <p>
-              Per-user NSIS installer (no admin) or portable zip. Pick x64 or
-              ARM64 to match your machine.
-            </p>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="specs shell reveal">
-      <dl class="spec-grid">
-        <div>
-          <dt>Interface</dt>
-          <dd>WinUI 3</dd>
-        </div>
-        <div>
-          <dt>Platform</dt>
-          <dd>Windows 10 and 11</dd>
-        </div>
-        <div>
-          <dt>Architectures</dt>
-          <dd>x64 and ARM64</dd>
-        </div>
-        <div>
-          <dt>Language</dt>
-          <dd>Rust</dd>
-        </div>
-      </dl>
-    </section>
-
-    <section class="privacy" id="privacy">
-      <div class="shell privacy-grid reveal">
-        <div>
-          <div class="feature-icon" aria-hidden="true">
-            <svg viewBox="0 0 15 15" width="18" height="18">
-              <path fill="currentColor" d="M7.501.978c1.074 0 1.968.345 2.59 1.014c.616.664.909 1.587.909 2.642V6h1a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h1V4.636c0-1.055.293-1.979.91-2.643c.622-.67 1.517-1.015 2.591-1.015M3 13h9V7H3zM7.501 1.978c-.855 0-1.461.27-1.857.696C5.243 3.105 5 3.76 5 4.636V6h5V4.634c0-.877-.241-1.531-.642-1.962c-.395-.426-1.001-.694-1.857-.694" />
-            </svg>
-          </div>
-          <h2>Your credentials are none of its business.</h2>
-          <p>
-            Codex Minibar talks to the local Codex app server from an already
-            authenticated installation. It does not ask for, store, or transmit
-            your Codex credentials.
-          </p>
-        </div>
-        <p class="privacy-aside">
-          Settings and usage history remain in your Windows user profile.
-          Update checks hit GitHub Releases only when you leave that option
-          enabled.
-        </p>
       </div>
     </section>
 
@@ -456,7 +313,7 @@
             View source
           </a>
         </div>
-        <p class="meta">Windows 10/11 · x64 and ARM64 · per-user or portable</p>
+        <p class="meta">Windows 10/11 · x86, x64 and ARM64</p>
       </div>
     </section>
   </main>

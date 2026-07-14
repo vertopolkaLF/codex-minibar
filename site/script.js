@@ -361,8 +361,16 @@ void main() {
       return "brave";
     }
     if (hasBrand("opera") || /OPR\/|Opera/i.test(ua)) return "opera";
+    if (hasBrand("yandex") || /YaBrowser\//i.test(ua)) return "yandex";
     if (hasBrand("edge") || /Edg\//i.test(ua)) return "edge";
     if (hasBrand("firefox") || /Firefox\//i.test(ua)) return "firefox";
+    // Safari must come after Chromium forks — they all include "Safari" in the UA.
+    if (
+      /Safari\//i.test(ua) &&
+      !/Chrome\/|Chromium\/|Edg\/|OPR\/|YaBrowser\//i.test(ua)
+    ) {
+      return "safari";
+    }
     if (hasBrand("chrome") || /Chrome\//i.test(ua)) return "chrome";
     return null;
   };
@@ -371,6 +379,8 @@ void main() {
   const EXTRA_BROWSERS = {
     opera: { title: "Opera", src: "assets/taskbar-opera.svg" },
     brave: { title: "Brave", src: "assets/taskbar-brave.svg" },
+    yandex: { title: "Yandex Browser", src: "assets/taskbar-yandex.svg" },
+    safari: { title: "Safari", src: "assets/taskbar-safari.svg" },
   };
 
   const markOpenBrowser = () => {
@@ -440,9 +450,100 @@ void main() {
 
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const reveals = document.querySelectorAll(".reveal");
+  const heroVisual = document.querySelector(".hero-visual");
+  const desk = document.querySelector(".desk");
+  const demoCursor = document.querySelector(".demo-cursor");
+  const trayTarget = document.querySelector("[data-tray-target]");
+  const popupMock = document.querySelector(".popup-mock");
+  let trayDemoPlayed = false;
+  let trayDemoBusy = false;
+
+  const setPopupOpen = (open) => {
+    if (!popupMock) return;
+    popupMock.classList.toggle("is-open", open);
+    trayTarget?.setAttribute("aria-expanded", open ? "true" : "false");
+  };
+
+  const togglePopup = () => {
+    if (!popupMock || trayDemoBusy) return;
+    const willOpen = !popupMock.classList.contains("is-open");
+    setPopupOpen(willOpen);
+
+    if (!reduceMotion && trayTarget) {
+      trayTarget.classList.add("is-clicked");
+      window.setTimeout(() => trayTarget.classList.remove("is-clicked"), 180);
+    }
+  };
+
+  const playTrayDemo = () => {
+    if (trayDemoPlayed || !desk || !demoCursor || !trayTarget || !popupMock) return;
+    trayDemoPlayed = true;
+
+    if (reduceMotion) {
+      setPopupOpen(true);
+      return;
+    }
+
+    trayDemoBusy = true;
+
+    const deskRect = desk.getBoundingClientRect();
+    const targetRect = trayTarget.getBoundingClientRect();
+    const startX = deskRect.width * 0.5;
+    const startY = deskRect.height * 0.42;
+    const endX = targetRect.left - deskRect.left + targetRect.width * 0.35;
+    const endY = targetRect.top - deskRect.top + targetRect.height * 0.45;
+
+    demoCursor.style.setProperty("--x", `${startX}px`);
+    demoCursor.style.setProperty("--y", `${startY}px`);
+    demoCursor.classList.add("is-active");
+
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        demoCursor.classList.add("is-moving");
+        demoCursor.style.setProperty("--x", `${endX}px`);
+        demoCursor.style.setProperty("--y", `${endY}px`);
+      });
+    });
+
+    window.setTimeout(() => {
+      demoCursor.classList.remove("is-moving");
+      demoCursor.classList.add("is-at-target");
+      demoCursor.classList.add("is-clicking");
+      trayTarget.classList.add("is-clicked");
+    }, 1180);
+
+    window.setTimeout(() => {
+      demoCursor.classList.remove("is-clicking");
+      setPopupOpen(true);
+    }, 1360);
+
+    window.setTimeout(() => {
+      demoCursor.classList.add("is-done");
+      trayTarget.classList.remove("is-clicked");
+      trayDemoBusy = false;
+    }, 1720);
+  };
+
+  const onHeroVisualVisible = () => {
+    if (reduceMotion) {
+      setPopupOpen(true);
+      return;
+    }
+    window.setTimeout(playTrayDemo, 480);
+  };
+
+  if (trayTarget) {
+    trayTarget.addEventListener("click", togglePopup);
+    trayTarget.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      togglePopup();
+    });
+  }
 
   if (reduceMotion || !("IntersectionObserver" in window)) {
     reveals.forEach((el) => el.classList.add("is-visible"));
+    setPopupOpen(true);
     return;
   }
 
@@ -451,6 +552,7 @@ void main() {
       entries.forEach((entry) => {
         if (!entry.isIntersecting) return;
         entry.target.classList.add("is-visible");
+        if (entry.target === heroVisual) onHeroVisualVisible();
         observer.unobserve(entry.target);
       });
     },
