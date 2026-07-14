@@ -210,7 +210,10 @@ fn popup_sections(
     if limits.is_free_plan() {
         sections.push(PopupSection::Monthly);
     } else {
-        sections.extend([PopupSection::FiveHour, PopupSection::Weekly]);
+        if !limits.five_hour_disabled() {
+            sections.push(PopupSection::FiveHour);
+        }
+        sections.push(PopupSection::Weekly);
     }
     if limits.available_reset_count() > 0 {
         sections.push(PopupSection::BankedResets);
@@ -1327,7 +1330,9 @@ fn reset_credits_card(limits: &RateLimits) -> Element {
                 .vertical_alignment(VerticalAlignment::Center),
                 vstack((
                     text_block(expiration_label),
-                    caption(expiration_date).foreground(ThemeRef::TertiaryText),
+                    caption(expiration_date)
+                        .foreground(ThemeRef::TertiaryText)
+                        .horizontal_alignment(HorizontalAlignment::Right),
                 ))
                 .spacing(1.0)
                 .horizontal_alignment(HorizontalAlignment::Right)
@@ -1485,6 +1490,19 @@ mod tests {
             ]
         );
         assert_unique_section_keys(&plus);
+    }
+
+    #[test]
+    fn disabled_five_hour_session_is_omitted_from_popup() {
+        let mut limits = plan_limits("plus");
+        limits.primary = LimitWindow::default();
+
+        let sections = popup_sections(&limits, false, false);
+        assert_eq!(
+            sections,
+            vec![PopupSection::Weekly, PopupSection::PlanCredits]
+        );
+        assert_unique_section_keys(&sections);
     }
 
     #[test]
