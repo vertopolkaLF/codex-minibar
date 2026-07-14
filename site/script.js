@@ -251,7 +251,26 @@ void main() {
     let previousTime = null;
     let wavePhase = Math.random() * Math.PI * 2;
     let secondaryWavePhase = wavePhase * -0.7;
+    // Smooth half-sine envelope timed from click; null when idle.
+    let pulseStartedAt = null;
+    const PULSE_DURATION_MS = 1100;
     const introStartedAt = performance.now();
+
+    const pulseWave = () => {
+      if (reduceMotion.matches) return;
+      pulseStartedAt = performance.now();
+    };
+
+    const pulseEnvelope = (time) => {
+      if (pulseStartedAt === null) return 0;
+      const t = (time - pulseStartedAt) / PULSE_DURATION_MS;
+      if (t >= 1) {
+        pulseStartedAt = null;
+        return 0;
+      }
+      // Soft attack + release (no hard edges on speed / amplitude).
+      return Math.sin(Math.PI * Math.min(1, Math.max(0, t)));
+    };
 
     const resize = () => {
       const rect = canvas.getBoundingClientRect();
@@ -275,8 +294,11 @@ void main() {
         ? 0
         : Math.min((time - previousTime) / 1000, 0.064);
       previousTime = reduced ? null : time;
-      wavePhase += 0.42 * delta;
-      secondaryWavePhase += 0.26 * delta;
+
+      const pulse = pulseEnvelope(time);
+      // Idle crawl vs a rounded surge that still sweeps ~2π across the stripes.
+      wavePhase += (0.42 + pulse * 9.5) * delta;
+      secondaryWavePhase += (0.26 + pulse * 6) * delta;
 
       const verticalSpan = height * 1.7;
       set2("u_size", width, height);
@@ -294,14 +316,14 @@ void main() {
       set1("u_secondary_wave_phase", secondaryWavePhase);
       set1("u_intro_active", reduced ? 0 : 1);
       set1("u_intro_elapsed", reduced ? 0 : time - introStartedAt - 700);
-      set1("u_shine_progress", 0);
+      set1("u_shine_progress", pulse);
 
       // Helium's shader palette, shifted into a restrained graphite navy.
       set3("u_start_color", 0.031, 0.047, 0.078);
       set3("u_highlight_delta", 0.082, 0.125, 0.196);
       set1("u_alpha", 0.7);
       set1("u_intro_alpha", 1);
-      set1("u_speed_up_shine_boost", 0.15);
+      set1("u_speed_up_shine_boost", 0.28);
       set1("u_grain_alpha", 0.15);
       set1("u_grain_luminance", 144);
       set1("u_grain_contrast", 64);
@@ -320,8 +342,8 @@ void main() {
       set1("u_intro_idle_center", 0.5);
       set1("u_idle_stripe_phase", 0.74);
       set1("u_idle_secondary_stripe_phase", 1.28);
-      set1("u_idle_primary_amplitude", 0.19);
-      set1("u_idle_secondary_amplitude", 0.055);
+      set1("u_idle_primary_amplitude", 0.19 + pulse * 0.1);
+      set1("u_idle_secondary_amplitude", 0.055 + pulse * 0.035);
 
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
@@ -344,9 +366,17 @@ void main() {
     reduceMotion.addEventListener("change", restart);
     resize();
     render(performance.now());
+
+    return { pulseWave };
   };
 
-  initHeroShader();
+  const heroShader = initHeroShader();
+
+  if (heroShader) {
+    document.querySelectorAll('a.btn[href*="releases/latest"]').forEach((link) => {
+      link.addEventListener("click", () => heroShader.pulseWave());
+    });
+  }
 
   const detectBrowser = () => {
     const ua = navigator.userAgent;
