@@ -17,7 +17,6 @@ use crate::{
     popup,
     settings::{NotificationSettings, Settings, TrayWidget},
     settings_controls::update_accent_button,
-    theme::{DARK_SURFACE_FILL, SURFACE_FILL, WINDOW_BORDER, WINDOW_FILL},
     tray::{TrayManager, TrayMenuAction},
     updater::{UpdateController, UpdatePhase},
     worker::{WorkerCommand, WorkerEvent},
@@ -227,6 +226,7 @@ fn popup_sections(
 /// Root WinUI view for Codex Minibar (hosted in a tray popup shell).
 pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let dpi = cx.use_dpi().max(1);
+    let color_scheme = cx.use_color_scheme();
     let window_corner_radius = f64::from(popup::WINDOW_CORNER_RADIUS_DIP);
     // Keep the visual stroke one physical pixel inside the HWND clip so GDI's
     // aliased region cannot trim its anti-aliased XAML corner pixels.
@@ -300,6 +300,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     ui.show_used_percentage,
                     ui.show_usage_pace,
                     false,
+                    color_scheme,
                 ),
                 PopupSection::FiveHour => limit_card(
                     "5h Session",
@@ -307,6 +308,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     ui.show_used_percentage,
                     ui.show_usage_pace,
                     limits.five_hour_disabled(),
+                    color_scheme,
                 ),
                 PopupSection::Weekly => limit_card(
                     "Weekly",
@@ -314,6 +316,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     ui.show_used_percentage,
                     ui.show_usage_pace,
                     false,
+                    color_scheme,
                 ),
                 PopupSection::BankedResets => reset_credits_card(&limits),
                 PopupSection::PlanCredits => meta_row(&limits),
@@ -392,7 +395,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         // Extra bottom padding so content clears the rounded window corners.
         bottom: 14.0,
     })
-    .background(DARK_SURFACE_FILL)
+    .background(ThemeRef::LayerFill)
     .border_thickness(Thickness {
         left: 0.0,
         top: 1.0,
@@ -427,9 +430,9 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         .background(Color::transparent()),
     )
     .border_thickness(Thickness::uniform(1.0))
-    .border_brush(WINDOW_BORDER)
+    .border_brush(ThemeRef::SurfaceStroke)
     .corner_radius(inner_corner_radius)
-    .background(WINDOW_FILL)
+    .background(ThemeRef::LayerFill)
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Top);
 
@@ -460,7 +463,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     )
     .padding(Thickness::uniform(border_inset))
     .corner_radius(window_corner_radius)
-    .background(WINDOW_FILL)
+    .background(ThemeRef::LayerFill)
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Top);
 
@@ -875,6 +878,10 @@ fn start_background_bridge(
             loop {
                 popup::pump_messages();
                 drain_toast_update();
+                if let Err(error) = tray.refresh_system_theme(&widgets, &state.current_limits()) {
+                    ui.error = Some(error.to_string());
+                    set_ui.call(ui.clone());
+                }
                 drain_settings(
                     &mut ui,
                     &set_ui,
@@ -904,6 +911,10 @@ fn start_background_bridge(
         loop {
             popup::pump_messages();
             drain_toast_update();
+            if let Err(error) = tray.refresh_system_theme(&widgets, &state.current_limits()) {
+                ui.error = Some(error.to_string());
+                set_ui.call(ui.clone());
+            }
             drain_settings(
                 &mut ui,
                 &set_ui,
@@ -1083,7 +1094,12 @@ fn icon_button(glyph: &str, tip: &str, font_size: f64, on_click: impl IntoUnitCa
 }
 
 /// Thin pill progress track with a rounded fill and optional pace marker.
-fn rounded_progress(value: f64, fill: ThemeRef, pace: Option<PaceTip>) -> Element {
+fn rounded_progress(
+    value: f64,
+    fill: ThemeRef,
+    pace: Option<PaceTip>,
+    color_scheme: ColorScheme,
+) -> Element {
     const HEIGHT: f64 = 6.0;
     let radius = HEIGHT / 2.0;
     let filled = value.clamp(0.0, 100.0);
@@ -1113,30 +1129,36 @@ fn rounded_progress(value: f64, fill: ThemeRef, pace: Option<PaceTip>) -> Elemen
         layers.push(pace_marker_layer(pace));
     }
 
-    border(
+    let track = border(
         grid(layers)
             .columns([GridLength::Star(1.0)])
             .rows([GridLength::Star(1.0)])
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .vertical_alignment(VerticalAlignment::Stretch),
     )
-    .background(Color {
-        a: 70,
-        r: 255,
-        g: 255,
-        b: 255,
-    })
     .corner_radius(radius)
     .height(HEIGHT)
-    .horizontal_alignment(HorizontalAlignment::Stretch)
-    .into()
+    .horizontal_alignment(HorizontalAlignment::Stretch);
+
+    match color_scheme {
+        // CSS shorthand `#0007` expands to `#00000077`, giving a clearly
+        // visible black track on a white Fluent surface.
+        ColorScheme::Light => track
+            .background(Color {
+                a: 0x77,
+                r: 0,
+                g: 0,
+                b: 0,
+            })
+            .into(),
+        ColorScheme::Dark => track.background(ThemeRef::ControlFillSecondary).into(),
+    }
 }
 
 /// High-contrast vertical tick showing the expected even-burn position.
 fn pace_marker_layer(pace: PaceTip) -> Element {
-    // Keep this wider than a physical pixel and use the theme's primary text
-    // brush. The old 1 DIP, 20%-opaque black tick effectively disappeared on
-    // the dark track (and became even harder to see on high-DPI displays).
+    // The pace marker is deliberately white in both themes, as it overlays
+    // the accent fill and must remain stable when Windows changes appearance.
     const LINE_WIDTH: f64 = 2.0;
     let percent = pace.percent.clamp(0.0, 100.0);
     let (left_star, right_star) = if percent <= 0.0 {
@@ -1149,7 +1171,12 @@ fn pace_marker_layer(pace: PaceTip) -> Element {
 
     grid((border(Element::Empty)
         .width(LINE_WIDTH)
-        .background(ThemeRef::PrimaryText)
+        .background(Color {
+            a: 255,
+            r: 255,
+            g: 255,
+            b: 255,
+        })
         .horizontal_alignment(HorizontalAlignment::Left)
         .vertical_alignment(VerticalAlignment::Stretch)
         .grid_column(1),))
@@ -1172,6 +1199,7 @@ fn limit_card(
     show_used_percentage: bool,
     show_usage_pace: bool,
     disabled: bool,
+    color_scheme: ColorScheme,
 ) -> Element {
     let accent = ThemeRef::SystemAttention;
     let (remaining_label, progress, show_reset, pace) = if disabled {
@@ -1250,13 +1278,20 @@ fn limit_card(
         .into()
     };
 
-    border(vstack((header, rounded_progress(progress, accent, pace), footer)).spacing(8.0))
-        .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
-        .padding(Thickness::uniform(12.0))
-        .background(SURFACE_FILL)
-        .border_thickness(Thickness::uniform(1.0))
-        .border_brush(ThemeRef::CardStroke)
-        .into()
+    border(
+        vstack((
+            header,
+            rounded_progress(progress, accent, pace, color_scheme),
+            footer,
+        ))
+        .spacing(8.0),
+    )
+    .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+    .padding(Thickness::uniform(12.0))
+    .background(ThemeRef::CardBackground)
+    .border_thickness(Thickness::uniform(1.0))
+    .border_brush(ThemeRef::CardStroke)
+    .into()
 }
 
 fn meta_row(limits: &RateLimits) -> Element {
@@ -1347,7 +1382,7 @@ fn reset_credits_card(limits: &RateLimits) -> Element {
     )
     .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
     .padding(Thickness::uniform(12.0))
-    .background(SURFACE_FILL)
+    .background(ThemeRef::CardBackground)
     .border_thickness(Thickness::uniform(1.0))
     .border_brush(ThemeRef::CardStroke)
     .into()

@@ -75,10 +75,7 @@ pub fn open(
                 recon.eager_templated_realization = true;
             },
         )?);
-        // Force Dark so the XAML island clear color is black, not white.
-        set_requested_theme(RequestedTheme::Dark);
         set_settings_window_icon();
-        apply_settings_dark_chrome();
         // Hide the HWND before WinUI tears content down so close does not flash
         // empty black chrome (default title bar + no Mica/content).
         install_settings_close_hide();
@@ -174,41 +171,6 @@ fn set_settings_window_icon() {}
 #[cfg(not(windows))]
 fn install_settings_close_hide() {}
 
-/// Immersive dark mode + Dark requested theme for the settings HWND.
-#[cfg(windows)]
-fn apply_settings_dark_chrome() {
-    use windows_sys::Win32::{
-        Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute},
-        UI::WindowsAndMessaging::FindWindowW,
-    };
-
-    set_requested_theme(RequestedTheme::Dark);
-
-    let title: Vec<u16> = "Codex Minibar Settings"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let hwnd = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
-    if hwnd.is_null() {
-        return;
-    }
-
-    let dark_mode = 1u32;
-    unsafe {
-        let _ = DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
-            &dark_mode as *const u32 as *const _,
-            size_of::<u32>() as u32,
-        );
-    }
-}
-
-#[cfg(not(windows))]
-fn apply_settings_dark_chrome() {
-    set_requested_theme(RequestedTheme::Dark);
-}
-
 fn load_settings_for_window() -> Settings {
     match Settings::default_path().and_then(|path| Settings::load_or_create(&path)) {
         Ok(settings) => settings,
@@ -274,9 +236,6 @@ pub fn render(
     settings_tx: Sender<Settings>,
     updates: Arc<UpdateController>,
 ) -> Element {
-    // After the tree mounts, pin Dark so the island clear color stays black
-    // (white clear washes every translucent Fluent layer on a real display).
-    cx.use_effect((), apply_settings_dark_chrome);
     let (update_phase, set_update_phase) = cx.use_async_state(updates.snapshot());
     let updates_for_poll = updates.clone();
     cx.use_effect((), move || {
@@ -549,20 +508,6 @@ fn settings_about_icon_uri() -> String {
         .filter(|path| path.exists());
     let path = packaged.unwrap_or_else(|| {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/app-icon.png")
-    });
-    format!("file:///{}", path.to_string_lossy().replace('\\', "/"))
-}
-
-fn settings_github_icon_uri() -> String {
-    let packaged = std::env::current_exe()
-        .ok()
-        .and_then(|path| {
-            path.parent()
-                .map(|parent| parent.join("assets/icons/github-iconify.svg"))
-        })
-        .filter(|path| path.exists());
-    let path = packaged.unwrap_or_else(|| {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/icons/github-iconify.svg")
     });
     format!("file:///{}", path.to_string_lossy().replace('\\', "/"))
 }
@@ -1048,12 +993,7 @@ fn about_settings_cards(
 
     let update_settings_separator = border(Element::Empty)
         .height(1.0)
-        .background(Color {
-            a: 17,
-            r: 255,
-            g: 255,
-            b: 255,
-        })
+        .background(ThemeRef::DividerStroke)
         .margin(Thickness {
             left: 0.0,
             top: 4.0,
@@ -1231,13 +1171,13 @@ fn about_action_card(
     };
     let on_exit = move || set_hovered_id.call(None);
 
+    // Resource shortcuts inherit Windows' active accent color, including its
+    // light/dark variants, rather than carrying a fixed app-specific tint.
     let base: Element = border(Element::Empty)
-        .background(Color {
-            a: 48,
-            r: 255,
-            g: 137,
-            b: 83,
-        })
+        .background(ThemeRef::AccentTertiary)
+        // Accent resources can be fully opaque on some Windows palettes.
+        // Keep only a gentle tint, comparable to the previous card fill.
+        .opacity(0.18)
         .corner_radius(10.0)
         .relative_align_left()
         .relative_align_right()
@@ -1245,13 +1185,8 @@ fn about_action_card(
         .relative_align_bottom()
         .into();
     let hover: Element = border(Element::Empty)
-        .background(Color {
-            a: 78,
-            r: 255,
-            g: 137,
-            b: 83,
-        })
-        .opacity(if hovered { 1.0 } else { 0.0 })
+        .background(ThemeRef::AccentSecondary)
+        .opacity(if hovered { 0.28 } else { 0.0 })
         .with_opacity_transition(CONTROL_FAST_ANIMATION)
         .corner_radius(10.0)
         .relative_align_left()
@@ -1260,19 +1195,23 @@ fn about_action_card(
         .relative_align_bottom()
         .into();
     let icon: Element = match icon {
-        AboutCardIcon::GitHub => Image::new_with_uri(settings_github_icon_uri())
-            .width(16.0)
-            .height(16.0)
-            .vertical_alignment(VerticalAlignment::Center)
-            .into(),
+        AboutCardIcon::GitHub => {
+            let mut host = swap_chain_panel()
+                .width(16.0)
+                .height(16.0)
+                .vertical_alignment(VerticalAlignment::Center);
+            host.mounted = Some(Callback::new(|native: Option<_>| {
+                if let Some(native) = native
+                    && let Err(error) = crate::acrylic::install_accent_github_icon_into(native)
+                {
+                    eprintln!("Could not install themed GitHub icon: {error:?}");
+                }
+            }));
+            host.into()
+        }
         AboutCardIcon::Glyph(value) => text_block(value)
             .font_size(16.0)
-            .foreground(Color {
-                a: 255,
-                r: 255,
-                g: 170,
-                b: 89,
-            })
+            .foreground(ThemeRef::Accent)
             .width(16.0)
             .vertical_alignment(VerticalAlignment::Center)
             .into(),

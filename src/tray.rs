@@ -79,6 +79,14 @@ fn stacked_reset_label(reset: Option<DateTime<Utc>>, countdown: bool) -> String 
 }
 
 fn icon_color(value: Option<u8>, limit_value: LimitValue) -> [u8; 3] {
+    icon_color_for_theme(value, limit_value, system_uses_light_theme())
+}
+
+fn icon_color_for_theme(
+    value: Option<u8>,
+    limit_value: LimitValue,
+    uses_light_theme: bool,
+) -> [u8; 3] {
     // Remaining: low is bad. Used: high is bad — color against remaining-equivalent.
     let severity = match limit_value {
         LimitValue::Used => value.map(|used| 100u8.saturating_sub(used.min(100))),
@@ -88,8 +96,57 @@ fn icon_color(value: Option<u8>, limit_value: LimitValue) -> [u8; 3] {
         Some(0..=15) => [230, 74, 72],
         Some(16..=50) => [245, 158, 11],
         Some(_) => [49, 196, 141],
-        None => [180, 180, 180],
+        // Unavailable values are text, not an inactive control: keep them
+        // readable against the system tray in either Windows theme.
+        None => tray_text_color(uses_light_theme),
     }
+}
+
+fn tray_text_color(uses_light_theme: bool) -> [u8; 3] {
+    if uses_light_theme {
+        [0, 0, 0]
+    } else {
+        [255, 255, 255]
+    }
+}
+
+/// `AppsUseLightTheme` is the source Windows itself uses for application
+/// surfaces. Treat an unreadable value as light so tray text never disappears
+/// against the ordinary light notification area.
+#[cfg(windows)]
+fn system_uses_light_theme() -> bool {
+    use windows_sys::Win32::{
+        Foundation::ERROR_SUCCESS,
+        System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW},
+    };
+
+    let subkey: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let value_name: Vec<u16> = "AppsUseLightTheme"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut value = 1u32;
+    let mut value_size = size_of::<u32>() as u32;
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            value_name.as_ptr(),
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            &mut value as *mut u32 as *mut _,
+            &mut value_size,
+        )
+    };
+    status == ERROR_SUCCESS && value != 0
+}
+
+#[cfg(not(windows))]
+fn system_uses_light_theme() -> bool {
+    true
 }
 
 fn system_font() -> Option<&'static Font> {
@@ -174,7 +231,7 @@ pub fn render_widget(widget: &TrayWidget, limits: &RateLimits) -> Vec<u8> {
                 primary_window.resets_at,
                 matches!(widget.presentation, TrayPresentation::ResetCountdown),
             ),
-            [255, 255, 255],
+            tray_text_color(system_uses_light_theme()),
         ),
     };
     render_text_icon(&text, rgb)
@@ -362,6 +419,7 @@ fn render_fallback(text: &str, rgb: [u8; 3]) -> Vec<u8> {
 #[cfg(windows)]
 mod platform {
     use anyhow::{Context, Result};
+    use std::time::{Duration, Instant};
     use tray_icon::{
         Icon, TrayIcon, TrayIconBuilder, TrayIconId,
         menu::{IconMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
@@ -372,6 +430,8 @@ mod platform {
     pub struct TrayManager {
         icons: Vec<TrayIcon>,
         update_available: bool,
+        uses_light_theme: bool,
+        next_theme_check: Instant,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -386,6 +446,8 @@ mod platform {
             Self {
                 icons: Vec::new(),
                 update_available: false,
+                uses_light_theme: system_uses_light_theme(),
+                next_theme_check: Instant::now(),
             }
         }
 
@@ -395,6 +457,8 @@ mod platform {
             limits: &RateLimits,
             update_available: bool,
         ) -> Result<()> {
+            self.uses_light_theme = system_uses_light_theme();
+            self.next_theme_check = Instant::now() + Duration::from_millis(250);
             let menu_changed = self.update_available != update_available;
             self.update_available = update_available;
             // No configured widgets is a deliberate state: retain one ordinary app icon.
@@ -421,6 +485,24 @@ mod platform {
                 }
             }
             Ok(())
+        }
+
+        /// Refresh only when Windows changes between light and dark. The
+        /// polling guard keeps registry reads cheap while repainting existing
+        /// icons in place within a quarter second of a theme switch.
+        pub fn refresh_system_theme(
+            &mut self,
+            widgets: &[TrayWidget],
+            limits: &RateLimits,
+        ) -> Result<()> {
+            if Instant::now() < self.next_theme_check {
+                return Ok(());
+            }
+            self.next_theme_check = Instant::now() + Duration::from_millis(250);
+            if system_uses_light_theme() == self.uses_light_theme {
+                return Ok(());
+            }
+            self.sync(widgets, limits, self.update_available)
         }
 
         /// Recreate after an order change: Windows assigns the newest icon next
@@ -555,6 +637,14 @@ impl TrayManager {
     pub fn drain_menu_actions(&self) -> Vec<TrayMenuAction> {
         Vec::new()
     }
+
+    pub fn refresh_system_theme(
+        &mut self,
+        _widgets: &[TrayWidget],
+        _limits: &RateLimits,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(not(windows))]
@@ -649,8 +739,13 @@ mod tests {
     }
 
     #[test]
-    fn reset_icons_are_white_and_percentage_icons_are_colored() {
-        assert_eq!(icon_color(None, LimitValue::Remaining), [180, 180, 180]);
+    fn tray_text_uses_the_system_theme_and_percentage_icons_stay_colored() {
+        assert_eq!(tray_text_color(true), [0, 0, 0]);
+        assert_eq!(tray_text_color(false), [255, 255, 255]);
+        assert_eq!(
+            icon_color_for_theme(None, LimitValue::Remaining, true),
+            [0, 0, 0]
+        );
         assert_eq!(icon_color(Some(80), LimitValue::Remaining), [49, 196, 141]);
         // Used inverts severity: low used is healthy, high used is critical.
         assert_eq!(icon_color(Some(1), LimitValue::Used), [49, 196, 141]);

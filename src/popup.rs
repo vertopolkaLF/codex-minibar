@@ -20,8 +20,8 @@ use windows_sys::Win32::{
     Graphics::{
         Dwm::{
             DWMSBT_NONE, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_EXTENDED_FRAME_BOUNDS,
-            DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DwmExtendFrameIntoClientArea,
-            DwmFlush, DwmGetWindowAttribute, DwmSetWindowAttribute,
+            DWMWA_SYSTEMBACKDROP_TYPE, DwmExtendFrameIntoClientArea, DwmFlush,
+            DwmGetWindowAttribute, DwmSetWindowAttribute,
         },
         Gdi::{
             CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, GetMonitorInfoW, HMONITOR,
@@ -567,13 +567,6 @@ fn resolve_monitor(anchor_x: i32, anchor_y: i32) -> (HMONITOR, RECT, RECT) {
 /// paints square corners + a drop shadow onto the neighboring monitor).
 fn apply_popup_chrome(hwnd: HWND) {
     unsafe {
-        let dark_mode = 1u32;
-        let _ = DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
-            &dark_mode as *const u32 as *const _,
-            size_of::<u32>() as u32,
-        );
         let no_border = DWMWA_COLOR_NONE;
         let _ = DwmSetWindowAttribute(
             hwnd,
