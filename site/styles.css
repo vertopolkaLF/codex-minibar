@@ -399,8 +399,8 @@ ul {
 .popup-body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 21px 21px 18px;
+  gap: 6px;
+  padding: 21px 21px 16px;
   align-content: start;
 }
 
@@ -415,12 +415,12 @@ ul {
   align-content: space-between;
 }
 
-/* Mirrors reset_credits_card() in the native popup: caption, then a two-column
-   summary with the available resets on the left and their expiry on the right. */
+/* Mirrors reset_credits_card() in the native popup: a compact two-column
+   summary with banked resets on the left and their expiry on the right. */
 .popup-banked-card {
-  height: 95px;
-  grid-template-rows: 19px 42px;
-  padding: 12px 15px;
+  height: 66px;
+  grid-template-rows: 42px;
+  padding: 8px 15px;
 }
 
 .popup-card-title {
@@ -474,6 +474,7 @@ ul {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  margin-top: 4px;
   height: 22px;
   color: #f1f1f1;
   font-size: 15px;

@@ -319,7 +319,12 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     color_scheme,
                 ),
                 PopupSection::BankedResets => reset_credits_card(&limits),
-                PopupSection::PlanCredits => meta_row(&limits),
+                PopupSection::PlanCredits => vstack((
+                    Shape::rectangle().height(4.0),
+                    meta_row(&limits),
+                ))
+                .spacing(0.0)
+                .into(),
             };
             element.with_key(section.key())
         })
@@ -426,12 +431,12 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let body_panel = border(
         grid((
             vstack(body)
-                .spacing(12.0)
+                .spacing(6.0)
                 .padding(Thickness {
                     left: 16.0,
                     top: 16.0,
                     right: 16.0,
-                    bottom: 20.0,
+                    bottom: 16.0,
                 })
                 .horizontal_alignment(HorizontalAlignment::Stretch)
                 .vertical_alignment(VerticalAlignment::Top)
@@ -1355,9 +1360,9 @@ fn meta_row(limits: &RateLimits) -> Element {
 fn reset_credits_card(limits: &RateLimits) -> Element {
     let count = limits.available_reset_count();
     let count_label = if count == 1 {
-        "1 available".into()
+        "1 Banked Reset".into()
     } else {
-        format!("{count} available")
+        format!("{count} Banked Resets")
     };
     let expiration = limits.next_reset_credit_expiration();
     let expiration_label = expiration
@@ -1373,36 +1378,28 @@ fn reset_credits_card(limits: &RateLimits) -> Element {
         .unwrap_or_else(|| "Available to use".into());
 
     border(
-        vstack((
-            caption("BANKED RESETS").foreground(ThemeRef::SecondaryText),
-            grid((
-                vstack((
-                    text_block(count_label)
-                        .font_weight(600)
-                        .foreground(ThemeRef::SystemAttention),
-                    caption("Full rate-limit reset").foreground(ThemeRef::TertiaryText),
-                ))
-                .spacing(1.0)
+        grid((
+            text_block(count_label)
+                .font_weight(600)
+                .foreground(ThemeRef::SystemAttention)
                 .vertical_alignment(VerticalAlignment::Center),
-                vstack((
-                    text_block(expiration_label),
-                    caption(expiration_date)
-                        .foreground(ThemeRef::TertiaryText)
-                        .horizontal_alignment(HorizontalAlignment::Right),
-                ))
-                .spacing(1.0)
-                .horizontal_alignment(HorizontalAlignment::Right)
-                .vertical_alignment(VerticalAlignment::Center)
-                .grid_column(1),
+            vstack((
+                text_block(expiration_label),
+                caption(expiration_date)
+                    .foreground(ThemeRef::TertiaryText)
+                    .horizontal_alignment(HorizontalAlignment::Right),
             ))
-            .columns([GridLength::Star(1.0), GridLength::Auto])
-            .rows([GridLength::Auto])
-            .horizontal_alignment(HorizontalAlignment::Stretch),
+            .spacing(1.0)
+            .horizontal_alignment(HorizontalAlignment::Right)
+            .vertical_alignment(VerticalAlignment::Center)
+            .grid_column(1),
         ))
-        .spacing(8.0),
+        .columns([GridLength::Star(1.0), GridLength::Auto])
+        .rows([GridLength::Auto])
+        .horizontal_alignment(HorizontalAlignment::Stretch),
     )
     .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
-    .padding(Thickness::uniform(12.0))
+    .padding(Thickness::xy(12.0, 8.0))
     .background(ThemeRef::CardBackground)
     .border_thickness(Thickness::uniform(1.0))
     .border_brush(ThemeRef::CardStroke)
