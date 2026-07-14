@@ -226,7 +226,6 @@ fn popup_sections(
 /// Root WinUI view for Codex Minibar (hosted in a tray popup shell).
 pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let dpi = cx.use_dpi().max(1);
-    let color_scheme = cx.use_color_scheme();
     let window_corner_radius = f64::from(popup::WINDOW_CORNER_RADIUS_DIP);
     // Keep the visual stroke one physical pixel inside the HWND clip so GDI's
     // aliased region cannot trim its anti-aliased XAML corner pixels.
@@ -300,7 +299,6 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     ui.show_used_percentage,
                     ui.show_usage_pace,
                     false,
-                    color_scheme,
                 ),
                 PopupSection::FiveHour => limit_card(
                     "5h Session",
@@ -308,7 +306,6 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     ui.show_used_percentage,
                     ui.show_usage_pace,
                     limits.five_hour_disabled(),
-                    color_scheme,
                 ),
                 PopupSection::Weekly => limit_card(
                     "Weekly",
@@ -316,7 +313,6 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     ui.show_used_percentage,
                     ui.show_usage_pace,
                     false,
-                    color_scheme,
                 ),
                 PopupSection::BankedResets => reset_credits_card(&limits),
                 PopupSection::PlanCredits => meta_row(&limits),
@@ -1094,12 +1090,7 @@ fn icon_button(glyph: &str, tip: &str, font_size: f64, on_click: impl IntoUnitCa
 }
 
 /// Thin pill progress track with a rounded fill and optional pace marker.
-fn rounded_progress(
-    value: f64,
-    fill: ThemeRef,
-    pace: Option<PaceTip>,
-    color_scheme: ColorScheme,
-) -> Element {
+fn rounded_progress(value: f64, fill: ThemeRef, pace: Option<PaceTip>) -> Element {
     const HEIGHT: f64 = 6.0;
     let radius = HEIGHT / 2.0;
     let filled = value.clamp(0.0, 100.0);
@@ -1112,7 +1103,7 @@ fn rounded_progress(
     };
 
     let fill_layer = grid((border(Element::Empty)
-        .background(fill)
+        .background(fill.clone())
         .corner_radius(radius)
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .vertical_alignment(VerticalAlignment::Stretch)
@@ -1124,12 +1115,21 @@ fn rounded_progress(
     .grid_column(0)
     .grid_row(0);
 
-    let mut layers: Vec<Element> = vec![fill_layer.into()];
+    let track_layer: Element = border(Element::Empty)
+        .background(fill)
+        .opacity(0.2)
+        .corner_radius(radius)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Stretch)
+        .grid_column(0)
+        .grid_row(0)
+        .into();
+    let mut layers: Vec<Element> = vec![track_layer, fill_layer.into()];
     if let Some(pace) = pace {
         layers.push(pace_marker_layer(pace));
     }
 
-    let track = border(
+    border(
         grid(layers)
             .columns([GridLength::Star(1.0)])
             .rows([GridLength::Star(1.0)])
@@ -1138,27 +1138,13 @@ fn rounded_progress(
     )
     .corner_radius(radius)
     .height(HEIGHT)
-    .horizontal_alignment(HorizontalAlignment::Stretch);
-
-    match color_scheme {
-        // CSS shorthand `#0007` expands to `#00000077`, giving a clearly
-        // visible black track on a white Fluent surface.
-        ColorScheme::Light => track
-            .background(Color {
-                a: 0x77,
-                r: 0,
-                g: 0,
-                b: 0,
-            })
-            .into(),
-        ColorScheme::Dark => track.background(ThemeRef::ControlFillSecondary).into(),
-    }
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .into()
 }
 
 /// High-contrast vertical tick showing the expected even-burn position.
 fn pace_marker_layer(pace: PaceTip) -> Element {
-    // The pace marker is deliberately white in both themes, as it overlays
-    // the accent fill and must remain stable when Windows changes appearance.
+    // The pace marker stays pure black for a crisp reference line.
     const LINE_WIDTH: f64 = 2.0;
     let percent = pace.percent.clamp(0.0, 100.0);
     let (left_star, right_star) = if percent <= 0.0 {
@@ -1173,9 +1159,9 @@ fn pace_marker_layer(pace: PaceTip) -> Element {
         .width(LINE_WIDTH)
         .background(Color {
             a: 255,
-            r: 255,
-            g: 255,
-            b: 255,
+            r: 0,
+            g: 0,
+            b: 0,
         })
         .horizontal_alignment(HorizontalAlignment::Left)
         .vertical_alignment(VerticalAlignment::Stretch)
@@ -1199,7 +1185,6 @@ fn limit_card(
     show_used_percentage: bool,
     show_usage_pace: bool,
     disabled: bool,
-    color_scheme: ColorScheme,
 ) -> Element {
     let accent = ThemeRef::SystemAttention;
     let (remaining_label, progress, show_reset, pace) = if disabled {
@@ -1278,20 +1263,13 @@ fn limit_card(
         .into()
     };
 
-    border(
-        vstack((
-            header,
-            rounded_progress(progress, accent, pace, color_scheme),
-            footer,
-        ))
-        .spacing(8.0),
-    )
-    .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
-    .padding(Thickness::uniform(12.0))
-    .background(ThemeRef::CardBackground)
-    .border_thickness(Thickness::uniform(1.0))
-    .border_brush(ThemeRef::CardStroke)
-    .into()
+    border(vstack((header, rounded_progress(progress, accent, pace), footer)).spacing(8.0))
+        .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+        .padding(Thickness::uniform(12.0))
+        .background(ThemeRef::CardBackground)
+        .border_thickness(Thickness::uniform(1.0))
+        .border_brush(ThemeRef::CardStroke)
+        .into()
 }
 
 fn meta_row(limits: &RateLimits) -> Element {
