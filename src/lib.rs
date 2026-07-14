@@ -15,4 +15,5 @@ pub mod single_instance;
 pub mod theme;
 pub mod tray;
 pub mod updater;
+pub mod usage;
 pub mod worker;

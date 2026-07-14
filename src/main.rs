@@ -2,22 +2,22 @@
 
 use std::{
     rc::Rc,
-    sync::{Arc, Mutex, mpsc},
+    sync::{mpsc, Arc, Mutex},
     time::Duration,
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use codex_minibar::{
-    app::{AppState, app},
-    codex::{CodexActivator, CodexClient, first_available},
+    app::{app, AppState},
+    codex::{first_available, CodexActivator, CodexClient},
     notifications,
     popup::{self, POPUP_HEIGHT_MAX, POPUP_WIDTH},
     scheduler::ActivationState,
     settings::Settings,
     single_instance::{self, SingleInstance},
     updater::{
-        UpdateController, show_post_update_success_if_needed, sync_installed_display_version,
+        show_post_update_success_if_needed, sync_installed_display_version, UpdateController,
     },
     worker::start_worker,
 };
@@ -50,6 +50,7 @@ fn run() -> Result<()> {
                 CodexActivator::new(executable),
                 activation_path,
                 settings.automatic_activation,
+                settings.history_retention_days,
                 Duration::from_secs(60),
             );
             (Some(worker.commands.clone()), Some(worker), None)
@@ -117,7 +118,7 @@ fn show_error(message: &str) {
     {
         use std::ffi::OsStr;
         use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
 
         let text: Vec<u16> = OsStr::new(message)
             .encode_wide()

@@ -14,7 +14,7 @@ use crate::{
 };
 
 pub trait LimitProvider: Send + 'static {
-    fn read_limits(&mut self) -> Result<RateLimits>;
+    fn read_limits(&mut self, history_days: u16) -> Result<RateLimits>;
 }
 
 pub trait Activator: Send + 'static {
@@ -25,6 +25,7 @@ pub trait Activator: Send + 'static {
 pub enum WorkerCommand {
     Refresh,
     SetAutomaticActivation(bool),
+    SetHistoryRetentionDays(u16),
     Shutdown,
 }
 
@@ -77,6 +78,7 @@ pub fn start_worker(
     mut activator: impl Activator,
     state_path: PathBuf,
     automatic_activation: bool,
+    history_retention_days: u16,
     poll_interval: Duration,
 ) -> WorkerHandle {
     let (command_sender, command_receiver) = mpsc::channel();
@@ -84,12 +86,14 @@ pub fn start_worker(
     let join = thread::spawn(move || {
         let mut state = ActivationState::load_or_default(&state_path).unwrap_or_default();
         let mut automatic_activation = automatic_activation;
+        let mut history_retention_days = history_retention_days;
         loop {
             match tick(
                 &mut provider,
                 &mut activator,
                 &mut state,
                 automatic_activation,
+                history_retention_days,
             ) {
                 Ok(events) => {
                     let _ = state.save(&state_path);
@@ -105,6 +109,9 @@ pub fn start_worker(
                 Ok(WorkerCommand::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
                 Ok(WorkerCommand::SetAutomaticActivation(enabled)) => {
                     automatic_activation = enabled;
+                }
+                Ok(WorkerCommand::SetHistoryRetentionDays(days)) => {
+                    history_retention_days = days.clamp(1, 365);
                 }
                 Ok(WorkerCommand::Refresh) | Err(RecvTimeoutError::Timeout) => {}
             }
@@ -123,8 +130,9 @@ fn tick(
     activator: &mut impl Activator,
     state: &mut ActivationState,
     automatic_activation: bool,
+    history_retention_days: u16,
 ) -> Result<Vec<WorkerEvent>> {
-    let mut limits = provider.read_limits()?;
+    let mut limits = provider.read_limits(history_retention_days)?;
     let mut events = Vec::new();
 
     if automatic_activation && state.decide(&limits.primary) == Decision::ActivateNow {
@@ -133,7 +141,7 @@ fn tick(
             Ok(()) => {
                 // Re-read so `observe` baselines the post-activation reset time
                 // and we do not immediately fire again on the next tick.
-                if let Ok(fresh) = provider.read_limits() {
+                if let Ok(fresh) = provider.read_limits(history_retention_days) {
                     limits = fresh;
                 }
                 state.observe(&limits.primary);
@@ -173,7 +181,7 @@ mod tests {
     }
 
     impl LimitProvider for ScriptedProvider {
-        fn read_limits(&mut self) -> Result<RateLimits> {
+        fn read_limits(&mut self, _history_days: u16) -> Result<RateLimits> {
             let sample = self.samples[self.index.min(self.samples.len() - 1)].clone();
             self.index += 1;
             Ok(sample)
@@ -214,20 +222,20 @@ mod tests {
         let mut activator = CountingActivator(0);
         let mut state = ActivationState::default();
 
-        tick(&mut provider, &mut activator, &mut state, true).unwrap();
+        tick(&mut provider, &mut activator, &mut state, true, 30).unwrap();
         assert_eq!(activator.0, 0);
 
-        tick(&mut provider, &mut activator, &mut state, true).unwrap();
+        tick(&mut provider, &mut activator, &mut state, true, 30).unwrap();
         assert_eq!(activator.0, 0);
 
-        tick(&mut provider, &mut activator, &mut state, true).unwrap();
+        tick(&mut provider, &mut activator, &mut state, true, 30).unwrap();
         assert_eq!(activator.0, 1);
         assert_eq!(
             state.last_seen_resets_at,
             limits_at(20, 1).primary.resets_at
         );
 
-        tick(&mut provider, &mut activator, &mut state, true).unwrap();
+        tick(&mut provider, &mut activator, &mut state, true, 30).unwrap();
         assert_eq!(activator.0, 1);
     }
 
@@ -249,6 +257,7 @@ mod tests {
             &mut FailingActivator,
             &mut state,
             true,
+            30,
         )
         .unwrap();
         assert!(matches!(

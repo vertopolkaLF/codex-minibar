@@ -36,8 +36,8 @@ Codex Minibar reads the usage data exposed by a locally installed, authenticated
 - Show five-hour and weekly usage in one or more configurable tray icons.
 - Choose numbers, bars, rings, reset times, or reset countdowns; show remaining or used
   percentage as appropriate.
-- Open a compact native popup for the current plan, credits, limit windows, and usage
-  history.
+- Open a compact native popup for the current plan, credits, limit windows, and local token
+  statistics (today, the configured history window, and a compact activity bar chart).
 - Receive Windows notifications when a limit resets, usage becomes low, Codex cannot be
   reached, or an update is available.
 - Optionally start Codex automatically to activate a fresh five-hour window.

@@ -100,6 +100,7 @@ struct UiState {
     refreshing: bool,
     show_used_percentage: bool,
     show_usage_pace: bool,
+    show_usage_stats: bool,
     hide_plan_credits: bool,
     update_version: Option<String>,
 }
@@ -155,6 +156,7 @@ impl Default for UiState {
             refreshing: false,
             show_used_percentage: false,
             show_usage_pace: true,
+            show_usage_stats: true,
             hide_plan_credits: false,
             update_version: None,
         }
@@ -180,6 +182,7 @@ enum PopupSection {
     Monthly,
     FiveHour,
     Weekly,
+    UsageStatistics,
     BankedResets,
     PlanCredits,
 }
@@ -191,6 +194,7 @@ impl PopupSection {
             Self::Monthly => "monthly",
             Self::FiveHour => "five-hour",
             Self::Weekly => "weekly",
+            Self::UsageStatistics => "usage-statistics",
             Self::BankedResets => "banked-resets",
             Self::PlanCredits => "plan-credits",
         }
@@ -199,10 +203,11 @@ impl PopupSection {
 
 fn popup_sections(
     limits: &RateLimits,
+    show_usage_stats: bool,
     hide_plan_credits: bool,
     has_error: bool,
 ) -> Vec<PopupSection> {
-    let mut sections = Vec::with_capacity(5);
+    let mut sections = Vec::with_capacity(6);
     if has_error {
         sections.push(PopupSection::Error);
     }
@@ -216,6 +221,9 @@ fn popup_sections(
     }
     if limits.available_reset_count() > 0 {
         sections.push(PopupSection::BankedResets);
+    }
+    if show_usage_stats && limits.usage.has_data() {
+        sections.push(PopupSection::UsageStatistics);
     }
     if !hide_plan_credits {
         sections.push(PopupSection::PlanCredits);
@@ -237,6 +245,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         last_activation: format_last_activation(&RateLimits::default(), state.last_activation_at),
         show_used_percentage: state.settings.show_used_percentage,
         show_usage_pace: state.settings.show_usage_pace,
+        show_usage_stats: state.settings.show_usage_stats,
         hide_plan_credits: state.settings.hide_plan_credits,
         update_version: state
             .updates
@@ -282,7 +291,12 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     };
     let quit = move || std::process::exit(0);
 
-    let body: Vec<Element> = popup_sections(&limits, ui.hide_plan_credits, ui.error.is_some())
+    let body: Vec<Element> = popup_sections(
+        &limits,
+        ui.show_usage_stats,
+        ui.hide_plan_credits,
+        ui.error.is_some(),
+    )
         .into_iter()
         .map(|section| {
             let element: Element = match section {
@@ -319,6 +333,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     false,
                     color_scheme,
                 ),
+                PopupSection::UsageStatistics => usage_statistics_card(&limits),
                 PopupSection::BankedResets => reset_credits_card(&limits),
                 PopupSection::PlanCredits => vstack((
                     Shape::rectangle().height(4.0),
@@ -803,6 +818,7 @@ fn start_background_bridge(
             last_activation: format_last_activation(&RateLimits::default(), fallback_attempt),
             show_used_percentage: state.settings.show_used_percentage,
             show_usage_pace: state.settings.show_usage_pace,
+            show_usage_stats: state.settings.show_usage_stats,
             hide_plan_credits: state.settings.hide_plan_credits,
             update_version: update_version_from_phase(&update_phase),
             ..UiState::default()
@@ -834,6 +850,7 @@ fn start_background_bridge(
             let phase = updates.snapshot();
             ui.show_used_percentage = settings.show_used_percentage;
             ui.show_usage_pace = settings.show_usage_pace;
+            ui.show_usage_stats = settings.show_usage_stats;
             ui.hide_plan_credits = settings.hide_plan_credits;
             *notification_settings = settings.notifications;
             *widgets = settings.tray_widgets;
@@ -850,6 +867,12 @@ fn start_background_bridge(
             if let Some(commands) = &state.commands {
                 let _ = commands.send(WorkerCommand::SetAutomaticActivation(
                     settings.automatic_activation,
+                ));
+                // The worker refreshes immediately after receiving this command,
+                // so the selected history range is reflected in the open popup
+                // without asking the user to restart the application.
+                let _ = commands.send(WorkerCommand::SetHistoryRetentionDays(
+                    settings.history_retention_days,
                 ));
             }
             set_ui.call(ui.clone());
@@ -1450,6 +1473,143 @@ fn reset_credits_card(limits: &RateLimits) -> Element {
     .into()
 }
 
+fn usage_statistics_card(limits: &RateLimits) -> Element {
+    let statistics = &limits.usage;
+    let period = statistics.history_days;
+    let total = format_token_count(statistics.history.total_tokens());
+    let today = format_token_count(statistics.today.total_tokens());
+    let latest = statistics
+        .daily
+        .last()
+        .map(|entry| format_token_count(entry.usage.total_tokens()))
+        .unwrap_or_else(|| "—".into());
+    let detail = format!(
+        "{} in · {} out · {} cached · {} requests",
+        format_token_count(statistics.history.input_tokens),
+        format_token_count(statistics.history.output_tokens),
+        format_token_count(statistics.history.cached_input_tokens),
+        statistics.history.requests,
+    );
+    let metrics = vstack((
+        grid((
+            usage_stat_metric("Today", today),
+            usage_stat_metric(&format!("Last {period} days tokens"), total).grid_column(1),
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
+        .rows([GridLength::Auto])
+        .horizontal_alignment(HorizontalAlignment::Stretch),
+        grid((
+            usage_stat_metric(
+                &format!("Last {period} days requests"),
+                statistics.history.requests.to_string(),
+            ),
+            usage_stat_metric("Latest tokens", latest).grid_column(1),
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
+        .rows([GridLength::Auto])
+        .horizontal_alignment(HorizontalAlignment::Stretch),
+    ))
+    .spacing(12.0)
+    .horizontal_alignment(HorizontalAlignment::Stretch);
+    let chart = usage_activity_chart(statistics);
+
+    border(
+        vstack((
+            metrics,
+            chart,
+            caption(detail).foreground(ThemeRef::TertiaryText),
+        ))
+        .spacing(12.0),
+    )
+    .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+    .padding(Thickness::uniform(12.0))
+    .background(ThemeRef::CardBackground)
+    .border_thickness(Thickness::uniform(1.0))
+    .border_brush(ThemeRef::CardStroke)
+    .into()
+}
+
+fn usage_stat_metric(label: &str, value: String) -> Element {
+    vstack((
+        caption(label).foreground(ThemeRef::TertiaryText),
+        text_block(value).font_weight(600),
+    ))
+    .spacing(1.0)
+    .vertical_alignment(VerticalAlignment::Center)
+    .into()
+}
+
+/// Compact, screenshot-style activity chart. For long histories, adjacent days
+/// are grouped into a single bar so the chart stays legible in the tray popup.
+fn usage_activity_chart(statistics: &crate::usage::UsageStatistics) -> Element {
+    const MAX_BARS: usize = 60;
+    const CHART_WIDTH: f64 = 308.0;
+    const CHART_HEIGHT: f64 = 56.0;
+    const BAR_GAP: f64 = 2.0;
+
+    let days = usize::from(statistics.history_days.max(1));
+    let today = Local::now().date_naive();
+    let first_day = today - ChronoDuration::days(days.saturating_sub(1) as i64);
+    let daily: Vec<u64> = (0..days)
+        .map(|index| statistics.tokens_on(first_day + ChronoDuration::days(index as i64)))
+        .collect();
+    let values = compact_activity_bars(&daily, MAX_BARS);
+    let max_value = values.iter().copied().max().unwrap_or(0);
+    let bar_width = ((CHART_WIDTH - BAR_GAP * values.len().saturating_sub(1) as f64)
+        / values.len().max(1) as f64)
+        .clamp(2.0, 12.0);
+
+    let bars: Vec<Element> = values
+        .into_iter()
+        .map(|tokens| {
+            let height = if max_value == 0 {
+                2.0
+            } else {
+                (CHART_HEIGHT * tokens as f64 / max_value as f64).max(2.0)
+            };
+            border(Element::Empty)
+                .width(bar_width)
+                .height(height)
+                .corner_radius(1.5)
+                .background(ThemeRef::SystemAttention)
+                .opacity(if tokens == 0 { 0.2 } else { 1.0 })
+                .vertical_alignment(VerticalAlignment::Bottom)
+                .into()
+        })
+        .collect();
+
+    border(
+        hstack(bars)
+            .spacing(BAR_GAP)
+            .height(CHART_HEIGHT)
+            .vertical_alignment(VerticalAlignment::Bottom),
+    )
+    .height(CHART_HEIGHT)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .vertical_alignment(VerticalAlignment::Bottom)
+    .into()
+}
+
+fn compact_activity_bars(values: &[u64], max_bars: usize) -> Vec<u64> {
+    if values.len() <= max_bars || max_bars == 0 {
+        return values.to_vec();
+    }
+    let per_bar = values.len().div_ceil(max_bars);
+    values
+        .chunks(per_bar)
+        .map(|chunk| chunk.iter().copied().sum())
+        .collect()
+}
+
+fn format_token_count(tokens: u64) -> String {
+    match tokens {
+        0..=999 => tokens.to_string(),
+        1_000..=999_999 => format!("{:.1}K", tokens as f64 / 1_000.0),
+        1_000_000..=999_999_999 => format!("{:.1}M", tokens as f64 / 1_000_000.0),
+        _ => format!("{:.1}B", tokens as f64 / 1_000_000_000.0),
+    }
+}
+
 fn credits_label(limits: &RateLimits) -> String {
     if limits.credits.unlimited {
         "Unlimited".into()
@@ -1562,6 +1722,23 @@ mod tests {
     }
 
     #[test]
+    fn activity_chart_groups_long_histories_without_losing_tokens() {
+        assert_eq!(compact_activity_bars(&[2, 3, 5], 60), vec![2, 3, 5]);
+        assert_eq!(compact_activity_bars(&[2, 3, 5, 7, 11], 2), vec![10, 18]);
+    }
+
+    #[test]
+    fn usage_statistics_section_respects_its_live_toggle() {
+        let mut limits = plan_limits("plus");
+        limits.usage.history.requests = 1;
+
+        assert!(popup_sections(&limits, true, false, false)
+            .contains(&PopupSection::UsageStatistics));
+        assert!(!popup_sections(&limits, false, false, false)
+            .contains(&PopupSection::UsageStatistics));
+    }
+
+    #[test]
     fn banked_reset_count_and_expiration_are_formatted() {
         assert_eq!(
             format_reset_in(Some(
@@ -1573,11 +1750,11 @@ mod tests {
 
     #[test]
     fn free_to_plus_replaces_monthly_with_session_and_weekly_sections() {
-        let free = popup_sections(&plan_limits("free"), false, false);
+        let free = popup_sections(&plan_limits("free"), true, false, false);
         assert_eq!(free, vec![PopupSection::Monthly, PopupSection::PlanCredits]);
         assert_unique_section_keys(&free);
 
-        let plus = popup_sections(&plan_limits("plus"), false, false);
+        let plus = popup_sections(&plan_limits("plus"), true, false, false);
         assert_eq!(
             plus,
             vec![
@@ -1594,7 +1771,7 @@ mod tests {
         let mut limits = plan_limits("plus");
         limits.primary = LimitWindow::default();
 
-        let sections = popup_sections(&limits, false, false);
+        let sections = popup_sections(&limits, true, false, false);
         assert_eq!(
             sections,
             vec![PopupSection::Weekly, PopupSection::PlanCredits]
@@ -1610,7 +1787,7 @@ mod tests {
             ..Default::default()
         });
 
-        let sections = popup_sections(&limits, false, true);
+        let sections = popup_sections(&limits, true, false, true);
         assert_eq!(
             sections,
             vec![

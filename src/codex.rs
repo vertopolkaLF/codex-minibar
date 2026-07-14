@@ -7,13 +7,14 @@ use std::{
     time::{Duration as StdDuration, Instant},
 };
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::{TimeZone, Utc};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::limits::{
     Credits, LimitWindow, RateLimitResetCredit, RateLimitResetCreditsSummary, RateLimits,
 };
+use crate::usage;
 use crate::worker::{Activator, LimitProvider};
 
 pub const ACTIVATION_MODEL: &str = "gpt-5.4-mini";
@@ -25,8 +26,8 @@ pub struct CodexClient {
 }
 
 impl LimitProvider for CodexClient {
-    fn read_limits(&mut self) -> Result<RateLimits> {
-        self.read_rate_limits()
+    fn read_limits(&mut self, history_days: u16) -> Result<RateLimits> {
+        self.read_rate_limits(history_days)
     }
 }
 
@@ -122,14 +123,19 @@ impl CodexClient {
         self
     }
 
-    pub fn read_rate_limits(&self) -> Result<RateLimits> {
+    pub fn read_rate_limits(&self, history_days: u16) -> Result<RateLimits> {
         let mut child = spawn_codex(
             &self.executable,
             &["-s", "read-only", "-a", "untrusted", "app-server"],
         )?;
         let result = self.exchange(&mut child);
         terminate(&mut child);
-        result
+        result.map(|mut limits| {
+            // Usage logs are optional (for example, a fresh Desktop install may
+            // not have created `sessions` yet). Keep live quota data available.
+            limits.usage = usage::read_usage_statistics(history_days).unwrap_or_default();
+            limits
+        })
     }
 
     fn exchange(&self, child: &mut Child) -> Result<RateLimits> {
@@ -221,6 +227,7 @@ pub fn parse_rate_limits(
             .map(str::to_owned),
         credits: parse_credits(limits.get("credits")),
         reset_credits: parse_reset_credits(response.pointer("/result/rateLimitResetCredits")),
+        usage: Default::default(),
     }
     .normalized(sampled_at))
 }
@@ -445,7 +452,7 @@ mod tests {
     fn reads_live_rate_limits() {
         let executable = first_available(None).expect("Codex CLI should be discoverable");
         let limits = CodexClient::new(executable)
-            .read_rate_limits()
+            .read_rate_limits(30)
             .expect("Codex app-server should return rate limits");
         assert!(limits.primary.used_percent.is_some() || limits.primary.resets_at.is_some());
     }

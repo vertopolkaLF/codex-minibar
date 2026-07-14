@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::usage::UsageStatistics;
+
 /// Windows longer than this are treated as weekly (or similar), not the 5h session.
 const SHORT_WINDOW_MAX_MINUTES: u32 = 12 * 60;
 
@@ -103,6 +105,8 @@ pub struct RateLimits {
     pub limit_name: Option<String>,
     pub credits: Credits,
     pub reset_credits: Option<RateLimitResetCreditsSummary>,
+    /// Token statistics computed from local Codex session logs.
+    pub usage: UsageStatistics,
 }
 
 impl RateLimits {

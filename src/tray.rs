@@ -242,14 +242,8 @@ fn render_text_icon(text: &str, rgb: [u8; 3]) -> Vec<u8> {
         return render_fallback(text, rgb);
     };
     let lines: Vec<_> = text.lines().collect();
+    let font_size = text_font_size(&lines);
     let two_lines = lines.len() > 1;
-    let font_size = if two_lines {
-        15.0
-    } else if text.chars().count() <= 2 {
-        24.0
-    } else {
-        20.0
-    };
     let fonts = [font.clone()];
     let mut pixels = vec![0; ICON_SIZE * ICON_SIZE * 4];
     let line_height = if two_lines { 15.0 } else { ICON_SIZE as f32 };
@@ -281,6 +275,20 @@ fn render_text_icon(text: &str, rgb: [u8; 3]) -> Vec<u8> {
         }
     }
     pixels
+}
+
+fn text_font_size(lines: &[&str]) -> f32 {
+    let two_lines = lines.len() > 1;
+    let widest_line = lines.iter().map(|line| line.chars().count()).max().unwrap_or(0);
+    // Windows downscales our 32px source to the 16px notification-area slot.
+    // Leave enough horizontal padding for `100` on either stacked line so the
+    // third digit stays crisp instead of being clipped at the icon edge.
+    match (two_lines, widest_line) {
+        (true, 0..=2) => 15.0,
+        (true, _) => 12.0,
+        (false, 0..=2) => 24.0,
+        (false, _) => 17.0,
+    }
 }
 
 fn render_bars(values: &[Option<u8>], limit_value: LimitValue) -> Vec<u8> {
@@ -688,6 +696,12 @@ mod tests {
         let pixels = render_widget(&widget, &limits());
         assert_eq!(pixels.len(), ICON_SIZE * ICON_SIZE * 4);
         assert!(pixels.chunks_exact(4).any(|pixel| pixel[3] != 0));
+    }
+
+    #[test]
+    fn stacked_three_digit_values_use_a_compact_font() {
+        assert_eq!(text_font_size(&["100", "100"]), 12.0);
+        assert_eq!(text_font_size(&["99", "99"]), 15.0);
     }
 
     #[test]

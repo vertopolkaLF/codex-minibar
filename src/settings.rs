@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 3;
+pub const SETTINGS_VERSION: u32 = 4;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -108,6 +108,7 @@ pub struct Settings {
     pub start_at_login: bool,
     pub show_used_percentage: bool,
     pub show_usage_pace: bool,
+    pub show_usage_stats: bool,
     pub hide_plan_credits: bool,
     pub codex_path: Option<PathBuf>,
     pub tray_widgets: Vec<TrayWidget>,
@@ -124,6 +125,7 @@ impl Default for Settings {
             start_at_login: true,
             show_used_percentage: false,
             show_usage_pace: true,
+            show_usage_stats: true,
             hide_plan_credits: false,
             codex_path: None,
             // An empty list intentionally means "show the ordinary app icon".
@@ -407,6 +409,18 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.insert("version".into(), toml::Value::Integer(3));
                 version = 3;
             }
+            3 => {
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .entry("show_usage_stats")
+                    .or_insert(toml::Value::Boolean(true));
+                document
+                    .as_table_mut()
+                    .expect("settings root was checked above")
+                    .insert("version".into(), toml::Value::Integer(4));
+                version = 4;
+            }
             unsupported => anyhow::bail!("no migration path from settings version {unsupported}"),
         }
     }
@@ -424,6 +438,7 @@ mod tests {
         assert!(value.start_at_login);
         assert!(!value.show_used_percentage);
         assert!(value.show_usage_pace);
+        assert!(value.show_usage_stats);
         assert!(!value.hide_plan_credits);
         assert_eq!(value.history_retention_days, 90);
         assert!(value.tray_widgets.is_empty());
@@ -465,8 +480,9 @@ tray_widgets = []
         assert!(!migrated.automatic_activation);
         assert!(migrated.start_at_login);
         assert!(migrated.show_usage_pace);
+        assert!(migrated.show_usage_stats);
         assert_eq!(migrated.history_retention_days, 30);
-        assert!(fs::read_to_string(path).unwrap().contains("version = 3"));
+        assert!(fs::read_to_string(path).unwrap().contains("version = 4"));
     }
 
     #[test]
