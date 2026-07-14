@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 5;
+pub const SETTINGS_VERSION: u32 = 6;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -108,6 +108,7 @@ pub struct Settings {
     pub start_at_login: bool,
     pub show_used_percentage: bool,
     pub show_usage_pace: bool,
+    pub show_banked_resets: bool,
     pub show_usage_stats: bool,
     pub hide_plan_credits: bool,
     pub codex_path: Option<PathBuf>,
@@ -125,6 +126,7 @@ impl Default for Settings {
             start_at_login: true,
             show_used_percentage: false,
             show_usage_pace: true,
+            show_banked_resets: true,
             show_usage_stats: true,
             hide_plan_credits: false,
             codex_path: None,
@@ -433,6 +435,15 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.insert("version".into(), toml::Value::Integer(5));
                 version = 5;
             }
+            5 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("show_banked_resets")
+                    .or_insert(toml::Value::Boolean(true));
+                root.insert("version".into(), toml::Value::Integer(6));
+                version = 6;
+            }
             unsupported => anyhow::bail!("no migration path from settings version {unsupported}"),
         }
     }
@@ -450,6 +461,7 @@ mod tests {
         assert!(value.start_at_login);
         assert!(!value.show_used_percentage);
         assert!(value.show_usage_pace);
+        assert!(value.show_banked_resets);
         assert!(value.show_usage_stats);
         assert!(!value.hide_plan_credits);
         assert_eq!(value.history_retention_days, 30);
@@ -492,9 +504,10 @@ tray_widgets = []
         assert!(!migrated.automatic_activation);
         assert!(migrated.start_at_login);
         assert!(migrated.show_usage_pace);
+        assert!(migrated.show_banked_resets);
         assert!(migrated.show_usage_stats);
         assert_eq!(migrated.history_retention_days, 30);
-        assert!(fs::read_to_string(path).unwrap().contains("version = 5"));
+        assert!(fs::read_to_string(path).unwrap().contains("version = 6"));
     }
 
     #[test]

@@ -358,6 +358,8 @@ pub fn render(
     let (show_used_percentage, set_show_used_percentage) =
         cx.use_state(settings.show_used_percentage);
     let (show_usage_pace, set_show_usage_pace) = cx.use_state(settings.show_usage_pace);
+    let (show_banked_resets, set_show_banked_resets) =
+        cx.use_state(settings.show_banked_resets);
     let (show_usage_stats, set_show_usage_stats) = cx.use_state(settings.show_usage_stats);
     let (hide_plan_credits, set_hide_plan_credits) = cx.use_state(settings.hide_plan_credits);
     let (activation_failure, set_activation_failure) =
@@ -392,6 +394,7 @@ pub fn render(
             start_at_login,
             show_used_percentage,
             show_usage_pace,
+            show_banked_resets,
             show_usage_stats,
             hide_plan_credits,
             activation_failure,
@@ -413,6 +416,7 @@ pub fn render(
             set_start_at_login,
             set_show_used_percentage,
             set_show_usage_pace,
+            set_show_banked_resets,
             set_show_usage_stats,
             set_hide_plan_credits,
             set_activation_failure,
@@ -554,6 +558,7 @@ fn tab_content(
     start_at_login: bool,
     show_used_percentage: bool,
     show_usage_pace: bool,
+    show_banked_resets: bool,
     show_usage_stats: bool,
     hide_plan_credits: bool,
     activation_failure: bool,
@@ -575,6 +580,7 @@ fn tab_content(
     set_start_at_login: SetState<bool>,
     set_show_used_percentage: SetState<bool>,
     set_show_usage_pace: SetState<bool>,
+    set_show_banked_resets: SetState<bool>,
     set_show_usage_stats: SetState<bool>,
     set_hide_plan_credits: SetState<bool>,
     set_activation_failure: SetState<bool>,
@@ -598,6 +604,7 @@ fn tab_content(
     let apply_start_at_login = settings_tx.clone();
     let apply_show_used_percentage = settings_tx.clone();
     let apply_show_usage_pace = settings_tx.clone();
+    let apply_show_banked_resets = settings_tx.clone();
     let apply_show_usage_stats = settings_tx.clone();
     let apply_hide_plan_credits = settings_tx.clone();
     let apply_activation_failure = settings_tx.clone();
@@ -692,6 +699,25 @@ fn tab_content(
                     set_hovered_card_id.clone(),
                 )
                 .with_key("general-show-usage-pace"),
+                settings_toggle_card_with_description(
+                    "Show banked resets",
+                    Some("Shows available banked reset credits in the popup."),
+                    show_banked_resets,
+                    move |value| {
+                        persist_bool(
+                            set_show_banked_resets.clone(),
+                            apply_show_banked_resets.clone(),
+                            value,
+                            |settings, value| {
+                                settings.show_banked_resets = value;
+                            },
+                        );
+                    },
+                    "general-show-banked-resets",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("general-show-banked-resets"),
                 settings_toggle_card_with_description(
                     "Show usage stats",
                     Some("Shows local token activity and the usage chart in the popup."),
