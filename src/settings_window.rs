@@ -35,7 +35,7 @@ pub fn open(
     updates: Arc<UpdateController>,
 ) -> windows_core::Result<()> {
     HOST.with(|slot| {
-        if settings_window_is_open() {
+        if is_open() {
             if let Some(host) = slot.borrow().as_ref() {
                 return host.activate();
             }
@@ -213,8 +213,12 @@ fn load_settings_for_window() -> Settings {
     }
 }
 
+/// Whether the independent settings surface is currently alive.
+///
+/// The tray popup uses this to stay visible as a live preview while a user
+/// navigates settings and changes popup-related options.
 #[cfg(windows)]
-fn settings_window_is_open() -> bool {
+pub(crate) fn is_open() -> bool {
     use windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW;
 
     let title: Vec<u16> = "Codex Minibar Settings"
@@ -225,7 +229,7 @@ fn settings_window_is_open() -> bool {
 }
 
 #[cfg(not(windows))]
-fn settings_window_is_open() -> bool {
+pub(crate) fn is_open() -> bool {
     false
 }
 

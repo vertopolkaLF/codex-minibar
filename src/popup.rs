@@ -777,6 +777,18 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
     BUTTON_WAS_DOWN.store(true, Ordering::SeqCst);
 }
 
+/// Show the popup beside the current pointer location.
+///
+/// Settings opened from the tray menu do not carry a tray-click position, but
+/// the pointer still gives the expected monitor and taskbar anchor.
+pub fn show_near_cursor() {
+    let mut cursor = POINT { x: 0, y: 0 };
+    unsafe {
+        GetCursorPos(&mut cursor);
+    }
+    show_near(cursor.x, cursor.y);
+}
+
 pub fn toggle_near(anchor_x: i32, anchor_y: i32) {
     if is_visible() {
         hide();

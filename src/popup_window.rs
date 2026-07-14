@@ -1083,7 +1083,11 @@ fn pump_tray_and_dismiss(
             let x = position.x as i32;
             let y = position.y as i32;
             if popup::is_visible() {
-                popup::hide();
+                // While Settings is open the popup is a live preview, not a
+                // transient tray flyout. Keep it available until Settings closes.
+                if !crate::settings_window::is_open() {
+                    popup::hide();
+                }
             } else {
                 // Opening the popup should always fetch a current snapshot.
                 if let Some(commands) = &state.commands
@@ -1122,6 +1126,12 @@ fn pump_tray_and_dismiss(
                 let settings_tx = settings_tx.clone();
                 let updates = Arc::clone(&state.updates);
                 ui_dispatcher.dispatch(move || {
+                    // Opening Settings from the tray menu should provide the
+                    // same always-visible live preview as opening it from the
+                    // popup footer.
+                    if !popup::is_visible() && popup::prepare_show_on_ui_thread() {
+                        popup::show_near_cursor();
+                    }
                     if let Err(error) = crate::settings_window::open(settings_tx, updates) {
                         eprintln!("Could not open settings window: {error:?}");
                     }
@@ -1133,7 +1143,10 @@ fn pump_tray_and_dismiss(
 
     popup::keep_on_monitor();
 
-    if popup::clicked_outside() {
+    // Settings are a live editor for this surface. Treat the separate settings
+    // window as part of the popup interaction so navigating or toggling a
+    // setting cannot dismiss the preview beneath it.
+    if !crate::settings_window::is_open() && popup::clicked_outside() {
         popup::hide();
     }
     false
