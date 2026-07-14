@@ -47,6 +47,7 @@ fn run() -> Result<()> {
         Ok(executable) => {
             let worker = start_worker(
                 CodexClient::new(&executable),
+                CodexClient::new(&executable),
                 CodexActivator::new(executable),
                 activation_path,
                 settings.automatic_activation,

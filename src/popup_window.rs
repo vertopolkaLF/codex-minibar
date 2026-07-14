@@ -69,9 +69,18 @@ impl AppState {
             .unwrap_or_default()
     }
 
-    fn replace_limits(&self, limits: RateLimits) {
+    fn replace_limits(&self, mut limits: RateLimits) {
         if let Ok(mut current) = self.limits.lock() {
+            // Quota polling must not erase the independently refreshed usage
+            // history between its ten-minute scans.
+            limits.usage = current.usage.clone();
             *current = limits;
+        }
+    }
+
+    fn replace_usage(&self, usage: crate::usage::UsageStatistics) {
+        if let Ok(mut current) = self.limits.lock() {
+            current.usage = usage;
         }
     }
 
@@ -1011,6 +1020,13 @@ fn start_background_bridge(
                     ui.last_activation = format_last_activation(&limits, fallback_attempt);
                     ui.observe_limits_update();
                     ui.refreshing = false;
+                    set_ui.call(ui.clone());
+                }
+                Ok(WorkerEvent::UsageUpdated(usage)) => {
+                    state.replace_usage(usage);
+                    // Usage stats affect only the popup, but they share the
+                    // reactive snapshot revision with quota updates.
+                    ui.observe_limits_update();
                     set_ui.call(ui.clone());
                 }
                 Ok(WorkerEvent::ActivationSucceeded) => {
