@@ -1,4 +1,4 @@
-Always run `cargo check` to ensure the code is correct.
+Always run `cargo check` after changes related to the app to ensure the code is correct. No need to run it after changes related to the website.
 
 Never launch the app itself.
 
