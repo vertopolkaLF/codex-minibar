@@ -628,15 +628,15 @@ ul {
   bottom: 0;
   width: 100%;
   border-radius: 0;
-  background: rgba(243, 243, 243, 0.8);
+  background: rgba(28, 28, 28, 0.7);
   border: 0;
-  border-top: 1px solid rgba(0, 0, 0, 0.1);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
   box-shadow:
-    0 -8px 24px rgba(0, 0, 0, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.4);
+    0 -10px 28px rgba(0, 0, 0, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
   backdrop-filter: blur(36px) saturate(140%);
-  -webkit-backdrop-filter: blur(36px) saturate(140%);
-  color: #1a1a1a;
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  color: #f3f3f3;
   font-family: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", sans-serif;
   overflow: hidden;
 }
@@ -680,7 +680,7 @@ ul {
 }
 
 .win-weather-copy span {
-  color: #4f4f4f;
+  color: #a6a6a6;
   font-size: 11px;
 }
 
@@ -701,7 +701,7 @@ ul {
   width: 48px;
   height: 48px;
   border-radius: 4px;
-  color: #1a1a1a;
+  color: #f3f3f3;
 }
 
 .win-pin svg,
@@ -710,19 +710,29 @@ ul {
   height: 27px;
 }
 
-.win-pin-app:last-child::after {
+.win-pin-app.open::after,
+.win-pin-app.using::after {
   content: "";
   position: absolute;
   left: 50%;
   bottom: 1px;
-  width: 6px;
+  transform: translateX(-50%);
   height: 3px;
   border-radius: 999px;
-  background: #1674d1;
+}
+
+.win-pin-app.open::after {
+  width: 6px;
+  background: #a19fa5;
+}
+
+.win-pin-app.using::after {
+  width: 12px;
+  background: #fb9a44;
 }
 
 .win-start {
-  color: #087cd5;
+  color: #60cdff;
 }
 
 .win-search {
@@ -732,11 +742,11 @@ ul {
   margin-inline: 2px;
   padding: 0 0.85rem;
   gap: 0.7rem;
-  border: 1px solid rgba(0, 0, 0, 0.14);
-  border-bottom-color: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom-color: rgba(255, 255, 255, 0.06);
   border-radius: 17px;
-  background: rgba(255, 255, 255, 0.4);
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
 }
 
 .win-search img {
@@ -745,7 +755,7 @@ ul {
 }
 
 .win-search-label {
-  color: #353535;
+  color: #cfcfcf;
   font-size: 14px;
   font-weight: 400;
 }
@@ -764,7 +774,7 @@ ul {
   justify-content: center;
   width: 28px;
   height: 48px;
-  color: #1a1a1a;
+  color: #f3f3f3;
 }
 
 .win-hidden img {
@@ -794,7 +804,7 @@ ul {
   padding: 0 0.5rem;
   font-size: 12px;
   letter-spacing: 0;
-  color: #1a1a1a;
+  color: #f3f3f3;
 }
 
 .win-sys-icon {
@@ -803,7 +813,7 @@ ul {
   justify-content: center;
   width: 25px;
   height: 48px;
-  color: #1a1a1a;
+  color: #f3f3f3;
 }
 
 .win-sys-icon img {
@@ -819,35 +829,35 @@ ul {
   line-height: 1.18;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-  color: #1a1a1a;
+  color: #f3f3f3;
 }
 
 .win-show-desktop {
   width: 8px;
   align-self: stretch;
   margin-left: 0.15rem;
-  border-left: 1px solid rgba(0, 0, 0, 0.2);
+  border-left: 1px solid rgba(255, 255, 255, 0.18);
 }
 
 .win-taskbar .widget {
-  color: #1a1a1a;
+  color: #f3f3f3;
   font-family: "Segor UI", "Segoe UI Variable Text", monospace;
 }
 
 .win-taskbar .widget-bars i {
-  background: rgba(0, 0, 0, 0.18);
+  background: rgba(255, 255, 255, 0.18);
 }
 
 .win-taskbar .widget-bars i::after {
-  background: #1a1a1a;
+  background: #f3f3f3;
 }
 
 .win-taskbar .widget-rings circle {
-  stroke: rgba(0, 0, 0, 0.18);
+  stroke: rgba(255, 255, 255, 0.18);
 }
 
 .win-taskbar .widget-rings circle[style] {
-  stroke: #1a1a1a;
+  stroke: #f3f3f3;
 }
 
 /* Tray widget mocks */

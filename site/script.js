@@ -348,6 +348,61 @@ void main() {
 
   initHeroShader();
 
+  const detectBrowser = () => {
+    const ua = navigator.userAgent;
+    const brands = navigator.userAgentData?.brands?.map((b) => b.brand.toLowerCase()) ?? [];
+    const hasBrand = (name) => brands.some((brand) => brand.includes(name));
+
+    if (
+      typeof navigator.brave?.isBrave === "function" ||
+      hasBrand("brave") ||
+      /\bBrave\b/i.test(ua)
+    ) {
+      return "brave";
+    }
+    if (hasBrand("opera") || /OPR\/|Opera/i.test(ua)) return "opera";
+    if (hasBrand("edge") || /Edg\//i.test(ua)) return "edge";
+    if (hasBrand("firefox") || /Firefox\//i.test(ua)) return "firefox";
+    if (hasBrand("chrome") || /Chrome\//i.test(ua)) return "chrome";
+    return null;
+  };
+
+  const PINNED_BROWSERS = new Set(["chrome", "edge", "firefox"]);
+  const EXTRA_BROWSERS = {
+    opera: { title: "Opera", src: "assets/taskbar-opera.svg" },
+    brave: { title: "Brave", src: "assets/taskbar-brave.svg" },
+  };
+
+  const markOpenBrowser = () => {
+    const browser = detectBrowser();
+    if (!browser) return;
+
+    if (PINNED_BROWSERS.has(browser)) {
+      document
+        .querySelector(`.win-pin-app[data-browser="${browser}"]`)
+        ?.classList.add("using");
+      return;
+    }
+
+    const meta = EXTRA_BROWSERS[browser];
+    const firefoxPin = document.querySelector('.win-pin-app[data-browser="firefox"]');
+    if (!meta || !firefoxPin) return;
+
+    const extra = document.createElement("span");
+    extra.className = "win-pin using win-pin-app";
+    extra.dataset.browser = browser;
+    extra.title = meta.title;
+
+    const img = document.createElement("img");
+    img.src = meta.src;
+    img.alt = "";
+    extra.appendChild(img);
+
+    firefoxPin.after(extra);
+  };
+
+  markOpenBrowser();
+
   const header = document.querySelector(".site-header");
   const toggle = document.querySelector(".nav-toggle");
   const mobileNav = document.querySelector("#mobile-nav");
