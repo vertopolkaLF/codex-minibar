@@ -93,6 +93,10 @@ impl AppState {
 struct UiState {
     last_activation: String,
     error: Option<String>,
+    /// Changes for every successful worker sample.  Rate-limit data lives only
+    /// in `AppState`, but this revision makes that external snapshot observable
+    /// to the reactive render loop even when all other view metadata is equal.
+    limits_revision: u64,
     /// A refresh has been requested and is waiting for the worker's next sample.
     refreshing: bool,
     show_used_percentage: bool,
@@ -148,6 +152,7 @@ impl Default for UiState {
         Self {
             last_activation: "Never".into(),
             error: None,
+            limits_revision: 0,
             refreshing: false,
             show_used_percentage: false,
             show_usage_pace: true,
@@ -155,6 +160,65 @@ impl Default for UiState {
             update_version: None,
         }
     }
+}
+
+impl UiState {
+    /// Marks the shared rate-limit snapshot as changed so `AsyncSetState` does
+    /// not discard an otherwise identical UI state as a no-op.
+    fn observe_limits_update(&mut self) {
+        self.limits_revision = self.limits_revision.wrapping_add(1);
+    }
+}
+
+/// Semantic identity for each independently reconciled popup section.
+///
+/// Keeping these identities separate from their position prevents the WinUI
+/// reconciler from reusing a Monthly or reset card as a Plus-plan card when the
+/// response changes the shape of the popup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PopupSection {
+    Error,
+    Monthly,
+    FiveHour,
+    Weekly,
+    BankedResets,
+    PlanCredits,
+}
+
+impl PopupSection {
+    const fn key(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Monthly => "monthly",
+            Self::FiveHour => "five-hour",
+            Self::Weekly => "weekly",
+            Self::BankedResets => "banked-resets",
+            Self::PlanCredits => "plan-credits",
+        }
+    }
+}
+
+fn popup_sections(
+    limits: &RateLimits,
+    hide_plan_credits: bool,
+    has_error: bool,
+) -> Vec<PopupSection> {
+    let mut sections = Vec::with_capacity(5);
+    if has_error {
+        sections.push(PopupSection::Error);
+    }
+    if limits.is_free_plan() {
+        sections.push(PopupSection::Monthly);
+    } else {
+        sections.extend([PopupSection::FiveHour, PopupSection::Weekly]);
+    }
+    if limits.available_reset_count() > 0 {
+        sections.push(PopupSection::BankedResets);
+    }
+    if !hide_plan_credits {
+        sections.push(PopupSection::PlanCredits);
+    }
+    sections
 }
 
 /// Root WinUI view for Codex Minibar (hosted in a tray popup shell).
@@ -214,51 +278,46 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     };
     let quit = move || std::process::exit(0);
 
-    let mut body: Vec<Element> = if limits.is_free_plan() {
-        vec![limit_card(
-            "Monthly",
-            &limits.secondary,
-            ui.show_used_percentage,
-            ui.show_usage_pace,
-            false,
-        )]
-    } else {
-        vec![
-            limit_card(
-                "5h Session",
-                &limits.primary,
-                ui.show_used_percentage,
-                ui.show_usage_pace,
-                limits.five_hour_disabled(),
-            ),
-            limit_card(
-                "Weekly",
-                &limits.secondary,
-                ui.show_used_percentage,
-                ui.show_usage_pace,
-                false,
-            ),
-        ]
-    };
-
-    if limits.available_reset_count() > 0 {
-        body.push(reset_credits_card(&limits));
-    }
-
-    if !ui.hide_plan_credits {
-        body.push(meta_row(&limits));
-    }
-
-    if let Some(error) = &ui.error {
-        body.insert(
-            0,
-            InfoBar::new("Something went wrong")
-                .message(error.clone())
-                .error()
-                .is_closable(false)
-                .into(),
-        );
-    }
+    let body: Vec<Element> = popup_sections(&limits, ui.hide_plan_credits, ui.error.is_some())
+        .into_iter()
+        .map(|section| {
+            let element: Element = match section {
+                PopupSection::Error => InfoBar::new("Something went wrong")
+                    .message(
+                        ui.error
+                            .clone()
+                            .expect("error section requires an error message"),
+                    )
+                    .error()
+                    .is_closable(false)
+                    .into(),
+                PopupSection::Monthly => limit_card(
+                    "Monthly",
+                    &limits.secondary,
+                    ui.show_used_percentage,
+                    ui.show_usage_pace,
+                    false,
+                ),
+                PopupSection::FiveHour => limit_card(
+                    "5h Session",
+                    &limits.primary,
+                    ui.show_used_percentage,
+                    ui.show_usage_pace,
+                    limits.five_hour_disabled(),
+                ),
+                PopupSection::Weekly => limit_card(
+                    "Weekly",
+                    &limits.secondary,
+                    ui.show_used_percentage,
+                    ui.show_usage_pace,
+                    false,
+                ),
+                PopupSection::BankedResets => reset_credits_card(&limits),
+                PopupSection::PlanCredits => meta_row(&limits),
+            };
+            element.with_key(section.key())
+        })
+        .collect();
 
     let quit_or_update = if ui.update_version.is_some() {
         update_accent_button("Update", || {
@@ -881,6 +940,7 @@ fn start_background_bridge(
                         ui.error = None;
                     }
                     ui.last_activation = format_last_activation(&limits, fallback_attempt);
+                    ui.observe_limits_update();
                     ui.refreshing = false;
                     set_ui.call(ui.clone());
                 }
@@ -1343,7 +1403,33 @@ fn sample_freshness(sampled_at: DateTime<Utc>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
+
+    fn plan_limits(plan_type: &str) -> RateLimits {
+        RateLimits {
+            plan_type: Some(plan_type.into()),
+            primary: LimitWindow {
+                used_percent: Some(20),
+                ..Default::default()
+            },
+            secondary: LimitWindow {
+                used_percent: Some(40),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn assert_unique_section_keys(sections: &[PopupSection]) {
+        let keys: HashSet<_> = sections.iter().map(|section| section.key()).collect();
+        assert_eq!(
+            keys.len(),
+            sections.len(),
+            "popup sections must not duplicate"
+        );
+    }
 
     #[test]
     fn last_activation_uses_window_start() {
@@ -1381,5 +1467,63 @@ mod tests {
             )),
             "2d"
         );
+    }
+
+    #[test]
+    fn free_to_plus_replaces_monthly_with_session_and_weekly_sections() {
+        let free = popup_sections(&plan_limits("free"), false, false);
+        assert_eq!(free, vec![PopupSection::Monthly, PopupSection::PlanCredits]);
+        assert_unique_section_keys(&free);
+
+        let plus = popup_sections(&plan_limits("plus"), false, false);
+        assert_eq!(
+            plus,
+            vec![
+                PopupSection::FiveHour,
+                PopupSection::Weekly,
+                PopupSection::PlanCredits,
+            ]
+        );
+        assert_unique_section_keys(&plus);
+    }
+
+    #[test]
+    fn sections_keep_banked_resets_and_plan_metadata_singleton() {
+        let mut limits = plan_limits("plus");
+        limits.reset_credits = Some(crate::limits::RateLimitResetCreditsSummary {
+            available_count: 1,
+            ..Default::default()
+        });
+
+        let sections = popup_sections(&limits, false, true);
+        assert_eq!(
+            sections,
+            vec![
+                PopupSection::Error,
+                PopupSection::FiveHour,
+                PopupSection::Weekly,
+                PopupSection::BankedResets,
+                PopupSection::PlanCredits,
+            ]
+        );
+        assert_unique_section_keys(&sections);
+    }
+
+    #[test]
+    fn every_limits_sample_forces_a_reactive_state_change() {
+        let mut ui = UiState::default();
+        let initial = ui.clone();
+
+        ui.observe_limits_update();
+        assert_ne!(ui, initial);
+        assert_eq!(ui.limits_revision, 1);
+
+        // A Plus sample can have the same footer metadata as the preceding
+        // Free sample; the revision still guarantees a rerender of the shared
+        // snapshot.
+        ui.observe_limits_update();
+        assert_eq!(ui.limits_revision, 2);
+        assert_eq!(ui.last_activation, initial.last_activation);
+        assert_eq!(ui.error, initial.error);
     }
 }
