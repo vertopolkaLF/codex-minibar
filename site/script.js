@@ -488,6 +488,24 @@ void main() {
   let trayDemoPlayed = false;
   let trayDemoBusy = false;
 
+  const scalePopupToFit = () => {
+    if (!popupMock || !heroVisual) return;
+
+    const taskbarClearance = 80;
+    const topClearance = (header?.getBoundingClientRect().height || 0) + 16;
+    const availableHeight = heroVisual.clientHeight - taskbarClearance - topClearance;
+    const naturalHeight = popupMock.offsetHeight;
+    const scale = naturalHeight > 0
+      ? Math.min(1, Math.max(0.55, availableHeight / naturalHeight))
+      : 1;
+
+    popupMock.style.setProperty("--popup-scale", scale.toFixed(4));
+  };
+
+  scalePopupToFit();
+  window.addEventListener("resize", scalePopupToFit, { passive: true });
+  new ResizeObserver(scalePopupToFit).observe(heroVisual);
+
   const setPopupOpen = (open) => {
     if (!popupMock) return;
     popupMock.classList.toggle("is-open", open);
