@@ -387,7 +387,6 @@ ul {
   right: 20px;
   bottom: 80px;
   width: 475px;
-  height: 349px;
   overflow: hidden;
   border: 1px solid #343434;
   border-radius: 10px;
@@ -398,10 +397,11 @@ ul {
 }
 
 .popup-body {
-  display: grid;
-  gap: 15px;
-  height: 269px;
-  padding: 21px 21px 25px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 21px 21px 18px;
+  align-content: start;
 }
 
 .popup-card {
@@ -413,6 +413,89 @@ ul {
   display: grid;
   grid-template-rows: 19px 8px 23px;
   align-content: space-between;
+}
+
+/* Mirrors reset_credits_card() in the native popup: caption, then a two-column
+   summary with the available resets on the left and their expiry on the right. */
+.popup-banked-card {
+  height: 95px;
+  grid-template-rows: 19px 42px;
+  padding: 12px 15px;
+}
+
+.popup-card-title {
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 19px;
+  color: #d0d0d0;
+}
+
+.popup-banked-details {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.popup-banked-amount,
+.popup-banked-expiry {
+  display: grid;
+  gap: 1px;
+}
+
+.popup-banked-amount strong,
+.popup-banked-expiry strong {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.popup-banked-amount strong {
+  color: #fb9a44;
+}
+
+.popup-banked-expiry {
+  text-align: right;
+}
+
+.popup-banked-expiry strong {
+  color: #f1f1f1;
+}
+
+.popup-banked-amount span,
+.popup-banked-expiry span {
+  font-size: 15px;
+  line-height: 19px;
+  color: #8d8d90;
+}
+
+/* The native meta_row() is intentionally unboxed and sits below the cards. */
+.popup-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 22px;
+  color: #f1f1f1;
+  font-size: 15px;
+  line-height: 22px;
+}
+
+.popup-meta-row span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.popup-meta-row em {
+  color: #8d8d90;
+  font-size: 15px;
+  font-style: normal;
+  font-weight: 400;
+}
+
+.popup-meta-row strong {
+  font-size: 15px;
+  font-weight: 700;
 }
 
 .popup-card-head,
