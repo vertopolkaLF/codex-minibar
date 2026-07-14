@@ -4,7 +4,7 @@ use super::*;
 pub struct NavViewItem {
     pub content: String,
     pub tag: Option<String>,
-    pub icon: Option<Symbol>,
+    pub icon_path: Option<(String, String)>,
     pub is_header: bool,
     pub children: Vec<Self>,
 }
@@ -26,8 +26,9 @@ impl NavViewItem {
         self.tag = Some(s.into());
         self
     }
-    pub fn icon(mut self, s: Symbol) -> Self {
-        self.icon = Some(s);
+    /// Use arbitrary vector geometry and a caller-selected color.
+    pub fn icon_path(mut self, data: impl Into<String>, color: impl Into<String>) -> Self {
+        self.icon_path = Some((data.into(), color.into()));
         self
     }
     pub fn child(mut self, item: Self) -> Self {

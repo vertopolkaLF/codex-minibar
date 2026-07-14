@@ -283,14 +283,10 @@ pub(crate) fn settings_toggle_expander(
                 right: TOGGLE_CHEVRON_GAP,
                 bottom: 0.0,
             }),
-        // Fixed hit-box; glyph centered inside. Rotation pivots on this box.
-        border(
-            text_block("\u{E70D}")
-                .font_family("Segoe Fluent Icons")
-                .font_size(12.0)
-                .horizontal_alignment(HorizontalAlignment::Center)
-                .vertical_alignment(VerticalAlignment::Center),
-        )
+        // Fixed hit-box; rotation pivots on this SVG.
+        border(crate::icons::element("caret-down", 16.0, Color::rgb(138, 138, 138))
+            .horizontal_alignment(HorizontalAlignment::Center)
+            .vertical_alignment(VerticalAlignment::Center))
         .width(CHEVRON_SIZE)
         .height(CHEVRON_SIZE)
         .background(Color::transparent())
@@ -477,18 +473,12 @@ pub(crate) fn settings_info_card(label: impl Into<String>, value: impl Into<Stri
     .into()
 }
 
-/// Segoe Fluent Icons SyncBadge12 (`\u{EDAB}`) for update actions.
-pub(crate) const UPDATE_SYMBOL: Symbol = Symbol(0xEDAB);
-
-/// Accent button with the SyncBadge12 glyph used for update actions.
+/// Accent update action. Text keeps the control accessible without an icon font.
 pub(crate) fn update_accent_button(
     label: impl Into<String>,
     on_click: impl IntoUnitCallback,
 ) -> Button {
-    Button::new(label)
-        .icon(UPDATE_SYMBOL)
-        .accent()
-        .on_click(on_click)
+    Button::new(label).accent().on_click(on_click)
 }
 
 /// Compact nav-pane card: version label stacked above the update action.
@@ -529,16 +519,12 @@ pub(crate) fn settings_action_card(
     card_id: &'static str,
     hovered_id: &Option<String>,
     set_hovered_id: SetState<Option<String>>,
-    button_icon: Option<Symbol>,
 ) -> Element {
     let hovered = card_is_hovered(hovered_id, card_id);
     let (on_enter, on_exit) = card_hover_handlers(card_id, set_hovered_id);
     let (base, hover) = card_background_layers(hovered);
 
-    let mut action_button = Button::new(button_label).accent().on_click(on_click);
-    if let Some(icon) = button_icon {
-        action_button = action_button.icon(icon);
-    }
+    let action_button = Button::new(button_label).accent().on_click(on_click);
 
     let children: Vec<Element> = vec![
         base,

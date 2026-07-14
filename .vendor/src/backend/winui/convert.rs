@@ -6,6 +6,51 @@
 
 use super::*;
 
+windows_core::imp::define_interface!(
+    IXamlReaderStatics,
+    IXamlReaderStatics_Vtbl,
+    0x82a4cd9e_435e_5aeb_8c4f_300cece45cae
+);
+impl windows_core::RuntimeType for IXamlReaderStatics {
+    const SIGNATURE: windows_core::imp::ConstBuffer =
+        windows_core::imp::ConstBuffer::for_interface::<Self>();
+}
+
+#[repr(C)]
+pub struct IXamlReaderStatics_Vtbl {
+    base__: windows_core::IInspectable_Vtbl,
+    load: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+}
+
+struct XamlReader;
+impl windows_core::RuntimeName for XamlReader {
+    const NAME: &'static str = "Microsoft.UI.Xaml.Markup.XamlReader";
+}
+
+fn svg_icon(path: &str, color: &str) -> Result<bindings::IconElement> {
+    let xaml = format!(
+        r#"<PathIcon xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Data="{path}" Foreground="{color}" />"#
+    );
+    let factory: IXamlReaderStatics = {
+        static SHARED: windows_core::imp::FactoryCache<XamlReader, IXamlReaderStatics> =
+            windows_core::imp::FactoryCache::new();
+        SHARED.call(|factory| Ok(factory.clone()))?
+    };
+    unsafe {
+        let mut result = core::ptr::null_mut();
+        (windows_core::Interface::vtable(&factory).load)(
+            windows_core::Interface::as_raw(&factory),
+            core::mem::transmute_copy(&windows_core::HSTRING::from(xaml)),
+            &mut result,
+        )
+        .and_then(|| windows_core::Type::from_abi(result))
+    }
+}
+
 pub(super) fn to_xaml_gridlength(v: GridLength) -> Result<bindings::GridLength> {
     use bindings::GridUnitType;
     match v {
@@ -53,8 +98,8 @@ pub(super) fn build_nav_view_item(item: &NavViewItem) -> Result<windows_core::II
     nv_item
         .cast::<bindings::IFrameworkElement>()?
         .SetTag(&tag_inspectable)?;
-    if let Some(sym) = &item.icon {
-        let icon_elem = bindings::SymbolIcon::CreateInstanceWithSymbol(*sym)?;
+    if let Some((path, color)) = &item.icon_path {
+        let icon_elem = svg_icon(path, color)?;
         nv_item.SetIcon(&icon_elem)?;
     }
     if !item.children.is_empty() {

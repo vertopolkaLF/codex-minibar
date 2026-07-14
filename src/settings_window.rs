@@ -6,7 +6,7 @@
 use crate::notifications;
 use crate::settings::{LimitValue, Settings, TrayPresentation, TraySource, TrayWidget};
 use crate::settings_controls::{
-    UPDATE_SYMBOL, settings_action_card, settings_info_card, settings_slider_content,
+    settings_action_card, settings_info_card, settings_slider_content,
     settings_toggle_card, settings_toggle_card_with_description, settings_toggle_expander,
     update_available_nav_card,
 };
@@ -288,21 +288,17 @@ pub fn render(
     let (rendered_tab, set_rendered_tab) = cx.use_async_state(Tab::default());
     let (page_visible, set_page_visible) = cx.use_async_state(true);
 
+    let nav_icon_color = match color_scheme {
+        ColorScheme::Dark => "#E6E6E6",
+        ColorScheme::Light => "#3A3A3A",
+    };
     let mut navigation = NavigationView::new(
         [
-            NavViewItem::new("General")
-                .tag("general")
-                .icon(Symbol::Home),
-            NavViewItem::new("Tray").tag("tray").icon(Symbol::More),
-            NavViewItem::new("Notifications")
-                .tag("notifications")
-                .icon(Symbol::Flag),
-            NavViewItem::new("Advanced")
-                .tag("advanced")
-                .icon(Symbol::Edit),
-            NavViewItem::new("About & Updates")
-                .tag("about")
-                .icon(Symbol::Important),
+            NavViewItem::new("General").tag("general").icon_path(crate::icons::data("house"), nav_icon_color),
+            NavViewItem::new("Tray").tag("tray").icon_path(crate::icons::data("chat-centered-text"), nav_icon_color),
+            NavViewItem::new("Notifications").tag("notifications").icon_path(crate::icons::data("bell"), nav_icon_color),
+            NavViewItem::new("Advanced").tag("advanced").icon_path(crate::icons::data("sliders"), nav_icon_color),
+            NavViewItem::new("About & Updates").tag("about").icon_path(crate::icons::data("info"), nav_icon_color),
         ],
         Element::Empty,
     )
@@ -1052,7 +1048,6 @@ fn about_settings_cards(
                 "about-update-apply",
                 hovered_card_id,
                 set_hovered_card_id.clone(),
-                Some(UPDATE_SYMBOL),
             )
             .with_key("about-update-apply"),
             settings_action_card(
@@ -1066,7 +1061,6 @@ fn about_settings_cards(
                 "about-whats-new",
                 hovered_card_id,
                 set_hovered_card_id.clone(),
-                None,
             )
             .with_key("about-whats-new"),
         ))
@@ -1082,7 +1076,6 @@ fn about_settings_cards(
             "about-check-now",
             hovered_card_id,
             set_hovered_card_id.clone(),
-            None,
         )
         .with_key("about-check-now")
     };
@@ -1099,7 +1092,7 @@ fn about_settings_cards(
             about_action_card(
                 "GitHub",
                 "Browse the source code",
-                AboutCardIcon::GitHub,
+                AboutCardIcon::Phosphor("github-logo"),
                 || {
                     let _ = crate::updater::open_url(REPO_URL);
                 },
@@ -1112,7 +1105,7 @@ fn about_settings_cards(
             about_action_card(
                 "Releases",
                 "See what's new",
-                AboutCardIcon::Glyph("▤"),
+                AboutCardIcon::Phosphor("download-simple"),
                 || {
                     let _ = crate::updater::open_url(RELEASES_URL);
                 },
@@ -1125,7 +1118,7 @@ fn about_settings_cards(
             about_action_card(
                 "Report an issue",
                 "Found a bug?",
-                AboutCardIcon::Glyph("⚑"),
+                AboutCardIcon::Phosphor("flag"),
                 || {
                     let _ = crate::updater::open_url(ISSUES_URL);
                 },
@@ -1138,7 +1131,7 @@ fn about_settings_cards(
             about_action_card(
                 "Author",
                 "@vertopolkaLF",
-                AboutCardIcon::Glyph("@"),
+                AboutCardIcon::Phosphor("at"),
                 || {
                     let _ = crate::updater::open_url("https://github.com/vertopolkaLF");
                 },
@@ -1186,8 +1179,7 @@ fn about_section_with_header(header: impl Into<Element>, content: impl Into<Elem
 /// button, owns the click target so it feels like one intentional control.
 #[derive(Clone, Copy)]
 enum AboutCardIcon {
-    GitHub,
-    Glyph(&'static str),
+    Phosphor(&'static str),
 }
 
 fn about_action_card(
@@ -1207,8 +1199,6 @@ fn about_action_card(
     };
     let on_exit = move || set_hovered_id.call(None);
 
-    // Resource shortcuts inherit Windows' active accent color, including its
-    // light/dark variants, rather than carrying a fixed app-specific tint.
     let base: Element = border(Element::Empty)
         .background(ThemeRef::AccentTertiary)
         // Accent resources can be fully opaque on some Windows palettes.
@@ -1230,28 +1220,10 @@ fn about_action_card(
         .relative_align_top()
         .relative_align_bottom()
         .into();
-    let icon: Element = match icon {
-        AboutCardIcon::GitHub => {
-            let mut host = swap_chain_panel()
-                .width(16.0)
-                .height(16.0)
-                .vertical_alignment(VerticalAlignment::Center);
-            host.mounted = Some(Callback::new(|native: Option<_>| {
-                if let Some(native) = native
-                    && let Err(error) = crate::acrylic::install_accent_github_icon_into(native)
-                {
-                    eprintln!("Could not install themed GitHub icon: {error:?}");
-                }
-            }));
-            host.into()
-        }
-        AboutCardIcon::Glyph(value) => text_block(value)
-            .font_size(16.0)
-            .foreground(ThemeRef::Accent)
-            .width(16.0)
-            .vertical_alignment(VerticalAlignment::Center)
-            .into(),
-    };
+    let AboutCardIcon::Phosphor(name) = icon;
+    let icon: Element = crate::icons::element(name, 16.0, Color::rgb(226, 151, 78))
+        .vertical_alignment(VerticalAlignment::Center)
+        .into();
     let heading = grid((
         icon.grid_column(0),
         text_block(title)

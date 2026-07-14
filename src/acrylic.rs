@@ -75,6 +75,20 @@ pub fn install_mica_into(mount: windows_core::IInspectable) -> Result<()> {
     install_into_inner(mount, &mica_xaml())
 }
 
+/// Host a Phosphor path with a caller-supplied color. The geometry and tint
+/// deliberately stay independent so controls can react to hover/theme state.
+pub fn install_colored_icon_into(
+    mount: windows_core::IInspectable,
+    path: &str,
+    color: (u8, u8, u8),
+) -> Result<()> {
+    let (r, g, b) = color;
+    let xaml = format!(
+        r##"<Viewbox xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Stretch="Uniform"><Path Fill="#{r:02X}{g:02X}{b:02X}" Data="{path}" /></Viewbox>"##
+    );
+    install_into_inner(mount, &xaml)
+}
+
 /// Host a GitHub SVG path whose color follows the current Windows accent.
 pub fn install_accent_github_icon_into(mount: windows_core::IInspectable) -> Result<()> {
     install_into_inner(mount, accent_github_xaml())

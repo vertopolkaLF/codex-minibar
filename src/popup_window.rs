@@ -250,6 +250,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let commands = state.commands.clone();
     let ui_dispatcher = cx.use_ui_marshaller();
     let settings_tx = state.settings_tx.clone();
+    let (hovered_action, set_hovered_action) = cx.use_state(Option::<String>::None);
 
     cx.use_effect((), {
         let state = Arc::clone(&state);
@@ -347,8 +348,17 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             bottom: 0.0,
         })
         .vertical_alignment(VerticalAlignment::Center)
+        .into()
     } else {
-        icon_button("\u{E7E8}", "Quit", 16.0, quit)
+        icon_button(
+            "quit",
+            "fluent-power",
+            "fluent-power",
+            "Quit",
+            &hovered_action,
+            set_hovered_action.clone(),
+            quit,
+        )
     };
     let footer_background = match color_scheme {
         // CSS shorthand: #0002 = #00000022; #0001 = #00000011.
@@ -385,8 +395,16 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             .horizontal_alignment(HorizontalAlignment::Left)
             .grid_column(0),
             hstack((
-                icon_button("\u{E72C}", "Refresh", 16.0, refresh),
-                icon_button("\u{E713}", "Settings", 16.0, {
+                icon_button(
+                    "refresh",
+                    "fluent-refresh",
+                    "fluent-refresh",
+                    "Refresh",
+                    &hovered_action,
+                    set_hovered_action.clone(),
+                    refresh,
+                ),
+                icon_button("settings", "fluent-settings", "fluent-settings", "Settings", &hovered_action, set_hovered_action.clone(), {
                     let settings_tx = settings_tx.clone();
                     let updates = Arc::clone(&state.updates);
                     move || {
@@ -566,18 +584,10 @@ fn settings_window(cx: &mut RenderCx, settings: Arc<Settings>) -> Element {
     let content = settings_tab_content(&settings, selected);
 
     let menu = [
-        NavViewItem::new("General")
-            .tag(SettingsTab::General.tag())
-            .icon(Symbol::Home),
-        NavViewItem::new("Tray")
-            .tag(SettingsTab::Tray.tag())
-            .icon(Symbol::More),
-        NavViewItem::new("Notifications")
-            .tag(SettingsTab::Notifications.tag())
-            .icon(Symbol::Flag),
-        NavViewItem::new("Advanced")
-            .tag(SettingsTab::Advanced.tag())
-            .icon(Symbol::Edit),
+        NavViewItem::new("General").tag(SettingsTab::General.tag()).icon_path(crate::icons::data("house"), "#E6E6E6"),
+        NavViewItem::new("Tray").tag(SettingsTab::Tray.tag()).icon_path(crate::icons::data("chat-centered-text"), "#E6E6E6"),
+        NavViewItem::new("Notifications").tag(SettingsTab::Notifications.tag()).icon_path(crate::icons::data("bell"), "#E6E6E6"),
+        NavViewItem::new("Advanced").tag(SettingsTab::Advanced.tag()).icon_path(crate::icons::data("sliders"), "#E6E6E6"),
     ];
     // NavigationView owns the sidebar only. Its generated content presenter
     // is opaque in the current WinUI template, so rendering the page inside it
@@ -1097,22 +1107,51 @@ fn pump_tray_and_dismiss(
 
 const ICON_BUTTON_SIZE: f64 = 36.0;
 
-/// Icon-only button using Segoe Fluent Icons glyphs.
-/// `font_size` is tuned per glyph so they look optically equal.
-fn icon_button(glyph: &str, tip: &str, font_size: f64, on_click: impl IntoUnitCallback) -> Button {
-    button(glyph)
-        .subtle()
+/// Icon-only action using a neutral Phosphor SVG that adopts the accent on hover.
+fn icon_button(
+    id: &'static str,
+    normal_icon: &'static str,
+    hover_icon: &'static str,
+    tip: &str,
+    hovered_action: &Option<String>,
+    set_hovered_action: SetState<Option<String>>,
+    on_click: impl IntoUnitCallback,
+) -> Element {
+    let hovered = hovered_action.as_deref() == Some(id);
+    let set_on_enter = set_hovered_action.clone();
+    let set_on_exit = set_hovered_action;
+    let hover_background: Element = border(Element::Empty)
+        .background(ThemeRef::SubtleFill)
+        .opacity(if hovered { 1.0 } else { 0.0 })
+        .corner_radius(4.0)
+        .relative_align_left()
+        .relative_align_right()
+        .relative_align_top()
+        .relative_align_bottom()
+        .into();
+    let icon: Element = crate::icons::element(
+        if hovered { hover_icon } else { normal_icon },
+        18.0,
+        if hovered { Color::rgb(0, 120, 212) } else { Color::rgb(230, 230, 230) },
+    )
+    .relative_align_h_center()
+    .relative_align_v_center()
+    .into();
+    relative_panel(vec![hover_background, icon])
         .tooltip(tip)
-        .font_family("Segoe Fluent Icons")
-        .font_size(font_size)
         .width(ICON_BUTTON_SIZE)
         .height(ICON_BUTTON_SIZE)
         .min_width(ICON_BUTTON_SIZE)
         .min_height(ICON_BUTTON_SIZE)
         .max_width(ICON_BUTTON_SIZE)
         .max_height(ICON_BUTTON_SIZE)
-        .padding(Thickness::uniform(0.0))
-        .on_click(on_click)
+        .background(Color::transparent())
+        .on_pointer_entered(move |_: PointerEventInfo| {
+            set_on_enter.call(Some(id.to_string()));
+        })
+        .on_pointer_exited(move || set_on_exit.call(None))
+        .on_tapped(on_click)
+        .into()
 }
 
 /// Thin pill progress track with a rounded fill and optional pace marker.

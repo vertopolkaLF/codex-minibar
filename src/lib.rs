@@ -2,6 +2,7 @@ pub mod acrylic;
 pub mod app;
 pub mod codex;
 pub mod discovery;
+pub mod icons;
 pub mod limits;
 pub mod notifications;
 pub mod popup;

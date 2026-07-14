@@ -612,10 +612,13 @@ ul {
   height: 45px;
   border-radius: 5px;
   color: #f1f1f1;
-  font-family: "Segoe Fluent Icons";
-  font-size: 20px;
-  font-weight: 400;
-  line-height: 1;
+}
+
+.popup-action img {
+  width: 20px;
+  height: 20px;
+  /* External SVGs do not inherit `currentColor` from their <img> host. */
+  filter: invert(1);
 }
 
 .win-taskbar {
