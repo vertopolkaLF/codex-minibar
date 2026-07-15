@@ -362,6 +362,10 @@ pub fn render(
 
     let (codex_enabled, set_codex_enabled) = cx.use_state(settings.providers.codex_enabled);
     let (claude_enabled, set_claude_enabled) = cx.use_state(settings.providers.claude_enabled);
+    let (use_colored_provider_icons, set_use_colored_provider_icons) =
+        cx.use_state(settings.use_colored_provider_icons);
+    let (replace_chatgpt_logo_with_codex, set_replace_chatgpt_logo_with_codex) =
+        cx.use_state(settings.replace_chatgpt_logo_with_codex);
     let (start_at_login, set_start_at_login) = cx.use_state(settings.start_at_login);
     let (automatic_activation, set_automatic_activation) =
         cx.use_state(settings.automatic_activation);
@@ -405,6 +409,8 @@ pub fn render(
             rendered_tab,
             codex_enabled,
             claude_enabled,
+            use_colored_provider_icons,
+            replace_chatgpt_logo_with_codex,
             automatic_activation,
             limit_refresh_interval,
             start_at_login,
@@ -431,6 +437,8 @@ pub fn render(
             &update_phase,
             set_codex_enabled,
             set_claude_enabled,
+            set_use_colored_provider_icons,
+            set_replace_chatgpt_logo_with_codex,
             set_automatic_activation,
             set_limit_refresh_interval,
             set_start_at_login,
@@ -577,6 +585,8 @@ fn tab_content(
     tab: Tab,
     codex_enabled: bool,
     claude_enabled: bool,
+    use_colored_provider_icons: bool,
+    replace_chatgpt_logo_with_codex: bool,
     automatic_activation: bool,
     limit_refresh_interval: LimitRefreshInterval,
     start_at_login: bool,
@@ -603,6 +613,8 @@ fn tab_content(
     update_phase: &UpdatePhase,
     set_codex_enabled: SetState<bool>,
     set_claude_enabled: SetState<bool>,
+    set_use_colored_provider_icons: SetState<bool>,
+    set_replace_chatgpt_logo_with_codex: SetState<bool>,
     set_automatic_activation: SetState<bool>,
     set_limit_refresh_interval: SetState<LimitRefreshInterval>,
     set_start_at_login: SetState<bool>,
@@ -631,6 +643,8 @@ fn tab_content(
 ) -> Element {
     let apply_codex_enabled = settings_tx.clone();
     let apply_claude_enabled = settings_tx.clone();
+    let apply_use_colored_provider_icons = settings_tx.clone();
+    let apply_replace_chatgpt_logo_with_codex = settings_tx.clone();
     let apply_automatic_activation = settings_tx.clone();
     let apply_limit_refresh_interval = settings_tx.clone();
     let apply_start_at_login = settings_tx.clone();
@@ -830,15 +844,8 @@ fn tab_content(
                 .with_key("general-show-account-name"),
             ],
         ),
-        Tab::Providers => (
-            "Providers",
-            vec![
-                text_block("Choose every provider you want to monitor. Each enabled provider refreshes independently.")
-                    .font_size(12.0)
-                    .opacity(0.72)
-                    .wrap()
-                    .with_key("providers-description")
-                    .into(),
+        Tab::Providers => {
+            let mut rows = vec![
                 settings_toggle_card_with_description(
                     "Codex",
                     Some("Reads limits from the locally signed-in Codex CLI or desktop app."),
@@ -879,8 +886,55 @@ fn tab_content(
                     set_hovered_card_id.clone(),
                 )
                 .with_key("providers-claude"),
-            ],
-        ),
+            ];
+            rows.push(
+                settings_section_heading("Customization")
+                    .with_key("providers-customization-heading"),
+            );
+            rows.push(
+                settings_toggle_card(
+                    "Use colored provider icons",
+                    use_colored_provider_icons,
+                    move |value| {
+                        persist_bool(
+                            set_use_colored_provider_icons.clone(),
+                            apply_use_colored_provider_icons.clone(),
+                            value,
+                            |settings, value| {
+                                settings.use_colored_provider_icons = value;
+                            },
+                        );
+                    },
+                    "providers-colored-icons",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("providers-colored-icons"),
+            );
+            if codex_enabled {
+                rows.push(
+                    settings_toggle_card(
+                        "Replace ChatGPT logo with Codex",
+                        replace_chatgpt_logo_with_codex,
+                        move |value| {
+                            persist_bool(
+                                set_replace_chatgpt_logo_with_codex.clone(),
+                                apply_replace_chatgpt_logo_with_codex.clone(),
+                                value,
+                                |settings, value| {
+                                    settings.replace_chatgpt_logo_with_codex = value;
+                                },
+                            );
+                        },
+                        "providers-codex-logo",
+                        hovered_card_id,
+                        set_hovered_card_id.clone(),
+                    )
+                    .with_key("providers-codex-logo"),
+                );
+            }
+            ("Providers", rows)
+        }
         Tab::Tray => {
             let enabled_providers = enabled_providers(codex_enabled, claude_enabled);
             (

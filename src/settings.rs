@@ -209,6 +209,8 @@ impl Default for NotificationSettings {
 pub struct Settings {
     pub version: u32,
     pub providers: ProviderSettings,
+    pub use_colored_provider_icons: bool,
+    pub replace_chatgpt_logo_with_codex: bool,
     pub automatic_activation: bool,
     pub limit_refresh_interval: LimitRefreshInterval,
     pub start_at_login: bool,
@@ -230,7 +232,9 @@ impl Default for Settings {
         Self {
             version: SETTINGS_VERSION,
             providers: ProviderSettings::default(),
-            automatic_activation: true,
+            use_colored_provider_icons: false,
+            replace_chatgpt_logo_with_codex: false,
+            automatic_activation: false,
             limit_refresh_interval: LimitRefreshInterval::default(),
             start_at_login: true,
             show_used_percentage: false,
@@ -630,7 +634,9 @@ mod tests {
         let value = Settings::default();
         assert!(value.providers.codex_enabled);
         assert!(!value.providers.claude_enabled);
-        assert!(value.automatic_activation);
+        assert!(!value.use_colored_provider_icons);
+        assert!(!value.replace_chatgpt_logo_with_codex);
+        assert!(!value.automatic_activation);
         assert_eq!(value.limit_refresh_interval, LimitRefreshInterval::Minute1);
         assert!(value.start_at_login);
         assert!(!value.show_used_percentage);
