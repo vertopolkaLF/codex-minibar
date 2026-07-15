@@ -25,13 +25,22 @@ pub fn tooltip(limits: &RateLimits) -> String {
     } else {
         format_reset(limits.primary.resets_at)
     };
-    format!(
+    let mut rows = vec![format!(
         "5h  |  {}  |  {}\n7d  |  {}  |  {}",
         five_hour,
         five_hour_reset,
         format_remaining(&limits.secondary),
         format_reset(limits.secondary.resets_at),
-    )
+    )];
+    rows.extend(limits.additional_limits.iter().map(|limit| {
+        format!(
+            "{}  |  {}  |  {}",
+            limit.title,
+            format_remaining(&limit.window),
+            format_reset(limit.window.resets_at),
+        )
+    }));
+    rows.join("\n")
 }
 
 fn provider_tooltip(limits: &ProviderLimits) -> String {
@@ -363,6 +372,10 @@ fn has_real_data(limits: &RateLimits) -> bool {
         || limits.primary.resets_at.is_some()
         || limits.secondary.used_percent.is_some()
         || limits.secondary.resets_at.is_some()
+        || limits
+            .additional_limits
+            .iter()
+            .any(|limit| !limit.window.is_empty())
 }
 
 fn app_icon_pixels() -> &'static [u8] {
@@ -742,6 +755,21 @@ mod tests {
         let value = tooltip(&limits);
         assert!(value.contains("5h  |  Disabled  |  —"));
         assert!(value.contains("7d  |  60%"));
+    }
+
+    #[test]
+    fn tooltip_includes_additional_claude_limits() {
+        let mut limits = RateLimits::default();
+        limits.additional_limits.push(crate::limits::AdditionalLimit {
+            id: "seven_day_fable".into(),
+            title: "Fable".into(),
+            window: LimitWindow {
+                used_percent: Some(12),
+                ..Default::default()
+            },
+        });
+
+        assert!(tooltip(&limits).contains("Fable  |  88%  |  ?"));
     }
 
     #[test]

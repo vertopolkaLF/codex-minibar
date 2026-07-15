@@ -14,6 +14,19 @@ pub struct LimitWindow {
     pub duration_minutes: Option<u32>,
 }
 
+/// A named quota window supplied in addition to the standard session and
+/// weekly limits. Claude adds model- and feature-specific windows over time,
+/// so these must remain data-driven rather than being discarded by a fixed
+/// two-window model.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AdditionalLimit {
+    /// Stable field name from the provider response, used as the UI identity.
+    pub id: String,
+    /// Human-readable title, such as "Fable" or "Opus".
+    pub title: String,
+    pub window: LimitWindow,
+}
+
 /// Pace tip on a usage progress bar (even-burn marker position).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PaceTip {
@@ -106,6 +119,8 @@ pub struct RateLimits {
     pub limit_name: Option<String>,
     pub credits: Credits,
     pub reset_credits: Option<RateLimitResetCreditsSummary>,
+    /// Provider-specific quota windows beyond primary and secondary.
+    pub additional_limits: Vec<AdditionalLimit>,
     /// Token statistics computed from local Codex session logs.
     pub usage: UsageStatistics,
 }
