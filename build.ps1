@@ -142,6 +142,79 @@ function Ensure-RustTarget {
     }
 }
 
+function Get-VcVarsAllPath {
+    $vswhereCandidates = @(
+        (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"),
+        (Join-Path $env:ProgramFiles "Microsoft Visual Studio\Installer\vswhere.exe")
+    ) | Where-Object { Test-Path -LiteralPath $_ }
+
+    foreach ($vswhere in $vswhereCandidates) {
+        $installPath = & $vswhere -latest -products * -property installationPath
+        if ($LASTEXITCODE -eq 0 -and $installPath) {
+            $vcvarsall = Join-Path $installPath.Trim() "VC\Auxiliary\Build\vcvarsall.bat"
+            if (Test-Path -LiteralPath $vcvarsall) {
+                return $vcvarsall
+            }
+        }
+    }
+
+    throw "Visual Studio C++ Build Tools were not found. Install the Desktop development with C++ workload, including the ARM64 build tools."
+}
+
+function Import-VisualStudioBuildEnvironment {
+    param([Parameter(Mandatory = $true)][string]$Architecture)
+
+    $vcvarsArgument = switch ($Architecture) {
+        "x86" { "x64_x86" }
+        "x64" { "x64" }
+        "arm64" { "x64_arm64" }
+        default { throw "Unknown architecture: $Architecture" }
+    }
+
+    $vcvarsall = Get-VcVarsAllPath
+    $command = 'call "{0}" {1} >nul && set' -f $vcvarsall, $vcvarsArgument
+    $environment = & cmd.exe /d /s /c $command
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to initialize the Visual Studio $Architecture build environment. Ensure its C++ tools are installed."
+    }
+
+    foreach ($line in $environment) {
+        if ($line -match '^([^=]+)=(.*)$') {
+            [Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
+        }
+    }
+
+    $compiler = Get-Command cl.exe -ErrorAction SilentlyContinue
+    if (-not $compiler) {
+        throw "Visual Studio did not provide cl.exe for $Architecture. Install the corresponding C++ build tools."
+    }
+
+    if ($Architecture -ne "arm64") {
+        return
+    }
+
+    # ring currently requires Clang (not MSVC's cl.exe) for Windows ARM64.
+    # The VS LLVM component is not always added to PATH by vcvarsall, so look
+    # in its standard location as well as a standalone LLVM installation.
+    $clang = Get-Command clang.exe -ErrorAction SilentlyContinue
+    if (-not $clang) {
+        $clangCandidates = @(@(
+            (Join-Path $env:VSINSTALLDIR "VC\Tools\Llvm\x64\bin\clang.exe"),
+            (Join-Path $env:ProgramFiles "LLVM\bin\clang.exe")
+        ) | Where-Object { Test-Path -LiteralPath $_ })
+
+        if ($clangCandidates) {
+            $clangDirectory = Split-Path -Parent $clangCandidates[0]
+            $env:PATH = "$clangDirectory;$env:PATH"
+            $clang = Get-Command clang.exe -ErrorAction SilentlyContinue
+        }
+    }
+
+    if (-not $clang) {
+        throw "ARM64 builds require clang because ring v0.17 does not support MSVC for Windows ARM64. Install the Visual Studio 'C++ Clang tools for Windows' component or LLVM, then run the build again."
+    }
+}
+
 function New-PortablePackage {
     param(
         [Parameter(Mandatory = $true)][string]$ReleaseDir,
@@ -364,6 +437,7 @@ try {
 
         Write-Host ""
         Write-Host "======== $archName ($triple) ========"
+        Import-VisualStudioBuildEnvironment -Architecture $archName
         Ensure-RustTarget -Triple $triple
         Clear-WasMsixExtractCache
 
