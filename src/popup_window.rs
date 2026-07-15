@@ -106,10 +106,14 @@ impl AppState {
 
     /// Applies provider toggles without disturbing workers that remain enabled.
     fn sync_provider_workers(&self, settings: &Settings) -> Vec<String> {
-        let disabled = [ProviderKind::Codex, ProviderKind::Claude, ProviderKind::Cursor]
-            .into_iter()
-            .filter(|provider| !settings.providers.is_enabled(*provider))
-            .collect::<Vec<_>>();
+        let disabled = [
+            ProviderKind::Codex,
+            ProviderKind::Claude,
+            ProviderKind::Cursor,
+        ]
+        .into_iter()
+        .filter(|provider| !settings.providers.is_enabled(*provider))
+        .collect::<Vec<_>>();
         let stopped = self.workers.lock().map_or_else(
             |_| Vec::new(),
             |mut workers| {
@@ -132,7 +136,11 @@ impl AppState {
         }
 
         let mut errors = Vec::new();
-        for provider in [ProviderKind::Codex, ProviderKind::Claude, ProviderKind::Cursor] {
+        for provider in [
+            ProviderKind::Codex,
+            ProviderKind::Claude,
+            ProviderKind::Cursor,
+        ] {
             if !settings.providers.is_enabled(provider)
                 || self
                     .workers
@@ -411,55 +419,50 @@ fn provider_cards(
     // Cursor usage is fetched from a remote CSV export rather than scanned
     // from a local session log. Keep its card visible while that export is
     // still empty or delayed, so the feature does not look like it vanished.
-    let has_usage_statistics = show_usage_stats
-        && (limits.usage.has_data() || provider == ProviderKind::Cursor);
+    let has_usage_statistics =
+        show_usage_stats && (limits.usage.has_data() || provider == ProviderKind::Cursor);
     cards.extend(
-        popup_sections(
-            limits,
-            show_banked_resets,
-            show_usage_stats,
-            false,
-        )
-        .into_iter()
-        .filter(|section| {
-            matches!(
-                section,
-                PopupSection::Monthly | PopupSection::FiveHour | PopupSection::Weekly
-            )
-        })
-        .filter_map(|section| {
-            let element: Element = match section {
-                PopupSection::Monthly => limit_card(
-                    monthly_label,
-                    &limits.secondary,
-                    show_used_percentage,
-                    show_usage_pace,
-                    false,
-                    color_scheme,
-                ),
-                PopupSection::FiveHour => limit_card(
-                    primary_label,
-                    &limits.primary,
-                    show_used_percentage,
-                    show_usage_pace,
-                    limits.five_hour_disabled(),
-                    color_scheme,
-                ),
-                PopupSection::Weekly => limit_card(
-                    secondary_label,
-                    &limits.secondary,
-                    show_used_percentage,
-                    show_usage_pace,
-                    false,
-                    color_scheme,
-                ),
-                PopupSection::Error => return None,
-                PopupSection::UsageStatistics
-                | PopupSection::BankedResets
-                | PopupSection::Credits => return None,
-            };
-            Some(element.with_key(format!("{}-{}", provider.display_name(), section.key())))
-        }),
+        popup_sections(limits, show_banked_resets, show_usage_stats, false)
+            .into_iter()
+            .filter(|section| {
+                matches!(
+                    section,
+                    PopupSection::Monthly | PopupSection::FiveHour | PopupSection::Weekly
+                )
+            })
+            .filter_map(|section| {
+                let element: Element = match section {
+                    PopupSection::Monthly => limit_card(
+                        monthly_label,
+                        &limits.secondary,
+                        show_used_percentage,
+                        show_usage_pace,
+                        false,
+                        color_scheme,
+                    ),
+                    PopupSection::FiveHour => limit_card(
+                        primary_label,
+                        &limits.primary,
+                        show_used_percentage,
+                        show_usage_pace,
+                        limits.five_hour_disabled(),
+                        color_scheme,
+                    ),
+                    PopupSection::Weekly => limit_card(
+                        secondary_label,
+                        &limits.secondary,
+                        show_used_percentage,
+                        show_usage_pace,
+                        false,
+                        color_scheme,
+                    ),
+                    PopupSection::Error => return None,
+                    PopupSection::UsageStatistics
+                    | PopupSection::BankedResets
+                    | PopupSection::Credits => return None,
+                };
+                Some(element.with_key(format!("{}-{}", provider.display_name(), section.key())))
+            }),
     );
     // Claude can return extra windows such as Fable or Opus. They belong with
     // the ordinary limit cards, before banked resets, statistics, or credits.
@@ -472,7 +475,11 @@ fn provider_cards(
             false,
             color_scheme,
         )
-        .with_key(format!("{}-additional-{}", provider.display_name(), limit.id))
+        .with_key(format!(
+            "{}-additional-{}",
+            provider.display_name(),
+            limit.id
+        ))
     });
     cards.extend(additional_limits);
     // Local statistics remain after every rate-limit window.
@@ -495,10 +502,14 @@ fn provider_cards(
 }
 
 fn latest_sampled_at(limits: &ProviderLimits) -> chrono::DateTime<Utc> {
-    [limits.codex.sampled_at, limits.claude.sampled_at, limits.cursor.sampled_at]
-        .into_iter()
-        .max()
-        .unwrap_or_default()
+    [
+        limits.codex.sampled_at,
+        limits.claude.sampled_at,
+        limits.cursor.sampled_at,
+    ]
+    .into_iter()
+    .max()
+    .unwrap_or_default()
 }
 
 /// Root WinUI view for Codex Minibar (hosted in a tray popup shell).
@@ -611,8 +622,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     // combined view stays focused on limits, while a provider tab can show
     // its full historical card. A lone provider has no All tab, so preserve
     // its existing detailed view.
-    let show_usage_stats = ui.show_usage_stats
-        && (!show_provider_tabs || selected_view != PopupView::All);
+    let show_usage_stats =
+        ui.show_usage_stats && (!show_provider_tabs || selected_view != PopupView::All);
 
     let mut body: Vec<Element> = Vec::new();
     if let Some(error) = ui.error.clone() {
@@ -750,52 +761,64 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     move || set_selected_view.call(PopupView::All)
                 },
             ),
-            if ui.codex_enabled { popup_tab_button(
-                "provider-tab-codex",
-                Some(if ui.replace_chatgpt_logo_with_codex {
-                    "codex"
-                } else {
-                    "chatgpt"
-                }),
-                None,
-                "Codex",
-                selected_view == PopupView::Codex,
-                ui.use_colored_provider_icons,
-                &hovered_action,
-                set_hovered_action.clone(),
-                {
-                    let set_selected_view = set_selected_view.clone();
-                    move || set_selected_view.call(PopupView::Codex)
-                },
-            ) } else { Element::Empty },
-            if ui.claude_enabled { popup_tab_button(
-                "provider-tab-claude",
-                Some("claude"),
-                None,
-                "Claude",
-                selected_view == PopupView::Claude,
-                ui.use_colored_provider_icons,
-                &hovered_action,
-                set_hovered_action.clone(),
-                {
-                    let set_selected_view = set_selected_view.clone();
-                    move || set_selected_view.call(PopupView::Claude)
-                },
-            ) } else { Element::Empty },
-            if ui.cursor_enabled { popup_tab_button(
-                "provider-tab-cursor",
-                Some("cursor"),
-                None,
-                "Cursor",
-                selected_view == PopupView::Cursor,
-                ui.use_colored_provider_icons,
-                &hovered_action,
-                set_hovered_action.clone(),
-                {
-                    let set_selected_view = set_selected_view.clone();
-                    move || set_selected_view.call(PopupView::Cursor)
-                },
-            ) } else { Element::Empty },
+            if ui.codex_enabled {
+                popup_tab_button(
+                    "provider-tab-codex",
+                    Some(if ui.replace_chatgpt_logo_with_codex {
+                        "codex"
+                    } else {
+                        "chatgpt"
+                    }),
+                    None,
+                    "Codex",
+                    selected_view == PopupView::Codex,
+                    ui.use_colored_provider_icons,
+                    &hovered_action,
+                    set_hovered_action.clone(),
+                    {
+                        let set_selected_view = set_selected_view.clone();
+                        move || set_selected_view.call(PopupView::Codex)
+                    },
+                )
+            } else {
+                Element::Empty
+            },
+            if ui.claude_enabled {
+                popup_tab_button(
+                    "provider-tab-claude",
+                    Some("claude"),
+                    None,
+                    "Claude",
+                    selected_view == PopupView::Claude,
+                    ui.use_colored_provider_icons,
+                    &hovered_action,
+                    set_hovered_action.clone(),
+                    {
+                        let set_selected_view = set_selected_view.clone();
+                        move || set_selected_view.call(PopupView::Claude)
+                    },
+                )
+            } else {
+                Element::Empty
+            },
+            if ui.cursor_enabled {
+                popup_tab_button(
+                    "provider-tab-cursor",
+                    Some("cursor"),
+                    None,
+                    "Cursor",
+                    selected_view == PopupView::Cursor,
+                    ui.use_colored_provider_icons,
+                    &hovered_action,
+                    set_hovered_action.clone(),
+                    {
+                        let set_selected_view = set_selected_view.clone();
+                        move || set_selected_view.call(PopupView::Cursor)
+                    },
+                )
+            } else {
+                Element::Empty
+            },
         ))
         .spacing(2.0)
         .horizontal_alignment(HorizontalAlignment::Left)
@@ -846,17 +869,25 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     set_hovered_action.clone(),
                     refresh,
                 ),
-                icon_button("settings", "fluent-settings", "fluent-settings", "Settings", &hovered_action, set_hovered_action.clone(), {
-                    let settings_tx = settings_tx.clone();
-                    let updates = Arc::clone(&state.updates);
-                    move || {
-                        if let Err(error) =
-                            crate::settings_window::open(settings_tx.clone(), updates.clone())
-                        {
-                            eprintln!("Could not open settings window: {error:?}");
+                icon_button(
+                    "settings",
+                    "fluent-settings",
+                    "fluent-settings",
+                    "Settings",
+                    &hovered_action,
+                    set_hovered_action.clone(),
+                    {
+                        let settings_tx = settings_tx.clone();
+                        let updates = Arc::clone(&state.updates);
+                        move || {
+                            if let Err(error) =
+                                crate::settings_window::open(settings_tx.clone(), updates.clone())
+                            {
+                                eprintln!("Could not open settings window: {error:?}");
+                            }
                         }
-                    }
-                }),
+                    },
+                ),
                 quit_or_update,
             ))
             .spacing(4.0)
@@ -1047,10 +1078,18 @@ fn settings_window(cx: &mut RenderCx, settings: Arc<Settings>) -> Element {
     let content = settings_tab_content(&settings, selected);
 
     let menu = [
-        NavViewItem::new("General").tag(SettingsTab::General.tag()).icon_path(crate::icons::data("house"), "#E6E6E6"),
-        NavViewItem::new("Tray").tag(SettingsTab::Tray.tag()).icon_path(crate::icons::data("chat-centered-text"), "#E6E6E6"),
-        NavViewItem::new("Notifications").tag(SettingsTab::Notifications.tag()).icon_path(crate::icons::data("bell"), "#E6E6E6"),
-        NavViewItem::new("Advanced").tag(SettingsTab::Advanced.tag()).icon_path(crate::icons::data("sliders"), "#E6E6E6"),
+        NavViewItem::new("General")
+            .tag(SettingsTab::General.tag())
+            .icon_path(crate::icons::data("house"), "#E6E6E6"),
+        NavViewItem::new("Tray")
+            .tag(SettingsTab::Tray.tag())
+            .icon_path(crate::icons::data("chat-centered-text"), "#E6E6E6"),
+        NavViewItem::new("Notifications")
+            .tag(SettingsTab::Notifications.tag())
+            .icon_path(crate::icons::data("bell"), "#E6E6E6"),
+        NavViewItem::new("Advanced")
+            .tag(SettingsTab::Advanced.tag())
+            .icon_path(crate::icons::data("sliders"), "#E6E6E6"),
     ];
     // NavigationView owns the sidebar only. Its generated content presenter
     // is opaque in the current WinUI template, so rendering the page inside it
@@ -1341,9 +1380,9 @@ fn start_background_bridge(
                 let _ = commands.send(WorkerCommand::SetAutomaticActivation(
                     settings.automatic_activation,
                 ));
-                let _ = commands.send(WorkerCommand::SetLimitRefreshInterval(
-                    Duration::from_secs(settings.limit_refresh_interval.seconds()),
-                ));
+                let _ = commands.send(WorkerCommand::SetLimitRefreshInterval(Duration::from_secs(
+                    settings.limit_refresh_interval.seconds(),
+                )));
                 // The worker refreshes immediately after receiving this command,
                 // so the selected history range is reflected in the open popup
                 // without asking the user to restart the application.
@@ -1480,10 +1519,11 @@ fn start_background_bridge(
                     // from that exact snapshot.
                     state.replace_limits(provider, limits);
                     let limits = state.current_limits();
-                    limit_notifications
-                        .entry(provider)
-                        .or_default()
-                        .observe(limits.get(provider), &notification_settings, provider);
+                    limit_notifications.entry(provider).or_default().observe(
+                        limits.get(provider),
+                        &notification_settings,
+                        provider,
+                    );
                     if let Err(error) = tray.sync(
                         &widgets,
                         &limits,
@@ -1536,11 +1576,13 @@ fn start_background_bridge(
                     set_ui.call(ui.clone());
                 }
                 // All live provider workers are forwarded as scoped events.
-                Ok(WorkerEvent::LimitsUpdated(_)
-                | WorkerEvent::UsageUpdated(_)
-                | WorkerEvent::ActivationSucceeded
-                | WorkerEvent::ActivationFailed(_)
-                | WorkerEvent::PollFailed(_)) => {}
+                Ok(
+                    WorkerEvent::LimitsUpdated(_)
+                    | WorkerEvent::UsageUpdated(_)
+                    | WorkerEvent::ActivationSucceeded
+                    | WorkerEvent::ActivationFailed(_)
+                    | WorkerEvent::PollFailed(_),
+                ) => {}
                 Ok(WorkerEvent::Stopped) => break,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
@@ -1679,7 +1721,11 @@ fn popup_tab_button(
     } else {
         neutral_icon_color
     };
-    let tab_width = if label.is_some() { 44.0 } else { ICON_BUTTON_SIZE };
+    let tab_width = if label.is_some() {
+        44.0
+    } else {
+        ICON_BUTTON_SIZE
+    };
     let hover_background: Element = border(Element::Empty)
         .background(ThemeRef::SubtleFill)
         .opacity(if hovered { 1.0 } else { 0.0 })
@@ -1775,7 +1821,11 @@ fn icon_button(
     let icon: Element = crate::icons::element(
         if hovered { hover_icon } else { normal_icon },
         18.0,
-        if hovered { Color::rgb(0, 120, 212) } else { Color::rgb(230, 230, 230) },
+        if hovered {
+            Color::rgb(0, 120, 212)
+        } else {
+            Color::rgb(230, 230, 230)
+        },
     )
     .relative_align_h_center()
     .relative_align_v_center()
@@ -2098,9 +2148,11 @@ fn usage_statistics_card(provider: ProviderKind, limits: &RateLimits) -> Element
         return border(
             vstack((
                 body_strong("Usage activity"),
-                caption("Waiting for Cursor usage export. Refresh to retry; Cursor can delay new rows.")
-                    .foreground(ThemeRef::TertiaryText)
-                    .wrap(),
+                caption(
+                    "Waiting for Cursor usage export. Refresh to retry; Cursor can delay new rows.",
+                )
+                .foreground(ThemeRef::TertiaryText)
+                .wrap(),
             ))
             .spacing(6.0),
         )
@@ -2114,16 +2166,16 @@ fn usage_statistics_card(provider: ProviderKind, limits: &RateLimits) -> Element
     let period = statistics.history_days;
     let total = format_token_count(statistics.history.total_tokens());
     let today = format_token_count(statistics.today.total_tokens());
-    let today_value = if provider == ProviderKind::Cursor {
-        "—".into()
-    } else {
-        format_usd(statistics.today.estimated_api_value_usd())
-    };
-    let history_value = if provider == ProviderKind::Cursor {
-        "—".into()
-    } else {
-        format_usd(statistics.history.estimated_api_value_usd())
-    };
+    let today_value = statistics
+        .today
+        .estimated_api_value_usd()
+        .map(format_usd)
+        .unwrap_or_else(|| "No data".into());
+    let history_value = statistics
+        .history
+        .estimated_api_value_usd()
+        .map(format_usd)
+        .unwrap_or_else(|| "No data".into());
     let detail = format!(
         "{} in · {} out · {} cached · {} requests",
         format_token_count(statistics.history.input_tokens),
@@ -2288,7 +2340,11 @@ fn capitalize_plan_name(plan: &str) -> String {
     let Some(first) = characters.next() else {
         return String::new();
     };
-    format!("{}{}", first.to_uppercase(), characters.as_str().to_lowercase())
+    format!(
+        "{}{}",
+        first.to_uppercase(),
+        characters.as_str().to_lowercase()
+    )
 }
 
 fn format_reset_in(reset: Option<DateTime<Utc>>) -> String {
@@ -2400,10 +2456,12 @@ mod tests {
         let mut limits = plan_limits("plus");
         limits.usage.history.requests = 1;
 
-        assert!(popup_sections(&limits, true, true, false)
-            .contains(&PopupSection::UsageStatistics));
-        assert!(!popup_sections(&limits, true, false, false)
-            .contains(&PopupSection::UsageStatistics));
+        assert!(
+            popup_sections(&limits, true, true, false).contains(&PopupSection::UsageStatistics)
+        );
+        assert!(
+            !popup_sections(&limits, true, false, false).contains(&PopupSection::UsageStatistics)
+        );
     }
 
     #[test]
@@ -2423,13 +2481,7 @@ mod tests {
         assert_unique_section_keys(&free);
 
         let plus = popup_sections(&plan_limits("plus"), true, true, false);
-        assert_eq!(
-            plus,
-            vec![
-                PopupSection::FiveHour,
-                PopupSection::Weekly,
-            ]
-        );
+        assert_eq!(plus, vec![PopupSection::FiveHour, PopupSection::Weekly,]);
         assert_unique_section_keys(&plus);
     }
 
@@ -2469,14 +2521,16 @@ mod tests {
     #[test]
     fn provider_cards_include_each_additional_limit() {
         let mut limits = plan_limits("plus");
-        limits.additional_limits.push(crate::limits::AdditionalLimit {
-            id: "seven_day_fable".into(),
-            title: "Fable".into(),
-            window: LimitWindow {
-                used_percent: Some(42),
-                ..Default::default()
-            },
-        });
+        limits
+            .additional_limits
+            .push(crate::limits::AdditionalLimit {
+                id: "seven_day_fable".into(),
+                title: "Fable".into(),
+                window: LimitWindow {
+                    used_percent: Some(42),
+                    ..Default::default()
+                },
+            });
 
         let cards = provider_cards(
             ProviderKind::Claude,
@@ -2522,10 +2576,8 @@ mod tests {
             ..Default::default()
         });
 
-        assert!(popup_sections(&limits, true, true, false)
-            .contains(&PopupSection::BankedResets));
-        assert!(!popup_sections(&limits, false, true, false)
-            .contains(&PopupSection::BankedResets));
+        assert!(popup_sections(&limits, true, true, false).contains(&PopupSection::BankedResets));
+        assert!(!popup_sections(&limits, false, true, false).contains(&PopupSection::BankedResets));
     }
 
     #[test]

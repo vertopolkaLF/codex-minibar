@@ -11,7 +11,13 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-const CACHE_VERSION: u8 = 1;
+// Version 3 adds the per-session model and service tier needed to calculate
+// model-aware Codex API-value estimates. Old aggregates have no such context,
+// so they must be rebuilt from the original rollout logs once.
+const CODEX_CACHE_VERSION: u8 = 3;
+// Claude's cache format did not change. Keep it independent so a Codex
+// pricing migration cannot hide an otherwise healthy Claude usage card.
+const CLAUDE_CACHE_VERSION: u8 = 1;
 const CACHE_RETENTION_DAYS: i64 = 365;
 
 /// Locally recorded Codex token usage. This is deliberately derived only from
@@ -22,8 +28,7 @@ pub struct TokenUsage {
     pub cached_input_tokens: u64,
     pub output_tokens: u64,
     pub requests: u64,
-    /// Locally measured or model-priced request cost. Codex's legacy cache
-    /// leaves this empty and continues to use its existing estimate below.
+    /// Locally measured or model-priced request cost.
     #[serde(default)]
     pub estimated_cost_microusd: u64,
     #[serde(default)]
@@ -37,33 +42,10 @@ impl TokenUsage {
         self.input_tokens.saturating_add(self.output_tokens)
     }
 
-    /// Approximate API value in USD using GPT-5.4 list pricing as of
-    /// 2026-07-14: $2.50/M input, $0.25/M cached input and $15.00/M output.
-    /// This deliberately describes an API-equivalent value, not a Codex plan
-    /// charge: subscription billing and included usage follow different rules.
-    pub fn estimated_api_value_usd(&self) -> f64 {
-        if self.priced_requests == self.requests && self.requests > 0 {
-            return self.estimated_cost_microusd as f64 / 1_000_000.0;
-        }
-        const NANODOLLARS_PER_DOLLAR: u64 = 1_000_000_000;
-        const INPUT_NANODOLLARS_PER_TOKEN: u64 = 2_500;
-        const CACHED_INPUT_NANODOLLARS_PER_TOKEN: u64 = 250;
-        const OUTPUT_NANODOLLARS_PER_TOKEN: u64 = 15_000;
-
-        let uncached_input = self
-            .input_tokens
-            .saturating_sub(self.cached_input_tokens);
-        let nanodollars = uncached_input
-            .saturating_mul(INPUT_NANODOLLARS_PER_TOKEN)
-            .saturating_add(
-                self.cached_input_tokens
-                    .saturating_mul(CACHED_INPUT_NANODOLLARS_PER_TOKEN),
-            )
-            .saturating_add(
-                self.output_tokens
-                    .saturating_mul(OUTPUT_NANODOLLARS_PER_TOKEN),
-            );
-        nanodollars as f64 / NANODOLLARS_PER_DOLLAR as f64
+    /// API-rate value is an estimate, not the user's subscription bill.
+    pub fn estimated_api_value_usd(&self) -> Option<f64> {
+        (self.requests > 0 && self.priced_requests > 0)
+            .then(|| self.estimated_cost_microusd as f64 / 1_000_000.0)
     }
 
     fn add(&mut self, other: &Self) {
@@ -118,6 +100,10 @@ impl UsageStatistics {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct UsageCache {
     version: u8,
+    /// Legacy totals are safe to show immediately, but need one full re-scan
+    /// before new rows can use their logged model and service tier.
+    #[serde(default)]
+    pricing_rebuild_needed: bool,
     files: BTreeMap<String, CachedSessionFile>,
 }
 
@@ -126,6 +112,12 @@ struct CachedSessionFile {
     /// Number of complete JSONL bytes already incorporated into `daily`.
     offset: u64,
     daily: Vec<DailyTokenUsage>,
+    /// The most recent rollout context lets an incremental scan price the next
+    /// token_count without reopening the whole session file.
+    #[serde(default)]
+    current_model: Option<String>,
+    #[serde(default)]
+    fast_service_tier: bool,
 }
 
 impl CachedSessionFile {
@@ -154,29 +146,25 @@ pub fn load_cached_usage_statistics(history_days: u16) -> Result<UsageStatistics
 /// cache, and returns the refreshed aggregate. Truncated/replaced files are
 /// safely rebuilt from their beginning.
 pub fn refresh_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
-    let sessions_root = codex_home().join("sessions");
+    let codex_root = codex_home();
     let mut cache = load_cache()?;
-    let mut files = Vec::new();
-    collect_session_files(&sessions_root, &mut files)?;
-    let known_paths: BTreeSet<String> = files
-        .iter()
-        .filter_map(|path| path.strip_prefix(&sessions_root).ok())
-        .map(|path| path.to_string_lossy().into_owned())
-        .collect();
+    if cache.pricing_rebuild_needed {
+        // The old aggregate has already been published. Start a clean cache
+        // now so re-reading the log cannot double-count it.
+        cache.files.clear();
+        cache.pricing_rebuild_needed = false;
+    }
+    let files = collect_codex_session_files(&codex_root)?;
+    let known_paths: BTreeSet<String> = files.iter().map(|(_, key)| key.clone()).collect();
     cache.files.retain(|path, _| known_paths.contains(path));
 
     let oldest = Local::now().date_naive() - Duration::days(CACHE_RETENTION_DAYS - 1);
-    for path in files {
-        let relative = path
-            .strip_prefix(&sessions_root)
-            .expect("session file was discovered below its root")
-            .to_string_lossy()
-            .into_owned();
-        let cached = cache.files.entry(relative).or_default();
+    for (path, key) in files {
+        let cached = cache.files.entry(key).or_default();
         scan_file_delta(&path, cached)?;
         cached.prune_before(oldest);
     }
-    cache.version = CACHE_VERSION;
+    cache.version = CODEX_CACHE_VERSION;
     save_cache(&cache)?;
     Ok(statistics_from_cache(&cache, history_days))
 }
@@ -246,12 +234,48 @@ fn scan_file_delta(path: &Path, cached: &mut CachedSessionFile) -> Result<()> {
         let Ok(line) = std::str::from_utf8(&bytes) else {
             continue;
         };
-        if let Some((timestamp, usage)) = token_usage_from_line(line) {
+        update_codex_rollout_context(line, cached);
+        if let Some((timestamp, usage)) = token_usage_from_line(line, cached) {
             cached.add(timestamp.with_timezone(&Local).date_naive(), usage);
         }
     }
     cached.offset = offset;
     Ok(())
+}
+
+/// Returns active rollouts plus archived ones. An active path wins when an
+/// archive contains the same relative rollout, matching Codex's move/copy
+/// behaviour and avoiding duplicate history after archival.
+fn collect_codex_session_files(root: &Path) -> Result<Vec<(PathBuf, String)>> {
+    let mut active = Vec::new();
+    let sessions = root.join("sessions");
+    collect_session_files(&sessions, &mut active)?;
+    let mut files = Vec::new();
+    let mut seen_relative = BTreeSet::new();
+    for path in active {
+        let key = path
+            .strip_prefix(&sessions)
+            .expect("active rollout was discovered below sessions")
+            .to_string_lossy()
+            .into_owned();
+        seen_relative.insert(key.clone());
+        files.push((path, format!("sessions/{key}")));
+    }
+
+    let archived = root.join("archived_sessions");
+    let mut archived_files = Vec::new();
+    collect_session_files(&archived, &mut archived_files)?;
+    for path in archived_files {
+        let key = path
+            .strip_prefix(&archived)
+            .expect("archived rollout was discovered below archived_sessions")
+            .to_string_lossy()
+            .into_owned();
+        if seen_relative.insert(key.clone()) {
+            files.push((path, format!("archived_sessions/{key}")));
+        }
+    }
+    Ok(files)
 }
 
 fn collect_session_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
@@ -262,7 +286,10 @@ fn collect_session_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
         let path = entry?.path();
         if path.is_dir() {
             collect_session_files(&path, files)?;
-        } else if path.extension().is_some_and(|extension| extension == "jsonl") {
+        } else if path
+            .extension()
+            .is_some_and(|extension| extension == "jsonl")
+        {
             files.push(path);
         }
     }
@@ -274,12 +301,16 @@ fn load_cache() -> Result<UsageCache> {
     let Ok(contents) = fs::read(path) else {
         return Ok(UsageCache::default());
     };
-    let cache: UsageCache = serde_json::from_slice(&contents).unwrap_or_default();
-    if cache.version == CACHE_VERSION {
-        Ok(cache)
-    } else {
-        Ok(UsageCache::default())
+    let mut cache: UsageCache = serde_json::from_slice(&contents).unwrap_or_default();
+    if cache.version > CODEX_CACHE_VERSION {
+        return Ok(UsageCache::default());
     }
+    if cache.version != CODEX_CACHE_VERSION {
+        // Do not blank good token totals merely because pricing gained extra
+        // metadata. The worker publishes this snapshot, then rebuilds it.
+        cache.pricing_rebuild_needed = true;
+    }
+    Ok(cache)
 }
 
 fn save_cache(cache: &UsageCache) -> Result<()> {
@@ -289,10 +320,11 @@ fn save_cache(cache: &UsageCache) -> Result<()> {
     let mut temporary = tempfile::NamedTempFile::new_in(parent)
         .with_context(|| format!("create usage cache in {}", parent.display()))?;
     serde_json::to_writer_pretty(temporary.as_file_mut(), cache)?;
-    temporary.as_file().sync_all().context("flush usage cache")?;
     temporary
-        .persist(path)
-        .context("commit usage cache")?;
+        .as_file()
+        .sync_all()
+        .context("flush usage cache")?;
+    temporary.persist(path).context("commit usage cache")?;
     Ok(())
 }
 
@@ -309,7 +341,39 @@ fn codex_home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".codex"))
 }
 
-fn token_usage_from_line(line: &str) -> Option<(DateTime<Utc>, TokenUsage)> {
+fn update_codex_rollout_context(line: &str, cached: &mut CachedSessionFile) {
+    let Ok(event) = serde_json::from_str::<Value>(line) else {
+        return;
+    };
+    let Some(payload) = event.get("payload") else {
+        return;
+    };
+    if event.get("type").and_then(Value::as_str) == Some("turn_context") {
+        if let Some(model) = payload.get("model").and_then(Value::as_str).map(str::trim)
+            && !model.is_empty()
+        {
+            cached.current_model = Some(model.to_owned());
+        }
+        return;
+    }
+    if event.get("type").and_then(Value::as_str) == Some("event_msg")
+        && payload.get("type").and_then(Value::as_str) == Some("thread_settings_applied")
+    {
+        let tier = payload
+            .pointer("/thread_settings/service_tier")
+            .or_else(|| payload.get("service_tier"))
+            .and_then(Value::as_str)
+            .map(str::trim);
+        if let Some(tier) = tier {
+            cached.fast_service_tier = matches!(tier, "fast" | "priority");
+        }
+    }
+}
+
+fn token_usage_from_line(
+    line: &str,
+    cached: &CachedSessionFile,
+) -> Option<(DateTime<Utc>, TokenUsage)> {
     let event: Value = serde_json::from_str(line).ok()?;
     if event.get("type")?.as_str()? != "event_msg"
         || event.pointer("/payload/type")?.as_str()? != "token_count"
@@ -321,16 +385,149 @@ fn token_usage_from_line(line: &str) -> Option<(DateTime<Utc>, TokenUsage)> {
         .with_timezone(&Utc);
     let usage = event.pointer("/payload/info/last_token_usage")?;
     let token = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
+    let input_tokens = token("input_tokens");
+    let cached_input_tokens = token("cached_input_tokens").max(token("cache_read_input_tokens"));
+    let output_tokens = token("output_tokens");
+    let model = usage
+        .get("model")
+        .or_else(|| usage.get("model_name"))
+        .and_then(Value::as_str)
+        .or(cached.current_model.as_deref());
+    let estimated_cost_microusd = codex_estimated_cost_microusd(
+        model,
+        input_tokens,
+        cached_input_tokens,
+        output_tokens,
+        cached.fast_service_tier,
+    );
     Some((
         timestamp,
         TokenUsage {
-            input_tokens: token("input_tokens"),
-            cached_input_tokens: token("cached_input_tokens").max(token("cache_read_input_tokens")),
-            output_tokens: token("output_tokens"),
+            input_tokens,
+            cached_input_tokens,
+            output_tokens,
             requests: 1,
+            estimated_cost_microusd: estimated_cost_microusd.unwrap_or_default(),
+            priced_requests: u64::from(estimated_cost_microusd.is_some()),
             ..Default::default()
         },
     ))
+}
+
+#[derive(Clone, Copy)]
+struct CodexModelRates {
+    input_per_million: f64,
+    cached_input_per_million: f64,
+    output_per_million: f64,
+    fast_multiplier: f64,
+}
+
+/// Price a single Codex event using its model and the tier recorded in that
+/// rollout. The values are OpenAI API list prices per million tokens, not a
+/// charge for a ChatGPT subscription. Older rollout formats sometimes omit a
+/// model, so those events use the current Codex base rate as an explicit
+/// fallback rather than erasing the whole spend tile.
+fn codex_estimated_cost_microusd(
+    model: Option<&str>,
+    input: u64,
+    cached_input: u64,
+    output: u64,
+    fast_service_tier: bool,
+) -> Option<u64> {
+    let model = model.unwrap_or("gpt-5.3-codex").trim().to_ascii_lowercase();
+    let base = codex_price_model_name(&model);
+    let mut rates = match base {
+        "gpt-5" | "gpt-5-codex" | "gpt-5.1" | "gpt-5.1-codex" => CodexModelRates {
+            input_per_million: 1.25,
+            cached_input_per_million: 0.125,
+            output_per_million: 10.0,
+            fast_multiplier: 2.0,
+        },
+        "gpt-5.2" | "gpt-5.2-codex" | "gpt-5.3" | "gpt-5.3-codex" => CodexModelRates {
+            input_per_million: 1.75,
+            cached_input_per_million: 0.175,
+            output_per_million: 14.0,
+            fast_multiplier: 2.0,
+        },
+        "gpt-5.4" => CodexModelRates {
+            input_per_million: 2.5,
+            cached_input_per_million: 0.25,
+            output_per_million: 15.0,
+            fast_multiplier: 2.0,
+        },
+        "gpt-5.4-pro" => CodexModelRates {
+            input_per_million: 30.0,
+            cached_input_per_million: 30.0,
+            output_per_million: 180.0,
+            fast_multiplier: 2.0,
+        },
+        "gpt-5.5" => CodexModelRates {
+            input_per_million: 5.0,
+            cached_input_per_million: 0.5,
+            output_per_million: 30.0,
+            fast_multiplier: 2.5,
+        },
+        "gpt-5.5-pro" => CodexModelRates {
+            input_per_million: 30.0,
+            cached_input_per_million: 30.0,
+            output_per_million: 180.0,
+            fast_multiplier: 2.5,
+        },
+        // Codex can publish a model slug before public pricing catalogs have
+        // caught up. Keep the local spend estimate useful and conservative.
+        _ => CodexModelRates {
+            input_per_million: 1.75,
+            cached_input_per_million: 0.175,
+            output_per_million: 14.0,
+            fast_multiplier: 2.0,
+        },
+    };
+
+    // OpenAI's published long-context tiers apply to the whole request.
+    if input > 272_000 {
+        match base {
+            "gpt-5.4" => {
+                rates.input_per_million = 5.0;
+                rates.cached_input_per_million = 0.5;
+                rates.output_per_million = 22.5;
+            }
+            "gpt-5.4-pro" | "gpt-5.5-pro" => {
+                rates.input_per_million = 60.0;
+                rates.cached_input_per_million = 60.0;
+                rates.output_per_million = 270.0;
+            }
+            "gpt-5.5" => {
+                rates.input_per_million = 10.0;
+                rates.cached_input_per_million = 1.0;
+                rates.output_per_million = 45.0;
+            }
+            _ => {}
+        }
+    }
+    let multiplier = if fast_service_tier {
+        rates.fast_multiplier
+    } else {
+        1.0
+    };
+    let uncached_input = input.saturating_sub(cached_input);
+    let cost = (uncached_input as f64 * rates.input_per_million
+        + cached_input.min(input) as f64 * rates.cached_input_per_million
+        + output as f64 * rates.output_per_million)
+        * multiplier
+        / 1_000_000.0;
+    Some((cost * 1_000_000.0).round().clamp(0.0, u64::MAX as f64) as u64)
+}
+
+/// Dates in rollout names are model revisions, not new rates. Retain the
+/// meaningful `-codex` and `-pro` suffixes while stripping only a final date.
+fn codex_price_model_name(model: &str) -> &str {
+    model
+        .strip_suffix("-2025-08-07")
+        .or_else(|| model.strip_suffix("-2025-11-13"))
+        .or_else(|| model.strip_suffix("-2025-12-11"))
+        .or_else(|| model.strip_suffix("-2026-03-05"))
+        .or_else(|| model.strip_suffix("-2026-04-23"))
+        .unwrap_or(model)
 }
 
 /// Cached representation of one Claude Code response. Keeping individual
@@ -386,7 +583,7 @@ pub fn refresh_claude_usage_statistics(history_days: u16) -> Result<UsageStatist
             .entries
             .retain(|entry| entry.timestamp.with_timezone(&Local).date_naive() >= oldest);
     }
-    cache.version = CACHE_VERSION;
+    cache.version = CLAUDE_CACHE_VERSION;
     save_claude_cache(&cache)?;
     Ok(claude_statistics_from_cache(&cache, history_days))
 }
@@ -457,12 +654,18 @@ fn deduplicate_claude_entries(cache: &ClaudeUsageCache) -> Vec<CachedClaudeUsage
         let index = entries.len();
         entries.push(entry.clone());
         exact.insert(key, index);
-        by_message.entry(message_id.clone()).or_default().push(index);
+        by_message
+            .entry(message_id.clone())
+            .or_default()
+            .push(index);
     }
     entries
 }
 
-fn claude_entry_should_replace(candidate: &CachedClaudeUsageEntry, existing: &CachedClaudeUsageEntry) -> bool {
+fn claude_entry_should_replace(
+    candidate: &CachedClaudeUsageEntry,
+    existing: &CachedClaudeUsageEntry,
+) -> bool {
     if candidate.is_sidechain != existing.is_sidechain {
         return existing.is_sidechain;
     }
@@ -553,16 +756,20 @@ fn claude_usage_from_line(line: &[u8]) -> Option<CachedClaudeUsageEntry> {
         cached_input_tokens: cache_read.min(input_tokens),
         output_tokens,
         requests: 1,
-        estimated_cost_microusd: (cost * 1_000_000.0)
-            .round()
-            .clamp(0.0, u64::MAX as f64) as u64,
+        estimated_cost_microusd: (cost * 1_000_000.0).round().clamp(0.0, u64::MAX as f64) as u64,
         priced_requests: 1,
     };
     Some(CachedClaudeUsageEntry {
         timestamp,
         message_id: message.get("id").and_then(Value::as_str).map(str::to_owned),
-        request_id: event.get("requestId").and_then(Value::as_str).map(str::to_owned),
-        is_sidechain: event.get("isSidechain").and_then(Value::as_bool).unwrap_or(false),
+        request_id: event
+            .get("requestId")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        is_sidechain: event
+            .get("isSidechain")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         has_speed: usage_json.get("speed").is_some(),
         usage,
     })
@@ -607,11 +814,16 @@ fn collect_claude_session_files() -> Vec<PathBuf> {
         // receives a normal PATH-style list from launchers, so tolerate both.
         let raw = config_dirs.to_string_lossy();
         let configured_paths: Vec<PathBuf> = if raw.contains(',') {
-            raw.split(',').map(|part| PathBuf::from(part.trim())).collect()
+            raw.split(',')
+                .map(|part| PathBuf::from(part.trim()))
+                .collect()
         } else {
             std::env::split_paths(&config_dirs).collect()
         };
-        for path in configured_paths.into_iter().filter(|path| !path.as_os_str().is_empty()) {
+        for path in configured_paths
+            .into_iter()
+            .filter(|path| !path.as_os_str().is_empty())
+        {
             roots.push(if path.file_name().is_some_and(|name| name == "projects") {
                 path.parent().map(Path::to_path_buf).unwrap_or(path)
             } else {
@@ -642,7 +854,7 @@ fn load_claude_cache() -> Result<ClaudeUsageCache> {
         return Ok(ClaudeUsageCache::default());
     };
     let cache: ClaudeUsageCache = serde_json::from_slice(&contents).unwrap_or_default();
-    if cache.version == CACHE_VERSION {
+    if cache.version == CLAUDE_CACHE_VERSION {
         Ok(cache)
     } else {
         Ok(ClaudeUsageCache::default())
@@ -651,13 +863,20 @@ fn load_claude_cache() -> Result<ClaudeUsageCache> {
 
 fn save_claude_cache(cache: &ClaudeUsageCache) -> Result<()> {
     let path = claude_cache_path()?;
-    let parent = path.parent().context("Claude usage cache path has no parent")?;
+    let parent = path
+        .parent()
+        .context("Claude usage cache path has no parent")?;
     fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     let mut temporary = tempfile::NamedTempFile::new_in(parent)
         .with_context(|| format!("create Claude usage cache in {}", parent.display()))?;
     serde_json::to_writer_pretty(temporary.as_file_mut(), cache)?;
-    temporary.as_file().sync_all().context("flush Claude usage cache")?;
-    temporary.persist(path).context("commit Claude usage cache")?;
+    temporary
+        .as_file()
+        .sync_all()
+        .context("flush Claude usage cache")?;
+    temporary
+        .persist(path)
+        .context("commit Claude usage cache")?;
     Ok(())
 }
 
@@ -674,37 +893,47 @@ mod tests {
     #[test]
     fn reads_per_request_token_usage() {
         let line = r#"{"timestamp":"2026-07-14T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":12,"cached_input_tokens":7,"output_tokens":4}}}}"#;
-        let (_, usage) = token_usage_from_line(line).unwrap();
+        let (_, usage) = token_usage_from_line(
+            line,
+            &CachedSessionFile {
+                current_model: Some("gpt-5.4".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(usage.total_tokens(), 16);
         assert_eq!(usage.requests, 1);
+        assert_eq!(usage.priced_requests, 1);
     }
 
     #[test]
-    fn estimates_gpt_5_4_api_value_without_double_counting_cache() {
-        let usage = TokenUsage {
-            input_tokens: 1_000_000,
-            cached_input_tokens: 1_000_000,
-            output_tokens: 1_000_000,
-            requests: 1,
-            ..Default::default()
-        };
-        assert!((usage.estimated_api_value_usd() - 15.25).abs() < f64::EPSILON);
+    fn prices_codex_by_logged_model_and_service_tier() {
+        let standard =
+            codex_estimated_cost_microusd(Some("gpt-5.4"), 1_000_000, 1_000_000, 1_000_000, false)
+                .unwrap();
+        assert_eq!(standard, 15_250_000);
+        let fast =
+            codex_estimated_cost_microusd(Some("gpt-5.4"), 1_000_000, 1_000_000, 1_000_000, true)
+                .unwrap();
+        assert_eq!(fast, 30_500_000);
+        assert!(codex_estimated_cost_microusd(Some("unknown-model"), 1, 0, 1, false).is_some());
+    }
 
-        let usage = TokenUsage {
-            input_tokens: 1_000_000,
-            cached_input_tokens: 0,
-            output_tokens: 1_000_000,
-            requests: 1,
-            ..Default::default()
-        };
-        assert!((usage.estimated_api_value_usd() - 17.5).abs() < f64::EPSILON);
+    #[test]
+    fn applies_codex_long_context_rate_to_the_whole_request() {
+        let cost =
+            codex_estimated_cost_microusd(Some("gpt-5.4"), 300_000, 0, 100_000, false).unwrap();
+        assert_eq!(cost, 3_750_000);
     }
 
     #[test]
     fn ignores_non_usage_events() {
         assert!(
-            token_usage_from_line(r#"{"type":"event_msg","payload":{"type":"task_started"}}"#)
-                .is_none()
+            token_usage_from_line(
+                r#"{"type":"event_msg","payload":{"type":"task_started"}}"#,
+                &CachedSessionFile::default(),
+            )
+            .is_none()
         );
     }
 
@@ -714,7 +943,7 @@ mod tests {
         let entry = claude_usage_from_line(line.as_bytes()).unwrap();
         assert_eq!(entry.usage.total_tokens(), 125);
         assert_eq!(entry.usage.cached_input_tokens, 40);
-        assert_eq!(entry.usage.estimated_api_value_usd(), 0.0125);
+        assert_eq!(entry.usage.estimated_api_value_usd(), Some(0.0125));
         assert!(entry.has_speed);
     }
 
@@ -741,10 +970,22 @@ mod tests {
             ..original.clone()
         };
         let cache = ClaudeUsageCache {
-            version: CACHE_VERSION,
+            version: CLAUDE_CACHE_VERSION,
             files: BTreeMap::from([
-                ("a.jsonl".into(), CachedClaudeSessionFile { offset: 0, entries: vec![original] }),
-                ("b.jsonl".into(), CachedClaudeSessionFile { offset: 0, entries: vec![replay] }),
+                (
+                    "a.jsonl".into(),
+                    CachedClaudeSessionFile {
+                        offset: 0,
+                        entries: vec![original],
+                    },
+                ),
+                (
+                    "b.jsonl".into(),
+                    CachedClaudeSessionFile {
+                        offset: 0,
+                        entries: vec![replay],
+                    },
+                ),
             ]),
         };
         assert_eq!(deduplicate_claude_entries(&cache).len(), 1);

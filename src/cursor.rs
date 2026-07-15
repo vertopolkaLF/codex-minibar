@@ -26,7 +26,7 @@ const CURSOR_CLIENT_ID: &str = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB";
 const ACCESS_TOKEN_KEY: &str = "cursorAuth/accessToken";
 const REFRESH_TOKEN_KEY: &str = "cursorAuth/refreshToken";
 const USAGE_EXPORT_PATH: &str = "/api/dashboard/export-usage-events-csv";
-const USAGE_CACHE_VERSION: u8 = 1;
+const USAGE_CACHE_VERSION: u8 = 2;
 const USAGE_CACHE_TTL: ChronoDuration = ChronoDuration::minutes(10);
 
 /// Detect the Cursor desktop application from its local installation or its
@@ -241,6 +241,7 @@ fn usage_cache_path() -> Result<PathBuf> {
 
 fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageStatistics> {
     const DATE: &str = "Date";
+    const MODEL: &str = "Model";
     const CACHE_WRITE: &str = "Input (w/ Cache Write)";
     const INPUT: &str = "Input (w/o Cache Write)";
     const CACHE_READ: &str = "Cache Read";
@@ -253,6 +254,7 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
     let column = |name: &str| headers.iter().position(|header| header == name)
         .with_context(|| format!("Cursor usage export is missing {name}"));
     let date_column = column(DATE)?;
+    let model_column = column(MODEL)?;
     let cache_write_column = column(CACHE_WRITE)?;
     let input_column = column(INPUT)?;
     let cache_read_column = column(CACHE_READ)?;
@@ -262,6 +264,7 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
     for row in reader.records() {
         let Ok(row) = row else { continue };
         let Some(date) = row.get(date_column).and_then(cursor_export_date) else { continue };
+        let model = row.get(model_column).unwrap_or_default();
         let Some(cache_write) = row.get(cache_write_column).and_then(cursor_export_tokens) else { continue };
         let Some(input) = row.get(input_column).and_then(cursor_export_tokens) else { continue };
         let Some(cache_read) = row.get(cache_read_column).and_then(cursor_export_tokens) else { continue };
@@ -277,6 +280,10 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
         // Export rows are aggregates rather than individual requests; retain a
         // row count so the common usage card can still report activity.
         usage.requests = usage.requests.saturating_add(1);
+        usage.estimated_cost_microusd = usage
+            .estimated_cost_microusd
+            .saturating_add(cursor_estimated_cost_microusd(model, cache_write, input, cache_read, output));
+        usage.priced_requests = usage.priced_requests.saturating_add(1);
     }
 
     let daily = daily
@@ -284,6 +291,48 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
         .map(|(date, usage)| DailyTokenUsage { date, usage })
         .collect::<Vec<_>>();
     Ok(statistics_from_cached_days(&daily, history_days))
+}
+
+/// Cursor's export aggregates rows by model/day. It provides all four token
+/// buckets, so price each row before aggregation rather than applying one
+/// made-up rate to a whole month of mixed models.
+fn cursor_estimated_cost_microusd(
+    model: &str,
+    cache_write: u64,
+    input: u64,
+    cache_read: u64,
+    output: u64,
+) -> u64 {
+    let model = model.trim().to_ascii_lowercase();
+    let (input_rate, cache_read_rate, output_rate) = if model.contains("claude-opus") {
+        (15.0, 1.5, 75.0)
+    } else if model.contains("claude-sonnet") {
+        (3.0, 0.3, 15.0)
+    } else if model.contains("claude-haiku") {
+        (1.0, 0.1, 5.0)
+    } else if model.contains("gemini-2.5-pro") {
+        (1.25, 0.3125, 10.0)
+    } else if model.contains("gemini") {
+        (0.3, 0.03, 2.5)
+    } else if model.contains("gpt-5.4") {
+        (2.5, 0.25, 15.0)
+    } else if model.contains("gpt-5.3") || model.contains("gpt-5.2") {
+        (1.75, 0.175, 14.0)
+    } else if model.contains("gpt-5") {
+        (1.25, 0.125, 10.0)
+    } else if model.contains("composer") || model == "auto" {
+        (1.25, 0.25, 6.0)
+    } else {
+        // Cursor occasionally exports a new alias before its public price is
+        // published. Use the current Auto baseline so usage never vanishes.
+        (1.25, 0.25, 6.0)
+    };
+    let cost = (cache_write as f64 * input_rate * 1.25
+        + input as f64 * input_rate
+        + cache_read as f64 * cache_read_rate
+        + output as f64 * output_rate)
+        / 1_000_000.0;
+    (cost * 1_000_000.0).round().clamp(0.0, u64::MAX as f64) as u64
 }
 
 fn statistics_from_cached_days(days: &[DailyTokenUsage], history_days: u16) -> UsageStatistics {
