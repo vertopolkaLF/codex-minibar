@@ -129,6 +129,9 @@ define_handles! {
 /// controls and drives them on the WinUI thread.
 pub struct WinUIBackend {
     controls: RefCell<FxHashMap<ControlId, Handle>>,
+    /// One stable `ToolTip` host per control. Updating the attached property
+    /// replaces an open tooltip in WinUI, so update this host's content instead.
+    tooltips: RefCell<FxHashMap<ControlId, bindings::ToolTip>>,
     event_revokers: RefCell<FxHashMap<(ControlId, Event), Vec<windows_core::EventRevoker>>>,
     templated_selection_revokers: RefCell<FxHashMap<ControlId, windows_core::EventRevoker>>,
     /// Pointer-handler revokers (separate from `event_revokers` because
@@ -178,6 +181,7 @@ impl WinUIBackend {
     pub fn new() -> Self {
         Self {
             controls: RefCell::new(FxHashMap::default()),
+            tooltips: RefCell::new(FxHashMap::default()),
             event_revokers: RefCell::new(FxHashMap::default()),
             templated_selection_revokers: RefCell::new(FxHashMap::default()),
             pointer_revokers: RefCell::new(FxHashMap::default()),
@@ -2143,6 +2147,7 @@ impl Backend for WinUIBackend {
         self.templated_selection_revokers.borrow_mut().remove(&id);
         self.pointer_revokers.borrow_mut().remove(&id);
         self.drag_revokers.borrow_mut().remove(&id);
+        self.tooltips.borrow_mut().remove(&id);
         self.controls.borrow_mut().remove(&id);
         self.event_revokers
             .borrow_mut()
@@ -2771,40 +2776,53 @@ impl Backend for WinUIBackend {
             Err(_) => return,
         };
 
-        // Apply (or clear) the tooltip value. ToolTipService::SetToolTip
-        // accepts any IInspectable; plain strings are auto-wrapped.
-        let inspectable: Option<windows_core::IInspectable> = match tooltip {
-            None => None,
-            Some(t) => match &t.content {
-                TooltipContent::Text(s) => {
-                    let reference = windows_reference::IReference::from(s.as_str());
-                    Some(reference.into())
-                }
-                TooltipContent::Rich(elem) => {
-                    let tt = match bindings::ToolTip::new() {
-                        Ok(t) => t,
-                        Err(e) => {
-                            diag::warn(format_args!("ToolTip::new failed: {e:?}"));
-                            return;
-                        }
-                    };
-                    if let Some(ui) = mount_static_tooltip_element(elem)
-                        && let Ok(cc) = tt.cast::<bindings::IContentControl>()
-                    {
-                        diag::dropped(cc.SetContent(&ui));
-                    }
-                    Some(tt.into())
+        let Some(tooltip) = tooltip else {
+            self.tooltips.borrow_mut().remove(&id);
+            diag::dropped(bindings::ToolTipService::SetToolTip(&dep, None));
+            diag::dropped(bindings::ToolTipService::SetPlacement(
+                &dep,
+                bindings::PlacementMode::Top,
+            ));
+            return;
+        };
+
+        // Replacing the ToolTipService value dismisses an open tooltip. Keep a
+        // stable ToolTip host and replace only its content so live strings
+        // (such as a relative "last updated" timestamp) remain visible.
+        let (host, is_new) = match self.tooltips.borrow().get(&id).cloned() {
+            Some(host) => (host, false),
+            None => match bindings::ToolTip::new() {
+                Ok(host) => (host, true),
+                Err(e) => {
+                    diag::warn(format_args!("ToolTip::new failed: {e:?}"));
+                    return;
                 }
             },
         };
-        diag::dropped(bindings::ToolTipService::SetToolTip(
-            &dep,
-            inspectable.as_ref(),
-        ));
+        let content: windows_core::IInspectable = match &tooltip.content {
+            TooltipContent::Text(s) => windows_reference::IReference::from(s.as_str()).into(),
+            TooltipContent::Rich(elem) => match mount_static_tooltip_element(elem) {
+                Some(ui) => ui.into(),
+                None => return,
+            },
+        };
+        let Ok(content_control) = host.cast::<bindings::IContentControl>() else {
+            return;
+        };
+        diag::dropped(content_control.SetContent(&content));
+
+        if is_new {
+            let inspectable: windows_core::IInspectable = host.clone().into();
+            diag::dropped(bindings::ToolTipService::SetToolTip(
+                &dep,
+                Some(&inspectable),
+            ));
+            self.tooltips.borrow_mut().insert(id, host);
+        }
 
         // Fall back to Top so cleared placements actually reset the slot.
         let placement = tooltip
-            .and_then(|t| t.placement)
+            .placement
             .map_or(bindings::PlacementMode::Top, map_placement);
         diag::dropped(bindings::ToolTipService::SetPlacement(&dep, placement));
     }
