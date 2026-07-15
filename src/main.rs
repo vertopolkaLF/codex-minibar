@@ -54,6 +54,7 @@ fn run() -> Result<()> {
     if settings.check_for_updates {
         updates.check_async(true, settings.notifications.update_available);
     }
+    let onboarding_needed = !settings.onboarding_completed;
     let initial_height = popup::height_for(startup_error.as_deref())
         // Oversize the first frame so Auto content can measure without clipping;
         // SizeChanged then shrinks the HWND to the real content height.
@@ -84,6 +85,7 @@ fn run() -> Result<()> {
             // Unlike `App::render`, this builds the WinUI host without calling
             // `Window::Activate`. The tray popup is the sole code path that
             // makes its HWND visible.
+            let render_state = Arc::clone(&state);
             let host = Rc::new(ReactorHost::new_with_window_options(
                 "Codex Minibar",
                 Some(WindowSize {
@@ -100,10 +102,15 @@ fn run() -> Result<()> {
                     // cannot be raised reliably by AppWindow later.
                     max_height: Some(f64::from(FALLBACK_CLIENT_HEIGHT_LIMIT)),
                 },
-                Box::new(move |_: &(), cx: &mut RenderCx| app(cx, Arc::clone(&state))),
+                Box::new(move |_: &(), cx: &mut RenderCx| app(cx, Arc::clone(&render_state))),
                 |_| {},
             )?);
             popup::register_host(Rc::clone(&host));
+            if onboarding_needed {
+                // First launch configures providers before any worker has a
+                // chance to poll. The regular popup stays parked until Done.
+                codex_minibar::settings_window::open_onboarding(state.settings_tx.clone())?;
+            }
             let _host = Box::leak(Box::new(host));
             Ok(())
         })
