@@ -20,12 +20,15 @@ use std::{
     path::PathBuf,
     rc::Rc,
     sync::{Arc, mpsc::Sender},
+    thread,
     time::Duration,
 };
 use windows_reactor::*;
 
 const WINDOW_WIDTH: f64 = 760.0;
 const WINDOW_HEIGHT: f64 = 520.0;
+const SETTINGS_WINDOW_TITLE: &str = "Codex Minibar Settings";
+const ONBOARDING_WINDOW_TITLE: &str = "Welcome to Codex Minibar";
 
 thread_local! {
     static HOST: RefCell<Option<Rc<ReactorHost>>> = const { RefCell::new(None) };
@@ -116,7 +119,7 @@ pub fn open(
         // values after an earlier toggle, without depending on a stale snapshot.
         let view_settings = Arc::new(load_settings_for_window());
         let host = Rc::new(ReactorHost::new_with_window_options(
-            "Codex Minibar Settings",
+            SETTINGS_WINDOW_TITLE,
             Some(WindowSize {
                 width: WINDOW_WIDTH,
                 height: WINDOW_HEIGHT,
@@ -151,6 +154,52 @@ pub fn open(
     })
 }
 
+/// Opens the two-step first-launch flow. Choices stay local until Done so a
+/// dismissed onboarding window never half-configures provider workers.
+pub fn open_onboarding(settings_tx: Sender<Settings>) -> windows_core::Result<()> {
+    HOST.with(|slot| {
+        if is_open() {
+            if let Some(host) = slot.borrow().as_ref() {
+                return host.activate();
+            }
+        }
+        slot.borrow_mut().take();
+
+        let settings = Arc::new(load_settings_for_window());
+        let detected = detected_providers(&settings);
+        let host = Rc::new(ReactorHost::new_with_window_options(
+            ONBOARDING_WINDOW_TITLE,
+            Some(WindowSize {
+                width: WINDOW_WIDTH,
+                height: WINDOW_HEIGHT,
+            }),
+            InnerConstraints {
+                min_width: Some(560.0),
+                min_height: Some(400.0),
+                max_width: None,
+                max_height: None,
+            },
+            Box::new(move |_: &(), cx: &mut RenderCx| {
+                onboarding_render(cx, Arc::clone(&settings), detected.clone(), settings_tx.clone())
+            }),
+            |recon| recon.eager_templated_realization = true,
+        )?);
+        set_settings_window_icon();
+        install_settings_close_hide();
+        host.activate()?;
+        *slot.borrow_mut() = Some(host);
+        Ok(())
+    })
+}
+
+fn detected_providers(settings: &Settings) -> [bool; 3] {
+    [
+        crate::codex::is_installed(settings.codex_path.as_deref()),
+        crate::claude::is_installed(),
+        crate::cursor::is_installed(),
+    ]
+}
+
 /// On WM_CLOSE / SC_CLOSE, hide the window while it still looks correct, then
 /// let the default close path destroy it. Without this, content is dismantled
 /// while the HWND is still visible → black flash with OS chrome.
@@ -159,16 +208,12 @@ fn install_settings_close_hide() {
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, SC_CLOSE, SW_HIDE, ShowWindow, WM_CLOSE, WM_NCDESTROY, WM_SYSCOMMAND,
+        SC_CLOSE, SW_HIDE, ShowWindow, WM_CLOSE, WM_NCDESTROY, WM_SYSCOMMAND,
     };
 
     const SUBCLASS_ID: usize = 0xC0DE_5E77;
 
-    let title: Vec<u16> = "Codex Minibar Settings"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let hwnd = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
+    let hwnd = find_settings_window();
     if hwnd.is_null() {
         return;
     }
@@ -207,15 +252,11 @@ fn set_settings_window_icon() {
     use windows_sys::Win32::{
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
-            FindWindowW, ICON_BIG, ICON_SMALL, LoadIconW, SendMessageW, WM_SETICON,
+            ICON_BIG, ICON_SMALL, LoadIconW, SendMessageW, WM_SETICON,
         },
     };
 
-    let title: Vec<u16> = "Codex Minibar Settings"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let hwnd = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
+    let hwnd = find_settings_window();
     if hwnd.is_null() {
         return;
     }
@@ -236,15 +277,11 @@ fn set_settings_window_icon() {
 #[cfg(windows)]
 fn sync_settings_caption_button_theme(color_scheme: ColorScheme) {
     use windows_sys::Win32::{
-        Graphics::Dwm::DwmSetWindowAttribute, UI::WindowsAndMessaging::FindWindowW,
+        Graphics::Dwm::DwmSetWindowAttribute,
     };
 
     const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
-    let title: Vec<u16> = "Codex Minibar Settings"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let hwnd = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
+    let hwnd = find_settings_window();
     if hwnd.is_null() {
         return;
     }
@@ -258,6 +295,20 @@ fn sync_settings_caption_button_theme(color_scheme: ColorScheme) {
             size_of::<i32>() as u32,
         );
     }
+}
+
+#[cfg(windows)]
+fn find_settings_window() -> windows_sys::Win32::Foundation::HWND {
+    use windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW;
+
+    [SETTINGS_WINDOW_TITLE, ONBOARDING_WINDOW_TITLE]
+        .into_iter()
+        .map(|title| {
+            let title: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+            unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) }
+        })
+        .find(|hwnd| !hwnd.is_null())
+        .unwrap_or(std::ptr::null_mut())
 }
 
 #[cfg(not(windows))]
@@ -285,18 +336,292 @@ fn load_settings_for_window() -> Settings {
 /// navigates settings and changes popup-related options.
 #[cfg(windows)]
 pub(crate) fn is_open() -> bool {
-    use windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW;
-
-    let title: Vec<u16> = "Codex Minibar Settings"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    !unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) }.is_null()
+    !find_settings_window().is_null()
 }
 
 #[cfg(not(windows))]
 pub(crate) fn is_open() -> bool {
     false
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum OnboardingStep {
+    #[default]
+    Providers,
+    General,
+}
+
+/// Compact first-launch surface. It deliberately reuses the same setting
+/// controls as the full editor, but persists exactly once on Done.
+fn onboarding_render(
+    cx: &mut RenderCx,
+    settings: Arc<Settings>,
+    detected: [bool; 3],
+    settings_tx: Sender<Settings>,
+) -> Element {
+    let color_scheme = cx.use_color_scheme();
+    cx.use_effect(color_scheme, move || {
+        sync_settings_caption_button_theme(color_scheme);
+    });
+    let (step, set_step) = cx.use_state(OnboardingStep::default());
+    let (codex_enabled, set_codex_enabled) = cx.use_state(detected[0]);
+    let (claude_enabled, set_claude_enabled) = cx.use_state(detected[1]);
+    let (cursor_enabled, set_cursor_enabled) = cx.use_state(detected[2]);
+    let (start_at_login, set_start_at_login) = cx.use_state(settings.start_at_login);
+    let (automatic_activation, set_automatic_activation) =
+        cx.use_state(settings.automatic_activation);
+    let (limit_refresh_interval, set_limit_refresh_interval) =
+        cx.use_state(settings.limit_refresh_interval);
+    let (show_used_percentage, set_show_used_percentage) =
+        cx.use_state(settings.show_used_percentage);
+    let (show_usage_pace, set_show_usage_pace) = cx.use_state(settings.show_usage_pace);
+    let (show_banked_resets, set_show_banked_resets) =
+        cx.use_state(settings.show_banked_resets);
+    let (show_usage_stats, set_show_usage_stats) = cx.use_state(settings.show_usage_stats);
+    let (show_account_name, set_show_account_name) = cx.use_state(settings.show_account_name);
+    let (hovered_card_id, set_hovered_card_id) = cx.use_state(None::<String>);
+
+    let (heading, description, cards): (&str, &str, Vec<Element>) = match step {
+        OnboardingStep::Providers => (
+            "Choose providers",
+            "We found the providers installed on this PC and selected them for you. You can change these choices now or later in Settings.",
+            vec![
+                settings_toggle_card_with_description(
+                    "Codex",
+                    Some(if detected[0] { "Detected on this PC." } else { "Not detected — enable it if it is installed elsewhere." }),
+                    codex_enabled,
+                    move |value| set_codex_enabled.call(value),
+                    "onboarding-codex",
+                    &hovered_card_id,
+                    set_hovered_card_id.clone(),
+                ).with_key("onboarding-codex"),
+                settings_toggle_card_with_description(
+                    "Claude",
+                    Some(if detected[1] { "Detected on this PC." } else { "Not detected — enable it if it is installed elsewhere." }),
+                    claude_enabled,
+                    move |value| set_claude_enabled.call(value),
+                    "onboarding-claude",
+                    &hovered_card_id,
+                    set_hovered_card_id.clone(),
+                ).with_key("onboarding-claude"),
+                settings_toggle_card_with_description(
+                    "Cursor",
+                    Some(if detected[2] { "Detected on this PC." } else { "Not detected — enable it if it is installed elsewhere." }),
+                    cursor_enabled,
+                    move |value| set_cursor_enabled.call(value),
+                    "onboarding-cursor",
+                    &hovered_card_id,
+                    set_hovered_card_id.clone(),
+                ).with_key("onboarding-cursor"),
+            ],
+        ),
+        OnboardingStep::General => (
+            "General settings",
+            "Set the basics for Codex Minibar. Every option can be changed later in Settings.",
+            vec![
+                settings_section_heading("Startup").with_key("onboarding-startup-heading"),
+                settings_toggle_card_with_description(
+                    "Start at login",
+                    Some("Opens Codex Minibar automatically after you sign in."),
+                    start_at_login,
+                    move |value| set_start_at_login.call(value),
+                    "onboarding-start-at-login",
+                    &hovered_card_id,
+                    set_hovered_card_id.clone(),
+                ).with_key("onboarding-start-at-login"),
+                settings_section_heading("Features").with_key("onboarding-features-heading"),
+                settings_toggle_card_with_description(
+                    "Activate limits automatically",
+                    Some("Starts a supported provider's 5-hour window when needed."),
+                    automatic_activation,
+                    move |value| set_automatic_activation.call(value),
+                    "onboarding-automatic-activation",
+                    &hovered_card_id,
+                    set_hovered_card_id.clone(),
+                ).with_key("onboarding-automatic-activation"),
+                settings_control_card(
+                    "Refresh limits",
+                    Some("How often enabled providers fetch their current limits."),
+                    ComboBox::new(["30 seconds", "1 minute", "5 minutes", "10 minutes", "15 minutes"])
+                        .selected_index(limit_refresh_interval.index())
+                        .on_selection_changed(move |choice| {
+                            set_limit_refresh_interval.call(LimitRefreshInterval::from_index(choice));
+                        }),
+                    "onboarding-limit-refresh-interval",
+                    &hovered_card_id,
+                    set_hovered_card_id.clone(),
+                ).with_key("onboarding-limit-refresh-interval"),
+                settings_section_heading("Customization").with_key("onboarding-customization-heading"),
+                settings_toggle_card_with_description(
+                    "Replace amount left with amount used",
+                    Some("Shows consumed usage instead of the remaining amount."),
+                    show_used_percentage,
+                    move |value| set_show_used_percentage.call(value),
+                    "onboarding-show-used",
+                    &hovered_card_id,
+                    set_hovered_card_id.clone(),
+                ).with_key("onboarding-show-used"),
+                settings_toggle_card_with_description(
+                    "Show usage pace",
+                    Some("Shows expected use and whether consumption is on pace."),
+                    show_usage_pace,
+                    move |value| set_show_usage_pace.call(value),
+                    "onboarding-show-usage-pace",
+                    &hovered_card_id,
+                    set_hovered_card_id.clone(),
+                ).with_key("onboarding-show-usage-pace"),
+                settings_toggle_card_with_description(
+                    "Show banked resets",
+                    Some("Shows available banked reset credits in the popup."),
+                    show_banked_resets,
+                    move |value| set_show_banked_resets.call(value),
+                    "onboarding-show-banked-resets",
+                    &hovered_card_id,
+                    set_hovered_card_id.clone(),
+                ).with_key("onboarding-show-banked-resets"),
+                settings_toggle_card_with_description(
+                    "Show usage stats",
+                    Some("Shows local token activity and the usage chart in the popup."),
+                    show_usage_stats,
+                    move |value| set_show_usage_stats.call(value),
+                    "onboarding-show-usage-stats",
+                    &hovered_card_id,
+                    set_hovered_card_id.clone(),
+                ).with_key("onboarding-show-usage-stats"),
+                settings_toggle_card_with_description(
+                    "Show account name",
+                    Some("Shows your Codex name or Claude organization in the popup."),
+                    show_account_name,
+                    move |value| set_show_account_name.call(value),
+                    "onboarding-show-account-name",
+                    &hovered_card_id,
+                    set_hovered_card_id.clone(),
+                ).with_key("onboarding-show-account-name"),
+            ],
+        ),
+    };
+
+    let back_or_spacer: Element = match step {
+        OnboardingStep::Providers => border(Element::Empty).width(72.0).into(),
+        OnboardingStep::General => {
+            let set_step = set_step.clone();
+            Button::new("Back")
+                .on_click(move || set_step.call(OnboardingStep::Providers))
+                .into()
+        }
+    };
+    let action: Element = match step {
+        OnboardingStep::Providers => {
+            let set_step = set_step.clone();
+            Button::new("Continue")
+                .accent()
+                .on_click(move || set_step.call(OnboardingStep::General))
+                .into()
+        }
+        OnboardingStep::General => {
+            let settings_tx = settings_tx.clone();
+            let settings = Arc::clone(&settings);
+            Button::new("Done")
+                .accent()
+                .on_click(move || {
+                    let mut completed = (*settings).clone();
+                    completed.onboarding_completed = true;
+                    completed.providers.codex_enabled = codex_enabled;
+                    completed.providers.claude_enabled = claude_enabled;
+                    completed.providers.cursor_enabled = cursor_enabled;
+                    completed.start_at_login = start_at_login;
+                    completed.automatic_activation = automatic_activation;
+                    completed.limit_refresh_interval = limit_refresh_interval;
+                    completed.show_used_percentage = show_used_percentage;
+                    completed.show_usage_pace = show_usage_pace;
+                    completed.show_banked_resets = show_banked_resets;
+                    completed.show_usage_stats = show_usage_stats;
+                    completed.show_account_name = show_account_name;
+                    if let Err(error) = replace_settings(settings_tx.clone(), completed) {
+                        eprintln!("failed to complete onboarding: {error:#}");
+                        return;
+                    }
+                    // The popup host shares this UI thread. Prepare it before
+                    // dismissing onboarding so Done always lands on the popup.
+                    if crate::popup::prepare_show_on_ui_thread() {
+                        crate::popup::show_near_cursor();
+                    }
+                    close_open_window();
+                })
+                .into()
+        }
+    };
+
+    let content = scroll_viewer(
+        vstack((
+            text_block(heading).font_size(28.0).font_weight(600),
+            text_block(description).font_size(14.0).opacity(0.72).wrap(),
+            vstack(cards).spacing(10.0),
+        ))
+        .spacing(16.0)
+        .padding(Thickness { left: 32.0, top: 28.0, right: 32.0, bottom: 20.0 })
+        .horizontal_alignment(HorizontalAlignment::Stretch),
+    )
+    .horizontal_scroll_bar_visibility(ScrollBarVisibility::Disabled)
+    .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
+    .grid_row(0);
+    let footer = border(
+        hstack((back_or_spacer, action))
+            .spacing(8.0)
+            .horizontal_alignment(HorizontalAlignment::Right),
+    )
+    .padding(Thickness { left: 32.0, top: 14.0, right: 32.0, bottom: 18.0 })
+    .border_thickness(Thickness { left: 0.0, top: 1.0, right: 0.0, bottom: 0.0 })
+    .border_brush(ThemeRef::CardStroke)
+    .grid_row(1);
+    let title_bar = TitleBar::new(ONBOARDING_WINDOW_TITLE)
+        .back_button_visible(false)
+        .pane_toggle_button_visible(false)
+        .tall(true);
+    let body = grid((content, footer))
+        .rows([GridLength::Star(1.0), GridLength::Auto])
+        .columns([GridLength::Star(1.0)])
+        .background(ThemeRef::LayerFill)
+        .grid_row(1);
+    grid((title_bar.grid_row(0), body))
+        .rows([GridLength::Auto, GridLength::Star(1.0)])
+        .columns([GridLength::Star(1.0)])
+        .background(ThemeRef::LayerFill)
+        .into()
+}
+
+#[cfg(windows)]
+fn close_open_window() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+    let hwnd = find_settings_window();
+    if !hwnd.is_null() {
+        unsafe {
+            let _ = PostMessageW(hwnd, WM_CLOSE, 0, 0);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn close_open_window() {}
+
+/// Resetting returns to the same first-launch path as a new install. Wait for
+/// the current native host to close before creating the onboarding host so the
+/// two settings surfaces can never overlap or fight over the host slot.
+fn restart_onboarding_after_reset(settings_tx: Sender<Settings>, ui_dispatcher: UiMarshaller) {
+    close_open_window();
+    thread::spawn(move || {
+        for _ in 0..20 {
+            if !is_open() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        ui_dispatcher.dispatch(move || {
+            if let Err(error) = open_onboarding(settings_tx) {
+                eprintln!("failed to reopen onboarding after settings reset: {error:?}");
+            }
+        });
+    });
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -342,6 +667,7 @@ pub fn render(
     updates: Arc<UpdateController>,
 ) -> Element {
     let color_scheme = cx.use_color_scheme();
+    let ui_dispatcher = cx.use_ui_marshaller();
     cx.use_effect(color_scheme, move || {
         sync_settings_caption_button_theme(color_scheme);
     });
@@ -528,6 +854,7 @@ pub fn render(
             set_check_for_updates,
             set_notify_on_update,
             settings_tx.clone(),
+            ui_dispatcher.clone(),
             updates.clone(),
         ))
         .padding(Thickness {
@@ -703,6 +1030,7 @@ fn tab_content(
     set_check_for_updates: SetState<bool>,
     set_notify_on_update: SetState<bool>,
     settings_tx: Sender<Settings>,
+    ui_dispatcher: UiMarshaller,
     updates: Arc<UpdateController>,
 ) -> Element {
     let apply_codex_enabled = settings_tx.clone();
@@ -1169,6 +1497,7 @@ fn tab_content(
                 notify_on_update: set_notify_on_update,
             };
             let reset_state = import_state.clone();
+            let reset_dispatcher = ui_dispatcher.clone();
             (
             "Advanced",
             vec![
@@ -1221,6 +1550,10 @@ fn tab_content(
                             notifications::show("Settings reset failed", &format!("{error:#}"));
                         } else {
                             reset_state.apply(&settings);
+                            restart_onboarding_after_reset(
+                                apply_settings_reset.clone(),
+                                reset_dispatcher.clone(),
+                            );
                         }
                     },
                     "advanced-reset",

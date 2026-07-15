@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 12;
+pub const SETTINGS_VERSION: u32 = 13;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -72,7 +72,9 @@ pub struct ProviderSettings {
 impl Default for ProviderSettings {
     fn default() -> Self {
         Self {
-            codex_enabled: true,
+            // A new installation chooses providers during onboarding. Existing
+            // settings files are migrated with their established choices.
+            codex_enabled: false,
             claude_enabled: false,
             cursor_enabled: false,
         }
@@ -215,6 +217,10 @@ impl Default for NotificationSettings {
 #[serde(default)]
 pub struct Settings {
     pub version: u32,
+    /// False only while a brand-new installation is still in the first-launch
+    /// flow. Keeping this persisted makes onboarding resilient to a close or
+    /// reboot between its two pages.
+    pub onboarding_completed: bool,
     pub providers: ProviderSettings,
     pub use_colored_provider_icons: bool,
     pub replace_chatgpt_logo_with_codex: bool,
@@ -237,6 +243,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             version: SETTINGS_VERSION,
+            onboarding_completed: false,
             providers: ProviderSettings::default(),
             use_colored_provider_icons: false,
             replace_chatgpt_logo_with_codex: false,
@@ -646,6 +653,20 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.remove("hide_plan_credits");
                 root.insert("version".into(), toml::Value::Integer(12));
                 version = 12;
+            }
+            12 => {
+                // Do not surprise existing users with onboarding after an
+                // update. Only settings files created by this version start
+                // with onboarding incomplete.
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .insert("onboarding_completed".into(), toml::Value::Boolean(true));
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .insert("version".into(), toml::Value::Integer(13));
+                version = 13;
             }
             unsupported => anyhow::bail!("no migration path from settings version {unsupported}"),
         }

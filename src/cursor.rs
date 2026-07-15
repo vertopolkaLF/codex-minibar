@@ -29,6 +29,32 @@ const USAGE_EXPORT_PATH: &str = "/api/dashboard/export-usage-events-csv";
 const USAGE_CACHE_VERSION: u8 = 1;
 const USAGE_CACHE_TTL: ChronoDuration = ChronoDuration::minutes(10);
 
+/// Detect the Cursor desktop application from its local installation or its
+/// VS Code state database. No database is opened and no network call is made.
+pub fn is_installed() -> bool {
+    if cursor_state_db().is_file() {
+        return true;
+    }
+
+    #[cfg(windows)]
+    {
+        let local_app_data = env::var_os("LOCALAPPDATA").map(PathBuf::from);
+        let program_files = env::var_os("ProgramFiles").map(PathBuf::from);
+        return local_app_data
+            .into_iter()
+            .map(|path| path.join("Programs/Cursor/Cursor.exe"))
+            .chain(
+                program_files
+                    .into_iter()
+                    .map(|path| path.join("Cursor/Cursor.exe")),
+            )
+            .any(|path| path.is_file());
+    }
+
+    #[cfg(not(windows))]
+    false
+}
+
 pub struct CursorClient {
     agent: ureq::Agent,
 }

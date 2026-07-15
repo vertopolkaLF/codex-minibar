@@ -434,6 +434,13 @@ pub fn first_available(explicit: Option<&Path>) -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("Codex executable was not found"))
 }
 
+/// Returns whether a local Codex CLI or the Codex desktop-app CLI bridge is
+/// present. This is intentionally filesystem-only so onboarding never starts
+/// a provider process merely to identify an installation.
+pub fn is_installed(explicit: Option<&Path>) -> bool {
+    first_available(explicit).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

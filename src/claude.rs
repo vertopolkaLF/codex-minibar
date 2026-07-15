@@ -28,6 +28,38 @@ const PROFILE_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 60);
 pub const ACTIVATION_MODEL: &str = "haiku";
 pub const ACTIVATION_PROMPT: &str = "reply with letter a";
 
+/// Detect a local Claude Code installation without starting it. A signed-in
+/// credentials directory is also a useful signal for portable/npm installs
+/// whose launcher is no longer present on PATH in the current process.
+pub fn is_installed() -> bool {
+    let credentials_present = BaseDirs::new().is_some_and(|directories| {
+        directories
+            .home_dir()
+            .join(".claude")
+            .join(".credentials.json")
+            .is_file()
+    });
+    credentials_present || path_contains_executable("claude")
+}
+
+fn path_contains_executable(name: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|directory| {
+        #[cfg(windows)]
+        {
+            [".exe", ".cmd", ".ps1", ".bat"]
+                .into_iter()
+                .any(|extension| directory.join(format!("{name}{extension}")).is_file())
+        }
+        #[cfg(not(windows))]
+        {
+            directory.join(name).is_file()
+        }
+    })
+}
+
 /// Starts Claude Code's five-hour window with the smallest supported prompt.
 pub struct ClaudeActivator {
     timeout: Duration,
