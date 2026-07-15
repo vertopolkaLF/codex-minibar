@@ -596,9 +596,50 @@ html.is-theme-transitioning .theme-toggle-icon {
 .popup-body {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 21px 21px 16px;
+  gap: 10px;
+  padding: 18px 21px 14px;
   align-content: start;
+}
+
+.popup-provider {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.popup-provider-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 22px;
+  padding: 0 4px;
+}
+
+.popup-provider:not(:first-child) .popup-provider-head {
+  margin-top: 4px;
+}
+
+.popup-provider-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  color: #d0d0d0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.popup-provider-title em {
+  color: #8d8d90;
+  font-style: normal;
+  font-weight: 400;
+}
+
+.popup-provider-account {
+  color: #8d8d90;
+  font-size: 13px;
+  line-height: 18px;
 }
 
 .popup-card {
@@ -618,74 +659,6 @@ html.is-theme-transitioning .theme-toggle-icon {
   height: 66px;
   grid-template-rows: 42px;
   padding: 12px 16px;
-}
-
-.popup-usage-card {
-  height: 194px;
-  display: block;
-  padding: 15px 15px 14px;
-}
-
-.popup-usage-summary {
-  display: grid;
-  grid-template-columns: 1fr 1.15fr;
-  gap: 1rem;
-}
-
-.popup-usage-summary div {
-  display: grid;
-  gap: 1px;
-}
-
-.popup-usage-summary span,
-.popup-usage-meta {
-  color: #ababaf;
-  font-size: 15px;
-  font-weight: 400;
-  line-height: 19px;
-}
-
-.popup-usage-summary strong {
-  color: #f1f1f1;
-  font-size: 18px;
-  font-weight: 600;
-  line-height: 23px;
-}
-
-.popup-usage-summary em {
-  color: #a7a7aa;
-  font-size: 15px;
-  font-style: normal;
-  font-weight: 400;
-}
-
-.popup-usage-chart {
-  display: flex;
-  align-items: end;
-  gap: 4px;
-  height: 84px;
-  margin-top: 8px;
-}
-
-.popup-usage-chart i {
-  display: block;
-  flex: 1 1 0;
-  min-width: 0;
-  height: var(--h);
-  border-radius: 3px 3px 1px 1px;
-  background: #fb9a44;
-}
-
-.popup-usage-meta {
-  margin-top: 8px;
-  white-space: nowrap;
-}
-
-.popup-card-title {
-  font-size: 15px;
-  font-weight: 400;
-  line-height: 19px;
-  color: #d0d0d0;
 }
 
 .popup-banked-details {
@@ -721,7 +694,6 @@ html.is-theme-transitioning .theme-toggle-icon {
   font-weight: 400;
 }
 
-.popup-banked-amount span,
 .popup-banked-expiry span {
   font-size: 15px;
   line-height: 19px;
@@ -832,28 +804,69 @@ html.is-theme-transitioning .theme-toggle-icon {
   align-items: center;
   justify-content: space-between;
   gap: 15px;
-  padding: 18px 20px 20px 30px;
+  padding: 14px 16px 16px 14px;
   border-top: 1px solid #212124;
   background: #0005;
 }
 
-.popup-brand {
-  display: grid;
-  gap: 0.1rem;
+.popup-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
-.popup-brand strong {
-  font-size: 18px;
-  font-weight: 600;
-  line-height: 22px;
-  letter-spacing: 0;
+.popup-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  height: 45px;
+  padding: 0 8px;
+  border-radius: 5px;
   color: #d0d0d0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
 }
 
-.popup-brand span {
-  font-size: 15px;
-  line-height: 19px;
-  color: #8d8d90;
+.popup-tab.is-active {
+  color: #fb9a44;
+}
+
+.popup-tab.is-active::after {
+  content: "";
+  position: absolute;
+  left: 9px;
+  right: 9px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: #fb9a44;
+}
+
+.popup-tab-icon {
+  min-width: 45px;
+  width: 45px;
+  padding: 0;
+}
+
+.popup-tab-icon img {
+  width: 18px;
+  height: 18px;
+}
+
+.popup-tab-chatgpt {
+  filter: invert(62%) sepia(48%) saturate(749%) hue-rotate(192deg) brightness(103%) contrast(101%);
+}
+
+.popup-tab-claude {
+  /* Claude SVG already ships with #d97757 fill. */
+  filter: none;
+}
+
+.popup-tab-cursor {
+  filter: invert(1);
 }
 
 .popup-actions {
@@ -1158,21 +1171,19 @@ html[data-theme="light"] .popup-card {
   border-color: #e4dfe1;
 }
 
+html[data-theme="light"] .popup-provider-title,
 html[data-theme="light"] .popup-card-head span:first-child,
 html[data-theme="light"] .popup-banked-expiry strong,
-html[data-theme="light"] .popup-usage-summary strong,
-html[data-theme="light"] .popup-reset {
+html[data-theme="light"] .popup-reset,
+html[data-theme="light"] .popup-tab {
   color: #202124;
 }
 
+html[data-theme="light"] .popup-provider-title em,
+html[data-theme="light"] .popup-provider-account,
 html[data-theme="light"] .popup-card-head .muted,
 html[data-theme="light"] .popup-card-foot .muted,
-html[data-theme="light"] .popup-banked-amount span,
-html[data-theme="light"] .popup-banked-expiry span,
-html[data-theme="light"] .popup-usage-summary span,
-html[data-theme="light"] .popup-usage-summary em,
-html[data-theme="light"] .popup-usage-meta,
-html[data-theme="light"] .popup-brand span {
+html[data-theme="light"] .popup-banked-expiry span {
   color: #878286;
 }
 
@@ -1189,7 +1200,15 @@ html[data-theme="light"] .popup-footer {
   background: rgba(233, 230, 230, 0.9);
 }
 
-html[data-theme="light"] .popup-brand strong,
+html[data-theme="light"] .popup-tab.is-active {
+  color: #fb9a44;
+}
+
+html[data-theme="light"] .popup-tab-cursor {
+  filter: none;
+  opacity: 0.75;
+}
+
 html[data-theme="light"] .popup-action {
   color: #555256;
 }
