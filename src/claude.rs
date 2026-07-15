@@ -1,4 +1,8 @@
-use std::{fs, time::Duration};
+use std::{
+    fs,
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
@@ -39,7 +43,14 @@ impl ClaudeClient {
             bail!("Claude login has expired. Run `claude` to sign in again.");
         }
 
-        let agent = ureq::AgentBuilder::new().timeout(self.timeout).build();
+        // `ureq` is built without its default Rustls backend. Configure the
+        // native TLS adapter explicitly so Claude's HTTPS endpoint uses the
+        // Windows certificate store (Schannel), as the updater already does.
+        let tls = ureq::native_tls::TlsConnector::new().context("create Windows TLS connector")?;
+        let agent = ureq::AgentBuilder::new()
+            .timeout(self.timeout)
+            .tls_connector(Arc::new(tls))
+            .build();
         let response = agent
             .get(OAUTH_USAGE_URL)
             .set("Authorization", &format!("Bearer {}", credentials.access_token))
