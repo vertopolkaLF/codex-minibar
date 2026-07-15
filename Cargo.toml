@@ -12,6 +12,7 @@ categories = ["command-line-utilities", "gui"]
 
 [dependencies]
 anyhow = "1"
+base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 directories = "6"
 font8x8 = "0.3"

@@ -8,7 +8,10 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{TimeZone, Utc};
+use directories::BaseDirs;
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::limits::{
@@ -146,7 +149,13 @@ impl CodexClient {
         )?;
         let result = self.exchange(&mut child);
         terminate(&mut child);
-        result
+        result.map(|mut limits| {
+            // The account name is a display-only claim from the locally
+            // authenticated Codex session. Never let a missing or malformed
+            // identity token make otherwise valid quota data unavailable.
+            limits.account_name = local_account_name();
+            limits
+        })
     }
 
     fn exchange(&self, child: &mut Child) -> Result<RateLimits> {
@@ -183,6 +192,44 @@ impl CodexClient {
         let response = wait_for_response(&receiver, 2, self.timeout)?;
         parse_rate_limits(&response, Utc::now())
     }
+}
+
+#[derive(Deserialize)]
+struct AuthFile {
+    tokens: Option<AuthTokens>,
+}
+
+#[derive(Deserialize)]
+struct AuthTokens {
+    id_token: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct IdTokenClaims {
+    name: Option<String>,
+    email: Option<String>,
+}
+
+fn local_account_name() -> Option<String> {
+    let home = BaseDirs::new()?.home_dir().to_path_buf();
+    let contents = std::fs::read(home.join(".codex").join("auth.json")).ok()?;
+    let auth: AuthFile = serde_json::from_slice(&contents).ok()?;
+    let token = auth.tokens?.id_token?;
+    account_name_from_id_token(&token)
+}
+
+fn account_name_from_id_token(token: &str) -> Option<String> {
+    let payload = token.split('.').nth(1)?;
+    let decoded = URL_SAFE_NO_PAD.decode(payload).ok()?;
+    let claims: IdTokenClaims = serde_json::from_slice(&decoded).ok()?;
+    non_empty(claims.name).or_else(|| non_empty(claims.email))
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let value = value.trim();
+        (!value.is_empty()).then(|| value.to_owned())
+    })
 }
 
 fn send_request(stdin: &mut impl Write, id: u64, method: &str, params: Value) -> Result<()> {
@@ -228,6 +275,7 @@ pub fn parse_rate_limits(
         primary: parse_window(limits.get("primary")),
         secondary: parse_window(limits.get("secondary")),
         sampled_at,
+        account_name: None,
         plan_type: limits
             .get("planType")
             .and_then(Value::as_str)
@@ -429,6 +477,25 @@ mod tests {
         let value = json!({"result": {"rateLimits": {"primary": {"usedPercent": 999}}}});
         let parsed = parse_rate_limits(&value, Utc::now()).unwrap();
         assert_eq!(parsed.primary.used_percent, Some(100));
+    }
+
+    #[test]
+    fn account_name_prefers_name_and_falls_back_to_email() {
+        let token = |claims: &str| {
+            format!(
+                "header.{}.signature",
+                URL_SAFE_NO_PAD.encode(claims.as_bytes())
+            )
+        };
+
+        assert_eq!(
+            account_name_from_id_token(&token(r#"{"name":"Ada Lovelace","email":"ada@example.com"}"#)),
+            Some("Ada Lovelace".into())
+        );
+        assert_eq!(
+            account_name_from_id_token(&token(r#"{"name":"  ","email":"ada@example.com"}"#)),
+            Some("ada@example.com".into())
+        );
     }
 
     #[test]

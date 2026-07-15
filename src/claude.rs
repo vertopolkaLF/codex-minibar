@@ -20,8 +20,10 @@ use crate::{
 };
 
 const OAUTH_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+const OAUTH_PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 const OAUTH_BETA: &str = "oauth-2025-04-20";
 const FALLBACK_CLAUDE_CODE_VERSION: &str = "2.1.0";
+const PROFILE_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 60);
 pub const ACTIVATION_MODEL: &str = "haiku";
 pub const ACTIVATION_PROMPT: &str = "reply with letter a";
 
@@ -97,12 +99,48 @@ fn terminate(child: &mut Child) {
 /// used by CodexBar. Credentials stay in Claude's own `.credentials.json`.
 pub struct ClaudeClient {
     timeout: Duration,
+    profile_cache: ClaudeProfileCache,
+}
+
+struct ClaudeProfileCache {
+    account_name: Option<String>,
+    checked_at: Option<Instant>,
+    reset_schedule: Vec<(String, Option<DateTime<Utc>>)>,
+}
+
+impl Default for ClaudeProfileCache {
+    fn default() -> Self {
+        Self {
+            account_name: None,
+            checked_at: None,
+            reset_schedule: Vec::new(),
+        }
+    }
+}
+
+impl ClaudeProfileCache {
+    fn needs_refresh(&self, reset_schedule: &[(String, Option<DateTime<Utc>>)]) -> bool {
+        self.checked_at
+            .is_none_or(|checked_at| checked_at.elapsed() >= PROFILE_REFRESH_INTERVAL)
+            || self.reset_schedule != reset_schedule
+    }
+
+    fn record(
+        &mut self,
+        account_name: Option<String>,
+        reset_schedule: Vec<(String, Option<DateTime<Utc>>)>,
+    ) {
+        self.account_name = account_name;
+        self.checked_at = Some(Instant::now());
+        self.reset_schedule = reset_schedule;
+    }
 }
 
 impl ClaudeClient {
     pub fn new() -> Self {
         Self {
             timeout: Duration::from_secs(15),
+            profile_cache: ClaudeProfileCache::default(),
         }
     }
 
@@ -111,7 +149,7 @@ impl ClaudeClient {
         self
     }
 
-    pub fn read_rate_limits(&self) -> Result<RateLimits> {
+    pub fn read_rate_limits(&mut self) -> Result<RateLimits> {
         let credentials = load_credentials()?;
         if credentials.expires_at.is_some_and(|expires_at| expires_at <= Utc::now()) {
             bail!("Claude login has expired. Run `claude` to sign in again.");
@@ -149,7 +187,25 @@ impl ClaudeClient {
             }
             Err(error) => return Err(error).context("request Claude OAuth usage"),
         };
-        parse_usage_response(&body, Utc::now())
+        let mut limits = parse_usage_response(&body, Utc::now())?;
+        let reset_schedule = reset_schedule(&limits);
+        if self.profile_cache.needs_refresh(&reset_schedule) {
+            // Profile stays separate from quota reads. Cache it for 30 minutes
+            // and refresh immediately when any quota reset timestamp changes.
+            self.profile_cache.record(
+                fetch_account_name(&agent, &credentials.access_token)
+                    .ok()
+                    .flatten(),
+                reset_schedule,
+            );
+        }
+        // Newer usage responses omit organization_name, but older responses
+        // still expose it. The cached profile is authoritative whenever it
+        // provides an identity value.
+        if let Some(account_name) = self.profile_cache.account_name.clone() {
+            limits.account_name = Some(account_name);
+        }
+        Ok(limits)
     }
 }
 
@@ -163,6 +219,20 @@ impl LimitProvider for ClaudeClient {
     fn read_limits(&mut self) -> Result<RateLimits> {
         self.read_rate_limits()
     }
+}
+
+fn reset_schedule(limits: &RateLimits) -> Vec<(String, Option<DateTime<Utc>>)> {
+    let mut schedule = vec![
+        ("primary".into(), limits.primary.resets_at),
+        ("secondary".into(), limits.secondary.resets_at),
+    ];
+    schedule.extend(
+        limits
+            .additional_limits
+            .iter()
+            .map(|limit| (limit.id.clone(), limit.window.resets_at)),
+    );
+    schedule
 }
 
 impl UsageProvider for ClaudeClient {
@@ -225,6 +295,7 @@ fn load_credentials() -> Result<Credentials> {
 struct OAuthUsageResponse {
     five_hour: Option<OAuthUsageWindow>,
     seven_day: Option<OAuthUsageWindow>,
+    organization_name: Option<String>,
     #[serde(default)]
     limits: Vec<OAuthLimitEntry>,
     /// Claude regularly adds model- and feature-specific quota windows (for
@@ -232,6 +303,24 @@ struct OAuthUsageResponse {
     /// silently throwing newer limits away.
     #[serde(flatten)]
     additional_windows: BTreeMap<String, Value>,
+}
+
+#[derive(Deserialize)]
+struct OAuthProfileResponse {
+    account: Option<OAuthProfileAccount>,
+    organization: Option<OAuthProfileOrganization>,
+}
+
+#[derive(Deserialize)]
+struct OAuthProfileAccount {
+    full_name: Option<String>,
+    display_name: Option<String>,
+    email: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct OAuthProfileOrganization {
+    name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -291,10 +380,43 @@ pub fn parse_usage_response(response: &str, sampled_at: DateTime<Utc>) -> Result
         secondary,
         additional_limits,
         sampled_at,
+        account_name: non_empty(response.organization_name),
         plan_type: Some("Claude".into()),
         ..RateLimits::default()
     }
     .normalized(sampled_at))
+}
+
+fn fetch_account_name(agent: &ureq::Agent, access_token: &str) -> Result<Option<String>> {
+    let response = agent
+        .get(OAUTH_PROFILE_URL)
+        .set("Authorization", &format!("Bearer {access_token}"))
+        .set("Accept", "application/json")
+        .set("anthropic-beta", OAUTH_BETA)
+        .set(
+            "User-Agent",
+            &format!("claude-code/{FALLBACK_CLAUDE_CODE_VERSION}"),
+        )
+        .call()
+        .context("request Claude OAuth profile")?;
+    let body = response
+        .into_string()
+        .context("read Claude OAuth profile response")?;
+    parse_account_name(&body)
+}
+
+fn parse_account_name(response: &str) -> Result<Option<String>> {
+    let profile: OAuthProfileResponse =
+        serde_json::from_str(response).context("parse Claude OAuth profile")?;
+    let (person_name, email) = profile.account.map_or((None, None), |account| {
+        (
+            non_empty(account.full_name).or_else(|| non_empty(account.display_name)),
+            non_empty(account.email),
+        )
+    });
+    Ok(person_name
+        .or_else(|| profile.organization.and_then(|organization| non_empty(organization.name)))
+        .or(email))
 }
 
 /// The OAuth endpoint's current shape puts promotional/model-only weekly
@@ -443,6 +565,41 @@ mod tests {
     }
 
     #[test]
+    fn profile_name_falls_back_to_organization_then_email() {
+        let name = parse_account_name(
+            r#"{"account":{"full_name":"Ada Lovelace","email":"ada@example.com"},"organization":{"name":"Example Studio"}}"#,
+        )
+        .unwrap();
+        assert_eq!(name.as_deref(), Some("Ada Lovelace"));
+
+        let organization_name = parse_account_name(
+            r#"{"account":{"full_name":" ","email":"ada@example.com"},"organization":{"name":"Example Studio"}}"#,
+        )
+        .unwrap();
+        assert_eq!(organization_name.as_deref(), Some("Example Studio"));
+
+        let email = parse_account_name(r#"{"account":{"email":"ada@example.com"},"organization":{}}"#)
+            .unwrap();
+        assert_eq!(email.as_deref(), Some("ada@example.com"));
+    }
+
+    #[test]
+    fn profile_cache_refreshes_after_30_minutes_or_a_reset_change() {
+        let schedule = vec![("primary".into(), None), ("secondary".into(), None)];
+        let mut cache = ClaudeProfileCache::default();
+        assert!(cache.needs_refresh(&schedule));
+
+        cache.record(Some("Ada Lovelace".into()), schedule.clone());
+        assert!(!cache.needs_refresh(&schedule));
+
+        let changed_schedule = vec![("primary".into(), None), ("secondary".into(), Some(Utc::now()))];
+        assert!(cache.needs_refresh(&changed_schedule));
+
+        cache.checked_at = Some(Instant::now() - PROFILE_REFRESH_INTERVAL);
+        assert!(cache.needs_refresh(&schedule));
+    }
+
+    #[test]
     fn preserves_every_additional_claude_limit_including_fable() {
         let limits = parse_usage_response(
             r#"{"five_hour":{"utilization":12},"seven_day":{"utilization":30},"seven_day_opus":{"utilization":7},"limits":[{"kind":"weekly_scoped","group":"weekly","percent":42,"resets_at":"2026-07-21T00:00:00.000Z","scope":{"model":{"id":"claude/fable.5:promo","display_name":"Fable"}}},{"kind":"weekly_scoped","group":"weekly","percent":30,"scope":{"model":{"display_name":"All models"}}}],"organization_name":"example"}"#,
@@ -456,6 +613,7 @@ mod tests {
         assert_eq!(limits.additional_limits[0].window.used_percent, Some(42));
         assert_eq!(limits.additional_limits[0].window.duration_minutes, Some(10_080));
         assert_eq!(limits.additional_limits[1].title, "Opus");
+        assert_eq!(limits.account_name.as_deref(), Some("example"));
     }
 
     #[test]
