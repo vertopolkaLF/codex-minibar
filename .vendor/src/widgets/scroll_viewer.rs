@@ -34,7 +34,10 @@ impl Widget for ScrollViewer {
         generated::scroll_viewer_bindings(self)
     }
     fn children(&self) -> Children<'_> {
-        Children::PositionalSingle(&self.child)
+        // A popup can replace its measured body when providers or an error
+        // change. Preserve this native ScrollViewer, but honor the body's key
+        // so the old WinUI child is unmounted before the new one is inserted.
+        Children::Keyed(std::slice::from_ref(&*self.child))
     }
 }
 
