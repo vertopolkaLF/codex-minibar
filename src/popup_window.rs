@@ -394,6 +394,20 @@ fn provider_cards(
             Some(element.with_key(format!("{}-{}", provider.display_name(), section.key())))
         }),
     );
+    // Claude can return extra windows such as Fable or Opus. They are not a
+    // fixed set, so give each received window its own stable card rather than
+    // squeezing it into the generic weekly slot.
+    cards.extend(limits.additional_limits.iter().map(|limit| {
+        limit_card(
+            &limit.title,
+            &limit.window,
+            show_used_percentage,
+            show_usage_pace,
+            false,
+            color_scheme,
+        )
+        .with_key(format!("{}-additional-{}", provider.display_name(), limit.id))
+    }));
     cards
 }
 
@@ -2050,6 +2064,33 @@ mod tests {
             vec![PopupSection::Weekly, PopupSection::PlanCredits]
         );
         assert_unique_section_keys(&sections);
+    }
+
+    #[test]
+    fn provider_cards_include_each_additional_limit() {
+        let mut limits = plan_limits("plus");
+        limits.additional_limits.push(crate::limits::AdditionalLimit {
+            id: "seven_day_fable".into(),
+            title: "Fable".into(),
+            window: LimitWindow {
+                used_percent: Some(42),
+                ..Default::default()
+            },
+        });
+
+        let cards = provider_cards(
+            ProviderKind::Claude,
+            true,
+            &limits,
+            false,
+            true,
+            true,
+            true,
+            false,
+            ColorScheme::Dark,
+        );
+        // Heading + 5h + weekly + plan metadata + Fable.
+        assert_eq!(cards.len(), 5);
     }
 
     #[test]
