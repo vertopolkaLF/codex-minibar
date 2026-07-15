@@ -187,7 +187,6 @@ struct UiState {
     show_usage_pace: bool,
     show_banked_resets: bool,
     show_usage_stats: bool,
-    hide_plan_credits: bool,
     show_account_name: bool,
     codex_enabled: bool,
     claude_enabled: bool,
@@ -250,7 +249,6 @@ impl Default for UiState {
             show_usage_pace: true,
             show_banked_resets: true,
             show_usage_stats: true,
-            hide_plan_credits: false,
             show_account_name: false,
             codex_enabled: true,
             claude_enabled: false,
@@ -296,7 +294,7 @@ enum PopupSection {
     Weekly,
     UsageStatistics,
     BankedResets,
-    PlanCredits,
+    Credits,
 }
 
 impl PopupSection {
@@ -308,7 +306,7 @@ impl PopupSection {
             Self::Weekly => "weekly",
             Self::UsageStatistics => "usage-statistics",
             Self::BankedResets => "banked-resets",
-            Self::PlanCredits => "plan-credits",
+            Self::Credits => "credits",
         }
     }
 }
@@ -317,7 +315,6 @@ fn popup_sections(
     limits: &RateLimits,
     show_banked_resets: bool,
     show_usage_stats: bool,
-    hide_plan_credits: bool,
     has_error: bool,
 ) -> Vec<PopupSection> {
     let mut sections = Vec::with_capacity(6);
@@ -338,8 +335,8 @@ fn popup_sections(
     if show_usage_stats && limits.usage.has_data() {
         sections.push(PopupSection::UsageStatistics);
     }
-    if !hide_plan_credits {
-        sections.push(PopupSection::PlanCredits);
+    if credits_display_value(limits).is_some() {
+        sections.push(PopupSection::Credits);
     }
     sections
 }
@@ -352,7 +349,6 @@ fn provider_cards(
     show_usage_pace: bool,
     show_banked_resets: bool,
     show_usage_stats: bool,
-    hide_plan_credits: bool,
     show_account_name: bool,
     color_scheme: ColorScheme,
 ) -> Vec<Element> {
@@ -378,10 +374,26 @@ fn provider_cards(
     };
     let mut cards: Vec<Element> = vec![
         grid((
-            body_strong(provider.display_name())
-                .foreground(ThemeRef::SecondaryText)
-                .vertical_alignment(VerticalAlignment::Center)
-                .grid_column(0),
+            hstack((
+                body_strong(provider.display_name())
+                    .foreground(ThemeRef::SecondaryText)
+                    .vertical_alignment(VerticalAlignment::Center),
+                limits
+                    .plan_type
+                    .as_deref()
+                    .filter(|plan| !plan.trim().is_empty())
+                    .map(|plan| {
+                        text_block(capitalize_plan_name(plan))
+                            .font_weight(400)
+                            .foreground(ThemeRef::TertiaryText)
+                            .vertical_alignment(VerticalAlignment::Center)
+                            .into()
+                    })
+                    .unwrap_or(Element::Empty),
+            ))
+            .spacing(4.0)
+            .vertical_alignment(VerticalAlignment::Center)
+            .grid_column(0),
             account_heading,
         ))
         .columns([GridLength::Star(1.0), GridLength::Auto])
@@ -406,13 +418,15 @@ fn provider_cards(
             limits,
             show_banked_resets,
             show_usage_stats,
-            hide_plan_credits,
             false,
         )
         .into_iter()
-        // Usage belongs at the end of the provider group, after dynamic
-        // provider-specific limits such as Claude Fable or Opus.
-        .filter(|section| !matches!(section, PopupSection::UsageStatistics))
+        .filter(|section| {
+            matches!(
+                section,
+                PopupSection::Monthly | PopupSection::FiveHour | PopupSection::Weekly
+            )
+        })
         .filter_map(|section| {
             let element: Element = match section {
                 PopupSection::Monthly => limit_card(
@@ -439,23 +453,17 @@ fn provider_cards(
                     false,
                     color_scheme,
                 ),
-                PopupSection::UsageStatistics => usage_statistics_card(provider, limits),
-                PopupSection::BankedResets => reset_credits_card(limits),
-                PopupSection::PlanCredits => vstack((
-                    Shape::rectangle().height(4.0),
-                    meta_row(limits),
-                ))
-                .spacing(0.0)
-                .into(),
                 PopupSection::Error => return None,
+                PopupSection::UsageStatistics
+                | PopupSection::BankedResets
+                | PopupSection::Credits => return None,
             };
             Some(element.with_key(format!("{}-{}", provider.display_name(), section.key())))
         }),
     );
-    // Claude can return extra windows such as Fable or Opus. They are not a
-    // fixed set, so give each received window its own stable card rather than
-    // squeezing it into the generic weekly slot.
-    cards.extend(limits.additional_limits.iter().map(|limit| {
+    // Claude can return extra windows such as Fable or Opus. They belong with
+    // the ordinary limit cards, before banked resets, statistics, or credits.
+    let additional_limits = limits.additional_limits.iter().map(|limit| {
         limit_card(
             &limit.title,
             &limit.window,
@@ -465,12 +473,23 @@ fn provider_cards(
             color_scheme,
         )
         .with_key(format!("{}-additional-{}", provider.display_name(), limit.id))
-    }));
+    });
+    cards.extend(additional_limits);
+    // Local statistics remain after every rate-limit window.
+    if show_banked_resets && limits.available_reset_count() > 0 {
+        cards.push(
+            reset_credits_card(limits)
+                .with_key(format!("{}-banked-resets", provider.display_name())),
+        );
+    }
     if has_usage_statistics {
         cards.push(
             usage_statistics_card(provider, limits)
                 .with_key(format!("{}-usage-statistics", provider.display_name())),
         );
+    }
+    if credits_display_value(limits).is_some() {
+        cards.push(credits_card(limits).with_key(format!("{}-credits", provider.display_name())));
     }
     cards
 }
@@ -498,7 +517,6 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         show_usage_pace: state.settings.show_usage_pace,
         show_banked_resets: state.settings.show_banked_resets,
         show_usage_stats: state.settings.show_usage_stats,
-        hide_plan_credits: state.settings.hide_plan_credits,
         show_account_name: state.settings.show_account_name,
         codex_enabled: state.settings.providers.codex_enabled,
         claude_enabled: state.settings.providers.claude_enabled,
@@ -617,7 +635,6 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 ui.show_usage_pace,
                 ui.show_banked_resets,
                 show_usage_stats,
-                ui.hide_plan_credits,
                 ui.show_account_name,
                 color_scheme,
             ))
@@ -636,7 +653,6 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 ui.show_usage_pace,
                 ui.show_banked_resets,
                 show_usage_stats,
-                ui.hide_plan_credits,
                 ui.show_account_name,
                 color_scheme,
             ))
@@ -655,7 +671,6 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 ui.show_usage_pace,
                 false,
                 show_usage_stats,
-                true,
                 ui.show_account_name,
                 color_scheme,
             ))
@@ -874,12 +889,11 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     // error are visible. Give it the flexible row and keep the footer in a
     // separate Auto row so it remains fixed to the bottom edge.
     let body_layout_key = format!(
-        "popup-scroll-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
+        "popup-scroll-{}-{:?}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
         ui.limits_revision,
         ui.error,
         ui.show_banked_resets,
         ui.show_usage_stats,
-        ui.hide_plan_credits,
         ui.show_account_name,
         ui.codex_enabled,
         ui.claude_enabled,
@@ -1254,7 +1268,6 @@ fn start_background_bridge(
             show_usage_pace: state.settings.show_usage_pace,
             show_banked_resets: state.settings.show_banked_resets,
             show_usage_stats: state.settings.show_usage_stats,
-            hide_plan_credits: state.settings.hide_plan_credits,
             show_account_name: state.settings.show_account_name,
             codex_enabled: state.settings.providers.codex_enabled,
             claude_enabled: state.settings.providers.claude_enabled,
@@ -1296,7 +1309,6 @@ fn start_background_bridge(
             ui.show_usage_pace = settings.show_usage_pace;
             ui.show_banked_resets = settings.show_banked_resets;
             ui.show_usage_stats = settings.show_usage_stats;
-            ui.hide_plan_credits = settings.hide_plan_credits;
             ui.show_account_name = settings.show_account_name;
             ui.codex_enabled = settings.providers.codex_enabled;
             ui.claude_enabled = settings.providers.claude_enabled;
@@ -1990,40 +2002,39 @@ fn limit_card(
     .into()
 }
 
-fn meta_row(limits: &RateLimits) -> Element {
-    grid((
-        hstack((
-            text_block("PLAN")
-                .foreground(ThemeRef::TertiaryText)
-                .vertical_alignment(VerticalAlignment::Center),
-            text_block(
-                limits
-                    .plan_type
-                    .as_deref()
-                    .unwrap_or("Unavailable")
-                    .to_uppercase(),
-            )
-            .bold()
+fn credits_card(limits: &RateLimits) -> Element {
+    let value = credits_display_value(limits)
+        .expect("credits card is only rendered for a displayable credit balance");
+
+    border(
+        grid((
+            vstack((
+                text_block("CREDITS").foreground(ThemeRef::TertiaryText),
+                caption("Available balance").foreground(ThemeRef::TertiaryText),
+            ))
+            .spacing(2.0)
             .vertical_alignment(VerticalAlignment::Center),
+            text_block(value)
+                .font_weight(600)
+                .foreground(ThemeRef::SystemAttention)
+                .vertical_alignment(VerticalAlignment::Center)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .grid_column(1),
         ))
-        .spacing(8.0)
-        .vertical_alignment(VerticalAlignment::Center),
-        hstack((
-            text_block("CREDITS")
-                .foreground(ThemeRef::TertiaryText)
-                .vertical_alignment(VerticalAlignment::Center),
-            text_block(credits_label(limits))
-                .bold()
-                .vertical_alignment(VerticalAlignment::Center),
-        ))
-        .spacing(8.0)
-        .vertical_alignment(VerticalAlignment::Center)
-        .horizontal_alignment(HorizontalAlignment::Right),
-    ))
-    .columns([GridLength::Star(1.0), GridLength::Auto])
-    .rows([GridLength::Auto])
-    .horizontal_alignment(HorizontalAlignment::Stretch)
-    .vertical_alignment(VerticalAlignment::Center)
+        .columns([GridLength::Star(1.0), GridLength::Auto])
+        .rows([GridLength::Auto])
+        .horizontal_alignment(HorizontalAlignment::Stretch),
+    )
+    .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+    .padding(Thickness {
+        left: 16.0,
+        top: 12.0,
+        right: 16.0,
+        bottom: 12.0,
+    })
+    .background(ThemeRef::CardBackground)
+    .border_thickness(Thickness::uniform(1.0))
+    .border_brush(ThemeRef::CardStroke)
     .into()
 }
 
@@ -2248,18 +2259,36 @@ fn format_usd(value: f64) -> String {
     }
 }
 
-fn credits_label(limits: &RateLimits) -> String {
+fn credits_display_value(limits: &RateLimits) -> Option<String> {
     if limits.credits.unlimited {
-        "Unlimited".into()
-    } else if limits.credits.has_credits {
-        limits
-            .credits
-            .balance
-            .clone()
-            .unwrap_or_else(|| "Available".into())
-    } else {
-        "None".into()
+        return Some("Unlimited".into());
     }
+    if !limits.credits.has_credits {
+        return None;
+    }
+
+    let balance = limits.credits.balance.as_deref()?.trim();
+    if balance.is_empty()
+        || matches!(
+            balance.to_ascii_lowercase().as_str(),
+            "none" | "undefined" | "null" | "n/a" | "unavailable"
+        )
+    {
+        None
+    } else if limits.credits.has_credits {
+        Some(balance.into())
+    } else {
+        None
+    }
+}
+
+fn capitalize_plan_name(plan: &str) -> String {
+    let plan = plan.trim();
+    let mut characters = plan.chars();
+    let Some(first) = characters.next() else {
+        return String::new();
+    };
+    format!("{}{}", first.to_uppercase(), characters.as_str().to_lowercase())
 }
 
 fn format_reset_in(reset: Option<DateTime<Utc>>) -> String {
@@ -2371,9 +2400,9 @@ mod tests {
         let mut limits = plan_limits("plus");
         limits.usage.history.requests = 1;
 
-        assert!(popup_sections(&limits, true, true, false, false)
+        assert!(popup_sections(&limits, true, true, false)
             .contains(&PopupSection::UsageStatistics));
-        assert!(!popup_sections(&limits, true, false, false, false)
+        assert!(!popup_sections(&limits, true, false, false)
             .contains(&PopupSection::UsageStatistics));
     }
 
@@ -2389,17 +2418,16 @@ mod tests {
 
     #[test]
     fn free_to_plus_replaces_monthly_with_session_and_weekly_sections() {
-        let free = popup_sections(&plan_limits("free"), true, true, false, false);
-        assert_eq!(free, vec![PopupSection::Monthly, PopupSection::PlanCredits]);
+        let free = popup_sections(&plan_limits("free"), true, true, false);
+        assert_eq!(free, vec![PopupSection::Monthly]);
         assert_unique_section_keys(&free);
 
-        let plus = popup_sections(&plan_limits("plus"), true, true, false, false);
+        let plus = popup_sections(&plan_limits("plus"), true, true, false);
         assert_eq!(
             plus,
             vec![
                 PopupSection::FiveHour,
                 PopupSection::Weekly,
-                PopupSection::PlanCredits,
             ]
         );
         assert_unique_section_keys(&plus);
@@ -2410,12 +2438,32 @@ mod tests {
         let mut limits = plan_limits("plus");
         limits.primary = LimitWindow::default();
 
-        let sections = popup_sections(&limits, true, true, false, false);
-        assert_eq!(
-            sections,
-            vec![PopupSection::Weekly, PopupSection::PlanCredits]
-        );
+        let sections = popup_sections(&limits, true, true, false);
+        assert_eq!(sections, vec![PopupSection::Weekly]);
         assert_unique_section_keys(&sections);
+    }
+
+    #[test]
+    fn plan_names_use_sentence_case() {
+        assert_eq!(capitalize_plan_name("PLUS"), "Plus");
+        assert_eq!(capitalize_plan_name("  pro  "), "Pro");
+    }
+
+    #[test]
+    fn credits_only_render_for_a_real_balance_or_unlimited_access() {
+        let mut limits = plan_limits("plus");
+        limits.credits.has_credits = true;
+        limits.credits.balance = Some("undefined".into());
+        assert_eq!(credits_display_value(&limits), None);
+        assert!(!popup_sections(&limits, true, true, false).contains(&PopupSection::Credits));
+
+        limits.credits.balance = Some("$12.50".into());
+        assert_eq!(credits_display_value(&limits).as_deref(), Some("$12.50"));
+        assert!(popup_sections(&limits, true, true, false).contains(&PopupSection::Credits));
+
+        limits.credits = Default::default();
+        limits.credits.unlimited = true;
+        assert_eq!(credits_display_value(&limits).as_deref(), Some("Unlimited"));
     }
 
     #[test]
@@ -2439,22 +2487,21 @@ mod tests {
             true,
             true,
             false,
-            false,
             ColorScheme::Dark,
         );
-        // Heading + 5h + weekly + plan metadata + Fable.
-        assert_eq!(cards.len(), 5);
+        // Heading + 5h + weekly + Fable (no separate plan metadata row).
+        assert_eq!(cards.len(), 4);
     }
 
     #[test]
-    fn sections_keep_banked_resets_and_plan_metadata_singleton() {
+    fn sections_keep_banked_resets_singleton() {
         let mut limits = plan_limits("plus");
         limits.reset_credits = Some(crate::limits::RateLimitResetCreditsSummary {
             available_count: 1,
             ..Default::default()
         });
 
-        let sections = popup_sections(&limits, true, true, false, true);
+        let sections = popup_sections(&limits, true, true, true);
         assert_eq!(
             sections,
             vec![
@@ -2462,7 +2509,6 @@ mod tests {
                 PopupSection::FiveHour,
                 PopupSection::Weekly,
                 PopupSection::BankedResets,
-                PopupSection::PlanCredits,
             ]
         );
         assert_unique_section_keys(&sections);
@@ -2476,9 +2522,9 @@ mod tests {
             ..Default::default()
         });
 
-        assert!(popup_sections(&limits, true, true, false, false)
+        assert!(popup_sections(&limits, true, true, false)
             .contains(&PopupSection::BankedResets));
-        assert!(!popup_sections(&limits, false, true, false, false)
+        assert!(!popup_sections(&limits, false, true, false)
             .contains(&PopupSection::BankedResets));
     }
 

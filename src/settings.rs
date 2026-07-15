@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 11;
+pub const SETTINGS_VERSION: u32 = 12;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -225,7 +225,6 @@ pub struct Settings {
     pub show_usage_pace: bool,
     pub show_banked_resets: bool,
     pub show_usage_stats: bool,
-    pub hide_plan_credits: bool,
     pub show_account_name: bool,
     pub codex_path: Option<PathBuf>,
     pub tray_widgets: Vec<TrayWidget>,
@@ -248,7 +247,6 @@ impl Default for Settings {
             show_usage_pace: true,
             show_banked_resets: true,
             show_usage_stats: true,
-            hide_plan_credits: false,
             show_account_name: false,
             codex_path: None,
             // An empty list intentionally means "show the ordinary app icon".
@@ -641,6 +639,14 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.insert("version".into(), toml::Value::Integer(11));
                 version = 11;
             }
+            11 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.remove("hide_plan_credits");
+                root.insert("version".into(), toml::Value::Integer(12));
+                version = 12;
+            }
             unsupported => anyhow::bail!("no migration path from settings version {unsupported}"),
         }
     }
@@ -665,7 +671,6 @@ mod tests {
         assert!(value.show_usage_pace);
         assert!(value.show_banked_resets);
         assert!(value.show_usage_stats);
-        assert!(!value.hide_plan_credits);
         assert_eq!(value.history_retention_days, 30);
         assert!(value.tray_widgets.is_empty());
         assert!(!value.notifications.limits_changed);

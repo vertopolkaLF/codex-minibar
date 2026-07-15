@@ -54,7 +54,7 @@ fn run() -> Result<()> {
     if settings.check_for_updates {
         updates.check_async(true, settings.notifications.update_available);
     }
-    let initial_height = popup::height_for(settings.hide_plan_credits, startup_error.as_deref())
+    let initial_height = popup::height_for(startup_error.as_deref())
         // Oversize the first frame so Auto content can measure without clipping;
         // SizeChanged then shrinks the HWND to the real content height.
         .saturating_add(80)
