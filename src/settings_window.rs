@@ -4,9 +4,9 @@
 //! details; both surfaces share tokens from [`crate::theme`].
 
 use crate::notifications;
-use crate::settings::{LimitValue, ProviderKind, Settings, TrayPresentation, TraySource, TrayWidget};
+use crate::settings::{LimitRefreshInterval, LimitValue, ProviderKind, Settings, TrayPresentation, TraySource, TrayWidget};
 use crate::settings_controls::{
-    settings_action_card, settings_info_card, settings_slider_content,
+    settings_action_card, settings_control_card, settings_info_card, settings_slider_content,
     settings_toggle_card, settings_toggle_card_with_description, settings_toggle_expander,
     update_available_nav_card,
 };
@@ -365,6 +365,8 @@ pub fn render(
     let (start_at_login, set_start_at_login) = cx.use_state(settings.start_at_login);
     let (automatic_activation, set_automatic_activation) =
         cx.use_state(settings.automatic_activation);
+    let (limit_refresh_interval, set_limit_refresh_interval) =
+        cx.use_state(settings.limit_refresh_interval);
     let (show_used_percentage, set_show_used_percentage) =
         cx.use_state(settings.show_used_percentage);
     let (show_usage_pace, set_show_usage_pace) = cx.use_state(settings.show_usage_pace);
@@ -403,6 +405,7 @@ pub fn render(
             codex_enabled,
             claude_enabled,
             automatic_activation,
+            limit_refresh_interval,
             start_at_login,
             show_used_percentage,
             show_usage_pace,
@@ -427,6 +430,7 @@ pub fn render(
             set_codex_enabled,
             set_claude_enabled,
             set_automatic_activation,
+            set_limit_refresh_interval,
             set_start_at_login,
             set_show_used_percentage,
             set_show_usage_pace,
@@ -571,6 +575,7 @@ fn tab_content(
     codex_enabled: bool,
     claude_enabled: bool,
     automatic_activation: bool,
+    limit_refresh_interval: LimitRefreshInterval,
     start_at_login: bool,
     show_used_percentage: bool,
     show_usage_pace: bool,
@@ -595,6 +600,7 @@ fn tab_content(
     set_codex_enabled: SetState<bool>,
     set_claude_enabled: SetState<bool>,
     set_automatic_activation: SetState<bool>,
+    set_limit_refresh_interval: SetState<LimitRefreshInterval>,
     set_start_at_login: SetState<bool>,
     set_show_used_percentage: SetState<bool>,
     set_show_usage_pace: SetState<bool>,
@@ -621,6 +627,7 @@ fn tab_content(
     let apply_codex_enabled = settings_tx.clone();
     let apply_claude_enabled = settings_tx.clone();
     let apply_automatic_activation = settings_tx.clone();
+    let apply_limit_refresh_interval = settings_tx.clone();
     let apply_start_at_login = settings_tx.clone();
     let apply_show_used_percentage = settings_tx.clone();
     let apply_show_usage_pace = settings_tx.clone();
@@ -678,6 +685,23 @@ fn tab_content(
                     set_hovered_card_id.clone(),
                 )
                 .with_key("general-automatic-activation"),
+                settings_control_card(
+                    "Refresh limits",
+                    Some("How often enabled providers fetch the current limits."),
+                    ComboBox::new(["30 seconds", "1 minute", "5 minutes", "10 minutes", "15 minutes"])
+                        .selected_index(limit_refresh_interval.index())
+                        .on_selection_changed(move |choice| {
+                            let value = LimitRefreshInterval::from_index(choice);
+                            set_limit_refresh_interval.call(value);
+                            persist_update(apply_limit_refresh_interval.clone(), move |settings| {
+                                settings.limit_refresh_interval = value;
+                            });
+                        }),
+                    "general-limit-refresh-interval",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("general-limit-refresh-interval"),
                 settings_section_heading("Customization").with_key("general-customization-heading"),
                 settings_toggle_card_with_description(
                     "Replace \"amount left\" with \"amount used\"",

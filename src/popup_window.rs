@@ -436,6 +436,10 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let ui_dispatcher = cx.use_ui_marshaller();
     let settings_tx = state.settings_tx.clone();
     let (hovered_action, set_hovered_action) = cx.use_state(Option::<String>::None);
+    // Relative timestamps need a render tick even while the popup receives no
+    // input or provider event. This changes only the elapsed-time label; it
+    // never requests fresh limits.
+    let (clock_tick, set_clock_tick) = cx.use_async_state(0_u64);
 
     cx.use_effect((), {
         let state = Arc::clone(&state);
@@ -448,6 +452,20 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             // SystemBackdrop paints square + shadow past SetWindowRgn — keep it off.
             set_backdrop(None);
             start_background_bridge(state, set_ui, ui_dispatcher);
+        }
+    });
+
+    cx.use_effect((), {
+        let set_clock_tick = set_clock_tick.clone();
+        move || {
+            thread::spawn(move || {
+                let mut tick = 0_u64;
+                loop {
+                    thread::sleep(Duration::from_secs(1));
+                    tick = tick.wrapping_add(1);
+                    set_clock_tick.call(tick);
+                }
+            });
         }
     });
 
@@ -577,10 +595,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 caption(if ui.refreshing {
                     "Refreshing…".into()
                 } else {
-                    format!(
-                        "Updated {}",
-                        sample_freshness(latest_sampled_at(&limits)).to_lowercase()
-                    )
+                    format_last_updated(latest_sampled_at(&limits), clock_tick)
                 })
                 .foreground(ThemeRef::TertiaryText),
             ))
@@ -1076,6 +1091,9 @@ fn start_background_bridge(
                 let _ = commands.send(WorkerCommand::SetAutomaticActivation(
                     settings.automatic_activation && provider == ProviderKind::Codex,
                 ));
+                let _ = commands.send(WorkerCommand::SetLimitRefreshInterval(
+                    Duration::from_secs(settings.limit_refresh_interval.seconds()),
+                ));
                 // The worker refreshes immediately after receiving this command,
                 // so the selected history range is reflected in the open popup
                 // without asking the user to restart the application.
@@ -1281,8 +1299,8 @@ fn pump_tray_and_dismiss(
     ui_dispatcher: &UiMarshaller,
     settings_tx: &Sender<Settings>,
     state: &AppState,
-    ui: &mut UiState,
-    set_ui: &AsyncSetState<UiState>,
+    _ui: &mut UiState,
+    _set_ui: &AsyncSetState<UiState>,
 ) -> bool {
     use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
 
@@ -1305,15 +1323,6 @@ fn pump_tray_and_dismiss(
                     popup::hide();
                 }
             } else {
-                // Opening the popup should always fetch a current snapshot.
-                if state
-                    .worker_commands()
-                    .iter()
-                    .any(|(_, commands)| commands.send(WorkerCommand::Refresh).is_ok())
-                {
-                    ui.refreshing = true;
-                    set_ui.call(ui.clone());
-                }
                 // Native showing is allowed only after synchronous WinUI
                 // reactivation; otherwise XAML can remain dormant indefinitely.
                 let (ready_tx, ready_rx) = std::sync::mpsc::channel();
@@ -1910,16 +1919,17 @@ fn format_reset_in(reset: Option<DateTime<Utc>>) -> String {
     }
 }
 
-fn sample_freshness(sampled_at: DateTime<Utc>) -> String {
+fn format_last_updated(sampled_at: DateTime<Utc>, _clock_tick: u64) -> String {
     if sampled_at.timestamp() == 0 {
-        return "Waiting for Codex...".into();
+        return "Waiting for first update...".into();
     }
     let seconds = (Utc::now() - sampled_at).num_seconds().max(0);
-    match seconds {
-        0..=4 => "Just now".into(),
+    let elapsed = match seconds {
+        0..=4 => "just now".into(),
         5..=59 => format!("{seconds} seconds ago"),
         _ => format!("{} minutes ago", seconds / 60),
-    }
+    };
+    format!("Updated {elapsed}")
 }
 
 #[cfg(test)]
@@ -1974,8 +1984,8 @@ mod tests {
     #[test]
     fn unavailable_sample_has_clear_copy() {
         assert_eq!(
-            sample_freshness(DateTime::default()),
-            "Waiting for Codex..."
+            format_last_updated(DateTime::default(), 0),
+            "Waiting for first update..."
         );
         assert_eq!(format_reset_in(None), "Unavailable");
     }

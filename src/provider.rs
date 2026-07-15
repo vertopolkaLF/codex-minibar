@@ -57,7 +57,7 @@ pub fn start_provider_worker(
                 activation_path,
                 settings.automatic_activation,
                 settings.history_retention_days,
-                Duration::from_secs(60),
+                Duration::from_secs(settings.limit_refresh_interval.seconds()),
             )
         }
         ProviderKind::Claude => worker::start_worker(
@@ -67,7 +67,7 @@ pub fn start_provider_worker(
             activation_path,
             false,
             settings.history_retention_days,
-            Duration::from_secs(60),
+            Duration::from_secs(settings.limit_refresh_interval.seconds()),
         ),
     };
     let source_events = worker

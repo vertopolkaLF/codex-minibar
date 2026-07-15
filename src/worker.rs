@@ -36,6 +36,7 @@ pub trait Activator: Send + 'static {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkerCommand {
     Refresh,
+    SetLimitRefreshInterval(Duration),
     SetAutomaticActivation(bool),
     SetHistoryRetentionDays(u16),
     Shutdown,
@@ -211,6 +212,9 @@ fn start_worker_with_channels(
                     let _ = limit_commands.send(WorkerCommand::Refresh);
                     let _ = usage_commands.send(WorkerCommand::Refresh);
                 }
+                WorkerCommand::SetLimitRefreshInterval(interval) => {
+                    let _ = limit_commands.send(WorkerCommand::SetLimitRefreshInterval(interval));
+                }
                 WorkerCommand::SetAutomaticActivation(enabled) => {
                     let _ = limit_commands.send(WorkerCommand::SetAutomaticActivation(enabled));
                 }
@@ -241,7 +245,7 @@ fn run_limit_task(
     mut activator: impl Activator,
     state_path: PathBuf,
     mut automatic_activation: bool,
-    poll_interval: Duration,
+    mut poll_interval: Duration,
     commands: Receiver<WorkerCommand>,
     events: Sender<WorkerEvent>,
     limits_ready: Arc<AtomicBool>,
@@ -270,6 +274,9 @@ fn run_limit_task(
             Ok(WorkerCommand::SetAutomaticActivation(enabled)) => {
                 automatic_activation = enabled;
             }
+            Ok(WorkerCommand::SetLimitRefreshInterval(interval)) => {
+                poll_interval = interval;
+            }
             Ok(WorkerCommand::Refresh)
             | Ok(WorkerCommand::SetHistoryRetentionDays(_))
             | Err(RecvTimeoutError::Timeout) => {}
@@ -292,7 +299,9 @@ fn run_usage_task(
             Ok(WorkerCommand::SetHistoryRetentionDays(days)) => {
                 history_retention_days = days.clamp(1, 365);
             }
-            Ok(WorkerCommand::Refresh) | Ok(WorkerCommand::SetAutomaticActivation(_)) => {}
+            Ok(WorkerCommand::Refresh)
+            | Ok(WorkerCommand::SetLimitRefreshInterval(_))
+            | Ok(WorkerCommand::SetAutomaticActivation(_)) => {}
             Err(RecvTimeoutError::Timeout) => {}
         }
     }
@@ -313,6 +322,7 @@ fn run_usage_task(
                 }
             }
             Ok(WorkerCommand::Refresh)
+            | Ok(WorkerCommand::SetLimitRefreshInterval(_))
             | Ok(WorkerCommand::SetAutomaticActivation(_))
             | Err(RecvTimeoutError::Timeout) => {}
         }
