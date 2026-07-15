@@ -664,13 +664,13 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             .vertical_alignment(VerticalAlignment::Top)
             .on_resize(|_width, height| {
                 popup::set_client_height_from_body_content(height);
-            }),
+            })
+            .with_key(body_layout_key),
     )
     .horizontal_scroll_bar_visibility(ScrollBarVisibility::Disabled)
     .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Stretch)
-    .with_key(body_layout_key)
     .grid_row(0);
 
     let body_panel = border(
