@@ -343,6 +343,7 @@ fn provider_cards(
                 right: 4.0,
                 bottom: 2.0,
             })
+            .with_key(format!("{}-heading", provider.display_name()))
             .into(),
     ];
     cards.extend(
@@ -474,40 +475,52 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 .message(error)
                 .error()
                 .is_closable(false)
+                .with_key("popup-error")
                 .into(),
         );
     }
     if ui.codex_enabled {
-        body.extend(provider_cards(
-            ProviderKind::Codex,
-            true,
-            &limits.codex,
-            ui.show_used_percentage,
-            ui.show_usage_pace,
-            ui.show_banked_resets,
-            ui.show_usage_stats,
-            ui.hide_plan_credits,
-            color_scheme,
-        ));
+        body.push(
+            vstack(provider_cards(
+                ProviderKind::Codex,
+                true,
+                &limits.codex,
+                ui.show_used_percentage,
+                ui.show_usage_pace,
+                ui.show_banked_resets,
+                ui.show_usage_stats,
+                ui.hide_plan_credits,
+                color_scheme,
+            ))
+            .spacing(6.0)
+            .with_key("provider-codex")
+            .into(),
+        );
     }
     if ui.claude_enabled {
-        body.extend(provider_cards(
-            ProviderKind::Claude,
-            !ui.codex_enabled,
-            &limits.claude,
-            ui.show_used_percentage,
-            ui.show_usage_pace,
-            ui.show_banked_resets,
-            ui.show_usage_stats,
-            ui.hide_plan_credits,
-            color_scheme,
-        ));
+        body.push(
+            vstack(provider_cards(
+                ProviderKind::Claude,
+                !ui.codex_enabled,
+                &limits.claude,
+                ui.show_used_percentage,
+                ui.show_usage_pace,
+                ui.show_banked_resets,
+                ui.show_usage_stats,
+                ui.hide_plan_credits,
+                color_scheme,
+            ))
+            .spacing(6.0)
+            .with_key("provider-claude")
+            .into(),
+        );
     }
     if !ui.codex_enabled && !ui.claude_enabled {
         body.push(
             InfoBar::new("No providers enabled")
                 .message("Enable Codex or Claude in Settings > Providers.")
                 .is_closable(false)
+                .with_key("popup-no-providers")
                 .into(),
         );
     }
@@ -624,29 +637,49 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     .border_brush(ThemeRef::CardStroke)
     .horizontal_alignment(HorizontalAlignment::Stretch);
 
-    // Content + footer are Auto-sized. Acrylic shares that Auto row so its
-    // SizeChanged reports the real content height — then we ResizeClient to match.
-    // Guessing DIP constants fought WinUI and left a beer gut under the footer.
+    // The body can outgrow the popup when both providers, statistics, and an
+    // error are visible. Give it the flexible row and keep the footer in a
+    // separate Auto row so it remains fixed to the bottom edge.
+    let body_layout_key = format!(
+        "popup-scroll-{}-{:?}-{}-{}-{}-{}-{}-{}",
+        ui.limits_revision,
+        ui.error,
+        ui.show_banked_resets,
+        ui.show_usage_stats,
+        ui.hide_plan_credits,
+        ui.codex_enabled,
+        ui.claude_enabled,
+        color_scheme as i32,
+    );
+    let scrollable_body = scroll_viewer(
+        vstack(body)
+            .spacing(6.0)
+            .padding(Thickness {
+                left: 16.0,
+                top: 16.0,
+                right: 16.0,
+                bottom: 16.0,
+            })
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .vertical_alignment(VerticalAlignment::Top)
+            .on_resize(|_width, height| {
+                popup::set_client_height_from_body_content(height);
+            }),
+    )
+    .horizontal_scroll_bar_visibility(ScrollBarVisibility::Disabled)
+    .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .vertical_alignment(VerticalAlignment::Stretch)
+    .with_key(body_layout_key)
+    .grid_row(0);
+
     let body_panel = border(
-        grid((
-            vstack(body)
-                .spacing(6.0)
-                .padding(Thickness {
-                    left: 16.0,
-                    top: 16.0,
-                    right: 16.0,
-                    bottom: 16.0,
-                })
-                .horizontal_alignment(HorizontalAlignment::Stretch)
-                .vertical_alignment(VerticalAlignment::Top)
-                .grid_row(0),
-            footer.grid_row(1),
-        ))
-        .rows([GridLength::Auto, GridLength::Auto])
-        .columns([GridLength::Star(1.0)])
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .vertical_alignment(VerticalAlignment::Top)
-        .background(Color::transparent()),
+        grid((scrollable_body, footer.grid_row(1)))
+            .rows([GridLength::Star(1.0), GridLength::Auto])
+            .columns([GridLength::Star(1.0)])
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .vertical_alignment(VerticalAlignment::Stretch)
+            .background(Color::transparent()),
     )
     .border_thickness(Thickness::uniform(1.0))
     .border_brush(ThemeRef::SurfaceStroke)
@@ -677,7 +710,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
 
     let chrome = border(
         grid((mica, body_panel))
-            .rows([GridLength::Auto])
+            .rows([GridLength::Star(1.0)])
             .columns([GridLength::Star(1.0)])
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .vertical_alignment(VerticalAlignment::Top)
