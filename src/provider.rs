@@ -12,8 +12,7 @@ use crate::{
     claude::{ClaudeActivator, ClaudeClient},
     codex::{first_available, CodexActivator, CodexClient},
     settings::{ProviderKind, Settings},
-    usage::UsageStatistics,
-    worker::{self, UsageProvider, WorkerEvent, WorkerHandle},
+    worker::{self, WorkerEvent, WorkerHandle},
 };
 
 pub type ProviderWorkers = HashMap<ProviderKind, WorkerHandle>;
@@ -63,7 +62,7 @@ pub fn start_provider_worker(
         }
         ProviderKind::Claude => worker::start_worker(
             ClaudeClient::new(),
-            EmptyUsageProvider,
+            ClaudeClient::new(),
             ClaudeActivator::new(),
             activation_path,
             settings.automatic_activation,
@@ -112,17 +111,5 @@ fn provider_activation_path(provider: ProviderKind, base_path: PathBuf) -> PathB
         // Claude has an independent five-hour clock; sharing Codex's baseline
         // would suppress or duplicate an activation whenever both are enabled.
         ProviderKind::Claude => base_path.with_file_name("activation-claude.toml"),
-    }
-}
-
-struct EmptyUsageProvider;
-
-impl UsageProvider for EmptyUsageProvider {
-    fn load_cached_usage_statistics(&mut self, _: u16) -> Result<UsageStatistics> {
-        Ok(UsageStatistics::default())
-    }
-
-    fn refresh_usage_statistics(&mut self, _: u16) -> Result<UsageStatistics> {
-        Ok(UsageStatistics::default())
     }
 }

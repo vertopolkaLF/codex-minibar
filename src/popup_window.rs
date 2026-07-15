@@ -346,6 +346,7 @@ fn provider_cards(
             .with_key(format!("{}-heading", provider.display_name()))
             .into(),
     ];
+    let has_usage_statistics = show_usage_stats && limits.usage.has_data();
     cards.extend(
         popup_sections(
             limits,
@@ -355,6 +356,9 @@ fn provider_cards(
             false,
         )
         .into_iter()
+        // Usage belongs at the end of the provider group, after dynamic
+        // provider-specific limits such as Claude Fable or Opus.
+        .filter(|section| !matches!(section, PopupSection::UsageStatistics))
         .filter_map(|section| {
             let element: Element = match section {
                 PopupSection::Monthly => limit_card(
@@ -408,6 +412,12 @@ fn provider_cards(
         )
         .with_key(format!("{}-additional-{}", provider.display_name(), limit.id))
     }));
+    if has_usage_statistics {
+        cards.push(
+            usage_statistics_card(limits)
+                .with_key(format!("{}-usage-statistics", provider.display_name())),
+        );
+    }
     cards
 }
 

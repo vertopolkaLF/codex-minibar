@@ -167,11 +167,11 @@ impl LimitProvider for ClaudeClient {
 
 impl UsageProvider for ClaudeClient {
     fn load_cached_usage_statistics(&mut self, history_days: u16) -> Result<usage::UsageStatistics> {
-        usage::load_cached_usage_statistics(history_days)
+        usage::load_cached_claude_usage_statistics(history_days)
     }
 
     fn refresh_usage_statistics(&mut self, history_days: u16) -> Result<usage::UsageStatistics> {
-        usage::refresh_usage_statistics(history_days)
+        usage::refresh_claude_usage_statistics(history_days)
     }
 }
 
