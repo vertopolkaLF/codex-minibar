@@ -2,7 +2,13 @@
 
 use windows_reactor::*;
 
-pub fn data(name: &str) -> &'static str {
+/// Path data plus the SVG design canvas so WinUI Viewbox keeps intended padding.
+pub struct IconGeom {
+    pub path: &'static str,
+    pub canvas: f64,
+}
+
+pub fn geom(name: &str) -> IconGeom {
     let svg = match name {
         "fluent-refresh" => include_str!("../assets/icons/fluent-arrow-sync-20-regular.svg"),
         "fluent-settings" => include_str!("../assets/icons/fluent-settings-20-regular.svg"),
@@ -30,20 +36,42 @@ pub fn data(name: &str) -> &'static str {
         "info" => include_str!("../assets/icons/ph-info.svg"),
         _ => panic!("unknown Phosphor icon: {name}"),
     };
+    let canvas = viewbox_size(svg);
     let start = svg.find(" d=\"").expect("Iconify SVG path") + 4;
     let end = svg[start..].find('"').expect("Iconify SVG path terminator") + start;
-    &svg[start..end]
+    IconGeom {
+        path: &svg[start..end],
+        canvas,
+    }
+}
+
+pub fn data(name: &str) -> &'static str {
+    geom(name).path
+}
+
+fn viewbox_size(svg: &str) -> f64 {
+    let start = svg.find("viewBox=\"").expect("SVG viewBox") + 9;
+    let end = svg[start..].find('"').expect("SVG viewBox terminator") + start;
+    let mut parts = svg[start..end].split_whitespace();
+    let _min_x = parts.next();
+    let _min_y = parts.next();
+    parts
+        .next()
+        .expect("SVG viewBox width")
+        .parse::<f64>()
+        .expect("SVG viewBox width number")
 }
 
 /// Render an icon at `size` using exactly the supplied color.
 pub fn element(name: &'static str, size: f64, color: Color) -> Element {
-    let path = data(name);
+    let icon = geom(name);
     let mut host = swap_chain_panel().width(size).height(size);
     host.mounted = Some(Callback::new(move |native: Option<_>| {
         if let Some(native) = native
             && let Err(error) = crate::acrylic::install_colored_icon_into(
                 native,
-                path,
+                icon.path,
+                icon.canvas,
                 (color.r, color.g, color.b),
             )
         {
@@ -52,4 +80,20 @@ pub fn element(name: &'static str, size: f64, color: Color) -> Element {
     }));
     let icon: Element = host.into();
     icon.with_key(format!("ph-{name}-{:02X}{:02X}{:02X}", color.r, color.g, color.b))
+}
+
+/// Render an icon filled with the live Windows accent theme brush.
+pub fn accent_element(name: &'static str, size: f64) -> Element {
+    let icon = geom(name);
+    let mut host = swap_chain_panel().width(size).height(size);
+    host.mounted = Some(Callback::new(move |native: Option<_>| {
+        if let Some(native) = native
+            && let Err(error) =
+                crate::acrylic::install_accent_icon_into(native, icon.path, icon.canvas)
+        {
+            eprintln!("Could not install accent Phosphor icon: {error:?}");
+        }
+    }));
+    let icon: Element = host.into();
+    icon.with_key(format!("ph-{name}-accent"))
 }

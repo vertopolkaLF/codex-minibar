@@ -791,6 +791,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             "fluent-power",
             "fluent-power",
             "Quit",
+            color_scheme,
             &hovered_action,
             set_hovered_action.clone(),
             quit,
@@ -821,6 +822,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 "All providers",
                 selected_view == PopupView::All,
                 ui.use_colored_provider_icons,
+                color_scheme,
                 &hovered_action,
                 set_hovered_action.clone(),
                 {
@@ -840,6 +842,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     "Codex",
                     selected_view == PopupView::Codex,
                     ui.use_colored_provider_icons,
+                    color_scheme,
                     &hovered_action,
                     set_hovered_action.clone(),
                     {
@@ -858,6 +861,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     "Claude",
                     selected_view == PopupView::Claude,
                     ui.use_colored_provider_icons,
+                    color_scheme,
                     &hovered_action,
                     set_hovered_action.clone(),
                     {
@@ -876,6 +880,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     "Cursor",
                     selected_view == PopupView::Cursor,
                     ui.use_colored_provider_icons,
+                    color_scheme,
                     &hovered_action,
                     set_hovered_action.clone(),
                     {
@@ -891,11 +896,15 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         .horizontal_alignment(HorizontalAlignment::Left)
         .vertical_alignment(VerticalAlignment::Center)
         // Provider marks are native swap-chain children. Recreate the whole
-        // selector when its membership changes; otherwise WinUI reconciliation
-        // can retain a prior tab's text/icon in a newly occupied slot.
+        // selector when membership, tint mode, or theme changes; otherwise
+        // WinUI reconciliation can retain a prior tab's text/icon.
         .with_key(format!(
-            "provider-tabs-{}-{}-{}",
-            ui.codex_enabled, ui.claude_enabled, ui.cursor_enabled
+            "provider-tabs-{}-{}-{}-{}-{}",
+            ui.codex_enabled,
+            ui.claude_enabled,
+            ui.cursor_enabled,
+            ui.use_colored_provider_icons,
+            color_scheme as i32
         ))
         .into()
     } else {
@@ -932,6 +941,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     "fluent-refresh",
                     "fluent-refresh",
                     &refresh_tooltip,
+                    color_scheme,
                     &hovered_action,
                     set_hovered_action.clone(),
                     refresh,
@@ -941,6 +951,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     "fluent-settings",
                     "fluent-settings",
                     "Settings",
+                    color_scheme,
                     &hovered_action,
                     set_hovered_action.clone(),
                     {
@@ -1772,6 +1783,7 @@ fn popup_tab_button(
     tip: &'static str,
     selected: bool,
     use_colored_provider_icons: bool,
+    color_scheme: ColorScheme,
     hovered_action: &Option<String>,
     set_hovered_action: SetState<Option<String>>,
     on_click: impl IntoUnitCallback,
@@ -1779,16 +1791,13 @@ fn popup_tab_button(
     let hovered = hovered_action.as_deref() == Some(id);
     let set_on_enter = set_hovered_action.clone();
     let set_on_exit = set_hovered_action;
-    let neutral_icon_color = if hovered {
-        Color::rgb(230, 230, 230)
-    } else {
-        Color::rgb(190, 190, 190)
-    };
+    let neutral_icon_color = popup_chrome_icon_color(color_scheme, hovered);
     let icon_color = if use_colored_provider_icons {
         match icon_name {
             Some("codex") | Some("chatgpt") => Color::rgb(128, 159, 255),
             Some("claude") => Color::rgb(217, 119, 87),
-            Some("cursor") => Color::rgb(255, 255, 255),
+            // Match Total Spend: Cursor mark flips with the Windows text theme.
+            Some("cursor") => combined_usage_color(ProviderKind::Cursor, color_scheme),
             _ => neutral_icon_color,
         }
     } else {
@@ -1875,6 +1884,7 @@ fn icon_button(
     normal_icon: &'static str,
     hover_icon: &'static str,
     tip: &str,
+    color_scheme: ColorScheme,
     hovered_action: &Option<String>,
     set_hovered_action: SetState<Option<String>>,
     on_click: impl IntoUnitCallback,
@@ -1882,6 +1892,7 @@ fn icon_button(
     let hovered = hovered_action.as_deref() == Some(id);
     let set_on_enter = set_hovered_action.clone();
     let set_on_exit = set_hovered_action;
+    let idle_color = popup_chrome_icon_color(color_scheme, false);
     let hover_background: Element = border(Element::Empty)
         .background(ThemeRef::SubtleFill)
         .opacity(if hovered { 1.0 } else { 0.0 })
@@ -1891,18 +1902,19 @@ fn icon_button(
         .relative_align_top()
         .relative_align_bottom()
         .into();
-    let icon: Element = crate::icons::element(
-        if hovered { hover_icon } else { normal_icon },
-        18.0,
-        if hovered {
-            Color::rgb(0, 120, 212)
-        } else {
-            Color::rgb(230, 230, 230)
-        },
-    )
-    .relative_align_h_center()
-    .relative_align_v_center()
-    .into();
+    // Hover uses the live accent brush; idle keeps theme-aware text chrome.
+    let icon: Element = if hovered {
+        crate::icons::accent_element(hover_icon, 18.0)
+            .relative_align_h_center()
+            .relative_align_v_center()
+            .into()
+    } else {
+        crate::icons::element(normal_icon, 18.0, idle_color)
+            .relative_align_h_center()
+            .relative_align_v_center()
+            .into()
+    };
+    // Swap-chain icons paint once on mount; key by tint so theme flips remount.
     relative_panel(vec![hover_background, icon])
         .tooltip(tip)
         .width(ICON_BUTTON_SIZE)
@@ -1917,7 +1929,36 @@ fn icon_button(
         })
         .on_pointer_exited(move || set_on_exit.call(None))
         .on_tapped(on_click)
+        .with_key(if hovered {
+            format!("{id}-accent")
+        } else {
+            format!(
+                "{id}-{:02X}{:02X}{:02X}",
+                idle_color.r, idle_color.g, idle_color.b
+            )
+        })
         .into()
+}
+
+/// Approximate WinUI primary/secondary text for swap-chain icons that cannot
+/// bind ThemeRef brushes directly.
+fn popup_chrome_icon_color(color_scheme: ColorScheme, emphasized: bool) -> Color {
+    match color_scheme {
+        ColorScheme::Light => {
+            if emphasized {
+                Color::rgb(0, 0, 0)
+            } else {
+                Color::rgb(96, 96, 96)
+            }
+        }
+        ColorScheme::Dark => {
+            if emphasized {
+                Color::rgb(230, 230, 230)
+            } else {
+                Color::rgb(190, 190, 190)
+            }
+        }
+    }
 }
 
 /// Thin pill progress track with a rounded fill and optional pace marker.
@@ -2547,7 +2588,9 @@ fn combined_usage_period_button(
             .relative_align_v_center()
             .into(),
         body_strong(period.label())
-            .foreground(Color::rgb(0, 0, 0))
+            // Accent-button label color from WinUI so the active chip tracks
+            // Windows button text on the accent fill in both themes.
+            .foreground(ThemeRef::custom("TextOnAccentFillColorPrimaryBrush"))
             .opacity(if is_selected { 1.0 } else { 0.0 })
             .with_opacity_transition(Duration::from_millis(200))
             .relative_align_h_center()
