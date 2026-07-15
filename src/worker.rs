@@ -304,13 +304,21 @@ fn run_usage_task(
     events: Sender<WorkerEvent>,
     limits_ready: Arc<AtomicBool>,
 ) {
-    // Do not compete with the first rate-limit request. The popup receives its
-    // actionable quota snapshot before any potentially expensive disk scan.
+    // Cached aggregates are a fast local read and make the popup useful before
+    // a provider's first quota request completes. Keep the potentially
+    // expensive refresh scan behind `limits_ready` so it does not compete with
+    // that first network request.
+    if let Ok(usage) = provider.load_cached_usage_statistics(history_retention_days) {
+        let _ = events.send(WorkerEvent::UsageUpdated(usage));
+    }
     while !limits_ready.load(Ordering::Acquire) {
         match commands.recv_timeout(Duration::from_millis(100)) {
             Ok(WorkerCommand::Shutdown) | Err(RecvTimeoutError::Disconnected) => return,
             Ok(WorkerCommand::SetHistoryRetentionDays(days)) => {
                 history_retention_days = days.clamp(1, 365);
+                if let Ok(usage) = provider.load_cached_usage_statistics(history_retention_days) {
+                    let _ = events.send(WorkerEvent::UsageUpdated(usage));
+                }
             }
             Ok(WorkerCommand::Refresh)
             | Ok(WorkerCommand::SetLimitRefreshInterval(_))
@@ -319,9 +327,6 @@ fn run_usage_task(
         }
     }
 
-    if let Ok(usage) = provider.load_cached_usage_statistics(history_retention_days) {
-        let _ = events.send(WorkerEvent::UsageUpdated(usage));
-    }
     loop {
         if let Ok(usage) = provider.refresh_usage_statistics(history_retention_days) {
             let _ = events.send(WorkerEvent::UsageUpdated(usage));
@@ -518,6 +523,39 @@ mod tests {
         commands_tx.send(WorkerCommand::Refresh).unwrap();
         assert!(matches!(events_rx.recv_timeout(Duration::from_secs(1)), Ok(WorkerEvent::UsageUpdated(_))));
         assert_eq!(refreshes.load(Ordering::SeqCst), 2);
+
+        commands_tx.send(WorkerCommand::Shutdown).unwrap();
+        task.join().unwrap();
+    }
+
+    #[test]
+    fn cached_usage_is_published_before_first_limits_update() {
+        let (commands_tx, commands_rx) = mpsc::channel();
+        let (events_tx, events_rx) = mpsc::channel();
+        let limits_ready = Arc::new(AtomicBool::new(false));
+        let refreshes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider = CountingUsageProvider {
+            refreshes: Arc::clone(&refreshes),
+        };
+        let task_limits_ready = Arc::clone(&limits_ready);
+        let task = thread::spawn(move || {
+            run_usage_task(provider, 30, commands_rx, events_tx, task_limits_ready);
+        });
+
+        // The cache arrives even while the first rate-limit request is still
+        // pending; no filesystem refresh has happened yet.
+        assert!(matches!(
+            events_rx.recv_timeout(Duration::from_secs(1)),
+            Ok(WorkerEvent::UsageUpdated(_))
+        ));
+        assert_eq!(refreshes.load(Ordering::SeqCst), 0);
+
+        limits_ready.store(true, Ordering::Release);
+        assert!(matches!(
+            events_rx.recv_timeout(Duration::from_secs(1)),
+            Ok(WorkerEvent::UsageUpdated(_))
+        ));
+        assert_eq!(refreshes.load(Ordering::SeqCst), 1);
 
         commands_tx.send(WorkerCommand::Shutdown).unwrap();
         task.join().unwrap();

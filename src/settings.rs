@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 13;
+pub const SETTINGS_VERSION: u32 = 16;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -143,6 +143,32 @@ pub enum TrayPresentation {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum TotalSpendPresentation {
+    #[default]
+    #[serde(alias = "list")]
+    Donut,
+    #[serde(alias = "grouped")]
+    ProgressBar,
+}
+
+impl TotalSpendPresentation {
+    pub const fn index(self) -> i32 {
+        match self {
+            Self::Donut => 0,
+            Self::ProgressBar => 1,
+        }
+    }
+
+    pub const fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::ProgressBar,
+            _ => Self::Donut,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LimitValue {
     #[default]
     Remaining,
@@ -231,6 +257,10 @@ pub struct Settings {
     pub show_usage_pace: bool,
     pub show_banked_resets: bool,
     pub show_usage_stats: bool,
+    /// Shows the compact provider spend breakdown on the popup's All tab.
+    pub show_total_spend_on_all_tab: bool,
+    /// Chooses between the donut and progress-bar spend layouts.
+    pub total_spend_presentation: TotalSpendPresentation,
     pub show_account_name: bool,
     pub codex_path: Option<PathBuf>,
     pub tray_widgets: Vec<TrayWidget>,
@@ -254,6 +284,8 @@ impl Default for Settings {
             show_usage_pace: true,
             show_banked_resets: true,
             show_usage_stats: true,
+            show_total_spend_on_all_tab: true,
+            total_spend_presentation: TotalSpendPresentation::default(),
             show_account_name: false,
             codex_path: None,
             // An empty list intentionally means "show the ordinary app icon".
@@ -668,6 +700,45 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     .insert("version".into(), toml::Value::Integer(13));
                 version = 13;
             }
+            13 => {
+                // The All tab previously had no usage summary at all, so
+                // preserve the new feature's default when existing settings
+                // files are upgraded.
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .entry("show_combined_usage_on_all_tab")
+                    .or_insert(toml::Value::Boolean(true));
+                document
+                    .as_table_mut()
+                    .expect("settings root was checked above")
+                    .insert("version".into(), toml::Value::Integer(14));
+                version = 14;
+            }
+            14 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                let previous = root
+                    .remove("show_combined_usage_on_all_tab")
+                    .unwrap_or(toml::Value::Boolean(true));
+                root.entry("show_total_spend_on_all_tab")
+                    .or_insert(previous);
+                root.insert("version".into(), toml::Value::Integer(15));
+                version = 15;
+            }
+            15 => {
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .entry("total_spend_presentation")
+                    .or_insert(toml::Value::String("donut".into()));
+                document
+                    .as_table_mut()
+                    .expect("settings root was checked above")
+                    .insert("version".into(), toml::Value::Integer(16));
+                version = 16;
+            }
             unsupported => anyhow::bail!("no migration path from settings version {unsupported}"),
         }
     }
@@ -681,7 +752,7 @@ mod tests {
     #[test]
     fn defaults_match_product_decisions() {
         let value = Settings::default();
-        assert!(value.providers.codex_enabled);
+        assert!(!value.providers.codex_enabled);
         assert!(!value.providers.claude_enabled);
         assert!(!value.use_colored_provider_icons);
         assert!(!value.replace_chatgpt_logo_with_codex);
@@ -692,6 +763,8 @@ mod tests {
         assert!(value.show_usage_pace);
         assert!(value.show_banked_resets);
         assert!(value.show_usage_stats);
+        assert!(value.show_total_spend_on_all_tab);
+        assert_eq!(value.total_spend_presentation, TotalSpendPresentation::Donut);
         assert_eq!(value.history_retention_days, 30);
         assert!(value.tray_widgets.is_empty());
         assert!(!value.notifications.limits_changed);
@@ -734,8 +807,12 @@ tray_widgets = []
         assert!(migrated.show_usage_pace);
         assert!(migrated.show_banked_resets);
         assert!(migrated.show_usage_stats);
+        assert!(migrated.show_total_spend_on_all_tab);
+        assert_eq!(migrated.total_spend_presentation, TotalSpendPresentation::Donut);
         assert_eq!(migrated.history_retention_days, 30);
-        assert!(fs::read_to_string(path).unwrap().contains("version = 9"));
+        assert!(fs::read_to_string(path)
+            .unwrap()
+            .contains(&format!("version = {SETTINGS_VERSION}")));
     }
 
     #[test]
@@ -750,6 +827,37 @@ tray_widgets = []
     }
 
     #[test]
+    fn total_spend_presentation_uses_stable_dropdown_indices() {
+        assert_eq!(TotalSpendPresentation::Donut.index(), 0);
+        assert_eq!(TotalSpendPresentation::ProgressBar.index(), 1);
+        assert_eq!(
+            TotalSpendPresentation::from_index(1),
+            TotalSpendPresentation::ProgressBar
+        );
+        assert_eq!(
+            TotalSpendPresentation::from_index(99),
+            TotalSpendPresentation::Donut
+        );
+    }
+
+    #[test]
+    fn migrates_combined_usage_toggle_to_total_spend_toggle() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(
+            &path,
+            "version = 14\nshow_combined_usage_on_all_tab = false\n",
+        )
+        .unwrap();
+
+        let migrated = Settings::load_or_create(&path).unwrap();
+        assert!(!migrated.show_total_spend_on_all_tab);
+        let rewritten = fs::read_to_string(path).unwrap();
+        assert!(rewritten.contains("show_total_spend_on_all_tab = false"));
+        assert!(!rewritten.contains("show_combined_usage_on_all_tab"));
+    }
+
+    #[test]
     fn migrates_single_claude_selection_to_the_provider_toggle_list() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.toml");
@@ -758,7 +866,9 @@ tray_widgets = []
         let migrated = Settings::load_or_create(&path).unwrap();
         assert!(!migrated.providers.codex_enabled);
         assert!(migrated.providers.claude_enabled);
-        assert!(fs::read_to_string(path).unwrap().contains("version = 8"));
+        assert!(fs::read_to_string(path)
+            .unwrap()
+            .contains(&format!("version = {SETTINGS_VERSION}")));
     }
 
     #[test]

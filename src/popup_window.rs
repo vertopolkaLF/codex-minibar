@@ -16,7 +16,9 @@ use crate::{
     notifications,
     notifications::LimitNotificationTracker,
     popup,
-    settings::{NotificationSettings, ProviderKind, Settings, TrayWidget},
+    settings::{
+        NotificationSettings, ProviderKind, Settings, TotalSpendPresentation, TrayWidget,
+    },
     settings_controls::update_accent_button,
     tray::{TrayManager, TrayMenuAction},
     updater::{UpdateController, UpdatePhase},
@@ -195,6 +197,8 @@ struct UiState {
     show_usage_pace: bool,
     show_banked_resets: bool,
     show_usage_stats: bool,
+    show_total_spend_on_all_tab: bool,
+    total_spend_presentation: TotalSpendPresentation,
     show_account_name: bool,
     codex_enabled: bool,
     claude_enabled: bool,
@@ -257,6 +261,8 @@ impl Default for UiState {
             show_usage_pace: true,
             show_banked_resets: true,
             show_usage_stats: true,
+            show_total_spend_on_all_tab: true,
+            total_spend_presentation: TotalSpendPresentation::default(),
             show_account_name: false,
             codex_enabled: true,
             claude_enabled: false,
@@ -287,6 +293,33 @@ enum PopupView {
     Codex,
     Claude,
     Cursor,
+}
+
+/// Ephemeral time range for the compact spend card on the All tab.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum CombinedUsagePeriod {
+    Today,
+    Yesterday,
+    #[default]
+    ThirtyDays,
+}
+
+impl CombinedUsagePeriod {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Today => "Today",
+            Self::Yesterday => "Yesterday",
+            Self::ThirtyDays => "30 Days",
+        }
+    }
+
+    const fn key(self) -> &'static str {
+        match self {
+            Self::Today => "today",
+            Self::Yesterday => "yesterday",
+            Self::ThirtyDays => "30-days",
+        }
+    }
 }
 
 /// Semantic identity for each independently reconciled popup section.
@@ -528,6 +561,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         show_usage_pace: state.settings.show_usage_pace,
         show_banked_resets: state.settings.show_banked_resets,
         show_usage_stats: state.settings.show_usage_stats,
+        show_total_spend_on_all_tab: state.settings.show_total_spend_on_all_tab,
         show_account_name: state.settings.show_account_name,
         codex_enabled: state.settings.providers.codex_enabled,
         claude_enabled: state.settings.providers.claude_enabled,
@@ -548,6 +582,10 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let settings_tx = state.settings_tx.clone();
     let (hovered_action, set_hovered_action) = cx.use_state(Option::<String>::None);
     let (selected_view, set_selected_view) = cx.use_state(PopupView::All);
+    let (combined_usage_period, set_combined_usage_period) =
+        cx.use_state(CombinedUsagePeriod::default());
+    let (hovered_combined_usage_period, set_hovered_combined_usage_period) =
+        cx.use_state(None::<CombinedUsagePeriod>);
     // Relative timestamps need a render tick even while the popup receives no
     // input or provider event. This changes only the elapsed-time label; it
     // never requests fresh limits.
@@ -618,12 +656,13 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         && (!show_provider_tabs || matches!(selected_view, PopupView::All | PopupView::Claude));
     let show_cursor = ui.cursor_enabled
         && (!show_provider_tabs || matches!(selected_view, PopupView::All | PopupView::Cursor));
-    // Usage statistics are deliberately a provider-detail concern. The
-    // combined view stays focused on limits, while a provider tab can show
-    // its full historical card. A lone provider has no All tab, so preserve
-    // its existing detailed view.
+    // Individual activity remains a provider-detail view. The All tab has its
+    // own compact, provider-by-provider summary when explicitly enabled.
     let show_usage_stats =
         ui.show_usage_stats && (!show_provider_tabs || selected_view != PopupView::All);
+    let show_total_spend = ui.show_total_spend_on_all_tab
+        && show_provider_tabs
+        && selected_view == PopupView::All;
 
     let mut body: Vec<Element> = Vec::new();
     if let Some(error) = ui.error.clone() {
@@ -633,7 +672,28 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 .error()
                 .is_closable(false)
                 .with_key("popup-error")
-                .into(),
+            .into(),
+        );
+    }
+    if show_total_spend {
+        body.push(
+            combined_usage_card(
+                &limits,
+                ui.codex_enabled,
+                ui.claude_enabled,
+                ui.cursor_enabled,
+                combined_usage_period,
+                set_combined_usage_period.clone(),
+                hovered_combined_usage_period,
+                set_hovered_combined_usage_period.clone(),
+                color_scheme,
+                ui.total_spend_presentation,
+            )
+            .with_key(format!(
+                "all-combined-usage-{}-{:?}",
+                combined_usage_period.key(),
+                ui.total_spend_presentation
+            )),
         );
     }
     if show_codex {
@@ -920,11 +980,13 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     // error are visible. Give it the flexible row and keep the footer in a
     // separate Auto row so it remains fixed to the bottom edge.
     let body_layout_key = format!(
-        "popup-scroll-{}-{:?}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
+        "popup-scroll-{}-{:?}-{}-{}-{}-{:?}-{}-{}-{}-{}-{:?}-{:?}",
         ui.limits_revision,
         ui.error,
         ui.show_banked_resets,
         ui.show_usage_stats,
+        ui.show_total_spend_on_all_tab,
+        ui.total_spend_presentation,
         ui.show_account_name,
         ui.codex_enabled,
         ui.claude_enabled,
@@ -1307,6 +1369,8 @@ fn start_background_bridge(
             show_usage_pace: state.settings.show_usage_pace,
             show_banked_resets: state.settings.show_banked_resets,
             show_usage_stats: state.settings.show_usage_stats,
+            show_total_spend_on_all_tab: state.settings.show_total_spend_on_all_tab,
+            total_spend_presentation: state.settings.total_spend_presentation,
             show_account_name: state.settings.show_account_name,
             codex_enabled: state.settings.providers.codex_enabled,
             claude_enabled: state.settings.providers.claude_enabled,
@@ -1348,6 +1412,8 @@ fn start_background_bridge(
             ui.show_usage_pace = settings.show_usage_pace;
             ui.show_banked_resets = settings.show_banked_resets;
             ui.show_usage_stats = settings.show_usage_stats;
+            ui.show_total_spend_on_all_tab = settings.show_total_spend_on_all_tab;
+            ui.total_spend_presentation = settings.total_spend_presentation;
             ui.show_account_name = settings.show_account_name;
             ui.codex_enabled = settings.providers.codex_enabled;
             ui.claude_enabled = settings.providers.claude_enabled;
@@ -2209,6 +2275,488 @@ fn usage_statistics_card(provider: ProviderKind, limits: &RateLimits) -> Element
     .into()
 }
 
+fn combined_usage_card(
+    limits: &ProviderLimits,
+    codex_enabled: bool,
+    claude_enabled: bool,
+    cursor_enabled: bool,
+    period: CombinedUsagePeriod,
+    set_period: SetState<CombinedUsagePeriod>,
+    hovered_period: Option<CombinedUsagePeriod>,
+    set_hovered_period: SetState<Option<CombinedUsagePeriod>>,
+    color_scheme: ColorScheme,
+    presentation: TotalSpendPresentation,
+) -> Element {
+    let providers = [
+        (ProviderKind::Cursor, cursor_enabled, &limits.cursor),
+        (ProviderKind::Claude, claude_enabled, &limits.claude),
+        (ProviderKind::Codex, codex_enabled, &limits.codex),
+    ];
+    let mut entries: Vec<_> = providers
+        .into_iter()
+        .filter(|(_, enabled, _)| *enabled)
+        .map(|(provider, _, provider_limits)| {
+            (provider, combined_usage_spend(&provider_limits.usage, period))
+        })
+        .collect();
+    entries.sort_by(|(_, left), (_, right)| right.cmp(left));
+    let total_spend = entries
+        .iter()
+        .fold(0_u64, |total, (_, spend)| total.saturating_add(*spend));
+    let content = match presentation {
+        TotalSpendPresentation::Donut => combined_usage_donut_content(
+            &entries,
+            total_spend,
+            period,
+            set_period,
+            hovered_period,
+            set_hovered_period,
+            color_scheme,
+        ),
+        TotalSpendPresentation::ProgressBar => combined_usage_progress_content(
+            &entries,
+            total_spend,
+            period,
+            set_period,
+            hovered_period,
+            set_hovered_period,
+            color_scheme,
+        ),
+    };
+
+    vstack((
+        body_strong("Total Spend")
+            .foreground(ThemeRef::SecondaryText)
+            .margin(Thickness {
+                left: 4.0,
+                top: 0.0,
+                right: 4.0,
+                bottom: 0.0,
+            }),
+        border(
+            content,
+        )
+        .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+        .padding(Thickness::uniform(10.0))
+        .background(ThemeRef::CardBackground)
+        .border_thickness(Thickness::uniform(1.0))
+        .border_brush(ThemeRef::CardStroke),
+    ))
+    .spacing(6.0)
+    .into()
+}
+
+fn combined_usage_donut_content(
+    entries: &[(ProviderKind, u64)],
+    total_spend: u64,
+    period: CombinedUsagePeriod,
+    set_period: SetState<CombinedUsagePeriod>,
+    hovered_period: Option<CombinedUsagePeriod>,
+    set_hovered_period: SetState<Option<CombinedUsagePeriod>>,
+    color_scheme: ColorScheme,
+) -> Element {
+    let provider_totals = vstack(
+        entries
+            .iter()
+            .map(|(provider, spend)| combined_usage_row(*provider, *spend, color_scheme))
+            .collect::<Vec<_>>(),
+    )
+    .spacing(10.0)
+    .vertical_alignment(VerticalAlignment::Center);
+
+    vstack((
+        combined_usage_period_selector(period, set_period, hovered_period, set_hovered_period),
+        grid((
+            combined_usage_donut(entries, total_spend, period, color_scheme).margin(Thickness {
+                left: 0.0,
+                top: 0.0,
+                right: 16.0,
+                bottom: 0.0,
+            }),
+            provider_totals
+                .vertical_alignment(VerticalAlignment::Center)
+                .grid_column(1),
+        ))
+        .columns([GridLength::Auto, GridLength::Star(1.0)])
+        .rows([GridLength::Auto])
+        .horizontal_alignment(HorizontalAlignment::Stretch),
+    ))
+    .spacing(10.0)
+    .into()
+}
+
+fn combined_usage_progress_content(
+    entries: &[(ProviderKind, u64)],
+    total_spend: u64,
+    _period: CombinedUsagePeriod,
+    set_period: SetState<CombinedUsagePeriod>,
+    hovered_period: Option<CombinedUsagePeriod>,
+    set_hovered_period: SetState<Option<CombinedUsagePeriod>>,
+    color_scheme: ColorScheme,
+) -> Element {
+    let mut sorted_entries = entries.to_vec();
+    sorted_entries.sort_by(|(_, left), (_, right)| right.cmp(left));
+
+    vstack((
+        combined_usage_period_selector(
+            _period,
+            set_period,
+            hovered_period,
+            set_hovered_period,
+        ),
+        text_block(format_spend(total_spend)).font_size(22.0).font_weight(600),
+        combined_usage_progress_bar(&sorted_entries, color_scheme),
+        combined_usage_grouped_totals(&sorted_entries, color_scheme),
+    ))
+    .spacing(10.0)
+    .into()
+}
+
+fn combined_usage_progress_bar(entries: &[(ProviderKind, u64)], color_scheme: ColorScheme) -> Element {
+    let total_spend = entries
+        .iter()
+        .fold(0_u64, |total, (_, spend)| total.saturating_add(*spend));
+    let mut columns = Vec::with_capacity(entries.len().saturating_mul(2).saturating_sub(1));
+    for (index, (_, spend)) in entries.iter().enumerate() {
+        if index > 0 {
+            columns.push(GridLength::Pixel(4.0));
+        }
+        let weight = if total_spend == 0 { 1 } else { *spend.max(&1) };
+        columns.push(GridLength::Star(weight as f64));
+    }
+    let segments: Vec<Element> = entries
+        .iter()
+        .enumerate()
+        .map(|(index, (provider, _))| {
+            border(Element::Empty)
+                .background(combined_usage_color(*provider, color_scheme))
+                .height(10.0)
+                .corner_radius(5.0)
+                .grid_column((index * 2) as i32)
+                .into()
+        })
+        .collect();
+
+    grid(segments)
+        .columns(columns)
+        .rows([GridLength::Pixel(10.0)])
+        .height(10.0)
+        .into()
+}
+
+fn combined_usage_spend(
+    statistics: &crate::usage::UsageStatistics,
+    period: CombinedUsagePeriod,
+) -> u64 {
+    match period {
+        CombinedUsagePeriod::Today => statistics.today.estimated_cost_microusd,
+        CombinedUsagePeriod::Yesterday => statistics
+            .daily
+            .iter()
+            .find(|entry| entry.date == Local::now().date_naive() - ChronoDuration::days(1))
+            .map(|entry| entry.usage.estimated_cost_microusd)
+            .unwrap_or_default(),
+        CombinedUsagePeriod::ThirtyDays => statistics.history.estimated_cost_microusd,
+    }
+}
+
+fn combined_usage_period_selector(
+    selected: CombinedUsagePeriod,
+    set_selected: SetState<CombinedUsagePeriod>,
+    hovered: Option<CombinedUsagePeriod>,
+    set_hovered: SetState<Option<CombinedUsagePeriod>>,
+) -> Element {
+    let buttons: Vec<Element> = [
+        CombinedUsagePeriod::Today,
+        CombinedUsagePeriod::Yesterday,
+        CombinedUsagePeriod::ThirtyDays,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, period)| {
+        combined_usage_period_button(
+            period,
+            selected,
+            hovered == Some(period),
+            set_selected.clone(),
+            set_hovered.clone(),
+        )
+            .grid_column(index as i32)
+    })
+    .collect();
+    border(
+        grid(buttons)
+            .columns([
+                GridLength::Star(1.0),
+                GridLength::Star(1.0),
+                GridLength::Star(1.0),
+            ])
+            .rows([GridLength::Auto])
+            .horizontal_alignment(HorizontalAlignment::Stretch),
+    )
+    .padding(Thickness::uniform(4.0))
+    .corner_radius(6.0)
+    .background(ThemeRef::SubtleFill)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .into()
+}
+
+fn combined_usage_period_button(
+    period: CombinedUsagePeriod,
+    selected: CombinedUsagePeriod,
+    hovered: bool,
+    set_selected: SetState<CombinedUsagePeriod>,
+    set_hovered: SetState<Option<CombinedUsagePeriod>>,
+) -> Element {
+    let is_selected = period == selected;
+    let set_hovered_on_enter = set_hovered.clone();
+    let set_hovered_on_exit = set_hovered;
+    let layers: Vec<Element> = vec![
+        border(Element::Empty)
+            .background(ThemeRef::Accent)
+            .opacity(if is_selected { 1.0 } else { 0.0 })
+            .with_opacity_transition(Duration::from_millis(200))
+            .corner_radius(4.0)
+            .relative_align_left()
+            .relative_align_right()
+            .relative_align_top()
+            .relative_align_bottom()
+            .into(),
+        border(Element::Empty)
+            .background(ThemeRef::CardBackground)
+            .opacity(if !is_selected && hovered { 1.0 } else { 0.0 })
+            .with_opacity_transition(Duration::from_millis(200))
+            .corner_radius(4.0)
+            .relative_align_left()
+            .relative_align_right()
+            .relative_align_top()
+            .relative_align_bottom()
+            .into(),
+        body_strong(period.label())
+            .foreground(ThemeRef::SecondaryText)
+            .opacity(if is_selected { 0.0 } else { 1.0 })
+            .with_opacity_transition(Duration::from_millis(200))
+            .relative_align_h_center()
+            .relative_align_v_center()
+            .into(),
+        body_strong(period.label())
+            .foreground(Color::rgb(0, 0, 0))
+            .opacity(if is_selected { 1.0 } else { 0.0 })
+            .with_opacity_transition(Duration::from_millis(200))
+            .relative_align_h_center()
+            .relative_align_v_center()
+            .into(),
+    ];
+    relative_panel(layers)
+    .height(24.0)
+    .min_height(24.0)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .on_pointer_entered(move |_: PointerEventInfo| {
+        set_hovered_on_enter.call(Some(period));
+    })
+    .on_pointer_exited(move || set_hovered_on_exit.call(None))
+    .on_tapped(move || set_selected.call(period))
+    .with_key(format!("combined-period-{}-{is_selected}", period.key()))
+    .into()
+}
+
+/// Draws a true circular ring with native WinUI arc paths. The XAML host is
+/// keyed by its data so a live refresh replaces its geometry as well as text.
+fn combined_usage_donut(
+    entries: &[(ProviderKind, u64)],
+    total_spend: u64,
+    period: CombinedUsagePeriod,
+    color_scheme: ColorScheme,
+) -> Element {
+    const SIZE: f64 = 124.0;
+    let xaml = combined_usage_donut_xaml(entries, total_spend, color_scheme);
+    let series_key = entries.iter().fold(0_u64, |hash, (provider, spend)| {
+        hash.wrapping_mul(31)
+            .wrapping_add(*spend)
+            .wrapping_add(*provider as u64)
+    });
+    let key = format!(
+        "spend-donut-{}-{total_spend}-{series_key}-{:?}",
+        period.key(),
+        color_scheme
+    );
+    let mut host = swap_chain_panel().width(SIZE).height(SIZE);
+    host.mounted = Some(Callback::new(move |native: Option<_>| {
+        if let Some(native) = native
+            && let Err(error) = crate::acrylic::install_spend_donut_into(native, &xaml)
+        {
+            eprintln!("Could not install spend donut: {error:?}");
+        }
+    }));
+    let donut: Element = host.with_key(key).into();
+
+    grid((
+        donut,
+        text_block(format_spend(total_spend))
+            .font_size(18.0)
+            .font_weight(600)
+            .horizontal_alignment(HorizontalAlignment::Center)
+            .vertical_alignment(VerticalAlignment::Center),
+    ))
+    .columns([GridLength::Auto])
+    .rows([GridLength::Auto])
+    .width(SIZE)
+    .height(SIZE)
+    .vertical_alignment(VerticalAlignment::Center)
+    .into()
+}
+
+fn combined_usage_donut_xaml(
+    entries: &[(ProviderKind, u64)],
+    total_spend: u64,
+    color_scheme: ColorScheme,
+) -> String {
+    const CENTER: f64 = 62.0;
+    const OUTER_RADIUS: f64 = 53.0;
+    const INNER_RADIUS: f64 = 34.0;
+    const GAP_DEGREES: f64 = 2.0;
+
+    let paths = if total_spend == 0 {
+        donut_path("#787878", -90.0, 270.0, CENTER, OUTER_RADIUS, INNER_RADIUS)
+    } else {
+        let mut start = -90.0;
+        entries
+            .iter()
+            .filter(|(_, spend)| *spend > 0)
+            .map(|(provider, spend)| {
+                let end = start + *spend as f64 / total_spend as f64 * 360.0;
+                let path = donut_path(
+                    &xaml_color(combined_usage_color(*provider, color_scheme)),
+                    start + GAP_DEGREES / 2.0,
+                    end - GAP_DEGREES / 2.0,
+                    CENTER,
+                    OUTER_RADIUS,
+                    INNER_RADIUS,
+                );
+                start = end;
+                path
+            })
+            .collect::<String>()
+    };
+
+    format!(
+        r#"<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Width="124" Height="124">{paths}</Grid>"#
+    )
+}
+
+fn donut_path(color: &str, start: f64, end: f64, center: f64, outer: f64, inner: f64) -> String {
+    let sweep = (end - start).max(0.0);
+    if sweep <= 0.0 {
+        return String::new();
+    }
+    if sweep >= 359.0 {
+        return format!(
+            r#"<Path Fill="{color}" Data="M {center:.2} {outer_top:.2} A {outer:.2} {outer:.2} 0 1 1 {center:.2} {outer_bottom:.2} A {outer:.2} {outer:.2} 0 1 1 {center:.2} {outer_top:.2} M {center:.2} {inner_top:.2} A {inner:.2} {inner:.2} 0 1 0 {center:.2} {inner_bottom:.2} A {inner:.2} {inner:.2} 0 1 0 {center:.2} {inner_top:.2} Z" />"#,
+            outer_top = center - outer,
+            outer_bottom = center + outer,
+            inner_top = center - inner,
+            inner_bottom = center + inner,
+        );
+    }
+    let (outer_start_x, outer_start_y) = donut_point(center, outer, start);
+    let (outer_end_x, outer_end_y) = donut_point(center, outer, end);
+    let (inner_start_x, inner_start_y) = donut_point(center, inner, start);
+    let (inner_end_x, inner_end_y) = donut_point(center, inner, end);
+    let large_arc = u8::from(sweep > 180.0);
+    format!(
+        r#"<Path Fill="{color}" Data="M {outer_start_x:.2} {outer_start_y:.2} A {outer:.2} {outer:.2} 0 {large_arc} 1 {outer_end_x:.2} {outer_end_y:.2} L {inner_end_x:.2} {inner_end_y:.2} A {inner:.2} {inner:.2} 0 {large_arc} 0 {inner_start_x:.2} {inner_start_y:.2} Z" />"#
+    )
+}
+
+fn donut_point(center: f64, radius: f64, degrees: f64) -> (f64, f64) {
+    let radians = degrees.to_radians();
+    (
+        center + radius * radians.cos(),
+        center + radius * radians.sin(),
+    )
+}
+
+fn xaml_color(color: Color) -> String {
+    format!("#{:02X}{:02X}{:02X}", color.r, color.g, color.b)
+}
+
+fn combined_usage_row(provider: ProviderKind, spend: u64, color_scheme: ColorScheme) -> Element {
+    grid((
+        hstack((
+            Shape::ellipse()
+                .fill(combined_usage_color(provider, color_scheme))
+                .width(9.0)
+                .height(9.0)
+                .vertical_alignment(VerticalAlignment::Center),
+            body_strong(provider.display_name()),
+        ))
+        .spacing(8.0)
+        .vertical_alignment(VerticalAlignment::Center),
+        body_strong(format_spend(spend))
+            .horizontal_alignment(HorizontalAlignment::Right)
+            .vertical_alignment(VerticalAlignment::Center)
+            .grid_column(1),
+    ))
+    .columns([GridLength::Star(1.0), GridLength::Auto])
+    .rows([GridLength::Auto])
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .into()
+}
+
+fn combined_usage_grouped_totals(
+    entries: &[(ProviderKind, u64)],
+    color_scheme: ColorScheme,
+) -> Element {
+    let column_count = entries.len().clamp(1, 3);
+    let row_count = entries.len().div_ceil(column_count);
+    let cells: Vec<Element> = entries
+        .iter()
+        .enumerate()
+        .map(|(index, (provider, spend))| {
+            vstack((
+                hstack((
+                    Shape::ellipse()
+                        .fill(combined_usage_color(*provider, color_scheme))
+                        .width(9.0)
+                        .height(9.0)
+                        .vertical_alignment(VerticalAlignment::Center),
+                    body_strong(provider.display_name()),
+                ))
+                .spacing(7.0)
+                .vertical_alignment(VerticalAlignment::Center),
+                body_strong(format_spend(*spend)),
+            ))
+            .spacing(4.0)
+            .grid_row((index / column_count) as i32)
+            .grid_column((index % column_count) as i32)
+            .into()
+        })
+        .collect();
+
+    grid(cells)
+        .columns(vec![GridLength::Star(1.0); column_count])
+        .rows(vec![GridLength::Auto; row_count])
+        .row_spacing(10.0)
+        .column_spacing(14.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .into()
+}
+
+fn combined_usage_color(provider: ProviderKind, color_scheme: ColorScheme) -> Color {
+    match provider {
+        ProviderKind::Codex => Color::rgb(128, 159, 255),
+        ProviderKind::Claude => Color::rgb(217, 119, 87),
+        ProviderKind::Cursor => match color_scheme {
+            ColorScheme::Light => Color::rgb(18, 18, 18),
+            ColorScheme::Dark => Color::rgb(230, 230, 230),
+        },
+    }
+}
+
+fn format_spend(microusd: u64) -> String {
+    format_usd(microusd as f64 / 1_000_000.0)
+}
+
 fn usage_tokens_and_cost_metric(label: &str, tokens: String, cost: String) -> Element {
     vstack((
         caption(label).foreground(ThemeRef::TertiaryText),
@@ -2449,6 +2997,52 @@ mod tests {
     fn activity_chart_groups_long_histories_without_losing_tokens() {
         assert_eq!(compact_activity_bars(&[2, 3, 5], 60), vec![2, 3, 5]);
         assert_eq!(compact_activity_bars(&[2, 3, 5, 7, 11], 2), vec![10, 18]);
+    }
+
+    #[test]
+    fn combined_spend_uses_the_selected_time_range() {
+        let mut statistics = crate::usage::UsageStatistics::default();
+        statistics.today.estimated_cost_microusd = 1_250_000;
+        statistics.history.estimated_cost_microusd = 9_750_000;
+        statistics.daily.push(crate::usage::DailyTokenUsage {
+            date: Local::now().date_naive() - ChronoDuration::days(1),
+            usage: crate::usage::TokenUsage {
+                estimated_cost_microusd: 2_500_000,
+                ..Default::default()
+            },
+        });
+
+        assert_eq!(
+            combined_usage_spend(&statistics, CombinedUsagePeriod::Today),
+            1_250_000
+        );
+        assert_eq!(
+            combined_usage_spend(&statistics, CombinedUsagePeriod::Yesterday),
+            2_500_000
+        );
+        assert_eq!(
+            combined_usage_spend(&statistics, CombinedUsagePeriod::ThirtyDays),
+            9_750_000
+        );
+        assert_eq!(format_spend(1_250_000), "$1.25");
+    }
+
+    #[test]
+    fn spend_donut_uses_native_arc_geometry() {
+        let xaml = combined_usage_donut_xaml(
+            &[
+                (ProviderKind::Cursor, 2_000_000),
+                (ProviderKind::Claude, 1_000_000),
+                (ProviderKind::Codex, 500_000),
+            ],
+            3_500_000,
+            ColorScheme::Dark,
+        );
+
+        assert!(xaml.starts_with("<Grid"));
+        assert_eq!(xaml.matches("<Path ").count(), 3);
+        assert!(xaml.contains(" A 53.00 53.00 "));
+        assert!(!xaml.contains("Rectangle"));
     }
 
     #[test]

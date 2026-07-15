@@ -89,6 +89,12 @@ pub fn install_colored_icon_into(
     install_into_inner(mount, &xaml)
 }
 
+/// Host a data-driven XAML chart inside a reactor swap-chain panel. The
+/// caller provides only locally generated XAML geometry (never user input).
+pub fn install_spend_donut_into(mount: windows_core::IInspectable, xaml: &str) -> Result<()> {
+    install_into_inner(mount, xaml)
+}
+
 /// Host a GitHub SVG path whose color follows the current Windows accent.
 pub fn install_accent_github_icon_into(mount: windows_core::IInspectable) -> Result<()> {
     install_into_inner(mount, accent_github_xaml())

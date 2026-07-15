@@ -4,7 +4,10 @@
 //! details; both surfaces share tokens from [`crate::theme`].
 
 use crate::notifications;
-use crate::settings::{LimitRefreshInterval, LimitValue, ProviderKind, Settings, TrayPresentation, TraySource, TrayWidget};
+use crate::settings::{
+    LimitRefreshInterval, LimitValue, ProviderKind, Settings, TotalSpendPresentation,
+    TrayPresentation, TraySource, TrayWidget,
+};
 use crate::settings_controls::{
     settings_action_card, settings_control_card, settings_info_card, settings_slider_content,
     settings_toggle_card, settings_toggle_card_with_description, settings_toggle_expander,
@@ -48,6 +51,8 @@ struct SettingsWindowState {
     show_usage_pace: SetState<bool>,
     show_banked_resets: SetState<bool>,
     show_usage_stats: SetState<bool>,
+    show_total_spend_on_all_tab: SetState<bool>,
+    total_spend_presentation: SetState<TotalSpendPresentation>,
     show_account_name: SetState<bool>,
     activation_failure: SetState<bool>,
     limits_reset: SetState<bool>,
@@ -79,6 +84,10 @@ impl SettingsWindowState {
         self.show_usage_pace.call(settings.show_usage_pace);
         self.show_banked_resets.call(settings.show_banked_resets);
         self.show_usage_stats.call(settings.show_usage_stats);
+        self.show_total_spend_on_all_tab
+            .call(settings.show_total_spend_on_all_tab);
+        self.total_spend_presentation
+            .call(settings.total_spend_presentation);
         self.show_account_name.call(settings.show_account_name);
         self.activation_failure
             .call(settings.notifications.activation_failure);
@@ -180,7 +189,12 @@ pub fn open_onboarding(settings_tx: Sender<Settings>) -> windows_core::Result<()
                 max_height: None,
             },
             Box::new(move |_: &(), cx: &mut RenderCx| {
-                onboarding_render(cx, Arc::clone(&settings), detected.clone(), settings_tx.clone())
+                onboarding_render(
+                    cx,
+                    Arc::clone(&settings),
+                    detected.clone(),
+                    settings_tx.clone(),
+                )
             }),
             |recon| recon.eager_templated_realization = true,
         )?);
@@ -251,9 +265,7 @@ fn install_settings_close_hide() {
 fn set_settings_window_icon() {
     use windows_sys::Win32::{
         System::LibraryLoader::GetModuleHandleW,
-        UI::WindowsAndMessaging::{
-            ICON_BIG, ICON_SMALL, LoadIconW, SendMessageW, WM_SETICON,
-        },
+        UI::WindowsAndMessaging::{ICON_BIG, ICON_SMALL, LoadIconW, SendMessageW, WM_SETICON},
     };
 
     let hwnd = find_settings_window();
@@ -276,9 +288,7 @@ fn set_settings_window_icon() {
 /// Keep their light/dark glyphs in lockstep with the live WinUI theme.
 #[cfg(windows)]
 fn sync_settings_caption_button_theme(color_scheme: ColorScheme) {
-    use windows_sys::Win32::{
-        Graphics::Dwm::DwmSetWindowAttribute,
-    };
+    use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
 
     const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
     let hwnd = find_settings_window();
@@ -375,9 +385,12 @@ fn onboarding_render(
     let (show_used_percentage, set_show_used_percentage) =
         cx.use_state(settings.show_used_percentage);
     let (show_usage_pace, set_show_usage_pace) = cx.use_state(settings.show_usage_pace);
-    let (show_banked_resets, set_show_banked_resets) =
-        cx.use_state(settings.show_banked_resets);
+    let (show_banked_resets, set_show_banked_resets) = cx.use_state(settings.show_banked_resets);
     let (show_usage_stats, set_show_usage_stats) = cx.use_state(settings.show_usage_stats);
+    let (show_total_spend_on_all_tab, set_show_total_spend_on_all_tab) =
+        cx.use_state(settings.show_total_spend_on_all_tab);
+    let (total_spend_presentation, set_total_spend_presentation) =
+        cx.use_state(settings.total_spend_presentation);
     let (show_account_name, set_show_account_name) = cx.use_state(settings.show_account_name);
     let (hovered_card_id, set_hovered_card_id) = cx.use_state(None::<String>);
 
@@ -388,31 +401,46 @@ fn onboarding_render(
             vec![
                 settings_toggle_card_with_description(
                     "Codex",
-                    Some(if detected[0] { "Detected on this PC." } else { "Not detected — enable it if it is installed elsewhere." }),
+                    Some(if detected[0] {
+                        "Detected on this PC."
+                    } else {
+                        "Not detected — enable it if it is installed elsewhere."
+                    }),
                     codex_enabled,
                     move |value| set_codex_enabled.call(value),
                     "onboarding-codex",
                     &hovered_card_id,
                     set_hovered_card_id.clone(),
-                ).with_key("onboarding-codex"),
+                )
+                .with_key("onboarding-codex"),
                 settings_toggle_card_with_description(
                     "Claude",
-                    Some(if detected[1] { "Detected on this PC." } else { "Not detected — enable it if it is installed elsewhere." }),
+                    Some(if detected[1] {
+                        "Detected on this PC."
+                    } else {
+                        "Not detected — enable it if it is installed elsewhere."
+                    }),
                     claude_enabled,
                     move |value| set_claude_enabled.call(value),
                     "onboarding-claude",
                     &hovered_card_id,
                     set_hovered_card_id.clone(),
-                ).with_key("onboarding-claude"),
+                )
+                .with_key("onboarding-claude"),
                 settings_toggle_card_with_description(
                     "Cursor",
-                    Some(if detected[2] { "Detected on this PC." } else { "Not detected — enable it if it is installed elsewhere." }),
+                    Some(if detected[2] {
+                        "Detected on this PC."
+                    } else {
+                        "Not detected — enable it if it is installed elsewhere."
+                    }),
                     cursor_enabled,
                     move |value| set_cursor_enabled.call(value),
                     "onboarding-cursor",
                     &hovered_card_id,
                     set_hovered_card_id.clone(),
-                ).with_key("onboarding-cursor"),
+                )
+                .with_key("onboarding-cursor"),
             ],
         ),
         OnboardingStep::General => (
@@ -428,7 +456,8 @@ fn onboarding_render(
                     "onboarding-start-at-login",
                     &hovered_card_id,
                     set_hovered_card_id.clone(),
-                ).with_key("onboarding-start-at-login"),
+                )
+                .with_key("onboarding-start-at-login"),
                 settings_section_heading("Features").with_key("onboarding-features-heading"),
                 settings_toggle_card_with_description(
                     "Activate limits automatically",
@@ -438,20 +467,29 @@ fn onboarding_render(
                     "onboarding-automatic-activation",
                     &hovered_card_id,
                     set_hovered_card_id.clone(),
-                ).with_key("onboarding-automatic-activation"),
+                )
+                .with_key("onboarding-automatic-activation"),
                 settings_control_card(
-                    "Refresh limits",
+                    "Refresh limits period",
                     Some("How often enabled providers fetch their current limits."),
-                    ComboBox::new(["30 seconds", "1 minute", "5 minutes", "10 minutes", "15 minutes"])
-                        .selected_index(limit_refresh_interval.index())
-                        .on_selection_changed(move |choice| {
-                            set_limit_refresh_interval.call(LimitRefreshInterval::from_index(choice));
-                        }),
+                    ComboBox::new([
+                        "30 seconds",
+                        "1 minute",
+                        "5 minutes",
+                        "10 minutes",
+                        "15 minutes",
+                    ])
+                    .selected_index(limit_refresh_interval.index())
+                    .on_selection_changed(move |choice| {
+                        set_limit_refresh_interval.call(LimitRefreshInterval::from_index(choice));
+                    }),
                     "onboarding-limit-refresh-interval",
                     &hovered_card_id,
                     set_hovered_card_id.clone(),
-                ).with_key("onboarding-limit-refresh-interval"),
-                settings_section_heading("Customization").with_key("onboarding-customization-heading"),
+                )
+                .with_key("onboarding-limit-refresh-interval"),
+                settings_section_heading("Customization")
+                    .with_key("onboarding-customization-heading"),
                 settings_toggle_card_with_description(
                     "Replace amount left with amount used",
                     Some("Shows consumed usage instead of the remaining amount."),
@@ -460,7 +498,8 @@ fn onboarding_render(
                     "onboarding-show-used",
                     &hovered_card_id,
                     set_hovered_card_id.clone(),
-                ).with_key("onboarding-show-used"),
+                )
+                .with_key("onboarding-show-used"),
                 settings_toggle_card_with_description(
                     "Show usage pace",
                     Some("Shows expected use and whether consumption is on pace."),
@@ -469,7 +508,8 @@ fn onboarding_render(
                     "onboarding-show-usage-pace",
                     &hovered_card_id,
                     set_hovered_card_id.clone(),
-                ).with_key("onboarding-show-usage-pace"),
+                )
+                .with_key("onboarding-show-usage-pace"),
                 settings_toggle_card_with_description(
                     "Show banked resets",
                     Some("Shows available banked reset credits in the popup."),
@@ -478,7 +518,8 @@ fn onboarding_render(
                     "onboarding-show-banked-resets",
                     &hovered_card_id,
                     set_hovered_card_id.clone(),
-                ).with_key("onboarding-show-banked-resets"),
+                )
+                .with_key("onboarding-show-banked-resets"),
                 settings_toggle_card_with_description(
                     "Show usage stats",
                     Some("Shows local token activity and the usage chart in the popup."),
@@ -487,7 +528,50 @@ fn onboarding_render(
                     "onboarding-show-usage-stats",
                     &hovered_card_id,
                     set_hovered_card_id.clone(),
-                ).with_key("onboarding-show-usage-stats"),
+                )
+                .with_key("onboarding-show-usage-stats"),
+                if [codex_enabled, claude_enabled, cursor_enabled]
+                    .into_iter()
+                    .filter(|enabled| *enabled)
+                    .count()
+                    > 1
+                {
+                    settings_toggle_card_with_description(
+                        "Show total spend in All tab",
+                        Some("Shows the provider spend breakdown when All is selected."),
+                        show_total_spend_on_all_tab,
+                        move |value| set_show_total_spend_on_all_tab.call(value),
+                        "onboarding-show-total-spend",
+                        &hovered_card_id,
+                        set_hovered_card_id.clone(),
+                    )
+                    .with_key("onboarding-show-total-spend")
+                } else {
+                    Element::Empty
+                },
+                if [codex_enabled, claude_enabled, cursor_enabled]
+                    .into_iter()
+                    .filter(|enabled| *enabled)
+                    .count()
+                    > 1
+                {
+                    settings_control_card(
+                        "Total spend layout",
+                        Some("Choose how provider totals are arranged in the All tab."),
+                        ComboBox::new(["Donut", "Progress bar"])
+                            .selected_index(total_spend_presentation.index())
+                            .on_selection_changed(move |choice| {
+                                set_total_spend_presentation
+                                    .call(TotalSpendPresentation::from_index(choice));
+                            }),
+                        "onboarding-total-spend-layout",
+                        &hovered_card_id,
+                        set_hovered_card_id.clone(),
+                    )
+                    .with_key("onboarding-total-spend-layout")
+                } else {
+                    Element::Empty
+                },
                 settings_toggle_card_with_description(
                     "Show account name",
                     Some("Shows your Codex name or Claude organization in the popup."),
@@ -496,7 +580,8 @@ fn onboarding_render(
                     "onboarding-show-account-name",
                     &hovered_card_id,
                     set_hovered_card_id.clone(),
-                ).with_key("onboarding-show-account-name"),
+                )
+                .with_key("onboarding-show-account-name"),
             ],
         ),
     };
@@ -536,6 +621,8 @@ fn onboarding_render(
                     completed.show_usage_pace = show_usage_pace;
                     completed.show_banked_resets = show_banked_resets;
                     completed.show_usage_stats = show_usage_stats;
+                    completed.show_total_spend_on_all_tab = show_total_spend_on_all_tab;
+                    completed.total_spend_presentation = total_spend_presentation;
                     completed.show_account_name = show_account_name;
                     if let Err(error) = replace_settings(settings_tx.clone(), completed) {
                         eprintln!("failed to complete onboarding: {error:#}");
@@ -559,7 +646,12 @@ fn onboarding_render(
             vstack(cards).spacing(10.0),
         ))
         .spacing(16.0)
-        .padding(Thickness { left: 32.0, top: 28.0, right: 32.0, bottom: 20.0 })
+        .padding(Thickness {
+            left: 32.0,
+            top: 28.0,
+            right: 32.0,
+            bottom: 20.0,
+        })
         .horizontal_alignment(HorizontalAlignment::Stretch),
     )
     .horizontal_scroll_bar_visibility(ScrollBarVisibility::Disabled)
@@ -570,8 +662,18 @@ fn onboarding_render(
             .spacing(8.0)
             .horizontal_alignment(HorizontalAlignment::Right),
     )
-    .padding(Thickness { left: 32.0, top: 14.0, right: 32.0, bottom: 18.0 })
-    .border_thickness(Thickness { left: 0.0, top: 1.0, right: 0.0, bottom: 0.0 })
+    .padding(Thickness {
+        left: 32.0,
+        top: 14.0,
+        right: 32.0,
+        bottom: 18.0,
+    })
+    .border_thickness(Thickness {
+        left: 0.0,
+        top: 1.0,
+        right: 0.0,
+        bottom: 0.0,
+    })
     .border_brush(ThemeRef::CardStroke)
     .grid_row(1);
     let title_bar = TitleBar::new(ONBOARDING_WINDOW_TITLE)
@@ -693,12 +795,24 @@ pub fn render(
     };
     let mut navigation = NavigationView::new(
         [
-            NavViewItem::new("General").tag("general").icon_path(crate::icons::data("house"), nav_icon_color),
-            NavViewItem::new("Providers").tag("providers").icon_path(crate::icons::data("plugs-connected"), nav_icon_color),
-            NavViewItem::new("Tray").tag("tray").icon_path(crate::icons::data("chat-centered-text"), nav_icon_color),
-            NavViewItem::new("Notifications").tag("notifications").icon_path(crate::icons::data("bell"), nav_icon_color),
-            NavViewItem::new("Advanced").tag("advanced").icon_path(crate::icons::data("sliders"), nav_icon_color),
-            NavViewItem::new("About & Updates").tag("about").icon_path(crate::icons::data("info"), nav_icon_color),
+            NavViewItem::new("General")
+                .tag("general")
+                .icon_path(crate::icons::data("house"), nav_icon_color),
+            NavViewItem::new("Providers")
+                .tag("providers")
+                .icon_path(crate::icons::data("plugs-connected"), nav_icon_color),
+            NavViewItem::new("Tray")
+                .tag("tray")
+                .icon_path(crate::icons::data("chat-centered-text"), nav_icon_color),
+            NavViewItem::new("Notifications")
+                .tag("notifications")
+                .icon_path(crate::icons::data("bell"), nav_icon_color),
+            NavViewItem::new("Advanced")
+                .tag("advanced")
+                .icon_path(crate::icons::data("sliders"), nav_icon_color),
+            NavViewItem::new("About & Updates")
+                .tag("about")
+                .icon_path(crate::icons::data("info"), nav_icon_color),
         ],
         Element::Empty,
     )
@@ -767,9 +881,12 @@ pub fn render(
     let (show_used_percentage, set_show_used_percentage) =
         cx.use_state(settings.show_used_percentage);
     let (show_usage_pace, set_show_usage_pace) = cx.use_state(settings.show_usage_pace);
-    let (show_banked_resets, set_show_banked_resets) =
-        cx.use_state(settings.show_banked_resets);
+    let (show_banked_resets, set_show_banked_resets) = cx.use_state(settings.show_banked_resets);
     let (show_usage_stats, set_show_usage_stats) = cx.use_state(settings.show_usage_stats);
+    let (show_total_spend_on_all_tab, set_show_total_spend_on_all_tab) =
+        cx.use_state(settings.show_total_spend_on_all_tab);
+    let (total_spend_presentation, set_total_spend_presentation) =
+        cx.use_state(settings.total_spend_presentation);
     let (show_account_name, set_show_account_name) = cx.use_state(settings.show_account_name);
     let (activation_failure, set_activation_failure) =
         cx.use_state(settings.notifications.activation_failure);
@@ -810,6 +927,8 @@ pub fn render(
             show_usage_pace,
             show_banked_resets,
             show_usage_stats,
+            show_total_spend_on_all_tab,
+            total_spend_presentation,
             show_account_name,
             activation_failure,
             limits_reset,
@@ -838,6 +957,8 @@ pub fn render(
             set_show_usage_pace,
             set_show_banked_resets,
             set_show_usage_stats,
+            set_show_total_spend_on_all_tab,
+            set_total_spend_presentation,
             set_show_account_name,
             set_activation_failure,
             set_limits_reset,
@@ -986,6 +1107,8 @@ fn tab_content(
     show_usage_pace: bool,
     show_banked_resets: bool,
     show_usage_stats: bool,
+    show_total_spend_on_all_tab: bool,
+    total_spend_presentation: TotalSpendPresentation,
     show_account_name: bool,
     activation_failure: bool,
     limits_reset: bool,
@@ -1014,6 +1137,8 @@ fn tab_content(
     set_show_usage_pace: SetState<bool>,
     set_show_banked_resets: SetState<bool>,
     set_show_usage_stats: SetState<bool>,
+    set_show_total_spend_on_all_tab: SetState<bool>,
+    set_total_spend_presentation: SetState<TotalSpendPresentation>,
     set_show_account_name: SetState<bool>,
     set_activation_failure: SetState<bool>,
     set_limits_reset: SetState<bool>,
@@ -1045,6 +1170,8 @@ fn tab_content(
     let apply_show_usage_pace = settings_tx.clone();
     let apply_show_banked_resets = settings_tx.clone();
     let apply_show_usage_stats = settings_tx.clone();
+    let apply_show_total_spend_on_all_tab = settings_tx.clone();
+    let apply_total_spend_presentation = settings_tx.clone();
     let apply_show_account_name = settings_tx.clone();
     let apply_activation_failure = settings_tx.clone();
     let apply_limits_reset = settings_tx.clone();
@@ -1106,7 +1233,7 @@ fn tab_content(
                 )
                 .with_key("general-automatic-activation"),
                 settings_control_card(
-                    "Refresh limits",
+                    "Refresh limits period",
                     Some("How often enabled providers fetch the current limits."),
                     ComboBox::new(["30 seconds", "1 minute", "5 minutes", "10 minutes", "15 minutes"])
                         .selected_index(limit_refresh_interval.index())
@@ -1201,6 +1328,60 @@ fn tab_content(
                     set_hovered_card_id.clone(),
                 )
                 .with_key("general-show-usage-stats"),
+                if [codex_enabled, claude_enabled, cursor_enabled]
+                    .into_iter()
+                    .filter(|enabled| *enabled)
+                    .count()
+                    > 1
+                {
+                    settings_toggle_card_with_description(
+                        "Show total spend in All tab",
+                        Some("Shows the provider spend breakdown when All is selected."),
+                        show_total_spend_on_all_tab,
+                        move |value| {
+                            persist_bool(
+                                set_show_total_spend_on_all_tab.clone(),
+                                apply_show_total_spend_on_all_tab.clone(),
+                                value,
+                                |settings, value| {
+                                    settings.show_total_spend_on_all_tab = value;
+                                },
+                            );
+                        },
+                        "general-show-total-spend",
+                        hovered_card_id,
+                        set_hovered_card_id.clone(),
+                    )
+                    .with_key("general-show-total-spend")
+                } else {
+                    Element::Empty
+                },
+                if [codex_enabled, claude_enabled, cursor_enabled]
+                    .into_iter()
+                    .filter(|enabled| *enabled)
+                    .count()
+                    > 1
+                {
+                    settings_control_card(
+                        "Total spend layout",
+                        Some("Choose how provider totals are arranged in the All tab."),
+                        ComboBox::new(["Donut", "Progress bar"])
+                            .selected_index(total_spend_presentation.index())
+                            .on_selection_changed(move |choice| {
+                                let value = TotalSpendPresentation::from_index(choice);
+                                set_total_spend_presentation.call(value);
+                                persist_update(apply_total_spend_presentation.clone(), move |settings| {
+                                    settings.total_spend_presentation = value;
+                                });
+                            }),
+                        "general-total-spend-layout",
+                        hovered_card_id,
+                        set_hovered_card_id.clone(),
+                    )
+                    .with_key("general-total-spend-layout")
+                } else {
+                    Element::Empty
+                },
                 settings_toggle_card_with_description(
                     "Show account name",
                     Some("Shows your Codex name or Claude organization beside the provider heading."),
@@ -1485,6 +1666,8 @@ fn tab_content(
                 show_usage_pace: set_show_usage_pace,
                 show_banked_resets: set_show_banked_resets,
                 show_usage_stats: set_show_usage_stats,
+                show_total_spend_on_all_tab: set_show_total_spend_on_all_tab,
+                total_spend_presentation: set_total_spend_presentation,
                 show_account_name: set_show_account_name,
                 activation_failure: set_activation_failure,
                 limits_reset: set_limits_reset,
@@ -2098,9 +2281,8 @@ fn tray_settings_cards(
                         .header("Provider")
                         .selected_index(provider_index)
                         .on_selection_changed(move |choice: i32| {
-                            let Some(provider) = providers_for_provider
-                                .get(choice.max(0) as usize)
-                                .copied()
+                            let Some(provider) =
+                                providers_for_provider.get(choice.max(0) as usize).copied()
                             else {
                                 return;
                             };
@@ -2279,7 +2461,11 @@ fn persist_tray_widgets(
     persist_update(settings_tx, move |settings| settings.tray_widgets = widgets);
 }
 
-fn enabled_providers(codex_enabled: bool, claude_enabled: bool, cursor_enabled: bool) -> Vec<ProviderKind> {
+fn enabled_providers(
+    codex_enabled: bool,
+    claude_enabled: bool,
+    cursor_enabled: bool,
+) -> Vec<ProviderKind> {
     [
         (ProviderKind::Codex, codex_enabled),
         (ProviderKind::Claude, claude_enabled),
