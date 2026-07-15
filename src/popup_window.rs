@@ -191,6 +191,8 @@ struct UiState {
     show_account_name: bool,
     codex_enabled: bool,
     claude_enabled: bool,
+    use_colored_provider_icons: bool,
+    replace_chatgpt_logo_with_codex: bool,
     update_version: Option<String>,
 }
 
@@ -251,6 +253,8 @@ impl Default for UiState {
             show_account_name: false,
             codex_enabled: true,
             claude_enabled: false,
+            use_colored_provider_icons: false,
+            replace_chatgpt_logo_with_codex: false,
             update_version: None,
         }
     }
@@ -487,6 +491,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         show_account_name: state.settings.show_account_name,
         codex_enabled: state.settings.providers.codex_enabled,
         claude_enabled: state.settings.providers.claude_enabled,
+        use_colored_provider_icons: state.settings.use_colored_provider_icons,
+        replace_chatgpt_logo_with_codex: state.settings.replace_chatgpt_logo_with_codex,
         update_version: state
             .updates
             .available_update()
@@ -683,6 +689,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 Some("All"),
                 "All providers",
                 selected_view == PopupView::All,
+                ui.use_colored_provider_icons,
                 &hovered_action,
                 set_hovered_action.clone(),
                 {
@@ -692,10 +699,15 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             ),
             popup_tab_button(
                 "provider-tab-codex",
-                Some("codex"),
+                Some(if ui.replace_chatgpt_logo_with_codex {
+                    "codex"
+                } else {
+                    "chatgpt"
+                }),
                 None,
                 "Codex",
                 selected_view == PopupView::Codex,
+                ui.use_colored_provider_icons,
                 &hovered_action,
                 set_hovered_action.clone(),
                 {
@@ -709,6 +721,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 None,
                 "Claude",
                 selected_view == PopupView::Claude,
+                ui.use_colored_provider_icons,
                 &hovered_action,
                 set_hovered_action.clone(),
                 move || set_selected_view.call(PopupView::Claude),
@@ -733,6 +746,15 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         .horizontal_alignment(HorizontalAlignment::Left)
         .into()
     };
+    let refresh_tooltip = if show_provider_tabs {
+        let last_updated = format_last_updated(latest_sampled_at(&limits), clock_tick);
+        let relative_time = last_updated
+            .strip_prefix("Updated ")
+            .unwrap_or(&last_updated);
+        format!("Refresh | Last updated {relative_time}")
+    } else {
+        "Refresh".into()
+    };
 
     let footer = border(
         grid((
@@ -742,7 +764,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     "refresh",
                     "fluent-refresh",
                     "fluent-refresh",
-                    "Refresh",
+                    &refresh_tooltip,
                     &hovered_action,
                     set_hovered_action.clone(),
                     refresh,
@@ -1173,6 +1195,8 @@ fn start_background_bridge(
             show_account_name: state.settings.show_account_name,
             codex_enabled: state.settings.providers.codex_enabled,
             claude_enabled: state.settings.providers.claude_enabled,
+            use_colored_provider_icons: state.settings.use_colored_provider_icons,
+            replace_chatgpt_logo_with_codex: state.settings.replace_chatgpt_logo_with_codex,
             update_version: update_version_from_phase(&update_phase),
             ..UiState::default()
         };
@@ -1201,6 +1225,8 @@ fn start_background_bridge(
                               tray: &mut TrayManager,
                               settings: Settings| {
             let phase = updates.snapshot();
+            let providers_changed = ui.codex_enabled != settings.providers.codex_enabled
+                || ui.claude_enabled != settings.providers.claude_enabled;
             ui.show_used_percentage = settings.show_used_percentage;
             ui.show_usage_pace = settings.show_usage_pace;
             ui.show_banked_resets = settings.show_banked_resets;
@@ -1209,12 +1235,20 @@ fn start_background_bridge(
             ui.show_account_name = settings.show_account_name;
             ui.codex_enabled = settings.providers.codex_enabled;
             ui.claude_enabled = settings.providers.claude_enabled;
+            ui.use_colored_provider_icons = settings.use_colored_provider_icons;
+            ui.replace_chatgpt_logo_with_codex = settings.replace_chatgpt_logo_with_codex;
             *notification_settings = settings.notifications.clone();
             *widgets = settings.tray_widgets.clone();
             ui.update_version = update_version_from_phase(&phase);
-            let provider_errors = state.sync_provider_workers(&settings);
-            if !provider_errors.is_empty() {
-                ui.error = Some(provider_errors.join("\n"));
+            // Presentation settings must visibly apply before any background
+            // work. In particular, changing provider icons must never wait on
+            // a worker lock, network request, or provider lifecycle change.
+            set_ui.call(ui.clone());
+            if providers_changed {
+                let provider_errors = state.sync_provider_workers(&settings);
+                if !provider_errors.is_empty() {
+                    ui.error = Some(provider_errors.join("\n"));
+                }
             }
             // Repaint the existing native icons in place. Recreating them makes
             // Explorer animate a remove/add sequence and causes a visible flash.
@@ -1542,6 +1576,7 @@ fn popup_tab_button(
     label: Option<&'static str>,
     tip: &'static str,
     selected: bool,
+    use_colored_provider_icons: bool,
     hovered_action: &Option<String>,
     set_hovered_action: SetState<Option<String>>,
     on_click: impl IntoUnitCallback,
@@ -1549,10 +1584,19 @@ fn popup_tab_button(
     let hovered = hovered_action.as_deref() == Some(id);
     let set_on_enter = set_hovered_action.clone();
     let set_on_exit = set_hovered_action;
-    let icon_color = if hovered {
+    let neutral_icon_color = if hovered {
         Color::rgb(230, 230, 230)
     } else {
         Color::rgb(190, 190, 190)
+    };
+    let icon_color = if use_colored_provider_icons {
+        match icon_name {
+            Some("codex") | Some("chatgpt") => Color::rgb(128, 159, 255),
+            Some("claude") => Color::rgb(217, 119, 87),
+            _ => neutral_icon_color,
+        }
+    } else {
+        neutral_icon_color
     };
     let tab_width = if label.is_some() { 44.0 } else { ICON_BUTTON_SIZE };
     let hover_background: Element = border(Element::Empty)
@@ -1598,6 +1642,9 @@ fn popup_tab_button(
             .into()
     };
 
+    // `SwapChainPanel` runs its icon painter only on mount. Key the complete
+    // tab by its appearance so changing either provider mark or tint replaces
+    // that native host immediately instead of leaving stale pixels on screen.
     relative_panel(vec![hover_background, content, selection_marker])
         .tooltip(tip)
         .width(tab_width)
@@ -1612,6 +1659,13 @@ fn popup_tab_button(
         })
         .on_pointer_exited(move || set_on_exit.call(None))
         .on_tapped(on_click)
+        .with_key(format!(
+            "{id}-{}-{:02X}{:02X}{:02X}",
+            icon_name.unwrap_or("label"),
+            icon_color.r,
+            icon_color.g,
+            icon_color.b
+        ))
         .into()
 }
 
