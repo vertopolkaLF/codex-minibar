@@ -642,6 +642,10 @@ fn tab_content(
     let apply_weekly_low_usage_threshold = settings_tx.clone();
     let apply_check_for_updates = settings_tx.clone();
     let apply_notify_on_update = settings_tx.clone();
+    let tray_widgets_for_codex_toggle = tray_widgets.to_vec();
+    let tray_widgets_for_claude_toggle = tray_widgets.to_vec();
+    let tray_widget_setter_for_codex_toggle = set_tray_widgets.clone();
+    let tray_widget_setter_for_claude_toggle = set_tray_widgets.clone();
     let (title, rows) = match tab {
         Tab::General => (
             "General",
@@ -815,11 +819,14 @@ fn tab_content(
                     Some("Reads limits from the locally signed-in Codex CLI or desktop app."),
                     codex_enabled,
                     move |value| {
-                        persist_bool(
+                        persist_provider_enabled(
                             set_codex_enabled.clone(),
+                            tray_widget_setter_for_codex_toggle.clone(),
                             apply_codex_enabled.clone(),
+                            ProviderKind::Codex,
                             value,
-                            |settings, value| settings.providers.codex_enabled = value,
+                            claude_enabled,
+                            tray_widgets_for_codex_toggle.clone(),
                         );
                     },
                     "providers-codex",
@@ -832,11 +839,14 @@ fn tab_content(
                     Some("Reads limits with the existing signed-in Claude Code OAuth session."),
                     claude_enabled,
                     move |value| {
-                        persist_bool(
+                        persist_provider_enabled(
                             set_claude_enabled.clone(),
+                            tray_widget_setter_for_claude_toggle.clone(),
                             apply_claude_enabled.clone(),
+                            ProviderKind::Claude,
                             value,
-                            |settings, value| settings.providers.claude_enabled = value,
+                            codex_enabled,
+                            tray_widgets_for_claude_toggle.clone(),
                         );
                     },
                     "providers-claude",
@@ -846,10 +856,18 @@ fn tab_content(
                 .with_key("providers-claude"),
             ],
         ),
-        Tab::Tray => (
-            "Tray",
-            tray_settings_cards(tray_widgets, set_tray_widgets, settings_tx.clone()),
-        ),
+        Tab::Tray => {
+            let enabled_providers = enabled_providers(codex_enabled, claude_enabled);
+            (
+                "Tray",
+                tray_settings_cards(
+                    tray_widgets,
+                    &enabled_providers,
+                    set_tray_widgets,
+                    settings_tx.clone(),
+                ),
+            )
+        }
         Tab::Notifications => (
             "Notifications",
             vec![
@@ -1408,6 +1426,7 @@ fn about_action_card(
 
 fn tray_settings_cards(
     widgets: &[TrayWidget],
+    enabled_providers: &[ProviderKind],
     set_widgets: SetState<Vec<TrayWidget>>,
     settings_tx: Sender<Settings>,
 ) -> Vec<Element> {
@@ -1420,7 +1439,6 @@ fn tray_settings_cards(
     }
     for (index, widget) in widgets.iter().cloned().enumerate() {
         let source_items = vec!["5h + week", "5h limit", "Weekly limit", "5h reset"];
-        let provider_index = if widget.provider == ProviderKind::Claude { 1 } else { 0 };
         let source_index = source_index(&widget.source);
         let presentation_items = presentation_options(&widget.source);
         let presentation_index = presentation_items
@@ -1431,43 +1449,37 @@ fn tray_settings_cards(
         let widgets_for_provider = widgets.to_vec();
         let provider_setter = set_widgets.clone();
         let provider_tx = settings_tx.clone();
+        let providers_for_provider = enabled_providers.to_vec();
         let widgets_for_source = widgets.to_vec();
         let source_setter = set_widgets.clone();
         let source_tx = settings_tx.clone();
+        let providers_for_source = enabled_providers.to_vec();
         let widget_for_presentation = widget.clone();
         let widgets_for_presentation = widgets.to_vec();
         let presentation_setter = set_widgets.clone();
         let presentation_tx = settings_tx.clone();
+        let providers_for_presentation = enabled_providers.to_vec();
         let widgets_for_value = widgets.to_vec();
         let value_setter = set_widgets.clone();
         let value_tx = settings_tx.clone();
+        let providers_for_value = enabled_providers.to_vec();
         let widgets_for_remove = widgets.to_vec();
         let remove_setter = set_widgets.clone();
         let remove_tx = settings_tx.clone();
+        let providers_for_remove = enabled_providers.to_vec();
         let widgets_for_left = widgets.to_vec();
         let left_setter = set_widgets.clone();
         let left_tx = settings_tx.clone();
+        let providers_for_left = enabled_providers.to_vec();
         let widgets_for_right = widgets.to_vec();
         let right_setter = set_widgets.clone();
         let right_tx = settings_tx.clone();
+        let providers_for_right = enabled_providers.to_vec();
 
         let mut fields: Vec<Element> = vec![
             text_block(format!("Tray widget {}", index + 1))
                 .font_size(16.0)
                 .bold()
-                .into(),
-            ComboBox::new(["Codex", "Claude"])
-                .header("Provider")
-                .selected_index(provider_index)
-                .on_selection_changed(move |choice: i32| {
-                    let mut next = widgets_for_provider.clone();
-                    next[index].provider = if choice == 1 {
-                        ProviderKind::Claude
-                    } else {
-                        ProviderKind::Codex
-                    };
-                    persist_tray_widgets(provider_setter.clone(), provider_tx.clone(), next);
-                })
                 .into(),
             ComboBox::new(source_items)
                 .header("Information")
@@ -1481,7 +1493,12 @@ fn tray_settings_cards(
                         presentation: default_presentation(&source),
                         limit_value: widget_for_source.limit_value,
                     };
-                    persist_tray_widgets(source_setter.clone(), source_tx.clone(), next);
+                    persist_tray_widgets(
+                        source_setter.clone(),
+                        source_tx.clone(),
+                        next,
+                        &providers_for_source,
+                    );
                 })
                 .into(),
             ComboBox::new(presentation_items.iter().map(|(label, _)| *label))
@@ -1501,11 +1518,51 @@ fn tray_settings_cards(
                             presentation_setter.clone(),
                             presentation_tx.clone(),
                             next,
+                            &providers_for_presentation,
                         );
                     }
                 })
                 .into(),
         ];
+        match enabled_providers {
+            [] => fields.push(
+                text_block("Enable a provider to choose what this widget displays.")
+                    .font_size(12.0)
+                    .foreground(ThemeRef::SecondaryText)
+                    .wrap()
+                    .into(),
+            ),
+            [_] => {}
+            providers => {
+                let provider_index = providers
+                    .iter()
+                    .position(|provider| *provider == widget.provider)
+                    .unwrap_or(0) as i32;
+                fields.insert(
+                    1,
+                    ComboBox::new(providers.iter().map(|provider| provider.display_name()))
+                        .header("Provider")
+                        .selected_index(provider_index)
+                        .on_selection_changed(move |choice: i32| {
+                            let Some(provider) = providers_for_provider
+                                .get(choice.max(0) as usize)
+                                .copied()
+                            else {
+                                return;
+                            };
+                            let mut next = widgets_for_provider.clone();
+                            next[index].provider = provider;
+                            persist_tray_widgets(
+                                provider_setter.clone(),
+                                provider_tx.clone(),
+                                next,
+                                &providers_for_provider,
+                            );
+                        })
+                        .into(),
+                );
+            }
+        }
         if widget.uses_limit_value() {
             fields.push(
                 ComboBox::new(["Remaining", "Used"])
@@ -1522,7 +1579,12 @@ fn tray_settings_cards(
                         } else {
                             LimitValue::Remaining
                         };
-                        persist_tray_widgets(value_setter.clone(), value_tx.clone(), next);
+                        persist_tray_widgets(
+                            value_setter.clone(),
+                            value_tx.clone(),
+                            next,
+                            &providers_for_value,
+                        );
                     })
                     .into(),
             );
@@ -1537,7 +1599,12 @@ fn tray_settings_cards(
                         }
                         let mut next = widgets_for_left.clone();
                         next.swap(index, index - 1);
-                        persist_tray_widgets(left_setter.clone(), left_tx.clone(), next);
+                        persist_tray_widgets(
+                            left_setter.clone(),
+                            left_tx.clone(),
+                            next,
+                            &providers_for_left,
+                        );
                     }),
                 Button::new("Move right")
                     .enabled(index + 1 < widgets_for_right.len())
@@ -1547,7 +1614,12 @@ fn tray_settings_cards(
                         }
                         let mut next = widgets_for_right.clone();
                         next.swap(index, index + 1);
-                        persist_tray_widgets(right_setter.clone(), right_tx.clone(), next);
+                        persist_tray_widgets(
+                            right_setter.clone(),
+                            right_tx.clone(),
+                            next,
+                            &providers_for_right,
+                        );
                     }),
             ))
             .spacing(8.0)
@@ -1558,7 +1630,12 @@ fn tray_settings_cards(
                 .on_click(move || {
                     let mut next = widgets_for_remove.clone();
                     next.remove(index);
-                    persist_tray_widgets(remove_setter.clone(), remove_tx.clone(), next);
+                    persist_tray_widgets(
+                        remove_setter.clone(),
+                        remove_tx.clone(),
+                        next,
+                        &providers_for_remove,
+                    );
                 })
                 .into(),
         );
@@ -1576,13 +1653,19 @@ fn tray_settings_cards(
     }
     let add_setter = set_widgets;
     let widgets_for_add = widgets.to_vec();
+    let providers_for_add = enabled_providers.to_vec();
     cards.push(
         Button::new("Add tray widget")
             .accent()
             .on_click(move || {
                 let mut next = widgets_for_add.clone();
                 next.push(TrayWidget::default_user_widget());
-                persist_tray_widgets(add_setter.clone(), settings_tx.clone(), next);
+                persist_tray_widgets(
+                    add_setter.clone(),
+                    settings_tx.clone(),
+                    next,
+                    &providers_for_add,
+                );
             })
             .with_key("tray-add-widget")
             .into(),
@@ -1635,9 +1718,53 @@ fn persist_tray_widgets(
     setter: SetState<Vec<TrayWidget>>,
     settings_tx: Sender<Settings>,
     widgets: Vec<TrayWidget>,
+    enabled_providers: &[ProviderKind],
 ) {
+    let widgets = normalize_tray_widget_providers(widgets, enabled_providers);
     setter.call(widgets.clone());
     persist_update(settings_tx, move |settings| settings.tray_widgets = widgets);
+}
+
+fn enabled_providers(codex_enabled: bool, claude_enabled: bool) -> Vec<ProviderKind> {
+    [
+        (ProviderKind::Codex, codex_enabled),
+        (ProviderKind::Claude, claude_enabled),
+    ]
+    .into_iter()
+    .filter_map(|(provider, enabled)| enabled.then_some(provider))
+    .collect()
+}
+
+fn normalize_tray_widget_providers(
+    mut widgets: Vec<TrayWidget>,
+    enabled_providers: &[ProviderKind],
+) -> Vec<TrayWidget> {
+    if let [provider] = enabled_providers {
+        for widget in &mut widgets {
+            widget.provider = *provider;
+        }
+    }
+    widgets
+}
+
+fn persist_provider_enabled(
+    setter: SetState<bool>,
+    widgets_setter: SetState<Vec<TrayWidget>>,
+    settings_tx: Sender<Settings>,
+    provider: ProviderKind,
+    enabled: bool,
+    other_provider_enabled: bool,
+    widgets: Vec<TrayWidget>,
+) {
+    setter.call(enabled);
+    let providers = match provider {
+        ProviderKind::Codex => enabled_providers(enabled, other_provider_enabled),
+        ProviderKind::Claude => enabled_providers(other_provider_enabled, enabled),
+    };
+    widgets_setter.call(normalize_tray_widget_providers(widgets, &providers));
+    persist_update(settings_tx, move |settings| {
+        settings.providers.set_enabled(provider, enabled);
+    });
 }
 
 fn persist_bool(
@@ -1664,6 +1791,7 @@ fn persist_update(settings_tx: Sender<Settings>, update: impl FnOnce(&mut Settin
     let result = Settings::default_path().and_then(|path| {
         let mut settings = Settings::load_or_create(&path)?;
         update(&mut settings);
+        settings.normalize_tray_widget_providers();
         // Persist first so a flaky side effect cannot block live UI updates.
         settings.save(&path)?;
         if let Err(error) = settings.apply_runtime_effects() {

@@ -6,7 +6,7 @@ use std::{
         mpsc::{self, Receiver, RecvTimeoutError, Sender},
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::Result;
@@ -251,35 +251,48 @@ fn run_limit_task(
     limits_ready: Arc<AtomicBool>,
 ) {
     let mut state = ActivationState::load_or_default(&state_path).unwrap_or_default();
+    // This worker belongs to one provider, so its deadline and any retry stay
+    // provider-local. A failing provider cannot wake another provider's loop.
+    let mut next_poll = Instant::now();
     loop {
-        match tick(&mut provider, &mut activator, &mut state, automatic_activation) {
-            Ok(worker_events) => {
-                let _ = state.save(&state_path);
-                for event in worker_events {
-                    let is_limits_update = matches!(event, WorkerEvent::LimitsUpdated(_));
-                    let _ = events.send(event);
-                    // The usage task may start only after the first quota event
-                    // has been placed in the UI queue.
-                    if is_limits_update {
-                        limits_ready.store(true, Ordering::Release);
+        if next_poll <= Instant::now() {
+            // Schedule from the end of each request. A manual refresh replaces
+            // the previous deadline instead of leaving a stale timer behind.
+            match tick(&mut provider, &mut activator, &mut state, automatic_activation) {
+                Ok(worker_events) => {
+                    let _ = state.save(&state_path);
+                    for event in worker_events {
+                        let is_limits_update = matches!(event, WorkerEvent::LimitsUpdated(_));
+                        let _ = events.send(event);
+                        // The usage task may start only after the first quota event
+                        // has been placed in the UI queue.
+                        if is_limits_update {
+                            limits_ready.store(true, Ordering::Release);
+                        }
                     }
                 }
+                Err(error) => {
+                    let _ = events.send(WorkerEvent::PollFailed(error.to_string()));
+                }
             }
-            Err(error) => {
-                let _ = events.send(WorkerEvent::PollFailed(error.to_string()));
-            }
+            next_poll = Instant::now() + poll_interval;
+            continue;
         }
-        match commands.recv_timeout(poll_interval) {
+
+        match commands.recv_timeout(next_poll.saturating_duration_since(Instant::now())) {
             Ok(WorkerCommand::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
             Ok(WorkerCommand::SetAutomaticActivation(enabled)) => {
                 automatic_activation = enabled;
             }
             Ok(WorkerCommand::SetLimitRefreshInterval(interval)) => {
                 poll_interval = interval;
+                // Apply the setting immediately without an extra request.
+                next_poll = Instant::now() + poll_interval;
             }
-            Ok(WorkerCommand::Refresh)
-            | Ok(WorkerCommand::SetHistoryRetentionDays(_))
-            | Err(RecvTimeoutError::Timeout) => {}
+            Ok(WorkerCommand::Refresh) | Err(RecvTimeoutError::Timeout) => {
+                next_poll = Instant::now();
+            }
+            Ok(WorkerCommand::SetHistoryRetentionDays(_)) => {}
         }
     }
 }

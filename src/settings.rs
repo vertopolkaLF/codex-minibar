@@ -90,6 +90,15 @@ impl ProviderSettings {
             ProviderKind::Claude => self.claude_enabled = enabled,
         }
     }
+
+    /// Returns the provider only when there is exactly one usable choice.
+    pub const fn single_enabled_provider(&self) -> Option<ProviderKind> {
+        match (self.codex_enabled, self.claude_enabled) {
+            (true, false) => Some(ProviderKind::Codex),
+            (false, true) => Some(ProviderKind::Claude),
+            _ => None,
+        }
+    }
 }
 
 impl ProviderKind {
@@ -264,9 +273,10 @@ impl Settings {
         if original_version < SETTINGS_VERSION {
             migrate(&mut document, original_version)?;
         }
-        let settings: Self = document.try_into().context("decode migrated settings")?;
+        let mut settings: Self = document.try_into().context("decode migrated settings")?;
         settings.validate()?;
-        if original_version < SETTINGS_VERSION {
+        let tray_widgets_normalized = settings.normalize_tray_widget_providers();
+        if original_version < SETTINGS_VERSION || tray_widgets_normalized {
             settings.save(path)?;
         }
         Ok(settings)
@@ -315,6 +325,24 @@ impl Settings {
             "weekly low usage threshold must be between 1 and 99 percent"
         );
         Ok(())
+    }
+
+    /// A tray widget cannot meaningfully target a disabled provider. When the
+    /// enabled set has a single member, that member is the widget's provider.
+    /// This keeps settings files and every live surface in agreement.
+    pub fn normalize_tray_widget_providers(&mut self) -> bool {
+        let Some(provider) = self.providers.single_enabled_provider() else {
+            return false;
+        };
+
+        let mut changed = false;
+        for widget in &mut self.tray_widgets {
+            if widget.provider != provider {
+                widget.provider = provider;
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Applies settings whose effect lives outside the render tree.
@@ -689,5 +717,41 @@ tray_widgets = []
             ..Settings::default()
         };
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn normalizes_tray_widgets_to_the_only_enabled_provider() {
+        let mut settings = Settings {
+            providers: ProviderSettings {
+                codex_enabled: false,
+                claude_enabled: true,
+            },
+            tray_widgets: vec![TrayWidget::default_user_widget()],
+            ..Settings::default()
+        };
+
+        assert!(settings.normalize_tray_widget_providers());
+        assert_eq!(settings.tray_widgets[0].provider, ProviderKind::Claude);
+        assert!(!settings.normalize_tray_widget_providers());
+    }
+
+    #[test]
+    fn loading_rewrites_a_widget_for_the_only_enabled_provider() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        let stale = Settings {
+            providers: ProviderSettings {
+                codex_enabled: false,
+                claude_enabled: true,
+            },
+            tray_widgets: vec![TrayWidget::default_user_widget()],
+            ..Settings::default()
+        };
+        stale.save(&path).unwrap();
+
+        let loaded = Settings::load_or_create(&path).unwrap();
+
+        assert_eq!(loaded.tray_widgets[0].provider, ProviderKind::Claude);
+        assert!(fs::read_to_string(path).unwrap().contains("provider = \"claude\""));
     }
 }
