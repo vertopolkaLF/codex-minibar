@@ -1087,9 +1087,9 @@ fn start_background_bridge(
             ) {
                 ui.error = Some(error.to_string());
             }
-            for (provider, commands) in state.worker_commands() {
+            for (_, commands) in state.worker_commands() {
                 let _ = commands.send(WorkerCommand::SetAutomaticActivation(
-                    settings.automatic_activation && provider == ProviderKind::Codex,
+                    settings.automatic_activation,
                 ));
                 let _ = commands.send(WorkerCommand::SetLimitRefreshInterval(
                     Duration::from_secs(settings.limit_refresh_interval.seconds()),
@@ -1262,14 +1262,20 @@ fn start_background_bridge(
                     ui.observe_limits_update();
                     set_ui.call(ui.clone());
                 }
-                Ok(WorkerEvent::ProviderActivationSucceeded(ProviderKind::Codex)) => {
-                    ui.last_activation =
-                        format!("Succeeded at {}", format_activation_at(Utc::now()));
+                Ok(WorkerEvent::ProviderActivationSucceeded(provider)) => {
+                    ui.last_activation = format!(
+                        "{} succeeded at {}",
+                        provider.display_name(),
+                        format_activation_at(Utc::now())
+                    );
                     set_ui.call(ui.clone());
                 }
-                Ok(WorkerEvent::ProviderActivationFailed(ProviderKind::Codex, error)) => {
-                    ui.last_activation =
-                        format!("Failed at {}: {error}", format_activation_at(Utc::now()));
+                Ok(WorkerEvent::ProviderActivationFailed(provider, error)) => {
+                    ui.last_activation = format!(
+                        "{} failed at {}: {error}",
+                        provider.display_name(),
+                        format_activation_at(Utc::now())
+                    );
                     set_ui.call(ui.clone());
                 }
                 Ok(WorkerEvent::ProviderPollFailed(provider, error)) => {
@@ -1282,9 +1288,7 @@ fn start_background_bridge(
                 | WorkerEvent::UsageUpdated(_)
                 | WorkerEvent::ActivationSucceeded
                 | WorkerEvent::ActivationFailed(_)
-                | WorkerEvent::PollFailed(_)
-                | WorkerEvent::ProviderActivationSucceeded(_)
-                | WorkerEvent::ProviderActivationFailed(_, _)) => {}
+                | WorkerEvent::PollFailed(_)) => {}
                 Ok(WorkerEvent::Stopped) => break,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,

@@ -9,11 +9,11 @@ use std::{
 use anyhow::{anyhow, Result};
 
 use crate::{
-    claude::ClaudeClient,
+    claude::{ClaudeActivator, ClaudeClient},
     codex::{first_available, CodexActivator, CodexClient},
     settings::{ProviderKind, Settings},
     usage::UsageStatistics,
-    worker::{self, Activator, UsageProvider, WorkerEvent, WorkerHandle},
+    worker::{self, UsageProvider, WorkerEvent, WorkerHandle},
 };
 
 pub type ProviderWorkers = HashMap<ProviderKind, WorkerHandle>;
@@ -47,6 +47,7 @@ pub fn start_provider_worker(
     activation_path: PathBuf,
     events: Sender<WorkerEvent>,
 ) -> Result<WorkerHandle> {
+    let activation_path = provider_activation_path(provider, activation_path);
     let mut worker = match provider {
         ProviderKind::Codex => {
             let executable = first_available(settings.codex_path.as_deref())?;
@@ -63,9 +64,9 @@ pub fn start_provider_worker(
         ProviderKind::Claude => worker::start_worker(
             ClaudeClient::new(),
             EmptyUsageProvider,
-            NoopActivator,
+            ClaudeActivator::new(),
             activation_path,
-            false,
+            settings.automatic_activation,
             settings.history_retention_days,
             Duration::from_secs(settings.limit_refresh_interval.seconds()),
         ),
@@ -103,6 +104,17 @@ pub fn start_provider_worker(
     Ok(worker)
 }
 
+fn provider_activation_path(provider: ProviderKind, base_path: PathBuf) -> PathBuf {
+    match provider {
+        // Preserve the existing Codex state file so current users retain their
+        // established activation baseline after updating.
+        ProviderKind::Codex => base_path,
+        // Claude has an independent five-hour clock; sharing Codex's baseline
+        // would suppress or duplicate an activation whenever both are enabled.
+        ProviderKind::Claude => base_path.with_file_name("activation-claude.toml"),
+    }
+}
+
 struct EmptyUsageProvider;
 
 impl UsageProvider for EmptyUsageProvider {
@@ -112,13 +124,5 @@ impl UsageProvider for EmptyUsageProvider {
 
     fn refresh_usage_statistics(&mut self, _: u16) -> Result<UsageStatistics> {
         Ok(UsageStatistics::default())
-    }
-}
-
-struct NoopActivator;
-
-impl Activator for NoopActivator {
-    fn activate(&mut self) -> Result<()> {
-        Err(anyhow!("automatic activation is only available for Codex"))
     }
 }
