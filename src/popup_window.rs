@@ -264,6 +264,18 @@ impl UiState {
     }
 }
 
+/// The popup either shows the combined feed or one enabled provider.
+///
+/// This intentionally stays ephemeral: it is a view choice for the currently
+/// open popup, not an application preference that should survive a restart.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum PopupView {
+    #[default]
+    All,
+    Codex,
+    Claude,
+}
+
 /// Semantic identity for each independently reconciled popup section.
 ///
 /// Keeping these identities separate from their position prevents the WinUI
@@ -488,6 +500,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let ui_dispatcher = cx.use_ui_marshaller();
     let settings_tx = state.settings_tx.clone();
     let (hovered_action, set_hovered_action) = cx.use_state(Option::<String>::None);
+    let (selected_view, set_selected_view) = cx.use_state(PopupView::All);
     // Relative timestamps need a render tick even while the popup receives no
     // input or provider event. This changes only the elapsed-time label; it
     // never requests fresh limits.
@@ -538,6 +551,26 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     };
     let quit = move || std::process::exit(0);
 
+    // A selector only earns its keep when it can actually switch between
+    // providers. With zero or one enabled provider the familiar compact
+    // footer remains, sparing us some very professional-looking empty UI.
+    let show_provider_tabs = ui.codex_enabled && ui.claude_enabled;
+    let selected_view = match selected_view {
+        PopupView::Codex if !ui.codex_enabled => PopupView::All,
+        PopupView::Claude if !ui.claude_enabled => PopupView::All,
+        view => view,
+    };
+    let show_codex = ui.codex_enabled
+        && (!show_provider_tabs || matches!(selected_view, PopupView::All | PopupView::Codex));
+    let show_claude = ui.claude_enabled
+        && (!show_provider_tabs || matches!(selected_view, PopupView::All | PopupView::Claude));
+    // Usage statistics are deliberately a provider-detail concern. The
+    // combined view stays focused on limits, while a provider tab can show
+    // its full historical card. A lone provider has no All tab, so preserve
+    // its existing detailed view.
+    let show_usage_stats = ui.show_usage_stats
+        && (!show_provider_tabs || selected_view != PopupView::All);
+
     let mut body: Vec<Element> = Vec::new();
     if let Some(error) = ui.error.clone() {
         body.push(
@@ -549,7 +582,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 .into(),
         );
     }
-    if ui.codex_enabled {
+    if show_codex {
         body.push(
             vstack(provider_cards(
                 ProviderKind::Codex,
@@ -558,7 +591,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 ui.show_used_percentage,
                 ui.show_usage_pace,
                 ui.show_banked_resets,
-                ui.show_usage_stats,
+                show_usage_stats,
                 ui.hide_plan_credits,
                 ui.show_account_name,
                 color_scheme,
@@ -568,16 +601,16 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             .into(),
         );
     }
-    if ui.claude_enabled {
+    if show_claude {
         body.push(
             vstack(provider_cards(
                 ProviderKind::Claude,
-                !ui.codex_enabled,
+                !show_codex,
                 &limits.claude,
                 ui.show_used_percentage,
                 ui.show_usage_pace,
                 ui.show_banked_resets,
-                ui.show_usage_stats,
+                show_usage_stats,
                 ui.hide_plan_credits,
                 ui.show_account_name,
                 color_scheme,
@@ -642,21 +675,68 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         },
     };
 
+    let footer_identity: Element = if show_provider_tabs {
+        hstack((
+            popup_tab_button(
+                "provider-tab-all",
+                None,
+                Some("All"),
+                "All providers",
+                selected_view == PopupView::All,
+                &hovered_action,
+                set_hovered_action.clone(),
+                {
+                    let set_selected_view = set_selected_view.clone();
+                    move || set_selected_view.call(PopupView::All)
+                },
+            ),
+            popup_tab_button(
+                "provider-tab-codex",
+                Some("codex"),
+                None,
+                "Codex",
+                selected_view == PopupView::Codex,
+                &hovered_action,
+                set_hovered_action.clone(),
+                {
+                    let set_selected_view = set_selected_view.clone();
+                    move || set_selected_view.call(PopupView::Codex)
+                },
+            ),
+            popup_tab_button(
+                "provider-tab-claude",
+                Some("claude"),
+                None,
+                "Claude",
+                selected_view == PopupView::Claude,
+                &hovered_action,
+                set_hovered_action.clone(),
+                move || set_selected_view.call(PopupView::Claude),
+            ),
+        ))
+        .spacing(2.0)
+        .horizontal_alignment(HorizontalAlignment::Left)
+        .vertical_alignment(VerticalAlignment::Center)
+        .into()
+    } else {
+        vstack((
+            body_strong("Codex Minibar").foreground(ThemeRef::SecondaryText),
+            caption(if ui.refreshing {
+                "Refreshing…".into()
+            } else {
+                format_last_updated(latest_sampled_at(&limits), clock_tick)
+            })
+            .foreground(ThemeRef::TertiaryText),
+        ))
+        .spacing(0.0)
+        .vertical_alignment(VerticalAlignment::Center)
+        .horizontal_alignment(HorizontalAlignment::Left)
+        .into()
+    };
+
     let footer = border(
         grid((
-            vstack((
-                body_strong("Codex Minibar").foreground(ThemeRef::SecondaryText),
-                caption(if ui.refreshing {
-                    "Refreshing…".into()
-                } else {
-                    format_last_updated(latest_sampled_at(&limits), clock_tick)
-                })
-                .foreground(ThemeRef::TertiaryText),
-            ))
-            .spacing(0.0)
-            .vertical_alignment(VerticalAlignment::Center)
-            .horizontal_alignment(HorizontalAlignment::Left)
-            .grid_column(0),
+            footer_identity.grid_column(0),
             hstack((
                 icon_button(
                     "refresh",
@@ -690,7 +770,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         .horizontal_alignment(HorizontalAlignment::Stretch),
     )
     .padding(Thickness {
-        left: 24.0,
+        left: if show_provider_tabs { 14.0 } else { 24.0 },
         top: 10.0,
         right: 18.0,
         // Extra bottom padding so content clears the rounded window corners.
@@ -710,7 +790,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     // error are visible. Give it the flexible row and keep the footer in a
     // separate Auto row so it remains fixed to the bottom edge.
     let body_layout_key = format!(
-        "popup-scroll-{}-{:?}-{}-{}-{}-{}-{}-{}-{}",
+        "popup-scroll-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{:?}",
         ui.limits_revision,
         ui.error,
         ui.show_banked_resets,
@@ -720,6 +800,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         ui.codex_enabled,
         ui.claude_enabled,
         color_scheme as i32,
+        selected_view,
     );
     let scrollable_body = scroll_viewer(
         vstack(body)
@@ -1453,6 +1534,86 @@ fn pump_tray_and_dismiss(
 }
 
 const ICON_BUTTON_SIZE: f64 = 36.0;
+
+/// Compact footer selector item for choosing the combined or provider view.
+fn popup_tab_button(
+    id: &'static str,
+    icon_name: Option<&'static str>,
+    label: Option<&'static str>,
+    tip: &'static str,
+    selected: bool,
+    hovered_action: &Option<String>,
+    set_hovered_action: SetState<Option<String>>,
+    on_click: impl IntoUnitCallback,
+) -> Element {
+    let hovered = hovered_action.as_deref() == Some(id);
+    let set_on_enter = set_hovered_action.clone();
+    let set_on_exit = set_hovered_action;
+    let icon_color = if hovered {
+        Color::rgb(230, 230, 230)
+    } else {
+        Color::rgb(190, 190, 190)
+    };
+    let tab_width = if label.is_some() { 44.0 } else { ICON_BUTTON_SIZE };
+    let hover_background: Element = border(Element::Empty)
+        .background(ThemeRef::SubtleFill)
+        .opacity(if hovered { 1.0 } else { 0.0 })
+        .corner_radius(4.0)
+        .relative_align_left()
+        .relative_align_right()
+        .relative_align_top()
+        .relative_align_bottom()
+        .into();
+    let selection_marker: Element = border(Element::Empty)
+        .height(2.0)
+        .background(ThemeRef::Accent)
+        .opacity(if selected { 1.0 } else { 0.0 })
+        .corner_radius(1.0)
+        .margin(Thickness {
+            left: 9.0,
+            top: 0.0,
+            right: 9.0,
+            bottom: 0.0,
+        })
+        .relative_align_left()
+        .relative_align_right()
+        .relative_align_bottom()
+        .into();
+    let content: Element = if let Some(label) = label {
+        body_strong(label)
+            .foreground(if selected {
+                ThemeRef::AccentText
+            } else if hovered {
+                ThemeRef::PrimaryText
+            } else {
+                ThemeRef::SecondaryText
+            })
+            .relative_align_h_center()
+            .relative_align_v_center()
+            .into()
+    } else {
+        crate::icons::element(icon_name.expect("provider tab icon"), 18.0, icon_color)
+            .relative_align_h_center()
+            .relative_align_v_center()
+            .into()
+    };
+
+    relative_panel(vec![hover_background, content, selection_marker])
+        .tooltip(tip)
+        .width(tab_width)
+        .height(ICON_BUTTON_SIZE)
+        .min_width(tab_width)
+        .min_height(ICON_BUTTON_SIZE)
+        .max_width(tab_width)
+        .max_height(ICON_BUTTON_SIZE)
+        .background(Color::transparent())
+        .on_pointer_entered(move |_: PointerEventInfo| {
+            set_on_enter.call(Some(id.to_string()));
+        })
+        .on_pointer_exited(move || set_on_exit.call(None))
+        .on_tapped(on_click)
+        .into()
+}
 
 /// Icon-only action using a neutral Phosphor SVG that adopts the accent on hover.
 fn icon_button(

@@ -7,6 +7,12 @@ pub fn data(name: &str) -> &'static str {
         "fluent-refresh" => include_str!("../assets/icons/fluent-arrow-sync-20-regular.svg"),
         "fluent-settings" => include_str!("../assets/icons/fluent-settings-20-regular.svg"),
         "fluent-power" => include_str!("../assets/icons/fluent-power-20-regular.svg"),
+        // Provider marks are sourced from Iconify. They are rendered as
+        // monochrome paths so they remain legible in either app theme.
+        "codex" => include_str!("../assets/icons/openai-iconify.svg"),
+        "claude" => include_str!("../assets/icons/claude-iconify.svg"),
+        // Reserved for the ChatGPT provider when it is added to ProviderKind.
+        "chatgpt" => include_str!("../assets/icons/chatgpt-iconify.svg"),
         "chat-centered-text" => include_str!("../assets/icons/ph-chat-centered-text.svg"),
         "download-simple" => include_str!("../assets/icons/ph-download-simple.svg"),
         "plugs-connected" => include_str!("../assets/icons/ph-plugs-connected.svg"),
