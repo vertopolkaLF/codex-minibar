@@ -17,6 +17,7 @@ use crate::updater::{
 use anyhow::Context;
 use std::{
     cell::RefCell,
+    path::PathBuf,
     rc::Rc,
     sync::{Arc, mpsc::Sender},
     time::Duration,
@@ -28,6 +29,71 @@ const WINDOW_HEIGHT: f64 = 520.0;
 
 thread_local! {
     static HOST: RefCell<Option<Rc<ReactorHost>>> = const { RefCell::new(None) };
+}
+
+#[derive(Clone)]
+struct SettingsWindowState {
+    codex_enabled: SetState<bool>,
+    claude_enabled: SetState<bool>,
+    cursor_enabled: SetState<bool>,
+    use_colored_provider_icons: SetState<bool>,
+    replace_chatgpt_logo_with_codex: SetState<bool>,
+    automatic_activation: SetState<bool>,
+    limit_refresh_interval: SetState<LimitRefreshInterval>,
+    start_at_login: SetState<bool>,
+    show_used_percentage: SetState<bool>,
+    show_usage_pace: SetState<bool>,
+    show_banked_resets: SetState<bool>,
+    show_usage_stats: SetState<bool>,
+    show_account_name: SetState<bool>,
+    activation_failure: SetState<bool>,
+    limits_reset: SetState<bool>,
+    low_usage_enabled: SetState<bool>,
+    low_usage_threshold: SetState<u8>,
+    weekly_low_usage_enabled: SetState<bool>,
+    weekly_low_usage_threshold: SetState<u8>,
+    tray_widgets: SetState<Vec<TrayWidget>>,
+    check_for_updates: SetState<bool>,
+    notify_on_update: SetState<bool>,
+}
+
+impl SettingsWindowState {
+    fn apply(&self, settings: &Settings) {
+        self.codex_enabled.call(settings.providers.codex_enabled);
+        self.claude_enabled.call(settings.providers.claude_enabled);
+        self.cursor_enabled.call(settings.providers.cursor_enabled);
+        self.use_colored_provider_icons
+            .call(settings.use_colored_provider_icons);
+        self.replace_chatgpt_logo_with_codex
+            .call(settings.replace_chatgpt_logo_with_codex);
+        self.automatic_activation
+            .call(settings.automatic_activation);
+        self.limit_refresh_interval
+            .call(settings.limit_refresh_interval);
+        self.start_at_login.call(settings.start_at_login);
+        self.show_used_percentage
+            .call(settings.show_used_percentage);
+        self.show_usage_pace.call(settings.show_usage_pace);
+        self.show_banked_resets.call(settings.show_banked_resets);
+        self.show_usage_stats.call(settings.show_usage_stats);
+        self.show_account_name.call(settings.show_account_name);
+        self.activation_failure
+            .call(settings.notifications.activation_failure);
+        self.limits_reset
+            .call(settings.notifications.limits_changed);
+        self.low_usage_enabled
+            .call(settings.notifications.low_usage_enabled);
+        self.low_usage_threshold
+            .call(settings.notifications.low_usage_threshold_percent);
+        self.weekly_low_usage_enabled
+            .call(settings.notifications.weekly_low_usage_enabled);
+        self.weekly_low_usage_threshold
+            .call(settings.notifications.weekly_low_usage_threshold_percent);
+        self.tray_widgets.call(settings.tray_widgets.clone());
+        self.check_for_updates.call(settings.check_for_updates);
+        self.notify_on_update
+            .call(settings.notifications.update_available);
+    }
 }
 
 pub fn open(
@@ -405,7 +471,6 @@ pub fn render(
     // LayerFill crops flush to the window edge while long tabs stay scrollable.
     let page_scroller = scroll_viewer(
         border(tab_content(
-            &settings,
             rendered_tab,
             codex_enabled,
             claude_enabled,
@@ -581,7 +646,6 @@ fn settings_about_icon_uri() -> String {
 }
 
 fn tab_content(
-    settings: &Settings,
     tab: Tab,
     codex_enabled: bool,
     claude_enabled: bool,
@@ -662,6 +726,8 @@ fn tab_content(
     let apply_weekly_low_usage_threshold = settings_tx.clone();
     let apply_check_for_updates = settings_tx.clone();
     let apply_notify_on_update = settings_tx.clone();
+    let apply_settings_import = settings_tx.clone();
+    let apply_settings_reset = settings_tx.clone();
     let tray_widgets_for_codex_toggle = tray_widgets.to_vec();
     let tray_widgets_for_claude_toggle = tray_widgets.to_vec();
     let tray_widgets_for_cursor_toggle = tray_widgets.to_vec();
@@ -1077,24 +1143,94 @@ fn tab_content(
                 .with_key("notif-weekly-low-usage"),
             ],
         ),
-        Tab::Advanced => (
+        Tab::Advanced => {
+            let import_state = SettingsWindowState {
+                codex_enabled: set_codex_enabled,
+                claude_enabled: set_claude_enabled,
+                cursor_enabled: set_cursor_enabled,
+                use_colored_provider_icons: set_use_colored_provider_icons,
+                replace_chatgpt_logo_with_codex: set_replace_chatgpt_logo_with_codex,
+                automatic_activation: set_automatic_activation,
+                limit_refresh_interval: set_limit_refresh_interval,
+                start_at_login: set_start_at_login,
+                show_used_percentage: set_show_used_percentage,
+                show_usage_pace: set_show_usage_pace,
+                show_banked_resets: set_show_banked_resets,
+                show_usage_stats: set_show_usage_stats,
+                show_account_name: set_show_account_name,
+                activation_failure: set_activation_failure,
+                limits_reset: set_limits_reset,
+                low_usage_enabled: set_low_usage_enabled,
+                low_usage_threshold: set_low_usage_threshold,
+                weekly_low_usage_enabled: set_weekly_low_usage_enabled,
+                weekly_low_usage_threshold: set_weekly_low_usage_threshold,
+                tray_widgets: set_tray_widgets,
+                check_for_updates: set_check_for_updates,
+                notify_on_update: set_notify_on_update,
+            };
+            let reset_state = import_state.clone();
+            (
             "Advanced",
             vec![
-                settings_info_card(
-                    "History retention",
-                    format!("{} days", settings.history_retention_days),
+                settings_action_card(
+                    "Export settings",
+                    "Export",
+                    || {
+                        if let Err(error) = export_settings() {
+                            eprintln!("failed to export settings: {error:#}");
+                            notifications::show("Settings export failed", &format!("{error:#}"));
+                        }
+                    },
+                    "advanced-export",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
                 )
-                .with_key("advanced-retention"),
-                settings_info_card(
-                    "Codex executable",
-                    settings
-                        .codex_path
-                        .as_ref()
-                        .map_or("Automatic".into(), |path| path.display().to_string()),
+                .with_key("advanced-export"),
+                settings_action_card(
+                    "Import settings",
+                    "Import",
+                    move || {
+                        let result = import_settings().and_then(|settings| match settings {
+                            Some(settings) => {
+                                replace_settings(apply_settings_import.clone(), settings.clone())?;
+                                import_state.apply(&settings);
+                                Ok(())
+                            }
+                            None => Ok(()),
+                        });
+                        if let Err(error) = result {
+                            eprintln!("failed to import settings: {error:#}");
+                            notifications::show("Settings import failed", &format!("{error:#}"));
+                        }
+                    },
+                    "advanced-import",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
                 )
-                .with_key("advanced-codex-path"),
+                .with_key("advanced-import"),
+                settings_action_card(
+                    "Reset all settings",
+                    "Reset",
+                    move || {
+                        if !confirm_settings_reset() {
+                            return;
+                        }
+                        let settings = Settings::default();
+                        if let Err(error) = replace_settings(apply_settings_reset.clone(), settings.clone()) {
+                            eprintln!("failed to reset settings: {error:#}");
+                            notifications::show("Settings reset failed", &format!("{error:#}"));
+                        } else {
+                            reset_state.apply(&settings);
+                        }
+                    },
+                    "advanced-reset",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("advanced-reset"),
             ],
-        ),
+        )
+        }
         Tab::About => (
             "About & Updates",
             about_settings_cards(
@@ -1910,4 +2046,115 @@ fn persist_update(settings_tx: Sender<Settings>, update: impl FnOnce(&mut Settin
     if let Err(error) = result {
         eprintln!("failed to save settings: {error:#}");
     }
+}
+
+fn replace_settings(settings_tx: Sender<Settings>, mut settings: Settings) -> anyhow::Result<()> {
+    let path = Settings::default_path()?;
+    settings.normalize_tray_widget_providers();
+    settings.save(&path)?;
+    if let Err(error) = settings.apply_runtime_effects() {
+        eprintln!("failed to apply runtime settings effects: {error:#}");
+    }
+    settings_tx
+        .send(settings)
+        .context("notify live settings listeners")?;
+    Ok(())
+}
+
+fn export_settings() -> anyhow::Result<()> {
+    let Some(path) = choose_settings_file(true)? else {
+        return Ok(());
+    };
+    let current_path = Settings::default_path()?;
+    Settings::load_or_create(&current_path)?.save(&path)
+}
+
+fn import_settings() -> anyhow::Result<Option<Settings>> {
+    let Some(path) = choose_settings_file(false)? else {
+        return Ok(None);
+    };
+    Settings::load_or_create(&path).map(Some)
+}
+
+#[cfg(windows)]
+fn choose_settings_file(save: bool) -> anyhow::Result<Option<PathBuf>> {
+    use windows_sys::Win32::UI::Controls::Dialogs::{
+        GetOpenFileNameW, GetSaveFileNameW, OFN_FILEMUSTEXIST, OFN_OVERWRITEPROMPT,
+        OFN_PATHMUSTEXIST, OPENFILENAMEW,
+    };
+
+    let mut filename = "codex-minibar-settings.toml"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    filename.resize(32_768, 0);
+    let filter = "Codex Minibar settings (*.toml)\0*.toml\0\0"
+        .encode_utf16()
+        .collect::<Vec<_>>();
+    let default_extension = "toml\0".encode_utf16().collect::<Vec<_>>();
+    let title = if save {
+        "Export settings\0"
+    } else {
+        "Import settings\0"
+    }
+    .encode_utf16()
+    .collect::<Vec<_>>();
+    let mut dialog: OPENFILENAMEW = unsafe { std::mem::zeroed() };
+    dialog.lStructSize = std::mem::size_of::<OPENFILENAMEW>() as u32;
+    dialog.lpstrFilter = filter.as_ptr();
+    dialog.lpstrFile = filename.as_mut_ptr();
+    dialog.nMaxFile = filename.len() as u32;
+    dialog.lpstrTitle = title.as_ptr();
+    dialog.lpstrDefExt = default_extension.as_ptr();
+    dialog.Flags = OFN_PATHMUSTEXIST
+        | if save {
+            OFN_OVERWRITEPROMPT
+        } else {
+            OFN_FILEMUSTEXIST
+        };
+
+    let accepted = unsafe {
+        if save {
+            GetSaveFileNameW(&mut dialog)
+        } else {
+            GetOpenFileNameW(&mut dialog)
+        }
+    } != 0;
+    if !accepted {
+        return Ok(None);
+    }
+    let length = filename.iter().position(|&unit| unit == 0).unwrap_or(0);
+    Ok(Some(PathBuf::from(String::from_utf16(
+        &filename[..length],
+    )?)))
+}
+
+#[cfg(not(windows))]
+fn choose_settings_file(_save: bool) -> anyhow::Result<Option<PathBuf>> {
+    anyhow::bail!("settings import and export are only available on Windows")
+}
+
+#[cfg(windows)]
+fn confirm_settings_reset() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        IDYES, MB_ICONWARNING, MB_YESNO, MessageBoxW,
+    };
+
+    let message = "Reset all Codex Minibar settings to their defaults?\0"
+        .encode_utf16()
+        .collect::<Vec<_>>();
+    let title = "Reset settings\0".encode_utf16().collect::<Vec<_>>();
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            message.as_ptr(),
+            title.as_ptr(),
+            MB_YESNO | MB_ICONWARNING,
+        ) == IDYES
+    }
+}
+
+#[cfg(not(windows))]
+fn confirm_settings_reset() -> bool {
+    false
 }
