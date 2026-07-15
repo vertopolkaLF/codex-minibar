@@ -89,21 +89,18 @@ const SHOW_GRACE_MS: i64 = 200;
 pub const POPUP_WIDTH: i32 = 380;
 /// Layout pieces used by [`height_for`] (must stay in sync with `popup_window`).
 const LIMIT_CARD_HEIGHT: i32 = 82;
-const META_ROW_HEIGHT: i32 = 22;
 const BODY_PAD_Y: i32 = 36; // top 16 + bottom 20
 const BODY_SPACING: i32 = 12;
 const FOOTER_HEIGHT: i32 = 61; // padding + icon row + top border
 const CHROME_HEIGHT: i32 = 4; // outer border + inset
-/// Baseline height when both limit cards, plan/credits, and footer are shown.
+/// Baseline height when the two standard limit cards and footer are shown.
 pub const POPUP_HEIGHT: i32 = BODY_PAD_Y
     + LIMIT_CARD_HEIGHT * 2
-    + META_ROW_HEIGHT
-    + BODY_SPACING * 2
+    + BODY_SPACING
     + FOOTER_HEIGHT
     + CHROME_HEIGHT;
-/// Smallest popup: two limit cards + footer (plan/credits row hidden).
-pub const POPUP_HEIGHT_MIN: i32 =
-    BODY_PAD_Y + LIMIT_CARD_HEIGHT * 2 + BODY_SPACING + FOOTER_HEIGHT + CHROME_HEIGHT;
+/// Smallest popup: two limit cards plus the footer.
+pub const POPUP_HEIGHT_MIN: i32 = POPUP_HEIGHT;
 /// Temporary safety ceiling before the popup is assigned to a monitor.
 ///
 /// This is deliberately larger than any supported desktop. The real maximum
@@ -324,11 +321,8 @@ fn monitor_dpi(monitor: HMONITOR) -> u32 {
 }
 
 /// Client height in DIP for the current popup contents.
-pub fn height_for(hide_plan_credits: bool, error: Option<&str>) -> i32 {
+pub fn height_for(error: Option<&str>) -> i32 {
     let mut blocks = vec![LIMIT_CARD_HEIGHT, LIMIT_CARD_HEIGHT];
-    if !hide_plan_credits {
-        blocks.push(META_ROW_HEIGHT);
-    }
     if let Some(message) = error {
         blocks.insert(0, info_bar_height(message));
     }

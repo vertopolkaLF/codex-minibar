@@ -21,6 +21,7 @@ use crate::{
 
 const OAUTH_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const OAUTH_PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
+const OAUTH_ACCOUNT_SETTINGS_URL: &str = "https://api.anthropic.com/api/oauth/account/settings";
 const OAUTH_BETA: &str = "oauth-2025-04-20";
 const FALLBACK_CLAUDE_CODE_VERSION: &str = "2.1.0";
 const PROFILE_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 60);
@@ -99,26 +100,28 @@ fn terminate(child: &mut Child) {
 /// used by CodexBar. Credentials stay in Claude's own `.credentials.json`.
 pub struct ClaudeClient {
     timeout: Duration,
-    profile_cache: ClaudeProfileCache,
+    account_cache: ClaudeAccountCache,
 }
 
-struct ClaudeProfileCache {
+struct ClaudeAccountCache {
     account_name: Option<String>,
+    plan_type: Option<String>,
     checked_at: Option<Instant>,
     reset_schedule: Vec<(String, Option<DateTime<Utc>>)>,
 }
 
-impl Default for ClaudeProfileCache {
+impl Default for ClaudeAccountCache {
     fn default() -> Self {
         Self {
             account_name: None,
+            plan_type: None,
             checked_at: None,
             reset_schedule: Vec::new(),
         }
     }
 }
 
-impl ClaudeProfileCache {
+impl ClaudeAccountCache {
     fn needs_refresh(&self, reset_schedule: &[(String, Option<DateTime<Utc>>)]) -> bool {
         self.checked_at
             .is_none_or(|checked_at| checked_at.elapsed() >= PROFILE_REFRESH_INTERVAL)
@@ -128,9 +131,11 @@ impl ClaudeProfileCache {
     fn record(
         &mut self,
         account_name: Option<String>,
+        plan_type: Option<String>,
         reset_schedule: Vec<(String, Option<DateTime<Utc>>)>,
     ) {
         self.account_name = account_name;
+        self.plan_type = plan_type;
         self.checked_at = Some(Instant::now());
         self.reset_schedule = reset_schedule;
     }
@@ -140,7 +145,7 @@ impl ClaudeClient {
     pub fn new() -> Self {
         Self {
             timeout: Duration::from_secs(15),
-            profile_cache: ClaudeProfileCache::default(),
+            account_cache: ClaudeAccountCache::default(),
         }
     }
 
@@ -189,11 +194,14 @@ impl ClaudeClient {
         };
         let mut limits = parse_usage_response(&body, Utc::now())?;
         let reset_schedule = reset_schedule(&limits);
-        if self.profile_cache.needs_refresh(&reset_schedule) {
-            // Profile stays separate from quota reads. Cache it for 30 minutes
-            // and refresh immediately when any quota reset timestamp changes.
-            self.profile_cache.record(
+        if self.account_cache.needs_refresh(&reset_schedule) {
+            // Account metadata stays separate from quota reads. Cache it for
+            // 30 minutes and refresh immediately when any reset changes.
+            self.account_cache.record(
                 fetch_account_name(&agent, &credentials.access_token)
+                    .ok()
+                    .flatten(),
+                fetch_plan_type(&agent, &credentials.access_token)
                     .ok()
                     .flatten(),
                 reset_schedule,
@@ -202,9 +210,10 @@ impl ClaudeClient {
         // Newer usage responses omit organization_name, but older responses
         // still expose it. The cached profile is authoritative whenever it
         // provides an identity value.
-        if let Some(account_name) = self.profile_cache.account_name.clone() {
+        if let Some(account_name) = self.account_cache.account_name.clone() {
             limits.account_name = Some(account_name);
         }
+        limits.plan_type = self.account_cache.plan_type.clone();
         Ok(limits)
     }
 }
@@ -324,6 +333,14 @@ struct OAuthProfileOrganization {
 }
 
 #[derive(Deserialize)]
+struct OAuthAccountSettingsResponse {
+    #[serde(rename = "subscriptionType")]
+    subscription_type: Option<String>,
+    #[serde(rename = "rateLimitTier")]
+    rate_limit_tier: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct OAuthLimitEntry {
     kind: Option<String>,
     group: Option<String>,
@@ -381,7 +398,9 @@ pub fn parse_usage_response(response: &str, sampled_at: DateTime<Utc>) -> Result
         additional_limits,
         sampled_at,
         account_name: non_empty(response.organization_name),
-        plan_type: Some("Claude".into()),
+        // The OAuth usage payload does not contain a subscription tier. Do
+        // not present the provider name as if it were a plan.
+        plan_type: None,
         ..RateLimits::default()
     }
     .normalized(sampled_at))
@@ -417,6 +436,44 @@ fn parse_account_name(response: &str) -> Result<Option<String>> {
     Ok(person_name
         .or_else(|| profile.organization.and_then(|organization| non_empty(organization.name)))
         .or(email))
+}
+
+fn fetch_plan_type(agent: &ureq::Agent, access_token: &str) -> Result<Option<String>> {
+    let response = agent
+        .get(OAUTH_ACCOUNT_SETTINGS_URL)
+        .set("Authorization", &format!("Bearer {access_token}"))
+        .set("Accept", "application/json")
+        .set("anthropic-beta", OAUTH_BETA)
+        .set(
+            "User-Agent",
+            &format!("claude-code/{FALLBACK_CLAUDE_CODE_VERSION}"),
+        )
+        .call()
+        .context("request Claude OAuth account settings")?;
+    let body = response
+        .into_string()
+        .context("read Claude OAuth account settings")?;
+    parse_plan_type(&body)
+}
+
+fn parse_plan_type(response: &str) -> Result<Option<String>> {
+    let settings: OAuthAccountSettingsResponse =
+        serde_json::from_str(response).context("parse Claude OAuth account settings")?;
+    if let Some(subscription_type) = non_empty(settings.subscription_type) {
+        return Ok(Some(subscription_type));
+    }
+
+    // Older accounts may only report an internal rate-limit tier. Infer a
+    // visible subscription tier only from unambiguous identifiers; generic
+    // values such as `default` remain intentionally absent from the UI.
+    let plan = non_empty(settings.rate_limit_tier).and_then(|tier| {
+        let tier = tier.to_ascii_lowercase();
+        ["enterprise", "team", "max", "pro"]
+            .into_iter()
+            .find(|plan| tier.split(|character: char| !character.is_alphanumeric()).any(|part| part == *plan))
+            .map(str::to_owned)
+    });
+    Ok(plan)
 }
 
 /// The OAuth endpoint's current shape puts promotional/model-only weekly
@@ -584,13 +641,31 @@ mod tests {
     }
 
     #[test]
-    fn profile_cache_refreshes_after_30_minutes_or_a_reset_change() {
+    fn account_settings_prefer_the_explicit_subscription_type() {
+        assert_eq!(
+            parse_plan_type(r#"{"subscriptionType":"pro","rateLimitTier":"default_claude_max_20x"}"#)
+                .unwrap()
+                .as_deref(),
+            Some("pro")
+        );
+        assert_eq!(
+            parse_plan_type(r#"{"rateLimitTier":"default_claude_max_20x"}"#)
+                .unwrap()
+                .as_deref(),
+            Some("max")
+        );
+        assert_eq!(parse_plan_type(r#"{"rateLimitTier":"default"}"#).unwrap(), None);
+    }
+
+    #[test]
+    fn account_cache_refreshes_after_30_minutes_or_a_reset_change() {
         let schedule = vec![("primary".into(), None), ("secondary".into(), None)];
-        let mut cache = ClaudeProfileCache::default();
+        let mut cache = ClaudeAccountCache::default();
         assert!(cache.needs_refresh(&schedule));
 
-        cache.record(Some("Ada Lovelace".into()), schedule.clone());
+        cache.record(Some("Ada Lovelace".into()), Some("pro".into()), schedule.clone());
         assert!(!cache.needs_refresh(&schedule));
+        assert_eq!(cache.plan_type.as_deref(), Some("pro"));
 
         let changed_schedule = vec![("primary".into(), None), ("secondary".into(), Some(Utc::now()))];
         assert!(cache.needs_refresh(&changed_schedule));
@@ -614,6 +689,7 @@ mod tests {
         assert_eq!(limits.additional_limits[0].window.duration_minutes, Some(10_080));
         assert_eq!(limits.additional_limits[1].title, "Opus");
         assert_eq!(limits.account_name.as_deref(), Some("example"));
+        assert_eq!(limits.plan_type, None);
     }
 
     #[test]
