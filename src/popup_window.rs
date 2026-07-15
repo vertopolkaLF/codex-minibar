@@ -665,6 +665,9 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         && selected_view == PopupView::All;
 
     let mut body: Vec<Element> = Vec::new();
+    // Provider headings add a small top gap unless they are the first visible
+    // section. Total Spend and an error banner count as sections too.
+    let mut has_preceding_section = false;
     if let Some(error) = ui.error.clone() {
         body.push(
             InfoBar::new("Something went wrong")
@@ -674,6 +677,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 .with_key("popup-error")
             .into(),
         );
+        has_preceding_section = true;
     }
     if show_total_spend {
         body.push(
@@ -695,12 +699,13 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 ui.total_spend_presentation
             )),
         );
+        has_preceding_section = true;
     }
     if show_codex {
         body.push(
             vstack(provider_cards(
                 ProviderKind::Codex,
-                true,
+                !has_preceding_section,
                 &limits.codex,
                 ui.show_used_percentage,
                 ui.show_usage_pace,
@@ -713,12 +718,13 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             .with_key("provider-codex")
             .into(),
         );
+        has_preceding_section = true;
     }
     if show_claude {
         body.push(
             vstack(provider_cards(
                 ProviderKind::Claude,
-                !show_codex,
+                !has_preceding_section,
                 &limits.claude,
                 ui.show_used_percentage,
                 ui.show_usage_pace,
@@ -731,12 +737,13 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             .with_key("provider-claude")
             .into(),
         );
+        has_preceding_section = true;
     }
     if show_cursor {
         body.push(
             vstack(provider_cards(
                 ProviderKind::Cursor,
-                !show_codex && !show_claude,
+                !has_preceding_section,
                 &limits.cursor,
                 ui.show_used_percentage,
                 ui.show_usage_pace,
