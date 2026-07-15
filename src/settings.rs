@@ -7,14 +7,46 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 7;
+pub const SETTINGS_VERSION: u32 = 8;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
     #[default]
     Codex,
     Claude,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProviderSettings {
+    pub codex_enabled: bool,
+    pub claude_enabled: bool,
+}
+
+impl Default for ProviderSettings {
+    fn default() -> Self {
+        Self {
+            codex_enabled: true,
+            claude_enabled: false,
+        }
+    }
+}
+
+impl ProviderSettings {
+    pub const fn is_enabled(&self, provider: ProviderKind) -> bool {
+        match provider {
+            ProviderKind::Codex => self.codex_enabled,
+            ProviderKind::Claude => self.claude_enabled,
+        }
+    }
+
+    pub fn set_enabled(&mut self, provider: ProviderKind, enabled: bool) {
+        match provider {
+            ProviderKind::Codex => self.codex_enabled = enabled,
+            ProviderKind::Claude => self.claude_enabled = enabled,
+        }
+    }
 }
 
 impl ProviderKind {
@@ -58,6 +90,8 @@ pub enum LimitValue {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrayWidget {
+    #[serde(default)]
+    pub provider: ProviderKind,
     pub source: TraySource,
     pub presentation: TrayPresentation,
     #[serde(default)]
@@ -67,6 +101,7 @@ pub struct TrayWidget {
 impl TrayWidget {
     pub fn default_user_widget() -> Self {
         Self {
+            provider: ProviderKind::Codex,
             source: TraySource::Combined,
             presentation: TrayPresentation::StackedNumbers,
             limit_value: LimitValue::Remaining,
@@ -121,7 +156,7 @@ impl Default for NotificationSettings {
 #[serde(default)]
 pub struct Settings {
     pub version: u32,
-    pub provider: ProviderKind,
+    pub providers: ProviderSettings,
     pub automatic_activation: bool,
     pub start_at_login: bool,
     pub show_used_percentage: bool,
@@ -140,7 +175,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             version: SETTINGS_VERSION,
-            provider: ProviderKind::default(),
+            providers: ProviderSettings::default(),
             automatic_activation: true,
             start_at_login: true,
             show_used_percentage: false,
@@ -472,6 +507,21 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.insert("version".into(), toml::Value::Integer(7));
                 version = 7;
             }
+            7 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                let selected = root
+                    .remove("provider")
+                    .and_then(|value| value.as_str().map(str::to_owned));
+                let claude_enabled = selected.as_deref() == Some("claude");
+                let mut providers = toml::map::Map::new();
+                providers.insert("codex_enabled".into(), toml::Value::Boolean(!claude_enabled));
+                providers.insert("claude_enabled".into(), toml::Value::Boolean(claude_enabled));
+                root.insert("providers".into(), toml::Value::Table(providers));
+                root.insert("version".into(), toml::Value::Integer(8));
+                version = 8;
+            }
             unsupported => anyhow::bail!("no migration path from settings version {unsupported}"),
         }
     }
@@ -485,7 +535,8 @@ mod tests {
     #[test]
     fn defaults_match_product_decisions() {
         let value = Settings::default();
-        assert_eq!(value.provider, ProviderKind::Codex);
+        assert!(value.providers.codex_enabled);
+        assert!(!value.providers.claude_enabled);
         assert!(value.automatic_activation);
         assert!(value.start_at_login);
         assert!(!value.show_used_percentage);
@@ -536,7 +587,7 @@ tray_widgets = []
         assert!(migrated.show_banked_resets);
         assert!(migrated.show_usage_stats);
         assert_eq!(migrated.history_retention_days, 30);
-        assert!(fs::read_to_string(path).unwrap().contains("version = 7"));
+        assert!(fs::read_to_string(path).unwrap().contains("version = 8"));
     }
 
     #[test]
@@ -548,6 +599,18 @@ tray_widgets = []
         let migrated = Settings::load_or_create(&path).unwrap();
         assert_eq!(migrated.version, SETTINGS_VERSION);
         assert_eq!(migrated.history_retention_days, 30);
+    }
+
+    #[test]
+    fn migrates_single_claude_selection_to_the_provider_toggle_list() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(&path, "version = 7\nprovider = 'claude'\n").unwrap();
+
+        let migrated = Settings::load_or_create(&path).unwrap();
+        assert!(!migrated.providers.codex_enabled);
+        assert!(migrated.providers.claude_enabled);
+        assert!(fs::read_to_string(path).unwrap().contains("version = 8"));
     }
 
     #[test]

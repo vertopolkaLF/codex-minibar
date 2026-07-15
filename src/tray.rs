@@ -8,7 +8,7 @@ use fontdue::{
 };
 
 use crate::{
-    limits::{LimitWindow, RateLimits},
+    limits::{LimitWindow, ProviderLimits, RateLimits},
     settings::{LimitValue, TrayPresentation, TraySource, TrayWidget},
 };
 
@@ -32,6 +32,21 @@ pub fn tooltip(limits: &RateLimits) -> String {
         format_remaining(&limits.secondary),
         format_reset(limits.secondary.resets_at),
     )
+}
+
+fn provider_tooltip(limits: &ProviderLimits) -> String {
+    let mut entries = Vec::new();
+    for provider in [crate::settings::ProviderKind::Codex, crate::settings::ProviderKind::Claude] {
+        let limits = limits.get(provider);
+        if has_real_data(limits) {
+            entries.push(format!("{} — {}", provider.display_name(), tooltip(limits)));
+        }
+    }
+    if entries.is_empty() {
+        "Codex Minibar".into()
+    } else {
+        entries.join("\n")
+    }
 }
 
 fn format_remaining(window: &LimitWindow) -> String {
@@ -462,7 +477,7 @@ mod platform {
         pub fn sync(
             &mut self,
             widgets: &[TrayWidget],
-            limits: &RateLimits,
+            limits: &ProviderLimits,
             update_available: bool,
         ) -> Result<()> {
             self.uses_light_theme = system_uses_light_theme();
@@ -478,13 +493,13 @@ mod platform {
                 let tray = TrayIconBuilder::new()
                     .with_icon(icon)
                     .with_menu(Box::new(make_menu(update_available)?))
-                    .with_tooltip(tooltip(limits))
+                    .with_tooltip(provider_tooltip(limits))
                     .with_menu_on_left_click(false)
                     .build()
                     .context("create tray icon")?;
                 self.icons.push(tray);
             }
-            let tooltip = tooltip(limits);
+            let tooltip = provider_tooltip(limits);
             for (index, tray) in self.icons.iter().enumerate() {
                 tray.set_icon(Some(make_icon(widget_for_icon(index, widgets), limits)?))?;
                 tray.set_tooltip(Some(&tooltip))?;
@@ -501,7 +516,7 @@ mod platform {
         pub fn refresh_system_theme(
             &mut self,
             widgets: &[TrayWidget],
-            limits: &RateLimits,
+            limits: &ProviderLimits,
         ) -> Result<()> {
             if Instant::now() < self.next_theme_check {
                 return Ok(());
@@ -518,7 +533,7 @@ mod platform {
         pub fn rebuild(
             &mut self,
             widgets: &[TrayWidget],
-            limits: &RateLimits,
+            limits: &ProviderLimits,
             update_available: bool,
         ) -> Result<()> {
             self.icons.clear();
@@ -565,11 +580,11 @@ mod platform {
         }
     }
 
-    fn make_icon(widget: Option<&TrayWidget>, limits: &RateLimits) -> Result<Icon> {
+    fn make_icon(widget: Option<&TrayWidget>, limits: &ProviderLimits) -> Result<Icon> {
         Icon::from_rgba(
             widget.map_or_else(
                 || app_icon_pixels().to_vec(),
-                |widget| render_widget(widget, limits),
+                |widget| render_widget(widget, limits.get(widget.provider)),
             ),
             ICON_SIZE as u32,
             ICON_SIZE as u32,
@@ -619,7 +634,7 @@ impl TrayManager {
     pub fn sync(
         &mut self,
         _widgets: &[TrayWidget],
-        _limits: &RateLimits,
+        _limits: &ProviderLimits,
         _update_available: bool,
     ) -> anyhow::Result<()> {
         Ok(())
@@ -628,7 +643,7 @@ impl TrayManager {
     pub fn rebuild(
         &mut self,
         _widgets: &[TrayWidget],
-        _limits: &RateLimits,
+        _limits: &ProviderLimits,
         _update_available: bool,
     ) -> anyhow::Result<()> {
         Ok(())
@@ -649,7 +664,7 @@ impl TrayManager {
     pub fn refresh_system_theme(
         &mut self,
         _widgets: &[TrayWidget],
-        _limits: &RateLimits,
+        _limits: &ProviderLimits,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -689,6 +704,7 @@ mod tests {
     #[test]
     fn renders_rgba_icon_with_visible_pixels() {
         let widget = TrayWidget {
+            provider: crate::settings::ProviderKind::Codex,
             source: TraySource::Primary,
             presentation: TrayPresentation::Number,
             limit_value: LimitValue::Remaining,
@@ -742,6 +758,7 @@ mod tests {
         };
         assert_eq!(limits.effective_primary().remaining_percent(), Some(60));
         let widget = TrayWidget {
+            provider: crate::settings::ProviderKind::Codex,
             source: TraySource::Primary,
             presentation: TrayPresentation::Number,
             limit_value: LimitValue::Remaining,
@@ -769,6 +786,7 @@ mod tests {
     #[test]
     fn uses_app_icon_until_rate_limit_data_arrives() {
         let widget = TrayWidget {
+            provider: crate::settings::ProviderKind::Codex,
             source: TraySource::Primary,
             presentation: TrayPresentation::Number,
             limit_value: LimitValue::Remaining,

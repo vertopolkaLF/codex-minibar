@@ -43,7 +43,7 @@ Codex Minibar reads the usage data exposed by a locally authenticated Codex CLI/
 - Optionally start Codex automatically to activate a fresh five-hour window.
 - Start with Windows, update in place from GitHub Releases, and retain history locally.
 - Detect Codex installations automatically, with an override for a custom executable path.
-- Switch to Claude in **Settings → General → Usage provider**. Claude reuses its local OAuth session from Claude Code; no credential is copied into this app.
+- Enable Codex and Claude independently in **Settings → Providers**. Both refresh at the same time; Claude reuses its local OAuth session from Claude Code and no credential is copied into this app.
 
 ## Requirements
 

@@ -1,4 +1,10 @@
-use std::{path::PathBuf, sync::mpsc::Sender, time::Duration};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::mpsc::Sender,
+    thread,
+    time::Duration,
+};
 
 use anyhow::{anyhow, Result};
 
@@ -10,18 +16,41 @@ use crate::{
     worker::{self, Activator, UsageProvider, WorkerEvent, WorkerHandle},
 };
 
-/// Starts the selected provider with a caller-owned event channel. Keeping the
-/// channel stable lets Settings replace a provider worker without restarting
-/// the tray bridge or any open WinUI surface.
-pub fn start_selected_worker(
+pub type ProviderWorkers = HashMap<ProviderKind, WorkerHandle>;
+
+/// Starts every enabled provider independently. Each worker has its own poll
+/// loop, then forwards into the shared UI stream with a provider identity.
+pub fn start_enabled_workers(
+    settings: &Settings,
+    activation_path: PathBuf,
+    events: Sender<WorkerEvent>,
+) -> (ProviderWorkers, Vec<String>) {
+    let mut workers = ProviderWorkers::new();
+    let mut errors = Vec::new();
+    for provider in [ProviderKind::Codex, ProviderKind::Claude] {
+        if !settings.providers.is_enabled(provider) {
+            continue;
+        }
+        match start_provider_worker(provider, settings, activation_path.clone(), events.clone()) {
+            Ok(worker) => {
+                workers.insert(provider, worker);
+            }
+            Err(error) => errors.push(format!("{}: {error:#}", provider.display_name())),
+        }
+    }
+    (workers, errors)
+}
+
+pub fn start_provider_worker(
+    provider: ProviderKind,
     settings: &Settings,
     activation_path: PathBuf,
     events: Sender<WorkerEvent>,
 ) -> Result<WorkerHandle> {
-    match settings.provider {
+    let mut worker = match provider {
         ProviderKind::Codex => {
             let executable = first_available(settings.codex_path.as_deref())?;
-            Ok(worker::start_worker_with_event_sender(
+            worker::start_worker(
                 CodexClient::new(&executable),
                 CodexClient::new(&executable),
                 CodexActivator::new(executable),
@@ -29,10 +58,9 @@ pub fn start_selected_worker(
                 settings.automatic_activation,
                 settings.history_retention_days,
                 Duration::from_secs(60),
-                events,
-            ))
+            )
         }
-        ProviderKind::Claude => Ok(worker::start_worker_with_event_sender(
+        ProviderKind::Claude => worker::start_worker(
             ClaudeClient::new(),
             EmptyUsageProvider,
             NoopActivator,
@@ -40,9 +68,39 @@ pub fn start_selected_worker(
             false,
             settings.history_retention_days,
             Duration::from_secs(60),
-            events,
-        )),
-    }
+        ),
+    };
+    let source_events = worker
+        .take_events()
+        .ok_or_else(|| anyhow!("provider worker did not expose an event stream"))?;
+    thread::spawn(move || {
+        while let Ok(event) = source_events.recv() {
+            let mapped = match event {
+                WorkerEvent::LimitsUpdated(limits) => {
+                    Some(WorkerEvent::ProviderLimitsUpdated(provider, limits))
+                }
+                WorkerEvent::UsageUpdated(usage) => {
+                    Some(WorkerEvent::ProviderUsageUpdated(provider, usage))
+                }
+                WorkerEvent::ActivationSucceeded => Some(WorkerEvent::ProviderActivationSucceeded(provider)),
+                WorkerEvent::ActivationFailed(error) => {
+                    Some(WorkerEvent::ProviderActivationFailed(provider, error))
+                }
+                WorkerEvent::PollFailed(error) => Some(WorkerEvent::ProviderPollFailed(provider, error)),
+                WorkerEvent::Stopped => None,
+                // Only the worker itself emits unscoped events. Passing any
+                // already-scoped value through avoids silently losing data if
+                // a future provider delegates another coordinator.
+                event => Some(event),
+            };
+            if let Some(event) = mapped {
+                if events.send(event).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+    Ok(worker)
 }
 
 struct EmptyUsageProvider;

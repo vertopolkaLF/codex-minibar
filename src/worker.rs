@@ -49,6 +49,12 @@ pub enum WorkerEvent {
     ActivationFailed(String),
     PollFailed(String),
     Stopped,
+    /// A provider-scoped event emitted by the multi-provider coordinator.
+    ProviderLimitsUpdated(crate::settings::ProviderKind, RateLimits),
+    ProviderUsageUpdated(crate::settings::ProviderKind, UsageStatistics),
+    ProviderActivationSucceeded(crate::settings::ProviderKind),
+    ProviderActivationFailed(crate::settings::ProviderKind, String),
+    ProviderPollFailed(crate::settings::ProviderKind, String),
 }
 
 pub struct WorkerHandle {

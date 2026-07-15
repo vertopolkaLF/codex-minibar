@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::usage::UsageStatistics;
+use crate::settings::ProviderKind;
 
 /// Windows longer than this are treated as weekly (or similar), not the 5h session.
 const SHORT_WINDOW_MAX_MINUTES: u32 = 12 * 60;
@@ -107,6 +108,30 @@ pub struct RateLimits {
     pub reset_credits: Option<RateLimitResetCreditsSummary>,
     /// Token statistics computed from local Codex session logs.
     pub usage: UsageStatistics,
+}
+
+/// Independent snapshots for every enabled provider. Provider data is never
+/// merged: a Claude weekly limit must not overwrite Codex's five-hour window.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ProviderLimits {
+    pub codex: RateLimits,
+    pub claude: RateLimits,
+}
+
+impl ProviderLimits {
+    pub fn get(&self, provider: ProviderKind) -> &RateLimits {
+        match provider {
+            ProviderKind::Codex => &self.codex,
+            ProviderKind::Claude => &self.claude,
+        }
+    }
+
+    pub fn get_mut(&mut self, provider: ProviderKind) -> &mut RateLimits {
+        match provider {
+            ProviderKind::Codex => &mut self.codex,
+            ProviderKind::Claude => &mut self.claude,
+        }
+    }
 }
 
 impl RateLimits {

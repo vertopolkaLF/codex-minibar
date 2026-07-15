@@ -17,7 +17,7 @@ use codex_minibar::{
     updater::{
         show_post_update_success_if_needed, sync_installed_display_version, UpdateController,
     },
-    provider::start_selected_worker,
+    provider::start_enabled_workers,
     worker::WorkerEvent,
 };
 use windows_reactor::*;
@@ -41,14 +41,13 @@ fn run() -> Result<()> {
             .and_then(|state| state.last_attempt_at);
 
     let (worker_events_tx, worker_events_rx) = mpsc::channel::<WorkerEvent>();
-    let (commands, worker, startup_error) = match start_selected_worker(
-        &settings,
-        activation_path.clone(),
-        worker_events_tx.clone(),
-    ) {
-        Ok(worker) => (Some(worker.commands.clone()), Some(worker), None),
-        Err(error) => (None, None, Some(error.to_string())),
-    };
+    let (workers, startup_errors) =
+        start_enabled_workers(&settings, activation_path.clone(), worker_events_tx.clone());
+    let commands = workers
+        .iter()
+        .map(|(provider, worker)| (*provider, worker.commands.clone()))
+        .collect();
+    let startup_error = (!startup_errors.is_empty()).then(|| startup_errors.join("\n"));
 
     let (settings_tx, settings_rx) = mpsc::channel();
     let updates = UpdateController::new();
@@ -61,16 +60,14 @@ fn run() -> Result<()> {
         .saturating_add(80)
         .min(popup::POPUP_HEIGHT_MAX);
     popup::set_client_height_dip(initial_height);
-    let active_provider = settings.provider;
     let state = Arc::new(AppState {
         settings,
         limits: Mutex::new(Default::default()),
         commands: Mutex::new(commands),
-        worker: Mutex::new(worker),
+        workers: Mutex::new(workers),
         worker_events_rx: Mutex::new(Some(worker_events_rx)),
         worker_events_tx,
         activation_path,
-        active_provider: Mutex::new(active_provider),
         startup_error,
         last_activation_at,
         settings_tx,
