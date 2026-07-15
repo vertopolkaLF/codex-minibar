@@ -15,7 +15,7 @@ use crate::{
     notifications,
     notifications::LimitNotificationTracker,
     popup,
-    settings::{NotificationSettings, Settings, TrayWidget},
+    settings::{NotificationSettings, ProviderKind, Settings, TrayWidget},
     settings_controls::update_accent_button,
     tray::{TrayManager, TrayMenuAction},
     updater::{UpdateController, UpdatePhase},
@@ -50,8 +50,12 @@ pub struct AppState {
     /// store, and worker results replace it atomically before either surface
     /// is repainted.
     pub limits: Mutex<RateLimits>,
-    pub commands: Option<Sender<WorkerCommand>>,
+    pub commands: Mutex<Option<Sender<WorkerCommand>>>,
     pub worker: Mutex<Option<crate::worker::WorkerHandle>>,
+    pub worker_events_rx: Mutex<Option<Receiver<WorkerEvent>>>,
+    pub worker_events_tx: Sender<WorkerEvent>,
+    pub activation_path: std::path::PathBuf,
+    pub active_provider: Mutex<ProviderKind>,
     pub startup_error: Option<String>,
     /// Last activation attempt loaded from persisted activation state.
     pub last_activation_at: Option<DateTime<Utc>>,
@@ -85,7 +89,53 @@ impl AppState {
     }
 
     fn take_worker_events(&self) -> Option<Receiver<WorkerEvent>> {
-        self.worker.lock().ok()?.as_mut()?.take_events()
+        self.worker_events_rx.lock().ok()?.take()
+    }
+
+    fn worker_commands(&self) -> Option<Sender<WorkerCommand>> {
+        self.commands.lock().ok()?.clone()
+    }
+
+    /// Replaces the background provider in place. The stable event channel is
+    /// deliberately shared with the tray bridge so settings take effect while
+    /// the popup and Settings window remain open.
+    fn restart_worker_if_needed(&self, settings: &Settings) -> anyhow::Result<bool> {
+        let provider_changed = self
+            .active_provider
+            .lock()
+            .map(|provider| *provider != settings.provider)
+            .unwrap_or(true);
+        let missing_worker = self.worker.lock().map(|worker| worker.is_none()).unwrap_or(true);
+        if !provider_changed && !missing_worker {
+            return Ok(false);
+        }
+
+        if let Ok(mut worker) = self.worker.lock()
+            && let Some(worker) = worker.take()
+        {
+            worker.shutdown();
+        }
+        if let Ok(mut commands) = self.commands.lock() {
+            *commands = None;
+        }
+        if let Ok(mut limits) = self.limits.lock() {
+            *limits = RateLimits::default();
+        }
+        let worker = crate::provider::start_selected_worker(
+            settings,
+            self.activation_path.clone(),
+            self.worker_events_tx.clone(),
+        )?;
+        if let Ok(mut slot) = self.worker.lock() {
+            if let Ok(mut commands) = self.commands.lock() {
+                *commands = Some(worker.commands.clone());
+            }
+            *slot = Some(worker);
+        }
+        if let Ok(mut provider) = self.active_provider.lock() {
+            *provider = settings.provider;
+        }
+        Ok(true)
     }
 
     pub fn shutdown_worker(&self) {
@@ -269,7 +319,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     // Rendering observes the same snapshot that the tray consumes; UiState
     // deliberately contains only view metadata, never a second copy of limits.
     let limits = state.current_limits();
-    let commands = state.commands.clone();
+    let commands = state.worker_commands();
     let ui_dispatcher = cx.use_ui_marshaller();
     let settings_tx = state.settings_tx.clone();
     let (hovered_action, set_hovered_action) = cx.use_state(Option::<String>::None);
@@ -868,9 +918,15 @@ fn start_background_bridge(
             ui.show_banked_resets = settings.show_banked_resets;
             ui.show_usage_stats = settings.show_usage_stats;
             ui.hide_plan_credits = settings.hide_plan_credits;
-            *notification_settings = settings.notifications;
-            *widgets = settings.tray_widgets;
+            *notification_settings = settings.notifications.clone();
+            *widgets = settings.tray_widgets.clone();
             ui.update_version = update_version_from_phase(&phase);
+            if let Err(error) = state.restart_worker_if_needed(&settings) {
+                ui.error = Some(format!(
+                    "Could not switch to {}: {error:#}",
+                    settings.provider.display_name()
+                ));
+            }
             // Repaint the existing native icons in place. Recreating them makes
             // Explorer animate a remove/add sequence and causes a visible flash.
             if let Err(error) = tray.sync(
@@ -880,9 +936,10 @@ fn start_background_bridge(
             ) {
                 ui.error = Some(error.to_string());
             }
-            if let Some(commands) = &state.commands {
+            if let Some(commands) = state.worker_commands() {
                 let _ = commands.send(WorkerCommand::SetAutomaticActivation(
-                    settings.automatic_activation,
+                    settings.automatic_activation
+                        && settings.provider == ProviderKind::Codex,
                 ));
                 // The worker refreshes immediately after receiving this command,
                 // so the selected history range is reflected in the open popup
@@ -1090,7 +1147,7 @@ fn pump_tray_and_dismiss(
                 }
             } else {
                 // Opening the popup should always fetch a current snapshot.
-                if let Some(commands) = &state.commands
+                if let Some(commands) = state.worker_commands()
                     && commands.send(WorkerCommand::Refresh).is_ok()
                 {
                     ui.refreshing = true;

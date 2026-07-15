@@ -7,7 +7,24 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 6;
+pub const SETTINGS_VERSION: u32 = 7;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderKind {
+    #[default]
+    Codex,
+    Claude,
+}
+
+impl ProviderKind {
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::Codex => "Codex",
+            Self::Claude => "Claude",
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -104,6 +121,7 @@ impl Default for NotificationSettings {
 #[serde(default)]
 pub struct Settings {
     pub version: u32,
+    pub provider: ProviderKind,
     pub automatic_activation: bool,
     pub start_at_login: bool,
     pub show_used_percentage: bool,
@@ -122,6 +140,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             version: SETTINGS_VERSION,
+            provider: ProviderKind::default(),
             automatic_activation: true,
             start_at_login: true,
             show_used_percentage: false,
@@ -444,6 +463,15 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.insert("version".into(), toml::Value::Integer(6));
                 version = 6;
             }
+            6 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("provider")
+                    .or_insert(toml::Value::String("codex".into()));
+                root.insert("version".into(), toml::Value::Integer(7));
+                version = 7;
+            }
             unsupported => anyhow::bail!("no migration path from settings version {unsupported}"),
         }
     }
@@ -457,6 +485,7 @@ mod tests {
     #[test]
     fn defaults_match_product_decisions() {
         let value = Settings::default();
+        assert_eq!(value.provider, ProviderKind::Codex);
         assert!(value.automatic_activation);
         assert!(value.start_at_login);
         assert!(!value.show_used_percentage);
@@ -507,7 +536,7 @@ tray_widgets = []
         assert!(migrated.show_banked_resets);
         assert!(migrated.show_usage_stats);
         assert_eq!(migrated.history_retention_days, 30);
-        assert!(fs::read_to_string(path).unwrap().contains("version = 6"));
+        assert!(fs::read_to_string(path).unwrap().contains("version = 7"));
     }
 
     #[test]

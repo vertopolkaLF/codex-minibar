@@ -4,7 +4,7 @@
 //! details; both surfaces share tokens from [`crate::theme`].
 
 use crate::notifications;
-use crate::settings::{LimitValue, Settings, TrayPresentation, TraySource, TrayWidget};
+use crate::settings::{LimitValue, ProviderKind, Settings, TrayPresentation, TraySource, TrayWidget};
 use crate::settings_controls::{
     settings_action_card, settings_info_card, settings_slider_content,
     settings_toggle_card, settings_toggle_card_with_description, settings_toggle_expander,
@@ -356,6 +356,7 @@ pub fn render(
         );
     }
 
+    let (provider, set_provider) = cx.use_state(settings.provider);
     let (start_at_login, set_start_at_login) = cx.use_state(settings.start_at_login);
     let (automatic_activation, set_automatic_activation) =
         cx.use_state(settings.automatic_activation);
@@ -394,6 +395,7 @@ pub fn render(
         border(tab_content(
             &settings,
             rendered_tab,
+            provider,
             automatic_activation,
             start_at_login,
             show_used_percentage,
@@ -416,6 +418,7 @@ pub fn render(
             check_for_updates,
             notify_on_update,
             &update_phase,
+            set_provider,
             set_automatic_activation,
             set_start_at_login,
             set_show_used_percentage,
@@ -558,6 +561,7 @@ fn settings_about_icon_uri() -> String {
 fn tab_content(
     settings: &Settings,
     tab: Tab,
+    provider: ProviderKind,
     automatic_activation: bool,
     start_at_login: bool,
     show_used_percentage: bool,
@@ -580,6 +584,7 @@ fn tab_content(
     check_for_updates: bool,
     notify_on_update: bool,
     update_phase: &UpdatePhase,
+    set_provider: SetState<ProviderKind>,
     set_automatic_activation: SetState<bool>,
     set_start_at_login: SetState<bool>,
     set_show_used_percentage: SetState<bool>,
@@ -604,6 +609,7 @@ fn tab_content(
     settings_tx: Sender<Settings>,
     updates: Arc<UpdateController>,
 ) -> Element {
+    let apply_provider = settings_tx.clone();
     let apply_automatic_activation = settings_tx.clone();
     let apply_start_at_login = settings_tx.clone();
     let apply_show_used_percentage = settings_tx.clone();
@@ -623,6 +629,33 @@ fn tab_content(
         Tab::General => (
             "General",
             vec![
+                settings_section_heading("Provider").with_key("general-provider-heading"),
+                ComboBox::new(["Codex", "Claude"])
+                    .header("Usage provider")
+                    .selected_index(if provider == ProviderKind::Claude { 1 } else { 0 })
+                    .on_selection_changed(move |choice: i32| {
+                        let provider = if choice == 1 {
+                            ProviderKind::Claude
+                        } else {
+                            ProviderKind::Codex
+                        };
+                        set_provider.call(provider);
+                        persist_update(apply_provider.clone(), move |settings| {
+                            settings.provider = provider;
+                        });
+                    })
+                    .with_key("general-provider")
+                    .into(),
+                text_block(if provider == ProviderKind::Claude {
+                    "Claude uses the signed-in Claude Code session and switches immediately."
+                } else {
+                    "Codex uses the locally signed-in Codex CLI or desktop app."
+                })
+                .font_size(12.0)
+                .opacity(0.72)
+                .wrap()
+                .with_key("general-provider-description")
+                .into(),
                 settings_toggle_card_with_description(
                     "Start with Windows",
                     Some("Opens Codex Minibar automatically after you sign in."),

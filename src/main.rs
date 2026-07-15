@@ -3,14 +3,12 @@
 use std::{
     rc::Rc,
     sync::{mpsc, Arc, Mutex},
-    time::Duration,
 };
 
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use codex_minibar::{
     app::{app, AppState},
-    codex::{first_available, CodexActivator, CodexClient},
     notifications,
     popup::{self, POPUP_HEIGHT_MAX, POPUP_WIDTH},
     scheduler::ActivationState,
@@ -19,7 +17,8 @@ use codex_minibar::{
     updater::{
         show_post_update_success_if_needed, sync_installed_display_version, UpdateController,
     },
-    worker::start_worker,
+    provider::start_selected_worker,
+    worker::WorkerEvent,
 };
 use windows_reactor::*;
 
@@ -35,27 +34,19 @@ fn run() -> Result<()> {
     if let Err(error) = settings.apply_runtime_effects() {
         eprintln!("failed to apply startup registration: {error:#}");
     }
-    let executable = first_available(settings.codex_path.as_deref());
-
     let activation_path = path.with_file_name("activation.toml");
     let last_activation_at: Option<DateTime<Utc>> =
         ActivationState::load_or_default(&activation_path)
             .ok()
             .and_then(|state| state.last_attempt_at);
 
-    let (commands, worker, startup_error) = match executable {
-        Ok(executable) => {
-            let worker = start_worker(
-                CodexClient::new(&executable),
-                CodexClient::new(&executable),
-                CodexActivator::new(executable),
-                activation_path,
-                settings.automatic_activation,
-                settings.history_retention_days,
-                Duration::from_secs(60),
-            );
-            (Some(worker.commands.clone()), Some(worker), None)
-        }
+    let (worker_events_tx, worker_events_rx) = mpsc::channel::<WorkerEvent>();
+    let (commands, worker, startup_error) = match start_selected_worker(
+        &settings,
+        activation_path.clone(),
+        worker_events_tx.clone(),
+    ) {
+        Ok(worker) => (Some(worker.commands.clone()), Some(worker), None),
         Err(error) => (None, None, Some(error.to_string())),
     };
 
@@ -70,11 +61,16 @@ fn run() -> Result<()> {
         .saturating_add(80)
         .min(popup::POPUP_HEIGHT_MAX);
     popup::set_client_height_dip(initial_height);
+    let active_provider = settings.provider;
     let state = Arc::new(AppState {
         settings,
         limits: Mutex::new(Default::default()),
-        commands,
+        commands: Mutex::new(commands),
         worker: Mutex::new(worker),
+        worker_events_rx: Mutex::new(Some(worker_events_rx)),
+        worker_events_tx,
+        activation_path,
+        active_provider: Mutex::new(active_provider),
         startup_error,
         last_activation_at,
         settings_tx,

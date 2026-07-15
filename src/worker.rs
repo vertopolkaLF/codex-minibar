@@ -99,9 +99,69 @@ pub fn start_worker(
     poll_interval: Duration,
 ) -> WorkerHandle {
     let (command_sender, command_receiver) = mpsc::channel();
+    let (event_sender, event_receiver) = mpsc::channel();
+    let mut handle = start_worker_with_channels(
+        provider,
+        usage_provider,
+        activator,
+        state_path,
+        automatic_activation,
+        history_retention_days,
+        poll_interval,
+        command_sender,
+        command_receiver,
+        event_sender,
+        true,
+    );
+    handle.events = Some(event_receiver);
+    handle
+}
+
+/// Starts a worker which publishes to an existing event stream. This lets the
+/// selected provider change without recreating the UI's event bridge.
+#[allow(clippy::too_many_arguments)]
+pub fn start_worker_with_event_sender(
+    provider: impl LimitProvider,
+    usage_provider: impl UsageProvider,
+    activator: impl Activator,
+    state_path: PathBuf,
+    automatic_activation: bool,
+    history_retention_days: u16,
+    poll_interval: Duration,
+    event_sender: Sender<WorkerEvent>,
+) -> WorkerHandle {
+    let (command_sender, command_receiver) = mpsc::channel();
+    start_worker_with_channels(
+        provider,
+        usage_provider,
+        activator,
+        state_path,
+        automatic_activation,
+        history_retention_days,
+        poll_interval,
+        command_sender,
+        command_receiver,
+        event_sender,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn start_worker_with_channels(
+    provider: impl LimitProvider,
+    usage_provider: impl UsageProvider,
+    activator: impl Activator,
+    state_path: PathBuf,
+    automatic_activation: bool,
+    history_retention_days: u16,
+    poll_interval: Duration,
+    command_sender: Sender<WorkerCommand>,
+    command_receiver: Receiver<WorkerCommand>,
+    event_sender: Sender<WorkerEvent>,
+    publish_stopped: bool,
+) -> WorkerHandle {
     let (limit_commands, limit_commands_rx) = mpsc::channel();
     let (usage_commands, usage_commands_rx) = mpsc::channel();
-    let (event_sender, event_receiver) = mpsc::channel();
     let limits_ready = Arc::new(AtomicBool::new(false));
 
     let limit_join = {
@@ -157,12 +217,14 @@ pub fn start_worker(
         let _ = usage_commands.send(WorkerCommand::Shutdown);
         let _ = limit_join.join();
         let _ = usage_join.join();
-        let _ = event_sender.send(WorkerEvent::Stopped);
+        if publish_stopped {
+            let _ = event_sender.send(WorkerEvent::Stopped);
+        }
     });
 
     WorkerHandle {
         commands: command_sender,
-        events: Some(event_receiver),
+        events: None,
         join: Some(join),
     }
 }

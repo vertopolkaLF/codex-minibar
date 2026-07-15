@@ -1,5 +1,6 @@
 pub mod acrylic;
 pub mod app;
+pub mod claude;
 pub mod codex;
 pub mod discovery;
 pub mod icons;
@@ -7,6 +8,7 @@ pub mod limits;
 pub mod notifications;
 pub mod popup;
 pub mod popup_window;
+pub mod provider;
 pub mod scheduler;
 pub mod settings;
 mod settings_controls;
