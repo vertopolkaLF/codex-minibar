@@ -1,7 +1,9 @@
 use std::{
     fs,
+    process::{Child, Command, Stdio},
     sync::Arc,
-    time::Duration,
+    thread,
+    time::{Duration, Instant},
 };
 
 use anyhow::{bail, Context, Result};
@@ -12,12 +14,82 @@ use serde::Deserialize;
 use crate::{
     limits::{LimitWindow, RateLimits},
     usage,
-    worker::{LimitProvider, UsageProvider},
+    worker::{Activator, LimitProvider, UsageProvider},
 };
 
 const OAUTH_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const OAUTH_BETA: &str = "oauth-2025-04-20";
 const FALLBACK_CLAUDE_CODE_VERSION: &str = "2.1.0";
+pub const ACTIVATION_MODEL: &str = "haiku";
+pub const ACTIVATION_PROMPT: &str = "reply with letter a";
+
+/// Starts Claude Code's five-hour window with the smallest supported prompt.
+pub struct ClaudeActivator {
+    timeout: Duration,
+}
+
+impl ClaudeActivator {
+    pub fn new() -> Self {
+        Self {
+            timeout: Duration::from_secs(120),
+        }
+    }
+
+    pub fn activate_minimal(&self) -> Result<()> {
+        let mut child = activation_command()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("launch Claude activation through `claude`")?;
+        let deadline = Instant::now() + self.timeout;
+        loop {
+            if let Some(status) = child.try_wait().context("wait for Claude activation")? {
+                anyhow::ensure!(status.success(), "Claude activation exited with {status}");
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                terminate(&mut child);
+                bail!("Claude activation timed out after {:?}", self.timeout);
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+}
+
+impl Default for ClaudeActivator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Activator for ClaudeActivator {
+    fn activate(&mut self) -> Result<()> {
+        self.activate_minimal()
+    }
+}
+
+fn activation_command() -> Command {
+    let mut command = Command::new("claude");
+    command.args([
+        "-p",
+        ACTIVATION_PROMPT,
+        "--model",
+        ACTIVATION_MODEL,
+        "--effort=low",
+    ]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    command
+}
+
+fn terminate(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
 
 /// Reads Claude Code's local OAuth session and queries the same usage endpoint
 /// used by CodexBar. Credentials stay in Claude's own `.credentials.json`.
@@ -220,5 +292,24 @@ mod tests {
         let limits = parse_usage_response(r#"{"seven_day":{"utilization":42}}"#, Utc::now()).unwrap();
         assert!(limits.primary.is_empty());
         assert_eq!(limits.secondary.used_percent, Some(42));
+    }
+
+    #[test]
+    fn activation_uses_the_minimal_haiku_command() {
+        let command = activation_command();
+        assert_eq!(command.get_program().to_string_lossy(), "claude");
+        assert_eq!(
+            command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            [
+                "-p",
+                "reply with letter a",
+                "--model",
+                "haiku",
+                "--effort=low",
+            ]
+        );
     }
 }

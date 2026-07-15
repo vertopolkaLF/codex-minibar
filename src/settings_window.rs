@@ -672,7 +672,7 @@ fn tab_content(
                 settings_section_heading("Features").with_key("general-features-heading"),
                 settings_toggle_card_with_description(
                     "Activate limits automatically",
-                    Some("Sends a short message when needed to begin the 5-hour usage window."),
+                    Some("Sends a short low-effort prompt through each enabled provider when needed to begin its 5-hour usage window."),
                     automatic_activation,
                     move |value| {
                         persist_bool(
