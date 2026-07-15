@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     sync::{
         Arc, Mutex,
         mpsc::{Receiver, Sender},
@@ -11,7 +12,7 @@ use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
 use windows_reactor::*;
 
 use crate::{
-    limits::{LimitWindow, PaceTip, RateLimits},
+    limits::{LimitWindow, PaceTip, ProviderLimits, RateLimits},
     notifications,
     notifications::LimitNotificationTracker,
     popup,
@@ -49,13 +50,12 @@ pub struct AppState {
     /// The sole live rate-limit snapshot. Both the tray and popup read this
     /// store, and worker results replace it atomically before either surface
     /// is repainted.
-    pub limits: Mutex<RateLimits>,
-    pub commands: Mutex<Option<Sender<WorkerCommand>>>,
-    pub worker: Mutex<Option<crate::worker::WorkerHandle>>,
+    pub limits: Mutex<ProviderLimits>,
+    pub commands: Mutex<HashMap<ProviderKind, Sender<WorkerCommand>>>,
+    pub workers: Mutex<crate::provider::ProviderWorkers>,
     pub worker_events_rx: Mutex<Option<Receiver<WorkerEvent>>>,
     pub worker_events_tx: Sender<WorkerEvent>,
     pub activation_path: std::path::PathBuf,
-    pub active_provider: Mutex<ProviderKind>,
     pub startup_error: Option<String>,
     /// Last activation attempt loaded from persisted activation state.
     pub last_activation_at: Option<DateTime<Utc>>,
@@ -66,25 +66,25 @@ pub struct AppState {
 }
 
 impl AppState {
-    fn current_limits(&self) -> RateLimits {
+    fn current_limits(&self) -> ProviderLimits {
         self.limits
             .lock()
             .map(|limits| limits.clone())
             .unwrap_or_default()
     }
 
-    fn replace_limits(&self, mut limits: RateLimits) {
+    fn replace_limits(&self, provider: ProviderKind, mut limits: RateLimits) {
         if let Ok(mut current) = self.limits.lock() {
             // Quota polling must not erase the independently refreshed usage
             // history between its ten-minute scans.
-            limits.usage = current.usage.clone();
-            *current = limits;
+            limits.usage = current.get(provider).usage.clone();
+            *current.get_mut(provider) = limits;
         }
     }
 
-    fn replace_usage(&self, usage: crate::usage::UsageStatistics) {
+    fn replace_usage(&self, provider: ProviderKind, usage: crate::usage::UsageStatistics) {
         if let Ok(mut current) = self.limits.lock() {
-            current.usage = usage;
+            current.get_mut(provider).usage = usage;
         }
     }
 
@@ -92,57 +92,83 @@ impl AppState {
         self.worker_events_rx.lock().ok()?.take()
     }
 
-    fn worker_commands(&self) -> Option<Sender<WorkerCommand>> {
-        self.commands.lock().ok()?.clone()
+    fn worker_commands(&self) -> Vec<(ProviderKind, Sender<WorkerCommand>)> {
+        self.commands
+            .lock()
+            .map(|commands| {
+                commands
+                    .iter()
+                    .map(|(provider, commands)| (*provider, commands.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
-    /// Replaces the background provider in place. The stable event channel is
-    /// deliberately shared with the tray bridge so settings take effect while
-    /// the popup and Settings window remain open.
-    fn restart_worker_if_needed(&self, settings: &Settings) -> anyhow::Result<bool> {
-        let provider_changed = self
-            .active_provider
-            .lock()
-            .map(|provider| *provider != settings.provider)
-            .unwrap_or(true);
-        let missing_worker = self.worker.lock().map(|worker| worker.is_none()).unwrap_or(true);
-        if !provider_changed && !missing_worker {
-            return Ok(false);
-        }
-
-        if let Ok(mut worker) = self.worker.lock()
-            && let Some(worker) = worker.take()
-        {
+    /// Applies provider toggles without disturbing workers that remain enabled.
+    fn sync_provider_workers(&self, settings: &Settings) -> Vec<String> {
+        let disabled = [ProviderKind::Codex, ProviderKind::Claude]
+            .into_iter()
+            .filter(|provider| !settings.providers.is_enabled(*provider))
+            .collect::<Vec<_>>();
+        let stopped = self.workers.lock().map_or_else(
+            |_| Vec::new(),
+            |mut workers| {
+                disabled
+                    .iter()
+                    .filter_map(|provider| workers.remove(provider))
+                    .collect()
+            },
+        );
+        for worker in stopped {
             worker.shutdown();
         }
         if let Ok(mut commands) = self.commands.lock() {
-            *commands = None;
+            commands.retain(|provider, _| settings.providers.is_enabled(*provider));
         }
         if let Ok(mut limits) = self.limits.lock() {
-            *limits = RateLimits::default();
-        }
-        let worker = crate::provider::start_selected_worker(
-            settings,
-            self.activation_path.clone(),
-            self.worker_events_tx.clone(),
-        )?;
-        if let Ok(mut slot) = self.worker.lock() {
-            if let Ok(mut commands) = self.commands.lock() {
-                *commands = Some(worker.commands.clone());
+            for provider in &disabled {
+                *limits.get_mut(*provider) = RateLimits::default();
             }
-            *slot = Some(worker);
         }
-        if let Ok(mut provider) = self.active_provider.lock() {
-            *provider = settings.provider;
+
+        let mut errors = Vec::new();
+        for provider in [ProviderKind::Codex, ProviderKind::Claude] {
+            if !settings.providers.is_enabled(provider)
+                || self
+                    .workers
+                    .lock()
+                    .is_ok_and(|workers| workers.contains_key(&provider))
+            {
+                continue;
+            }
+            match crate::provider::start_provider_worker(
+                provider,
+                settings,
+                self.activation_path.clone(),
+                self.worker_events_tx.clone(),
+            ) {
+                Ok(worker) => {
+                    if let Ok(mut commands) = self.commands.lock() {
+                        commands.insert(provider, worker.commands.clone());
+                    }
+                    if let Ok(mut workers) = self.workers.lock() {
+                        workers.insert(provider, worker);
+                    }
+                }
+                Err(error) => errors.push(format!("{}: {error:#}", provider.display_name())),
+            }
         }
-        Ok(true)
+        errors
     }
 
     pub fn shutdown_worker(&self) {
-        if let Ok(mut worker) = self.worker.lock()
-            && let Some(worker) = worker.take()
-        {
-            worker.shutdown();
+        if let Ok(mut workers) = self.workers.lock() {
+            for (_, worker) in std::mem::take(&mut *workers) {
+                worker.shutdown();
+            }
+        }
+        if let Ok(mut commands) = self.commands.lock() {
+            commands.clear();
         }
     }
 }
@@ -162,6 +188,8 @@ struct UiState {
     show_banked_resets: bool,
     show_usage_stats: bool,
     hide_plan_credits: bool,
+    codex_enabled: bool,
+    claude_enabled: bool,
     update_version: Option<String>,
 }
 
@@ -219,6 +247,8 @@ impl Default for UiState {
             show_banked_resets: true,
             show_usage_stats: true,
             hide_plan_credits: false,
+            codex_enabled: true,
+            claude_enabled: false,
             update_version: None,
         }
     }
@@ -293,6 +323,86 @@ fn popup_sections(
     sections
 }
 
+fn provider_cards(
+    provider: ProviderKind,
+    is_first: bool,
+    limits: &RateLimits,
+    show_used_percentage: bool,
+    show_usage_pace: bool,
+    show_banked_resets: bool,
+    show_usage_stats: bool,
+    hide_plan_credits: bool,
+    color_scheme: ColorScheme,
+) -> Vec<Element> {
+    let mut cards: Vec<Element> = vec![
+        body_strong(provider.display_name())
+            .foreground(ThemeRef::SecondaryText)
+            .margin(Thickness {
+                left: 4.0,
+                top: if is_first { 0.0 } else { 8.0 },
+                right: 4.0,
+                bottom: 2.0,
+            })
+            .into(),
+    ];
+    cards.extend(
+        popup_sections(
+            limits,
+            show_banked_resets,
+            show_usage_stats,
+            hide_plan_credits,
+            false,
+        )
+        .into_iter()
+        .filter_map(|section| {
+            let element: Element = match section {
+                PopupSection::Monthly => limit_card(
+                    "Monthly",
+                    &limits.secondary,
+                    show_used_percentage,
+                    show_usage_pace,
+                    false,
+                    color_scheme,
+                ),
+                PopupSection::FiveHour => limit_card(
+                    "5h Session",
+                    &limits.primary,
+                    show_used_percentage,
+                    show_usage_pace,
+                    limits.five_hour_disabled(),
+                    color_scheme,
+                ),
+                PopupSection::Weekly => limit_card(
+                    "Weekly",
+                    &limits.secondary,
+                    show_used_percentage,
+                    show_usage_pace,
+                    false,
+                    color_scheme,
+                ),
+                PopupSection::UsageStatistics => usage_statistics_card(limits),
+                PopupSection::BankedResets => reset_credits_card(limits),
+                PopupSection::PlanCredits => vstack((
+                    Shape::rectangle().height(4.0),
+                    meta_row(limits),
+                ))
+                .spacing(0.0)
+                .into(),
+                PopupSection::Error => return None,
+            };
+            Some(element.with_key(format!("{}-{}", provider.display_name(), section.key())))
+        }),
+    );
+    cards
+}
+
+fn latest_sampled_at(limits: &ProviderLimits) -> chrono::DateTime<Utc> {
+    [limits.codex.sampled_at, limits.claude.sampled_at]
+        .into_iter()
+        .max()
+        .unwrap_or_default()
+}
+
 /// Root WinUI view for Codex Minibar (hosted in a tray popup shell).
 pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let dpi = cx.use_dpi().max(1);
@@ -310,6 +420,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         show_banked_resets: state.settings.show_banked_resets,
         show_usage_stats: state.settings.show_usage_stats,
         hide_plan_credits: state.settings.hide_plan_credits,
+        codex_enabled: state.settings.providers.codex_enabled,
+        claude_enabled: state.settings.providers.claude_enabled,
         update_version: state
             .updates
             .available_update()
@@ -343,72 +455,62 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         let set_ui = set_ui.clone();
         let ui = ui.clone();
         move || {
-            if let Some(commands) = &commands {
-                if commands.send(WorkerCommand::Refresh).is_ok() {
-                    let mut ui = ui.clone();
-                    ui.refreshing = true;
-                    set_ui.call(ui);
-                }
+            if commands
+                .iter()
+                .any(|(_, commands)| commands.send(WorkerCommand::Refresh).is_ok())
+            {
+                let mut ui = ui.clone();
+                ui.refreshing = true;
+                set_ui.call(ui);
             }
         }
     };
     let quit = move || std::process::exit(0);
 
-    let body: Vec<Element> = popup_sections(
-        &limits,
-        ui.show_banked_resets,
-        ui.show_usage_stats,
-        ui.hide_plan_credits,
-        ui.error.is_some(),
-    )
-        .into_iter()
-        .map(|section| {
-            let element: Element = match section {
-                PopupSection::Error => InfoBar::new("Something went wrong")
-                    .message(
-                        ui.error
-                            .clone()
-                            .expect("error section requires an error message"),
-                    )
-                    .error()
-                    .is_closable(false)
-                    .into(),
-                PopupSection::Monthly => limit_card(
-                    "Monthly",
-                    &limits.secondary,
-                    ui.show_used_percentage,
-                    ui.show_usage_pace,
-                    false,
-                    color_scheme,
-                ),
-                PopupSection::FiveHour => limit_card(
-                    "5h Session",
-                    &limits.primary,
-                    ui.show_used_percentage,
-                    ui.show_usage_pace,
-                    limits.five_hour_disabled(),
-                    color_scheme,
-                ),
-                PopupSection::Weekly => limit_card(
-                    "Weekly",
-                    &limits.secondary,
-                    ui.show_used_percentage,
-                    ui.show_usage_pace,
-                    false,
-                    color_scheme,
-                ),
-                PopupSection::UsageStatistics => usage_statistics_card(&limits),
-                PopupSection::BankedResets => reset_credits_card(&limits),
-                PopupSection::PlanCredits => vstack((
-                    Shape::rectangle().height(4.0),
-                    meta_row(&limits),
-                ))
-                .spacing(0.0)
+    let mut body: Vec<Element> = Vec::new();
+    if let Some(error) = ui.error.clone() {
+        body.push(
+            InfoBar::new("Something went wrong")
+                .message(error)
+                .error()
+                .is_closable(false)
                 .into(),
-            };
-            element.with_key(section.key())
-        })
-        .collect();
+        );
+    }
+    if ui.codex_enabled {
+        body.extend(provider_cards(
+            ProviderKind::Codex,
+            true,
+            &limits.codex,
+            ui.show_used_percentage,
+            ui.show_usage_pace,
+            ui.show_banked_resets,
+            ui.show_usage_stats,
+            ui.hide_plan_credits,
+            color_scheme,
+        ));
+    }
+    if ui.claude_enabled {
+        body.extend(provider_cards(
+            ProviderKind::Claude,
+            !ui.codex_enabled,
+            &limits.claude,
+            ui.show_used_percentage,
+            ui.show_usage_pace,
+            ui.show_banked_resets,
+            ui.show_usage_stats,
+            ui.hide_plan_credits,
+            color_scheme,
+        ));
+    }
+    if !ui.codex_enabled && !ui.claude_enabled {
+        body.push(
+            InfoBar::new("No providers enabled")
+                .message("Enable Codex or Claude in Settings > Providers.")
+                .is_closable(false)
+                .into(),
+        );
+    }
 
     let quit_or_update = if ui.update_version.is_some() {
         update_accent_button("Update", || {
@@ -464,7 +566,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 } else {
                     format!(
                         "Updated {}",
-                        sample_freshness(limits.sampled_at).to_lowercase()
+                        sample_freshness(latest_sampled_at(&limits)).to_lowercase()
                     )
                 })
                 .foreground(ThemeRef::TertiaryText),
@@ -875,7 +977,7 @@ fn start_background_bridge(
         let mut tray = TrayManager::new();
         let fallback_attempt = state.last_activation_at;
         let mut notification_settings = state.settings.notifications.clone();
-        let mut limit_notifications = LimitNotificationTracker::default();
+        let mut limit_notifications = HashMap::<ProviderKind, LimitNotificationTracker>::new();
         let mut update_phase = updates.snapshot();
         let mut ui = UiState {
             error: state.startup_error.clone(),
@@ -885,6 +987,8 @@ fn start_background_bridge(
             show_banked_resets: state.settings.show_banked_resets,
             show_usage_stats: state.settings.show_usage_stats,
             hide_plan_credits: state.settings.hide_plan_credits,
+            codex_enabled: state.settings.providers.codex_enabled,
+            claude_enabled: state.settings.providers.claude_enabled,
             update_version: update_version_from_phase(&update_phase),
             ..UiState::default()
         };
@@ -918,14 +1022,14 @@ fn start_background_bridge(
             ui.show_banked_resets = settings.show_banked_resets;
             ui.show_usage_stats = settings.show_usage_stats;
             ui.hide_plan_credits = settings.hide_plan_credits;
+            ui.codex_enabled = settings.providers.codex_enabled;
+            ui.claude_enabled = settings.providers.claude_enabled;
             *notification_settings = settings.notifications.clone();
             *widgets = settings.tray_widgets.clone();
             ui.update_version = update_version_from_phase(&phase);
-            if let Err(error) = state.restart_worker_if_needed(&settings) {
-                ui.error = Some(format!(
-                    "Could not switch to {}: {error:#}",
-                    settings.provider.display_name()
-                ));
+            let provider_errors = state.sync_provider_workers(&settings);
+            if !provider_errors.is_empty() {
+                ui.error = Some(provider_errors.join("\n"));
             }
             // Repaint the existing native icons in place. Recreating them makes
             // Explorer animate a remove/add sequence and causes a visible flash.
@@ -936,10 +1040,9 @@ fn start_background_bridge(
             ) {
                 ui.error = Some(error.to_string());
             }
-            if let Some(commands) = state.worker_commands() {
+            for (provider, commands) in state.worker_commands() {
                 let _ = commands.send(WorkerCommand::SetAutomaticActivation(
-                    settings.automatic_activation
-                        && settings.provider == ProviderKind::Codex,
+                    settings.automatic_activation && provider == ProviderKind::Codex,
                 ));
                 // The worker refreshes immediately after receiving this command,
                 // so the selected history range is reflected in the open popup
@@ -1066,12 +1169,20 @@ fn start_background_bridge(
                 std::process::exit(0);
             }
             match events.recv_timeout(Duration::from_millis(16)) {
-                Ok(WorkerEvent::LimitsUpdated(limits)) => {
+                Ok(WorkerEvent::ProviderLimitsUpdated(provider, limits)) => {
+                    if (provider == ProviderKind::Codex && !ui.codex_enabled)
+                        || (provider == ProviderKind::Claude && !ui.claude_enabled)
+                    {
+                        continue;
+                    }
                     // Publish once, then let both native tray and WinUI render
                     // from that exact snapshot.
-                    state.replace_limits(limits);
+                    state.replace_limits(provider, limits);
                     let limits = state.current_limits();
-                    limit_notifications.observe(&limits, &notification_settings);
+                    limit_notifications
+                        .entry(provider)
+                        .or_default()
+                        .observe(limits.get(provider), &notification_settings, provider);
                     if let Err(error) = tray.sync(
                         &widgets,
                         &limits,
@@ -1081,33 +1192,49 @@ fn start_background_bridge(
                     } else {
                         ui.error = None;
                     }
-                    ui.last_activation = format_last_activation(&limits, fallback_attempt);
+                    if provider == ProviderKind::Codex {
+                        ui.last_activation =
+                            format_last_activation(limits.get(provider), fallback_attempt);
+                    }
                     ui.observe_limits_update();
                     ui.refreshing = false;
                     set_ui.call(ui.clone());
                 }
-                Ok(WorkerEvent::UsageUpdated(usage)) => {
-                    state.replace_usage(usage);
+                Ok(WorkerEvent::ProviderUsageUpdated(provider, usage)) => {
+                    if (provider == ProviderKind::Codex && !ui.codex_enabled)
+                        || (provider == ProviderKind::Claude && !ui.claude_enabled)
+                    {
+                        continue;
+                    }
+                    state.replace_usage(provider, usage);
                     // Usage stats affect only the popup, but they share the
                     // reactive snapshot revision with quota updates.
                     ui.observe_limits_update();
                     set_ui.call(ui.clone());
                 }
-                Ok(WorkerEvent::ActivationSucceeded) => {
+                Ok(WorkerEvent::ProviderActivationSucceeded(ProviderKind::Codex)) => {
                     ui.last_activation =
                         format!("Succeeded at {}", format_activation_at(Utc::now()));
                     set_ui.call(ui.clone());
                 }
-                Ok(WorkerEvent::ActivationFailed(error)) => {
+                Ok(WorkerEvent::ProviderActivationFailed(ProviderKind::Codex, error)) => {
                     ui.last_activation =
                         format!("Failed at {}: {error}", format_activation_at(Utc::now()));
                     set_ui.call(ui.clone());
                 }
-                Ok(WorkerEvent::PollFailed(error)) => {
-                    ui.error = Some(error);
+                Ok(WorkerEvent::ProviderPollFailed(provider, error)) => {
+                    ui.error = Some(format!("{}: {error}", provider.display_name()));
                     ui.refreshing = false;
                     set_ui.call(ui.clone());
                 }
+                // All live provider workers are forwarded as scoped events.
+                Ok(WorkerEvent::LimitsUpdated(_)
+                | WorkerEvent::UsageUpdated(_)
+                | WorkerEvent::ActivationSucceeded
+                | WorkerEvent::ActivationFailed(_)
+                | WorkerEvent::PollFailed(_)
+                | WorkerEvent::ProviderActivationSucceeded(_)
+                | WorkerEvent::ProviderActivationFailed(_, _)) => {}
                 Ok(WorkerEvent::Stopped) => break,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
@@ -1147,8 +1274,10 @@ fn pump_tray_and_dismiss(
                 }
             } else {
                 // Opening the popup should always fetch a current snapshot.
-                if let Some(commands) = state.worker_commands()
-                    && commands.send(WorkerCommand::Refresh).is_ok()
+                if state
+                    .worker_commands()
+                    .iter()
+                    .any(|(_, commands)| commands.send(WorkerCommand::Refresh).is_ok())
                 {
                     ui.refreshing = true;
                     set_ui.call(ui.clone());

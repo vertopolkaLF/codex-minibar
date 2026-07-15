@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 
 use crate::limits::RateLimits;
-use crate::settings::NotificationSettings;
+use crate::settings::{NotificationSettings, ProviderKind};
 
 /// App User Model ID used for Action Center toasts.
 pub const AUMID: &str = "dev.CodexMinibar";
@@ -130,7 +130,12 @@ pub struct LimitNotificationTracker {
 }
 
 impl LimitNotificationTracker {
-    pub fn observe(&mut self, limits: &RateLimits, settings: &NotificationSettings) {
+    pub fn observe(
+        &mut self,
+        limits: &RateLimits,
+        settings: &NotificationSettings,
+        provider: ProviderKind,
+    ) {
         if !self.primed {
             self.capture(limits);
             self.primed = true;
@@ -146,7 +151,7 @@ impl LimitNotificationTracker {
             if settings.limits_changed {
                 show(
                     "5-hour limit reset",
-                    "Your Codex 5-hour usage window has reset.",
+                    &format!("Your {} 5-hour usage window has reset.", provider.display_name()),
                 );
             }
         }
@@ -156,7 +161,7 @@ impl LimitNotificationTracker {
             if settings.limits_changed {
                 show(
                     "Weekly limit reset",
-                    "Your Codex weekly usage window has reset.",
+                    &format!("Your {} weekly usage window has reset.", provider.display_name()),
                 );
             }
         }
@@ -164,7 +169,7 @@ impl LimitNotificationTracker {
         if settings.low_usage_enabled {
             let threshold = settings.low_usage_threshold_percent;
             maybe_notify_low_usage(
-                "5-hour",
+                &format!("{} 5-hour", provider.display_name()),
                 limits.primary.remaining_percent(),
                 limits.primary.resets_at,
                 threshold,
@@ -174,7 +179,7 @@ impl LimitNotificationTracker {
         if settings.weekly_low_usage_enabled && can_notify_weekly(limits) {
             let threshold = settings.weekly_low_usage_threshold_percent;
             maybe_notify_low_usage(
-                "Weekly",
+                &format!("{} weekly", provider.display_name()),
                 limits.secondary.remaining_percent(),
                 limits.secondary.resets_at,
                 threshold,

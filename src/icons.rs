@@ -9,6 +9,7 @@ pub fn data(name: &str) -> &'static str {
         "fluent-power" => include_str!("../assets/icons/fluent-power-20-regular.svg"),
         "chat-centered-text" => include_str!("../assets/icons/ph-chat-centered-text.svg"),
         "download-simple" => include_str!("../assets/icons/ph-download-simple.svg"),
+        "plugs-connected" => include_str!("../assets/icons/ph-plugs-connected.svg"),
         "arrows-clockwise" | "popup-refresh" => include_str!("../assets/icons/ph-arrows-clockwise.svg"),
         "sliders" | "popup-settings" => include_str!("../assets/icons/ph-sliders.svg"),
         "power" | "popup-power" => include_str!("../assets/icons/ph-power.svg"),

@@ -237,6 +237,7 @@ pub(crate) fn is_open() -> bool {
 enum Tab {
     #[default]
     General,
+    Providers,
     Tray,
     Notifications,
     Advanced,
@@ -247,6 +248,7 @@ impl Tab {
     fn tag(self) -> &'static str {
         match self {
             Self::General => "general",
+            Self::Providers => "providers",
             Self::Tray => "tray",
             Self::Notifications => "notifications",
             Self::Advanced => "advanced",
@@ -257,6 +259,7 @@ impl Tab {
     fn from_tag(tag: &str) -> Self {
         match tag {
             "tray" => Self::Tray,
+            "providers" => Self::Providers,
             "notifications" => Self::Notifications,
             "advanced" => Self::Advanced,
             "about" => Self::About,
@@ -299,6 +302,7 @@ pub fn render(
     let mut navigation = NavigationView::new(
         [
             NavViewItem::new("General").tag("general").icon_path(crate::icons::data("house"), nav_icon_color),
+            NavViewItem::new("Providers").tag("providers").icon_path(crate::icons::data("plugs-connected"), nav_icon_color),
             NavViewItem::new("Tray").tag("tray").icon_path(crate::icons::data("chat-centered-text"), nav_icon_color),
             NavViewItem::new("Notifications").tag("notifications").icon_path(crate::icons::data("bell"), nav_icon_color),
             NavViewItem::new("Advanced").tag("advanced").icon_path(crate::icons::data("sliders"), nav_icon_color),
@@ -356,7 +360,8 @@ pub fn render(
         );
     }
 
-    let (provider, set_provider) = cx.use_state(settings.provider);
+    let (codex_enabled, set_codex_enabled) = cx.use_state(settings.providers.codex_enabled);
+    let (claude_enabled, set_claude_enabled) = cx.use_state(settings.providers.claude_enabled);
     let (start_at_login, set_start_at_login) = cx.use_state(settings.start_at_login);
     let (automatic_activation, set_automatic_activation) =
         cx.use_state(settings.automatic_activation);
@@ -395,7 +400,8 @@ pub fn render(
         border(tab_content(
             &settings,
             rendered_tab,
-            provider,
+            codex_enabled,
+            claude_enabled,
             automatic_activation,
             start_at_login,
             show_used_percentage,
@@ -418,7 +424,8 @@ pub fn render(
             check_for_updates,
             notify_on_update,
             &update_phase,
-            set_provider,
+            set_codex_enabled,
+            set_claude_enabled,
             set_automatic_activation,
             set_start_at_login,
             set_show_used_percentage,
@@ -561,7 +568,8 @@ fn settings_about_icon_uri() -> String {
 fn tab_content(
     settings: &Settings,
     tab: Tab,
-    provider: ProviderKind,
+    codex_enabled: bool,
+    claude_enabled: bool,
     automatic_activation: bool,
     start_at_login: bool,
     show_used_percentage: bool,
@@ -584,7 +592,8 @@ fn tab_content(
     check_for_updates: bool,
     notify_on_update: bool,
     update_phase: &UpdatePhase,
-    set_provider: SetState<ProviderKind>,
+    set_codex_enabled: SetState<bool>,
+    set_claude_enabled: SetState<bool>,
     set_automatic_activation: SetState<bool>,
     set_start_at_login: SetState<bool>,
     set_show_used_percentage: SetState<bool>,
@@ -609,7 +618,8 @@ fn tab_content(
     settings_tx: Sender<Settings>,
     updates: Arc<UpdateController>,
 ) -> Element {
-    let apply_provider = settings_tx.clone();
+    let apply_codex_enabled = settings_tx.clone();
+    let apply_claude_enabled = settings_tx.clone();
     let apply_automatic_activation = settings_tx.clone();
     let apply_start_at_login = settings_tx.clone();
     let apply_show_used_percentage = settings_tx.clone();
@@ -629,33 +639,6 @@ fn tab_content(
         Tab::General => (
             "General",
             vec![
-                settings_section_heading("Provider").with_key("general-provider-heading"),
-                ComboBox::new(["Codex", "Claude"])
-                    .header("Usage provider")
-                    .selected_index(if provider == ProviderKind::Claude { 1 } else { 0 })
-                    .on_selection_changed(move |choice: i32| {
-                        let provider = if choice == 1 {
-                            ProviderKind::Claude
-                        } else {
-                            ProviderKind::Codex
-                        };
-                        set_provider.call(provider);
-                        persist_update(apply_provider.clone(), move |settings| {
-                            settings.provider = provider;
-                        });
-                    })
-                    .with_key("general-provider")
-                    .into(),
-                text_block(if provider == ProviderKind::Claude {
-                    "Claude uses the signed-in Claude Code session and switches immediately."
-                } else {
-                    "Codex uses the locally signed-in Codex CLI or desktop app."
-                })
-                .font_size(12.0)
-                .opacity(0.72)
-                .wrap()
-                .with_key("general-provider-description")
-                .into(),
                 settings_toggle_card_with_description(
                     "Start with Windows",
                     Some("Opens Codex Minibar automatically after you sign in."),
@@ -792,6 +775,51 @@ fn tab_content(
                     set_hovered_card_id.clone(),
                 )
                 .with_key("general-hide-credits"),
+            ],
+        ),
+        Tab::Providers => (
+            "Providers",
+            vec![
+                text_block("Choose every provider you want to monitor. Each enabled provider refreshes independently.")
+                    .font_size(12.0)
+                    .opacity(0.72)
+                    .wrap()
+                    .with_key("providers-description")
+                    .into(),
+                settings_toggle_card_with_description(
+                    "Codex",
+                    Some("Reads limits from the locally signed-in Codex CLI or desktop app."),
+                    codex_enabled,
+                    move |value| {
+                        persist_bool(
+                            set_codex_enabled.clone(),
+                            apply_codex_enabled.clone(),
+                            value,
+                            |settings, value| settings.providers.codex_enabled = value,
+                        );
+                    },
+                    "providers-codex",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("providers-codex"),
+                settings_toggle_card_with_description(
+                    "Claude",
+                    Some("Reads limits with the existing signed-in Claude Code OAuth session."),
+                    claude_enabled,
+                    move |value| {
+                        persist_bool(
+                            set_claude_enabled.clone(),
+                            apply_claude_enabled.clone(),
+                            value,
+                            |settings, value| settings.providers.claude_enabled = value,
+                        );
+                    },
+                    "providers-claude",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("providers-claude"),
             ],
         ),
         Tab::Tray => (
@@ -1368,6 +1396,7 @@ fn tray_settings_cards(
     }
     for (index, widget) in widgets.iter().cloned().enumerate() {
         let source_items = vec!["5h + week", "5h limit", "Weekly limit", "5h reset"];
+        let provider_index = if widget.provider == ProviderKind::Claude { 1 } else { 0 };
         let source_index = source_index(&widget.source);
         let presentation_items = presentation_options(&widget.source);
         let presentation_index = presentation_items
@@ -1375,6 +1404,9 @@ fn tray_settings_cards(
             .position(|(_, presentation)| *presentation == widget.presentation)
             .unwrap_or(0) as i32;
         let widget_for_source = widget.clone();
+        let widgets_for_provider = widgets.to_vec();
+        let provider_setter = set_widgets.clone();
+        let provider_tx = settings_tx.clone();
         let widgets_for_source = widgets.to_vec();
         let source_setter = set_widgets.clone();
         let source_tx = settings_tx.clone();
@@ -1400,6 +1432,19 @@ fn tray_settings_cards(
                 .font_size(16.0)
                 .bold()
                 .into(),
+            ComboBox::new(["Codex", "Claude"])
+                .header("Provider")
+                .selected_index(provider_index)
+                .on_selection_changed(move |choice: i32| {
+                    let mut next = widgets_for_provider.clone();
+                    next[index].provider = if choice == 1 {
+                        ProviderKind::Claude
+                    } else {
+                        ProviderKind::Codex
+                    };
+                    persist_tray_widgets(provider_setter.clone(), provider_tx.clone(), next);
+                })
+                .into(),
             ComboBox::new(source_items)
                 .header("Information")
                 .selected_index(source_index)
@@ -1407,6 +1452,7 @@ fn tray_settings_cards(
                     let mut next = widgets_for_source.clone();
                     let source = source_from_index(choice);
                     next[index] = TrayWidget {
+                        provider: widget_for_source.provider,
                         source: source.clone(),
                         presentation: default_presentation(&source),
                         limit_value: widget_for_source.limit_value,
