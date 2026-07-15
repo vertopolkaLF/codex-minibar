@@ -13,7 +13,14 @@ pub struct StackPanel {
 }
 
 impl StackPanel {
-    /// Invoke `f` whenever WinUI lays out this panel, with its size in DIPs.
+    /// Invoke `f` after this panel's next layout pass and whenever its arranged
+    /// size changes, with the panel's natural size in DIPs.
+    ///
+    /// `SizeChanged` alone is not enough for a panel inside a `ScrollViewer`:
+    /// changing a child can leave the viewport unchanged, so WinUI never
+    /// raises that event even though the panel's desired height grew.  The
+    /// queued first measurement runs after reconciliation/layout and catches
+    /// those content-only changes as well.
     pub fn on_resize(mut self, f: impl Fn(f64, f64) + 'static) -> Self {
         let f = Rc::new(f);
         let previous = self.mounted.take();
@@ -27,6 +34,32 @@ impl StackPanel {
             let Ok(element) = native.cast::<bindings::IFrameworkElement>() else {
                 return;
             };
+            let callback = f.clone();
+            let measurement_element = native.clone();
+            let measure = move || {
+                if let Ok(size) = measurement_element
+                    .cast::<bindings::IUIElement>()
+                    .and_then(|element| element.DesiredSize())
+                {
+                    callback(size.width as f64, size.height as f64);
+                }
+            };
+
+            // Run once on the queue after this render has been arranged. This
+            // is the path that observes an inserted error banner without a
+            // corresponding viewport-size change.
+            let queued_measure = Rc::new(measure);
+            if let (Ok(queue), callback) = (
+                bindings::DispatcherQueue::GetForCurrentThread(),
+                queued_measure.clone(),
+            ) {
+                let handler = bindings::DispatcherQueueHandler::new(move || callback());
+                let _ = queue.TryEnqueueWithPriority(
+                    bindings::DispatcherQueuePriority::Low,
+                    &handler,
+                );
+            }
+
             let callback = f.clone();
             let measurement_element = native.clone();
             let revoker: Rc<RefCell<Option<windows_core::EventRevoker>>> =
