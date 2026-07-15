@@ -391,6 +391,11 @@ impl ReactorHost {
         &self.window
     }
 
+    /// DPI currently used by this host for DIP-to-pixel conversions.
+    pub fn dpi(&self) -> u32 {
+        self.render_host.dpi().max(1)
+    }
+
     /// Control whether this window appears on the taskbar / Alt+Tab switcher.
     /// Tray popups must pass `false` so they never register as a normal app window.
     pub fn set_shown_in_switchers(&self, shown: bool) -> Result<()> {

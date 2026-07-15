@@ -690,8 +690,9 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     // Mica behind content; reconciler does not manage this panel's children.
     // It is element-level Mica rather than `Window.SystemBackdrop`: the latter
     // ignores the popup's Win32 rounded region and paints past its edges.
-    // on_resize reports the Auto-row height (body + border). Add chrome padding
-    // (border_inset on top and bottom) so the HWND does not clip the bottom stroke.
+    // Height is owned solely by the body's desired-size callback above. Using
+    // this layer's arranged height as a second source fed ResizeClient back
+    // into layout and caused a resize loop / spurious scrollbars.
     let mica = {
         let mut host = swap_chain_panel()
             .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -703,9 +704,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 }
             }
         }));
-        host.on_resize(move |_width, height| {
-            popup::set_client_height_from_content(height + 2.0 * border_inset);
-        })
+        host
     };
 
     let chrome = border(

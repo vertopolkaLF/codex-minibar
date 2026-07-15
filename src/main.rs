@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use codex_minibar::{
     app::{app, AppState},
     notifications,
-    popup::{self, POPUP_HEIGHT_MAX, POPUP_WIDTH},
+    popup::{self, FALLBACK_CLIENT_HEIGHT_LIMIT, POPUP_WIDTH},
     scheduler::ActivationState,
     settings::Settings,
     single_instance::{self, SingleInstance},
@@ -58,7 +58,7 @@ fn run() -> Result<()> {
         // Oversize the first frame so Auto content can measure without clipping;
         // SizeChanged then shrinks the HWND to the real content height.
         .saturating_add(80)
-        .min(popup::POPUP_HEIGHT_MAX);
+        .min(FALLBACK_CLIENT_HEIGHT_LIMIT);
     popup::set_client_height_dip(initial_height);
     let state = Arc::new(AppState {
         settings,
@@ -95,7 +95,10 @@ fn run() -> Result<()> {
                     // Keep min tiny — OverlappedPresenter preferred-min was blocking shrink.
                     min_height: Some(80.0),
                     max_width: Some(f64::from(POPUP_WIDTH)),
-                    max_height: Some(f64::from(POPUP_HEIGHT_MAX)),
+                    // The actual 80% cap is selected from the monitor at
+                    // popup-show time. A fixed 640 DIP creation constraint
+                    // cannot be raised reliably by AppWindow later.
+                    max_height: Some(f64::from(FALLBACK_CLIENT_HEIGHT_LIMIT)),
                 },
                 Box::new(move |_: &(), cx: &mut RenderCx| app(cx, Arc::clone(&state))),
                 |_| {},

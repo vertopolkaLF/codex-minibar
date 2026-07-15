@@ -104,8 +104,12 @@ pub const POPUP_HEIGHT: i32 = BODY_PAD_Y
 /// Smallest popup: two limit cards + footer (plan/credits row hidden).
 pub const POPUP_HEIGHT_MIN: i32 =
     BODY_PAD_Y + LIMIT_CARD_HEIGHT * 2 + BODY_SPACING + FOOTER_HEIGHT + CHROME_HEIGHT;
-/// Fallback maximum used before a popup is assigned to a monitor.
-pub const POPUP_HEIGHT_MAX: i32 = 640;
+/// Temporary safety ceiling before the popup is assigned to a monitor.
+///
+/// This is deliberately larger than any supported desktop. The real maximum
+/// is set from the target monitor immediately before every show; using the old
+/// 640 DIP value here made that bootstrap constraint leak into the live popup.
+pub const FALLBACK_CLIENT_HEIGHT_LIMIT: i32 = 4_096;
 /// Popup height as a share of the monitor it is opened on.
 const POPUP_SCREEN_HEIGHT_FRACTION: f64 = 0.80;
 /// Must match the root XAML `corner_radius` in `app.rs`.
@@ -127,7 +131,7 @@ static CLIENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(POPUP_HEIGHT);
 /// Natural height of the body stack, including its padding, in DIPs.
 static BODY_CONTENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(0);
 /// Dynamic client-height limit for the monitor that owns the current popup.
-static MAX_CLIENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(POPUP_HEIGHT_MAX);
+static MAX_CLIENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(FALLBACK_CLIENT_HEIGHT_LIMIT);
 /// Physical monitor bounds (not work area) — right edge is the seam to the next display.
 static MONITOR_LEFT: AtomicI32 = AtomicI32::new(0);
 static MONITOR_TOP: AtomicI32 = AtomicI32::new(0);
@@ -167,16 +171,25 @@ pub fn max_client_height_dip() -> i32 {
     MAX_CLIENT_HEIGHT_DIP.load(Ordering::SeqCst)
 }
 
-fn update_height_limit_for_monitor(monitor: RECT, dpi: u32) {
+/// The same DPI used by `ReactorHost::resize_client`; mixing it with the
+/// monitor DPI makes a nominal 80% window visibly much shorter on scaled
+/// displays.
+fn host_dpi(fallback: u32) -> u32 {
+    POPUP_HOST.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .map_or(fallback.max(1), |host| host.dpi())
+    })
+}
+
+fn update_height_limit_for_monitor(monitor: RECT, fallback_dpi: u32) {
     let monitor_height_px = (monitor.bottom - monitor.top).max(1);
-    let height_dip = (f64::from(monitor_height_px) * 96.0 / f64::from(dpi)
+    let height_dip = (f64::from(monitor_height_px) * 96.0 / f64::from(host_dpi(fallback_dpi))
         * POPUP_SCREEN_HEIGHT_FRACTION)
         .round() as i32;
     let max_height_dip = height_dip.max(80);
 
-    if MAX_CLIENT_HEIGHT_DIP.swap(max_height_dip, Ordering::SeqCst) == max_height_dip {
-        return;
-    }
+    let changed = MAX_CLIENT_HEIGHT_DIP.swap(max_height_dip, Ordering::SeqCst) != max_height_dip;
 
     POPUP_HOST.with(|slot| {
         if let Some(host) = slot.borrow().as_ref() {
@@ -184,7 +197,9 @@ fn update_height_limit_for_monitor(monitor: RECT, dpi: u32) {
         }
     });
 
-    resize_for_body_content();
+    if changed {
+        resize_for_body_content();
+    }
 }
 
 fn now_ms() -> i64 {
@@ -340,14 +355,6 @@ pub fn register_host(host: Rc<ReactorHost>) {
     POPUP_HOST.with(|slot| *slot.borrow_mut() = Some(host));
 }
 
-/// Resize from a measured content height (DIPs). Ignores bogus zero-size layout passes.
-pub fn set_client_height_from_content(height_dip: f64) {
-    if !height_dip.is_finite() || height_dip < 32.0 {
-        return;
-    }
-    set_client_height_dip(height_dip.ceil() as i32);
-}
-
 /// Resize to the body's natural height plus the fixed footer and popup chrome.
 /// The final size is always capped by the active monitor's height limit.
 pub fn set_client_height_from_body_content(body_height_dip: f64) {
@@ -413,7 +420,7 @@ fn popup_pixel_size(hwnd: HWND, monitor: HMONITOR) -> (i32, i32) {
     let measured_w = (rect.right - rect.left).abs();
     let measured_h = (rect.bottom - rect.top).abs();
 
-    let dpi = monitor_dpi(monitor);
+    let dpi = host_dpi(monitor_dpi(monitor));
     let height_dip = CLIENT_HEIGHT_DIP.load(Ordering::SeqCst);
     let expected_w = (i64::from(POPUP_WIDTH) * i64::from(dpi) / 96) as i32;
     let expected_h = (i64::from(height_dip) * i64::from(dpi) / 96) as i32;
