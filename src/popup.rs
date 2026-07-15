@@ -104,8 +104,10 @@ pub const POPUP_HEIGHT: i32 = BODY_PAD_Y
 /// Smallest popup: two limit cards + footer (plan/credits row hidden).
 pub const POPUP_HEIGHT_MIN: i32 =
     BODY_PAD_Y + LIMIT_CARD_HEIGHT * 2 + BODY_SPACING + FOOTER_HEIGHT + CHROME_HEIGHT;
-/// Upper bound for long error InfoBars; keeps OverlappedPresenter flexible.
+/// Fallback maximum used before a popup is assigned to a monitor.
 pub const POPUP_HEIGHT_MAX: i32 = 640;
+/// Popup height as a share of the monitor it is opened on.
+const POPUP_SCREEN_HEIGHT_FRACTION: f64 = 0.80;
 /// Must match the root XAML `corner_radius` in `app.rs`.
 pub const WINDOW_CORNER_RADIUS_DIP: i32 = 8;
 const PARKED_X: i32 = -32_000;
@@ -122,6 +124,10 @@ static BUTTON_WAS_DOWN: AtomicBool = AtomicBool::new(false);
 static IGNORE_OUTSIDE_UNTIL_MS: AtomicI64 = AtomicI64::new(0);
 /// Current client height in DIP (updated when content changes).
 static CLIENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(POPUP_HEIGHT);
+/// Natural height of the body stack, including its padding, in DIPs.
+static BODY_CONTENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(0);
+/// Dynamic client-height limit for the monitor that owns the current popup.
+static MAX_CLIENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(POPUP_HEIGHT_MAX);
 /// Physical monitor bounds (not work area) — right edge is the seam to the next display.
 static MONITOR_LEFT: AtomicI32 = AtomicI32::new(0);
 static MONITOR_TOP: AtomicI32 = AtomicI32::new(0);
@@ -154,6 +160,31 @@ fn loaded_monitor() -> RECT {
 
 fn loaded_work_bottom() -> i32 {
     WORK_BOTTOM.load(Ordering::SeqCst)
+}
+
+/// Maximum client height for the monitor selected when the popup was opened.
+pub fn max_client_height_dip() -> i32 {
+    MAX_CLIENT_HEIGHT_DIP.load(Ordering::SeqCst)
+}
+
+fn update_height_limit_for_monitor(monitor: RECT, dpi: u32) {
+    let monitor_height_px = (monitor.bottom - monitor.top).max(1);
+    let height_dip = (f64::from(monitor_height_px) * 96.0 / f64::from(dpi)
+        * POPUP_SCREEN_HEIGHT_FRACTION)
+        .round() as i32;
+    let max_height_dip = height_dip.max(80);
+
+    if MAX_CLIENT_HEIGHT_DIP.swap(max_height_dip, Ordering::SeqCst) == max_height_dip {
+        return;
+    }
+
+    POPUP_HOST.with(|slot| {
+        if let Some(host) = slot.borrow().as_ref() {
+            let _ = host.relax_height_constraints(f64::from(max_height_dip));
+        }
+    });
+
+    resize_for_body_content();
 }
 
 fn now_ms() -> i64 {
@@ -288,7 +319,8 @@ pub fn height_for(hide_plan_credits: bool, error: Option<&str>) -> i32 {
     }
     let spacings = BODY_SPACING * (blocks.len().saturating_sub(1) as i32);
     let height = BODY_PAD_Y + blocks.iter().sum::<i32>() + spacings + FOOTER_HEIGHT + CHROME_HEIGHT;
-    height.clamp(POPUP_HEIGHT_MIN, POPUP_HEIGHT_MAX)
+    let max_height = max_client_height_dip();
+    height.clamp(POPUP_HEIGHT_MIN.min(max_height), max_height)
 }
 
 fn info_bar_height(message: &str) -> i32 {
@@ -302,7 +334,7 @@ fn info_bar_height(message: &str) -> i32 {
 
 /// Keep the WinUI host so content-driven resizes can call `AppWindow.ResizeClient`.
 pub fn register_host(host: Rc<ReactorHost>) {
-    let _ = host.relax_height_constraints(f64::from(POPUP_HEIGHT_MAX));
+    let _ = host.relax_height_constraints(f64::from(max_client_height_dip()));
     // Pin taskbar exclusion as early as possible — before the first show.
     let _ = host.set_shown_in_switchers(false);
     POPUP_HOST.with(|slot| *slot.borrow_mut() = Some(host));
@@ -316,9 +348,27 @@ pub fn set_client_height_from_content(height_dip: f64) {
     set_client_height_dip(height_dip.ceil() as i32);
 }
 
+/// Resize to the body's natural height plus the fixed footer and popup chrome.
+/// The final size is always capped by the active monitor's height limit.
+pub fn set_client_height_from_body_content(body_height_dip: f64) {
+    if !body_height_dip.is_finite() || body_height_dip < 1.0 {
+        return;
+    }
+    BODY_CONTENT_HEIGHT_DIP.store(body_height_dip.ceil() as i32, Ordering::SeqCst);
+    resize_for_body_content();
+}
+
+fn resize_for_body_content() {
+    let body_height = BODY_CONTENT_HEIGHT_DIP.load(Ordering::SeqCst);
+    if body_height < 1 {
+        return;
+    }
+    set_client_height_dip(body_height + FOOTER_HEIGHT + CHROME_HEIGHT);
+}
+
 /// Resize the WinUI client to `height_dip` and re-pin if the popup is open.
 pub fn set_client_height_dip(height_dip: i32) {
-    let height_dip = height_dip.clamp(80, POPUP_HEIGHT_MAX);
+    let height_dip = height_dip.clamp(80, max_client_height_dip());
     if CLIENT_HEIGHT_DIP.swap(height_dip, Ordering::SeqCst) == height_dip {
         return;
     }
@@ -329,7 +379,7 @@ pub fn set_client_height_dip(height_dip: i32) {
 pub fn sync_host_constraints() {
     POPUP_HOST.with(|slot| {
         if let Some(host) = slot.borrow().as_ref() {
-            let _ = host.relax_height_constraints(f64::from(POPUP_HEIGHT_MAX));
+            let _ = host.relax_height_constraints(f64::from(max_client_height_dip()));
             let height = CLIENT_HEIGHT_DIP.load(Ordering::SeqCst);
             let _ = host.resize_client(f64::from(POPUP_WIDTH), f64::from(height));
         }
@@ -339,7 +389,7 @@ pub fn sync_host_constraints() {
 fn apply_client_height(height_dip: i32) {
     POPUP_HOST.with(|slot| {
         if let Some(host) = slot.borrow().as_ref() {
-            let _ = host.relax_height_constraints(f64::from(POPUP_HEIGHT_MAX));
+            let _ = host.relax_height_constraints(f64::from(max_client_height_dip()));
             let _ = host.resize_client(f64::from(POPUP_WIDTH), f64::from(height_dip));
         }
     });
@@ -716,6 +766,7 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
     store_bounds(monitor, work);
 
     let dpi = monitor_dpi(hmonitor);
+    update_height_limit_for_monitor(monitor, dpi);
     let corner_px = (i64::from(WINDOW_CORNER_RADIUS_DIP) * i64::from(dpi) / 96) as i32;
     CORNER_RADIUS_PX.store(corner_px.max(1), Ordering::SeqCst);
 
