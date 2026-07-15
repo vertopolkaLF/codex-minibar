@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 10;
+pub const SETTINGS_VERSION: u32 = 11;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -58,6 +58,7 @@ pub enum ProviderKind {
     #[default]
     Codex,
     Claude,
+    Cursor,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +66,7 @@ pub enum ProviderKind {
 pub struct ProviderSettings {
     pub codex_enabled: bool,
     pub claude_enabled: bool,
+    pub cursor_enabled: bool,
 }
 
 impl Default for ProviderSettings {
@@ -72,6 +74,7 @@ impl Default for ProviderSettings {
         Self {
             codex_enabled: true,
             claude_enabled: false,
+            cursor_enabled: false,
         }
     }
 }
@@ -81,6 +84,7 @@ impl ProviderSettings {
         match provider {
             ProviderKind::Codex => self.codex_enabled,
             ProviderKind::Claude => self.claude_enabled,
+            ProviderKind::Cursor => self.cursor_enabled,
         }
     }
 
@@ -88,14 +92,16 @@ impl ProviderSettings {
         match provider {
             ProviderKind::Codex => self.codex_enabled = enabled,
             ProviderKind::Claude => self.claude_enabled = enabled,
+            ProviderKind::Cursor => self.cursor_enabled = enabled,
         }
     }
 
     /// Returns the provider only when there is exactly one usable choice.
     pub const fn single_enabled_provider(&self) -> Option<ProviderKind> {
-        match (self.codex_enabled, self.claude_enabled) {
-            (true, false) => Some(ProviderKind::Codex),
-            (false, true) => Some(ProviderKind::Claude),
+        match (self.codex_enabled, self.claude_enabled, self.cursor_enabled) {
+            (true, false, false) => Some(ProviderKind::Codex),
+            (false, true, false) => Some(ProviderKind::Claude),
+            (false, false, true) => Some(ProviderKind::Cursor),
             _ => None,
         }
     }
@@ -106,6 +112,7 @@ impl ProviderKind {
         match self {
             Self::Codex => "Codex",
             Self::Claude => "Claude",
+            Self::Cursor => "Cursor",
         }
     }
 }
@@ -619,6 +626,21 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.insert("version".into(), toml::Value::Integer(10));
                 version = 10;
             }
+            10 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                let providers = root
+                    .entry("providers")
+                    .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+                if let Some(providers) = providers.as_table_mut() {
+                    providers
+                        .entry("cursor_enabled")
+                        .or_insert(toml::Value::Boolean(false));
+                }
+                root.insert("version".into(), toml::Value::Integer(11));
+                version = 11;
+            }
             unsupported => anyhow::bail!("no migration path from settings version {unsupported}"),
         }
     }
@@ -742,6 +764,7 @@ tray_widgets = []
             providers: ProviderSettings {
                 codex_enabled: false,
                 claude_enabled: true,
+                cursor_enabled: false,
             },
             tray_widgets: vec![TrayWidget::default_user_widget()],
             ..Settings::default()
@@ -760,6 +783,7 @@ tray_widgets = []
             providers: ProviderSettings {
                 codex_enabled: false,
                 claude_enabled: true,
+                cursor_enabled: false,
             },
             tray_widgets: vec![TrayWidget::default_user_widget()],
             ..Settings::default()

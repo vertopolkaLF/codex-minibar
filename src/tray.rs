@@ -45,7 +45,7 @@ pub fn tooltip(limits: &RateLimits) -> String {
 
 fn provider_tooltip(limits: &ProviderLimits) -> String {
     let mut entries = Vec::new();
-    for provider in [crate::settings::ProviderKind::Codex, crate::settings::ProviderKind::Claude] {
+    for provider in [crate::settings::ProviderKind::Codex, crate::settings::ProviderKind::Claude, crate::settings::ProviderKind::Cursor] {
         let limits = limits.get(provider);
         if has_real_data(limits) {
             entries.push(format!("{} — {}", provider.display_name(), tooltip(limits)));

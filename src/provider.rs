@@ -11,6 +11,7 @@ use anyhow::{anyhow, Result};
 use crate::{
     claude::{ClaudeActivator, ClaudeClient},
     codex::{first_available, CodexActivator, CodexClient},
+    cursor::{CursorActivator, CursorClient},
     settings::{ProviderKind, Settings},
     worker::{self, WorkerEvent, WorkerHandle},
 };
@@ -26,7 +27,7 @@ pub fn start_enabled_workers(
 ) -> (ProviderWorkers, Vec<String>) {
     let mut workers = ProviderWorkers::new();
     let mut errors = Vec::new();
-    for provider in [ProviderKind::Codex, ProviderKind::Claude] {
+    for provider in [ProviderKind::Codex, ProviderKind::Claude, ProviderKind::Cursor] {
         if !settings.providers.is_enabled(provider) {
             continue;
         }
@@ -66,6 +67,15 @@ pub fn start_provider_worker(
             ClaudeActivator::new(),
             activation_path,
             settings.automatic_activation,
+            settings.history_retention_days,
+            Duration::from_secs(settings.limit_refresh_interval.seconds()),
+        ),
+        ProviderKind::Cursor => worker::start_worker(
+            CursorClient::new(),
+            CursorClient::new(),
+            CursorActivator,
+            activation_path,
+            false,
             settings.history_retention_days,
             Duration::from_secs(settings.limit_refresh_interval.seconds()),
         ),
@@ -111,5 +121,6 @@ fn provider_activation_path(provider: ProviderKind, base_path: PathBuf) -> PathB
         // Claude has an independent five-hour clock; sharing Codex's baseline
         // would suppress or duplicate an activation whenever both are enabled.
         ProviderKind::Claude => base_path.with_file_name("activation-claude.toml"),
+        ProviderKind::Cursor => base_path.with_file_name("activation-cursor.toml"),
     }
 }
