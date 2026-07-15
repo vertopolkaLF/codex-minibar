@@ -357,7 +357,7 @@ fn provider_cards(
     color_scheme: ColorScheme,
 ) -> Vec<Element> {
     let (monthly_label, primary_label, secondary_label) = match provider {
-        ProviderKind::Cursor => ("Total usage", "Total usage", "Auto usage"),
+        ProviderKind::Cursor => ("Auto + Composer", "Auto + Composer", "Auto + Composer"),
         _ => ("Monthly", "5h Session", "Weekly"),
     };
     let account_heading: Element = if show_account_name {
@@ -396,7 +396,11 @@ fn provider_cards(
         .with_key(format!("{}-heading", provider.display_name()))
         .into(),
     ];
-    let has_usage_statistics = show_usage_stats && limits.usage.has_data();
+    // Cursor usage is fetched from a remote CSV export rather than scanned
+    // from a local session log. Keep its card visible while that export is
+    // still empty or delayed, so the feature does not look like it vanished.
+    let has_usage_statistics = show_usage_stats
+        && (limits.usage.has_data() || provider == ProviderKind::Cursor);
     cards.extend(
         popup_sections(
             limits,
@@ -435,7 +439,7 @@ fn provider_cards(
                     false,
                     color_scheme,
                 ),
-                PopupSection::UsageStatistics => usage_statistics_card(limits),
+                PopupSection::UsageStatistics => usage_statistics_card(provider, limits),
                 PopupSection::BankedResets => reset_credits_card(limits),
                 PopupSection::PlanCredits => vstack((
                     Shape::rectangle().height(4.0),
@@ -464,7 +468,7 @@ fn provider_cards(
     }));
     if has_usage_statistics {
         cards.push(
-            usage_statistics_card(limits)
+            usage_statistics_card(provider, limits)
                 .with_key(format!("{}-usage-statistics", provider.display_name())),
         );
     }
@@ -650,7 +654,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 ui.show_used_percentage,
                 ui.show_usage_pace,
                 false,
-                false,
+                show_usage_stats,
                 true,
                 ui.show_account_name,
                 color_scheme,
@@ -2077,13 +2081,38 @@ fn reset_credits_card(limits: &RateLimits) -> Element {
     .into()
 }
 
-fn usage_statistics_card(limits: &RateLimits) -> Element {
+fn usage_statistics_card(provider: ProviderKind, limits: &RateLimits) -> Element {
     let statistics = &limits.usage;
+    if provider == ProviderKind::Cursor && !statistics.has_data() {
+        return border(
+            vstack((
+                body_strong("Usage activity"),
+                caption("Waiting for Cursor usage export. Refresh to retry; Cursor can delay new rows.")
+                    .foreground(ThemeRef::TertiaryText)
+                    .wrap(),
+            ))
+            .spacing(6.0),
+        )
+        .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+        .padding(Thickness::uniform(12.0))
+        .background(ThemeRef::CardBackground)
+        .border_thickness(Thickness::uniform(1.0))
+        .border_brush(ThemeRef::CardStroke)
+        .into();
+    }
     let period = statistics.history_days;
     let total = format_token_count(statistics.history.total_tokens());
     let today = format_token_count(statistics.today.total_tokens());
-    let today_value = format_usd(statistics.today.estimated_api_value_usd());
-    let history_value = format_usd(statistics.history.estimated_api_value_usd());
+    let today_value = if provider == ProviderKind::Cursor {
+        "—".into()
+    } else {
+        format_usd(statistics.today.estimated_api_value_usd())
+    };
+    let history_value = if provider == ProviderKind::Cursor {
+        "—".into()
+    } else {
+        format_usd(statistics.history.estimated_api_value_usd())
+    };
     let detail = format!(
         "{} in · {} out · {} cached · {} requests",
         format_token_count(statistics.history.input_tokens),

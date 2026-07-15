@@ -78,6 +78,12 @@ impl TokenUsage {
             .saturating_add(other.estimated_cost_microusd);
         self.priced_requests = self.priced_requests.saturating_add(other.priced_requests);
     }
+
+    /// Aggregates externally sourced usage that follows the same token shape
+    /// as local logs (Cursor's dashboard CSV, for example).
+    pub(crate) fn add_public(&mut self, other: &Self) {
+        self.add(other);
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
