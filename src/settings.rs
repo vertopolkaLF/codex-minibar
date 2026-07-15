@@ -7,7 +7,50 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 8;
+pub const SETTINGS_VERSION: u32 = 9;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LimitRefreshInterval {
+    Seconds30,
+    #[default]
+    Minute1,
+    Minutes5,
+    Minutes10,
+    Minutes15,
+}
+
+impl LimitRefreshInterval {
+    pub const fn seconds(self) -> u64 {
+        match self {
+            Self::Seconds30 => 30,
+            Self::Minute1 => 60,
+            Self::Minutes5 => 5 * 60,
+            Self::Minutes10 => 10 * 60,
+            Self::Minutes15 => 15 * 60,
+        }
+    }
+
+    pub const fn index(self) -> i32 {
+        match self {
+            Self::Seconds30 => 0,
+            Self::Minute1 => 1,
+            Self::Minutes5 => 2,
+            Self::Minutes10 => 3,
+            Self::Minutes15 => 4,
+        }
+    }
+
+    pub const fn from_index(index: i32) -> Self {
+        match index {
+            0 => Self::Seconds30,
+            2 => Self::Minutes5,
+            3 => Self::Minutes10,
+            4 => Self::Minutes15,
+            _ => Self::Minute1,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -158,6 +201,7 @@ pub struct Settings {
     pub version: u32,
     pub providers: ProviderSettings,
     pub automatic_activation: bool,
+    pub limit_refresh_interval: LimitRefreshInterval,
     pub start_at_login: bool,
     pub show_used_percentage: bool,
     pub show_usage_pace: bool,
@@ -177,6 +221,7 @@ impl Default for Settings {
             version: SETTINGS_VERSION,
             providers: ProviderSettings::default(),
             automatic_activation: true,
+            limit_refresh_interval: LimitRefreshInterval::default(),
             start_at_login: true,
             show_used_percentage: false,
             show_usage_pace: true,
@@ -522,6 +567,15 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.insert("version".into(), toml::Value::Integer(8));
                 version = 8;
             }
+            8 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("limit_refresh_interval")
+                    .or_insert(toml::Value::String("minute1".into()));
+                root.insert("version".into(), toml::Value::Integer(9));
+                version = 9;
+            }
             unsupported => anyhow::bail!("no migration path from settings version {unsupported}"),
         }
     }
@@ -538,6 +592,7 @@ mod tests {
         assert!(value.providers.codex_enabled);
         assert!(!value.providers.claude_enabled);
         assert!(value.automatic_activation);
+        assert_eq!(value.limit_refresh_interval, LimitRefreshInterval::Minute1);
         assert!(value.start_at_login);
         assert!(!value.show_used_percentage);
         assert!(value.show_usage_pace);
@@ -587,7 +642,7 @@ tray_widgets = []
         assert!(migrated.show_banked_resets);
         assert!(migrated.show_usage_stats);
         assert_eq!(migrated.history_retention_days, 30);
-        assert!(fs::read_to_string(path).unwrap().contains("version = 8"));
+        assert!(fs::read_to_string(path).unwrap().contains("version = 9"));
     }
 
     #[test]

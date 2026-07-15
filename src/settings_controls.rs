@@ -442,6 +442,67 @@ pub(crate) fn settings_slider_content(
     .into()
 }
 
+/// Fluent settings card with a descriptive label and a trailing native control.
+/// Use this for choices such as ComboBox settings so no option floats outside
+/// the settings-card layout.
+pub(crate) fn settings_control_card(
+    label: impl Into<String>,
+    description: Option<&str>,
+    control: impl Into<Element>,
+    card_id: &'static str,
+    hovered_id: &Option<String>,
+    set_hovered_id: SetState<Option<String>>,
+) -> Element {
+    const CONTROL_WIDTH: f64 = 160.0;
+    let hovered = card_is_hovered(hovered_id, card_id);
+    let (on_enter, on_exit) = card_hover_handlers(card_id, set_hovered_id);
+    let (base, hover) = card_background_layers(hovered);
+    let label = label.into();
+    let label_content: Element = match description {
+        Some(description) => vstack((
+            text_block(label).font_size(14.0).wrap(),
+            text_block(description).font_size(12.0).opacity(0.72).wrap(),
+        ))
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .into(),
+        None => text_block(label).wrap().into(),
+    };
+
+    relative_panel(vec![
+        base,
+        hover,
+        label_content
+            .margin(Thickness {
+                left: CARD_PADDING_X,
+                top: CARD_CONTENT_PADDING_Y,
+                right: CONTROL_WIDTH + CARD_PADDING_X * 2.0,
+                bottom: CARD_CONTENT_PADDING_Y,
+            })
+            .relative_align_left()
+            .relative_align_right()
+            .relative_align_v_center()
+            .into(),
+        control
+            .into()
+            .width(CONTROL_WIDTH)
+            .margin(Thickness {
+                left: 0.0,
+                top: 0.0,
+                right: CARD_PADDING_X,
+                bottom: 0.0,
+            })
+            .relative_align_right()
+            .relative_align_v_center()
+            .into(),
+    ])
+    .min_height(CARD_ROW_HEIGHT)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .background(Color::transparent())
+    .on_pointer_entered(on_enter)
+    .on_pointer_exited(on_exit)
+    .into()
+}
+
 /// Read-only settings row (no hover — it isn't interactive).
 pub(crate) fn settings_info_card(label: impl Into<String>, value: impl Into<String>) -> Element {
     border(
