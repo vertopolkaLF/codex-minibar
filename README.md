@@ -5,7 +5,7 @@
 <h1 align="center">Codex Minibar</h1>
 
 <p align="center">
-  <b>Free, open-source Windows tray companion for Codex rate limits with configurable tray widgets, a compact usage popup, notifications, auto-start, in-place updates, and local history.</b>
+  <b>Free, open-source Windows tray companion for Codex and Claude usage limits with configurable tray widgets, a compact usage popup, notifications, auto-start, in-place updates, and local history.</b>
 </p>
 
 <p align="center">
@@ -27,7 +27,7 @@
 
 ## Overview
 
-Codex Minibar reads the usage data exposed by a locally installed, authenticated Codex CLI/Desktop installation and keeps your five-hour and weekly limits visible in the notification area. It is a native WinUI 3 application written in Rust.
+Codex Minibar reads the usage data exposed by a locally authenticated Codex CLI/Desktop installation or Claude Code session and keeps your five-hour and weekly limits visible in the notification area. It is a native WinUI 3 application written in Rust.
 
 > Codex Minibar is an independent project. It is not affiliated with, endorsed by, or sponsored by OpenAI.
 
@@ -43,14 +43,16 @@ Codex Minibar reads the usage data exposed by a locally installed, authenticated
 - Optionally start Codex automatically to activate a fresh five-hour window.
 - Start with Windows, update in place from GitHub Releases, and retain history locally.
 - Detect Codex installations automatically, with an override for a custom executable path.
+- Switch to Claude in **Settings → General → Usage provider**. Claude reuses its local OAuth session from Claude Code; no credential is copied into this app.
 
 ## Requirements
 
 - Windows 10 or Windows 11 (64-bit ARM or x64).
-- A locally installed and authenticated Codex CLI or Codex desktop application.
+- A locally installed and authenticated Codex CLI/Desktop app or Claude Code.
 
-The app does not ask for, store, or transmit your Codex credentials. It talks to the local
-Codex app server and stores its own settings and usage history in your Windows user profile.
+The app does not ask for or store provider credentials. It talks to the local Codex app server,
+or reads Claude Code's existing local OAuth session to request its usage endpoint, and stores its
+own settings and usage history in your Windows user profile.
 
 ## Install
 
