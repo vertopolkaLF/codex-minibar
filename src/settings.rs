@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 9;
+pub const SETTINGS_VERSION: u32 = 10;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -217,6 +217,7 @@ pub struct Settings {
     pub show_banked_resets: bool,
     pub show_usage_stats: bool,
     pub hide_plan_credits: bool,
+    pub show_account_name: bool,
     pub codex_path: Option<PathBuf>,
     pub tray_widgets: Vec<TrayWidget>,
     pub notifications: NotificationSettings,
@@ -237,6 +238,7 @@ impl Default for Settings {
             show_banked_resets: true,
             show_usage_stats: true,
             hide_plan_credits: false,
+            show_account_name: false,
             codex_path: None,
             // An empty list intentionally means "show the ordinary app icon".
             tray_widgets: Vec::new(),
@@ -603,6 +605,15 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     .or_insert(toml::Value::String("minute1".into()));
                 root.insert("version".into(), toml::Value::Integer(9));
                 version = 9;
+            }
+            9 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("show_account_name")
+                    .or_insert(toml::Value::Boolean(false));
+                root.insert("version".into(), toml::Value::Integer(10));
+                version = 10;
             }
             unsupported => anyhow::bail!("no migration path from settings version {unsupported}"),
         }

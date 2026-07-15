@@ -115,6 +115,8 @@ pub struct RateLimits {
     pub primary: LimitWindow,
     pub secondary: LimitWindow,
     pub sampled_at: DateTime<Utc>,
+    /// Human-readable account identity supplied by the provider, when available.
+    pub account_name: Option<String>,
     pub plan_type: Option<String>,
     pub limit_name: Option<String>,
     pub credits: Credits,

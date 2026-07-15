@@ -188,6 +188,7 @@ struct UiState {
     show_banked_resets: bool,
     show_usage_stats: bool,
     hide_plan_credits: bool,
+    show_account_name: bool,
     codex_enabled: bool,
     claude_enabled: bool,
     update_version: Option<String>,
@@ -247,6 +248,7 @@ impl Default for UiState {
             show_banked_resets: true,
             show_usage_stats: true,
             hide_plan_credits: false,
+            show_account_name: false,
             codex_enabled: true,
             claude_enabled: false,
             update_version: None,
@@ -332,19 +334,44 @@ fn provider_cards(
     show_banked_resets: bool,
     show_usage_stats: bool,
     hide_plan_credits: bool,
+    show_account_name: bool,
     color_scheme: ColorScheme,
 ) -> Vec<Element> {
-    let mut cards: Vec<Element> = vec![
-        body_strong(provider.display_name())
-            .foreground(ThemeRef::SecondaryText)
-            .margin(Thickness {
-                left: 4.0,
-                top: if is_first { 0.0 } else { 8.0 },
-                right: 4.0,
-                bottom: 2.0,
+    let account_heading: Element = if show_account_name {
+        limits
+            .account_name
+            .as_ref()
+            .map(|name| {
+                caption(name.clone())
+                    .foreground(ThemeRef::TertiaryText)
+                    .horizontal_alignment(HorizontalAlignment::Right)
+                    .vertical_alignment(VerticalAlignment::Center)
+                    .grid_column(1)
+                    .into()
             })
-            .with_key(format!("{}-heading", provider.display_name()))
-            .into(),
+            .unwrap_or(Element::Empty)
+    } else {
+        Element::Empty
+    };
+    let mut cards: Vec<Element> = vec![
+        grid((
+            body_strong(provider.display_name())
+                .foreground(ThemeRef::SecondaryText)
+                .vertical_alignment(VerticalAlignment::Center)
+                .grid_column(0),
+            account_heading,
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Auto])
+        .rows([GridLength::Auto])
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .margin(Thickness {
+            left: 4.0,
+            top: if is_first { 0.0 } else { 8.0 },
+            right: 4.0,
+            bottom: 2.0,
+        })
+        .with_key(format!("{}-heading", provider.display_name()))
+        .into(),
     ];
     let has_usage_statistics = show_usage_stats && limits.usage.has_data();
     cards.extend(
@@ -445,6 +472,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         show_banked_resets: state.settings.show_banked_resets,
         show_usage_stats: state.settings.show_usage_stats,
         hide_plan_credits: state.settings.hide_plan_credits,
+        show_account_name: state.settings.show_account_name,
         codex_enabled: state.settings.providers.codex_enabled,
         claude_enabled: state.settings.providers.claude_enabled,
         update_version: state
@@ -532,6 +560,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 ui.show_banked_resets,
                 ui.show_usage_stats,
                 ui.hide_plan_credits,
+                ui.show_account_name,
                 color_scheme,
             ))
             .spacing(6.0)
@@ -550,6 +579,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 ui.show_banked_resets,
                 ui.show_usage_stats,
                 ui.hide_plan_credits,
+                ui.show_account_name,
                 color_scheme,
             ))
             .spacing(6.0)
@@ -680,12 +710,13 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     // error are visible. Give it the flexible row and keep the footer in a
     // separate Auto row so it remains fixed to the bottom edge.
     let body_layout_key = format!(
-        "popup-scroll-{}-{:?}-{}-{}-{}-{}-{}-{}",
+        "popup-scroll-{}-{:?}-{}-{}-{}-{}-{}-{}-{}",
         ui.limits_revision,
         ui.error,
         ui.show_banked_resets,
         ui.show_usage_stats,
         ui.hide_plan_credits,
+        ui.show_account_name,
         ui.codex_enabled,
         ui.claude_enabled,
         color_scheme as i32,
@@ -1058,6 +1089,7 @@ fn start_background_bridge(
             show_banked_resets: state.settings.show_banked_resets,
             show_usage_stats: state.settings.show_usage_stats,
             hide_plan_credits: state.settings.hide_plan_credits,
+            show_account_name: state.settings.show_account_name,
             codex_enabled: state.settings.providers.codex_enabled,
             claude_enabled: state.settings.providers.claude_enabled,
             update_version: update_version_from_phase(&update_phase),
@@ -1093,6 +1125,7 @@ fn start_background_bridge(
             ui.show_banked_resets = settings.show_banked_resets;
             ui.show_usage_stats = settings.show_usage_stats;
             ui.hide_plan_credits = settings.hide_plan_credits;
+            ui.show_account_name = settings.show_account_name;
             ui.codex_enabled = settings.providers.codex_enabled;
             ui.claude_enabled = settings.providers.claude_enabled;
             *notification_settings = settings.notifications.clone();
@@ -2096,6 +2129,7 @@ mod tests {
             true,
             true,
             true,
+            false,
             false,
             ColorScheme::Dark,
         );

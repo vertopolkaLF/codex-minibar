@@ -172,6 +172,7 @@ name = "codex-minibar"
 version = "0.2.1"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "directories",
  "font8x8",

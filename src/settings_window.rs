@@ -374,6 +374,7 @@ pub fn render(
         cx.use_state(settings.show_banked_resets);
     let (show_usage_stats, set_show_usage_stats) = cx.use_state(settings.show_usage_stats);
     let (hide_plan_credits, set_hide_plan_credits) = cx.use_state(settings.hide_plan_credits);
+    let (show_account_name, set_show_account_name) = cx.use_state(settings.show_account_name);
     let (activation_failure, set_activation_failure) =
         cx.use_state(settings.notifications.activation_failure);
     let (limits_reset, set_limits_reset) = cx.use_state(settings.notifications.limits_changed);
@@ -412,6 +413,7 @@ pub fn render(
             show_banked_resets,
             show_usage_stats,
             hide_plan_credits,
+            show_account_name,
             activation_failure,
             limits_reset,
             low_usage_enabled,
@@ -437,6 +439,7 @@ pub fn render(
             set_show_banked_resets,
             set_show_usage_stats,
             set_hide_plan_credits,
+            set_show_account_name,
             set_activation_failure,
             set_limits_reset,
             set_low_usage_enabled,
@@ -582,6 +585,7 @@ fn tab_content(
     show_banked_resets: bool,
     show_usage_stats: bool,
     hide_plan_credits: bool,
+    show_account_name: bool,
     activation_failure: bool,
     limits_reset: bool,
     low_usage_enabled: bool,
@@ -607,6 +611,7 @@ fn tab_content(
     set_show_banked_resets: SetState<bool>,
     set_show_usage_stats: SetState<bool>,
     set_hide_plan_credits: SetState<bool>,
+    set_show_account_name: SetState<bool>,
     set_activation_failure: SetState<bool>,
     set_limits_reset: SetState<bool>,
     set_low_usage_enabled: SetState<bool>,
@@ -634,6 +639,7 @@ fn tab_content(
     let apply_show_banked_resets = settings_tx.clone();
     let apply_show_usage_stats = settings_tx.clone();
     let apply_hide_plan_credits = settings_tx.clone();
+    let apply_show_account_name = settings_tx.clone();
     let apply_activation_failure = settings_tx.clone();
     let apply_limits_reset = settings_tx.clone();
     let apply_low_usage_enabled = settings_tx.clone();
@@ -803,6 +809,25 @@ fn tab_content(
                     set_hovered_card_id.clone(),
                 )
                 .with_key("general-hide-credits"),
+                settings_toggle_card_with_description(
+                    "Show account name",
+                    Some("Shows your Codex name or Claude organization beside the provider heading."),
+                    show_account_name,
+                    move |value| {
+                        persist_bool(
+                            set_show_account_name.clone(),
+                            apply_show_account_name.clone(),
+                            value,
+                            |settings, value| {
+                                settings.show_account_name = value;
+                            },
+                        );
+                    },
+                    "general-show-account-name",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("general-show-account-name"),
             ],
         ),
         Tab::Providers => (
