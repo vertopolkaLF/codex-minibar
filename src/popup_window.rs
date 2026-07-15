@@ -106,7 +106,7 @@ impl AppState {
 
     /// Applies provider toggles without disturbing workers that remain enabled.
     fn sync_provider_workers(&self, settings: &Settings) -> Vec<String> {
-        let disabled = [ProviderKind::Codex, ProviderKind::Claude]
+        let disabled = [ProviderKind::Codex, ProviderKind::Claude, ProviderKind::Cursor]
             .into_iter()
             .filter(|provider| !settings.providers.is_enabled(*provider))
             .collect::<Vec<_>>();
@@ -132,7 +132,7 @@ impl AppState {
         }
 
         let mut errors = Vec::new();
-        for provider in [ProviderKind::Codex, ProviderKind::Claude] {
+        for provider in [ProviderKind::Codex, ProviderKind::Claude, ProviderKind::Cursor] {
             if !settings.providers.is_enabled(provider)
                 || self
                     .workers
@@ -191,6 +191,7 @@ struct UiState {
     show_account_name: bool,
     codex_enabled: bool,
     claude_enabled: bool,
+    cursor_enabled: bool,
     use_colored_provider_icons: bool,
     replace_chatgpt_logo_with_codex: bool,
     update_version: Option<String>,
@@ -253,6 +254,7 @@ impl Default for UiState {
             show_account_name: false,
             codex_enabled: true,
             claude_enabled: false,
+            cursor_enabled: false,
             use_colored_provider_icons: false,
             replace_chatgpt_logo_with_codex: false,
             update_version: None,
@@ -278,6 +280,7 @@ enum PopupView {
     All,
     Codex,
     Claude,
+    Cursor,
 }
 
 /// Semantic identity for each independently reconciled popup section.
@@ -353,6 +356,10 @@ fn provider_cards(
     show_account_name: bool,
     color_scheme: ColorScheme,
 ) -> Vec<Element> {
+    let (monthly_label, primary_label, secondary_label) = match provider {
+        ProviderKind::Cursor => ("Total usage", "Total usage", "Auto usage"),
+        _ => ("Monthly", "5h Session", "Weekly"),
+    };
     let account_heading: Element = if show_account_name {
         limits
             .account_name
@@ -405,7 +412,7 @@ fn provider_cards(
         .filter_map(|section| {
             let element: Element = match section {
                 PopupSection::Monthly => limit_card(
-                    "Monthly",
+                    monthly_label,
                     &limits.secondary,
                     show_used_percentage,
                     show_usage_pace,
@@ -413,7 +420,7 @@ fn provider_cards(
                     color_scheme,
                 ),
                 PopupSection::FiveHour => limit_card(
-                    "5h Session",
+                    primary_label,
                     &limits.primary,
                     show_used_percentage,
                     show_usage_pace,
@@ -421,7 +428,7 @@ fn provider_cards(
                     color_scheme,
                 ),
                 PopupSection::Weekly => limit_card(
-                    "Weekly",
+                    secondary_label,
                     &limits.secondary,
                     show_used_percentage,
                     show_usage_pace,
@@ -465,7 +472,7 @@ fn provider_cards(
 }
 
 fn latest_sampled_at(limits: &ProviderLimits) -> chrono::DateTime<Utc> {
-    [limits.codex.sampled_at, limits.claude.sampled_at]
+    [limits.codex.sampled_at, limits.claude.sampled_at, limits.cursor.sampled_at]
         .into_iter()
         .max()
         .unwrap_or_default()
@@ -491,6 +498,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         show_account_name: state.settings.show_account_name,
         codex_enabled: state.settings.providers.codex_enabled,
         claude_enabled: state.settings.providers.claude_enabled,
+        cursor_enabled: state.settings.providers.cursor_enabled,
         use_colored_provider_icons: state.settings.use_colored_provider_icons,
         replace_chatgpt_logo_with_codex: state.settings.replace_chatgpt_logo_with_codex,
         update_version: state
@@ -560,16 +568,23 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     // A selector only earns its keep when it can actually switch between
     // providers. With zero or one enabled provider the familiar compact
     // footer remains, sparing us some very professional-looking empty UI.
-    let show_provider_tabs = ui.codex_enabled && ui.claude_enabled;
+    let enabled_provider_count = [ui.codex_enabled, ui.claude_enabled, ui.cursor_enabled]
+        .into_iter()
+        .filter(|enabled| *enabled)
+        .count();
+    let show_provider_tabs = enabled_provider_count > 1;
     let selected_view = match selected_view {
         PopupView::Codex if !ui.codex_enabled => PopupView::All,
         PopupView::Claude if !ui.claude_enabled => PopupView::All,
+        PopupView::Cursor if !ui.cursor_enabled => PopupView::All,
         view => view,
     };
     let show_codex = ui.codex_enabled
         && (!show_provider_tabs || matches!(selected_view, PopupView::All | PopupView::Codex));
     let show_claude = ui.claude_enabled
         && (!show_provider_tabs || matches!(selected_view, PopupView::All | PopupView::Claude));
+    let show_cursor = ui.cursor_enabled
+        && (!show_provider_tabs || matches!(selected_view, PopupView::All | PopupView::Cursor));
     // Usage statistics are deliberately a provider-detail concern. The
     // combined view stays focused on limits, while a provider tab can show
     // its full historical card. A lone provider has no All tab, so preserve
@@ -626,10 +641,29 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             .into(),
         );
     }
-    if !ui.codex_enabled && !ui.claude_enabled {
+    if show_cursor {
+        body.push(
+            vstack(provider_cards(
+                ProviderKind::Cursor,
+                !show_codex && !show_claude,
+                &limits.cursor,
+                ui.show_used_percentage,
+                ui.show_usage_pace,
+                false,
+                false,
+                true,
+                ui.show_account_name,
+                color_scheme,
+            ))
+            .spacing(6.0)
+            .with_key("provider-cursor")
+            .into(),
+        );
+    }
+    if !ui.codex_enabled && !ui.claude_enabled && !ui.cursor_enabled {
         body.push(
             InfoBar::new("No providers enabled")
-                .message("Enable Codex or Claude in Settings > Providers.")
+                .message("Enable Codex, Claude, or Cursor in Settings > Providers.")
                 .is_closable(false)
                 .with_key("popup-no-providers")
                 .into(),
@@ -697,7 +731,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     move || set_selected_view.call(PopupView::All)
                 },
             ),
-            popup_tab_button(
+            if ui.codex_enabled { popup_tab_button(
                 "provider-tab-codex",
                 Some(if ui.replace_chatgpt_logo_with_codex {
                     "codex"
@@ -714,8 +748,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     let set_selected_view = set_selected_view.clone();
                     move || set_selected_view.call(PopupView::Codex)
                 },
-            ),
-            popup_tab_button(
+            ) } else { Element::Empty },
+            if ui.claude_enabled { popup_tab_button(
                 "provider-tab-claude",
                 Some("claude"),
                 None,
@@ -724,12 +758,36 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 ui.use_colored_provider_icons,
                 &hovered_action,
                 set_hovered_action.clone(),
-                move || set_selected_view.call(PopupView::Claude),
-            ),
+                {
+                    let set_selected_view = set_selected_view.clone();
+                    move || set_selected_view.call(PopupView::Claude)
+                },
+            ) } else { Element::Empty },
+            if ui.cursor_enabled { popup_tab_button(
+                "provider-tab-cursor",
+                Some("cursor"),
+                None,
+                "Cursor",
+                selected_view == PopupView::Cursor,
+                ui.use_colored_provider_icons,
+                &hovered_action,
+                set_hovered_action.clone(),
+                {
+                    let set_selected_view = set_selected_view.clone();
+                    move || set_selected_view.call(PopupView::Cursor)
+                },
+            ) } else { Element::Empty },
         ))
         .spacing(2.0)
         .horizontal_alignment(HorizontalAlignment::Left)
         .vertical_alignment(VerticalAlignment::Center)
+        // Provider marks are native swap-chain children. Recreate the whole
+        // selector when its membership changes; otherwise WinUI reconciliation
+        // can retain a prior tab's text/icon in a newly occupied slot.
+        .with_key(format!(
+            "provider-tabs-{}-{}-{}",
+            ui.codex_enabled, ui.claude_enabled, ui.cursor_enabled
+        ))
         .into()
     } else {
         vstack((
@@ -812,7 +870,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     // error are visible. Give it the flexible row and keep the footer in a
     // separate Auto row so it remains fixed to the bottom edge.
     let body_layout_key = format!(
-        "popup-scroll-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{:?}",
+        "popup-scroll-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
         ui.limits_revision,
         ui.error,
         ui.show_banked_resets,
@@ -821,6 +879,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         ui.show_account_name,
         ui.codex_enabled,
         ui.claude_enabled,
+        ui.cursor_enabled,
         color_scheme as i32,
         selected_view,
     );
@@ -1195,6 +1254,7 @@ fn start_background_bridge(
             show_account_name: state.settings.show_account_name,
             codex_enabled: state.settings.providers.codex_enabled,
             claude_enabled: state.settings.providers.claude_enabled,
+            cursor_enabled: state.settings.providers.cursor_enabled,
             use_colored_provider_icons: state.settings.use_colored_provider_icons,
             replace_chatgpt_logo_with_codex: state.settings.replace_chatgpt_logo_with_codex,
             update_version: update_version_from_phase(&update_phase),
@@ -1226,7 +1286,8 @@ fn start_background_bridge(
                               settings: Settings| {
             let phase = updates.snapshot();
             let providers_changed = ui.codex_enabled != settings.providers.codex_enabled
-                || ui.claude_enabled != settings.providers.claude_enabled;
+                || ui.claude_enabled != settings.providers.claude_enabled
+                || ui.cursor_enabled != settings.providers.cursor_enabled;
             ui.show_used_percentage = settings.show_used_percentage;
             ui.show_usage_pace = settings.show_usage_pace;
             ui.show_banked_resets = settings.show_banked_resets;
@@ -1235,6 +1296,7 @@ fn start_background_bridge(
             ui.show_account_name = settings.show_account_name;
             ui.codex_enabled = settings.providers.codex_enabled;
             ui.claude_enabled = settings.providers.claude_enabled;
+            ui.cursor_enabled = settings.providers.cursor_enabled;
             ui.use_colored_provider_icons = settings.use_colored_provider_icons;
             ui.replace_chatgpt_logo_with_codex = settings.replace_chatgpt_logo_with_codex;
             *notification_settings = settings.notifications.clone();
@@ -1394,6 +1456,7 @@ fn start_background_bridge(
                 Ok(WorkerEvent::ProviderLimitsUpdated(provider, limits)) => {
                     if (provider == ProviderKind::Codex && !ui.codex_enabled)
                         || (provider == ProviderKind::Claude && !ui.claude_enabled)
+                        || (provider == ProviderKind::Cursor && !ui.cursor_enabled)
                     {
                         continue;
                     }
@@ -1425,6 +1488,7 @@ fn start_background_bridge(
                 Ok(WorkerEvent::ProviderUsageUpdated(provider, usage)) => {
                     if (provider == ProviderKind::Codex && !ui.codex_enabled)
                         || (provider == ProviderKind::Claude && !ui.claude_enabled)
+                        || (provider == ProviderKind::Cursor && !ui.cursor_enabled)
                     {
                         continue;
                     }
@@ -1593,6 +1657,7 @@ fn popup_tab_button(
         match icon_name {
             Some("codex") | Some("chatgpt") => Color::rgb(128, 159, 255),
             Some("claude") => Color::rgb(217, 119, 87),
+            Some("cursor") => Color::rgb(255, 255, 255),
             _ => neutral_icon_color,
         }
     } else {

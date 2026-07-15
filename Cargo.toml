@@ -23,7 +23,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.9"
 tempfile = "3"
-ureq = { version = "2", default-features = false, features = ["native-tls"] }
+ureq = { version = "2", default-features = false, features = ["tls", "native-tls"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
 zip = "2"
 windows-collections = { git = "https://github.com/microsoft/windows-rs", features = ["std"] }
 windows-core = { git = "https://github.com/microsoft/windows-rs" }

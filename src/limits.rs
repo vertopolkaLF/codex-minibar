@@ -133,6 +133,7 @@ pub struct RateLimits {
 pub struct ProviderLimits {
     pub codex: RateLimits,
     pub claude: RateLimits,
+    pub cursor: RateLimits,
 }
 
 impl ProviderLimits {
@@ -140,6 +141,7 @@ impl ProviderLimits {
         match provider {
             ProviderKind::Codex => &self.codex,
             ProviderKind::Claude => &self.claude,
+            ProviderKind::Cursor => &self.cursor,
         }
     }
 
@@ -147,6 +149,7 @@ impl ProviderLimits {
         match provider {
             ProviderKind::Codex => &mut self.codex,
             ProviderKind::Claude => &mut self.claude,
+            ProviderKind::Cursor => &mut self.cursor,
         }
     }
 }

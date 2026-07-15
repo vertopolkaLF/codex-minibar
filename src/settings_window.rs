@@ -362,6 +362,7 @@ pub fn render(
 
     let (codex_enabled, set_codex_enabled) = cx.use_state(settings.providers.codex_enabled);
     let (claude_enabled, set_claude_enabled) = cx.use_state(settings.providers.claude_enabled);
+    let (cursor_enabled, set_cursor_enabled) = cx.use_state(settings.providers.cursor_enabled);
     let (use_colored_provider_icons, set_use_colored_provider_icons) =
         cx.use_state(settings.use_colored_provider_icons);
     let (replace_chatgpt_logo_with_codex, set_replace_chatgpt_logo_with_codex) =
@@ -409,6 +410,7 @@ pub fn render(
             rendered_tab,
             codex_enabled,
             claude_enabled,
+            cursor_enabled,
             use_colored_provider_icons,
             replace_chatgpt_logo_with_codex,
             automatic_activation,
@@ -437,6 +439,7 @@ pub fn render(
             &update_phase,
             set_codex_enabled,
             set_claude_enabled,
+            set_cursor_enabled,
             set_use_colored_provider_icons,
             set_replace_chatgpt_logo_with_codex,
             set_automatic_activation,
@@ -585,6 +588,7 @@ fn tab_content(
     tab: Tab,
     codex_enabled: bool,
     claude_enabled: bool,
+    cursor_enabled: bool,
     use_colored_provider_icons: bool,
     replace_chatgpt_logo_with_codex: bool,
     automatic_activation: bool,
@@ -613,6 +617,7 @@ fn tab_content(
     update_phase: &UpdatePhase,
     set_codex_enabled: SetState<bool>,
     set_claude_enabled: SetState<bool>,
+    set_cursor_enabled: SetState<bool>,
     set_use_colored_provider_icons: SetState<bool>,
     set_replace_chatgpt_logo_with_codex: SetState<bool>,
     set_automatic_activation: SetState<bool>,
@@ -643,6 +648,7 @@ fn tab_content(
 ) -> Element {
     let apply_codex_enabled = settings_tx.clone();
     let apply_claude_enabled = settings_tx.clone();
+    let apply_cursor_enabled = settings_tx.clone();
     let apply_use_colored_provider_icons = settings_tx.clone();
     let apply_replace_chatgpt_logo_with_codex = settings_tx.clone();
     let apply_automatic_activation = settings_tx.clone();
@@ -664,8 +670,10 @@ fn tab_content(
     let apply_notify_on_update = settings_tx.clone();
     let tray_widgets_for_codex_toggle = tray_widgets.to_vec();
     let tray_widgets_for_claude_toggle = tray_widgets.to_vec();
+    let tray_widgets_for_cursor_toggle = tray_widgets.to_vec();
     let tray_widget_setter_for_codex_toggle = set_tray_widgets.clone();
     let tray_widget_setter_for_claude_toggle = set_tray_widgets.clone();
+    let tray_widget_setter_for_cursor_toggle = set_tray_widgets.clone();
     let (title, rows) = match tab {
         Tab::General => (
             "General",
@@ -858,6 +866,7 @@ fn tab_content(
                             ProviderKind::Codex,
                             value,
                             claude_enabled,
+                            cursor_enabled,
                             tray_widgets_for_codex_toggle.clone(),
                         );
                     },
@@ -878,6 +887,7 @@ fn tab_content(
                             ProviderKind::Claude,
                             value,
                             codex_enabled,
+                            cursor_enabled,
                             tray_widgets_for_claude_toggle.clone(),
                         );
                     },
@@ -886,6 +896,26 @@ fn tab_content(
                     set_hovered_card_id.clone(),
                 )
                 .with_key("providers-claude"),
+                settings_toggle_card_with_description(
+                    "Cursor",
+                    Some("Reads your signed-in Cursor desktop app session and shows the current billing-cycle usage."),
+                    cursor_enabled,
+                    move |value| {
+                        persist_cursor_enabled(
+                            set_cursor_enabled.clone(),
+                            tray_widget_setter_for_cursor_toggle.clone(),
+                            apply_cursor_enabled.clone(),
+                            value,
+                            codex_enabled,
+                            claude_enabled,
+                            tray_widgets_for_cursor_toggle.clone(),
+                        );
+                    },
+                    "providers-cursor",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("providers-cursor"),
             ];
             rows.push(
                 settings_section_heading("Customization")
@@ -936,7 +966,7 @@ fn tab_content(
             ("Providers", rows)
         }
         Tab::Tray => {
-            let enabled_providers = enabled_providers(codex_enabled, claude_enabled);
+            let enabled_providers = enabled_providers(codex_enabled, claude_enabled, cursor_enabled);
             (
                 "Tray",
                 tray_settings_cards(
@@ -1804,10 +1834,11 @@ fn persist_tray_widgets(
     persist_update(settings_tx, move |settings| settings.tray_widgets = widgets);
 }
 
-fn enabled_providers(codex_enabled: bool, claude_enabled: bool) -> Vec<ProviderKind> {
+fn enabled_providers(codex_enabled: bool, claude_enabled: bool, cursor_enabled: bool) -> Vec<ProviderKind> {
     [
         (ProviderKind::Codex, codex_enabled),
         (ProviderKind::Claude, claude_enabled),
+        (ProviderKind::Cursor, cursor_enabled),
     ]
     .into_iter()
     .filter_map(|(provider, enabled)| enabled.then_some(provider))
@@ -1833,16 +1864,35 @@ fn persist_provider_enabled(
     provider: ProviderKind,
     enabled: bool,
     other_provider_enabled: bool,
+    cursor_enabled: bool,
     widgets: Vec<TrayWidget>,
 ) {
     setter.call(enabled);
     let providers = match provider {
-        ProviderKind::Codex => enabled_providers(enabled, other_provider_enabled),
-        ProviderKind::Claude => enabled_providers(other_provider_enabled, enabled),
+        ProviderKind::Codex => enabled_providers(enabled, other_provider_enabled, cursor_enabled),
+        ProviderKind::Claude => enabled_providers(other_provider_enabled, enabled, cursor_enabled),
+        ProviderKind::Cursor => enabled_providers(other_provider_enabled, false, enabled),
     };
     widgets_setter.call(normalize_tray_widget_providers(widgets, &providers));
     persist_update(settings_tx, move |settings| {
         settings.providers.set_enabled(provider, enabled);
+    });
+}
+
+fn persist_cursor_enabled(
+    setter: SetState<bool>,
+    widgets_setter: SetState<Vec<TrayWidget>>,
+    settings_tx: Sender<Settings>,
+    enabled: bool,
+    codex_enabled: bool,
+    claude_enabled: bool,
+    widgets: Vec<TrayWidget>,
+) {
+    setter.call(enabled);
+    let providers = enabled_providers(codex_enabled, claude_enabled, enabled);
+    widgets_setter.call(normalize_tray_widget_providers(widgets, &providers));
+    persist_update(settings_tx, move |settings| {
+        settings.providers.cursor_enabled = enabled;
     });
 }
 
