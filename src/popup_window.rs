@@ -1819,7 +1819,7 @@ fn popup_tab_button(
         .into();
     let selection_marker: Element = border(Element::Empty)
         .height(2.0)
-        .background(ThemeRef::Accent)
+        .background(ThemeRef::SystemAttention)
         .opacity(if selected { 1.0 } else { 0.0 })
         .corner_radius(1.0)
         .margin(Thickness {
@@ -1835,7 +1835,8 @@ fn popup_tab_button(
     let content: Element = if let Some(label) = label {
         body_strong(label)
             .foreground(if selected {
-                ThemeRef::AccentText
+                // Match usage progress / "% left" chrome, not Windows accent text.
+                ThemeRef::SystemAttention
             } else if hovered {
                 ThemeRef::PrimaryText
             } else {
@@ -2352,43 +2353,45 @@ fn combined_usage_card(
         .iter()
         .fold(0_u64, |total, (_, spend)| total.saturating_add(*spend));
     let content = match presentation {
-        TotalSpendPresentation::Donut => combined_usage_donut_content(
-            &entries,
-            total_spend,
-            period,
-            set_period,
-            hovered_period,
-            set_hovered_period,
-            color_scheme,
-        ),
-        TotalSpendPresentation::ProgressBar => combined_usage_progress_content(
-            &entries,
-            total_spend,
-            period,
-            set_period,
-            hovered_period,
-            set_hovered_period,
-            color_scheme,
-        ),
+        TotalSpendPresentation::Donut => {
+            combined_usage_donut_content(&entries, total_spend, period, color_scheme)
+        }
+        TotalSpendPresentation::ProgressBar => {
+            combined_usage_progress_content(&entries, total_spend, color_scheme)
+        }
     };
 
     vstack((
-        body_strong("Total Spend")
-            .foreground(ThemeRef::SecondaryText)
-            .margin(Thickness {
-                left: 4.0,
-                top: 0.0,
-                right: 4.0,
-                bottom: 0.0,
-            }),
-        border(
-            content,
-        )
-        .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
-        .padding(Thickness::uniform(10.0))
-        .background(ThemeRef::CardBackground)
-        .border_thickness(Thickness::uniform(1.0))
-        .border_brush(ThemeRef::CardStroke),
+        grid((
+            body_strong("Total Spend")
+                .foreground(ThemeRef::SecondaryText)
+                .vertical_alignment(VerticalAlignment::Center),
+            combined_usage_period_selector(
+                period,
+                set_period,
+                hovered_period,
+                set_hovered_period,
+            )
+            .horizontal_alignment(HorizontalAlignment::Right)
+            .vertical_alignment(VerticalAlignment::Center)
+            .grid_column(1),
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Auto])
+        .rows([GridLength::Auto])
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        // Same title → card gap as provider headings.
+        .margin(Thickness {
+            left: 4.0,
+            top: 0.0,
+            right: 4.0,
+            bottom: 2.0,
+        }),
+        border(content)
+            .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+            .padding(Thickness::uniform(10.0))
+            .background(ThemeRef::CardBackground)
+            .border_thickness(Thickness::uniform(1.0))
+            .border_brush(ThemeRef::CardStroke),
     ))
     .spacing(6.0)
     .into()
@@ -2398,9 +2401,6 @@ fn combined_usage_donut_content(
     entries: &[(ProviderKind, u64)],
     total_spend: u64,
     period: CombinedUsagePeriod,
-    set_period: SetState<CombinedUsagePeriod>,
-    hovered_period: Option<CombinedUsagePeriod>,
-    set_hovered_period: SetState<Option<CombinedUsagePeriod>>,
     color_scheme: ColorScheme,
 ) -> Element {
     let provider_totals = vstack(
@@ -2412,46 +2412,32 @@ fn combined_usage_donut_content(
     .spacing(10.0)
     .vertical_alignment(VerticalAlignment::Center);
 
-    vstack((
-        combined_usage_period_selector(period, set_period, hovered_period, set_hovered_period),
-        grid((
-            combined_usage_donut(entries, total_spend, period, color_scheme).margin(Thickness {
-                left: 0.0,
-                top: 0.0,
-                right: 16.0,
-                bottom: 0.0,
-            }),
-            provider_totals
-                .vertical_alignment(VerticalAlignment::Center)
-                .grid_column(1),
-        ))
-        .columns([GridLength::Auto, GridLength::Star(1.0)])
-        .rows([GridLength::Auto])
-        .horizontal_alignment(HorizontalAlignment::Stretch),
+    grid((
+        combined_usage_donut(entries, total_spend, period, color_scheme).margin(Thickness {
+            left: 0.0,
+            top: 0.0,
+            right: 16.0,
+            bottom: 0.0,
+        }),
+        provider_totals
+            .vertical_alignment(VerticalAlignment::Center)
+            .grid_column(1),
     ))
-    .spacing(10.0)
+    .columns([GridLength::Auto, GridLength::Star(1.0)])
+    .rows([GridLength::Auto])
+    .horizontal_alignment(HorizontalAlignment::Stretch)
     .into()
 }
 
 fn combined_usage_progress_content(
     entries: &[(ProviderKind, u64)],
     total_spend: u64,
-    _period: CombinedUsagePeriod,
-    set_period: SetState<CombinedUsagePeriod>,
-    hovered_period: Option<CombinedUsagePeriod>,
-    set_hovered_period: SetState<Option<CombinedUsagePeriod>>,
     color_scheme: ColorScheme,
 ) -> Element {
     let mut sorted_entries = entries.to_vec();
     sorted_entries.sort_by(|(_, left), (_, right)| right.cmp(left));
 
     vstack((
-        combined_usage_period_selector(
-            _period,
-            set_period,
-            hovered_period,
-            set_hovered_period,
-        ),
         text_block(format_spend(total_spend)).font_size(22.0).font_weight(600),
         combined_usage_progress_bar(&sorted_entries, color_scheme),
         combined_usage_grouped_totals(&sorted_entries, color_scheme),
@@ -2520,8 +2506,7 @@ fn combined_usage_period_selector(
         CombinedUsagePeriod::ThirtyDays,
     ]
     .into_iter()
-    .enumerate()
-    .map(|(index, period)| {
+    .map(|period| {
         combined_usage_period_button(
             period,
             selected,
@@ -2529,24 +2514,9 @@ fn combined_usage_period_selector(
             set_selected.clone(),
             set_hovered.clone(),
         )
-            .grid_column(index as i32)
     })
     .collect();
-    border(
-        grid(buttons)
-            .columns([
-                GridLength::Star(1.0),
-                GridLength::Star(1.0),
-                GridLength::Star(1.0),
-            ])
-            .rows([GridLength::Auto])
-            .horizontal_alignment(HorizontalAlignment::Stretch),
-    )
-    .padding(Thickness::uniform(4.0))
-    .corner_radius(6.0)
-    .background(ThemeRef::SubtleFill)
-    .horizontal_alignment(HorizontalAlignment::Stretch)
-    .into()
+    hstack(buttons).spacing(12.0).into()
 }
 
 fn combined_usage_period_button(
@@ -2559,38 +2529,25 @@ fn combined_usage_period_button(
     let is_selected = period == selected;
     let set_hovered_on_enter = set_hovered.clone();
     let set_hovered_on_exit = set_hovered;
+    // Crossfade text colors: tertiary idle, secondary hover, accent selected.
     let layers: Vec<Element> = vec![
-        border(Element::Empty)
-            .background(ThemeRef::Accent)
-            .opacity(if is_selected { 1.0 } else { 0.0 })
-            .with_opacity_transition(Duration::from_millis(200))
-            .corner_radius(4.0)
-            .relative_align_left()
-            .relative_align_right()
-            .relative_align_top()
-            .relative_align_bottom()
-            .into(),
-        border(Element::Empty)
-            .background(ThemeRef::CardBackground)
-            .opacity(if !is_selected && hovered { 1.0 } else { 0.0 })
-            .with_opacity_transition(Duration::from_millis(200))
-            .corner_radius(4.0)
-            .relative_align_left()
-            .relative_align_right()
-            .relative_align_top()
-            .relative_align_bottom()
-            .into(),
         body_strong(period.label())
-            .foreground(ThemeRef::SecondaryText)
-            .opacity(if is_selected { 0.0 } else { 1.0 })
+            .foreground(ThemeRef::TertiaryText)
+            .opacity(if !is_selected && !hovered { 1.0 } else { 0.0 })
             .with_opacity_transition(Duration::from_millis(200))
             .relative_align_h_center()
             .relative_align_v_center()
             .into(),
         body_strong(period.label())
-            // Accent-button label color from WinUI so the active chip tracks
-            // Windows button text on the accent fill in both themes.
-            .foreground(ThemeRef::custom("TextOnAccentFillColorPrimaryBrush"))
+            .foreground(ThemeRef::SecondaryText)
+            .opacity(if !is_selected && hovered { 1.0 } else { 0.0 })
+            .with_opacity_transition(Duration::from_millis(200))
+            .relative_align_h_center()
+            .relative_align_v_center()
+            .into(),
+        body_strong(period.label())
+            // Match usage progress / "% left" chrome, not Windows accent text.
+            .foreground(ThemeRef::SystemAttention)
             .opacity(if is_selected { 1.0 } else { 0.0 })
             .with_opacity_transition(Duration::from_millis(200))
             .relative_align_h_center()
@@ -2598,16 +2555,13 @@ fn combined_usage_period_button(
             .into(),
     ];
     relative_panel(layers)
-    .height(24.0)
-    .min_height(24.0)
-    .horizontal_alignment(HorizontalAlignment::Stretch)
-    .on_pointer_entered(move |_: PointerEventInfo| {
-        set_hovered_on_enter.call(Some(period));
-    })
-    .on_pointer_exited(move || set_hovered_on_exit.call(None))
-    .on_tapped(move || set_selected.call(period))
-    .with_key(format!("combined-period-{}-{is_selected}", period.key()))
-    .into()
+        .on_pointer_entered(move |_: PointerEventInfo| {
+            set_hovered_on_enter.call(Some(period));
+        })
+        .on_pointer_exited(move || set_hovered_on_exit.call(None))
+        .on_tapped(move || set_selected.call(period))
+        .with_key(format!("combined-period-{}-{is_selected}", period.key()))
+        .into()
 }
 
 /// Draws a true circular ring with native WinUI arc paths. The XAML host is
