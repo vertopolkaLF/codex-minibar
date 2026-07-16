@@ -228,6 +228,8 @@ pub enum Easing {
     EaseOut,
     EaseIn,
     EaseInOut,
+    /// Windows point-to-point motion for an existing element.
+    Fluent,
 }
 
 /// Combined animation block stored on [`Modifiers`]`.animations`. All

@@ -594,6 +594,10 @@ fn easing_for(
             windows_numerics::Vector2 { x: 0.42, y: 0.0 },
             windows_numerics::Vector2 { x: 0.58, y: 1.0 },
         ),
+        Easing::Fluent => (
+            windows_numerics::Vector2 { x: 0.55, y: 0.55 },
+            windows_numerics::Vector2 { x: 0.0, y: 1.0 },
+        ),
     };
     let cubic = compositor.CreateCubicBezierEasingFunction(p1, p2)?;
     cubic.cast::<bindings::CompositionEasingFunction>()

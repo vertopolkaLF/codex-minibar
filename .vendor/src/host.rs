@@ -416,11 +416,55 @@ impl ReactorHost {
             width: dip_to_px(width_dip).max(1),
             height: dip_to_px(height_dip).max(1),
         })?;
+        self.sync_render_size(width_dip, height_dip);
+        Ok(())
+    }
+
+    /// Move + resize in one AppWindow call so the bottom edge can stay pinned.
+    ///
+    /// `ResizeClient` always re-anchors top-left (bottom walks). Pairing it with
+    /// a follow-up `SetWindowPos` still presents one bad frame. `MoveAndResize`
+    /// writes position and outer size together; NC chrome is preserved from the
+    /// current `Size`/`ClientSize` delta so the resulting client matches DIP.
+    pub fn move_and_resize_bottom_pinned(
+        &self,
+        x: i32,
+        bottom_px: i32,
+        width_dip: f64,
+        height_dip: f64,
+    ) -> Result<()> {
+        let dpi = self.render_host.dpi().max(1);
+        let dip_to_px = |dips: f64| (dips * dpi as f64 / 96.0).round() as i32;
+        let window_2 = self.window.cast::<IWindow2>()?;
+        let app_window = window_2.AppWindow()?;
+        let app_window_2 = app_window.cast::<IAppWindow2>()?;
+        let outer = app_window.Size()?;
+        let client = app_window_2.ClientSize()?;
+        let nc_w = (outer.width - client.width).max(0);
+        let nc_h = (outer.height - client.height).max(0);
+        let width_px = dip_to_px(width_dip).max(1) + nc_w;
+        let height_px = dip_to_px(height_dip).max(1) + nc_h;
+        let y = bottom_px - height_px;
+        app_window.MoveAndResize(RectInt32 {
+            x,
+            y,
+            width: width_px,
+            height: height_px,
+        })?;
+        self.sync_render_size(width_dip, height_dip);
+        Ok(())
+    }
+
+    /// Update the reactor's layout size without calling `AppWindow.ResizeClient`.
+    ///
+    /// Used while a tray popup drives HWND geometry itself (bottom-pinned
+    /// `SetWindowPos`) so XAML/Mica still fill every intermediate frame instead
+    /// of leaving the black window clear under the footer.
+    pub fn sync_render_size(&self, width_dip: f64, height_dip: f64) {
         self.render_host.set_inner_size(WindowSize {
             width: width_dip,
             height: height_dip,
         });
-        Ok(())
     }
 
     /// Drop inflated preferred min height so content-driven `ResizeClient` can shrink.

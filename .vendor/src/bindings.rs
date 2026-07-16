@@ -3880,6 +3880,16 @@ impl windows_core::RuntimeType for IAppWindow {
         windows_core::imp::ConstBuffer::for_interface::<Self>();
 }
 impl IAppWindow {
+    pub(crate) fn Position(&self) -> windows_core::Result<PointInt32> {
+        unsafe {
+            let mut result__ = core::mem::zeroed();
+            (windows_core::Interface::vtable(self).Position)(
+                windows_core::Interface::as_raw(self),
+                &mut result__,
+            )
+            .map(|| result__)
+        }
+    }
     pub(crate) fn Presenter(&self) -> windows_core::Result<AppWindowPresenter> {
         unsafe {
             let mut result__ = core::mem::zeroed();
@@ -3898,6 +3908,15 @@ impl IAppWindow {
                 &mut result__,
             )
             .map(|| result__)
+        }
+    }
+    pub(crate) fn MoveAndResize(&self, rect: RectInt32) -> windows_core::Result<()> {
+        unsafe {
+            (windows_core::Interface::vtable(self).MoveAndResize)(
+                windows_core::Interface::as_raw(self),
+                rect,
+            )
+            .ok()
         }
     }
     pub(crate) fn TitleBar(&self) -> windows_core::Result<AppWindowTitleBar> {
@@ -3952,7 +3971,8 @@ pub struct IAppWindow_Vtbl {
     ) -> windows_core::HRESULT,
     IsVisible: usize,
     OwnerWindowId: usize,
-    Position: usize,
+    pub Position:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut PointInt32) -> windows_core::HRESULT,
     pub Presenter: unsafe extern "system" fn(
         *mut core::ffi::c_void,
         *mut *mut core::ffi::c_void,
@@ -3968,7 +3988,10 @@ pub struct IAppWindow_Vtbl {
     Destroy: usize,
     Hide: usize,
     Move: usize,
-    MoveAndResize: usize,
+    pub MoveAndResize: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        RectInt32,
+    ) -> windows_core::HRESULT,
     MoveAndResizeRelativeToDisplayArea: usize,
     Resize: usize,
     pub SetIcon: unsafe extern "system" fn(
@@ -16784,6 +16807,16 @@ impl windows_core::RuntimeType for IVisual {
         windows_core::imp::ConstBuffer::for_interface::<Self>();
 }
 impl IVisual {
+    pub(crate) fn Offset(&self) -> windows_core::Result<windows_numerics::Vector3> {
+        unsafe {
+            let mut result__ = core::mem::zeroed();
+            (windows_core::Interface::vtable(self).Offset)(
+                windows_core::Interface::as_raw(self),
+                &mut result__,
+            )
+            .map(|| result__)
+        }
+    }
     pub(crate) fn SetCenterPoint(
         &self,
         value: windows_numerics::Vector3,
@@ -16836,7 +16869,10 @@ pub struct IVisual_Vtbl {
     SetCompositeMode: usize,
     IsVisible: usize,
     SetIsVisible: usize,
-    Offset: usize,
+    pub Offset: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut windows_numerics::Vector3,
+    ) -> windows_core::HRESULT,
     SetOffset: usize,
     Opacity: usize,
     SetOpacity: usize,
@@ -21295,6 +21331,35 @@ impl<
             windows_core::HRESULT(0)
         }
     }
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PointInt32 {
+    pub x: i32,
+    pub y: i32,
+}
+impl windows_core::TypeKind for PointInt32 {
+    type TypeKind = windows_core::CopyType;
+}
+impl windows_core::RuntimeType for PointInt32 {
+    const SIGNATURE: windows_core::imp::ConstBuffer =
+        windows_core::imp::ConstBuffer::from_slice(b"struct(Windows.Graphics.PointInt32;i4;i4)");
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RectInt32 {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+impl windows_core::TypeKind for RectInt32 {
+    type TypeKind = windows_core::CopyType;
+}
+impl windows_core::RuntimeType for RectInt32 {
+    const SIGNATURE: windows_core::imp::ConstBuffer = windows_core::imp::ConstBuffer::from_slice(
+        b"struct(Windows.Graphics.RectInt32;i4;i4;i4;i4)",
+    );
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
