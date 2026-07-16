@@ -16784,6 +16784,16 @@ impl windows_core::RuntimeType for IVisual {
         windows_core::imp::ConstBuffer::for_interface::<Self>();
 }
 impl IVisual {
+    pub(crate) fn Offset(&self) -> windows_core::Result<windows_numerics::Vector3> {
+        unsafe {
+            let mut result__ = core::mem::zeroed();
+            (windows_core::Interface::vtable(self).Offset)(
+                windows_core::Interface::as_raw(self),
+                &mut result__,
+            )
+            .map(|| result__)
+        }
+    }
     pub(crate) fn SetCenterPoint(
         &self,
         value: windows_numerics::Vector3,
@@ -16836,7 +16846,10 @@ pub struct IVisual_Vtbl {
     SetCompositeMode: usize,
     IsVisible: usize,
     SetIsVisible: usize,
-    Offset: usize,
+    pub Offset: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut windows_numerics::Vector3,
+    ) -> windows_core::HRESULT,
     SetOffset: usize,
     Opacity: usize,
     SetOpacity: usize,

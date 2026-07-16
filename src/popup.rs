@@ -10,11 +10,14 @@
 use std::{
     cell::RefCell,
     rc::Rc,
-    sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicIsize, Ordering},
-    time::{SystemTime, UNIX_EPOCH},
+    sync::{
+        Mutex, MutexGuard,
+        atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicIsize, Ordering},
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use windows_reactor::ReactorHost;
+use windows_reactor::{ReactorHost, Rendering, on_rendering};
 use windows_sys::Win32::{
     Foundation::{HWND, POINT, RECT},
     Graphics::{
@@ -31,12 +34,15 @@ use windows_sys::Win32::{
     UI::{
         Controls::MARGINS,
         HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
-        Input::KeyboardAndMouse::{GetAsyncKeyState, SetFocus, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON},
+        Input::KeyboardAndMouse::{
+            GetAsyncKeyState, SetFocus, VK_ESCAPE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
+        },
         WindowsAndMessaging::{
-            CS_DROPSHADOW, DispatchMessageW, FindWindowW, GCL_STYLE, GWL_EXSTYLE, GWL_STYLE,
+            DispatchMessageW, FindWindowW, GWL_EXSTYLE, GWL_STYLE,
             GetCursorPos, GetWindowLongW, GetWindowRect, HWND_TOPMOST, MSG, PM_REMOVE,
             PeekMessageW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-            SWP_SHOWWINDOW, SetForegroundWindow, SetWindowLongW, SetWindowPos, TranslateMessage,
+            SPI_GETCLIENTAREAANIMATION, SWP_SHOWWINDOW, SetForegroundWindow, SetWindowLongW,
+            SetWindowPos, SystemParametersInfoW, TranslateMessage,
             WS_CAPTION, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
             WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX,
             WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
@@ -44,44 +50,11 @@ use windows_sys::Win32::{
     },
 };
 
-#[cfg(target_pointer_width = "64")]
-use windows_sys::Win32::UI::WindowsAndMessaging::{GetClassLongPtrW, SetClassLongPtrW};
-
-#[cfg(target_pointer_width = "32")]
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetClassLongW as GetClassLongPtrW, SetClassLongW as SetClassLongPtrW,
-};
-
-/// `SetClassLongPtrW` is a macro to `SetClassLongW` on 32-bit; keep one call site.
-#[inline]
-unsafe fn set_class_long_ptr(hwnd: HWND, index: i32, value: isize) -> isize {
-    #[cfg(target_pointer_width = "64")]
-    unsafe {
-        SetClassLongPtrW(hwnd, index, value) as isize
-    }
-    #[cfg(target_pointer_width = "32")]
-    unsafe {
-        SetClassLongPtrW(hwnd, index, value as i32) as isize
-    }
-}
-
-#[inline]
-unsafe fn get_class_long_ptr(hwnd: HWND, index: i32) -> usize {
-    #[cfg(target_pointer_width = "64")]
-    unsafe {
-        GetClassLongPtrW(hwnd, index)
-    }
-    #[cfg(target_pointer_width = "32")]
-    unsafe {
-        GetClassLongPtrW(hwnd, index) as usize
-    }
-}
-
 const WINDOW_TITLE: &str = "Codex Minibar";
 const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
-/// No DWM rounded-frame (its drop shadow always spills past the monitor seam).
-/// Shape comes from `CreateRoundRectRgn` + matching XAML `corner_radius`.
-const DWMWCP_DONOTROUND: u32 = 1;
+/// Native rounded frame in the settled state. The temporary GDI region exists
+/// only while the surface crosses a monitor edge.
+const DWMWCP_ROUND: u32 = 2;
 /// Ignore outside presses briefly after open so the tray click that showed us
 /// cannot immediately dismiss. Counted from the moment the slide starts.
 const SHOW_GRACE_MS: i64 = 200;
@@ -113,8 +86,10 @@ const POPUP_SCREEN_HEIGHT_FRACTION: f64 = 0.80;
 pub const WINDOW_CORNER_RADIUS_DIP: i32 = 8;
 const PARKED_X: i32 = -32_000;
 const PARKED_Y: i32 = -32_000;
-/// 24 compositor-synchronised frames at 60 Hz ≈ 400 ms.
-const ANIMATION_STEPS: i32 = 24;
+/// Fluent motion tokens used by Windows edge panels.
+const OPEN_ANIMATION_DURATION: Duration = Duration::from_millis(250);
+const CLOSE_ANIMATION_DURATION: Duration = Duration::from_millis(167);
+const HEIGHT_ANIMATION_DURATION: Duration = Duration::from_millis(250);
 /// Gap from the monitor edge.
 const EDGE_MARGIN: i32 = 20;
 
@@ -122,9 +97,12 @@ static HWND_BITS: AtomicIsize = AtomicIsize::new(0);
 static CONFIGURED: AtomicBool = AtomicBool::new(false);
 static POPUP_VISIBLE: AtomicBool = AtomicBool::new(false);
 static BUTTON_WAS_DOWN: AtomicBool = AtomicBool::new(false);
+static ESCAPE_WAS_DOWN: AtomicBool = AtomicBool::new(false);
 static IGNORE_OUTSIDE_UNTIL_MS: AtomicI64 = AtomicI64::new(0);
 /// Current client height in DIP (updated when content changes).
 static CLIENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(POPUP_HEIGHT);
+/// Last height actually presented by the HWND, including intermediate frames.
+static APPLIED_CLIENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(POPUP_HEIGHT);
 /// Natural height of the body stack, including its padding, in DIPs.
 static BODY_CONTENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(0);
 /// Dynamic client-height limit for the monitor that owns the current popup.
@@ -139,6 +117,50 @@ static CORNER_RADIUS_PX: AtomicI32 = AtomicI32::new(WINDOW_CORNER_RADIUS_DIP);
 
 thread_local! {
     static POPUP_HOST: RefCell<Option<Rc<ReactorHost>>> = const { RefCell::new(None) };
+    static POPUP_RENDERING: RefCell<Option<Rendering>> = const { RefCell::new(None) };
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WindowMotionKind {
+    Opening,
+    Closing,
+}
+
+#[derive(Clone, Debug)]
+struct WindowMotion {
+    kind: WindowMotionKind,
+    from_x: i32,
+    to_x: i32,
+    started_at: Instant,
+    duration: Duration,
+}
+
+#[derive(Clone, Debug)]
+struct HeightMotion {
+    from_dip: i32,
+    to_dip: i32,
+    started_at: Instant,
+    duration: Duration,
+}
+
+struct PopupMotion {
+    window: Option<WindowMotion>,
+    height: Option<HeightMotion>,
+}
+
+// Tray events are pumped on a worker thread while CompositionTarget.Rendering
+// fires on the WinUI thread. Motion therefore cannot be thread-local: doing so
+// leaves the real animation loop staring at a different, permanently empty
+// state while the HWND remains parked beyond the monitor edge.
+static POPUP_MOTION: Mutex<PopupMotion> = Mutex::new(PopupMotion {
+    window: None,
+    height: None,
+});
+
+fn popup_motion() -> MutexGuard<'static, PopupMotion> {
+    POPUP_MOTION
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn store_bounds(monitor: RECT, work: RECT) {
@@ -232,9 +254,44 @@ fn cubic_bezier(x1: f64, y1: f64, x2: f64, y2: f64, progress: f64) -> f64 {
     3.0 * u * u * t * y1 + 3.0 * u * t * t * y2 + t * t * t
 }
 
-/// Popup slide-in easing: `cubic-bezier(1, 0, 0, 1)`.
-fn ease_appear(progress: f64) -> f64 {
-    cubic_bezier(0.0, 0.5, 0.0, 1.0, progress)
+/// Fluent direct entrance: fast response with a soft landing.
+fn ease_entrance(progress: f64) -> f64 {
+    cubic_bezier(0.0, 0.0, 0.0, 1.0, progress)
+}
+
+/// Respect the Windows "Animation effects" accessibility preference.
+pub fn animations_enabled() -> bool {
+    let mut enabled = 1i32;
+    let ok = unsafe {
+        SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            &mut enabled as *mut i32 as *mut _,
+            0,
+        )
+    };
+    ok == 0 || enabled != 0
+}
+
+/// Fluent gentle exit: the surface gains speed as it leaves.
+fn ease_exit(progress: f64) -> f64 {
+    cubic_bezier(1.0, 0.0, 1.0, 1.0, progress)
+}
+
+/// Fluent point-to-point curve for an existing surface changing geometry.
+fn ease_existing(progress: f64) -> f64 {
+    cubic_bezier(0.55, 0.55, 0.0, 1.0, progress)
+}
+
+fn elapsed_progress(started_at: Instant, duration: Duration, now: Instant) -> f64 {
+    if duration.is_zero() {
+        return 1.0;
+    }
+    now.saturating_duration_since(started_at).as_secs_f64() / duration.as_secs_f64()
+}
+
+fn lerp_i32(from: i32, to: i32, progress: f64) -> i32 {
+    (f64::from(from) + f64::from(to - from) * progress).round() as i32
 }
 
 fn encode_wide(value: &str) -> Vec<u16> {
@@ -257,6 +314,16 @@ fn current_hwnd() -> Option<HWND> {
 }
 
 fn park(hwnd: HWND) {
+    // Every HWND mutation is dispatched to the WinUI thread. Update shared
+    // state first, then release the mutex before calling Win32: SetWindowPos
+    // can synchronously re-enter XAML layout, which may publish a height motion
+    // and must never wait on a lock held by this same call stack.
+    POPUP_VISIBLE.store(false, Ordering::SeqCst);
+    {
+        let mut motion = popup_motion();
+        motion.window = None;
+        motion.height = None;
+    }
     unsafe {
         // Preserve the HWND/XAML compositor between shows. An empty region and
         // an off-screen position are invisible without `SWP_HIDEWINDOW`, which
@@ -273,7 +340,6 @@ fn park(hwnd: HWND) {
             SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER,
         );
     }
-    POPUP_VISIBLE.store(false, Ordering::SeqCst);
 }
 
 fn window_rect(hwnd: HWND) -> RECT {
@@ -347,6 +413,11 @@ pub fn register_host(host: Rc<ReactorHost>) {
     // Pin taskbar exclusion as early as possible — before the first show.
     let _ = host.set_shown_in_switchers(false);
     POPUP_HOST.with(|slot| *slot.borrow_mut() = Some(host));
+    POPUP_RENDERING.with(|slot| {
+        if slot.borrow().is_none() {
+            *slot.borrow_mut() = on_rendering(animation_frame).ok();
+        }
+    });
 }
 
 /// Resize to the body's natural height plus the fixed footer and popup chrome.
@@ -373,7 +444,17 @@ pub fn set_client_height_dip(height_dip: i32) {
     if CLIENT_HEIGHT_DIP.swap(height_dip, Ordering::SeqCst) == height_dip {
         return;
     }
-    apply_client_height(height_dip);
+    if is_visible() && animations_enabled() {
+        let from_dip = APPLIED_CLIENT_HEIGHT_DIP.load(Ordering::SeqCst);
+        popup_motion().height = Some(HeightMotion {
+            from_dip,
+            to_dip: height_dip,
+            started_at: Instant::now(),
+            duration: HEIGHT_ANIMATION_DURATION,
+        });
+    } else {
+        apply_client_height_immediately(height_dip);
+    }
 }
 
 /// Re-apply size constraints after Win32 chrome is stripped (stale NC metrics).
@@ -383,17 +464,19 @@ pub fn sync_host_constraints() {
             let _ = host.relax_height_constraints(f64::from(max_client_height_dip()));
             let height = CLIENT_HEIGHT_DIP.load(Ordering::SeqCst);
             let _ = host.resize_client(f64::from(POPUP_WIDTH), f64::from(height));
+            APPLIED_CLIENT_HEIGHT_DIP.store(height, Ordering::SeqCst);
         }
     });
 }
 
-fn apply_client_height(height_dip: i32) {
+fn apply_client_height_immediately(height_dip: i32) {
     POPUP_HOST.with(|slot| {
         if let Some(host) = slot.borrow().as_ref() {
             let _ = host.relax_height_constraints(f64::from(max_client_height_dip()));
             let _ = host.resize_client(f64::from(POPUP_WIDTH), f64::from(height_dip));
         }
     });
+    APPLIED_CLIENT_HEIGHT_DIP.store(height_dip, Ordering::SeqCst);
 
     if !is_visible() {
         return;
@@ -404,6 +487,44 @@ fn apply_client_height(height_dip: i32) {
     HWND_BITS.store(hwnd as isize, Ordering::SeqCst);
     let monitor = loaded_monitor();
     if monitor.right > monitor.left {
+        pin_bottom_right(hwnd, monitor, loaded_work_bottom());
+    }
+}
+
+/// Resize and move in one Win32 transaction so the bottom edge never jumps.
+/// WinUI receives the final `ResizeClient` after the animation completes; its
+/// root still gets native SizeChanged notifications for every intermediate frame.
+fn apply_animated_client_height(hwnd: HWND, height_dip: i32) {
+    let dpi = host_dpi(96);
+    let height_px = (i64::from(height_dip) * i64::from(dpi) / 96).max(1) as i32;
+    let rect = window_rect(hwnd);
+    let width = (rect.right - rect.left).max(1);
+    let bottom = loaded_work_bottom().saturating_sub(EDGE_MARGIN);
+    let y = bottom.saturating_sub(height_px);
+
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            rect.left,
+            y,
+            width,
+            height_px,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+    }
+    APPLIED_CLIENT_HEIGHT_DIP.store(height_dip, Ordering::SeqCst);
+}
+
+fn finish_height_animation(hwnd: HWND, height_dip: i32, pin: bool) {
+    POPUP_HOST.with(|slot| {
+        if let Some(host) = slot.borrow().as_ref() {
+            let _ = host.resize_client(f64::from(POPUP_WIDTH), f64::from(height_dip));
+        }
+    });
+    APPLIED_CLIENT_HEIGHT_DIP.store(height_dip, Ordering::SeqCst);
+    let monitor = loaded_monitor();
+    if pin && monitor.right > monitor.left {
         pin_bottom_right(hwnd, monitor, loaded_work_bottom());
     }
 }
@@ -479,16 +600,32 @@ fn pin_bottom_right(hwnd: HWND, monitor: RECT, work_bottom: i32) {
         move_hwnd(hwnd, win.left - dx, win.top);
     }
 
-    // Rounded region = window shape without the Win11 DWM frame shadow.
-    apply_window_region(hwnd, None);
+    // The settled popup must remain an ordinary DWM surface; leaving a GDI
+    // region installed here suppresses the native frame shadow.
+    clear_window_region(hwnd);
 }
 
-/// Rounded HWND shape (and optional monitor clip during slide-in).
+/// Rounded HWND shape (and optional monitor clip during edge motion).
 ///
-/// `DWMWCP_ROUND` looks better but always paints a drop shadow past the
-/// monitor seam; a GDI round-rect region has no shadow and matches XAML.
+/// During edge entry/exit a GDI region clips the surface to the selected monitor.
+/// The region is cleared as soon as the popup settles so DWM owns its corners
+/// and shadow for the remainder of the interaction.
 fn apply_window_region(hwnd: HWND, monitor_clip: Option<RECT>) {
     let window = window_rect(hwnd);
+    apply_window_region_for_rect(hwnd, window, monitor_clip);
+}
+
+fn monitor_clip_bounds(window: RECT, monitor: RECT) -> (i32, i32, i32, i32) {
+    let width = (window.right - window.left).max(1);
+    let height = (window.bottom - window.top).max(1);
+    let left = (monitor.left - window.left).clamp(0, width);
+    let top = (monitor.top - window.top).clamp(0, height);
+    let right = (monitor.right - window.left).clamp(left, width);
+    let bottom = (monitor.bottom - window.top).clamp(top, height);
+    (left, top, right, bottom)
+}
+
+fn apply_window_region_for_rect(hwnd: HWND, window: RECT, monitor_clip: Option<RECT>) {
     let width = (window.right - window.left).max(1);
     let height = (window.bottom - window.top).max(1);
     let radius = CORNER_RADIUS_PX.load(Ordering::SeqCst).max(1);
@@ -501,10 +638,7 @@ fn apply_window_region(hwnd: HWND, monitor_clip: Option<RECT>) {
         }
 
         if let Some(mon) = monitor_clip {
-            let left = (mon.left - window.left).clamp(0, width);
-            let top = (mon.top - window.top).clamp(0, height);
-            let right = (mon.right - window.left).clamp(left, width);
-            let bottom = (mon.bottom - window.top).clamp(top, height);
+            let (left, top, right, bottom) = monitor_clip_bounds(window, mon);
             let clip = CreateRectRgn(left, top, right, bottom);
             if !clip.is_null() {
                 let _ = CombineRgn(shape, shape, clip, RGN_AND);
@@ -521,6 +655,106 @@ fn hide_window_pixels(hwnd: HWND) {
         let empty = CreateRectRgn(0, 0, 0, 0);
         SetWindowRgn(hwnd, empty, 1);
     }
+}
+
+fn clear_window_region(hwnd: HWND) {
+    unsafe {
+        SetWindowRgn(hwnd, std::ptr::null_mut(), 1);
+    }
+}
+
+/// Drive every popup movement from the compositor clock. This keeps window
+/// geometry, XAML layout, and the DWM frame on the same cadence instead of
+/// blocking the UI thread in a hand-written `DwmFlush` loop.
+fn animation_frame() {
+    let Some(hwnd) = current_hwnd() else {
+        return;
+    };
+    let now = Instant::now();
+    let mut height_frame = None;
+    let mut height_finished = None;
+    let mut window_frame = None;
+    let mut window_finished = None;
+    let mut active_window_kind = None;
+
+    {
+        let mut motion = popup_motion();
+        if let Some(height) = motion.height.as_ref() {
+            let progress = elapsed_progress(height.started_at, height.duration, now).clamp(0.0, 1.0);
+            let value = lerp_i32(height.from_dip, height.to_dip, ease_existing(progress));
+            height_frame = Some(value);
+            if progress >= 1.0 {
+                height_finished = Some(height.to_dip);
+                motion.height = None;
+            }
+        }
+
+        if let Some(window) = motion.window.as_ref() {
+            active_window_kind = Some(window.kind);
+            let progress = elapsed_progress(window.started_at, window.duration, now).clamp(0.0, 1.0);
+            let eased = match window.kind {
+                WindowMotionKind::Opening => ease_entrance(progress),
+                WindowMotionKind::Closing => ease_exit(progress),
+            };
+            window_frame = Some((window.kind, lerp_i32(window.from_x, window.to_x, eased)));
+            if progress >= 1.0 {
+                window_finished = Some(window.kind);
+                motion.window = None;
+            }
+        }
+    }
+
+    if let Some(height) = height_frame {
+        apply_animated_client_height(hwnd, height);
+    }
+    if let Some((kind, x)) = window_frame {
+        let rect = window_rect(hwnd);
+        if kind == WindowMotionKind::Closing {
+            // Clip for the upcoming position *before* moving. This prevents a
+            // DWM frame from being presented for one refresh on a monitor to
+            // the right of the popup's owning monitor.
+            let width = (rect.right - rect.left).max(1);
+            let height = (rect.bottom - rect.top).max(1);
+            let next_rect = RECT {
+                left: x,
+                top: rect.top,
+                right: x.saturating_add(width),
+                bottom: rect.top.saturating_add(height),
+            };
+            apply_window_region_for_rect(hwnd, next_rect, Some(loaded_monitor()));
+            move_hwnd(hwnd, x, rect.top);
+        } else {
+            move_hwnd(hwnd, x, rect.top);
+            apply_window_region(hwnd, Some(loaded_monitor()));
+        }
+    }
+
+    if let Some(height) = height_finished {
+        finish_height_animation(hwnd, height, active_window_kind.is_none());
+    }
+
+    match window_finished {
+        Some(WindowMotionKind::Opening) => finish_opening(hwnd),
+        Some(WindowMotionKind::Closing) => park(hwnd),
+        None => {}
+    }
+}
+
+fn finish_opening(hwnd: HWND) {
+    apply_popup_chrome(hwnd);
+    hide_from_taskbar(hwnd);
+    unsafe {
+        // A tray click authorizes foreground activation. Clear keyboard focus
+        // immediately so the first footer action never receives a focus ring.
+        let _ = SetForegroundWindow(hwnd);
+        let _ = SetFocus(std::ptr::null_mut());
+    }
+    let monitor = loaded_monitor();
+    if monitor.right > monitor.left {
+        pin_bottom_right(hwnd, monitor, loaded_work_bottom());
+    }
+    IGNORE_OUTSIDE_UNTIL_MS.store(now_ms() + SHOW_GRACE_MS, Ordering::SeqCst);
+    BUTTON_WAS_DOWN.store(true, Ordering::SeqCst);
 }
 
 fn set_system_backdrop(hwnd: HWND, backdrop: i32) {
@@ -555,9 +789,23 @@ fn set_frame_margins(hwnd: HWND, fill: bool) {
     }
 }
 
+/// A one-pixel glass frame lets DWM retain the native top-level shadow while
+/// the XAML element remains responsible for the actual Mica surface.
+fn set_shadow_frame_margins(hwnd: HWND) {
+    let margins = MARGINS {
+        cxLeftWidth: 1,
+        cxRightWidth: 1,
+        cyTopHeight: 1,
+        cyBottomHeight: 1,
+    };
+    unsafe {
+        let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
+    }
+}
+
 fn set_corner_preference(hwnd: HWND) {
     unsafe {
-        let corner = DWMWCP_DONOTROUND;
+        let corner = DWMWCP_ROUND;
         let _ = DwmSetWindowAttribute(
             hwnd,
             DWMWA_WINDOW_CORNER_PREFERENCE,
@@ -614,8 +862,8 @@ fn resolve_monitor(anchor_x: i32, anchor_y: i32) -> (HMONITOR, RECT, RECT) {
     }
 }
 
-/// Shell chrome without SystemBackdrop (Acrylic ignores SetWindowRgn and
-/// paints square corners + a drop shadow onto the neighboring monitor).
+/// Settled shell chrome: element-level Mica supplies the material while DWM
+/// supplies the native rounded frame and top-level shadow.
 fn apply_popup_chrome(hwnd: HWND) {
     unsafe {
         let no_border = DWMWA_COLOR_NONE;
@@ -628,7 +876,8 @@ fn apply_popup_chrome(hwnd: HWND) {
     }
     set_corner_preference(hwnd);
     set_system_backdrop(hwnd, DWMSBT_NONE);
-    set_frame_margins(hwnd, false);
+    set_shadow_frame_margins(hwnd);
+    clear_window_region(hwnd);
 }
 
 /// Keep the popup out of the taskbar and Alt+Tab forever.
@@ -690,9 +939,6 @@ pub fn ensure_configured() -> Option<HWND> {
         // (bright fringes that eyes see and screenshots often miss).
         hide_from_taskbar(hwnd);
 
-        let class_style = get_class_long_ptr(hwnd, GCL_STYLE) as u32;
-        set_class_long_ptr(hwnd, GCL_STYLE, (class_style & !CS_DROPSHADOW) as isize);
-
         apply_popup_chrome(hwnd);
     }
 
@@ -715,13 +961,47 @@ pub fn is_visible() -> bool {
     POPUP_VISIBLE.load(Ordering::SeqCst)
 }
 
+pub fn is_closing() -> bool {
+    popup_motion()
+        .window
+        .as_ref()
+        .is_some_and(|window| window.kind == WindowMotionKind::Closing)
+}
+
 pub fn hide() {
     let Some(hwnd) = current_hwnd() else {
         // Still clear the flag — a missing HWND must not sticky-lock toggle.
         POPUP_VISIBLE.store(false, Ordering::SeqCst);
         return;
     };
-    park(hwnd);
+    if !is_visible() {
+        return;
+    }
+    if !animations_enabled() {
+        park(hwnd);
+        return;
+    }
+    if is_closing() {
+        return;
+    }
+    let rect = window_rect(hwnd);
+    let monitor = loaded_monitor();
+    if monitor.right <= monitor.left {
+        park(hwnd);
+        return;
+    }
+    // The settled DWM shadow is intentionally unconstrained. Replace it with a
+    // monitor-clipped region before the first exit frame so neither the shadow
+    // nor the surface can spill onto an adjacent display.
+    set_frame_margins(hwnd, false);
+    apply_window_region(hwnd, Some(monitor));
+    popup_motion().window = Some(WindowMotion {
+        kind: WindowMotionKind::Closing,
+        from_x: rect.left,
+        to_x: monitor.right,
+        started_at: Instant::now(),
+        duration: CLOSE_ANIMATION_DURATION,
+    });
 }
 
 /// Synchronize XAML composition before a native show. Must run on the UI thread.
@@ -741,7 +1021,14 @@ pub fn prepare_show_on_ui_thread() -> bool {
 
 /// Re-clamp if WinUI grows/moves the HWND past the stored monitor.
 pub fn keep_on_monitor() {
-    if !is_visible() {
+    // This function runs only on the WinUI dispatcher. Inspect motion under the
+    // mutex, release it, and only then touch HWND geometry to avoid Win32/XAML
+    // re-entrancy deadlocks.
+    let animating = {
+        let motion = popup_motion();
+        motion.window.is_some() || motion.height.is_some()
+    };
+    if !is_visible() || animating {
         return;
     }
     let Some(hwnd) = current_hwnd() else {
@@ -772,7 +1059,8 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
     CORNER_RADIUS_PX.store(corner_px.max(1), Ordering::SeqCst);
 
     unsafe {
-        // Acrylic ignores SetWindowRgn — kill it for the slide, restore after.
+        // Element-level Mica stays clipped by XAML; suspend the DWM frame while
+        // the temporary monitor-edge region owns the entering surface shape.
         set_system_backdrop(hwnd, DWMSBT_NONE);
         set_frame_margins(hwnd, false);
 
@@ -791,42 +1079,24 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
         // frame is in place so element-level Mica uses its active wallpaper
         // material instead of the dimmed inactive fallback.
 
-        // Mark visible + start grace before the blocking slide so mid-anim
-        // outside clicks can dismiss without waiting for the last frame.
+        // Mark visible before scheduling the non-blocking compositor motion.
         POPUP_VISIBLE.store(true, Ordering::SeqCst);
         IGNORE_OUTSIDE_UNTIL_MS.store(now_ms() + SHOW_GRACE_MS, Ordering::SeqCst);
         BUTTON_WAS_DOWN.store(true, Ordering::SeqCst);
-
-        for step in 1..=ANIMATION_STEPS {
-            let progress = f64::from(step) / f64::from(ANIMATION_STEPS);
-            let eased = ease_appear(progress);
-            let animated_x = start_x - ((f64::from(start_x - target_x) * eased).round() as i32);
-            move_hwnd(hwnd, animated_x, target_y);
-            apply_window_region(hwnd, Some(monitor));
-            let _ = DwmFlush();
-
-            if clicked_outside() {
-                park(hwnd);
-                return;
-            }
+        if !animations_enabled() {
+            move_hwnd(hwnd, target_x, target_y);
+            finish_opening(hwnd);
+            return;
         }
 
-        apply_popup_chrome(hwnd);
-        hide_from_taskbar(hwnd);
-        // A user tray click authorizes foreground activation. Clear keyboard
-        // focus immediately afterward so no footer button gains a focus ring;
-        // the HWND remains active, which is the state Mica observes.
-        let _ = SetForegroundWindow(hwnd);
-        let _ = SetFocus(std::ptr::null_mut());
-        let _ = DwmFlush();
+        popup_motion().window = Some(WindowMotion {
+            kind: WindowMotionKind::Opening,
+            from_x: start_x,
+            to_x: target_x,
+            started_at: Instant::now(),
+            duration: OPEN_ANIMATION_DURATION,
+        });
     }
-
-    pin_bottom_right(hwnd, monitor, work.bottom);
-
-    // Anim is longer than SHOW_GRACE_MS — re-arm so the same pump tick that
-    // called us cannot immediately dismiss on a stale edge.
-    IGNORE_OUTSIDE_UNTIL_MS.store(now_ms() + SHOW_GRACE_MS, Ordering::SeqCst);
-    BUTTON_WAS_DOWN.store(true, Ordering::SeqCst);
 }
 
 /// Show the popup beside the current pointer location.
@@ -892,4 +1162,87 @@ pub fn clicked_outside() -> bool {
         return false;
     };
     new_press_outside(hwnd)
+}
+
+/// Rising edge of Escape while the transient popup is active.
+pub fn escape_pressed() -> bool {
+    if !is_visible() {
+        ESCAPE_WAS_DOWN.store(false, Ordering::SeqCst);
+        return false;
+    }
+    let down = unsafe { GetAsyncKeyState(VK_ESCAPE as i32) < 0 };
+    let was_down = ESCAPE_WAS_DOWN.swap(down, Ordering::SeqCst);
+    down && !was_down
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fluent_curves_keep_exact_endpoints() {
+        for easing in [ease_entrance, ease_exit, ease_existing] {
+            assert_eq!(easing(0.0), 0.0);
+            assert_eq!(easing(1.0), 1.0);
+        }
+    }
+
+    #[test]
+    fn fluent_curves_are_monotonic() {
+        for easing in [ease_entrance, ease_exit, ease_existing] {
+            let samples = (0..=100)
+                .map(|step| easing(f64::from(step) / 100.0))
+                .collect::<Vec<_>>();
+            assert!(samples.windows(2).all(|pair| pair[0] <= pair[1]));
+        }
+    }
+
+    #[test]
+    fn integer_interpolation_reaches_both_geometry_targets() {
+        assert_eq!(lerp_i32(300, 700, 0.0), 300);
+        assert_eq!(lerp_i32(300, 700, 1.0), 700);
+        assert_eq!(lerp_i32(700, 300, 0.5), 500);
+    }
+
+    #[test]
+    fn worker_published_motion_is_visible_to_the_render_thread() {
+        popup_motion().window = None;
+        std::thread::spawn(|| {
+            popup_motion().window = Some(WindowMotion {
+                kind: WindowMotionKind::Opening,
+                from_x: 1_920,
+                to_x: 1_520,
+                started_at: Instant::now(),
+                duration: OPEN_ANIMATION_DURATION,
+            });
+        })
+        .join()
+        .unwrap();
+
+        assert_eq!(
+            popup_motion().window.as_ref().map(|motion| motion.kind),
+            Some(WindowMotionKind::Opening)
+        );
+        popup_motion().window = None;
+    }
+
+    #[test]
+    fn exit_clip_shrinks_at_the_owning_monitor_edge() {
+        let monitor = RECT {
+            left: 0,
+            top: 0,
+            right: 1_920,
+            bottom: 1_080,
+        };
+        let window = |left| RECT {
+            left,
+            top: 400,
+            right: left + 380,
+            bottom: 700,
+        };
+
+        assert_eq!(monitor_clip_bounds(window(1_520), monitor), (0, 0, 380, 300));
+        assert_eq!(monitor_clip_bounds(window(1_720), monitor), (0, 0, 200, 300));
+        assert_eq!(monitor_clip_bounds(window(1_920), monitor), (0, 0, 0, 300));
+    }
 }

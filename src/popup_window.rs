@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
         mpsc::{Receiver, Sender},
     },
     thread,
@@ -24,6 +25,9 @@ use crate::{
     updater::{UpdateController, UpdatePhase},
     worker::{WorkerCommand, WorkerEvent},
 };
+
+#[cfg(windows)]
+static KEEP_ON_MONITOR_QUEUED: AtomicBool = AtomicBool::new(false);
 
 fn format_activation_at(at: DateTime<Utc>) -> String {
     at.with_timezone(&Local)
@@ -293,6 +297,125 @@ enum PopupView {
     Codex,
     Claude,
     Cursor,
+}
+
+impl PopupView {
+    const fn order(self) -> i32 {
+        match self {
+            Self::All => 0,
+            Self::Codex => 1,
+            Self::Claude => 2,
+            Self::Cursor => 3,
+        }
+    }
+}
+
+fn enabled_popup_views(codex: bool, claude: bool, cursor: bool) -> Vec<PopupView> {
+    let mut views = vec![PopupView::All];
+    if codex {
+        views.push(PopupView::Codex);
+    }
+    if claude {
+        views.push(PopupView::Claude);
+    }
+    if cursor {
+        views.push(PopupView::Cursor);
+    }
+    views
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PagerDirection {
+    Forward,
+    Backward,
+}
+
+const PAGER_ANIMATION_DURATION: Duration = Duration::from_millis(250);
+
+impl PagerDirection {
+    const fn between(from: PopupView, to: PopupView) -> Self {
+        if to.order() > from.order() {
+            Self::Forward
+        } else {
+            Self::Backward
+        }
+    }
+
+    const fn outgoing_offset(self) -> f32 {
+        match self {
+            Self::Forward => -(popup::POPUP_WIDTH as f32),
+            Self::Backward => popup::POPUP_WIDTH as f32,
+        }
+    }
+
+    const fn incoming_offset(self) -> f32 {
+        -self.outgoing_offset()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PagerState {
+    current: PopupView,
+    outgoing: Option<PopupView>,
+    pending: Option<PopupView>,
+    direction: PagerDirection,
+    animation_id: u64,
+}
+
+impl Default for PagerState {
+    fn default() -> Self {
+        Self {
+            current: PopupView::All,
+            outgoing: None,
+            pending: None,
+            direction: PagerDirection::Forward,
+            animation_id: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PagerAction {
+    Select(PopupView),
+    AnimationFinished(u64),
+}
+
+fn reduce_pager(mut state: PagerState, action: PagerAction) -> PagerState {
+    match action {
+        PagerAction::Select(target) => {
+            if state.outgoing.is_some() {
+                if target != state.current {
+                    state.pending = Some(target);
+                }
+                return state;
+            }
+            if target == state.current {
+                return state;
+            }
+            state.direction = PagerDirection::between(state.current, target);
+            state.outgoing = Some(state.current);
+            state.current = target;
+            state.pending = None;
+            state.animation_id = state.animation_id.wrapping_add(1);
+            state
+        }
+        PagerAction::AnimationFinished(animation_id) => {
+            if state.animation_id != animation_id || state.outgoing.is_none() {
+                return state;
+            }
+            state.outgoing = None;
+            let pending = state.pending.take();
+            if let Some(target) = pending
+                && target != state.current
+            {
+                state.direction = PagerDirection::between(state.current, target);
+                state.outgoing = Some(state.current);
+                state.current = target;
+                state.animation_id = state.animation_id.wrapping_add(1);
+            }
+            state
+        }
+    }
 }
 
 /// Ephemeral time range for the compact spend card on the All tab.
@@ -581,7 +704,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let ui_dispatcher = cx.use_ui_marshaller();
     let settings_tx = state.settings_tx.clone();
     let (hovered_action, set_hovered_action) = cx.use_state(Option::<String>::None);
-    let (selected_view, set_selected_view) = cx.use_state(PopupView::All);
+    let (pager, pager_dispatch) = cx.use_reducer_fn(reduce_pager, PagerState::default());
     let (combined_usage_period, set_combined_usage_period) =
         cx.use_state(CombinedUsagePeriod::default());
     let (hovered_combined_usage_period, set_hovered_combined_usage_period) =
@@ -590,6 +713,55 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     // input or provider event. This changes only the elapsed-time label; it
     // never requests fresh limits.
     let (clock_tick, set_clock_tick) = cx.use_async_state(0_u64);
+    let page_animations_enabled = popup::animations_enabled();
+
+    cx.use_effect_with_cleanup(
+        (
+            pager.animation_id,
+            pager.outgoing.is_some(),
+            page_animations_enabled,
+        ),
+        {
+            let pager_dispatch = pager_dispatch.clone();
+            move || {
+                let timer = pager.outgoing.and_then(|_| {
+                    let duration = if page_animations_enabled {
+                        PAGER_ANIMATION_DURATION
+                    } else {
+                        Duration::from_millis(1)
+                    };
+                    DispatcherTimer::new_one_shot(duration, move || {
+                        pager_dispatch.call(PagerAction::AnimationFinished(pager.animation_id));
+                    })
+                    .ok()
+                });
+                Some(move || drop(timer))
+            }
+        },
+    );
+
+    cx.use_effect(
+        (
+            pager.current,
+            ui.codex_enabled,
+            ui.claude_enabled,
+            ui.cursor_enabled,
+        ),
+        {
+            let pager_dispatch = pager_dispatch.clone();
+            move || {
+                let available = match pager.current {
+                    PopupView::All => true,
+                    PopupView::Codex => ui.codex_enabled,
+                    PopupView::Claude => ui.claude_enabled,
+                    PopupView::Cursor => ui.cursor_enabled,
+                };
+                if !available {
+                    pager_dispatch.call(PagerAction::Select(PopupView::All));
+                }
+            }
+        },
+    );
 
     cx.use_effect((), {
         let state = Arc::clone(&state);
@@ -639,133 +811,138 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     // A selector only earns its keep when it can actually switch between
     // providers. With zero or one enabled provider the familiar compact
     // footer remains, sparing us some very professional-looking empty UI.
-    let enabled_provider_count = [ui.codex_enabled, ui.claude_enabled, ui.cursor_enabled]
-        .into_iter()
-        .filter(|enabled| *enabled)
-        .count();
+    let enabled_views = enabled_popup_views(
+        ui.codex_enabled,
+        ui.claude_enabled,
+        ui.cursor_enabled,
+    );
+    let enabled_provider_count = enabled_views.len().saturating_sub(1);
     let show_provider_tabs = enabled_provider_count > 1;
-    let selected_view = match selected_view {
-        PopupView::Codex if !ui.codex_enabled => PopupView::All,
-        PopupView::Claude if !ui.claude_enabled => PopupView::All,
-        PopupView::Cursor if !ui.cursor_enabled => PopupView::All,
-        view => view,
-    };
-    let show_codex = ui.codex_enabled
-        && (!show_provider_tabs || matches!(selected_view, PopupView::All | PopupView::Codex));
-    let show_claude = ui.claude_enabled
-        && (!show_provider_tabs || matches!(selected_view, PopupView::All | PopupView::Claude));
-    let show_cursor = ui.cursor_enabled
-        && (!show_provider_tabs || matches!(selected_view, PopupView::All | PopupView::Cursor));
-    // Individual activity remains a provider-detail view. The All tab has its
-    // own compact, provider-by-provider summary when explicitly enabled.
-    let show_usage_stats =
-        ui.show_usage_stats && (!show_provider_tabs || selected_view != PopupView::All);
-    let show_total_spend = ui.show_total_spend_on_all_tab
-        && show_provider_tabs
-        && selected_view == PopupView::All;
+    let selected_view = pager.current;
+    let build_body = |view: PopupView, retain_disabled_detail: bool| {
+        let show_codex = (ui.codex_enabled
+            || retain_disabled_detail && view == PopupView::Codex)
+            && (!show_provider_tabs || matches!(view, PopupView::All | PopupView::Codex));
+        let show_claude = (ui.claude_enabled
+            || retain_disabled_detail && view == PopupView::Claude)
+            && (!show_provider_tabs || matches!(view, PopupView::All | PopupView::Claude));
+        let show_cursor = (ui.cursor_enabled
+            || retain_disabled_detail && view == PopupView::Cursor)
+            && (!show_provider_tabs || matches!(view, PopupView::All | PopupView::Cursor));
+        // Individual activity remains a provider-detail view. The All tab has
+        // its own compact provider summary when explicitly enabled.
+        let show_usage_stats =
+            ui.show_usage_stats && (!show_provider_tabs || view != PopupView::All);
+        let show_total_spend =
+            ui.show_total_spend_on_all_tab && show_provider_tabs && view == PopupView::All;
 
-    let mut body: Vec<Element> = Vec::new();
-    // Provider headings add a small top gap unless they are the first visible
-    // section. Total Spend and an error banner count as sections too.
-    let mut has_preceding_section = false;
-    if let Some(error) = ui.error.clone() {
-        body.push(
-            InfoBar::new("Something went wrong")
-                .message(error)
-                .error()
-                .is_closable(false)
-                .with_key("popup-error")
-            .into(),
-        );
-        has_preceding_section = true;
-    }
-    if show_total_spend {
-        body.push(
-            combined_usage_card(
-                &limits,
-                ui.codex_enabled,
-                ui.claude_enabled,
-                ui.cursor_enabled,
-                combined_usage_period,
-                set_combined_usage_period.clone(),
-                hovered_combined_usage_period,
-                set_hovered_combined_usage_period.clone(),
-                color_scheme,
-                ui.total_spend_presentation,
-            )
-            .with_key(format!(
-                "all-combined-usage-{}-{:?}",
-                combined_usage_period.key(),
-                ui.total_spend_presentation
-            )),
-        );
-        has_preceding_section = true;
-    }
-    if show_codex {
-        body.push(
-            vstack(provider_cards(
-                ProviderKind::Codex,
-                !has_preceding_section,
-                &limits.codex,
-                ui.show_used_percentage,
-                ui.show_usage_pace,
-                ui.show_banked_resets,
-                show_usage_stats,
-                ui.show_account_name,
-                color_scheme,
-            ))
-            .spacing(6.0)
-            .with_key("provider-codex")
-            .into(),
-        );
-        has_preceding_section = true;
-    }
-    if show_claude {
-        body.push(
-            vstack(provider_cards(
-                ProviderKind::Claude,
-                !has_preceding_section,
-                &limits.claude,
-                ui.show_used_percentage,
-                ui.show_usage_pace,
-                ui.show_banked_resets,
-                show_usage_stats,
-                ui.show_account_name,
-                color_scheme,
-            ))
-            .spacing(6.0)
-            .with_key("provider-claude")
-            .into(),
-        );
-        has_preceding_section = true;
-    }
-    if show_cursor {
-        body.push(
-            vstack(provider_cards(
-                ProviderKind::Cursor,
-                !has_preceding_section,
-                &limits.cursor,
-                ui.show_used_percentage,
-                ui.show_usage_pace,
-                false,
-                show_usage_stats,
-                ui.show_account_name,
-                color_scheme,
-            ))
-            .spacing(6.0)
-            .with_key("provider-cursor")
-            .into(),
-        );
-    }
-    if !ui.codex_enabled && !ui.claude_enabled && !ui.cursor_enabled {
-        body.push(
-            InfoBar::new("No providers enabled")
-                .message("Enable Codex, Claude, or Cursor in Settings > Providers.")
-                .is_closable(false)
-                .with_key("popup-no-providers")
+        let mut body: Vec<Element> = Vec::new();
+        let mut has_preceding_section = false;
+        if let Some(error) = ui.error.clone() {
+            body.push(
+                InfoBar::new("Something went wrong")
+                    .message(error)
+                    .error()
+                    .is_closable(false)
+                    .with_key("popup-error")
+                    .into(),
+            );
+            has_preceding_section = true;
+        }
+        if show_total_spend {
+            body.push(
+                combined_usage_card(
+                    &limits,
+                    ui.codex_enabled,
+                    ui.claude_enabled,
+                    ui.cursor_enabled,
+                    combined_usage_period,
+                    set_combined_usage_period.clone(),
+                    hovered_combined_usage_period,
+                    set_hovered_combined_usage_period.clone(),
+                    color_scheme,
+                    ui.total_spend_presentation,
+                )
+                .with_key(format!(
+                    "all-combined-usage-{}-{:?}",
+                    combined_usage_period.key(),
+                    ui.total_spend_presentation
+                )),
+            );
+            has_preceding_section = true;
+        }
+        if show_codex {
+            body.push(
+                vstack(provider_cards(
+                    ProviderKind::Codex,
+                    !has_preceding_section,
+                    &limits.codex,
+                    ui.show_used_percentage,
+                    ui.show_usage_pace,
+                    ui.show_banked_resets,
+                    show_usage_stats,
+                    ui.show_account_name,
+                    color_scheme,
+                ))
+                .spacing(6.0)
+                .with_key("provider-codex")
                 .into(),
-        );
-    }
+            );
+            has_preceding_section = true;
+        }
+        if show_claude {
+            body.push(
+                vstack(provider_cards(
+                    ProviderKind::Claude,
+                    !has_preceding_section,
+                    &limits.claude,
+                    ui.show_used_percentage,
+                    ui.show_usage_pace,
+                    ui.show_banked_resets,
+                    show_usage_stats,
+                    ui.show_account_name,
+                    color_scheme,
+                ))
+                .spacing(6.0)
+                .with_key("provider-claude")
+                .into(),
+            );
+            has_preceding_section = true;
+        }
+        if show_cursor {
+            body.push(
+                vstack(provider_cards(
+                    ProviderKind::Cursor,
+                    !has_preceding_section,
+                    &limits.cursor,
+                    ui.show_used_percentage,
+                    ui.show_usage_pace,
+                    false,
+                    show_usage_stats,
+                    ui.show_account_name,
+                    color_scheme,
+                ))
+                .spacing(6.0)
+                .with_key("provider-cursor")
+                .into(),
+            );
+        }
+        if !ui.codex_enabled && !ui.claude_enabled && !ui.cursor_enabled {
+            body.push(
+                InfoBar::new("No providers enabled")
+                    .message("Enable Codex, Claude, or Cursor in Settings > Providers.")
+                    .is_closable(false)
+                    .with_key("popup-no-providers")
+                    .into(),
+            );
+        }
+        body
+    };
+
+    let body = build_body(selected_view, false);
+    let outgoing_body = pager
+        .outgoing
+        .map(|view| build_body(view, true));
 
     let quit_or_update = if ui.update_version.is_some() {
         update_accent_button("Update", || {
@@ -826,8 +1003,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 &hovered_action,
                 set_hovered_action.clone(),
                 {
-                    let set_selected_view = set_selected_view.clone();
-                    move || set_selected_view.call(PopupView::All)
+                    let pager_dispatch = pager_dispatch.clone();
+                    move || pager_dispatch.call(PagerAction::Select(PopupView::All))
                 },
             ),
             if ui.codex_enabled {
@@ -846,8 +1023,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     &hovered_action,
                     set_hovered_action.clone(),
                     {
-                        let set_selected_view = set_selected_view.clone();
-                        move || set_selected_view.call(PopupView::Codex)
+                        let pager_dispatch = pager_dispatch.clone();
+                        move || pager_dispatch.call(PagerAction::Select(PopupView::Codex))
                     },
                 )
             } else {
@@ -865,8 +1042,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     &hovered_action,
                     set_hovered_action.clone(),
                     {
-                        let set_selected_view = set_selected_view.clone();
-                        move || set_selected_view.call(PopupView::Claude)
+                        let pager_dispatch = pager_dispatch.clone();
+                        move || pager_dispatch.call(PagerAction::Select(PopupView::Claude))
                     },
                 )
             } else {
@@ -884,8 +1061,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     &hovered_action,
                     set_hovered_action.clone(),
                     {
-                        let set_selected_view = set_selected_view.clone();
-                        move || set_selected_view.call(PopupView::Cursor)
+                        let pager_dispatch = pager_dispatch.clone();
+                        move || pager_dispatch.call(PagerAction::Select(PopupView::Cursor))
                     },
                 )
             } else {
@@ -997,23 +1174,29 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     // The body can outgrow the popup when both providers, statistics, and an
     // error are visible. Give it the flexible row and keep the footer in a
     // separate Auto row so it remains fixed to the bottom edge.
-    let body_layout_key = format!(
-        "popup-scroll-{}-{:?}-{}-{}-{}-{:?}-{}-{}-{}-{}-{:?}-{:?}",
-        ui.limits_revision,
-        ui.error,
-        ui.show_banked_resets,
-        ui.show_usage_stats,
-        ui.show_total_spend_on_all_tab,
-        ui.total_spend_presentation,
-        ui.show_account_name,
-        ui.codex_enabled,
-        ui.claude_enabled,
-        ui.cursor_enabled,
-        color_scheme as i32,
-        selected_view,
-    );
-    let scrollable_body = scroll_viewer(
-        vstack(body)
+    let build_page = |body: Vec<Element>,
+                      view: PopupView,
+                      role: &'static str,
+                      from_x: f32,
+                      to_x: f32,
+                      measure_height: bool| {
+        let body_layout_key = format!(
+            "popup-page-{role}-{}-{}-{:?}-{}-{}-{}-{:?}-{}-{}-{}-{}-{:?}-{:?}",
+            pager.animation_id,
+            ui.limits_revision,
+            ui.error,
+            ui.show_banked_resets,
+            ui.show_usage_stats,
+            ui.show_total_spend_on_all_tab,
+            ui.total_spend_presentation,
+            ui.show_account_name,
+            ui.codex_enabled,
+            ui.claude_enabled,
+            ui.cursor_enabled,
+            color_scheme as i32,
+            view,
+        );
+        let mut content = vstack(body)
             .spacing(6.0)
             .padding(Thickness {
                 left: 16.0,
@@ -1022,20 +1205,74 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 bottom: 16.0,
             })
             .horizontal_alignment(HorizontalAlignment::Stretch)
-            .vertical_alignment(VerticalAlignment::Top)
-            .on_resize(|_width, height| {
+            .vertical_alignment(VerticalAlignment::Top);
+        if from_x != to_x {
+            content.mounted = Some(Callback::new(move |native: Option<_>| {
+                if let Some(native) = native
+                    && let Err(error) = animate_translation_x(
+                        native,
+                        from_x,
+                        to_x,
+                        PAGER_ANIMATION_DURATION,
+                        Easing::Fluent,
+                    )
+                {
+                    eprintln!("Could not animate popup page: {error:?}");
+                }
+            }));
+        }
+        if measure_height {
+            content = content.on_resize(|_width, height| {
                 popup::set_client_height_from_body_content(height);
+            });
+        }
+        scroll_viewer(content.with_key(body_layout_key))
+            .horizontal_scroll_bar_visibility(ScrollBarVisibility::Disabled)
+            .vertical_scroll_bar_visibility(if measure_height {
+                ScrollBarVisibility::Auto
+            } else {
+                ScrollBarVisibility::Hidden
             })
-            .with_key(body_layout_key),
-    )
-    .horizontal_scroll_bar_visibility(ScrollBarVisibility::Disabled)
-    .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
-    .horizontal_alignment(HorizontalAlignment::Stretch)
-    .vertical_alignment(VerticalAlignment::Stretch)
-    .grid_row(0);
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .vertical_alignment(VerticalAlignment::Stretch)
+            .grid_row(0)
+            .into()
+    };
+
+    let incoming_from = if page_animations_enabled {
+        pager
+            .outgoing
+            .map_or(0.0, |_| pager.direction.incoming_offset())
+    } else {
+        0.0
+    };
+    let current_page = build_page(
+        body,
+        selected_view,
+        "current",
+        incoming_from,
+        0.0,
+        true,
+    );
+    let outgoing_page = match (pager.outgoing, outgoing_body) {
+        (Some(view), Some(body)) => build_page(
+            body,
+            view,
+            "outgoing",
+            0.0,
+            if page_animations_enabled {
+                pager.direction.outgoing_offset()
+            } else {
+                0.0
+            },
+            false,
+        ),
+        _ => Element::Empty,
+    };
+    let page_viewport = grid((outgoing_page, current_page)).grid_row(0);
 
     let body_panel = border(
-        grid((scrollable_body, footer.grid_row(1)))
+        grid((page_viewport, footer.grid_row(1)))
             .rows([GridLength::Star(1.0), GridLength::Auto])
             .columns([GridLength::Star(1.0)])
             .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -1046,7 +1283,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     .border_brush(ThemeRef::SurfaceStroke)
     .corner_radius(inner_corner_radius)
     .horizontal_alignment(HorizontalAlignment::Stretch)
-    .vertical_alignment(VerticalAlignment::Top);
+    .vertical_alignment(VerticalAlignment::Stretch);
 
     // Mica behind content; reconciler does not manage this panel's children.
     // It is element-level Mica rather than `Window.SystemBackdrop`: the latter
@@ -1068,20 +1305,19 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         host
     };
 
-    let chrome = border(
+    border(
         grid((mica, body_panel))
             .rows([GridLength::Star(1.0)])
             .columns([GridLength::Star(1.0)])
             .horizontal_alignment(HorizontalAlignment::Stretch)
-            .vertical_alignment(VerticalAlignment::Top)
+            .vertical_alignment(VerticalAlignment::Stretch)
             .background(Color::transparent()),
     )
     .padding(Thickness::uniform(border_inset))
     .corner_radius(window_corner_radius)
     .horizontal_alignment(HorizontalAlignment::Stretch)
-    .vertical_alignment(VerticalAlignment::Top);
-
-    chrome.into()
+    .vertical_alignment(VerticalAlignment::Stretch)
+    .into()
 }
 
 /// The first settings surface is deliberately a native WinUI shell: persistent
@@ -1702,17 +1938,22 @@ fn pump_tray_and_dismiss(
                 // While Settings is open the popup is a live preview, not a
                 // transient tray flyout. Keep it available until Settings closes.
                 if !crate::settings_window::is_open() {
-                    popup::hide();
+                    ui_dispatcher.dispatch(popup::hide);
                 }
             } else {
-                // Native showing is allowed only after synchronous WinUI
-                // reactivation; otherwise XAML can remain dormant indefinitely.
+                // Activation and motion publication both belong to WinUI's
+                // thread. Publishing the animation from this tray worker used
+                // to strand the HWND just beyond the monitor edge forever.
                 let (ready_tx, ready_rx) = std::sync::mpsc::channel();
                 ui_dispatcher.dispatch(move || {
-                    let _ = ready_tx.send(popup::prepare_show_on_ui_thread());
+                    let ready = popup::prepare_show_on_ui_thread();
+                    if ready {
+                        popup::show_near(x, y);
+                    }
+                    let _ = ready_tx.send(ready);
                 });
                 match ready_rx.recv_timeout(std::time::Duration::from_millis(500)) {
-                    Ok(true) => popup::show_near(x, y),
+                    Ok(true) => {}
                     Ok(false) => {
                         eprintln!("popup host was unavailable during synchronous reactivation");
                     }
@@ -1750,13 +1991,24 @@ fn pump_tray_and_dismiss(
         }
     }
 
-    popup::keep_on_monitor();
+    // HWND geometry belongs to the WinUI thread. Coalesce the 60 Hz tray pump
+    // into at most one pending UI task so a busy dispatcher cannot accumulate
+    // an unbounded tail of stale SetWindowPos calls.
+    if popup::is_visible() && !KEEP_ON_MONITOR_QUEUED.swap(true, Ordering::SeqCst) {
+        ui_dispatcher.dispatch(|| {
+            popup::keep_on_monitor();
+            KEEP_ON_MONITOR_QUEUED.store(false, Ordering::SeqCst);
+        });
+    }
 
     // Settings are a live editor for this surface. Treat the separate settings
     // window as part of the popup interaction so navigating or toggling a
     // setting cannot dismiss the preview beneath it.
-    if !crate::settings_window::is_open() && popup::clicked_outside() {
-        popup::hide();
+    if !crate::settings_window::is_open()
+        && !popup::is_closing()
+        && (popup::clicked_outside() || popup::escape_pressed())
+    {
+        ui_dispatcher.dispatch(popup::hide);
     }
     false
 }
@@ -3194,5 +3446,71 @@ mod tests {
         assert_eq!(ui.limits_revision, 2);
         assert_eq!(ui.last_activation, initial.last_activation);
         assert_eq!(ui.error, initial.error);
+    }
+
+    #[test]
+    fn pager_queues_only_the_latest_destination() {
+        let state = reduce_pager(
+            PagerState::default(),
+            PagerAction::Select(PopupView::Codex),
+        );
+        assert_eq!(state.outgoing, Some(PopupView::All));
+        assert_eq!(state.current, PopupView::Codex);
+        assert_eq!(state.direction, PagerDirection::Forward);
+
+        let animation_id = state.animation_id;
+        let state = reduce_pager(state, PagerAction::Select(PopupView::Claude));
+        let state = reduce_pager(state, PagerAction::Select(PopupView::Cursor));
+        assert_eq!(state.pending, Some(PopupView::Cursor));
+
+        let state = reduce_pager(state, PagerAction::AnimationFinished(animation_id));
+        assert_eq!(state.outgoing, Some(PopupView::Codex));
+        assert_eq!(state.current, PopupView::Cursor);
+        assert_eq!(state.pending, None);
+        assert_eq!(state.direction, PagerDirection::Forward);
+    }
+
+    #[test]
+    fn pager_uses_reverse_motion_for_an_earlier_tab() {
+        let state = PagerState {
+            current: PopupView::Cursor,
+            ..PagerState::default()
+        };
+        let state = reduce_pager(state, PagerAction::Select(PopupView::All));
+        assert_eq!(state.outgoing, Some(PopupView::Cursor));
+        assert_eq!(state.current, PopupView::All);
+        assert_eq!(state.direction, PagerDirection::Backward);
+        assert!(state.direction.outgoing_offset() > 0.0);
+        assert!(state.direction.incoming_offset() < 0.0);
+    }
+
+    #[test]
+    fn stale_pager_completion_cannot_end_a_newer_transition() {
+        let state = reduce_pager(
+            PagerState::default(),
+            PagerAction::Select(PopupView::Codex),
+        );
+        let unchanged = reduce_pager(
+            state,
+            PagerAction::AnimationFinished(state.animation_id.wrapping_sub(1)),
+        );
+        assert_eq!(unchanged, state);
+    }
+
+    #[test]
+    fn every_provider_membership_has_the_expected_tab_order() {
+        for mask in 0_u8..8 {
+            let codex = mask & 0b001 != 0;
+            let claude = mask & 0b010 != 0;
+            let cursor = mask & 0b100 != 0;
+            let views = enabled_popup_views(codex, claude, cursor);
+
+            assert_eq!(views.first(), Some(&PopupView::All));
+            assert_eq!(views.contains(&PopupView::Codex), codex);
+            assert_eq!(views.contains(&PopupView::Claude), claude);
+            assert_eq!(views.contains(&PopupView::Cursor), cursor);
+            assert!(views.windows(2).all(|pair| pair[0].order() < pair[1].order()));
+            assert_eq!(views.len(), 1 + usize::from(codex) + usize::from(claude) + usize::from(cursor));
+        }
     }
 }

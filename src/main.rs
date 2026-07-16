@@ -55,10 +55,10 @@ fn run() -> Result<()> {
         updates.check_async(true, settings.notifications.update_available);
     }
     let onboarding_needed = !settings.onboarding_completed;
+    // The host stays parked until Auto content reports its natural size. Never
+    // expose an intentionally oversized first client area: that was the black
+    // strip visible below the top-aligned XAML chrome.
     let initial_height = popup::height_for(startup_error.as_deref())
-        // Oversize the first frame so Auto content can measure without clipping;
-        // SizeChanged then shrinks the HWND to the real content height.
-        .saturating_add(80)
         .min(FALLBACK_CLIENT_HEIGHT_LIMIT);
     popup::set_client_height_dip(initial_height);
     let state = Arc::new(AppState {
