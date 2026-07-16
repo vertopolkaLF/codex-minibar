@@ -118,6 +118,9 @@ static MONITOR_RIGHT: AtomicI32 = AtomicI32::new(0);
 static MONITOR_BOTTOM: AtomicI32 = AtomicI32::new(0);
 static WORK_BOTTOM: AtomicI32 = AtomicI32::new(0);
 static CORNER_RADIUS_PX: AtomicI32 = AtomicI32::new(WINDOW_CORNER_RADIUS_DIP);
+/// `GetWindowRect().bottom` locked when the popup settles. Height animation
+/// keeps this exact pixel fixed — never retarget from DWM frame bounds.
+static PINNED_WIN_BOTTOM_PX: AtomicI32 = AtomicI32::new(0);
 
 thread_local! {
     static POPUP_HOST: RefCell<Option<Rc<ReactorHost>>> = const { RefCell::new(None) };
@@ -189,10 +192,18 @@ fn loaded_work_bottom() -> i32 {
     WORK_BOTTOM.load(Ordering::SeqCst)
 }
 
-/// Stable work-area seam for the popup bottom edge (never DWM frame bounds —
-/// the shadow rect jitters during resize and made the seam bob).
 fn pinned_bottom_px() -> i32 {
-    loaded_work_bottom().saturating_sub(EDGE_MARGIN)
+    let locked = PINNED_WIN_BOTTOM_PX.load(Ordering::SeqCst);
+    if locked != 0 {
+        locked
+    } else {
+        loaded_work_bottom().saturating_sub(EDGE_MARGIN)
+    }
+}
+
+fn lock_pinned_win_bottom(hwnd: HWND) {
+    let win = window_rect(hwnd);
+    PINNED_WIN_BOTTOM_PX.store(win.bottom, Ordering::SeqCst);
 }
 
 /// Maximum client height for the monitor selected when the popup was opened.
@@ -335,6 +346,7 @@ fn park(hwnd: HWND) {
         motion.height = None;
     }
     PENDING_GROW_HEIGHT_DIP.store(0, Ordering::SeqCst);
+    PINNED_WIN_BOTTOM_PX.store(0, Ordering::SeqCst);
     unsafe {
         // Preserve the HWND/XAML compositor between shows. An empty region and
         // an off-screen position are invisible without `SWP_HIDEWINDOW`, which
@@ -529,45 +541,35 @@ fn apply_client_height_immediately(height_dip: i32) {
     let monitor = loaded_monitor();
     if monitor.right > monitor.left {
         pin_bottom_right(hwnd, monitor, loaded_work_bottom());
+        lock_pinned_win_bottom(hwnd);
     }
 }
 
-/// Apply island + HWND height with the Win32 bottom edge locked to the work seam.
+/// Apply island + HWND height with `GetWindowRect().bottom` frozen on the seam.
 ///
-/// Grow: nudge the top up first (NOREDRAW), then `ResizeClient` expands downward
-/// onto the seam — the bottom never drops below it on a presented frame.
-/// Shrink: `ResizeClient` first (bottom rises), then translate back down to the seam.
+/// Uses `AppWindow.MoveAndResize` so position and size land in one WinUI
+/// transaction. The old path did `SetWindowPos` then `ResizeClient` — the
+/// latter re-anchors top-left every frame, which is exactly the bottom bob.
 fn apply_shell_height_now(hwnd: HWND, height_dip: i32) {
-    let seam = pinned_bottom_px();
-    let applied = APPLIED_CLIENT_HEIGHT_DIP.load(Ordering::SeqCst);
-    let dpi = host_dpi(96);
-    let old_px = ((f64::from(applied) * f64::from(dpi) / 96.0).round() as i32).max(1);
-    let new_px = ((f64::from(height_dip) * f64::from(dpi) / 96.0).round() as i32).max(1);
-
-    if new_px > old_px {
-        let delta = new_px - old_px;
-        let win = window_rect(hwnd);
-        unsafe {
-            SetWindowPos(
-                hwnd,
-                HWND_TOPMOST,
-                win.left,
-                win.top - delta,
-                0,
-                0,
-                SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOREDRAW,
-            );
-        }
+    if PINNED_WIN_BOTTOM_PX.load(Ordering::SeqCst) == 0 {
+        lock_pinned_win_bottom(hwnd);
     }
+    let seam = pinned_bottom_px();
+    let win = window_rect(hwnd);
 
     POPUP_HOST.with(|slot| {
         if let Some(host) = slot.borrow().as_ref() {
             let _ = host.relax_height_constraints(f64::from(max_client_height_dip()));
-            let _ = host.resize_client(f64::from(POPUP_WIDTH), f64::from(height_dip));
+            let _ = host.move_and_resize_bottom_pinned(
+                win.left,
+                seam,
+                f64::from(POPUP_WIDTH),
+                f64::from(height_dip),
+            );
         }
     });
-    APPLIED_CLIENT_HEIGHT_DIP.store(height_dip, Ordering::SeqCst);
     pin_win_bottom_to_seam(hwnd, seam);
+    APPLIED_CLIENT_HEIGHT_DIP.store(height_dip, Ordering::SeqCst);
 }
 
 /// Enlarge the shell only after XAML has rendered at the pending height.
@@ -609,9 +611,29 @@ fn apply_animated_client_height(hwnd: HWND, height_dip: i32) {
 fn finish_height_animation(hwnd: HWND, height_dip: i32, pin: bool) {
     PENDING_GROW_HEIGHT_DIP.store(0, Ordering::SeqCst);
     apply_shell_height_now(hwnd, height_dip);
+    if pin {
+        // Horizontal settle only — full `pin_bottom_right` uses DWM frame math
+        // and will yank the locked vertical seam by a pixel or two.
+        pin_right_edge(hwnd);
+        pin_win_bottom_to_seam(hwnd, pinned_bottom_px());
+    }
+}
+
+/// Keep the right edge on the monitor seam without touching Y.
+fn pin_right_edge(hwnd: HWND) {
     let monitor = loaded_monitor();
-    if pin && monitor.right > monitor.left {
-        pin_bottom_right(hwnd, monitor, loaded_work_bottom());
+    if monitor.right <= monitor.left {
+        return;
+    }
+    let win = window_rect(hwnd);
+    let frame = frame_bounds(hwnd);
+    let left = frame.left.min(win.left);
+    let right = frame.right.max(win.right);
+    let width = (right - left).max(1);
+    let target_x = monitor.right - width - EDGE_MARGIN;
+    let dx = target_x - left;
+    if dx != 0 {
+        move_hwnd(hwnd, win.left + dx, win.top);
     }
 }
 
@@ -858,6 +880,7 @@ fn finish_opening(hwnd: HWND) {
     let monitor = loaded_monitor();
     if monitor.right > monitor.left {
         pin_bottom_right(hwnd, monitor, loaded_work_bottom());
+        lock_pinned_win_bottom(hwnd);
     }
     IGNORE_OUTSIDE_UNTIL_MS.store(now_ms() + SHOW_GRACE_MS, Ordering::SeqCst);
     BUTTON_WAS_DOWN.store(true, Ordering::SeqCst);
