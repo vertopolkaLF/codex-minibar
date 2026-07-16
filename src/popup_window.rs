@@ -671,6 +671,10 @@ fn latest_sampled_at(limits: &ProviderLimits) -> chrono::DateTime<Utc> {
 /// Root WinUI view for Codex Minibar (hosted in a tray popup shell).
 pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let dpi = cx.use_dpi().max(1);
+    // Pin the root to the live client size. Stretch alone is not enough: during
+    // shell-height animation the tree otherwise keeps its content DesiredSize
+    // and sits top-aligned in a taller HWND, leaving a black band under the footer.
+    let window_size = cx.use_inner_size();
     let color_scheme = cx.use_color_scheme();
     let window_corner_radius = f64::from(popup::WINDOW_CORNER_RADIUS_DIP);
     // Keep the visual stroke one physical pixel inside the HWND clip so GDI's
@@ -1269,7 +1273,10 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         ),
         _ => Element::Empty,
     };
-    let page_viewport = grid((outgoing_page, current_page)).grid_row(0);
+    let page_viewport = grid((outgoing_page, current_page))
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Stretch)
+        .grid_row(0);
 
     let body_panel = border(
         grid((page_viewport, footer.grid_row(1)))
@@ -1311,10 +1318,15 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             .columns([GridLength::Star(1.0)])
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .vertical_alignment(VerticalAlignment::Stretch)
-            .background(Color::transparent()),
+            // Match card chrome — SolidBackground is near-black in dark mode and
+            // reads as the same "black gap" when Mica lags a frame behind resize.
+            .background(ThemeRef::CardBackground),
     )
     .padding(Thickness::uniform(border_inset))
     .corner_radius(window_corner_radius)
+    .background(ThemeRef::CardBackground)
+    .width(window_size.width.max(1.0))
+    .height(window_size.height.max(1.0))
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Stretch)
     .into()

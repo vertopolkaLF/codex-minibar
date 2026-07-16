@@ -416,11 +416,20 @@ impl ReactorHost {
             width: dip_to_px(width_dip).max(1),
             height: dip_to_px(height_dip).max(1),
         })?;
+        self.sync_render_size(width_dip, height_dip);
+        Ok(())
+    }
+
+    /// Update the reactor's layout size without calling `AppWindow.ResizeClient`.
+    ///
+    /// Used while a tray popup drives HWND geometry itself (bottom-pinned
+    /// `SetWindowPos`) so XAML/Mica still fill every intermediate frame instead
+    /// of leaving the black window clear under the footer.
+    pub fn sync_render_size(&self, width_dip: f64, height_dip: f64) {
         self.render_host.set_inner_size(WindowSize {
             width: width_dip,
             height: height_dip,
         });
-        Ok(())
     }
 
     /// Drop inflated preferred min height so content-driven `ResizeClient` can shrink.

@@ -40,9 +40,9 @@ use windows_sys::Win32::{
         WindowsAndMessaging::{
             DispatchMessageW, FindWindowW, GWL_EXSTYLE, GWL_STYLE,
             GetCursorPos, GetWindowLongW, GetWindowRect, HWND_TOPMOST, MSG, PM_REMOVE,
-            PeekMessageW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-            SPI_GETCLIENTAREAANIMATION, SWP_SHOWWINDOW, SetForegroundWindow, SetWindowLongW,
-            SetWindowPos, SystemParametersInfoW, TranslateMessage,
+            PeekMessageW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOREDRAW, SWP_NOSIZE,
+            SWP_NOZORDER, SPI_GETCLIENTAREAANIMATION, SWP_SHOWWINDOW, SetForegroundWindow,
+            SetWindowLongW, SetWindowPos, SystemParametersInfoW, TranslateMessage,
             WS_CAPTION, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
             WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX,
             WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
@@ -89,6 +89,7 @@ const PARKED_Y: i32 = -32_000;
 /// Fluent motion tokens used by Windows edge panels.
 const OPEN_ANIMATION_DURATION: Duration = Duration::from_millis(250);
 const CLOSE_ANIMATION_DURATION: Duration = Duration::from_millis(167);
+/// Matches the popup page-slide duration so shell and content ease together.
 const HEIGHT_ANIMATION_DURATION: Duration = Duration::from_millis(250);
 /// Gap from the monitor edge.
 const EDGE_MARGIN: i32 = 20;
@@ -103,6 +104,9 @@ static IGNORE_OUTSIDE_UNTIL_MS: AtomicI64 = AtomicI64::new(0);
 static CLIENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(POPUP_HEIGHT);
 /// Last height actually presented by the HWND, including intermediate frames.
 static APPLIED_CLIENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(POPUP_HEIGHT);
+/// Grow target waiting for a finished XAML render before `ResizeClient`.
+/// Zero means none. Shrink never uses this path.
+static PENDING_GROW_HEIGHT_DIP: AtomicI32 = AtomicI32::new(0);
 /// Natural height of the body stack, including its padding, in DIPs.
 static BODY_CONTENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(0);
 /// Dynamic client-height limit for the monitor that owns the current popup.
@@ -183,6 +187,12 @@ fn loaded_monitor() -> RECT {
 
 fn loaded_work_bottom() -> i32 {
     WORK_BOTTOM.load(Ordering::SeqCst)
+}
+
+/// Stable work-area seam for the popup bottom edge (never DWM frame bounds —
+/// the shadow rect jitters during resize and made the seam bob).
+fn pinned_bottom_px() -> i32 {
+    loaded_work_bottom().saturating_sub(EDGE_MARGIN)
 }
 
 /// Maximum client height for the monitor selected when the popup was opened.
@@ -278,7 +288,7 @@ fn ease_exit(progress: f64) -> f64 {
     cubic_bezier(1.0, 0.0, 1.0, 1.0, progress)
 }
 
-/// Fluent point-to-point curve for an existing surface changing geometry.
+/// Fluent point-to-point curve for shell height changes.
 fn ease_existing(progress: f64) -> f64 {
     cubic_bezier(0.55, 0.55, 0.0, 1.0, progress)
 }
@@ -324,6 +334,7 @@ fn park(hwnd: HWND) {
         motion.window = None;
         motion.height = None;
     }
+    PENDING_GROW_HEIGHT_DIP.store(0, Ordering::SeqCst);
     unsafe {
         // Preserve the HWND/XAML compositor between shows. An empty region and
         // an off-screen position are invisible without `SWP_HIDEWINDOW`, which
@@ -412,6 +423,11 @@ pub fn register_host(host: Rc<ReactorHost>) {
     let _ = host.relax_height_constraints(f64::from(max_client_height_dip()));
     // Pin taskbar exclusion as early as possible — before the first show.
     let _ = host.set_shown_in_switchers(false);
+    // After each reconcile, commit any deferred shell grow so the HWND/island
+    // only enlarge once the root has already been laid out at that height.
+    host.set_render_complete(|_| {
+        commit_pending_grow_height();
+    });
     POPUP_HOST.with(|slot| *slot.borrow_mut() = Some(host));
     POPUP_RENDERING.with(|slot| {
         if slot.borrow().is_none() {
@@ -439,22 +455,46 @@ fn resize_for_body_content() {
 }
 
 /// Resize the WinUI client to `height_dip` and re-pin if the popup is open.
+///
+/// Shell height eases on the compositor clock. Every frame applies HWND geometry
+/// and the reactor layout size together so XAML never lags behind the window
+/// (the black clear under the footer). Layout noise during a page slide may
+/// retarget the destination, but never restarts the ease from a stale origin.
 pub fn set_client_height_dip(height_dip: i32) {
     let height_dip = height_dip.clamp(80, max_client_height_dip());
-    if CLIENT_HEIGHT_DIP.swap(height_dip, Ordering::SeqCst) == height_dip {
+    let previous_target = CLIENT_HEIGHT_DIP.swap(height_dip, Ordering::SeqCst);
+    if previous_target == height_dip {
         return;
     }
-    if is_visible() && animations_enabled() {
-        let from_dip = APPLIED_CLIENT_HEIGHT_DIP.load(Ordering::SeqCst);
-        popup_motion().height = Some(HeightMotion {
-            from_dip,
-            to_dip: height_dip,
-            started_at: Instant::now(),
-            duration: HEIGHT_ANIMATION_DURATION,
-        });
-    } else {
+
+    if !is_visible() || !animations_enabled() {
         apply_client_height_immediately(height_dip);
+        return;
     }
+
+    let applied = APPLIED_CLIENT_HEIGHT_DIP.load(Ordering::SeqCst);
+    let mut motion = popup_motion();
+    if let Some(height) = motion.height.as_mut() {
+        // Already easing — only move the destination. Restarting from a stale
+        // `from_dip` on every DesiredSize blip made the bottom edge bob.
+        if (height.to_dip - height_dip).abs() <= 1 {
+            return;
+        }
+        height.from_dip = applied;
+        height.to_dip = height_dip;
+        height.started_at = Instant::now();
+        return;
+    }
+
+    if applied == height_dip {
+        return;
+    }
+    motion.height = Some(HeightMotion {
+        from_dip: applied,
+        to_dip: height_dip,
+        started_at: Instant::now(),
+        duration: HEIGHT_ANIMATION_DURATION,
+    });
 }
 
 /// Re-apply size constraints after Win32 chrome is stripped (stale NC metrics).
@@ -470,6 +510,7 @@ pub fn sync_host_constraints() {
 }
 
 fn apply_client_height_immediately(height_dip: i32) {
+    PENDING_GROW_HEIGHT_DIP.store(0, Ordering::SeqCst);
     POPUP_HOST.with(|slot| {
         if let Some(host) = slot.borrow().as_ref() {
             let _ = host.relax_height_constraints(f64::from(max_client_height_dip()));
@@ -491,41 +532,106 @@ fn apply_client_height_immediately(height_dip: i32) {
     }
 }
 
-/// Resize and move in one Win32 transaction so the bottom edge never jumps.
-/// WinUI receives the final `ResizeClient` after the animation completes; its
-/// root still gets native SizeChanged notifications for every intermediate frame.
-fn apply_animated_client_height(hwnd: HWND, height_dip: i32) {
+/// Apply island + HWND height with the Win32 bottom edge locked to the work seam.
+///
+/// Grow: nudge the top up first (NOREDRAW), then `ResizeClient` expands downward
+/// onto the seam — the bottom never drops below it on a presented frame.
+/// Shrink: `ResizeClient` first (bottom rises), then translate back down to the seam.
+fn apply_shell_height_now(hwnd: HWND, height_dip: i32) {
+    let seam = pinned_bottom_px();
+    let applied = APPLIED_CLIENT_HEIGHT_DIP.load(Ordering::SeqCst);
     let dpi = host_dpi(96);
-    let height_px = (i64::from(height_dip) * i64::from(dpi) / 96).max(1) as i32;
-    let rect = window_rect(hwnd);
-    let width = (rect.right - rect.left).max(1);
-    let bottom = loaded_work_bottom().saturating_sub(EDGE_MARGIN);
-    let y = bottom.saturating_sub(height_px);
+    let old_px = ((f64::from(applied) * f64::from(dpi) / 96.0).round() as i32).max(1);
+    let new_px = ((f64::from(height_dip) * f64::from(dpi) / 96.0).round() as i32).max(1);
 
-    unsafe {
-        SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            rect.left,
-            y,
-            width,
-            height_px,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW,
-        );
+    if new_px > old_px {
+        let delta = new_px - old_px;
+        let win = window_rect(hwnd);
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                win.left,
+                win.top - delta,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOREDRAW,
+            );
+        }
     }
-    APPLIED_CLIENT_HEIGHT_DIP.store(height_dip, Ordering::SeqCst);
-}
 
-fn finish_height_animation(hwnd: HWND, height_dip: i32, pin: bool) {
     POPUP_HOST.with(|slot| {
         if let Some(host) = slot.borrow().as_ref() {
+            let _ = host.relax_height_constraints(f64::from(max_client_height_dip()));
             let _ = host.resize_client(f64::from(POPUP_WIDTH), f64::from(height_dip));
         }
     });
     APPLIED_CLIENT_HEIGHT_DIP.store(height_dip, Ordering::SeqCst);
+    pin_win_bottom_to_seam(hwnd, seam);
+}
+
+/// Enlarge the shell only after XAML has rendered at the pending height.
+fn commit_pending_grow_height() {
+    let pending = PENDING_GROW_HEIGHT_DIP.swap(0, Ordering::SeqCst);
+    if pending < 80 {
+        return;
+    }
+    let Some(hwnd) = current_hwnd() else {
+        return;
+    };
+    if !is_visible() {
+        return;
+    }
+    apply_shell_height_now(hwnd, pending);
+}
+
+/// One compositor tick of shell-height motion.
+///
+/// Growing: update reactor layout first; `ResizeClient` runs from
+/// `render_complete` once the root already fills that height.
+/// Shrinking: resize the shell immediately (HWND first, never an empty band).
+fn apply_animated_client_height(hwnd: HWND, height_dip: i32) {
+    let applied = APPLIED_CLIENT_HEIGHT_DIP.load(Ordering::SeqCst);
+    if height_dip >= applied {
+        POPUP_HOST.with(|slot| {
+            if let Some(host) = slot.borrow().as_ref() {
+                host.sync_render_size(f64::from(POPUP_WIDTH), f64::from(height_dip));
+            }
+        });
+        PENDING_GROW_HEIGHT_DIP.store(height_dip, Ordering::SeqCst);
+        return;
+    }
+
+    PENDING_GROW_HEIGHT_DIP.store(0, Ordering::SeqCst);
+    apply_shell_height_now(hwnd, height_dip);
+}
+
+fn finish_height_animation(hwnd: HWND, height_dip: i32, pin: bool) {
+    PENDING_GROW_HEIGHT_DIP.store(0, Ordering::SeqCst);
+    apply_shell_height_now(hwnd, height_dip);
     let monitor = loaded_monitor();
     if pin && monitor.right > monitor.left {
         pin_bottom_right(hwnd, monitor, loaded_work_bottom());
+    }
+}
+
+/// Pin using `GetWindowRect` only — DWM extended bounds include a jittery shadow.
+fn pin_win_bottom_to_seam(hwnd: HWND, seam: i32) {
+    let win = window_rect(hwnd);
+    let dy = seam - win.bottom;
+    if dy == 0 {
+        return;
+    }
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            win.left,
+            win.top + dy,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOREDRAW,
+        );
     }
 }
 
