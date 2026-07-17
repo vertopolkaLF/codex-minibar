@@ -226,8 +226,8 @@ impl Default for NotificationSettings {
     fn default() -> Self {
         Self {
             activation_success: false,
-            activation_failure: true,
-            codex_unavailable: true,
+            activation_failure: false,
+            codex_unavailable: false,
             approaching_reset: false,
             limits_changed: false,
             low_usage_enabled: false,
@@ -767,6 +767,10 @@ mod tests {
         assert_eq!(value.total_spend_presentation, TotalSpendPresentation::Donut);
         assert_eq!(value.history_retention_days, 30);
         assert!(value.tray_widgets.is_empty());
+        assert!(!value.notifications.activation_success);
+        assert!(!value.notifications.activation_failure);
+        assert!(!value.notifications.codex_unavailable);
+        assert!(!value.notifications.approaching_reset);
         assert!(!value.notifications.limits_changed);
         assert!(!value.notifications.low_usage_enabled);
         assert_eq!(value.notifications.low_usage_threshold_percent, 20);
