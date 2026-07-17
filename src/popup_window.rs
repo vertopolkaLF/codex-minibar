@@ -84,7 +84,12 @@ impl AppState {
             // Quota polling must not erase the independently refreshed usage
             // history between its ten-minute scans.
             limits.usage = current.get(provider).usage.clone();
-            *current.get_mut(provider) = limits;
+            *current.get_mut(provider) = limits.clone();
+            if let Err(error) =
+                crate::store::with_store(|store| store.save_limits(provider, &limits))
+            {
+                eprintln!("failed to persist {} limits: {error:#}", provider.display_name());
+            }
         }
     }
 

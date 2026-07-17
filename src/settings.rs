@@ -110,6 +110,14 @@ impl ProviderSettings {
 }
 
 impl ProviderKind {
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::Claude => "claude",
+            Self::Cursor => "cursor",
+        }
+    }
+
     pub const fn display_name(self) -> &'static str {
         match self {
             Self::Codex => "Codex",

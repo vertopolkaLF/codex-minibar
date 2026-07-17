@@ -14,6 +14,7 @@ use codex_minibar::{
     scheduler::ActivationState,
     settings::Settings,
     single_instance::{self, SingleInstance},
+    store,
     updater::{
         show_post_update_success_if_needed, sync_installed_display_version, UpdateController,
     },
@@ -41,6 +42,17 @@ fn run() -> Result<()> {
             .and_then(|state| state.last_attempt_at);
 
     let (worker_events_tx, worker_events_rx) = mpsc::channel::<WorkerEvent>();
+    let hydrated_limits = store::shared()
+        .and_then(|shared| {
+            shared
+                .lock()
+                .map_err(|_| anyhow!("provider store lock poisoned"))?
+                .hydrate_provider_limits(settings.history_retention_days)
+        })
+        .unwrap_or_else(|error| {
+            eprintln!("failed to hydrate provider store: {error:#}");
+            Default::default()
+        });
     let (workers, startup_errors) =
         start_enabled_workers(&settings, activation_path.clone(), worker_events_tx.clone());
     let commands = workers
@@ -63,7 +75,7 @@ fn run() -> Result<()> {
     popup::set_client_height_dip(initial_height);
     let state = Arc::new(AppState {
         settings,
-        limits: Mutex::new(Default::default()),
+        limits: Mutex::new(hydrated_limits),
         commands: Mutex::new(commands),
         workers: Mutex::new(workers),
         worker_events_rx: Mutex::new(Some(worker_events_rx)),

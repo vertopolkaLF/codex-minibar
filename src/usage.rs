@@ -7,17 +7,19 @@ use std::{
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::settings::ProviderKind;
+use crate::store;
 
 // Version 3 adds the per-session model and service tier needed to calculate
 // model-aware Codex API-value estimates. Old aggregates have no such context,
 // so they must be rebuilt from the original rollout logs once.
-const CODEX_CACHE_VERSION: u8 = 3;
+pub(crate) const CODEX_CACHE_VERSION: u8 = 3;
 // Claude's cache format did not change. Keep it independent so a Codex
 // pricing migration cannot hide an otherwise healthy Claude usage card.
-const CLAUDE_CACHE_VERSION: u8 = 1;
+pub(crate) const CLAUDE_CACHE_VERSION: u8 = 1;
 const CACHE_RETENTION_DAYS: i64 = 365;
 
 /// Locally recorded Codex token usage. This is deliberately derived only from
@@ -63,6 +65,7 @@ impl TokenUsage {
 
     /// Aggregates externally sourced usage that follows the same token shape
     /// as local logs (Cursor's dashboard CSV, for example).
+    #[allow(dead_code)]
     pub(crate) fn add_public(&mut self, other: &Self) {
         self.add(other);
     }
@@ -98,26 +101,26 @@ impl UsageStatistics {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-struct UsageCache {
-    version: u8,
+pub(crate) struct UsageCache {
+    pub(crate) version: u8,
     /// Legacy totals are safe to show immediately, but need one full re-scan
     /// before new rows can use their logged model and service tier.
     #[serde(default)]
-    pricing_rebuild_needed: bool,
-    files: BTreeMap<String, CachedSessionFile>,
+    pub(crate) pricing_rebuild_needed: bool,
+    pub(crate) files: BTreeMap<String, CachedSessionFile>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-struct CachedSessionFile {
+pub(crate) struct CachedSessionFile {
     /// Number of complete JSONL bytes already incorporated into `daily`.
-    offset: u64,
-    daily: Vec<DailyTokenUsage>,
+    pub(crate) offset: u64,
+    pub(crate) daily: Vec<DailyTokenUsage>,
     /// The most recent rollout context lets an incremental scan price the next
     /// token_count without reopening the whole session file.
     #[serde(default)]
-    current_model: Option<String>,
+    pub(crate) current_model: Option<String>,
     #[serde(default)]
-    fast_service_tier: bool,
+    pub(crate) fast_service_tier: bool,
 }
 
 impl CachedSessionFile {
@@ -138,8 +141,7 @@ impl CachedSessionFile {
 /// Returns an immediately available snapshot from the persisted local cache.
 /// It never opens or scans Codex session logs.
 pub fn load_cached_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
-    let cache = load_cache()?;
-    Ok(statistics_from_cache(&cache, history_days))
+    store::with_store(|store| store.load_usage_daily(ProviderKind::Codex, history_days))
 }
 
 /// Incorporates only JSONL bytes appended since the previous scan, persists the
@@ -147,7 +149,7 @@ pub fn load_cached_usage_statistics(history_days: u16) -> Result<UsageStatistics
 /// safely rebuilt from their beginning.
 pub fn refresh_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
     let codex_root = codex_home();
-    let mut cache = load_cache()?;
+    let mut cache = store::with_store(|store| store.load_codex_cache())?;
     if cache.pricing_rebuild_needed {
         // The old aggregate has already been published. Start a clean cache
         // now so re-reading the log cannot double-count it.
@@ -165,20 +167,28 @@ pub fn refresh_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
         cached.prune_before(oldest);
     }
     cache.version = CODEX_CACHE_VERSION;
-    save_cache(&cache)?;
+    store::with_store(|store| store.save_codex_cache(&cache))?;
     Ok(statistics_from_cache(&cache, history_days))
 }
 
 fn statistics_from_cache(cache: &UsageCache, history_days: u16) -> UsageStatistics {
+    let days: Vec<DailyTokenUsage> = cache
+        .files
+        .values()
+        .flat_map(|file| file.daily.iter().cloned())
+        .collect();
+    statistics_from_daily(&days, history_days)
+}
+
+/// Merges same-day rows and builds today/history totals for the requested window.
+pub(crate) fn statistics_from_daily(days: &[DailyTokenUsage], history_days: u16) -> UsageStatistics {
     let history_days = history_days.clamp(1, 365);
     let today = Local::now().date_naive();
     let first_day = today - Duration::days(i64::from(history_days.saturating_sub(1)));
     let mut daily = BTreeMap::<NaiveDate, TokenUsage>::new();
-    for file in cache.files.values() {
-        for entry in &file.daily {
-            if entry.date >= first_day && entry.date <= today {
-                daily.entry(entry.date).or_default().add(&entry.usage);
-            }
+    for entry in days {
+        if entry.date >= first_day && entry.date <= today {
+            daily.entry(entry.date).or_default().add(&entry.usage);
         }
     }
     let mut stats = UsageStatistics {
@@ -294,44 +304,6 @@ fn collect_session_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn load_cache() -> Result<UsageCache> {
-    let path = cache_path()?;
-    let Ok(contents) = fs::read(path) else {
-        return Ok(UsageCache::default());
-    };
-    let mut cache: UsageCache = serde_json::from_slice(&contents).unwrap_or_default();
-    if cache.version > CODEX_CACHE_VERSION {
-        return Ok(UsageCache::default());
-    }
-    if cache.version != CODEX_CACHE_VERSION {
-        // Do not blank good token totals merely because pricing gained extra
-        // metadata. The worker publishes this snapshot, then rebuilds it.
-        cache.pricing_rebuild_needed = true;
-    }
-    Ok(cache)
-}
-
-fn save_cache(cache: &UsageCache) -> Result<()> {
-    let path = cache_path()?;
-    let parent = path.parent().context("usage cache path has no parent")?;
-    fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)
-        .with_context(|| format!("create usage cache in {}", parent.display()))?;
-    serde_json::to_writer_pretty(temporary.as_file_mut(), cache)?;
-    temporary
-        .as_file()
-        .sync_all()
-        .context("flush usage cache")?;
-    temporary.persist(path).context("commit usage cache")?;
-    Ok(())
-}
-
-fn cache_path() -> Result<PathBuf> {
-    let dirs = ProjectDirs::from("dev", "Codex Minibar", "Codex Minibar")
-        .context("could not resolve the application config directory")?;
-    Ok(dirs.config_dir().join("usage-cache.json"))
 }
 
 fn codex_home() -> PathBuf {
@@ -534,39 +506,38 @@ fn codex_price_model_name(model: &str) -> &str {
 /// messages (rather than just daily totals) lets us suppress the same
 /// sidechain/replayed message when it appears in more than one session log.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct CachedClaudeUsageEntry {
-    timestamp: DateTime<Utc>,
-    message_id: Option<String>,
-    request_id: Option<String>,
-    is_sidechain: bool,
-    has_speed: bool,
-    usage: TokenUsage,
+pub(crate) struct CachedClaudeUsageEntry {
+    pub(crate) timestamp: DateTime<Utc>,
+    pub(crate) message_id: Option<String>,
+    pub(crate) request_id: Option<String>,
+    pub(crate) is_sidechain: bool,
+    pub(crate) has_speed: bool,
+    pub(crate) usage: TokenUsage,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-struct ClaudeUsageCache {
-    version: u8,
-    files: BTreeMap<String, CachedClaudeSessionFile>,
+pub(crate) struct ClaudeUsageCache {
+    pub(crate) version: u8,
+    pub(crate) files: BTreeMap<String, CachedClaudeSessionFile>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-struct CachedClaudeSessionFile {
+pub(crate) struct CachedClaudeSessionFile {
     /// Number of complete JSONL bytes incorporated into `entries`.
-    offset: u64,
-    entries: Vec<CachedClaudeUsageEntry>,
+    pub(crate) offset: u64,
+    pub(crate) entries: Vec<CachedClaudeUsageEntry>,
 }
 
 /// Returns Claude Code usage from the on-disk cache without opening a log.
 pub fn load_cached_claude_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
-    let cache = load_claude_cache()?;
-    Ok(claude_statistics_from_cache(&cache, history_days))
+    store::with_store(|store| store.load_usage_daily(ProviderKind::Claude, history_days))
 }
 
 /// Scans Claude Code's `projects/**/*.jsonl` logs incrementally. The cache is
 /// separate from Codex's and stores a byte offset per file, so reopening the
 /// popup never causes a full re-read of an ever-growing Claude history.
 pub fn refresh_claude_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
-    let mut cache = load_claude_cache()?;
+    let mut cache = store::with_store(|store| store.load_claude_cache())?;
     let files = collect_claude_session_files();
     let known_paths: BTreeSet<String> = files
         .iter()
@@ -584,38 +555,23 @@ pub fn refresh_claude_usage_statistics(history_days: u16) -> Result<UsageStatist
             .retain(|entry| entry.timestamp.with_timezone(&Local).date_naive() >= oldest);
     }
     cache.version = CLAUDE_CACHE_VERSION;
-    save_claude_cache(&cache)?;
-    Ok(claude_statistics_from_cache(&cache, history_days))
+    let stats = claude_statistics_from_cache(&cache, history_days);
+    store::with_store(|store| {
+        store.save_claude_cache(&cache)?;
+        store.replace_usage_daily(ProviderKind::Claude, &stats.daily)
+    })?;
+    Ok(stats)
 }
 
 fn claude_statistics_from_cache(cache: &ClaudeUsageCache, history_days: u16) -> UsageStatistics {
-    let history_days = history_days.clamp(1, 365);
-    let today = Local::now().date_naive();
-    let first_day = today - Duration::days(i64::from(history_days.saturating_sub(1)));
-    let mut daily = BTreeMap::<NaiveDate, TokenUsage>::new();
-
-    for entry in deduplicate_claude_entries(cache) {
-        let date = entry.timestamp.with_timezone(&Local).date_naive();
-        if date >= first_day && date <= today {
-            daily.entry(date).or_default().add(&entry.usage);
-        }
-    }
-
-    let mut stats = UsageStatistics {
-        history_days,
-        daily: daily
-            .into_iter()
-            .map(|(date, usage)| DailyTokenUsage { date, usage })
-            .collect(),
-        ..Default::default()
-    };
-    for entry in &stats.daily {
-        stats.history.add(&entry.usage);
-        if entry.date == today {
-            stats.today.add(&entry.usage);
-        }
-    }
-    stats
+    let days: Vec<DailyTokenUsage> = deduplicate_claude_entries(cache)
+        .into_iter()
+        .map(|entry| DailyTokenUsage {
+            date: entry.timestamp.with_timezone(&Local).date_naive(),
+            usage: entry.usage,
+        })
+        .collect();
+    statistics_from_daily(&days, history_days)
 }
 
 /// Mirrors Claude Code/OpenUsage's duplicate preference: the original message
@@ -846,44 +802,6 @@ fn collect_claude_session_files() -> Vec<PathBuf> {
     files.sort();
     files.dedup();
     files
-}
-
-fn load_claude_cache() -> Result<ClaudeUsageCache> {
-    let path = claude_cache_path()?;
-    let Ok(contents) = fs::read(path) else {
-        return Ok(ClaudeUsageCache::default());
-    };
-    let cache: ClaudeUsageCache = serde_json::from_slice(&contents).unwrap_or_default();
-    if cache.version == CLAUDE_CACHE_VERSION {
-        Ok(cache)
-    } else {
-        Ok(ClaudeUsageCache::default())
-    }
-}
-
-fn save_claude_cache(cache: &ClaudeUsageCache) -> Result<()> {
-    let path = claude_cache_path()?;
-    let parent = path
-        .parent()
-        .context("Claude usage cache path has no parent")?;
-    fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)
-        .with_context(|| format!("create Claude usage cache in {}", parent.display()))?;
-    serde_json::to_writer_pretty(temporary.as_file_mut(), cache)?;
-    temporary
-        .as_file()
-        .sync_all()
-        .context("flush Claude usage cache")?;
-    temporary
-        .persist(path)
-        .context("commit Claude usage cache")?;
-    Ok(())
-}
-
-fn claude_cache_path() -> Result<PathBuf> {
-    let dirs = ProjectDirs::from("dev", "Codex Minibar", "Codex Minibar")
-        .context("could not resolve the application config directory")?;
-    Ok(dirs.config_dir().join("claude-usage-cache.json"))
 }
 
 #[cfg(test)]

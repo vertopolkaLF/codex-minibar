@@ -5,18 +5,19 @@
 //! memory, and query the same dashboard endpoints used by Cursor itself.
 //! The UI deliberately exposes its Auto and API lanes, not blended Total Usage.
 
-use std::{collections::BTreeMap, env, fs, path::PathBuf, time::Duration};
+use std::{collections::BTreeMap, env, path::PathBuf, time::Duration};
 
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveDate, Utc};
 use rusqlite::{Connection, OpenFlags};
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{
     limits::{AdditionalLimit, LimitWindow, RateLimits},
-    usage::{DailyTokenUsage, TokenUsage, UsageStatistics},
+    settings::ProviderKind,
+    store,
+    usage::{DailyTokenUsage, TokenUsage, UsageStatistics, statistics_from_daily},
     worker::{Activator, LimitProvider, UsageProvider},
 };
 
@@ -141,28 +142,40 @@ impl CursorClient {
     }
 
     fn usage_statistics(&self, history_days: u16) -> Result<UsageStatistics> {
-        if let Ok(cache) = load_usage_cache()
-            && Utc::now() - cache.fetched_at < USAGE_CACHE_TTL
-        {
-            return Ok(statistics_from_cached_days(&cache.daily, history_days));
+        let cached = store::with_store(|store| {
+            if store.cursor_usage_version()? != USAGE_CACHE_VERSION {
+                return Ok(None);
+            }
+            let Some(fetched_at) = store.usage_fetched_at(ProviderKind::Cursor)? else {
+                return Ok(None);
+            };
+            if Utc::now() - fetched_at >= USAGE_CACHE_TTL {
+                return Ok(None);
+            }
+            store
+                .load_usage_daily(ProviderKind::Cursor, history_days)
+                .map(Some)
+        })?;
+        if let Some(statistics) = cached {
+            return Ok(statistics);
         }
 
         match self.download_usage_statistics(history_days) {
             Ok(statistics) => {
-                save_usage_cache(&CursorUsageCache {
-                    version: USAGE_CACHE_VERSION,
-                    fetched_at: Utc::now(),
-                    daily: statistics.daily.clone(),
+                store::with_store(|store| {
+                    store.replace_usage_daily(ProviderKind::Cursor, &statistics.daily)?;
+                    store.set_usage_fetched_at(ProviderKind::Cursor, Utc::now())
                 })?;
                 Ok(statistics)
             }
             // An export can be delayed or intermittently rejected by Cursor.
             // Keep showing the last verified activity rather than making a
             // healthy usage card disappear on a transient network failure.
-            Err(error) => load_usage_cache()
-                .map(|cache| statistics_from_cached_days(&cache.daily, history_days))
-                .context("refresh Cursor usage export")
-                .or(Err(error)),
+            Err(error) => store::with_store(|store| {
+                store.load_usage_daily(ProviderKind::Cursor, history_days)
+            })
+            .context("refresh Cursor usage export")
+            .or(Err(error)),
         }
     }
 
@@ -196,47 +209,13 @@ impl LimitProvider for CursorClient {
 
 impl UsageProvider for CursorClient {
     fn load_cached_usage_statistics(&mut self, history_days: u16) -> Result<UsageStatistics> {
-        load_usage_cache()
-            .map(|cache| statistics_from_cached_days(&cache.daily, history_days))
+        store::with_store(|store| store.load_usage_daily(ProviderKind::Cursor, history_days))
             .or_else(|_| Ok(UsageStatistics::default()))
     }
 
     fn refresh_usage_statistics(&mut self, history_days: u16) -> Result<UsageStatistics> {
         self.usage_statistics(history_days)
     }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct CursorUsageCache {
-    version: u8,
-    fetched_at: DateTime<Utc>,
-    daily: Vec<DailyTokenUsage>,
-}
-
-fn load_usage_cache() -> Result<CursorUsageCache> {
-    let path = usage_cache_path()?;
-    let bytes = fs::read(&path).with_context(|| format!("read Cursor usage cache at {}", path.display()))?;
-    let cache: CursorUsageCache = serde_json::from_slice(&bytes).context("parse Cursor usage cache")?;
-    anyhow::ensure!(cache.version == USAGE_CACHE_VERSION, "Cursor usage cache version is obsolete");
-    Ok(cache)
-}
-
-fn save_usage_cache(cache: &CursorUsageCache) -> Result<()> {
-    let path = usage_cache_path()?;
-    let parent = path.parent().context("Cursor usage cache path has no parent")?;
-    fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)
-        .with_context(|| format!("create Cursor usage cache in {}", parent.display()))?;
-    serde_json::to_writer_pretty(temporary.as_file_mut(), cache)?;
-    temporary.as_file().sync_all().context("flush Cursor usage cache")?;
-    temporary.persist(&path).with_context(|| format!("commit {}", path.display()))?;
-    Ok(())
-}
-
-fn usage_cache_path() -> Result<PathBuf> {
-    let dirs = directories::ProjectDirs::from("dev", "Codex Minibar", "Codex Minibar")
-        .context("could not resolve application config directory")?;
-    Ok(dirs.config_dir().join("cursor-usage-cache.json"))
 }
 
 fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageStatistics> {
@@ -290,12 +269,8 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
         .into_iter()
         .map(|(date, usage)| DailyTokenUsage { date, usage })
         .collect::<Vec<_>>();
-    Ok(statistics_from_cached_days(&daily, history_days))
+    Ok(statistics_from_daily(&daily, history_days))
 }
-
-/// Cursor's export aggregates rows by model/day. It provides all four token
-/// buckets, so price each row before aggregation rather than applying one
-/// made-up rate to a whole month of mixed models.
 fn cursor_estimated_cost_microusd(
     model: &str,
     cache_write: u64,
@@ -333,25 +308,6 @@ fn cursor_estimated_cost_microusd(
         + output as f64 * output_rate)
         / 1_000_000.0;
     (cost * 1_000_000.0).round().clamp(0.0, u64::MAX as f64) as u64
-}
-
-fn statistics_from_cached_days(days: &[DailyTokenUsage], history_days: u16) -> UsageStatistics {
-    let history_days = history_days.clamp(1, 365);
-    let today = Local::now().date_naive();
-    let first_day = today - ChronoDuration::days(i64::from(history_days.saturating_sub(1)));
-    let daily = days
-        .iter()
-        .filter(|entry| entry.date >= first_day && entry.date <= today)
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut statistics = UsageStatistics { history_days, daily, ..Default::default() };
-    for entry in &statistics.daily {
-        statistics.history.add_public(&entry.usage);
-        if entry.date == today {
-            statistics.today.add_public(&entry.usage);
-        }
-    }
-    statistics
 }
 
 fn cursor_export_date(value: &str) -> Option<NaiveDate> {
@@ -545,7 +501,7 @@ mod tests {
     #[test]
     fn cached_cursor_usage_is_available_without_downloading_again() {
         let today = Local::now().date_naive();
-        let statistics = statistics_from_cached_days(
+        let statistics = statistics_from_daily(
             &[DailyTokenUsage {
                 date: today,
                 usage: TokenUsage {
