@@ -5,8 +5,8 @@
 
 use crate::notifications;
 use crate::settings::{
-    LimitRefreshInterval, LimitValue, ProviderKind, Settings, TotalSpendPresentation,
-    TrayPresentation, TraySource, TrayWidget,
+    LimitRefreshInterval, LimitValue, PopupWidgetKind, ProviderKind, Settings,
+    TotalSpendPresentation, TrayPresentation, TraySource, TrayWidget,
 };
 use crate::settings_controls::{
     settings_action_card, settings_control_card, settings_info_card, settings_slider_content,
@@ -42,6 +42,7 @@ struct SettingsWindowState {
     codex_enabled: SetState<bool>,
     claude_enabled: SetState<bool>,
     cursor_enabled: SetState<bool>,
+    popup_order: SetState<Vec<PopupWidgetKind>>,
     use_colored_provider_icons: SetState<bool>,
     replace_chatgpt_logo_with_codex: SetState<bool>,
     automatic_activation: SetState<bool>,
@@ -70,6 +71,7 @@ impl SettingsWindowState {
         self.codex_enabled.call(settings.providers.codex_enabled);
         self.claude_enabled.call(settings.providers.claude_enabled);
         self.cursor_enabled.call(settings.providers.cursor_enabled);
+        self.popup_order.call(settings.popup_order.clone());
         self.use_colored_provider_icons
             .call(settings.use_colored_provider_icons);
         self.replace_chatgpt_logo_with_codex
@@ -869,6 +871,7 @@ pub fn render(
     let (codex_enabled, set_codex_enabled) = cx.use_state(settings.providers.codex_enabled);
     let (claude_enabled, set_claude_enabled) = cx.use_state(settings.providers.claude_enabled);
     let (cursor_enabled, set_cursor_enabled) = cx.use_state(settings.providers.cursor_enabled);
+    let (popup_order, set_popup_order) = cx.use_state(settings.popup_order.clone());
     let (use_colored_provider_icons, set_use_colored_provider_icons) =
         cx.use_state(settings.use_colored_provider_icons);
     let (replace_chatgpt_logo_with_codex, set_replace_chatgpt_logo_with_codex) =
@@ -918,6 +921,7 @@ pub fn render(
             codex_enabled,
             claude_enabled,
             cursor_enabled,
+            &popup_order,
             use_colored_provider_icons,
             replace_chatgpt_logo_with_codex,
             automatic_activation,
@@ -948,6 +952,7 @@ pub fn render(
             set_codex_enabled,
             set_claude_enabled,
             set_cursor_enabled,
+            set_popup_order,
             set_use_colored_provider_icons,
             set_replace_chatgpt_logo_with_codex,
             set_automatic_activation,
@@ -1098,6 +1103,7 @@ fn tab_content(
     codex_enabled: bool,
     claude_enabled: bool,
     cursor_enabled: bool,
+    popup_order: &[PopupWidgetKind],
     use_colored_provider_icons: bool,
     replace_chatgpt_logo_with_codex: bool,
     automatic_activation: bool,
@@ -1128,6 +1134,7 @@ fn tab_content(
     set_codex_enabled: SetState<bool>,
     set_claude_enabled: SetState<bool>,
     set_cursor_enabled: SetState<bool>,
+    set_popup_order: SetState<Vec<PopupWidgetKind>>,
     set_use_colored_provider_icons: SetState<bool>,
     set_replace_chatgpt_logo_with_codex: SetState<bool>,
     set_automatic_activation: SetState<bool>,
@@ -1404,70 +1411,172 @@ fn tab_content(
             ],
         ),
         Tab::Providers => {
-            let mut rows = vec![
-                settings_toggle_card_with_description(
-                    "Codex",
-                    Some("Reads limits from the locally signed-in Codex CLI or desktop app."),
-                    codex_enabled,
-                    move |value| {
-                        persist_provider_enabled(
+            let provider_order: Vec<ProviderKind> = popup_order
+                .iter()
+                .filter_map(|widget| widget.as_provider())
+                .collect();
+            let mut rows = Vec::new();
+            for (index, provider) in provider_order.iter().copied().enumerate() {
+                let (title, description, enabled, setter, apply_tx, other_a, other_b, tray_snapshot, tray_setter) =
+                    match provider {
+                        ProviderKind::Codex => (
+                            "Codex",
+                            Some("Reads limits from the locally signed-in Codex CLI or desktop app."),
+                            codex_enabled,
                             set_codex_enabled.clone(),
-                            tray_widget_setter_for_codex_toggle.clone(),
                             apply_codex_enabled.clone(),
-                            ProviderKind::Codex,
-                            value,
                             claude_enabled,
                             cursor_enabled,
                             tray_widgets_for_codex_toggle.clone(),
-                        );
-                    },
-                    "providers-codex",
-                    hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("providers-codex"),
-                settings_toggle_card_with_description(
-                    "Claude",
-                    Some("Reads limits with the existing signed-in Claude Code OAuth session."),
-                    claude_enabled,
-                    move |value| {
-                        persist_provider_enabled(
+                            tray_widget_setter_for_codex_toggle.clone(),
+                        ),
+                        ProviderKind::Claude => (
+                            "Claude",
+                            Some("Reads limits with the existing signed-in Claude Code OAuth session."),
+                            claude_enabled,
                             set_claude_enabled.clone(),
-                            tray_widget_setter_for_claude_toggle.clone(),
                             apply_claude_enabled.clone(),
-                            ProviderKind::Claude,
-                            value,
                             codex_enabled,
                             cursor_enabled,
                             tray_widgets_for_claude_toggle.clone(),
-                        );
-                    },
-                    "providers-claude",
-                    hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("providers-claude"),
-                settings_toggle_card_with_description(
-                    "Cursor",
-                    Some("Reads your signed-in Cursor desktop app session and shows the current billing-cycle usage."),
-                    cursor_enabled,
-                    move |value| {
-                        persist_cursor_enabled(
+                            tray_widget_setter_for_claude_toggle.clone(),
+                        ),
+                        ProviderKind::Cursor => (
+                            "Cursor",
+                            Some("Reads your signed-in Cursor desktop app session and shows the current billing-cycle usage."),
+                            cursor_enabled,
                             set_cursor_enabled.clone(),
-                            tray_widget_setter_for_cursor_toggle.clone(),
                             apply_cursor_enabled.clone(),
-                            value,
                             codex_enabled,
                             claude_enabled,
                             tray_widgets_for_cursor_toggle.clone(),
-                        );
-                    },
-                    "providers-cursor",
-                    hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("providers-cursor"),
-            ];
+                            tray_widget_setter_for_cursor_toggle.clone(),
+                        ),
+                    };
+                let order_for_up = popup_order.to_vec();
+                let order_for_down = popup_order.to_vec();
+                let order_setter_up = set_popup_order.clone();
+                let order_setter_down = set_popup_order.clone();
+                let order_tx_up = settings_tx.clone();
+                let order_tx_down = settings_tx.clone();
+                let can_move_up = index > 0;
+                let can_move_down = index + 1 < provider_order.len();
+                let mut actions: Vec<Element> = Vec::new();
+                if can_move_up {
+                    actions.push(
+                        Button::new("Move up")
+                            .on_click(move || {
+                                let mut settings = Settings {
+                                    popup_order: order_for_up.clone(),
+                                    ..Settings::default()
+                                };
+                                if settings.move_provider(provider, true) {
+                                    persist_popup_order(
+                                        order_setter_up.clone(),
+                                        order_tx_up.clone(),
+                                        settings.popup_order,
+                                    );
+                                }
+                            })
+                            .into(),
+                    );
+                }
+                if can_move_down {
+                    actions.push(
+                        Button::new("Move down")
+                            .on_click(move || {
+                                let mut settings = Settings {
+                                    popup_order: order_for_down.clone(),
+                                    ..Settings::default()
+                                };
+                                if settings.move_provider(provider, false) {
+                                    persist_popup_order(
+                                        order_setter_down.clone(),
+                                        order_tx_down.clone(),
+                                        settings.popup_order,
+                                    );
+                                }
+                            })
+                            .into(),
+                    );
+                }
+                let toggle = match provider {
+                    ProviderKind::Codex => settings_toggle_card_with_description(
+                        title,
+                        description,
+                        enabled,
+                        move |value| {
+                            persist_provider_enabled(
+                                setter.clone(),
+                                tray_setter.clone(),
+                                apply_tx.clone(),
+                                ProviderKind::Codex,
+                                value,
+                                other_a,
+                                other_b,
+                                tray_snapshot.clone(),
+                            );
+                        },
+                        "providers-codex",
+                        hovered_card_id,
+                        set_hovered_card_id.clone(),
+                    ),
+                    ProviderKind::Claude => settings_toggle_card_with_description(
+                        title,
+                        description,
+                        enabled,
+                        move |value| {
+                            persist_provider_enabled(
+                                setter.clone(),
+                                tray_setter.clone(),
+                                apply_tx.clone(),
+                                ProviderKind::Claude,
+                                value,
+                                other_a,
+                                other_b,
+                                tray_snapshot.clone(),
+                            );
+                        },
+                        "providers-claude",
+                        hovered_card_id,
+                        set_hovered_card_id.clone(),
+                    ),
+                    ProviderKind::Cursor => settings_toggle_card_with_description(
+                        title,
+                        description,
+                        enabled,
+                        move |value| {
+                            persist_cursor_enabled(
+                                setter.clone(),
+                                tray_setter.clone(),
+                                apply_tx.clone(),
+                                value,
+                                other_a,
+                                other_b,
+                                tray_snapshot.clone(),
+                            );
+                        },
+                        "providers-cursor",
+                        hovered_card_id,
+                        set_hovered_card_id.clone(),
+                    ),
+                };
+                if actions.is_empty() {
+                    rows.push(toggle.with_key(format!("providers-{}", provider.id())));
+                } else {
+                    rows.push(
+                        vstack((
+                            toggle,
+                            hstack(actions)
+                                .spacing(8.0)
+                                .horizontal_alignment(HorizontalAlignment::Right),
+                        ))
+                        .spacing(8.0)
+                        .with_key(format!("providers-{}", provider.id()))
+                        .into(),
+                    );
+                }
+            }
             rows.push(
                 settings_section_heading("Customization")
                     .with_key("providers-customization-heading"),
@@ -1517,7 +1626,12 @@ fn tab_content(
             ("Providers", rows)
         }
         Tab::Tray => {
-            let enabled_providers = enabled_providers(codex_enabled, claude_enabled, cursor_enabled);
+            let providers: Vec<ProviderKind> = popup_order
+                .iter()
+                .filter_map(|widget| widget.as_provider())
+                .collect();
+            let enabled_providers =
+                enabled_providers(&providers, codex_enabled, claude_enabled, cursor_enabled);
             (
                 "Tray",
                 tray_settings_cards(
@@ -1657,6 +1771,7 @@ fn tab_content(
                 codex_enabled: set_codex_enabled,
                 claude_enabled: set_claude_enabled,
                 cursor_enabled: set_cursor_enabled,
+                popup_order: set_popup_order,
                 use_colored_provider_icons: set_use_colored_provider_icons,
                 replace_chatgpt_logo_with_codex: set_replace_chatgpt_logo_with_codex,
                 automatic_activation: set_automatic_activation,
@@ -2461,19 +2576,33 @@ fn persist_tray_widgets(
     persist_update(settings_tx, move |settings| settings.tray_widgets = widgets);
 }
 
+fn persist_popup_order(
+    setter: SetState<Vec<PopupWidgetKind>>,
+    settings_tx: Sender<Settings>,
+    order: Vec<PopupWidgetKind>,
+) {
+    setter.call(order.clone());
+    persist_update(settings_tx, move |settings| {
+        settings.popup_order = order;
+        settings.normalize_popup_order();
+    });
+}
+
 fn enabled_providers(
+    order: &[ProviderKind],
     codex_enabled: bool,
     claude_enabled: bool,
     cursor_enabled: bool,
 ) -> Vec<ProviderKind> {
-    [
-        (ProviderKind::Codex, codex_enabled),
-        (ProviderKind::Claude, claude_enabled),
-        (ProviderKind::Cursor, cursor_enabled),
-    ]
-    .into_iter()
-    .filter_map(|(provider, enabled)| enabled.then_some(provider))
-    .collect()
+    order
+        .iter()
+        .copied()
+        .filter(|provider| match provider {
+            ProviderKind::Codex => codex_enabled,
+            ProviderKind::Claude => claude_enabled,
+            ProviderKind::Cursor => cursor_enabled,
+        })
+        .collect()
 }
 
 fn normalize_tray_widget_providers(
@@ -2500,9 +2629,24 @@ fn persist_provider_enabled(
 ) {
     setter.call(enabled);
     let providers = match provider {
-        ProviderKind::Codex => enabled_providers(enabled, other_provider_enabled, cursor_enabled),
-        ProviderKind::Claude => enabled_providers(other_provider_enabled, enabled, cursor_enabled),
-        ProviderKind::Cursor => enabled_providers(other_provider_enabled, false, enabled),
+        ProviderKind::Codex => enabled_providers(
+            &ProviderKind::default_order(),
+            enabled,
+            other_provider_enabled,
+            cursor_enabled,
+        ),
+        ProviderKind::Claude => enabled_providers(
+            &ProviderKind::default_order(),
+            other_provider_enabled,
+            enabled,
+            cursor_enabled,
+        ),
+        ProviderKind::Cursor => enabled_providers(
+            &ProviderKind::default_order(),
+            other_provider_enabled,
+            false,
+            enabled,
+        ),
     };
     widgets_setter.call(normalize_tray_widget_providers(widgets, &providers));
     persist_update(settings_tx, move |settings| {
@@ -2520,7 +2664,12 @@ fn persist_cursor_enabled(
     widgets: Vec<TrayWidget>,
 ) {
     setter.call(enabled);
-    let providers = enabled_providers(codex_enabled, claude_enabled, enabled);
+    let providers = enabled_providers(
+        &ProviderKind::default_order(),
+        codex_enabled,
+        claude_enabled,
+        enabled,
+    );
     widgets_setter.call(normalize_tray_widget_providers(widgets, &providers));
     persist_update(settings_tx, move |settings| {
         settings.providers.cursor_enabled = enabled;
@@ -2547,7 +2696,7 @@ fn persist_u8(
     persist_update(settings_tx, |settings| update(settings, value));
 }
 
-fn persist_update(settings_tx: Sender<Settings>, update: impl FnOnce(&mut Settings)) {
+pub(crate) fn persist_update(settings_tx: Sender<Settings>, update: impl FnOnce(&mut Settings)) {
     let result = Settings::default_path().and_then(|path| {
         let mut settings = Settings::load_or_create(&path)?;
         update(&mut settings);

@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 16;
+pub const SETTINGS_VERSION: u32 = 18;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -110,6 +110,8 @@ impl ProviderSettings {
 }
 
 impl ProviderKind {
+    pub const ALL: [Self; 3] = [Self::Codex, Self::Claude, Self::Cursor];
+
     pub const fn id(self) -> &'static str {
         match self {
             Self::Codex => "codex",
@@ -123,6 +125,59 @@ impl ProviderKind {
             Self::Codex => "Codex",
             Self::Claude => "Claude",
             Self::Cursor => "Cursor",
+        }
+    }
+
+    pub fn default_order() -> Vec<Self> {
+        Self::ALL.to_vec()
+    }
+}
+
+/// Ordered slots on the popup All tab, including Total Spend.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PopupWidgetKind {
+    TotalSpend,
+    Codex,
+    Claude,
+    Cursor,
+}
+
+impl PopupWidgetKind {
+    pub const ALL: [Self; 4] = [
+        Self::TotalSpend,
+        Self::Codex,
+        Self::Claude,
+        Self::Cursor,
+    ];
+
+    pub fn default_order() -> Vec<Self> {
+        Self::ALL.to_vec()
+    }
+
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::TotalSpend => "total_spend",
+            Self::Codex => "codex",
+            Self::Claude => "claude",
+            Self::Cursor => "cursor",
+        }
+    }
+
+    pub const fn as_provider(self) -> Option<ProviderKind> {
+        match self {
+            Self::TotalSpend => None,
+            Self::Codex => Some(ProviderKind::Codex),
+            Self::Claude => Some(ProviderKind::Claude),
+            Self::Cursor => Some(ProviderKind::Cursor),
+        }
+    }
+
+    pub const fn from_provider(provider: ProviderKind) -> Self {
+        match provider {
+            ProviderKind::Codex => Self::Codex,
+            ProviderKind::Claude => Self::Claude,
+            ProviderKind::Cursor => Self::Cursor,
         }
     }
 }
@@ -256,6 +311,8 @@ pub struct Settings {
     /// reboot between its two pages.
     pub onboarding_completed: bool,
     pub providers: ProviderSettings,
+    /// Display order for All-tab widgets (Total Spend + providers) and footer tabs.
+    pub popup_order: Vec<PopupWidgetKind>,
     pub use_colored_provider_icons: bool,
     pub replace_chatgpt_logo_with_codex: bool,
     pub automatic_activation: bool,
@@ -283,6 +340,7 @@ impl Default for Settings {
             version: SETTINGS_VERSION,
             onboarding_completed: false,
             providers: ProviderSettings::default(),
+            popup_order: PopupWidgetKind::default_order(),
             use_colored_provider_icons: false,
             replace_chatgpt_logo_with_codex: false,
             automatic_activation: false,
@@ -334,7 +392,11 @@ impl Settings {
         let mut settings: Self = document.try_into().context("decode migrated settings")?;
         settings.validate()?;
         let tray_widgets_normalized = settings.normalize_tray_widget_providers();
-        if original_version < SETTINGS_VERSION || tray_widgets_normalized {
+        let popup_order_normalized = settings.normalize_popup_order();
+        if original_version < SETTINGS_VERSION
+            || tray_widgets_normalized
+            || popup_order_normalized
+        {
             settings.save(path)?;
         }
         Ok(settings)
@@ -383,6 +445,128 @@ impl Settings {
             "weekly low usage threshold must be between 1 and 99 percent"
         );
         Ok(())
+    }
+
+    /// Ensures `popup_order` lists every known All-tab widget exactly once.
+    pub fn normalize_popup_order(&mut self) -> bool {
+        let mut next = Vec::with_capacity(PopupWidgetKind::ALL.len());
+        for widget in &self.popup_order {
+            if PopupWidgetKind::ALL.contains(widget) && !next.contains(widget) {
+                next.push(*widget);
+            }
+        }
+        for widget in PopupWidgetKind::ALL {
+            if !next.contains(&widget) {
+                next.push(widget);
+            }
+        }
+        if next == self.popup_order {
+            return false;
+        }
+        self.popup_order = next;
+        true
+    }
+
+    /// Provider subsequence of [`Self::popup_order`].
+    pub fn provider_order(&self) -> Vec<ProviderKind> {
+        self.popup_order
+            .iter()
+            .filter_map(|widget| widget.as_provider())
+            .collect()
+    }
+
+    /// Enabled providers in the user's preferred display order.
+    pub fn ordered_enabled_providers(&self) -> Vec<ProviderKind> {
+        self.provider_order()
+            .into_iter()
+            .filter(|provider| self.providers.is_enabled(*provider))
+            .collect()
+    }
+
+    /// Visible All-tab widgets for the current enable flags.
+    pub fn ordered_visible_popup_widgets(&self, show_total_spend: bool) -> Vec<PopupWidgetKind> {
+        self.popup_order
+            .iter()
+            .copied()
+            .filter(|widget| match widget {
+                PopupWidgetKind::TotalSpend => show_total_spend,
+                other => other
+                    .as_provider()
+                    .is_some_and(|provider| self.providers.is_enabled(provider)),
+            })
+            .collect()
+    }
+
+    /// Moves a visible All-tab widget onto another visible widget's slot.
+    pub fn move_popup_widget(
+        &mut self,
+        active: PopupWidgetKind,
+        target: PopupWidgetKind,
+        show_total_spend: bool,
+    ) -> bool {
+        self.normalize_popup_order();
+        if active == target {
+            return false;
+        }
+        let before_visible = self.ordered_visible_popup_widgets(show_total_spend);
+        let Some(from) = before_visible.iter().position(|item| *item == active) else {
+            return false;
+        };
+        let Some(to) = before_visible.iter().position(|item| *item == target) else {
+            return false;
+        };
+        let mut after_visible = before_visible.clone();
+        let item = after_visible.remove(from);
+        after_visible.insert(to, item);
+        if after_visible == before_visible {
+            return false;
+        }
+
+        let visible_set: std::collections::HashSet<_> =
+            before_visible.iter().copied().collect();
+        let mut sequence = after_visible.into_iter();
+        let mut rebuilt = Vec::with_capacity(self.popup_order.len());
+        for widget in &self.popup_order {
+            if visible_set.contains(widget) {
+                if let Some(next) = sequence.next() {
+                    rebuilt.push(next);
+                }
+            } else {
+                rebuilt.push(*widget);
+            }
+        }
+        rebuilt.extend(sequence);
+        self.popup_order = rebuilt;
+        true
+    }
+
+    /// Moves any provider earlier or later among provider slots in `popup_order`.
+    pub fn move_provider(&mut self, provider: ProviderKind, earlier: bool) -> bool {
+        self.normalize_popup_order();
+        let providers = self.provider_order();
+        let Some(index) = providers.iter().position(|item| *item == provider) else {
+            return false;
+        };
+        let swap_index = if earlier {
+            index.checked_sub(1)
+        } else if index + 1 < providers.len() {
+            Some(index + 1)
+        } else {
+            None
+        };
+        let Some(swap_index) = swap_index else {
+            return false;
+        };
+        let left = PopupWidgetKind::from_provider(providers[index]);
+        let right = PopupWidgetKind::from_provider(providers[swap_index]);
+        let Some(left_pos) = self.popup_order.iter().position(|item| *item == left) else {
+            return false;
+        };
+        let Some(right_pos) = self.popup_order.iter().position(|item| *item == right) else {
+            return false;
+        };
+        self.popup_order.swap(left_pos, right_pos);
+        true
     }
 
     /// A tray widget cannot meaningfully target a disabled provider. When the
@@ -747,6 +931,56 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     .insert("version".into(), toml::Value::Integer(16));
                 version = 16;
             }
+            16 => {
+                // Preserve the historical Codex → Claude → Cursor presentation
+                // order for existing installs when provider reordering lands.
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("provider_order").or_insert_with(|| {
+                    toml::Value::Array(
+                        ProviderKind::ALL
+                            .iter()
+                            .map(|provider| toml::Value::String(provider.id().into()))
+                            .collect(),
+                    )
+                });
+                root.insert("version".into(), toml::Value::Integer(17));
+                version = 17;
+            }
+            17 => {
+                // Promote provider_order into popup_order and pin Total Spend
+                // above the historical provider stack.
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                let providers = root
+                    .remove("provider_order")
+                    .and_then(|value| value.as_array().cloned())
+                    .unwrap_or_else(|| {
+                        ProviderKind::ALL
+                            .iter()
+                            .map(|provider| toml::Value::String(provider.id().into()))
+                            .collect()
+                    });
+                let mut popup_order = vec![toml::Value::String("total_spend".into())];
+                for provider in providers {
+                    if let Some(id) = provider.as_str() {
+                        if matches!(id, "codex" | "claude" | "cursor") {
+                            popup_order.push(toml::Value::String(id.into()));
+                        }
+                    }
+                }
+                for provider in ProviderKind::ALL {
+                    let id = provider.id();
+                    if !popup_order.iter().any(|value| value.as_str() == Some(id)) {
+                        popup_order.push(toml::Value::String(id.into()));
+                    }
+                }
+                root.insert("popup_order".into(), toml::Value::Array(popup_order));
+                root.insert("version".into(), toml::Value::Integer(18));
+                version = 18;
+            }
             unsupported => anyhow::bail!("no migration path from settings version {unsupported}"),
         }
     }
@@ -775,6 +1009,7 @@ mod tests {
         assert_eq!(value.total_spend_presentation, TotalSpendPresentation::Donut);
         assert_eq!(value.history_retention_days, 30);
         assert!(value.tray_widgets.is_empty());
+        assert_eq!(value.popup_order, PopupWidgetKind::default_order());
         assert!(!value.notifications.activation_success);
         assert!(!value.notifications.activation_failure);
         assert!(!value.notifications.codex_unavailable);
@@ -904,6 +1139,52 @@ tray_widgets = []
             ..Settings::default()
         };
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn normalizes_and_reorders_popup_order() {
+        let mut settings = Settings {
+            popup_order: vec![
+                PopupWidgetKind::Cursor,
+                PopupWidgetKind::Cursor,
+                PopupWidgetKind::Codex,
+            ],
+            providers: ProviderSettings {
+                codex_enabled: true,
+                claude_enabled: false,
+                cursor_enabled: true,
+            },
+            show_total_spend_on_all_tab: true,
+            ..Settings::default()
+        };
+        assert!(settings.normalize_popup_order());
+        assert_eq!(
+            settings.popup_order,
+            vec![
+                PopupWidgetKind::Cursor,
+                PopupWidgetKind::Codex,
+                PopupWidgetKind::TotalSpend,
+                PopupWidgetKind::Claude,
+            ]
+        );
+        assert!(settings.move_popup_widget(
+            PopupWidgetKind::Codex,
+            PopupWidgetKind::TotalSpend,
+            true
+        ));
+        assert_eq!(
+            settings.ordered_visible_popup_widgets(true),
+            vec![
+                PopupWidgetKind::Cursor,
+                PopupWidgetKind::TotalSpend,
+                PopupWidgetKind::Codex,
+            ]
+        );
+        assert!(settings.move_provider(ProviderKind::Codex, true));
+        assert_eq!(
+            settings.ordered_enabled_providers(),
+            vec![ProviderKind::Codex, ProviderKind::Cursor]
+        );
     }
 
     #[test]

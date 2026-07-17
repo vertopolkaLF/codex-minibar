@@ -18,7 +18,8 @@ use crate::{
     notifications::LimitNotificationTracker,
     popup,
     settings::{
-        NotificationSettings, ProviderKind, Settings, TotalSpendPresentation, TrayWidget,
+        NotificationSettings, PopupWidgetKind, ProviderKind, Settings, TotalSpendPresentation,
+        TrayWidget,
     },
     settings_controls::update_accent_button,
     tray::{TrayManager, TrayMenuAction},
@@ -212,6 +213,7 @@ struct UiState {
     codex_enabled: bool,
     claude_enabled: bool,
     cursor_enabled: bool,
+    popup_order: Vec<PopupWidgetKind>,
     use_colored_provider_icons: bool,
     replace_chatgpt_logo_with_codex: bool,
     update_version: Option<String>,
@@ -276,6 +278,7 @@ impl Default for UiState {
             codex_enabled: true,
             claude_enabled: false,
             cursor_enabled: false,
+            popup_order: PopupWidgetKind::default_order(),
             use_colored_provider_icons: false,
             replace_chatgpt_logo_with_codex: false,
             update_version: None,
@@ -305,28 +308,108 @@ enum PopupView {
 }
 
 impl PopupView {
-    const fn order(self) -> i32 {
+    const fn from_provider(provider: ProviderKind) -> Self {
+        match provider {
+            ProviderKind::Codex => Self::Codex,
+            ProviderKind::Claude => Self::Claude,
+            ProviderKind::Cursor => Self::Cursor,
+        }
+    }
+
+    const fn provider(self) -> Option<ProviderKind> {
+        match self {
+            Self::All => None,
+            Self::Codex => Some(ProviderKind::Codex),
+            Self::Claude => Some(ProviderKind::Claude),
+            Self::Cursor => Some(ProviderKind::Cursor),
+        }
+    }
+
+    fn order(self, provider_order: &[ProviderKind]) -> i32 {
         match self {
             Self::All => 0,
-            Self::Codex => 1,
-            Self::Claude => 2,
-            Self::Cursor => 3,
+            other => {
+                let provider = other.provider().expect("provider view");
+                1 + provider_order
+                    .iter()
+                    .position(|item| *item == provider)
+                    .unwrap_or(0) as i32
+            }
         }
     }
 }
 
-fn enabled_popup_views(codex: bool, claude: bool, cursor: bool) -> Vec<PopupView> {
+fn enabled_popup_views(
+    popup_order: &[PopupWidgetKind],
+    codex: bool,
+    claude: bool,
+    cursor: bool,
+) -> Vec<PopupView> {
     let mut views = vec![PopupView::All];
-    if codex {
-        views.push(PopupView::Codex);
-    }
-    if claude {
-        views.push(PopupView::Claude);
-    }
-    if cursor {
-        views.push(PopupView::Cursor);
+    for widget in popup_order {
+        let Some(provider) = widget.as_provider() else {
+            continue;
+        };
+        let enabled = match provider {
+            ProviderKind::Codex => codex,
+            ProviderKind::Claude => claude,
+            ProviderKind::Cursor => cursor,
+        };
+        if enabled {
+            views.push(PopupView::from_provider(provider));
+        }
     }
     views
+}
+
+fn provider_order_from_popup(popup_order: &[PopupWidgetKind]) -> Vec<ProviderKind> {
+    popup_order
+        .iter()
+        .filter_map(|widget| widget.as_provider())
+        .collect()
+}
+
+fn provider_order_key(providers: &[ProviderKind]) -> String {
+    providers
+        .iter()
+        .map(|provider| provider.id())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn popup_order_key(popup_order: &[PopupWidgetKind]) -> String {
+    popup_order
+        .iter()
+        .map(|widget| widget.id())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn provider_is_enabled(provider: ProviderKind, codex: bool, claude: bool, cursor: bool) -> bool {
+    match provider {
+        ProviderKind::Codex => codex,
+        ProviderKind::Claude => claude,
+        ProviderKind::Cursor => cursor,
+    }
+}
+
+fn visible_popup_widgets(
+    popup_order: &[PopupWidgetKind],
+    show_total_spend: bool,
+    codex: bool,
+    claude: bool,
+    cursor: bool,
+) -> Vec<PopupWidgetKind> {
+    popup_order
+        .iter()
+        .copied()
+        .filter(|widget| match widget {
+            PopupWidgetKind::TotalSpend => show_total_spend,
+            other => other.as_provider().is_some_and(|provider| {
+                provider_is_enabled(provider, codex, claude, cursor)
+            }),
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -338,8 +421,8 @@ enum PagerDirection {
 const PAGER_ANIMATION_DURATION: Duration = Duration::from_millis(250);
 
 impl PagerDirection {
-    const fn between(from: PopupView, to: PopupView) -> Self {
-        if to.order() > from.order() {
+    fn between(from: PopupView, to: PopupView, provider_order: &[ProviderKind]) -> Self {
+        if to.order(provider_order) > from.order(provider_order) {
             Self::Forward
         } else {
             Self::Backward
@@ -358,13 +441,14 @@ impl PagerDirection {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct PagerState {
     current: PopupView,
     outgoing: Option<PopupView>,
     pending: Option<PopupView>,
     direction: PagerDirection,
     animation_id: u64,
+    provider_order: Vec<ProviderKind>,
 }
 
 impl Default for PagerState {
@@ -375,18 +459,26 @@ impl Default for PagerState {
             pending: None,
             direction: PagerDirection::Forward,
             animation_id: 0,
+            provider_order: ProviderKind::default_order(),
         }
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum PagerAction {
     Select(PopupView),
+    SetProviderOrder(Vec<ProviderKind>),
     AnimationFinished(u64),
 }
 
 fn reduce_pager(mut state: PagerState, action: PagerAction) -> PagerState {
     match action {
+        PagerAction::SetProviderOrder(order) => {
+            if state.provider_order != order {
+                state.provider_order = order;
+            }
+            state
+        }
         PagerAction::Select(target) => {
             if state.outgoing.is_some() {
                 if target != state.current {
@@ -397,7 +489,8 @@ fn reduce_pager(mut state: PagerState, action: PagerAction) -> PagerState {
             if target == state.current {
                 return state;
             }
-            state.direction = PagerDirection::between(state.current, target);
+            state.direction =
+                PagerDirection::between(state.current, target, &state.provider_order);
             state.outgoing = Some(state.current);
             state.current = target;
             state.pending = None;
@@ -413,7 +506,8 @@ fn reduce_pager(mut state: PagerState, action: PagerAction) -> PagerState {
             if let Some(target) = pending
                 && target != state.current
             {
-                state.direction = PagerDirection::between(state.current, target);
+                state.direction =
+                    PagerDirection::between(state.current, target, &state.provider_order);
                 state.outgoing = Some(state.current);
                 state.current = target;
                 state.animation_id = state.animation_id.wrapping_add(1);
@@ -510,6 +604,209 @@ fn popup_sections(
     sections
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WidgetDragState {
+    active: PopupWidgetKind,
+    over: PopupWidgetKind,
+}
+
+fn persist_popup_order(
+    settings_tx: Sender<Settings>,
+    set_ui: AsyncSetState<UiState>,
+    mut ui: UiState,
+    next_order: Vec<PopupWidgetKind>,
+) {
+    ui.popup_order = next_order.clone();
+    set_ui.call(ui);
+    crate::settings_window::persist_update(settings_tx, move |settings| {
+        settings.popup_order = next_order;
+        settings.normalize_popup_order();
+    });
+}
+
+fn commit_widget_drag(
+    settings_tx: Sender<Settings>,
+    set_ui: AsyncSetState<UiState>,
+    ui: UiState,
+    drag: WidgetDragState,
+    set_drag: SetState<Option<WidgetDragState>>,
+) {
+    // PointerReleased can hit both the section catcher and the page body in one
+    // gesture; only the first commit may mutate order.
+    thread_local! {
+        static COMMITTING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    if COMMITTING.with(|flag| flag.replace(true)) {
+        return;
+    }
+
+    set_drag.call(None);
+    if drag.active == drag.over {
+        COMMITTING.with(|flag| flag.set(false));
+        return;
+    }
+    let show_total_spend = ui.show_total_spend_on_all_tab
+        && {
+            let enabled = usize::from(ui.codex_enabled)
+                + usize::from(ui.claude_enabled)
+                + usize::from(ui.cursor_enabled);
+            enabled > 1
+        };
+    let mut scratch = Settings {
+        popup_order: ui.popup_order.clone(),
+        providers: crate::settings::ProviderSettings {
+            codex_enabled: ui.codex_enabled,
+            claude_enabled: ui.claude_enabled,
+            cursor_enabled: ui.cursor_enabled,
+        },
+        show_total_spend_on_all_tab: ui.show_total_spend_on_all_tab,
+        ..Settings::default()
+    };
+    if !scratch.move_popup_widget(drag.active, drag.over, show_total_spend) {
+        COMMITTING.with(|flag| flag.set(false));
+        return;
+    }
+    persist_popup_order(settings_tx, set_ui, ui, scratch.popup_order);
+    COMMITTING.with(|flag| flag.set(false));
+}
+
+fn drag_handle(
+    widget: PopupWidgetKind,
+    color_scheme: ColorScheme,
+    drag: &Option<WidgetDragState>,
+    set_drag: SetState<Option<WidgetDragState>>,
+) -> Element {
+    let idle = popup_chrome_icon_color(color_scheme, false);
+    let active = drag.as_ref().is_some_and(|state| state.active == widget);
+    let set_on_press = set_drag.clone();
+    relative_panel::<Vec<Element>>(vec![
+        border(Element::Empty)
+            .background(ThemeRef::SubtleFill)
+            .opacity(if active { 1.0 } else { 0.0 })
+            .corner_radius(4.0)
+            .relative_align_left()
+            .relative_align_right()
+            .relative_align_top()
+            .relative_align_bottom()
+            .into(),
+        crate::icons::element("fluent-drag", 14.0, idle)
+            .relative_align_h_center()
+            .relative_align_v_center()
+            .into(),
+    ])
+    .tooltip("Drag to reorder")
+    .width(REORDER_BUTTON_SIZE)
+    .height(REORDER_BUTTON_SIZE)
+    .min_width(REORDER_BUTTON_SIZE)
+    .min_height(REORDER_BUTTON_SIZE)
+    .max_width(REORDER_BUTTON_SIZE)
+    .max_height(REORDER_BUTTON_SIZE)
+    .background(Color::transparent())
+    .on_pointer_pressed(move |_: PointerEventInfo| {
+        set_on_press.call(Some(WidgetDragState {
+            active: widget,
+            over: widget,
+        }));
+    })
+    .with_key(format!("drag-handle-{}", widget.id()))
+    .into()
+}
+
+fn with_widget_drop_target(
+    widget: PopupWidgetKind,
+    content: Element,
+    drag: &Option<WidgetDragState>,
+    set_drag: SetState<Option<WidgetDragState>>,
+    settings_tx: Sender<Settings>,
+    set_ui: AsyncSetState<UiState>,
+    ui: UiState,
+) -> Element {
+    let is_active = drag.as_ref().is_some_and(|state| state.active == widget);
+    let is_over = drag.as_ref().is_some_and(|state| state.over == widget);
+    let show_outline = is_over && !is_active;
+    let dragging = drag.is_some();
+    let set_on_enter = set_drag.clone();
+    let set_on_release = set_drag.clone();
+    let drag_for_enter = drag.clone();
+    let drag_for_release = drag.clone();
+
+    // Visual ring only — null fill so it does not steal hits on its own.
+    let outline: Element = border(Element::Empty)
+        .border_thickness(Thickness::uniform(1.0))
+        .border_brush(ThemeRef::SystemAttention)
+        .corner_radius(6.0)
+        .opacity(if show_outline { 1.0 } else { 0.0 })
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Stretch)
+        .grid_column(0)
+        .grid_row(0)
+        .into();
+
+    let mut layers: Vec<Element> = vec![
+        content
+            .opacity(if is_active { 0.55 } else { 1.0 })
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .grid_column(0)
+            .grid_row(0),
+        outline,
+    ];
+
+    // While dragging, a transparent full-size catcher matches the highlight
+    // zone (header + cards) so release on the title row commits the drop.
+    // WinUI hit-tests Transparent backgrounds; null backgrounds do not.
+    if dragging {
+        layers.push(
+            border(Element::Empty)
+                .background(Color::transparent())
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .vertical_alignment(VerticalAlignment::Stretch)
+                .grid_column(0)
+                .grid_row(0)
+                .on_pointer_entered(move |_: PointerEventInfo| {
+                    let Some(current) = drag_for_enter.clone() else {
+                        return;
+                    };
+                    if current.over == widget {
+                        return;
+                    }
+                    set_on_enter.call(Some(WidgetDragState {
+                        active: current.active,
+                        over: widget,
+                    }));
+                })
+                .on_pointer_released(move |_: PointerEventInfo| {
+                    let Some(current) = drag_for_release.clone() else {
+                        return;
+                    };
+                    // This catcher covers the whole section (header + body), so
+                    // the drop target is always `widget` — do not trust a possibly
+                    // stale `over` captured before the last pointer-enter update.
+                    commit_widget_drag(
+                        settings_tx.clone(),
+                        set_ui.clone(),
+                        ui.clone(),
+                        WidgetDragState {
+                            active: current.active,
+                            over: widget,
+                        },
+                        set_on_release.clone(),
+                    );
+                })
+                .with_key(format!("drop-catcher-{}", widget.id()))
+                .into(),
+        );
+    }
+
+    grid(layers)
+        .columns([GridLength::Star(1.0)])
+        .rows([GridLength::Auto])
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        // Keep the host identity stable across highlight toggles so a remount
+        // cannot swallow the in-flight pointer release.
+        .with_key(format!("drop-target-{}", widget.id()))
+        .into()
+}
+
 fn provider_cards(
     provider: ProviderKind,
     is_first: bool,
@@ -520,26 +817,36 @@ fn provider_cards(
     show_usage_stats: bool,
     show_account_name: bool,
     color_scheme: ColorScheme,
+    drag_handle: Option<Element>,
 ) -> Vec<Element> {
     let (monthly_label, primary_label, secondary_label) = match provider {
         ProviderKind::Cursor => ("Auto + Composer", "Auto + Composer", "Auto + Composer"),
         _ => ("Monthly", "5h Session", "Weekly"),
     };
-    let account_heading: Element = if show_account_name {
-        limits
-            .account_name
-            .as_ref()
-            .map(|name| {
+    let mut trailing: Vec<Element> = Vec::new();
+    if show_account_name {
+        if let Some(name) = limits.account_name.as_ref() {
+            trailing.push(
                 caption(name.clone())
                     .foreground(ThemeRef::TertiaryText)
                     .horizontal_alignment(HorizontalAlignment::Right)
                     .vertical_alignment(VerticalAlignment::Center)
-                    .grid_column(1)
-                    .into()
-            })
-            .unwrap_or(Element::Empty)
-    } else {
+                    .into(),
+            );
+        }
+    }
+    if let Some(handle) = drag_handle {
+        trailing.push(handle);
+    }
+    let trailing_slot: Element = if trailing.is_empty() {
         Element::Empty
+    } else {
+        hstack(trailing)
+            .spacing(4.0)
+            .horizontal_alignment(HorizontalAlignment::Right)
+            .vertical_alignment(VerticalAlignment::Center)
+            .grid_column(1)
+            .into()
     };
     let mut cards: Vec<Element> = vec![
         grid((
@@ -563,7 +870,7 @@ fn provider_cards(
             .spacing(4.0)
             .vertical_alignment(VerticalAlignment::Center)
             .grid_column(0),
-            account_heading,
+            trailing_slot,
         ))
         .columns([GridLength::Star(1.0), GridLength::Auto])
         .rows([GridLength::Auto])
@@ -574,7 +881,11 @@ fn provider_cards(
             right: 4.0,
             bottom: 2.0,
         })
-        .with_key(format!("{}-heading", provider.display_name()))
+        .with_key(format!(
+            "{}-heading-{}",
+            provider.display_name(),
+            if is_first { "first" } else { "rest" }
+        ))
         .into(),
     ];
     // Cursor usage is fetched from a remote CSV export rather than scanned
@@ -698,6 +1009,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         codex_enabled: state.settings.providers.codex_enabled,
         claude_enabled: state.settings.providers.claude_enabled,
         cursor_enabled: state.settings.providers.cursor_enabled,
+        popup_order: state.settings.popup_order.clone(),
         use_colored_provider_icons: state.settings.use_colored_provider_icons,
         replace_chatgpt_logo_with_codex: state.settings.replace_chatgpt_logo_with_codex,
         update_version: state
@@ -713,6 +1025,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let ui_dispatcher = cx.use_ui_marshaller();
     let settings_tx = state.settings_tx.clone();
     let (hovered_action, set_hovered_action) = cx.use_state(Option::<String>::None);
+    let (widget_drag, set_widget_drag) = cx.use_state(None::<WidgetDragState>);
     let (pager, pager_dispatch) = cx.use_reducer_fn(reduce_pager, PagerState::default());
     let (combined_usage_period, set_combined_usage_period) =
         cx.use_state(CombinedUsagePeriod::default());
@@ -755,10 +1068,13 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             ui.codex_enabled,
             ui.claude_enabled,
             ui.cursor_enabled,
+            popup_order_key(&ui.popup_order),
         ),
         {
             let pager_dispatch = pager_dispatch.clone();
+            let order = provider_order_from_popup(&ui.popup_order);
             move || {
+                pager_dispatch.call(PagerAction::SetProviderOrder(order.clone()));
                 let available = match pager.current {
                     PopupView::All => true,
                     PopupView::Codex => ui.codex_enabled,
@@ -820,7 +1136,19 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     // A selector only earns its keep when it can actually switch between
     // providers. With zero or one enabled provider the familiar compact
     // footer remains, sparing us some very professional-looking empty UI.
+    let enabled_provider_order = provider_order_from_popup(&ui.popup_order)
+        .into_iter()
+        .filter(|provider| {
+            provider_is_enabled(
+                *provider,
+                ui.codex_enabled,
+                ui.claude_enabled,
+                ui.cursor_enabled,
+            )
+        })
+        .collect::<Vec<_>>();
     let enabled_views = enabled_popup_views(
+        &ui.popup_order,
         ui.codex_enabled,
         ui.claude_enabled,
         ui.cursor_enabled,
@@ -828,18 +1156,15 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let enabled_provider_count = enabled_views.len().saturating_sub(1);
     let show_provider_tabs = enabled_provider_count > 1;
     let selected_view = pager.current;
+    let all_tab_widgets = visible_popup_widgets(
+        &ui.popup_order,
+        ui.show_total_spend_on_all_tab && show_provider_tabs,
+        ui.codex_enabled,
+        ui.claude_enabled,
+        ui.cursor_enabled,
+    );
+    let can_reorder_widgets = selected_view == PopupView::All && all_tab_widgets.len() > 1;
     let build_body = |view: PopupView, retain_disabled_detail: bool| {
-        let show_codex = (ui.codex_enabled
-            || retain_disabled_detail && view == PopupView::Codex)
-            && (!show_provider_tabs || matches!(view, PopupView::All | PopupView::Codex));
-        let show_claude = (ui.claude_enabled
-            || retain_disabled_detail && view == PopupView::Claude)
-            && (!show_provider_tabs || matches!(view, PopupView::All | PopupView::Claude));
-        let show_cursor = (ui.cursor_enabled
-            || retain_disabled_detail && view == PopupView::Cursor)
-            && (!show_provider_tabs || matches!(view, PopupView::All | PopupView::Cursor));
-        // Individual activity remains a provider-detail view. The All tab has
-        // its own compact provider summary when explicitly enabled.
         let show_usage_stats =
             ui.show_usage_stats && (!show_provider_tabs || view != PopupView::All);
         let show_total_spend =
@@ -858,83 +1183,143 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             );
             has_preceding_section = true;
         }
-        if show_total_spend {
-            body.push(
-                combined_usage_card(
-                    &limits,
-                    ui.codex_enabled,
-                    ui.claude_enabled,
-                    ui.cursor_enabled,
-                    combined_usage_period,
-                    set_combined_usage_period.clone(),
-                    hovered_combined_usage_period,
-                    set_hovered_combined_usage_period.clone(),
-                    color_scheme,
-                    ui.total_spend_presentation,
-                )
-                .with_key(format!(
-                    "all-combined-usage-{}-{:?}",
-                    combined_usage_period.key(),
-                    ui.total_spend_presentation
-                )),
+
+        if view == PopupView::All {
+            let widgets = visible_popup_widgets(
+                &ui.popup_order,
+                show_total_spend,
+                ui.codex_enabled,
+                ui.claude_enabled,
+                ui.cursor_enabled,
             );
-            has_preceding_section = true;
-        }
-        if show_codex {
-            body.push(
-                vstack(provider_cards(
-                    ProviderKind::Codex,
-                    !has_preceding_section,
-                    &limits.codex,
-                    ui.show_used_percentage,
-                    ui.show_usage_pace,
-                    ui.show_banked_resets,
-                    show_usage_stats,
-                    ui.show_account_name,
-                    color_scheme,
-                ))
-                .spacing(6.0)
-                .with_key("provider-codex")
-                .into(),
-            );
-            has_preceding_section = true;
-        }
-        if show_claude {
-            body.push(
-                vstack(provider_cards(
-                    ProviderKind::Claude,
-                    !has_preceding_section,
-                    &limits.claude,
-                    ui.show_used_percentage,
-                    ui.show_usage_pace,
-                    ui.show_banked_resets,
-                    show_usage_stats,
-                    ui.show_account_name,
-                    color_scheme,
-                ))
-                .spacing(6.0)
-                .with_key("provider-claude")
-                .into(),
-            );
-            has_preceding_section = true;
-        }
-        if show_cursor {
-            body.push(
-                vstack(provider_cards(
-                    ProviderKind::Cursor,
-                    !has_preceding_section,
-                    &limits.cursor,
-                    ui.show_used_percentage,
-                    ui.show_usage_pace,
-                    false,
-                    show_usage_stats,
-                    ui.show_account_name,
-                    color_scheme,
-                ))
-                .spacing(6.0)
-                .with_key("provider-cursor")
-                .into(),
-            );
+            for (index, widget) in widgets.into_iter().enumerate() {
+                let is_first = index == 0 && !has_preceding_section;
+                let section = match widget {
+                    PopupWidgetKind::TotalSpend => combined_usage_card(
+                        &limits,
+                        is_first,
+                        ui.codex_enabled,
+                        ui.claude_enabled,
+                        ui.cursor_enabled,
+                        combined_usage_period,
+                        set_combined_usage_period.clone(),
+                        hovered_combined_usage_period,
+                        set_hovered_combined_usage_period.clone(),
+                        color_scheme,
+                        ui.total_spend_presentation,
+                        can_reorder_widgets.then(|| {
+                            drag_handle(
+                                PopupWidgetKind::TotalSpend,
+                                color_scheme,
+                                &widget_drag,
+                                set_widget_drag.clone(),
+                            )
+                        }),
+                    )
+                    .with_key(format!(
+                        "all-combined-usage-{}-{:?}-{}",
+                        combined_usage_period.key(),
+                        ui.total_spend_presentation,
+                        if is_first { "first" } else { "rest" }
+                    )),
+                    provider_widget => {
+                        let provider = provider_widget.as_provider().expect("provider widget");
+                        let limits_for_provider = match provider {
+                            ProviderKind::Codex => &limits.codex,
+                            ProviderKind::Claude => &limits.claude,
+                            ProviderKind::Cursor => &limits.cursor,
+                        };
+                        let show_banked = match provider {
+                            ProviderKind::Cursor => false,
+                            _ => ui.show_banked_resets,
+                        };
+                        let handle = can_reorder_widgets.then(|| {
+                            drag_handle(
+                                provider_widget,
+                                color_scheme,
+                                &widget_drag,
+                                set_widget_drag.clone(),
+                            )
+                        });
+                        vstack(provider_cards(
+                            provider,
+                            is_first,
+                            limits_for_provider,
+                            ui.show_used_percentage,
+                            ui.show_usage_pace,
+                            show_banked,
+                            show_usage_stats,
+                            ui.show_account_name,
+                            color_scheme,
+                            handle,
+                        ))
+                        .spacing(6.0)
+                        .with_key(format!(
+                            "provider-{}-{}",
+                            provider.id(),
+                            if is_first { "first" } else { "rest" }
+                        ))
+                        .into()
+                    }
+                };
+                let section = if can_reorder_widgets {
+                    with_widget_drop_target(
+                        widget,
+                        section,
+                        &widget_drag,
+                        set_widget_drag.clone(),
+                        settings_tx.clone(),
+                        set_ui.clone(),
+                        ui.clone(),
+                    )
+                } else {
+                    section
+                };
+                body.push(section);
+                has_preceding_section = true;
+            }
+        } else {
+            let providers_for_view: Vec<ProviderKind> = view
+                .provider()
+                .filter(|provider| {
+                    provider_is_enabled(
+                        *provider,
+                        ui.codex_enabled,
+                        ui.claude_enabled,
+                        ui.cursor_enabled,
+                    ) || retain_disabled_detail
+                })
+                .into_iter()
+                .collect();
+            for provider in providers_for_view {
+                let limits_for_provider = match provider {
+                    ProviderKind::Codex => &limits.codex,
+                    ProviderKind::Claude => &limits.claude,
+                    ProviderKind::Cursor => &limits.cursor,
+                };
+                let show_banked = match provider {
+                    ProviderKind::Cursor => false,
+                    _ => ui.show_banked_resets,
+                };
+                body.push(
+                    vstack(provider_cards(
+                        provider,
+                        !has_preceding_section,
+                        limits_for_provider,
+                        ui.show_used_percentage,
+                        ui.show_usage_pace,
+                        show_banked,
+                        show_usage_stats,
+                        ui.show_account_name,
+                        color_scheme,
+                        None,
+                    ))
+                    .spacing(6.0)
+                    .with_key(format!("provider-{}", provider.id()))
+                    .into(),
+                );
+                has_preceding_section = true;
+            }
         }
         if !ui.codex_enabled && !ui.claude_enabled && !ui.cursor_enabled {
             body.push(
@@ -1019,58 +1404,44 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 move || pager_dispatch.call(PagerAction::Select(PopupView::All))
             },
         )];
-        if ui.codex_enabled {
+        for provider in &enabled_provider_order {
+            let (tab_id, icon_name, tip, view) = match provider {
+                ProviderKind::Codex => (
+                    "provider-tab-codex",
+                    if ui.replace_chatgpt_logo_with_codex {
+                        "codex"
+                    } else {
+                        "chatgpt"
+                    },
+                    "Codex",
+                    PopupView::Codex,
+                ),
+                ProviderKind::Claude => (
+                    "provider-tab-claude",
+                    "claude",
+                    "Claude",
+                    PopupView::Claude,
+                ),
+                ProviderKind::Cursor => (
+                    "provider-tab-cursor",
+                    "cursor",
+                    "Cursor",
+                    PopupView::Cursor,
+                ),
+            };
             provider_tabs.push(popup_tab_button(
-                "provider-tab-codex",
-                Some(if ui.replace_chatgpt_logo_with_codex {
-                    "codex"
-                } else {
-                    "chatgpt"
-                }),
+                tab_id,
+                Some(icon_name),
                 None,
-                "Codex",
-                selected_view == PopupView::Codex,
+                tip,
+                selected_view == view,
                 ui.use_colored_provider_icons,
                 color_scheme,
                 &hovered_action,
                 set_hovered_action.clone(),
                 {
                     let pager_dispatch = pager_dispatch.clone();
-                    move || pager_dispatch.call(PagerAction::Select(PopupView::Codex))
-                },
-            ));
-        }
-        if ui.claude_enabled {
-            provider_tabs.push(popup_tab_button(
-                "provider-tab-claude",
-                Some("claude"),
-                None,
-                "Claude",
-                selected_view == PopupView::Claude,
-                ui.use_colored_provider_icons,
-                color_scheme,
-                &hovered_action,
-                set_hovered_action.clone(),
-                {
-                    let pager_dispatch = pager_dispatch.clone();
-                    move || pager_dispatch.call(PagerAction::Select(PopupView::Claude))
-                },
-            ));
-        }
-        if ui.cursor_enabled {
-            provider_tabs.push(popup_tab_button(
-                "provider-tab-cursor",
-                Some("cursor"),
-                None,
-                "Cursor",
-                selected_view == PopupView::Cursor,
-                ui.use_colored_provider_icons,
-                color_scheme,
-                &hovered_action,
-                set_hovered_action.clone(),
-                {
-                    let pager_dispatch = pager_dispatch.clone();
-                    move || pager_dispatch.call(PagerAction::Select(PopupView::Cursor))
+                    move || pager_dispatch.call(PagerAction::Select(view))
                 },
             ));
         }
@@ -1079,13 +1450,11 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         .horizontal_alignment(HorizontalAlignment::Left)
         .vertical_alignment(VerticalAlignment::Center)
         // Provider marks are native swap-chain children. Recreate the whole
-        // selector when membership, tint mode, or theme changes; otherwise
-        // WinUI reconciliation can retain a prior tab's text/icon.
+        // selector when membership, order, tint mode, or theme changes;
+        // otherwise WinUI reconciliation can retain a prior tab's text/icon.
         .with_key(format!(
-            "provider-tabs-{}-{}-{}-{}-{}",
-            ui.codex_enabled,
-            ui.claude_enabled,
-            ui.cursor_enabled,
+            "provider-tabs-{}-{}-{}",
+            provider_order_key(&enabled_provider_order),
             ui.use_colored_provider_icons,
             color_scheme as i32
         ))
@@ -1194,7 +1563,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                       to_x: f32,
                       measure_height: bool| {
         let body_layout_key = format!(
-            "popup-page-{role}-{}-{}-{:?}-{}-{}-{}-{:?}-{}-{}-{}-{}-{:?}-{:?}",
+            "popup-page-{role}-{}-{}-{:?}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{:?}-{:?}",
             pager.animation_id,
             ui.limits_revision,
             ui.error,
@@ -1206,6 +1575,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             ui.codex_enabled,
             ui.claude_enabled,
             ui.cursor_enabled,
+            popup_order_key(&ui.popup_order),
             color_scheme as i32,
             view,
         );
@@ -1219,6 +1589,25 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             })
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .vertical_alignment(VerticalAlignment::Top);
+        if widget_drag.is_some() {
+            let set_drag = set_widget_drag.clone();
+            let drag = widget_drag.clone();
+            let settings_tx = settings_tx.clone();
+            let set_ui = set_ui.clone();
+            let ui = ui.clone();
+            content = content.on_pointer_released(move |_: PointerEventInfo| {
+                let Some(current) = drag.clone() else {
+                    return;
+                };
+                commit_widget_drag(
+                    settings_tx.clone(),
+                    set_ui.clone(),
+                    ui.clone(),
+                    current,
+                    set_drag.clone(),
+                );
+            });
+        }
         if from_x != to_x {
             content.mounted = Some(Callback::new(move |native: Option<_>| {
                 if let Some(native) = native
@@ -1650,6 +2039,7 @@ fn start_background_bridge(
             codex_enabled: state.settings.providers.codex_enabled,
             claude_enabled: state.settings.providers.claude_enabled,
             cursor_enabled: state.settings.providers.cursor_enabled,
+            popup_order: state.settings.popup_order.clone(),
             use_colored_provider_icons: state.settings.use_colored_provider_icons,
             replace_chatgpt_logo_with_codex: state.settings.replace_chatgpt_logo_with_codex,
             update_version: update_version_from_phase(&update_phase),
@@ -1693,6 +2083,7 @@ fn start_background_bridge(
             ui.codex_enabled = settings.providers.codex_enabled;
             ui.claude_enabled = settings.providers.claude_enabled;
             ui.cursor_enabled = settings.providers.cursor_enabled;
+            ui.popup_order = settings.popup_order.clone();
             ui.use_colored_provider_icons = settings.use_colored_provider_icons;
             ui.replace_chatgpt_logo_with_codex = settings.replace_chatgpt_logo_with_codex;
             *notification_settings = settings.notifications.clone();
@@ -2047,6 +2438,7 @@ fn pump_tray_and_dismiss(
 }
 
 const ICON_BUTTON_SIZE: f64 = 36.0;
+const REORDER_BUTTON_SIZE: f64 = 28.0;
 
 /// Compact footer selector item for choosing the combined or provider view.
 fn popup_tab_button(
@@ -2183,6 +2575,32 @@ fn icon_button(
     set_hovered_action: SetState<Option<String>>,
     on_click: impl IntoUnitCallback,
 ) -> Element {
+    chrome_icon_button(
+        id,
+        normal_icon,
+        hover_icon,
+        tip,
+        ICON_BUTTON_SIZE,
+        18.0,
+        color_scheme,
+        hovered_action,
+        set_hovered_action,
+        on_click,
+    )
+}
+
+fn chrome_icon_button(
+    id: &'static str,
+    normal_icon: &'static str,
+    hover_icon: &'static str,
+    tip: &str,
+    size: f64,
+    glyph_size: f64,
+    color_scheme: ColorScheme,
+    hovered_action: &Option<String>,
+    set_hovered_action: SetState<Option<String>>,
+    on_click: impl IntoUnitCallback,
+) -> Element {
     let hovered = hovered_action.as_deref() == Some(id);
     let set_on_enter = set_hovered_action.clone();
     let set_on_exit = set_hovered_action;
@@ -2199,12 +2617,12 @@ fn icon_button(
     // Keep both swap-chain hosts mounted and crossfade opacity on hover.
     // Remounting the icon host on every hover recycles native panels and can
     // leave a neighbor's painted glyph in this slot.
-    let idle_icon: Element = crate::icons::element(normal_icon, 18.0, idle_color)
+    let idle_icon: Element = crate::icons::element(normal_icon, glyph_size, idle_color)
         .opacity(if hovered { 0.0 } else { 1.0 })
         .relative_align_h_center()
         .relative_align_v_center()
         .into();
-    let accent_icon: Element = crate::icons::accent_element(hover_icon, 18.0)
+    let accent_icon: Element = crate::icons::accent_element(hover_icon, glyph_size)
         .opacity(if hovered { 1.0 } else { 0.0 })
         .relative_align_h_center()
         .relative_align_v_center()
@@ -2212,12 +2630,12 @@ fn icon_button(
     // Stable across hover; remount only when theme tint changes.
     relative_panel(vec![hover_background, idle_icon, accent_icon])
         .tooltip(tip)
-        .width(ICON_BUTTON_SIZE)
-        .height(ICON_BUTTON_SIZE)
-        .min_width(ICON_BUTTON_SIZE)
-        .min_height(ICON_BUTTON_SIZE)
-        .max_width(ICON_BUTTON_SIZE)
-        .max_height(ICON_BUTTON_SIZE)
+        .width(size)
+        .height(size)
+        .min_width(size)
+        .min_height(size)
+        .max_width(size)
+        .max_height(size)
         .background(Color::transparent())
         .on_pointer_entered(move |_: PointerEventInfo| {
             set_on_enter.call(Some(id.to_string()));
@@ -2225,7 +2643,7 @@ fn icon_button(
         .on_pointer_exited(move || set_on_exit.call(None))
         .on_tapped(on_click)
         .with_key(format!(
-            "{id}-{:02X}{:02X}{:02X}",
+            "{id}-{size}-{glyph_size}-{:02X}{:02X}{:02X}",
             idle_color.r, idle_color.g, idle_color.b
         ))
         .into()
@@ -2616,6 +3034,7 @@ fn usage_statistics_card(provider: ProviderKind, limits: &RateLimits) -> Element
 
 fn combined_usage_card(
     limits: &ProviderLimits,
+    is_first: bool,
     codex_enabled: bool,
     claude_enabled: bool,
     cursor_enabled: bool,
@@ -2625,6 +3044,7 @@ fn combined_usage_card(
     set_hovered_period: SetState<Option<CombinedUsagePeriod>>,
     color_scheme: ColorScheme,
     presentation: TotalSpendPresentation,
+    drag_handle: Option<Element>,
 ) -> Element {
     let providers = [
         (ProviderKind::Cursor, cursor_enabled, &limits.cursor),
@@ -2651,31 +3071,42 @@ fn combined_usage_card(
         }
     };
 
+    let mut title_trailing_items: Vec<Element> = vec![combined_usage_period_selector(
+        period,
+        set_period,
+        hovered_period,
+        set_hovered_period,
+    )
+    .into()];
+    if let Some(handle) = drag_handle {
+        title_trailing_items.push(handle);
+    }
+    let title_trailing = hstack(title_trailing_items)
+        .spacing(4.0)
+        .horizontal_alignment(HorizontalAlignment::Right)
+        .vertical_alignment(VerticalAlignment::Center)
+        .grid_column(1);
+
     vstack((
         grid((
             body_strong("Total Spend")
                 .foreground(ThemeRef::SecondaryText)
                 .vertical_alignment(VerticalAlignment::Center),
-            combined_usage_period_selector(
-                period,
-                set_period,
-                hovered_period,
-                set_hovered_period,
-            )
-            .horizontal_alignment(HorizontalAlignment::Right)
-            .vertical_alignment(VerticalAlignment::Center)
-            .grid_column(1),
+            title_trailing,
         ))
         .columns([GridLength::Star(1.0), GridLength::Auto])
         .rows([GridLength::Auto])
         .horizontal_alignment(HorizontalAlignment::Stretch)
-        // Same title → card gap as provider headings.
         .margin(Thickness {
             left: 4.0,
-            top: 0.0,
+            top: if is_first { 0.0 } else { 8.0 },
             right: 4.0,
             bottom: 2.0,
-        }),
+        })
+        .with_key(format!(
+            "total-spend-heading-{}",
+            if is_first { "first" } else { "rest" }
+        )),
         border(content)
             .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
             .padding(Thickness::uniform(10.0))
@@ -3430,6 +3861,7 @@ mod tests {
             true,
             false,
             ColorScheme::Dark,
+            None,
         );
         // Heading + 5h + weekly + Fable (no separate plan metadata row).
         assert_eq!(cards.len(), 4);
@@ -3523,32 +3955,56 @@ mod tests {
     }
 
     #[test]
+    fn every_provider_membership_has_the_expected_tab_order() {
+        let default_order = PopupWidgetKind::default_order();
+        for mask in 0_u8..8 {
+            let codex = mask & 0b001 != 0;
+            let claude = mask & 0b010 != 0;
+            let cursor = mask & 0b100 != 0;
+            let views = enabled_popup_views(&default_order, codex, claude, cursor);
+            let providers = provider_order_from_popup(&default_order);
+
+            assert_eq!(views.first(), Some(&PopupView::All));
+            assert_eq!(views.contains(&PopupView::Codex), codex);
+            assert_eq!(views.contains(&PopupView::Claude), claude);
+            assert_eq!(views.contains(&PopupView::Cursor), cursor);
+            assert!(views
+                .windows(2)
+                .all(|pair| pair[0].order(&providers) < pair[1].order(&providers)));
+            assert_eq!(
+                views.len(),
+                1 + usize::from(codex) + usize::from(claude) + usize::from(cursor)
+            );
+        }
+
+        let reversed = vec![
+            PopupWidgetKind::TotalSpend,
+            PopupWidgetKind::Cursor,
+            PopupWidgetKind::Claude,
+            PopupWidgetKind::Codex,
+        ];
+        let views = enabled_popup_views(&reversed, true, true, true);
+        assert_eq!(
+            views,
+            vec![
+                PopupView::All,
+                PopupView::Cursor,
+                PopupView::Claude,
+                PopupView::Codex,
+            ]
+        );
+    }
+
+    #[test]
     fn stale_pager_completion_cannot_end_a_newer_transition() {
         let state = reduce_pager(
             PagerState::default(),
             PagerAction::Select(PopupView::Codex),
         );
         let unchanged = reduce_pager(
-            state,
+            state.clone(),
             PagerAction::AnimationFinished(state.animation_id.wrapping_sub(1)),
         );
         assert_eq!(unchanged, state);
-    }
-
-    #[test]
-    fn every_provider_membership_has_the_expected_tab_order() {
-        for mask in 0_u8..8 {
-            let codex = mask & 0b001 != 0;
-            let claude = mask & 0b010 != 0;
-            let cursor = mask & 0b100 != 0;
-            let views = enabled_popup_views(codex, claude, cursor);
-
-            assert_eq!(views.first(), Some(&PopupView::All));
-            assert_eq!(views.contains(&PopupView::Codex), codex);
-            assert_eq!(views.contains(&PopupView::Claude), claude);
-            assert_eq!(views.contains(&PopupView::Cursor), cursor);
-            assert!(views.windows(2).all(|pair| pair[0].order() < pair[1].order()));
-            assert_eq!(views.len(), 1 + usize::from(codex) + usize::from(claude) + usize::from(cursor));
-        }
     }
 }

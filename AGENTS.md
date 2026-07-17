@@ -27,3 +27,5 @@ When touching popup footer tabs/buttons or `icons::element` / `acrylic::install_
 https://github.com/steipete/CodexBar - similar app for macos. You can use it as a reference for the features and implementations.
 
 When you need icons, download them from iocnify. Icon pack - Phosphor Icons for settings window, Fluent UI Icons for the popup icons
+
+All layout shifts have to be animated, respect the user's preference for animations.
