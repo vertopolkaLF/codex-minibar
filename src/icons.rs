@@ -63,6 +63,9 @@ fn viewbox_size(svg: &str) -> f64 {
 }
 
 /// Render an icon at `size` using exactly the supplied color.
+///
+/// The host is keyed by glyph + tint. Swap-chain painters run only on mount,
+/// so any identity change must remount — never rely on in-place updates.
 pub fn element(name: &'static str, size: f64, color: Color) -> Element {
     let icon = geom(name);
     let mut host = swap_chain_panel().width(size).height(size);
@@ -83,6 +86,8 @@ pub fn element(name: &'static str, size: f64, color: Color) -> Element {
 }
 
 /// Render an icon filled with the live Windows accent theme brush.
+///
+/// Same mount-only paint rule as [`element`]: key changes must remount the host.
 pub fn accent_element(name: &'static str, size: f64) -> Element {
     let icon = geom(name);
     let mut host = swap_chain_panel().width(size).height(size);

@@ -5,7 +5,8 @@
 //! inside the popup chrome.
 //!
 //! Installed as a child of a reactor `SwapChainPanel` (a `Panel` whose children
-//! the reconciler does not manage), so UI re-renders do not rip it out.
+//! the reconciler does not manage). Installers must clear existing children
+//! before appending so a recycled host cannot keep a previous glyph/backdrop.
 
 #![allow(non_snake_case)]
 
@@ -120,9 +121,9 @@ pub fn install_accent_github_icon_into(mount: windows_core::IInspectable) -> Res
 fn install_into_inner(mount: windows_core::IInspectable, xaml: &str) -> Result<()> {
     let panel: IPanel = mount.cast()?;
     let children = panel.Children()?;
-    if children.Size()? > 0 {
-        return Ok(());
-    }
+    // Recycled SwapChainPanel hosts can keep a previous XAML child. Always
+    // replace so a remount cannot leave another control's icon on screen.
+    children.Clear()?;
     let backdrop = XamlReader::Load(xaml)?;
     let element: UIElement = backdrop.cast()?;
     children.Append(&element)?;

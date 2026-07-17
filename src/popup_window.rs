@@ -965,6 +965,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             bottom: 0.0,
         })
         .vertical_alignment(VerticalAlignment::Center)
+        .with_key("footer-update")
         .into()
     } else {
         icon_button(
@@ -995,84 +996,80 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     };
 
     let footer_identity: Element = if show_provider_tabs {
-        hstack((
-            popup_tab_button(
-                "provider-tab-all",
+        // Build only live tabs — never pad with Element::Empty. Empty siblings
+        // collapse during reconcile and let swap-chain hosts keep a prior
+        // provider's pixels in another tab's slot.
+        let mut provider_tabs = vec![popup_tab_button(
+            "provider-tab-all",
+            None,
+            Some("All"),
+            "All providers",
+            selected_view == PopupView::All,
+            ui.use_colored_provider_icons,
+            color_scheme,
+            &hovered_action,
+            set_hovered_action.clone(),
+            {
+                let pager_dispatch = pager_dispatch.clone();
+                move || pager_dispatch.call(PagerAction::Select(PopupView::All))
+            },
+        )];
+        if ui.codex_enabled {
+            provider_tabs.push(popup_tab_button(
+                "provider-tab-codex",
+                Some(if ui.replace_chatgpt_logo_with_codex {
+                    "codex"
+                } else {
+                    "chatgpt"
+                }),
                 None,
-                Some("All"),
-                "All providers",
-                selected_view == PopupView::All,
+                "Codex",
+                selected_view == PopupView::Codex,
                 ui.use_colored_provider_icons,
                 color_scheme,
                 &hovered_action,
                 set_hovered_action.clone(),
                 {
                     let pager_dispatch = pager_dispatch.clone();
-                    move || pager_dispatch.call(PagerAction::Select(PopupView::All))
+                    move || pager_dispatch.call(PagerAction::Select(PopupView::Codex))
                 },
-            ),
-            if ui.codex_enabled {
-                popup_tab_button(
-                    "provider-tab-codex",
-                    Some(if ui.replace_chatgpt_logo_with_codex {
-                        "codex"
-                    } else {
-                        "chatgpt"
-                    }),
-                    None,
-                    "Codex",
-                    selected_view == PopupView::Codex,
-                    ui.use_colored_provider_icons,
-                    color_scheme,
-                    &hovered_action,
-                    set_hovered_action.clone(),
-                    {
-                        let pager_dispatch = pager_dispatch.clone();
-                        move || pager_dispatch.call(PagerAction::Select(PopupView::Codex))
-                    },
-                )
-            } else {
-                Element::Empty
-            },
-            if ui.claude_enabled {
-                popup_tab_button(
-                    "provider-tab-claude",
-                    Some("claude"),
-                    None,
-                    "Claude",
-                    selected_view == PopupView::Claude,
-                    ui.use_colored_provider_icons,
-                    color_scheme,
-                    &hovered_action,
-                    set_hovered_action.clone(),
-                    {
-                        let pager_dispatch = pager_dispatch.clone();
-                        move || pager_dispatch.call(PagerAction::Select(PopupView::Claude))
-                    },
-                )
-            } else {
-                Element::Empty
-            },
-            if ui.cursor_enabled {
-                popup_tab_button(
-                    "provider-tab-cursor",
-                    Some("cursor"),
-                    None,
-                    "Cursor",
-                    selected_view == PopupView::Cursor,
-                    ui.use_colored_provider_icons,
-                    color_scheme,
-                    &hovered_action,
-                    set_hovered_action.clone(),
-                    {
-                        let pager_dispatch = pager_dispatch.clone();
-                        move || pager_dispatch.call(PagerAction::Select(PopupView::Cursor))
-                    },
-                )
-            } else {
-                Element::Empty
-            },
-        ))
+            ));
+        }
+        if ui.claude_enabled {
+            provider_tabs.push(popup_tab_button(
+                "provider-tab-claude",
+                Some("claude"),
+                None,
+                "Claude",
+                selected_view == PopupView::Claude,
+                ui.use_colored_provider_icons,
+                color_scheme,
+                &hovered_action,
+                set_hovered_action.clone(),
+                {
+                    let pager_dispatch = pager_dispatch.clone();
+                    move || pager_dispatch.call(PagerAction::Select(PopupView::Claude))
+                },
+            ));
+        }
+        if ui.cursor_enabled {
+            provider_tabs.push(popup_tab_button(
+                "provider-tab-cursor",
+                Some("cursor"),
+                None,
+                "Cursor",
+                selected_view == PopupView::Cursor,
+                ui.use_colored_provider_icons,
+                color_scheme,
+                &hovered_action,
+                set_hovered_action.clone(),
+                {
+                    let pager_dispatch = pager_dispatch.clone();
+                    move || pager_dispatch.call(PagerAction::Select(PopupView::Cursor))
+                },
+            ));
+        }
+        hstack(provider_tabs)
         .spacing(2.0)
         .horizontal_alignment(HorizontalAlignment::Left)
         .vertical_alignment(VerticalAlignment::Center)
@@ -1152,6 +1149,13 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             .spacing(4.0)
             .horizontal_alignment(HorizontalAlignment::Right)
             .vertical_alignment(VerticalAlignment::Center)
+            // Quit ↔ Update swaps control kinds; key the whole strip so action
+            // swap-chain hosts never inherit a neighbor's painted icon.
+            .with_key(format!(
+                "footer-actions-{}-{}",
+                ui.update_version.is_some(),
+                color_scheme as i32
+            ))
             .grid_column(1),
         ))
         .rows([GridLength::Auto])
@@ -2055,17 +2059,14 @@ fn popup_tab_button(
     let hovered = hovered_action.as_deref() == Some(id);
     let set_on_enter = set_hovered_action.clone();
     let set_on_exit = set_hovered_action;
-    let neutral_icon_color = popup_chrome_icon_color(color_scheme, hovered);
-    let icon_color = if use_colored_provider_icons {
-        match icon_name {
-            Some("codex") | Some("chatgpt") => Color::rgb(128, 159, 255),
-            Some("claude") => Color::rgb(217, 119, 87),
-            // Match Total Spend: Cursor mark flips with the Windows text theme.
-            Some("cursor") => combined_usage_color(ProviderKind::Cursor, color_scheme),
-            _ => neutral_icon_color,
-        }
-    } else {
-        neutral_icon_color
+    let idle_icon_color = popup_chrome_icon_color(color_scheme, false);
+    let hover_icon_color = popup_chrome_icon_color(color_scheme, true);
+    let brand_icon_color = match icon_name {
+        Some("codex") | Some("chatgpt") => Color::rgb(128, 159, 255),
+        Some("claude") => Color::rgb(217, 119, 87),
+        // Match Total Spend: Cursor mark flips with the Windows text theme.
+        Some("cursor") => combined_usage_color(ProviderKind::Cursor, color_scheme),
+        _ => idle_icon_color,
     };
     let tab_width = if label.is_some() {
         44.0
@@ -2096,30 +2097,54 @@ fn popup_tab_button(
         .relative_align_right()
         .relative_align_bottom()
         .into();
-    let content: Element = if let Some(label) = label {
-        body_strong(label)
-            .foreground(if selected {
-                // Match usage progress / "% left" chrome, not Windows accent text.
-                ThemeRef::SystemAttention
-            } else if hovered {
-                ThemeRef::PrimaryText
-            } else {
-                ThemeRef::SecondaryText
-            })
-            .relative_align_h_center()
-            .relative_align_v_center()
-            .into()
+    let mut layers: Vec<Element> = vec![hover_background];
+    if let Some(label) = label {
+        layers.push(
+            body_strong(label)
+                .foreground(if selected {
+                    // Match usage progress / "% left" chrome, not Windows accent text.
+                    ThemeRef::SystemAttention
+                } else if hovered {
+                    ThemeRef::PrimaryText
+                } else {
+                    ThemeRef::SecondaryText
+                })
+                .relative_align_h_center()
+                .relative_align_v_center()
+                .into(),
+        );
     } else {
-        crate::icons::element(icon_name.expect("provider tab icon"), 18.0, icon_color)
-            .relative_align_h_center()
-            .relative_align_v_center()
-            .into()
-    };
+        let icon_name = icon_name.expect("provider tab icon");
+        if use_colored_provider_icons {
+            layers.push(
+                crate::icons::element(icon_name, 18.0, brand_icon_color)
+                    .relative_align_h_center()
+                    .relative_align_v_center()
+                    .into(),
+            );
+        } else {
+            // Crossfade idle/emphasized hosts instead of remounting on hover.
+            layers.push(
+                crate::icons::element(icon_name, 18.0, idle_icon_color)
+                    .opacity(if hovered { 0.0 } else { 1.0 })
+                    .relative_align_h_center()
+                    .relative_align_v_center()
+                    .into(),
+            );
+            layers.push(
+                crate::icons::element(icon_name, 18.0, hover_icon_color)
+                    .opacity(if hovered { 1.0 } else { 0.0 })
+                    .relative_align_h_center()
+                    .relative_align_v_center()
+                    .into(),
+            );
+        }
+    }
+    layers.push(selection_marker);
 
-    // `SwapChainPanel` runs its icon painter only on mount. Key the complete
-    // tab by its appearance so changing either provider mark or tint replaces
-    // that native host immediately instead of leaving stale pixels on screen.
-    relative_panel(vec![hover_background, content, selection_marker])
+    // `SwapChainPanel` paints only on mount. Keep the tab key stable across
+    // hover so reconciliation cannot recycle another tab's native icon host.
+    relative_panel(layers)
         .tooltip(tip)
         .width(tab_width)
         .height(ICON_BUTTON_SIZE)
@@ -2134,11 +2159,10 @@ fn popup_tab_button(
         .on_pointer_exited(move || set_on_exit.call(None))
         .on_tapped(on_click)
         .with_key(format!(
-            "{id}-{}-{:02X}{:02X}{:02X}",
+            "{id}-{}-{}-{}",
             icon_name.unwrap_or("label"),
-            icon_color.r,
-            icon_color.g,
-            icon_color.b
+            use_colored_provider_icons,
+            color_scheme as i32
         ))
         .into()
 }
@@ -2167,20 +2191,21 @@ fn icon_button(
         .relative_align_top()
         .relative_align_bottom()
         .into();
-    // Hover uses the live accent brush; idle keeps theme-aware text chrome.
-    let icon: Element = if hovered {
-        crate::icons::accent_element(hover_icon, 18.0)
-            .relative_align_h_center()
-            .relative_align_v_center()
-            .into()
-    } else {
-        crate::icons::element(normal_icon, 18.0, idle_color)
-            .relative_align_h_center()
-            .relative_align_v_center()
-            .into()
-    };
-    // Swap-chain icons paint once on mount; key by tint so theme flips remount.
-    relative_panel(vec![hover_background, icon])
+    // Keep both swap-chain hosts mounted and crossfade opacity on hover.
+    // Remounting the icon host on every hover recycles native panels and can
+    // leave a neighbor's painted glyph in this slot.
+    let idle_icon: Element = crate::icons::element(normal_icon, 18.0, idle_color)
+        .opacity(if hovered { 0.0 } else { 1.0 })
+        .relative_align_h_center()
+        .relative_align_v_center()
+        .into();
+    let accent_icon: Element = crate::icons::accent_element(hover_icon, 18.0)
+        .opacity(if hovered { 1.0 } else { 0.0 })
+        .relative_align_h_center()
+        .relative_align_v_center()
+        .into();
+    // Stable across hover; remount only when theme tint changes.
+    relative_panel(vec![hover_background, idle_icon, accent_icon])
         .tooltip(tip)
         .width(ICON_BUTTON_SIZE)
         .height(ICON_BUTTON_SIZE)
@@ -2194,14 +2219,10 @@ fn icon_button(
         })
         .on_pointer_exited(move || set_on_exit.call(None))
         .on_tapped(on_click)
-        .with_key(if hovered {
-            format!("{id}-accent")
-        } else {
-            format!(
-                "{id}-{:02X}{:02X}{:02X}",
-                idle_color.r, idle_color.g, idle_color.b
-            )
-        })
+        .with_key(format!(
+            "{id}-{:02X}{:02X}{:02X}",
+            idle_color.r, idle_color.g, idle_color.b
+        ))
         .into()
 }
 
