@@ -13,7 +13,9 @@ pub fn geom(name: &str) -> IconGeom {
         "fluent-refresh" => include_str!("../assets/icons/fluent-arrow-sync-20-regular.svg"),
         "fluent-settings" => include_str!("../assets/icons/fluent-settings-20-regular.svg"),
         "fluent-power" => include_str!("../assets/icons/fluent-power-20-regular.svg"),
-        "fluent-drag" => include_str!("../assets/icons/fluent-line-horizontal-3-16-regular.svg"),
+        "fluent-drag" => {
+            include_str!("../assets/icons/fluent-re-order-dots-vertical-16-regular.svg")
+        }
 
         // Provider marks are sourced from Iconify. They are rendered as
         // monochrome paths so they remain legible in either app theme.
