@@ -2574,9 +2574,16 @@ fn tray_color_mode_from_index(index: i32) -> TrayColorMode {
     }
 }
 
-// Segoe Fluent chevron glyphs used by WinUI's native SymbolIcon host.
-const CHEVRON_UP_SYMBOL: Symbol = Symbol(0xE70E);
-const CHEVRON_DOWN_SYMBOL: Symbol = Symbol(0xE70D);
+// Segoe Fluent chevron glyphs — same family/size as the WinUI Expander toggle.
+const CHEVRON_UP_GLYPH: &str = "\u{E70E}";
+const CHEVRON_DOWN_GLYPH: &str = "\u{E70D}";
+const TRAY_REORDER_ICON_FONT: &str = "Segoe Fluent Icons";
+/// Match the Expander header chevron glyph size.
+const TRAY_REORDER_ICON_SIZE: f64 = 12.0;
+const TRAY_REORDER_BUTTON_SIZE: f64 = 16.0;
+/// Match ComboBox / input control height; trash glyph is intentionally smaller.
+const TRAY_REMOVE_BUTTON_SIZE: f64 = 32.0;
+const TRAY_REMOVE_ICON_SIZE: f64 = 14.0;
 
 fn tray_settings_cards(
     widgets: &[TrayWidget],
@@ -2644,10 +2651,16 @@ fn tray_settings_cards(
         let providers_for_down = enabled_providers.to_vec();
 
         let reorder_buttons = vstack((
-            Button::new("")
-                .icon(CHEVRON_UP_SYMBOL)
-                .width(24.0)
-                .height(24.0)
+            Button::new(CHEVRON_UP_GLYPH)
+                .subtle()
+                .font_family(TRAY_REORDER_ICON_FONT)
+                .font_size(TRAY_REORDER_ICON_SIZE)
+                .width(TRAY_REORDER_BUTTON_SIZE)
+                .height(TRAY_REORDER_BUTTON_SIZE)
+                .min_width(TRAY_REORDER_BUTTON_SIZE)
+                .min_height(TRAY_REORDER_BUTTON_SIZE)
+                .max_width(TRAY_REORDER_BUTTON_SIZE)
+                .max_height(TRAY_REORDER_BUTTON_SIZE)
                 .padding(Thickness::uniform(0.0))
                 .enabled(index > 0)
                 .tooltip("Move widget up")
@@ -2659,10 +2672,16 @@ fn tray_settings_cards(
                     next.swap(index, index - 1);
                     persist_tray_widgets(up_setter.clone(), up_tx.clone(), next, &providers_for_up);
                 }),
-            Button::new("")
-                .icon(CHEVRON_DOWN_SYMBOL)
-                .width(24.0)
-                .height(24.0)
+            Button::new(CHEVRON_DOWN_GLYPH)
+                .subtle()
+                .font_family(TRAY_REORDER_ICON_FONT)
+                .font_size(TRAY_REORDER_ICON_SIZE)
+                .width(TRAY_REORDER_BUTTON_SIZE)
+                .height(TRAY_REORDER_BUTTON_SIZE)
+                .min_width(TRAY_REORDER_BUTTON_SIZE)
+                .min_height(TRAY_REORDER_BUTTON_SIZE)
+                .max_width(TRAY_REORDER_BUTTON_SIZE)
+                .max_height(TRAY_REORDER_BUTTON_SIZE)
                 .padding(Thickness::uniform(0.0))
                 .enabled(index + 1 < widgets.len())
                 .tooltip("Move widget down")
@@ -2680,8 +2699,9 @@ fn tray_settings_cards(
                     );
                 }),
         ))
-        .spacing(2.0)
-        .horizontal_alignment(HorizontalAlignment::Center);
+        .spacing(0.0)
+        .horizontal_alignment(HorizontalAlignment::Center)
+        .vertical_alignment(VerticalAlignment::Center);
         let header = grid((
             reorder_buttons
                 .grid_column(0)
@@ -2698,10 +2718,11 @@ fn tray_settings_cards(
                     .foreground(ThemeRef::SecondaryText),
             ))
             .spacing(2.0)
+            .vertical_alignment(VerticalAlignment::Center)
             .grid_column(2),
         ))
         .columns([
-            GridLength::Pixel(28.0),
+            GridLength::Pixel(TRAY_REORDER_BUTTON_SIZE),
             GridLength::Pixel(32.0),
             GridLength::Star(1.0),
         ])
@@ -2893,10 +2914,16 @@ fn tray_settings_cards(
                 let enabled_for_indicator_down = enabled_providers.to_vec();
 
                 let indicator_reorder = vstack((
-                    Button::new("")
-                        .icon(CHEVRON_UP_SYMBOL)
-                        .width(24.0)
-                        .height(24.0)
+                    Button::new(CHEVRON_UP_GLYPH)
+                        .subtle()
+                        .font_family(TRAY_REORDER_ICON_FONT)
+                        .font_size(TRAY_REORDER_ICON_SIZE)
+                        .width(TRAY_REORDER_BUTTON_SIZE)
+                        .height(TRAY_REORDER_BUTTON_SIZE)
+                        .min_width(TRAY_REORDER_BUTTON_SIZE)
+                        .min_height(TRAY_REORDER_BUTTON_SIZE)
+                        .max_width(TRAY_REORDER_BUTTON_SIZE)
+                        .max_height(TRAY_REORDER_BUTTON_SIZE)
                         .padding(Thickness::uniform(0.0))
                         .enabled(indicator_index > 0)
                         .tooltip("Move indicator up")
@@ -2915,10 +2942,16 @@ fn tray_settings_cards(
                                 &enabled_for_indicator_up,
                             );
                         }),
-                    Button::new("")
-                        .icon(CHEVRON_DOWN_SYMBOL)
-                        .width(24.0)
-                        .height(24.0)
+                    Button::new(CHEVRON_DOWN_GLYPH)
+                        .subtle()
+                        .font_family(TRAY_REORDER_ICON_FONT)
+                        .font_size(TRAY_REORDER_ICON_SIZE)
+                        .width(TRAY_REORDER_BUTTON_SIZE)
+                        .height(TRAY_REORDER_BUTTON_SIZE)
+                        .min_width(TRAY_REORDER_BUTTON_SIZE)
+                        .min_height(TRAY_REORDER_BUTTON_SIZE)
+                        .max_width(TRAY_REORDER_BUTTON_SIZE)
+                        .max_height(TRAY_REORDER_BUTTON_SIZE)
                         .padding(Thickness::uniform(0.0))
                         .enabled(indicator_index + 1 < widget.indicators.len())
                         .tooltip("Move indicator down")
@@ -2938,13 +2971,13 @@ fn tray_settings_cards(
                             );
                         }),
                 ))
-                .spacing(2.0)
+                .spacing(0.0)
                 .horizontal_alignment(HorizontalAlignment::Center);
 
                 let indicator_fields = vec![
                     indicator_reorder
                         .grid_column(0)
-                        .vertical_alignment(VerticalAlignment::Bottom)
+                        .vertical_alignment(VerticalAlignment::Center)
                         .into(),
                     ComboBox::new(provider_labels)
                         .header("Provider")
@@ -3024,11 +3057,16 @@ fn tray_settings_cards(
                     Button::new("")
                         .icon(Symbol::Delete)
                         .grid_column(4)
-                        .width(24.0)
-                        .height(24.0)
+                        .font_size(TRAY_REMOVE_ICON_SIZE)
+                        .width(TRAY_REMOVE_BUTTON_SIZE)
+                        .height(TRAY_REMOVE_BUTTON_SIZE)
+                        .min_width(TRAY_REMOVE_BUTTON_SIZE)
+                        .min_height(TRAY_REMOVE_BUTTON_SIZE)
+                        .max_width(TRAY_REMOVE_BUTTON_SIZE)
+                        .max_height(TRAY_REMOVE_BUTTON_SIZE)
                         .padding(Thickness::uniform(0.0))
                         .tooltip("Remove indicator")
-                        .vertical_alignment(VerticalAlignment::Bottom)
+                        .vertical_alignment(VerticalAlignment::Center)
                         .on_click(move || {
                             let mut next = widgets_for_remove.clone();
                             next[index].indicators.remove(indicator_index);
@@ -3049,11 +3087,11 @@ fn tray_settings_cards(
                     border(
                         grid(indicator_fields)
                             .columns([
-                                GridLength::Pixel(28.0),
+                                GridLength::Pixel(TRAY_REORDER_BUTTON_SIZE),
                                 GridLength::Star(1.0),
                                 GridLength::Star(1.5),
                                 GridLength::Star(1.0),
-                                GridLength::Pixel(24.0),
+                                GridLength::Pixel(TRAY_REMOVE_BUTTON_SIZE),
                             ])
                             .column_spacing(12.0)
                             .horizontal_alignment(HorizontalAlignment::Stretch),
