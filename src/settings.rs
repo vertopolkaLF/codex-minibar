@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 21;
+pub const SETTINGS_VERSION: u32 = 22;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -346,6 +346,34 @@ impl TotalSpendPresentation {
     }
 }
 
+/// Time range for the Total Spend card on the popup All tab.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TotalSpendPeriod {
+    Today,
+    Yesterday,
+    #[default]
+    ThirtyDays,
+}
+
+impl TotalSpendPeriod {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Today => "Today",
+            Self::Yesterday => "Yesterday",
+            Self::ThirtyDays => "30 Days",
+        }
+    }
+
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Today => "today",
+            Self::Yesterday => "yesterday",
+            Self::ThirtyDays => "30-days",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LimitValue {
@@ -605,6 +633,8 @@ pub struct Settings {
     pub show_total_spend_on_all_tab: bool,
     /// Chooses between the donut and progress-bar spend layouts.
     pub total_spend_presentation: TotalSpendPresentation,
+    /// Last selected Total Spend time range on the All tab.
+    pub total_spend_period: TotalSpendPeriod,
     pub show_account_name: bool,
     pub codex_path: Option<PathBuf>,
     pub tray_widgets: Vec<TrayWidget>,
@@ -634,6 +664,7 @@ impl Default for Settings {
             show_usage_stats: true,
             show_total_spend_on_all_tab: true,
             total_spend_presentation: TotalSpendPresentation::default(),
+            total_spend_period: TotalSpendPeriod::default(),
             show_account_name: false,
             codex_path: None,
             // An empty list intentionally means "show the ordinary app icon".
@@ -659,27 +690,121 @@ impl Settings {
             return Ok(settings);
         }
         let raw = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-        let mut document: toml::Value = toml::from_str(&raw).context("parse settings TOML")?;
+        // A settings file must never prevent the application from starting.
+        // Prefer repairing or dropping broken sections over refusing to boot.
+        let (mut settings, dirty) = match Self::decode_raw(&raw) {
+            Ok((settings, dirty)) => (settings, dirty),
+            Err(error) => {
+                eprintln!(
+                    "settings at {} could not be decoded ({error:#}); recreating usable defaults",
+                    path.display()
+                );
+                let _ = backup_corrupt_settings(path);
+                let mut settings = Self::salvage_raw(&raw).unwrap_or_else(Self::default);
+                settings.version = SETTINGS_VERSION;
+                // An existing install with a broken file should not be forced
+                // back through first-run onboarding.
+                settings.onboarding_completed = true;
+                settings.repair_inplace();
+                let _ = settings.save(path);
+                return Ok(settings);
+            }
+        };
+        let repaired = settings.repair_inplace();
+        let tray_widgets_normalized = settings.normalize_tray_widgets();
+        let popup_order_normalized = settings.normalize_popup_order();
+        if dirty || repaired || tray_widgets_normalized || popup_order_normalized {
+            settings.save(path)?;
+        }
+        Ok(settings)
+    }
+
+    fn decode_raw(raw: &str) -> Result<(Self, bool)> {
+        let mut document: toml::Value = toml::from_str(raw).context("parse settings TOML")?;
         let original_version = document
             .get("version")
             .and_then(toml::Value::as_integer)
             .unwrap_or(0);
-        // A settings file must never prevent the application from starting.
-        // Serde intentionally ignores unknown fields, so a newer file can still
-        // supply every option this build understands. Only migrate older files.
         let original_version = u32::try_from(original_version).unwrap_or(u32::MAX);
+        // Heal legacy tray widget shapes even when `version` already claims to
+        // be current — a stamped version must never leave us unable to decode.
+        let healed_tray = heal_legacy_tray_widgets(&mut document);
+        let mut dirty = healed_tray;
         if original_version < SETTINGS_VERSION {
             migrate(&mut document, original_version)?;
+            dirty = true;
         }
-        let mut settings: Self = document.try_into().context("decode migrated settings")?;
-        settings.validate()?;
-        let tray_widgets_normalized = settings.normalize_tray_widgets();
-        let popup_order_normalized = settings.normalize_popup_order();
-        if original_version < SETTINGS_VERSION || tray_widgets_normalized || popup_order_normalized
-        {
-            settings.save(path)?;
+        match document.clone().try_into::<Self>() {
+            Ok(settings) => Ok((settings, dirty)),
+            Err(error) => {
+                // Drop only the section that failed rather than wiping everything.
+                if let Some(root) = document.as_table_mut() {
+                    root.insert("tray_widgets".into(), toml::Value::Array(Vec::new()));
+                }
+                match document.try_into::<Self>() {
+                    Ok(settings) => {
+                        eprintln!(
+                            "settings tray_widgets were invalid ({error}); resetting that section"
+                        );
+                        Ok((settings, true))
+                    }
+                    Err(retry_error) => Err(retry_error).context("decode migrated settings"),
+                }
+            }
         }
-        Ok(settings)
+    }
+
+    /// Best-effort recovery: keep scalar settings, discard sections that refuse
+    /// to decode. Returns `None` only when the file is not usable TOML at all.
+    fn salvage_raw(raw: &str) -> Option<Self> {
+        let mut document: toml::Value = toml::from_str(raw).ok()?;
+        let Some(root) = document.as_table_mut() else {
+            return None;
+        };
+        root.insert("tray_widgets".into(), toml::Value::Array(Vec::new()));
+        root.insert(
+            "notifications".into(),
+            toml::Value::Table(toml::map::Map::new()),
+        );
+        root.insert(
+            "providers".into(),
+            toml::Value::Table(toml::map::Map::new()),
+        );
+        root.insert("popup_order".into(), toml::Value::Array(Vec::new()));
+        root.insert(
+            "version".into(),
+            toml::Value::Integer(i64::from(SETTINGS_VERSION)),
+        );
+        heal_legacy_tray_widgets(&mut document);
+        document.try_into::<Self>().ok()
+    }
+
+    /// Clamps out-of-range values instead of rejecting the whole file.
+    fn repair_inplace(&mut self) -> bool {
+        let mut changed = false;
+        let retention = self.history_retention_days.clamp(1, 365);
+        if retention != self.history_retention_days {
+            self.history_retention_days = retention;
+            changed = true;
+        }
+        let low = self.notifications.low_usage_threshold_percent.clamp(1, 99);
+        if low != self.notifications.low_usage_threshold_percent {
+            self.notifications.low_usage_threshold_percent = low;
+            changed = true;
+        }
+        let weekly = self
+            .notifications
+            .weekly_low_usage_threshold_percent
+            .clamp(1, 99);
+        if weekly != self.notifications.weekly_low_usage_threshold_percent {
+            self.notifications.weekly_low_usage_threshold_percent = weekly;
+            changed = true;
+        }
+        if self.version < SETTINGS_VERSION {
+            self.version = SETTINGS_VERSION;
+            changed = true;
+        }
+        changed
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
@@ -996,6 +1121,128 @@ fn apply_startup_registration(enabled: bool) -> Result<()> {
 #[cfg(not(windows))]
 fn apply_startup_registration(_enabled: bool) -> Result<()> {
     Ok(())
+}
+
+fn backup_corrupt_settings(path: &Path) -> Result<()> {
+    let backup = path.with_extension("toml.corrupt");
+    fs::copy(path, &backup)
+        .with_context(|| format!("backup corrupt settings to {}", backup.display()))?;
+    Ok(())
+}
+
+/// Converts leftover pre-indicator tray widget tables into the current shape.
+/// Safe to run on every load: modern widgets (with `indicators`) are left alone.
+fn heal_legacy_tray_widgets(document: &mut toml::Value) -> bool {
+    let Some(root) = document.as_table_mut() else {
+        return false;
+    };
+    let Some(toml::Value::Array(widgets)) = root.get_mut("tray_widgets") else {
+        return false;
+    };
+    let mut changed = false;
+    let mut healed = Vec::with_capacity(widgets.len());
+    for (index, value) in widgets.iter_mut().enumerate() {
+        let Some(widget) = value.as_table_mut() else {
+            changed = true;
+            continue;
+        };
+        let looks_legacy = (widget.contains_key("provider")
+            || widget.contains_key("source")
+            || widget.contains_key("metric")
+            || widget.contains_key("limit_value"))
+            && !widget.contains_key("indicators");
+        if looks_legacy {
+            convert_legacy_tray_widget(widget, index);
+            changed = true;
+        } else if widget.contains_key("source") {
+            // Current schema has no widget-level `source`; drop leftovers so a
+            // downgrade/upgrade ping-pong cannot keep confusing decoders.
+            widget.remove("source");
+            widget.remove("provider");
+            widget.remove("limit_value");
+            widget.remove("metric");
+            changed = true;
+        }
+        healed.push(value.clone());
+    }
+    if changed {
+        *widgets = healed;
+    }
+    changed
+}
+
+fn convert_legacy_tray_widget(widget: &mut toml::map::Map<String, toml::Value>, index: usize) {
+    let provider = widget
+        .remove("provider")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "codex".into());
+    let source = widget
+        .remove("source")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "combined".into());
+    let limit_value = widget
+        .remove("limit_value")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "remaining".into());
+    let color_mode = widget
+        .remove("color_mode")
+        .unwrap_or_else(|| toml::Value::String("status".into()));
+    let fixed_color = widget.remove("fixed_color");
+    widget.remove("metric");
+    let primary = match provider.as_str() {
+        "claude" => "claude.session",
+        "cursor" => "cursor.auto",
+        _ => "codex.session",
+    };
+    let secondary = match provider.as_str() {
+        "claude" => "claude.weekly",
+        "cursor" => "cursor.auto",
+        _ => "codex.weekly",
+    };
+    let metric_ids: Vec<&str> = match source.as_str() {
+        "primary" | "primary_reset" => vec![primary],
+        "secondary" => vec![secondary],
+        _ if primary == secondary => vec![primary],
+        _ => vec![primary, secondary],
+    };
+    let indicators = metric_ids
+        .into_iter()
+        .map(|metric_id| {
+            let mut indicator = toml::map::Map::new();
+            indicator.insert("provider".into(), toml::Value::String(provider.clone()));
+            indicator.insert(
+                "metric_id".into(),
+                toml::Value::String(metric_id.into()),
+            );
+            indicator.insert(
+                "limit_value".into(),
+                toml::Value::String(limit_value.clone()),
+            );
+            indicator.insert("color_mode".into(), color_mode.clone());
+            if let Some(fixed_color) = fixed_color.clone() {
+                indicator.insert("fixed_color".into(), fixed_color);
+            }
+            toml::Value::Table(indicator)
+        })
+        .collect();
+    widget
+        .entry("id")
+        .or_insert_with(|| toml::Value::String(format!("legacy-tray-{index}")));
+    widget
+        .entry("kind")
+        .or_insert_with(|| toml::Value::String("limits".into()));
+    widget.insert("indicators".into(), toml::Value::Array(indicators));
+    if !widget.contains_key("presentation") {
+        let presentation = match source.as_str() {
+            "primary_reset" => "reset_time",
+            "primary" | "secondary" => "number",
+            _ => "stacked_numbers",
+        };
+        widget.insert(
+            "presentation".into(),
+            toml::Value::String(presentation.into()),
+        );
+    }
 }
 
 fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
@@ -1326,60 +1573,10 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                         let Some(widget) = value.as_table_mut() else {
                             continue;
                         };
-                        let provider = widget
-                            .remove("provider")
-                            .and_then(|value| value.as_str().map(str::to_owned))
-                            .unwrap_or_else(|| "codex".into());
-                        let source = widget
-                            .remove("source")
-                            .and_then(|value| value.as_str().map(str::to_owned))
-                            .unwrap_or_else(|| "combined".into());
-                        let limit_value = widget
-                            .remove("limit_value")
-                            .and_then(|value| value.as_str().map(str::to_owned))
-                            .unwrap_or_else(|| "remaining".into());
-                        let primary = match provider.as_str() {
-                            "claude" => "claude.session",
-                            "cursor" => "cursor.auto",
-                            _ => "codex.session",
-                        };
-                        let secondary = match provider.as_str() {
-                            "claude" => "claude.weekly",
-                            "cursor" => "cursor.auto",
-                            _ => "codex.weekly",
-                        };
-                        let metric_ids: Vec<&str> = match source.as_str() {
-                            "primary" | "primary_reset" => vec![primary],
-                            "secondary" => vec![secondary],
-                            _ if primary == secondary => vec![primary],
-                            _ => vec![primary, secondary],
-                        };
-                        let indicators = metric_ids
-                            .into_iter()
-                            .map(|metric_id| {
-                                let mut indicator = toml::map::Map::new();
-                                indicator.insert(
-                                    "provider".into(),
-                                    toml::Value::String(provider.clone()),
-                                );
-                                indicator.insert(
-                                    "metric_id".into(),
-                                    toml::Value::String(metric_id.into()),
-                                );
-                                indicator.insert(
-                                    "limit_value".into(),
-                                    toml::Value::String(limit_value.clone()),
-                                );
-                                toml::Value::Table(indicator)
-                            })
-                            .collect();
-                        widget.insert(
-                            "id".into(),
-                            toml::Value::String(format!("legacy-tray-{index}")),
-                        );
-                        widget.insert("kind".into(), toml::Value::String("limits".into()));
-                        widget.insert("indicators".into(), toml::Value::Array(indicators));
-                        widget.insert("color_mode".into(), toml::Value::String("status".into()));
+                        if widget.contains_key("indicators") {
+                            continue;
+                        }
+                        convert_legacy_tray_widget(widget, index);
                     }
                 }
                 root.insert("version".into(), toml::Value::Integer(20));
@@ -1418,7 +1615,31 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.insert("version".into(), toml::Value::Integer(21));
                 version = 21;
             }
-            unsupported => anyhow::bail!("no migration path from settings version {unsupported}"),
+            21 => {
+                // Preserve the historical Thirty Days default for existing installs.
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .entry("total_spend_period")
+                    .or_insert(toml::Value::String("thirty_days".into()));
+                document
+                    .as_table_mut()
+                    .expect("settings root was checked above")
+                    .insert("version".into(), toml::Value::Integer(22));
+                version = 22;
+            }
+            // Unknown future/gap versions: stamp current and keep decoding with
+            // serde defaults rather than refusing to start.
+            _ => {
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .insert(
+                        "version".into(),
+                        toml::Value::Integer(i64::from(SETTINGS_VERSION)),
+                    );
+                version = SETTINGS_VERSION;
+            }
         }
     }
     Ok(())
@@ -1450,6 +1671,7 @@ mod tests {
             value.total_spend_presentation,
             TotalSpendPresentation::Donut
         );
+        assert_eq!(value.total_spend_period, TotalSpendPeriod::ThirtyDays);
         assert_eq!(value.history_retention_days, 30);
         assert!(value.tray_widgets.is_empty());
         assert_eq!(value.popup_order, PopupWidgetKind::default_order());
@@ -1502,6 +1724,7 @@ tray_widgets = []
             migrated.total_spend_presentation,
             TotalSpendPresentation::Donut
         );
+        assert_eq!(migrated.total_spend_period, TotalSpendPeriod::ThirtyDays);
         assert_eq!(migrated.history_retention_days, 30);
         assert!(
             fs::read_to_string(path)
@@ -1766,5 +1989,68 @@ tray_widgets = [
             loaded.tray_widgets[0].indicators[1].color_mode,
             TrayColorMode::Provider
         );
+    }
+
+    #[test]
+    fn loads_current_version_with_legacy_tray_widgets_missing_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(
+            &path,
+            r#"version = 21
+start_at_login = false
+tray_widgets = [{ provider = "claude", presentation = "stacked_numbers", limit_value = "used" }]
+
+[providers]
+enabled = ["claude"]
+"#,
+        )
+        .unwrap();
+
+        let loaded = Settings::load_or_create(&path).unwrap();
+        assert!(!loaded.start_at_login);
+        assert_eq!(loaded.tray_widgets.len(), 1);
+        assert_eq!(
+            loaded.tray_widgets[0].indicators[0].metric_id,
+            "claude.session"
+        );
+        assert_eq!(
+            loaded.tray_widgets[0].indicators[0].limit_value,
+            LimitValue::Used
+        );
+    }
+
+    #[test]
+    fn resets_invalid_tray_widgets_without_failing_startup() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(
+            &path,
+            r#"version = 21
+start_at_login = false
+tray_widgets = ["completely-wrong"]
+
+[providers]
+enabled = ["codex"]
+"#,
+        )
+        .unwrap();
+
+        let loaded = Settings::load_or_create(&path).unwrap();
+        assert!(!loaded.start_at_login);
+        assert!(loaded.tray_widgets.is_empty());
+        assert!(loaded.providers.is_enabled(ProviderKind::Codex));
+    }
+
+    #[test]
+    fn recreates_defaults_for_unparseable_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(&path, "this is not { valid toml").unwrap();
+
+        let loaded = Settings::load_or_create(&path).unwrap();
+        assert_eq!(loaded.version, SETTINGS_VERSION);
+        assert!(loaded.onboarding_completed);
+        assert!(path.with_extension("toml.corrupt").exists());
     }
 }

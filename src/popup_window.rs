@@ -19,7 +19,7 @@ use crate::{
     popup,
     settings::{
         AccentColor, AppTheme, NotificationSettings, PopupWidgetKind, ProviderKind, Settings,
-        TotalSpendPresentation, TrayWidget,
+        TotalSpendPeriod, TotalSpendPresentation, TrayWidget,
     },
     settings_controls::update_accent_button,
     tray::{TrayManager, TrayMenuAction},
@@ -217,6 +217,7 @@ struct UiState {
     show_usage_stats: bool,
     show_total_spend_on_all_tab: bool,
     total_spend_presentation: TotalSpendPresentation,
+    total_spend_period: TotalSpendPeriod,
     show_account_name: bool,
     codex_enabled: bool,
     claude_enabled: bool,
@@ -285,6 +286,7 @@ impl Default for UiState {
             show_usage_stats: true,
             show_total_spend_on_all_tab: true,
             total_spend_presentation: TotalSpendPresentation::default(),
+            total_spend_period: TotalSpendPeriod::default(),
             show_account_name: false,
             codex_enabled: true,
             claude_enabled: false,
@@ -527,33 +529,6 @@ fn reduce_pager(mut state: PagerState, action: PagerAction) -> PagerState {
     }
 }
 
-/// Ephemeral time range for the compact spend card on the All tab.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum CombinedUsagePeriod {
-    Today,
-    Yesterday,
-    #[default]
-    ThirtyDays,
-}
-
-impl CombinedUsagePeriod {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Today => "Today",
-            Self::Yesterday => "Yesterday",
-            Self::ThirtyDays => "30 Days",
-        }
-    }
-
-    const fn key(self) -> &'static str {
-        match self {
-            Self::Today => "today",
-            Self::Yesterday => "yesterday",
-            Self::ThirtyDays => "30-days",
-        }
-    }
-}
-
 /// Semantic identity for each independently reconciled popup section.
 ///
 /// Keeping these identities separate from their position prevents the WinUI
@@ -631,6 +606,22 @@ fn persist_popup_order(
     crate::settings_window::persist_update(settings_tx, move |settings| {
         settings.popup_order = next_order;
         settings.normalize_popup_order();
+    });
+}
+
+fn persist_total_spend_period(
+    settings_tx: Sender<Settings>,
+    set_ui: AsyncSetState<UiState>,
+    mut ui: UiState,
+    period: TotalSpendPeriod,
+) {
+    if ui.total_spend_period == period {
+        return;
+    }
+    ui.total_spend_period = period;
+    set_ui.call(ui);
+    crate::settings_window::persist_update(settings_tx, move |settings| {
+        settings.total_spend_period = period;
     });
 }
 
@@ -1019,6 +1010,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         show_banked_resets: state.settings.show_banked_resets,
         show_usage_stats: state.settings.show_usage_stats,
         show_total_spend_on_all_tab: state.settings.show_total_spend_on_all_tab,
+        total_spend_presentation: state.settings.total_spend_presentation,
+        total_spend_period: state.settings.total_spend_period,
         show_account_name: state.settings.show_account_name,
         codex_enabled: state.settings.providers.is_enabled(ProviderKind::Codex),
         claude_enabled: state.settings.providers.is_enabled(ProviderKind::Claude),
@@ -1048,10 +1041,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let (hovered_action, set_hovered_action) = cx.use_state(Option::<String>::None);
     let (widget_drag, set_widget_drag) = cx.use_state(None::<WidgetDragState>);
     let (pager, pager_dispatch) = cx.use_reducer_fn(reduce_pager, PagerState::default());
-    let (combined_usage_period, set_combined_usage_period) =
-        cx.use_state(CombinedUsagePeriod::default());
     let (hovered_combined_usage_period, set_hovered_combined_usage_period) =
-        cx.use_state(None::<CombinedUsagePeriod>);
+        cx.use_state(None::<TotalSpendPeriod>);
     // Relative timestamps need a render tick even while the popup receives no
     // input or provider event. This changes only the elapsed-time label; it
     // never requests fresh limits.
@@ -1216,33 +1207,48 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             for (index, widget) in widgets.into_iter().enumerate() {
                 let is_first = index == 0 && !has_preceding_section;
                 let section = match widget {
-                    PopupWidgetKind::TotalSpend => combined_usage_card(
-                        &limits,
-                        is_first,
-                        ui.codex_enabled,
-                        ui.claude_enabled,
-                        ui.cursor_enabled,
-                        combined_usage_period,
-                        set_combined_usage_period.clone(),
-                        hovered_combined_usage_period,
-                        set_hovered_combined_usage_period.clone(),
-                        color_scheme,
-                        ui.total_spend_presentation,
-                        can_reorder_widgets.then(|| {
-                            drag_handle(
-                                PopupWidgetKind::TotalSpend,
-                                color_scheme,
-                                &widget_drag,
-                                set_widget_drag.clone(),
-                            )
-                        }),
-                    )
-                    .with_key(format!(
-                        "all-combined-usage-{}-{:?}-{}",
-                        combined_usage_period.key(),
-                        ui.total_spend_presentation,
-                        if is_first { "first" } else { "rest" }
-                    )),
+                    PopupWidgetKind::TotalSpend => {
+                        let on_period = {
+                            let settings_tx = settings_tx.clone();
+                            let set_ui = set_ui.clone();
+                            let ui = ui.clone();
+                            move |period| {
+                                persist_total_spend_period(
+                                    settings_tx.clone(),
+                                    set_ui.clone(),
+                                    ui.clone(),
+                                    period,
+                                );
+                            }
+                        };
+                        combined_usage_card(
+                            &limits,
+                            is_first,
+                            ui.codex_enabled,
+                            ui.claude_enabled,
+                            ui.cursor_enabled,
+                            ui.total_spend_period,
+                            on_period,
+                            hovered_combined_usage_period,
+                            set_hovered_combined_usage_period.clone(),
+                            color_scheme,
+                            ui.total_spend_presentation,
+                            can_reorder_widgets.then(|| {
+                                drag_handle(
+                                    PopupWidgetKind::TotalSpend,
+                                    color_scheme,
+                                    &widget_drag,
+                                    set_widget_drag.clone(),
+                                )
+                            }),
+                        )
+                        .with_key(format!(
+                            "all-combined-usage-{}-{:?}-{}",
+                            ui.total_spend_period.key(),
+                            ui.total_spend_presentation,
+                            if is_first { "first" } else { "rest" }
+                        ))
+                    }
                     provider_widget => {
                         let provider = provider_widget.as_provider().expect("provider widget");
                         let limits_for_provider = limits.get(provider);
@@ -1568,7 +1574,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                       to_x: f32,
                       measure_height: bool| {
         let body_layout_key = format!(
-            "popup-page-{role}-{}-{}-{:?}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{:?}-{:?}",
+            "popup-page-{role}-{}-{}-{:?}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
             pager.animation_id,
             ui.limits_revision,
             ui.error,
@@ -1576,6 +1582,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             ui.show_usage_stats,
             ui.show_total_spend_on_all_tab,
             ui.total_spend_presentation,
+            ui.total_spend_period.key(),
             ui.show_account_name,
             ui.codex_enabled,
             ui.claude_enabled,
@@ -2042,6 +2049,7 @@ fn start_background_bridge(
             show_usage_stats: state.settings.show_usage_stats,
             show_total_spend_on_all_tab: state.settings.show_total_spend_on_all_tab,
             total_spend_presentation: state.settings.total_spend_presentation,
+            total_spend_period: state.settings.total_spend_period,
             show_account_name: state.settings.show_account_name,
             codex_enabled: state.settings.providers.is_enabled(ProviderKind::Codex),
             claude_enabled: state.settings.providers.is_enabled(ProviderKind::Claude),
@@ -2091,6 +2099,7 @@ fn start_background_bridge(
             ui.show_usage_stats = settings.show_usage_stats;
             ui.show_total_spend_on_all_tab = settings.show_total_spend_on_all_tab;
             ui.total_spend_presentation = settings.total_spend_presentation;
+            ui.total_spend_period = settings.total_spend_period;
             ui.show_account_name = settings.show_account_name;
             ui.codex_enabled = settings.providers.is_enabled(ProviderKind::Codex);
             ui.claude_enabled = settings.providers.is_enabled(ProviderKind::Claude);
@@ -3054,10 +3063,10 @@ fn combined_usage_card(
     codex_enabled: bool,
     claude_enabled: bool,
     cursor_enabled: bool,
-    period: CombinedUsagePeriod,
-    set_period: SetState<CombinedUsagePeriod>,
-    hovered_period: Option<CombinedUsagePeriod>,
-    set_hovered_period: SetState<Option<CombinedUsagePeriod>>,
+    period: TotalSpendPeriod,
+    on_period: impl Fn(TotalSpendPeriod) + Clone + 'static,
+    hovered_period: Option<TotalSpendPeriod>,
+    set_hovered_period: SetState<Option<TotalSpendPeriod>>,
     color_scheme: ColorScheme,
     presentation: TotalSpendPresentation,
     drag_handle: Option<Element>,
@@ -3093,7 +3102,7 @@ fn combined_usage_card(
     };
 
     let mut title_trailing_items: Vec<Element> = vec![
-        combined_usage_period_selector(period, set_period, hovered_period, set_hovered_period)
+        combined_usage_period_selector(period, on_period, hovered_period, set_hovered_period)
             .into(),
     ];
     if let Some(handle) = drag_handle {
@@ -3139,7 +3148,7 @@ fn combined_usage_card(
 fn combined_usage_donut_content(
     entries: &[(ProviderKind, u64)],
     total_spend: u64,
-    period: CombinedUsagePeriod,
+    period: TotalSpendPeriod,
     color_scheme: ColorScheme,
 ) -> Element {
     let provider_totals = vstack(
@@ -3224,30 +3233,30 @@ fn combined_usage_progress_bar(
 
 fn combined_usage_spend(
     statistics: &crate::usage::UsageStatistics,
-    period: CombinedUsagePeriod,
+    period: TotalSpendPeriod,
 ) -> u64 {
     match period {
-        CombinedUsagePeriod::Today => statistics.today.estimated_cost_microusd,
-        CombinedUsagePeriod::Yesterday => statistics
+        TotalSpendPeriod::Today => statistics.today.estimated_cost_microusd,
+        TotalSpendPeriod::Yesterday => statistics
             .daily
             .iter()
             .find(|entry| entry.date == Local::now().date_naive() - ChronoDuration::days(1))
             .map(|entry| entry.usage.estimated_cost_microusd)
             .unwrap_or_default(),
-        CombinedUsagePeriod::ThirtyDays => statistics.history.estimated_cost_microusd,
+        TotalSpendPeriod::ThirtyDays => statistics.history.estimated_cost_microusd,
     }
 }
 
 fn combined_usage_period_selector(
-    selected: CombinedUsagePeriod,
-    set_selected: SetState<CombinedUsagePeriod>,
-    hovered: Option<CombinedUsagePeriod>,
-    set_hovered: SetState<Option<CombinedUsagePeriod>>,
+    selected: TotalSpendPeriod,
+    on_select: impl Fn(TotalSpendPeriod) + Clone + 'static,
+    hovered: Option<TotalSpendPeriod>,
+    set_hovered: SetState<Option<TotalSpendPeriod>>,
 ) -> Element {
     let buttons: Vec<Element> = [
-        CombinedUsagePeriod::Today,
-        CombinedUsagePeriod::Yesterday,
-        CombinedUsagePeriod::ThirtyDays,
+        TotalSpendPeriod::Today,
+        TotalSpendPeriod::Yesterday,
+        TotalSpendPeriod::ThirtyDays,
     ]
     .into_iter()
     .map(|period| {
@@ -3255,7 +3264,7 @@ fn combined_usage_period_selector(
             period,
             selected,
             hovered == Some(period),
-            set_selected.clone(),
+            on_select.clone(),
             set_hovered.clone(),
         )
     })
@@ -3264,11 +3273,11 @@ fn combined_usage_period_selector(
 }
 
 fn combined_usage_period_button(
-    period: CombinedUsagePeriod,
-    selected: CombinedUsagePeriod,
+    period: TotalSpendPeriod,
+    selected: TotalSpendPeriod,
     hovered: bool,
-    set_selected: SetState<CombinedUsagePeriod>,
-    set_hovered: SetState<Option<CombinedUsagePeriod>>,
+    on_select: impl Fn(TotalSpendPeriod) + Clone + 'static,
+    set_hovered: SetState<Option<TotalSpendPeriod>>,
 ) -> Element {
     let is_selected = period == selected;
     let set_hovered_on_enter = set_hovered.clone();
@@ -3302,7 +3311,7 @@ fn combined_usage_period_button(
             set_hovered_on_enter.call(Some(period));
         })
         .on_pointer_exited(move || set_hovered_on_exit.call(None))
-        .on_tapped(move || set_selected.call(period))
+        .on_tapped(move || on_select(period))
         .with_key(format!("combined-period-{}-{is_selected}", period.key()))
         .into()
 }
@@ -3312,7 +3321,7 @@ fn combined_usage_period_button(
 fn combined_usage_donut(
     entries: &[(ProviderKind, u64)],
     total_spend: u64,
-    period: CombinedUsagePeriod,
+    period: TotalSpendPeriod,
     color_scheme: ColorScheme,
 ) -> Element {
     const SIZE: f64 = 124.0;
@@ -3760,15 +3769,15 @@ mod tests {
         });
 
         assert_eq!(
-            combined_usage_spend(&statistics, CombinedUsagePeriod::Today),
+            combined_usage_spend(&statistics, TotalSpendPeriod::Today),
             1_250_000
         );
         assert_eq!(
-            combined_usage_spend(&statistics, CombinedUsagePeriod::Yesterday),
+            combined_usage_spend(&statistics, TotalSpendPeriod::Yesterday),
             2_500_000
         );
         assert_eq!(
-            combined_usage_spend(&statistics, CombinedUsagePeriod::ThirtyDays),
+            combined_usage_spend(&statistics, TotalSpendPeriod::ThirtyDays),
             9_750_000
         );
         assert_eq!(format_spend(1_250_000), "$1.25");
