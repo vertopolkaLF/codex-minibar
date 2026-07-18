@@ -113,6 +113,52 @@ pub fn install_spend_donut_into(mount: windows_core::IInspectable, xaml: &str) -
     install_into_inner(mount, xaml)
 }
 
+/// Host the exact 32x32 RGBA output used by the native tray icon renderer.
+/// Adjacent same-color pixels are emitted as horizontal runs, keeping the XAML
+/// tree compact while preserving nearest-neighbour pixel edges in the preview.
+pub fn install_tray_pixels_into(mount: windows_core::IInspectable, pixels: &[u8]) -> Result<()> {
+    const SIZE: usize = 32;
+    if pixels.len() != SIZE * SIZE * 4 {
+        return Err(windows_core::Error::new(
+            windows_core::HRESULT(0x80070057u32 as i32),
+            "tray preview must contain exactly 32x32 RGBA pixels",
+        ));
+    }
+    let mut rectangles = String::new();
+    for y in 0..SIZE {
+        let mut x = 0usize;
+        while x < SIZE {
+            let offset = (y * SIZE + x) * 4;
+            let color = &pixels[offset..offset + 4];
+            if color[3] == 0 {
+                x += 1;
+                continue;
+            }
+            let mut end = x + 1;
+            while end < SIZE {
+                let next = (y * SIZE + end) * 4;
+                if &pixels[next..next + 4] != color {
+                    break;
+                }
+                end += 1;
+            }
+            rectangles.push_str(&format!(
+                r##"<Rectangle Canvas.Left="{x}" Canvas.Top="{y}" Width="{}" Height="1" Fill="#{:02X}{:02X}{:02X}{:02X}" />"##,
+                end - x,
+                color[3],
+                color[0],
+                color[1],
+                color[2],
+            ));
+            x = end;
+        }
+    }
+    let xaml = format!(
+        r#"<Viewbox xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Stretch="Uniform"><Canvas Width="32" Height="32">{rectangles}</Canvas></Viewbox>"#
+    );
+    install_into_inner(mount, &xaml)
+}
+
 /// Host a GitHub SVG path whose color follows the current Windows accent.
 pub fn install_accent_github_icon_into(mount: windows_core::IInspectable) -> Result<()> {
     install_into_inner(mount, accent_github_xaml())

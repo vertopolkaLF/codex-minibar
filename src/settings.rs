@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 19;
+pub const SETTINGS_VERSION: u32 = 21;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -146,48 +146,51 @@ pub enum ProviderKind {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProviderSettings {
-    pub codex_enabled: bool,
-    pub claude_enabled: bool,
-    pub cursor_enabled: bool,
+    /// Enabled providers in the user's preferred popup/tab order.
+    pub enabled: Vec<String>,
 }
 
 impl Default for ProviderSettings {
     fn default() -> Self {
         Self {
-            // A new installation chooses providers during onboarding. Existing
-            // settings files are migrated with their established choices.
-            codex_enabled: false,
-            claude_enabled: false,
-            cursor_enabled: false,
+            // A new installation chooses providers during onboarding.
+            enabled: Vec::new(),
         }
     }
 }
 
 impl ProviderSettings {
-    pub const fn is_enabled(&self, provider: ProviderKind) -> bool {
-        match provider {
-            ProviderKind::Codex => self.codex_enabled,
-            ProviderKind::Claude => self.claude_enabled,
-            ProviderKind::Cursor => self.cursor_enabled,
-        }
+    pub fn is_enabled(&self, provider: ProviderKind) -> bool {
+        self.enabled.iter().any(|id| id == provider.id())
     }
 
     pub fn set_enabled(&mut self, provider: ProviderKind, enabled: bool) {
-        match provider {
-            ProviderKind::Codex => self.codex_enabled = enabled,
-            ProviderKind::Claude => self.claude_enabled = enabled,
-            ProviderKind::Cursor => self.cursor_enabled = enabled,
+        if enabled {
+            if !self.is_enabled(provider) {
+                self.enabled.push(provider.id().into());
+            }
+        } else {
+            self.enabled.retain(|id| id != provider.id());
         }
     }
 
     /// Returns the provider only when there is exactly one usable choice.
-    pub const fn single_enabled_provider(&self) -> Option<ProviderKind> {
-        match (self.codex_enabled, self.claude_enabled, self.cursor_enabled) {
-            (true, false, false) => Some(ProviderKind::Codex),
-            (false, true, false) => Some(ProviderKind::Claude),
-            (false, false, true) => Some(ProviderKind::Cursor),
-            _ => None,
+    pub fn single_enabled_provider(&self) -> Option<ProviderKind> {
+        if self.enabled.len() == 1 {
+            self.enabled
+                .first()
+                .and_then(|id| ProviderKind::from_id(id))
+        } else {
+            None
         }
+    }
+
+    pub fn from_enabled(enabled: impl IntoIterator<Item = ProviderKind>) -> Self {
+        let mut settings = Self::default();
+        for provider in enabled {
+            settings.set_enabled(provider, true);
+        }
+        settings
     }
 }
 
@@ -199,6 +202,15 @@ impl ProviderKind {
             Self::Codex => "codex",
             Self::Claude => "claude",
             Self::Cursor => "cursor",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "codex" => Some(Self::Codex),
+            "claude" => Some(Self::Claude),
+            "cursor" => Some(Self::Cursor),
+            _ => None,
         }
     }
 
@@ -268,7 +280,7 @@ pub enum TraySource {
     PrimaryReset,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrayPresentation {
     StackedNumbers,
@@ -279,6 +291,33 @@ pub enum TrayPresentation {
     Ring,
     ResetTime,
     ResetCountdown,
+}
+
+impl TrayPresentation {
+    pub const fn is_percentage(self) -> bool {
+        matches!(
+            self,
+            Self::StackedNumbers
+                | Self::StackedBars
+                | Self::NestedRings
+                | Self::Number
+                | Self::Bar
+                | Self::Ring
+        )
+    }
+
+    pub const fn canonical_percentage(self) -> Self {
+        match self {
+            Self::StackedNumbers | Self::Number => Self::StackedNumbers,
+            Self::StackedBars | Self::Bar => Self::StackedBars,
+            Self::NestedRings | Self::Ring => Self::NestedRings,
+            other => other,
+        }
+    }
+
+    pub const fn is_reset_clock(self) -> bool {
+        matches!(self, Self::ResetTime | Self::ResetCountdown)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -315,28 +354,186 @@ pub enum LimitValue {
     Used,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrayWidgetKind {
+    #[default]
+    Limits,
+    AppIcon,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrayColorMode {
+    #[default]
+    Status,
+    Fixed,
+    Provider,
+    Accent,
+    Monochrome,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrayFixedColor {
+    pub red: u8,
+    pub green: u8,
+    pub blue: u8,
+}
+
+impl Default for TrayFixedColor {
+    fn default() -> Self {
+        Self {
+            red: 0,
+            green: 120,
+            blue: 212,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TrayWidget {
-    #[serde(default)]
-    pub provider: ProviderKind,
-    pub source: TraySource,
-    pub presentation: TrayPresentation,
+pub struct TrayIndicator {
+    #[serde(rename = "provider")]
+    pub provider_id: String,
+    pub metric_id: String,
     #[serde(default)]
     pub limit_value: LimitValue,
+    #[serde(default)]
+    pub color_mode: TrayColorMode,
+    #[serde(default)]
+    pub fixed_color: TrayFixedColor,
+}
+
+impl TrayIndicator {
+    pub fn new(provider: ProviderKind, metric_id: impl Into<String>) -> Self {
+        Self {
+            provider_id: provider.id().into(),
+            metric_id: metric_id.into(),
+            limit_value: LimitValue::Remaining,
+            color_mode: TrayColorMode::Status,
+            fixed_color: TrayFixedColor::default(),
+        }
+    }
+
+    pub fn provider(&self) -> Option<ProviderKind> {
+        ProviderKind::from_id(&self.provider_id)
+    }
+}
+
+fn new_tray_widget_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let sequence = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    format!("tray-{timestamp:x}-{sequence:x}")
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrayWidget {
+    #[serde(default = "new_tray_widget_id")]
+    pub id: String,
+    #[serde(default)]
+    pub kind: TrayWidgetKind,
+    #[serde(default)]
+    pub indicators: Vec<TrayIndicator>,
+    #[serde(default = "default_tray_presentation")]
+    pub presentation: TrayPresentation,
+}
+
+fn default_tray_presentation() -> TrayPresentation {
+    TrayPresentation::StackedNumbers
 }
 
 impl TrayWidget {
     pub fn default_user_widget() -> Self {
+        Self::for_provider(ProviderKind::Codex)
+    }
+
+    pub fn for_provider(provider: ProviderKind) -> Self {
+        let descriptor = crate::provider_registry::descriptor(provider);
         Self {
-            provider: ProviderKind::Codex,
-            source: TraySource::Combined,
+            id: new_tray_widget_id(),
+            kind: TrayWidgetKind::Limits,
+            indicators: descriptor
+                .default_tray_metrics
+                .iter()
+                .take(3)
+                .map(|metric| TrayIndicator::new(provider, *metric))
+                .collect(),
             presentation: TrayPresentation::StackedNumbers,
-            limit_value: LimitValue::Remaining,
         }
     }
 
-    pub fn uses_limit_value(&self) -> bool {
-        !matches!(self.source, TraySource::PrimaryReset)
+    pub fn custom_for_provider(provider: ProviderKind) -> Self {
+        let descriptor = crate::provider_registry::descriptor(provider);
+        let metric = descriptor
+            .default_tray_metrics
+            .first()
+            .copied()
+            .or_else(|| descriptor.metrics.first().map(|metric| metric.id))
+            .unwrap_or("unknown");
+        Self {
+            id: new_tray_widget_id(),
+            kind: TrayWidgetKind::Limits,
+            indicators: vec![TrayIndicator::new(provider, metric)],
+            presentation: TrayPresentation::StackedNumbers,
+        }
+    }
+
+    pub fn app_icon() -> Self {
+        Self {
+            id: new_tray_widget_id(),
+            kind: TrayWidgetKind::AppIcon,
+            indicators: Vec::new(),
+            presentation: TrayPresentation::StackedNumbers,
+        }
+    }
+
+    pub fn duplicate_with_new_id(&self) -> Self {
+        let mut copy = self.clone();
+        copy.id = new_tray_widget_id();
+        copy
+    }
+
+    pub fn is_app_icon(&self) -> bool {
+        self.kind == TrayWidgetKind::AppIcon
+    }
+
+    pub fn is_visible_for(&self, providers: &ProviderSettings) -> bool {
+        self.is_app_icon()
+            || self.indicators.iter().any(|indicator| {
+                indicator
+                    .provider()
+                    .is_some_and(|provider| providers.is_enabled(provider))
+            })
+    }
+
+    pub fn normalize(&mut self) -> bool {
+        let mut changed = false;
+        if self.id.is_empty() {
+            self.id = new_tray_widget_id();
+            changed = true;
+        }
+        if self.kind == TrayWidgetKind::AppIcon {
+            if !self.indicators.is_empty() {
+                self.indicators.clear();
+                changed = true;
+            }
+            return changed;
+        }
+        if self.indicators.len() > 3 {
+            self.indicators.truncate(3);
+            changed = true;
+        }
+        if self.presentation.is_reset_clock() && self.indicators.len() > 1 {
+            self.indicators.truncate(1);
+            changed = true;
+        }
+        changed
     }
 }
 
@@ -476,7 +673,7 @@ impl Settings {
         }
         let mut settings: Self = document.try_into().context("decode migrated settings")?;
         settings.validate()?;
-        let tray_widgets_normalized = settings.normalize_tray_widget_providers();
+        let tray_widgets_normalized = settings.normalize_tray_widgets();
         let popup_order_normalized = settings.normalize_popup_order();
         if original_version < SETTINGS_VERSION || tray_widgets_normalized || popup_order_normalized
         {
@@ -651,18 +848,16 @@ impl Settings {
         true
     }
 
-    /// A tray widget cannot meaningfully target a disabled provider. When the
-    /// enabled set has a single member, that member is the widget's provider.
-    /// This keeps settings files and every live surface in agreement.
-    pub fn normalize_tray_widget_providers(&mut self) -> bool {
-        let Some(provider) = self.providers.single_enabled_provider() else {
-            return false;
-        };
-
+    /// Keeps persisted widget identities and cardinality valid without
+    /// rewriting disabled or temporarily unavailable provider references.
+    pub fn normalize_tray_widgets(&mut self) -> bool {
         let mut changed = false;
+        let mut ids = std::collections::HashSet::new();
         for widget in &mut self.tray_widgets {
-            if widget.provider != provider {
-                widget.provider = provider;
+            changed |= widget.normalize();
+            if !ids.insert(widget.id.clone()) {
+                widget.id = new_tray_widget_id();
+                ids.insert(widget.id.clone());
                 changed = true;
             }
         }
@@ -1083,6 +1278,146 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.insert("version".into(), toml::Value::Integer(19));
                 version = 19;
             }
+            19 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                let provider_flags = root
+                    .get("providers")
+                    .and_then(toml::Value::as_table)
+                    .cloned()
+                    .unwrap_or_default();
+                let popup_order = root
+                    .get("popup_order")
+                    .and_then(toml::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut enabled = Vec::new();
+                for value in popup_order {
+                    let Some(id) = value.as_str() else {
+                        continue;
+                    };
+                    let flag = format!("{id}_enabled");
+                    if provider_flags
+                        .get(&flag)
+                        .and_then(toml::Value::as_bool)
+                        .unwrap_or(false)
+                    {
+                        enabled.push(toml::Value::String(id.into()));
+                    }
+                }
+                for provider in ProviderKind::ALL {
+                    let id = provider.id();
+                    let flag = format!("{id}_enabled");
+                    if provider_flags
+                        .get(&flag)
+                        .and_then(toml::Value::as_bool)
+                        .unwrap_or(false)
+                        && !enabled.iter().any(|value| value.as_str() == Some(id))
+                    {
+                        enabled.push(toml::Value::String(id.into()));
+                    }
+                }
+                let mut providers = toml::map::Map::new();
+                providers.insert("enabled".into(), toml::Value::Array(enabled));
+                root.insert("providers".into(), toml::Value::Table(providers));
+                if let Some(toml::Value::Array(widgets)) = root.get_mut("tray_widgets") {
+                    for (index, value) in widgets.iter_mut().enumerate() {
+                        let Some(widget) = value.as_table_mut() else {
+                            continue;
+                        };
+                        let provider = widget
+                            .remove("provider")
+                            .and_then(|value| value.as_str().map(str::to_owned))
+                            .unwrap_or_else(|| "codex".into());
+                        let source = widget
+                            .remove("source")
+                            .and_then(|value| value.as_str().map(str::to_owned))
+                            .unwrap_or_else(|| "combined".into());
+                        let limit_value = widget
+                            .remove("limit_value")
+                            .and_then(|value| value.as_str().map(str::to_owned))
+                            .unwrap_or_else(|| "remaining".into());
+                        let primary = match provider.as_str() {
+                            "claude" => "claude.session",
+                            "cursor" => "cursor.auto",
+                            _ => "codex.session",
+                        };
+                        let secondary = match provider.as_str() {
+                            "claude" => "claude.weekly",
+                            "cursor" => "cursor.auto",
+                            _ => "codex.weekly",
+                        };
+                        let metric_ids: Vec<&str> = match source.as_str() {
+                            "primary" | "primary_reset" => vec![primary],
+                            "secondary" => vec![secondary],
+                            _ if primary == secondary => vec![primary],
+                            _ => vec![primary, secondary],
+                        };
+                        let indicators = metric_ids
+                            .into_iter()
+                            .map(|metric_id| {
+                                let mut indicator = toml::map::Map::new();
+                                indicator.insert(
+                                    "provider".into(),
+                                    toml::Value::String(provider.clone()),
+                                );
+                                indicator.insert(
+                                    "metric_id".into(),
+                                    toml::Value::String(metric_id.into()),
+                                );
+                                indicator.insert(
+                                    "limit_value".into(),
+                                    toml::Value::String(limit_value.clone()),
+                                );
+                                toml::Value::Table(indicator)
+                            })
+                            .collect();
+                        widget.insert(
+                            "id".into(),
+                            toml::Value::String(format!("legacy-tray-{index}")),
+                        );
+                        widget.insert("kind".into(), toml::Value::String("limits".into()));
+                        widget.insert("indicators".into(), toml::Value::Array(indicators));
+                        widget.insert("color_mode".into(), toml::Value::String("status".into()));
+                    }
+                }
+                root.insert("version".into(), toml::Value::Integer(20));
+                version = 20;
+            }
+            20 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                if let Some(toml::Value::Array(widgets)) = root.get_mut("tray_widgets") {
+                    for value in widgets.iter_mut() {
+                        let Some(widget) = value.as_table_mut() else {
+                            continue;
+                        };
+                        let color_mode = widget
+                            .remove("color_mode")
+                            .unwrap_or_else(|| toml::Value::String("status".into()));
+                        let fixed_color = widget.remove("fixed_color");
+                        let Some(toml::Value::Array(indicators)) = widget.get_mut("indicators")
+                        else {
+                            continue;
+                        };
+                        for indicator_value in indicators.iter_mut() {
+                            let Some(indicator) = indicator_value.as_table_mut() else {
+                                continue;
+                            };
+                            indicator
+                                .entry("color_mode")
+                                .or_insert(color_mode.clone());
+                            if let Some(fixed_color) = fixed_color.clone() {
+                                indicator.entry("fixed_color").or_insert(fixed_color);
+                            }
+                        }
+                    }
+                }
+                root.insert("version".into(), toml::Value::Integer(21));
+                version = 21;
+            }
             unsupported => anyhow::bail!("no migration path from settings version {unsupported}"),
         }
     }
@@ -1096,8 +1431,8 @@ mod tests {
     #[test]
     fn defaults_match_product_decisions() {
         let value = Settings::default();
-        assert!(!value.providers.codex_enabled);
-        assert!(!value.providers.claude_enabled);
+        assert!(!value.providers.is_enabled(ProviderKind::Codex));
+        assert!(!value.providers.is_enabled(ProviderKind::Claude));
         assert_eq!(value.theme, AppTheme::Auto);
         assert_eq!(value.accent_color, AccentColor::Windows);
         assert!(value.animations_enabled);
@@ -1224,8 +1559,8 @@ tray_widgets = []
         fs::write(&path, "version = 7\nprovider = 'claude'\n").unwrap();
 
         let migrated = Settings::load_or_create(&path).unwrap();
-        assert!(!migrated.providers.codex_enabled);
-        assert!(migrated.providers.claude_enabled);
+        assert!(!migrated.providers.is_enabled(ProviderKind::Codex));
+        assert!(migrated.providers.is_enabled(ProviderKind::Claude));
         assert!(
             fs::read_to_string(path)
                 .unwrap()
@@ -1264,11 +1599,7 @@ tray_widgets = []
                 PopupWidgetKind::Cursor,
                 PopupWidgetKind::Codex,
             ],
-            providers: ProviderSettings {
-                codex_enabled: true,
-                claude_enabled: false,
-                cursor_enabled: true,
-            },
+            providers: ProviderSettings::from_enabled([ProviderKind::Codex, ProviderKind::Cursor]),
             show_total_spend_on_all_tab: true,
             ..Settings::default()
         };
@@ -1303,32 +1634,26 @@ tray_widgets = []
     }
 
     #[test]
-    fn normalizes_tray_widgets_to_the_only_enabled_provider() {
+    fn disabled_provider_references_are_preserved() {
         let mut settings = Settings {
-            providers: ProviderSettings {
-                codex_enabled: false,
-                claude_enabled: true,
-                cursor_enabled: false,
-            },
+            providers: ProviderSettings::from_enabled([ProviderKind::Claude]),
             tray_widgets: vec![TrayWidget::default_user_widget()],
             ..Settings::default()
         };
 
-        assert!(settings.normalize_tray_widget_providers());
-        assert_eq!(settings.tray_widgets[0].provider, ProviderKind::Claude);
-        assert!(!settings.normalize_tray_widget_providers());
+        assert!(!settings.normalize_tray_widgets());
+        assert_eq!(
+            settings.tray_widgets[0].indicators[0].provider(),
+            Some(ProviderKind::Codex)
+        );
     }
 
     #[test]
-    fn loading_rewrites_a_widget_for_the_only_enabled_provider() {
+    fn loading_preserves_a_widget_for_a_disabled_provider() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.toml");
         let stale = Settings {
-            providers: ProviderSettings {
-                codex_enabled: false,
-                claude_enabled: true,
-                cursor_enabled: false,
-            },
+            providers: ProviderSettings::from_enabled([ProviderKind::Claude]),
             tray_widgets: vec![TrayWidget::default_user_widget()],
             ..Settings::default()
         };
@@ -1336,11 +1661,110 @@ tray_widgets = []
 
         let loaded = Settings::load_or_create(&path).unwrap();
 
-        assert_eq!(loaded.tray_widgets[0].provider, ProviderKind::Claude);
+        assert_eq!(
+            loaded.tray_widgets[0].indicators[0].provider(),
+            Some(ProviderKind::Codex)
+        );
         assert!(
             fs::read_to_string(path)
                 .unwrap()
-                .contains("provider = \"claude\"")
+                .contains("provider = \"codex\"")
+        );
+    }
+
+    #[test]
+    fn unknown_provider_and_metric_ids_round_trip_without_data_loss() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        let mut settings = Settings::default();
+        settings.version = SETTINGS_VERSION;
+        settings.providers.enabled.push("future-provider".into());
+        let mut widget = TrayWidget::custom_for_provider(ProviderKind::Codex);
+        widget.indicators[0].provider_id = "future-provider".into();
+        widget.indicators[0].metric_id = "future-provider.daily".into();
+        settings.tray_widgets.push(widget);
+        settings.save(&path).unwrap();
+
+        let loaded = Settings::load_or_create(&path).unwrap();
+
+        assert!(loaded.providers.enabled.contains(&"future-provider".into()));
+        assert_eq!(
+            loaded.tray_widgets[0].indicators[0].provider_id,
+            "future-provider"
+        );
+        assert_eq!(
+            loaded.tray_widgets[0].indicators[0].metric_id,
+            "future-provider.daily"
+        );
+    }
+
+    #[test]
+    fn migrates_v19_tray_widgets_to_ordered_indicators() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(
+            &path,
+            r#"version = 19
+popup_order = ["total_spend", "claude", "codex", "cursor"]
+tray_widgets = [{ provider = "claude", source = "combined", presentation = "stacked_numbers", limit_value = "used" }]
+
+[providers]
+codex_enabled = false
+claude_enabled = true
+cursor_enabled = false
+"#,
+        )
+        .unwrap();
+
+        let loaded = Settings::load_or_create(&path).unwrap();
+
+        assert_eq!(loaded.providers.enabled, vec!["claude"]);
+        assert_eq!(loaded.tray_widgets.len(), 1);
+        assert_eq!(loaded.tray_widgets[0].id, "legacy-tray-0");
+        assert_eq!(loaded.tray_widgets[0].indicators.len(), 2);
+        assert_eq!(
+            loaded.tray_widgets[0].indicators[0].metric_id,
+            "claude.session"
+        );
+        assert_eq!(
+            loaded.tray_widgets[0].indicators[1].metric_id,
+            "claude.weekly"
+        );
+        assert_eq!(
+            loaded.tray_widgets[0].indicators[0].limit_value,
+            LimitValue::Used
+        );
+    }
+
+    #[test]
+    fn migrates_v20_widget_color_onto_each_indicator() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(
+            &path,
+            r#"version = 20
+tray_widgets = [
+  { id = "tray-1", kind = "limits", presentation = "stacked_numbers", color_mode = "provider",
+    indicators = [
+      { provider = "codex", metric_id = "codex.session", limit_value = "remaining" },
+      { provider = "claude", metric_id = "claude.session", limit_value = "used" }
+    ] }
+]
+"#,
+        )
+        .unwrap();
+
+        let loaded = Settings::load_or_create(&path).unwrap();
+
+        assert_eq!(loaded.version, SETTINGS_VERSION);
+        assert_eq!(loaded.tray_widgets.len(), 1);
+        assert_eq!(
+            loaded.tray_widgets[0].indicators[0].color_mode,
+            TrayColorMode::Provider
+        );
+        assert_eq!(
+            loaded.tray_widgets[0].indicators[1].color_mode,
+            TrayColorMode::Provider
         );
     }
 }

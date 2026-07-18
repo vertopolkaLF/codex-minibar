@@ -10,6 +10,7 @@ pub mod notifications;
 pub mod popup;
 pub mod popup_window;
 pub mod provider;
+pub mod provider_registry;
 pub mod scheduler;
 pub mod settings;
 mod settings_controls;

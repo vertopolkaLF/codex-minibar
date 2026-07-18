@@ -127,14 +127,11 @@ impl AppState {
 
     /// Applies provider toggles without disturbing workers that remain enabled.
     fn sync_provider_workers(&self, settings: &Settings) -> Vec<String> {
-        let disabled = [
-            ProviderKind::Codex,
-            ProviderKind::Claude,
-            ProviderKind::Cursor,
-        ]
-        .into_iter()
-        .filter(|provider| !settings.providers.is_enabled(*provider))
-        .collect::<Vec<_>>();
+        let disabled = crate::provider_registry::PROVIDERS
+            .iter()
+            .map(|descriptor| descriptor.kind)
+            .filter(|provider| !settings.providers.is_enabled(*provider))
+            .collect::<Vec<_>>();
         let stopped = self.workers.lock().map_or_else(
             |_| Vec::new(),
             |mut workers| {
@@ -157,11 +154,10 @@ impl AppState {
         }
 
         let mut errors = Vec::new();
-        for provider in [
-            ProviderKind::Codex,
-            ProviderKind::Claude,
-            ProviderKind::Cursor,
-        ] {
+        for provider in crate::provider_registry::PROVIDERS
+            .iter()
+            .map(|descriptor| descriptor.kind)
+        {
             if !settings.providers.is_enabled(provider)
                 || self
                     .workers
@@ -667,11 +663,16 @@ fn commit_widget_drag(
     };
     let mut scratch = Settings {
         popup_order: ui.popup_order.clone(),
-        providers: crate::settings::ProviderSettings {
-            codex_enabled: ui.codex_enabled,
-            claude_enabled: ui.claude_enabled,
-            cursor_enabled: ui.cursor_enabled,
-        },
+        providers: crate::settings::ProviderSettings::from_enabled(
+            crate::provider_registry::PROVIDERS
+                .iter()
+                .filter(|descriptor| match descriptor.kind {
+                    ProviderKind::Codex => ui.codex_enabled,
+                    ProviderKind::Claude => ui.claude_enabled,
+                    ProviderKind::Cursor => ui.cursor_enabled,
+                })
+                .map(|descriptor| descriptor.kind),
+        ),
         show_total_spend_on_all_tab: ui.show_total_spend_on_all_tab,
         ..Settings::default()
     };
@@ -987,14 +988,11 @@ fn provider_cards(
 }
 
 fn latest_sampled_at(limits: &ProviderLimits) -> chrono::DateTime<Utc> {
-    [
-        limits.codex.sampled_at,
-        limits.claude.sampled_at,
-        limits.cursor.sampled_at,
-    ]
-    .into_iter()
-    .max()
-    .unwrap_or_default()
+    crate::provider_registry::PROVIDERS
+        .iter()
+        .map(|descriptor| limits.get(descriptor.kind).sampled_at)
+        .max()
+        .unwrap_or_default()
 }
 
 /// Root WinUI view for Codex Minibar (hosted in a tray popup shell).
@@ -1022,9 +1020,9 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         show_usage_stats: state.settings.show_usage_stats,
         show_total_spend_on_all_tab: state.settings.show_total_spend_on_all_tab,
         show_account_name: state.settings.show_account_name,
-        codex_enabled: state.settings.providers.codex_enabled,
-        claude_enabled: state.settings.providers.claude_enabled,
-        cursor_enabled: state.settings.providers.cursor_enabled,
+        codex_enabled: state.settings.providers.is_enabled(ProviderKind::Codex),
+        claude_enabled: state.settings.providers.is_enabled(ProviderKind::Claude),
+        cursor_enabled: state.settings.providers.is_enabled(ProviderKind::Cursor),
         popup_order: state.settings.popup_order.clone(),
         use_colored_provider_icons: state.settings.use_colored_provider_icons,
         replace_chatgpt_logo_with_codex: state.settings.replace_chatgpt_logo_with_codex,
@@ -1247,11 +1245,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     )),
                     provider_widget => {
                         let provider = provider_widget.as_provider().expect("provider widget");
-                        let limits_for_provider = match provider {
-                            ProviderKind::Codex => &limits.codex,
-                            ProviderKind::Claude => &limits.claude,
-                            ProviderKind::Cursor => &limits.cursor,
-                        };
+                        let limits_for_provider = limits.get(provider);
                         let show_banked = match provider {
                             ProviderKind::Cursor => false,
                             _ => ui.show_banked_resets,
@@ -1315,11 +1309,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 .into_iter()
                 .collect();
             for provider in providers_for_view {
-                let limits_for_provider = match provider {
-                    ProviderKind::Codex => &limits.codex,
-                    ProviderKind::Claude => &limits.claude,
-                    ProviderKind::Cursor => &limits.cursor,
-                };
+                let limits_for_provider = limits.get(provider);
                 let show_banked = match provider {
                     ProviderKind::Cursor => false,
                     _ => ui.show_banked_resets,
@@ -2017,7 +2007,13 @@ fn start_background_bridge(
     ui_dispatcher: UiMarshaller,
 ) {
     let events = state.take_worker_events();
-    let mut widgets = state.settings.tray_widgets.clone();
+    let mut widgets = state
+        .settings
+        .tray_widgets
+        .iter()
+        .filter(|widget| widget.is_visible_for(&state.settings.providers))
+        .cloned()
+        .collect::<Vec<_>>();
     let settings_rx = state
         .settings_rx
         .lock()
@@ -2047,9 +2043,9 @@ fn start_background_bridge(
             show_total_spend_on_all_tab: state.settings.show_total_spend_on_all_tab,
             total_spend_presentation: state.settings.total_spend_presentation,
             show_account_name: state.settings.show_account_name,
-            codex_enabled: state.settings.providers.codex_enabled,
-            claude_enabled: state.settings.providers.claude_enabled,
-            cursor_enabled: state.settings.providers.cursor_enabled,
+            codex_enabled: state.settings.providers.is_enabled(ProviderKind::Codex),
+            claude_enabled: state.settings.providers.is_enabled(ProviderKind::Claude),
+            cursor_enabled: state.settings.providers.is_enabled(ProviderKind::Cursor),
             popup_order: state.settings.popup_order.clone(),
             use_colored_provider_icons: state.settings.use_colored_provider_icons,
             replace_chatgpt_logo_with_codex: state.settings.replace_chatgpt_logo_with_codex,
@@ -2080,10 +2076,12 @@ fn start_background_bridge(
                               widgets: &mut Vec<TrayWidget>,
                               tray: &mut TrayManager,
                               settings: Settings| {
+            crate::settings_window::sync_open_window(settings.clone(), ui_dispatcher.clone());
             let phase = updates.snapshot();
-            let providers_changed = ui.codex_enabled != settings.providers.codex_enabled
-                || ui.claude_enabled != settings.providers.claude_enabled
-                || ui.cursor_enabled != settings.providers.cursor_enabled;
+            let providers_changed = ui.codex_enabled
+                != settings.providers.is_enabled(ProviderKind::Codex)
+                || ui.claude_enabled != settings.providers.is_enabled(ProviderKind::Claude)
+                || ui.cursor_enabled != settings.providers.is_enabled(ProviderKind::Cursor);
             ui.theme = settings.theme;
             ui.accent_color = settings.accent_color;
             ui.animations_enabled = settings.animations_enabled;
@@ -2094,14 +2092,19 @@ fn start_background_bridge(
             ui.show_total_spend_on_all_tab = settings.show_total_spend_on_all_tab;
             ui.total_spend_presentation = settings.total_spend_presentation;
             ui.show_account_name = settings.show_account_name;
-            ui.codex_enabled = settings.providers.codex_enabled;
-            ui.claude_enabled = settings.providers.claude_enabled;
-            ui.cursor_enabled = settings.providers.cursor_enabled;
+            ui.codex_enabled = settings.providers.is_enabled(ProviderKind::Codex);
+            ui.claude_enabled = settings.providers.is_enabled(ProviderKind::Claude);
+            ui.cursor_enabled = settings.providers.is_enabled(ProviderKind::Cursor);
             ui.popup_order = settings.popup_order.clone();
             ui.use_colored_provider_icons = settings.use_colored_provider_icons;
             ui.replace_chatgpt_logo_with_codex = settings.replace_chatgpt_logo_with_codex;
             *notification_settings = settings.notifications.clone();
-            *widgets = settings.tray_widgets.clone();
+            *widgets = settings
+                .tray_widgets
+                .iter()
+                .filter(|widget| widget.is_visible_for(&settings.providers))
+                .cloned()
+                .collect();
             ui.update_version = update_version_from_phase(&phase);
             // Presentation settings must visibly apply before any background
             // work. In particular, changing provider icons must never wait on
@@ -3059,15 +3062,17 @@ fn combined_usage_card(
     presentation: TotalSpendPresentation,
     drag_handle: Option<Element>,
 ) -> Element {
-    let providers = [
-        (ProviderKind::Cursor, cursor_enabled, &limits.cursor),
-        (ProviderKind::Claude, claude_enabled, &limits.claude),
-        (ProviderKind::Codex, codex_enabled, &limits.codex),
-    ];
-    let mut entries: Vec<_> = providers
-        .into_iter()
-        .filter(|(_, enabled, _)| *enabled)
-        .map(|(provider, _, provider_limits)| {
+    let mut entries: Vec<_> = crate::provider_registry::PROVIDERS
+        .iter()
+        .filter_map(|descriptor| {
+            let enabled = match descriptor.kind {
+                ProviderKind::Codex => codex_enabled,
+                ProviderKind::Claude => claude_enabled,
+                ProviderKind::Cursor => cursor_enabled,
+            };
+            enabled.then(|| (descriptor.kind, limits.get(descriptor.kind)))
+        })
+        .map(|(provider, provider_limits)| {
             (
                 provider,
                 combined_usage_spend(&provider_limits.usage, period),
