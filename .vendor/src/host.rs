@@ -1,5 +1,4 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use super::*;
@@ -8,7 +7,7 @@ use bindings::*;
 thread_local! {
     static ROOT_FRAMEWORK_ELEMENT: RefCell<Option<FrameworkElement>> = const { RefCell::new(None) };
     static ALL_ROOT_FRAMEWORK_ELEMENTS: RefCell<Vec<FrameworkElement>> = const { RefCell::new(Vec::new()) };
-    static ORIGINAL_ACCENT_COLORS: RefCell<HashMap<&'static str, Color>> = RefCell::new(HashMap::new());
+    static CURRENT_ACCENT_PALETTE: Cell<Option<AccentPalette>> = const { Cell::new(None) };
     static ROOT_WINDOW: RefCell<Option<Window>> = const { RefCell::new(None) };
     /// Queued theme; applied once `ROOT_FRAMEWORK_ELEMENT` is available.
     static PENDING_THEME: Cell<Option<ElementTheme>> = const { Cell::new(None) };
@@ -26,6 +25,32 @@ pub enum RequestedTheme {
     Light,
     /// Force dark theme.
     Dark,
+}
+
+/// Complete Windows accent ramp consumed by WinUI's role brushes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AccentPalette {
+    pub base: (u8, u8, u8),
+    pub light1: (u8, u8, u8),
+    pub light2: (u8, u8, u8),
+    pub light3: (u8, u8, u8),
+    pub dark1: (u8, u8, u8),
+    pub dark2: (u8, u8, u8),
+    pub dark3: (u8, u8, u8),
+}
+
+impl AccentPalette {
+    pub fn from_base(base: (u8, u8, u8)) -> Self {
+        Self {
+            base,
+            light1: tone(base, 0.25, true),
+            light2: tone(base, 0.45, true),
+            light3: tone(base, 0.70, true),
+            dark1: tone(base, 0.25, false),
+            dark2: tone(base, 0.45, false),
+            dark3: tone(base, 0.70, false),
+        }
+    }
 }
 
 /// Set the application theme. Always queued for the next root attach, and
@@ -50,36 +75,121 @@ pub fn set_requested_theme(theme: RequestedTheme) {
 }
 
 /// Update the live WinUI accent brushes in place for every open surface.
-/// Existing controls retain references to these brush objects, so replacing a
-/// resource-dictionary entry would not repaint them. Passing `None` restores
-/// the colors captured from Windows before the first override.
-pub fn set_accent_color(color: Option<(u8, u8, u8)>) -> windows_core::Result<()> {
+pub fn set_accent_palette(palette: AccentPalette) -> windows_core::Result<()> {
+    CURRENT_ACCENT_PALETTE.with(|current| current.set(Some(palette)));
+    apply_accent_palette(palette)
+}
+
+pub fn set_accent_color(color: (u8, u8, u8)) -> windows_core::Result<()> {
+    set_accent_palette(AccentPalette::from_base(color))
+}
+
+fn apply_accent_palette(palette: AccentPalette) -> windows_core::Result<()> {
     use windows_collections::IMap;
 
-    const BRUSH_KEYS: [(&str, u8); 8] = [
-        ("AccentFillColorDefaultBrush", 255),
-        ("AccentFillColorSecondaryBrush", 230),
-        ("AccentFillColorTertiaryBrush", 204),
-        ("AccentFillColorDisabledBrush", 102),
-        ("AccentTextFillColorPrimaryBrush", 255),
-        ("AccentTextFillColorSecondaryBrush", 230),
-        ("AccentTextFillColorTertiaryBrush", 204),
-        ("AccentTextFillColorDisabledBrush", 102),
-    ];
+    let Some(is_dark) = ROOT_FRAMEWORK_ELEMENT.with(|root| {
+        root.borrow()
+            .as_ref()
+            .and_then(|element| element.ActualTheme().ok())
+            .map(|theme| theme == ElementTheme::Dark)
+    }) else {
+        // The palette is already retained in CURRENT_ACCENT_PALETTE. Applying
+        // before a root exists would guess the theme and poison WinUI's global
+        // brushes with light-theme roles during a dark-theme startup.
+        return Ok(());
+    };
+    let roles = accent_roles(palette, is_dark);
     let resources = Application::Current()?.Resources()?;
     let map = resources.cast::<IMap<windows_core::IInspectable, windows_core::IInspectable>>()?;
 
-    for (key_name, alpha) in BRUSH_KEYS {
+    for (key_name, next) in accent_brushes(roles, is_dark) {
         let key = windows_reference::IReference::from(windows_core::HSTRING::from(key_name));
         let brush = map.Lookup(&key)?.cast::<SolidColorBrush>()?;
-        let original = ORIGINAL_ACCENT_COLORS.with(|colors| {
-            let mut colors = colors.borrow_mut();
-            Ok::<_, windows_core::Error>(*colors.entry(key_name).or_insert(brush.Color()?))
-        })?;
-        let next = color.map_or(original, |(r, g, b)| Color { a: alpha, r, g, b });
         brush.SetColor(next)?;
     }
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct AccentRoles {
+    base: Color,
+    fill: Color,
+    text_primary: Color,
+    text_secondary: Color,
+    text_tertiary: Color,
+}
+
+fn accent_roles(palette: AccentPalette, is_dark: bool) -> AccentRoles {
+    AccentRoles {
+        base: opaque(palette.base),
+        fill: opaque(if is_dark {
+            palette.light2
+        } else {
+            palette.dark1
+        }),
+        text_primary: opaque(if is_dark {
+            palette.light3
+        } else {
+            palette.dark2
+        }),
+        text_secondary: opaque(if is_dark {
+            palette.light3
+        } else {
+            palette.dark3
+        }),
+        text_tertiary: opaque(if is_dark {
+            palette.light2
+        } else {
+            palette.dark1
+        }),
+    }
+}
+
+fn accent_brushes(roles: AccentRoles, is_dark: bool) -> [(&'static str, Color); 10] {
+    let disabled_fill = Color {
+        a: if is_dark { 0x28 } else { 0x37 },
+        r: if is_dark { 255 } else { 0 },
+        g: if is_dark { 255 } else { 0 },
+        b: if is_dark { 255 } else { 0 },
+    };
+    let disabled_text = Color {
+        a: if is_dark { 0x5D } else { 0x5C },
+        r: if is_dark { 255 } else { 0 },
+        g: if is_dark { 255 } else { 0 },
+        b: if is_dark { 255 } else { 0 },
+    };
+    [
+        ("AccentFillColorSelectedTextBackgroundBrush", roles.base),
+        ("AccentFillColorDefaultBrush", roles.fill),
+        ("AccentFillColorSecondaryBrush", roles.fill),
+        ("AccentFillColorTertiaryBrush", roles.fill),
+        ("AccentFillColorDisabledBrush", disabled_fill),
+        ("AccentTextFillColorPrimaryBrush", roles.text_primary),
+        ("AccentTextFillColorSecondaryBrush", roles.text_secondary),
+        ("AccentTextFillColorTertiaryBrush", roles.text_tertiary),
+        ("AccentTextFillColorDisabledBrush", disabled_text),
+        (
+            "SystemFillColorAttentionBrush",
+            if is_dark { roles.fill } else { roles.base },
+        ),
+    ]
+}
+
+fn opaque((r, g, b): (u8, u8, u8)) -> Color {
+    Color { a: 255, r, g, b }
+}
+
+/// Builds the Windows-style ramp by mixing the accent toward white or black.
+/// This changes saturation and brightness together instead of merely applying
+/// alpha, keeping each tone useful on its intended light/dark surface.
+fn tone((r, g, b): (u8, u8, u8), amount: f64, lighter: bool) -> (u8, u8, u8) {
+    let target = if lighter { 255.0 } else { 0.0 };
+    let channel = |value: u8| {
+        (f64::from(value) + (target - f64::from(value)) * amount)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
+    (channel(r), channel(g), channel(b))
 }
 
 fn update_titlebar_theme() {
@@ -303,16 +413,6 @@ impl ReactorHost {
                             ROOT_WINDOW
                                 .with(|cell| *cell.borrow_mut() = Some(state.window.clone()));
                             if let Ok(fe) = ui_element.cast::<FrameworkElement>() {
-                                subscribe_actual_theme_changed(
-                                    &fe,
-                                    state.render_host.clone_inner(),
-                                );
-                                subscribe_size_and_dpi(
-                                    &fe,
-                                    state.render_host.clone_inner(),
-                                    state.window.clone(),
-                                    constraints,
-                                );
                                 ROOT_FRAMEWORK_ELEMENT
                                     .with(|cell| *cell.borrow_mut() = Some(fe.clone()));
                                 ALL_ROOT_FRAMEWORK_ELEMENTS
@@ -325,6 +425,21 @@ impl ReactorHost {
                                     let _ = fe.SetRequestedTheme(theme);
                                     update_titlebar_theme();
                                 }
+
+                                // Resolve the actual theme only after the root
+                                // and its requested theme are both installed.
+                                // This also applies the retained startup accent
+                                // before the window can ever be shown.
+                                subscribe_actual_theme_changed(
+                                    &fe,
+                                    state.render_host.clone_inner(),
+                                );
+                                subscribe_size_and_dpi(
+                                    &fe,
+                                    state.render_host.clone_inner(),
+                                    state.window.clone(),
+                                    constraints,
+                                );
                             }
                         }
 
@@ -749,12 +864,18 @@ fn subscribe_actual_theme_changed(
     render_host: RenderHost<WinUIBackend, WinUIDispatcher>,
 ) {
     update_color_scheme_from(fe);
+    if let Some(palette) = CURRENT_ACCENT_PALETTE.with(Cell::get) {
+        let _ = apply_accent_palette(palette);
+    }
 
     let _ = fe
         .ActualThemeChanged(move |sender, _| {
             if let Some(fe) = sender.as_ref() {
                 update_color_scheme_from(fe);
                 update_titlebar_theme();
+                if let Some(palette) = CURRENT_ACCENT_PALETTE.with(Cell::get) {
+                    let _ = apply_accent_palette(palette);
+                }
             }
             render_host.with_reconciler_mut(|r| r.notify_theme_changed());
             render_host.request_render();
@@ -795,6 +916,62 @@ fn apply_activate_chrome(window: &Window, chrome: &ActivateChrome) {
         && let Err(err) = bd.apply_to(window)
     {
         fault::report("backdrop", format!("{err}"));
+    }
+}
+
+#[cfg(test)]
+mod accent_palette_tests {
+    use super::*;
+
+    #[test]
+    fn accent_palette_is_retained_until_a_root_resolves_the_theme() {
+        let palette = AccentPalette::from_base((0xF7, 0x63, 0x0C));
+
+        set_accent_palette(palette).unwrap();
+
+        assert_eq!(CURRENT_ACCENT_PALETTE.with(Cell::get), Some(palette));
+    }
+
+    #[test]
+    fn accent_ramp_produces_distinct_light_and_dark_roles() {
+        let base = (0x00, 0x78, 0xD4);
+        let palette = AccentPalette::from_base(base);
+        let dark_theme = accent_roles(palette, true);
+        let light_theme = accent_roles(palette, false);
+
+        assert_eq!(dark_theme.base, opaque(base));
+        assert_ne!(dark_theme.fill, dark_theme.base);
+        assert_ne!(light_theme.fill, light_theme.base);
+        assert!(dark_theme.fill.r > dark_theme.base.r);
+        assert!(light_theme.fill.g < light_theme.base.g);
+        assert!(dark_theme.text_primary.r > dark_theme.fill.r);
+        assert!(light_theme.text_secondary.b < light_theme.text_primary.b);
+    }
+
+    #[test]
+    fn winui_disabled_roles_are_neutral_not_tinted() {
+        let palette = AccentPalette::from_base((227, 0, 140));
+        let dark = accent_brushes(accent_roles(palette, true), true);
+        let light = accent_brushes(accent_roles(palette, false), false);
+
+        assert_eq!(
+            dark[4].1,
+            Color {
+                a: 0x28,
+                r: 255,
+                g: 255,
+                b: 255
+            }
+        );
+        assert_eq!(
+            light[8].1,
+            Color {
+                a: 0x5C,
+                r: 0,
+                g: 0,
+                b: 0
+            }
+        );
     }
 }
 

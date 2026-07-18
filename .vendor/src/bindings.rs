@@ -13219,16 +13219,6 @@ impl windows_core::RuntimeType for ISolidColorBrush {
         windows_core::imp::ConstBuffer::for_interface::<Self>();
 }
 impl ISolidColorBrush {
-    pub(crate) fn Color(&self) -> windows_core::Result<Color> {
-        unsafe {
-            let mut result__ = core::mem::zeroed();
-            (windows_core::Interface::vtable(self).Color)(
-                windows_core::Interface::as_raw(self),
-                &mut result__,
-            )
-            .map(|| result__)
-        }
-    }
     pub(crate) fn SetColor(&self, value: Color) -> windows_core::Result<()> {
         unsafe {
             (windows_core::Interface::vtable(self).SetColor)(
@@ -13242,8 +13232,7 @@ impl ISolidColorBrush {
 #[repr(C)]
 pub struct ISolidColorBrush_Vtbl {
     pub base__: windows_core::IInspectable_Vtbl,
-    pub Color:
-        unsafe extern "system" fn(*mut core::ffi::c_void, *mut Color) -> windows_core::HRESULT,
+    pub Color: usize,
     pub SetColor: unsafe extern "system" fn(*mut core::ffi::c_void, Color) -> windows_core::HRESULT,
 }
 windows_core::imp::define_interface!(

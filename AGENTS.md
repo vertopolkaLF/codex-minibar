@@ -4,6 +4,14 @@ Never launch the app itself.
 
 All settings must take effect immediately in the running application. The user must never need to relaunch the app for a setting change to be applied. Keep every open UI surface and affected background component synchronized with the updated settings.
 
+## Appearance initialization guardrails
+
+Theme and accent settings must be applied during application startup, before any window is shown. Do not rely on opening the Settings window, mounting an Appearance page, or a later rerender to initialize global appearance resources.
+
+WinUI accent brushes are application-global but their role mapping depends on the root element's resolved `ActualTheme`. If appearance is requested before a root exists, retain the requested palette without mutating brushes. After `SetContent`, install the requested theme on the root first, then resolve `ActualTheme` and apply the complete accent palette before activation or native popup display. Repeat the role mapping on every `ActualThemeChanged` event.
+
+Before finishing appearance work, review both cold-start paths (popup first and Settings first) for Auto, Light, and Dark themes. Opening or closing another window must never be required to correct colors. Always run `cargo check`; never launch the app for this verification.
+
 ## Provider UI guardrails
 
 When adding or changing a provider, update every provider enumeration, settings migration, worker lifecycle, popup state, tray source and provider-tab path as one atomic change. Native popup provider tabs use swap-chain icon hosts: key the complete tab selector by the enabled-provider set so reconciliation cannot reuse an old provider's text or icon in another provider's slot. Do not treat `Element::Empty` as sufficient remounting.

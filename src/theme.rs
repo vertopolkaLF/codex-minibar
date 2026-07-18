@@ -37,7 +37,39 @@ pub fn apply_appearance(theme: crate::settings::AppTheme, accent: crate::setting
         crate::settings::AppTheme::Dark => windows_reactor::RequestedTheme::Dark,
     };
     windows_reactor::set_requested_theme(requested);
-    if let Err(error) = windows_reactor::set_accent_color(accent.rgb()) {
+
+    let result = match accent.rgb() {
+        Some(color) => windows_reactor::set_accent_color(color),
+        None => system_accent_palette().and_then(windows_reactor::set_accent_palette),
+    };
+    if let Err(error) = result {
         eprintln!("failed to apply accent color: {error:?}");
     }
+}
+
+#[cfg(windows)]
+fn system_accent_palette() -> windows_core::Result<windows_reactor::AccentPalette> {
+    use windows::UI::ViewManagement::{UIColorType, UISettings};
+
+    let settings = UISettings::new()?;
+    let rgb = |kind| {
+        settings
+            .GetColorValue(kind)
+            .map(|color| (color.R, color.G, color.B))
+    };
+
+    Ok(windows_reactor::AccentPalette {
+        base: rgb(UIColorType::Accent)?,
+        light1: rgb(UIColorType::AccentLight1)?,
+        light2: rgb(UIColorType::AccentLight2)?,
+        light3: rgb(UIColorType::AccentLight3)?,
+        dark1: rgb(UIColorType::AccentDark1)?,
+        dark2: rgb(UIColorType::AccentDark2)?,
+        dark3: rgb(UIColorType::AccentDark3)?,
+    })
+}
+
+#[cfg(not(windows))]
+fn system_accent_palette() -> windows_core::Result<windows_reactor::AccentPalette> {
+    Ok(windows_reactor::AccentPalette::from_base((0, 120, 212)))
 }
