@@ -404,6 +404,123 @@ pub(crate) fn settings_toggle_expander(
         .into()
 }
 
+/// Settings-style expandable card with arbitrary header content (no toggle).
+///
+/// Matches [`settings_toggle_card`] chrome: 8px radius, 16px horizontal padding,
+/// 60px header row. Used by tray widget rows so they share option-card sizing.
+pub(crate) fn settings_content_expander(
+    header: impl Into<Element>,
+    expanded: bool,
+    on_expanding: impl IntoCallback<bool>,
+    content: impl Into<Element>,
+) -> Element {
+    let on_expanding = on_expanding.into_callback();
+    let toggle_expand = {
+        let on_expanding = on_expanding.clone();
+        move || on_expanding.invoke(!expanded)
+    };
+
+    let chevron = border(
+        crate::icons::element("caret-down", 16.0, Color::rgb(138, 138, 138))
+            .horizontal_alignment(HorizontalAlignment::Center)
+            .vertical_alignment(VerticalAlignment::Center),
+    )
+    .width(CHEVRON_SIZE)
+    .height(CHEVRON_SIZE)
+    .background(Color::transparent())
+    .rotation(if expanded { 180.0 } else { 0.0 })
+    .with_rotation_transition(duration(CONTROL_NORMAL_ANIMATION))
+    .margin(Thickness {
+        left: 0.0,
+        top: 0.0,
+        right: CARD_PADDING_X,
+        bottom: 0.0,
+    })
+    .relative_align_right()
+    .relative_align_v_center()
+    .on_tapped({
+        let toggle_expand = toggle_expand.clone();
+        move || toggle_expand()
+    });
+
+    let header_children: Vec<Element> = vec![
+        border(Element::Empty)
+            .background(Color::transparent())
+            .relative_align_left()
+            .relative_align_right()
+            .relative_align_top()
+            .relative_align_bottom()
+            .on_tapped({
+                let toggle_expand = toggle_expand.clone();
+                move || toggle_expand()
+            })
+            .into(),
+        header
+            .into()
+            .margin(Thickness {
+                left: CARD_PADDING_X,
+                top: 0.0,
+                right: CARD_PADDING_X + CHEVRON_SIZE + TOGGLE_CHEVRON_GAP,
+                bottom: 0.0,
+            })
+            .relative_align_left()
+            .relative_align_right()
+            .relative_align_v_center()
+            .into(),
+        chevron.into(),
+    ];
+
+    let header_row = relative_panel(header_children)
+        .height(CARD_ROW_HEIGHT)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .background(Color::transparent());
+
+    let body: Element = if expanded {
+        vstack((
+            border(Element::Empty)
+                .height(1.0)
+                .background(ThemeRef::CardStroke)
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .margin(Thickness {
+                    left: CARD_PADDING_X,
+                    top: 0.0,
+                    right: CARD_PADDING_X,
+                    bottom: 0.0,
+                }),
+            border(content.into())
+                .padding(Thickness {
+                    left: CARD_PADDING_X,
+                    top: CARD_CONTENT_PADDING_Y,
+                    right: CARD_PADDING_X,
+                    bottom: CARD_CONTENT_PADDING_Y,
+                })
+                .horizontal_alignment(HorizontalAlignment::Stretch),
+        ))
+        .spacing(0.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .into()
+    } else {
+        Element::Empty
+    };
+
+    let (base, hover) = card_background_layers(false);
+    relative_panel(vec![
+        base,
+        hover,
+        vstack((header_row, body))
+            .spacing(0.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .relative_align_left()
+            .relative_align_right()
+            .relative_align_top()
+            .relative_align_bottom()
+            .into(),
+    ])
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .background(Color::transparent())
+    .into()
+}
+
 /// Nested slider row for use inside [`settings_toggle_expander`] content.
 ///
 /// Label and percent sit on opposite sides (space-between); the slider spans

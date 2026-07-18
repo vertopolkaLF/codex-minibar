@@ -12,9 +12,9 @@ use crate::settings::{
     TrayPresentation, TrayWidget, TrayWidgetKind,
 };
 use crate::settings_controls::{
-    settings_action_card, settings_control_card, settings_info_card, settings_slider_content,
-    settings_toggle_card, settings_toggle_card_with_description, settings_toggle_expander,
-    update_available_nav_card,
+    settings_action_card, settings_content_expander, settings_control_card, settings_info_card,
+    settings_slider_content, settings_toggle_card, settings_toggle_card_with_description,
+    settings_toggle_expander, update_available_nav_card,
 };
 use crate::theme::{CONTROL_FAST_ANIMATION, duration};
 use crate::updater::{
@@ -2496,7 +2496,7 @@ fn tray_widget_preview(widget: &TrayWidget) -> Element {
 
     // Swap-chain preview painters normally run only on mount. Settings need
     // true live feedback, so repaint the retained native panel in place while
-    // keeping the surrounding Expander identity stable.
+    // keeping the surrounding card identity stable.
     TRAY_PREVIEW_MOUNTS.with(|mounts| {
         if let Some(native) = mounts.borrow().get(&preview_id).cloned()
             && let Err(error) = crate::acrylic::install_tray_pixels_into(native, &pixels)
@@ -2574,13 +2574,13 @@ fn tray_color_mode_from_index(index: i32) -> TrayColorMode {
     }
 }
 
-// Segoe Fluent chevron glyphs — same family/size as the WinUI Expander toggle.
+// Segoe Fluent chevron glyphs — same family/size as the settings card chevron.
 const CHEVRON_UP_GLYPH: &str = "\u{E70E}";
 const CHEVRON_DOWN_GLYPH: &str = "\u{E70D}";
 const TRAY_REORDER_ICON_FONT: &str = "Segoe Fluent Icons";
-/// Match the Expander header chevron glyph size.
+/// Match the settings card chevron glyph size.
 const TRAY_REORDER_ICON_SIZE: f64 = 12.0;
-const TRAY_REORDER_BUTTON_SIZE: f64 = 16.0;
+const TRAY_REORDER_BUTTON_SIZE: f64 = 18.0;
 /// Match ComboBox / input control height; trash glyph is intentionally smaller.
 const TRAY_REMOVE_BUTTON_SIZE: f64 = 32.0;
 const TRAY_REMOVE_ICON_SIZE: f64 = 14.0;
@@ -2719,6 +2719,17 @@ fn tray_settings_cards(
             ))
             .spacing(2.0)
             .vertical_alignment(VerticalAlignment::Center)
+            .on_tapped({
+                let expand_setter = set_expanded_widget.clone();
+                let expand_id = widget_id.clone();
+                move || {
+                    expand_setter.call(if is_expanded {
+                        None
+                    } else {
+                        Some(expand_id.clone())
+                    });
+                }
+            })
             .grid_column(2),
         ))
         .columns([
@@ -3066,7 +3077,7 @@ fn tray_settings_cards(
                         .max_height(TRAY_REMOVE_BUTTON_SIZE)
                         .padding(Thickness::uniform(0.0))
                         .tooltip("Remove indicator")
-                        .vertical_alignment(VerticalAlignment::Center)
+                        .vertical_alignment(VerticalAlignment::Bottom)
                         .on_click(move || {
                             let mut next = widgets_for_remove.clone();
                             next[index].indicators.remove(indicator_index);
@@ -3193,17 +3204,12 @@ fn tray_settings_cards(
             vstack(fields).spacing(10.0).into()
         };
 
-        let row: Element = Expander::new(content)
-            .header_content(header)
-            .expanded(is_expanded)
-            .with_translation_transition(duration(CONTROL_FAST_ANIMATION))
-            .with_opacity_transition(duration(CONTROL_FAST_ANIMATION))
-            .on_expanding(move |expanded: bool| {
-                expand_setter.call(expanded.then(|| expand_id.clone()));
-            })
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .with_key(format!("tray-widget-{widget_id}"))
-            .into();
+        let row: Element = settings_content_expander(header, is_expanded, move |expanded: bool| {
+            expand_setter.call(expanded.then(|| expand_id.clone()));
+        }, content)
+        .with_translation_transition(duration(CONTROL_FAST_ANIMATION))
+        .with_opacity_transition(duration(CONTROL_FAST_ANIMATION))
+        .with_key(format!("tray-widget-{widget_id}"));
         rows.push(row);
     }
 
