@@ -8,7 +8,7 @@ use std::{
 
 use windows_reactor::*;
 
-use crate::theme::{CONTROL_FASTER_ANIMATION, CONTROL_NORMAL_ANIMATION};
+use crate::theme::{CONTROL_FASTER_ANIMATION, CONTROL_NORMAL_ANIMATION, duration};
 
 const CARD_RADIUS: f64 = 8.0;
 const CARD_PADDING_X: f64 = 16.0;
@@ -59,7 +59,7 @@ fn card_background_layers(hovered: bool) -> (Element, Element) {
     let hover = border(Element::Empty)
         .background(ThemeRef::SubtleFill)
         .opacity(if hovered { 1.0 } else { 0.0 })
-        .with_opacity_transition(CONTROL_FASTER_ANIMATION)
+        .with_opacity_transition(duration(CONTROL_FASTER_ANIMATION))
         .corner_radius(CARD_RADIUS)
         .relative_align_left()
         .relative_align_right()
@@ -205,7 +205,11 @@ pub(crate) fn animate_expand_progress(
     let to = if next { 1.0 } else { 0.0 };
     let from = if next { 0.0 } else { 1.0 };
     let anim_id = EXPAND_ANIM_GEN.fetch_add(1, Ordering::Relaxed) + 1;
-    let duration = CONTROL_NORMAL_ANIMATION;
+    let duration = duration(CONTROL_NORMAL_ANIMATION);
+    if duration.is_zero() {
+        set_progress.call(to);
+        return;
+    }
     thread::spawn(move || {
         let start = Instant::now();
         loop {
@@ -284,9 +288,11 @@ pub(crate) fn settings_toggle_expander(
                 bottom: 0.0,
             }),
         // Fixed hit-box; rotation pivots on this SVG.
-        border(crate::icons::element("caret-down", 16.0, Color::rgb(138, 138, 138))
-            .horizontal_alignment(HorizontalAlignment::Center)
-            .vertical_alignment(VerticalAlignment::Center))
+        border(
+            crate::icons::element("caret-down", 16.0, Color::rgb(138, 138, 138))
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center),
+        )
         .width(CHEVRON_SIZE)
         .height(CHEVRON_SIZE)
         .background(Color::transparent())

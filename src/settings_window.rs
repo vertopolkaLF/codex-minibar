@@ -5,15 +5,15 @@
 
 use crate::notifications;
 use crate::settings::{
-    LimitRefreshInterval, LimitValue, PopupWidgetKind, ProviderKind, Settings,
-    TotalSpendPresentation, TrayPresentation, TraySource, TrayWidget,
+    AccentColor, AppTheme, LimitRefreshInterval, LimitValue, PopupWidgetKind, ProviderKind,
+    Settings, TotalSpendPresentation, TrayPresentation, TraySource, TrayWidget,
 };
 use crate::settings_controls::{
     settings_action_card, settings_control_card, settings_info_card, settings_slider_content,
     settings_toggle_card, settings_toggle_card_with_description, settings_toggle_expander,
     update_available_nav_card,
 };
-use crate::theme::CONTROL_FAST_ANIMATION;
+use crate::theme::{CONTROL_FAST_ANIMATION, duration};
 use crate::updater::{
     ISSUES_URL, RELEASES_URL, REPO_URL, UpdateController, UpdatePhase, current_version,
 };
@@ -39,6 +39,9 @@ thread_local! {
 
 #[derive(Clone)]
 struct SettingsWindowState {
+    theme: SetState<AppTheme>,
+    accent_color: SetState<AccentColor>,
+    animations_enabled: SetState<bool>,
     codex_enabled: SetState<bool>,
     claude_enabled: SetState<bool>,
     cursor_enabled: SetState<bool>,
@@ -68,6 +71,9 @@ struct SettingsWindowState {
 
 impl SettingsWindowState {
     fn apply(&self, settings: &Settings) {
+        self.theme.call(settings.theme);
+        self.accent_color.call(settings.accent_color);
+        self.animations_enabled.call(settings.animations_enabled);
         self.codex_enabled.call(settings.providers.codex_enabled);
         self.claude_enabled.call(settings.providers.claude_enabled);
         self.cursor_enabled.call(settings.providers.cursor_enabled);
@@ -732,6 +738,7 @@ fn restart_onboarding_after_reset(settings_tx: Sender<Settings>, ui_dispatcher: 
 enum Tab {
     #[default]
     General,
+    Appearance,
     Providers,
     Tray,
     Notifications,
@@ -743,6 +750,7 @@ impl Tab {
     fn tag(self) -> &'static str {
         match self {
             Self::General => "general",
+            Self::Appearance => "appearance",
             Self::Providers => "providers",
             Self::Tray => "tray",
             Self::Notifications => "notifications",
@@ -753,6 +761,7 @@ impl Tab {
 
     fn from_tag(tag: &str) -> Self {
         match tag {
+            "appearance" => Self::Appearance,
             "tray" => Self::Tray,
             "providers" => Self::Providers,
             "notifications" => Self::Notifications,
@@ -790,6 +799,8 @@ pub fn render(
     let (selected, set_selected) = cx.use_state(Tab::default());
     let (rendered_tab, set_rendered_tab) = cx.use_async_state(Tab::default());
     let (page_visible, set_page_visible) = cx.use_async_state(true);
+    let theme_navigation_guard = cx.use_ref(false);
+    let theme_navigation_guard_timer = cx.use_ref(None::<DispatcherTimer>);
 
     let nav_icon_color = match color_scheme {
         ColorScheme::Dark => "#E6E6E6",
@@ -809,6 +820,9 @@ pub fn render(
             NavViewItem::new("Notifications")
                 .tag("notifications")
                 .icon_path(crate::icons::data("bell"), nav_icon_color),
+            NavViewItem::new("Appearance")
+                .tag("appearance")
+                .icon_path(crate::icons::data("paint-brush"), nav_icon_color),
             NavViewItem::new("Advanced")
                 .tag("advanced")
                 .icon_path(crate::icons::data("sliders"), nav_icon_color),
@@ -822,15 +836,19 @@ pub fn render(
     .on_selection_changed({
         let set_rendered_tab = set_rendered_tab.clone();
         let set_page_visible = set_page_visible.clone();
+        let theme_navigation_guard = theme_navigation_guard.clone();
         move |tag: String| {
             let next = Tab::from_tag(&tag);
+            if theme_navigation_guard.get_cloned() && next != selected {
+                return;
+            }
             if next != selected {
                 set_page_visible.call(false);
                 set_selected.call(next);
                 let set_rendered_tab = set_rendered_tab.clone();
                 let set_page_visible = set_page_visible.clone();
                 std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_millis(180));
+                    std::thread::sleep(duration(Duration::from_millis(180)));
                     set_rendered_tab.call(next);
                     set_page_visible.call(true);
                 });
@@ -869,6 +887,13 @@ pub fn render(
     }
 
     let (codex_enabled, set_codex_enabled) = cx.use_state(settings.providers.codex_enabled);
+    let (theme, set_theme) = cx.use_state(settings.theme);
+    let (accent_color, set_accent_color) = cx.use_state(settings.accent_color);
+    let (animations_enabled, set_animations_enabled) = cx.use_state(settings.animations_enabled);
+    cx.use_effect((theme, accent_color, animations_enabled), move || {
+        crate::theme::set_animations_enabled(animations_enabled);
+        crate::theme::apply_appearance(theme, accent_color);
+    });
     let (claude_enabled, set_claude_enabled) = cx.use_state(settings.providers.claude_enabled);
     let (cursor_enabled, set_cursor_enabled) = cx.use_state(settings.providers.cursor_enabled);
     let (popup_order, set_popup_order) = cx.use_state(settings.popup_order.clone());
@@ -918,6 +943,9 @@ pub fn render(
     let page_scroller = scroll_viewer(
         border(tab_content(
             rendered_tab,
+            theme,
+            accent_color,
+            animations_enabled,
             codex_enabled,
             claude_enabled,
             cursor_enabled,
@@ -950,6 +978,9 @@ pub fn render(
             notify_on_update,
             &update_phase,
             set_codex_enabled,
+            set_theme,
+            set_accent_color,
+            set_animations_enabled,
             set_claude_enabled,
             set_cursor_enabled,
             set_popup_order,
@@ -979,6 +1010,8 @@ pub fn render(
             set_hovered_card_id,
             set_check_for_updates,
             set_notify_on_update,
+            theme_navigation_guard,
+            theme_navigation_guard_timer,
             settings_tx.clone(),
             ui_dispatcher.clone(),
             updates.clone(),
@@ -1012,7 +1045,7 @@ pub fn render(
             .vertical_alignment(VerticalAlignment::Stretch),
     )
     .opacity(if page_visible { 1.0 } else { 0.0 })
-    .with_opacity_transition(CONTROL_FAST_ANIMATION)
+    .with_opacity_transition(duration(CONTROL_FAST_ANIMATION))
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Stretch);
 
@@ -1100,6 +1133,9 @@ fn settings_about_icon_uri() -> String {
 
 fn tab_content(
     tab: Tab,
+    theme: AppTheme,
+    accent_color: AccentColor,
+    animations_enabled: bool,
     codex_enabled: bool,
     claude_enabled: bool,
     cursor_enabled: bool,
@@ -1132,6 +1168,9 @@ fn tab_content(
     notify_on_update: bool,
     update_phase: &UpdatePhase,
     set_codex_enabled: SetState<bool>,
+    set_theme: SetState<AppTheme>,
+    set_accent_color: SetState<AccentColor>,
+    set_animations_enabled: SetState<bool>,
     set_claude_enabled: SetState<bool>,
     set_cursor_enabled: SetState<bool>,
     set_popup_order: SetState<Vec<PopupWidgetKind>>,
@@ -1161,10 +1200,15 @@ fn tab_content(
     set_hovered_card_id: SetState<Option<String>>,
     set_check_for_updates: SetState<bool>,
     set_notify_on_update: SetState<bool>,
+    theme_navigation_guard: HookRef<bool>,
+    theme_navigation_guard_timer: HookRef<Option<DispatcherTimer>>,
     settings_tx: Sender<Settings>,
     ui_dispatcher: UiMarshaller,
     updates: Arc<UpdateController>,
 ) -> Element {
+    let apply_theme = settings_tx.clone();
+    let apply_accent_color = settings_tx.clone();
+    let apply_animations_enabled = settings_tx.clone();
     let apply_codex_enabled = settings_tx.clone();
     let apply_claude_enabled = settings_tx.clone();
     let apply_cursor_enabled = settings_tx.clone();
@@ -1410,13 +1454,91 @@ fn tab_content(
                 .with_key("general-show-account-name"),
             ],
         ),
+        Tab::Appearance => (
+            "Appearance",
+            vec![
+                settings_control_card(
+                    "Color theme",
+                    Some("Follow Windows or keep Codex Minibar light or dark."),
+                    ComboBox::new(["Use Windows setting", "Light", "Dark"])
+                        .selected_index(theme.index())
+                        .on_selection_changed(move |choice| {
+                            let value = AppTheme::from_index(choice);
+                            theme_navigation_guard.set(true);
+                            let guard = theme_navigation_guard.clone();
+                            match DispatcherTimer::new_one_shot(
+                                Duration::from_millis(350),
+                                move || guard.set(false),
+                            ) {
+                                Ok(timer) => theme_navigation_guard_timer.set(Some(timer)),
+                                Err(_) => theme_navigation_guard.set(false),
+                            }
+                            set_theme.call(value);
+                            crate::theme::apply_appearance(value, accent_color);
+                            persist_update(apply_theme.clone(), move |settings| {
+                                settings.theme = value;
+                            });
+                        }),
+                    "appearance-theme",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("appearance-theme"),
+                settings_control_card(
+                    "Accent color",
+                    Some("Use the Windows accent or choose a color for highlighted controls."),
+                    ComboBox::new([
+                        "Windows default",
+                        "Blue",
+                        "Purple",
+                        "Pink",
+                        "Red",
+                        "Orange",
+                        "Green",
+                        "Teal",
+                    ])
+                    .selected_index(accent_color.index())
+                    .on_selection_changed(move |choice| {
+                        let value = AccentColor::from_index(choice);
+                        set_accent_color.call(value);
+                        crate::theme::apply_appearance(theme, value);
+                        persist_update(apply_accent_color.clone(), move |settings| {
+                            settings.accent_color = value;
+                        });
+                    }),
+                    "appearance-accent",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("appearance-accent"),
+                settings_section_heading("Motion").with_key("appearance-motion-heading"),
+                settings_toggle_card_with_description(
+                    "Animation effects",
+                    Some("Turn this off for the same reduced-motion behavior as disabling Animation effects in Windows."),
+                    animations_enabled,
+                    move |value| {
+                        crate::theme::set_animations_enabled(value);
+                        persist_bool(
+                            set_animations_enabled.clone(),
+                            apply_animations_enabled.clone(),
+                            value,
+                            |settings, value| settings.animations_enabled = value,
+                        );
+                    },
+                    "appearance-animations",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("appearance-animations"),
+            ],
+        ),
         Tab::Providers => {
             let provider_order: Vec<ProviderKind> = popup_order
                 .iter()
                 .filter_map(|widget| widget.as_provider())
                 .collect();
             let mut rows = Vec::new();
-            for (index, provider) in provider_order.iter().copied().enumerate() {
+            for provider in provider_order.iter().copied() {
                 let (title, description, enabled, setter, apply_tx, other_a, other_b, tray_snapshot, tray_setter) =
                     match provider {
                         ProviderKind::Codex => (
@@ -1453,53 +1575,6 @@ fn tab_content(
                             tray_widget_setter_for_cursor_toggle.clone(),
                         ),
                     };
-                let order_for_up = popup_order.to_vec();
-                let order_for_down = popup_order.to_vec();
-                let order_setter_up = set_popup_order.clone();
-                let order_setter_down = set_popup_order.clone();
-                let order_tx_up = settings_tx.clone();
-                let order_tx_down = settings_tx.clone();
-                let can_move_up = index > 0;
-                let can_move_down = index + 1 < provider_order.len();
-                let mut actions: Vec<Element> = Vec::new();
-                if can_move_up {
-                    actions.push(
-                        Button::new("Move up")
-                            .on_click(move || {
-                                let mut settings = Settings {
-                                    popup_order: order_for_up.clone(),
-                                    ..Settings::default()
-                                };
-                                if settings.move_provider(provider, true) {
-                                    persist_popup_order(
-                                        order_setter_up.clone(),
-                                        order_tx_up.clone(),
-                                        settings.popup_order,
-                                    );
-                                }
-                            })
-                            .into(),
-                    );
-                }
-                if can_move_down {
-                    actions.push(
-                        Button::new("Move down")
-                            .on_click(move || {
-                                let mut settings = Settings {
-                                    popup_order: order_for_down.clone(),
-                                    ..Settings::default()
-                                };
-                                if settings.move_provider(provider, false) {
-                                    persist_popup_order(
-                                        order_setter_down.clone(),
-                                        order_tx_down.clone(),
-                                        settings.popup_order,
-                                    );
-                                }
-                            })
-                            .into(),
-                    );
-                }
                 let toggle = match provider {
                     ProviderKind::Codex => settings_toggle_card_with_description(
                         title,
@@ -1561,21 +1636,7 @@ fn tab_content(
                         set_hovered_card_id.clone(),
                     ),
                 };
-                if actions.is_empty() {
-                    rows.push(toggle.with_key(format!("providers-{}", provider.id())));
-                } else {
-                    rows.push(
-                        vstack((
-                            toggle,
-                            hstack(actions)
-                                .spacing(8.0)
-                                .horizontal_alignment(HorizontalAlignment::Right),
-                        ))
-                        .spacing(8.0)
-                        .with_key(format!("providers-{}", provider.id()))
-                        .into(),
-                    );
-                }
+                rows.push(toggle.with_key(format!("providers-{}", provider.id())));
             }
             rows.push(
                 settings_section_heading("Customization")
@@ -1768,6 +1829,9 @@ fn tab_content(
         ),
         Tab::Advanced => {
             let import_state = SettingsWindowState {
+                theme: set_theme,
+                accent_color: set_accent_color,
+                animations_enabled: set_animations_enabled,
                 codex_enabled: set_codex_enabled,
                 claude_enabled: set_claude_enabled,
                 cursor_enabled: set_cursor_enabled,
@@ -2223,7 +2287,7 @@ fn about_action_card(
     let hover: Element = border(Element::Empty)
         .background(ThemeRef::AccentSecondary)
         .opacity(if hovered { 0.28 } else { 0.0 })
-        .with_opacity_transition(CONTROL_FAST_ANIMATION)
+        .with_opacity_transition(duration(CONTROL_FAST_ANIMATION))
         .corner_radius(10.0)
         .relative_align_left()
         .relative_align_right()
@@ -2574,18 +2638,6 @@ fn persist_tray_widgets(
     let widgets = normalize_tray_widget_providers(widgets, enabled_providers);
     setter.call(widgets.clone());
     persist_update(settings_tx, move |settings| settings.tray_widgets = widgets);
-}
-
-fn persist_popup_order(
-    setter: SetState<Vec<PopupWidgetKind>>,
-    settings_tx: Sender<Settings>,
-    order: Vec<PopupWidgetKind>,
-) {
-    setter.call(order.clone());
-    persist_update(settings_tx, move |settings| {
-        settings.popup_order = order;
-        settings.normalize_popup_order();
-    });
 }
 
 fn enabled_providers(

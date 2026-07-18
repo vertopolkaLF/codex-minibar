@@ -3965,10 +3965,8 @@ pub struct IAppWindow_Vtbl {
     pub base__: windows_core::IInspectable_Vtbl,
     Id: usize,
     IsShownInSwitchers: usize,
-    pub SetIsShownInSwitchers: unsafe extern "system" fn(
-        *mut core::ffi::c_void,
-        bool,
-    ) -> windows_core::HRESULT,
+    pub SetIsShownInSwitchers:
+        unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_core::HRESULT,
     IsVisible: usize,
     OwnerWindowId: usize,
     pub Position:
@@ -3988,10 +3986,8 @@ pub struct IAppWindow_Vtbl {
     Destroy: usize,
     Hide: usize,
     Move: usize,
-    pub MoveAndResize: unsafe extern "system" fn(
-        *mut core::ffi::c_void,
-        RectInt32,
-    ) -> windows_core::HRESULT,
+    pub MoveAndResize:
+        unsafe extern "system" fn(*mut core::ffi::c_void, RectInt32) -> windows_core::HRESULT,
     MoveAndResizeRelativeToDisplayArea: usize,
     Resize: usize,
     pub SetIcon: unsafe extern "system" fn(
@@ -4069,7 +4065,10 @@ impl windows_core::RuntimeType for IAppWindowTitleBar {
         windows_core::imp::ConstBuffer::for_interface::<Self>();
 }
 impl IAppWindowTitleBar {
-    pub(crate) fn SetButtonForegroundColor(&self, value: Option<Color>) -> windows_core::Result<()> {
+    pub(crate) fn SetButtonForegroundColor(
+        &self,
+        value: Option<Color>,
+    ) -> windows_core::Result<()> {
         let value = value.map(<windows_reference::IReference<Color> as From<_>>::from);
         unsafe {
             (windows_core::Interface::vtable(self).SetButtonForegroundColor)(
@@ -8347,8 +8346,7 @@ pub struct IFrameworkElement_Vtbl {
         unsafe extern "system" fn(*mut core::ffi::c_void, *mut f64) -> windows_core::HRESULT,
     pub ActualHeight:
         unsafe extern "system" fn(*mut core::ffi::c_void, *mut f64) -> windows_core::HRESULT,
-    pub Width:
-        unsafe extern "system" fn(*mut core::ffi::c_void, *mut f64) -> windows_core::HRESULT,
+    pub Width: unsafe extern "system" fn(*mut core::ffi::c_void, *mut f64) -> windows_core::HRESULT,
     pub SetWidth: unsafe extern "system" fn(*mut core::ffi::c_void, f64) -> windows_core::HRESULT,
     pub Height:
         unsafe extern "system" fn(*mut core::ffi::c_void, *mut f64) -> windows_core::HRESULT,
@@ -13221,6 +13219,16 @@ impl windows_core::RuntimeType for ISolidColorBrush {
         windows_core::imp::ConstBuffer::for_interface::<Self>();
 }
 impl ISolidColorBrush {
+    pub(crate) fn Color(&self) -> windows_core::Result<Color> {
+        unsafe {
+            let mut result__ = core::mem::zeroed();
+            (windows_core::Interface::vtable(self).Color)(
+                windows_core::Interface::as_raw(self),
+                &mut result__,
+            )
+            .map(|| result__)
+        }
+    }
     pub(crate) fn SetColor(&self, value: Color) -> windows_core::Result<()> {
         unsafe {
             (windows_core::Interface::vtable(self).SetColor)(
@@ -13234,7 +13242,8 @@ impl ISolidColorBrush {
 #[repr(C)]
 pub struct ISolidColorBrush_Vtbl {
     pub base__: windows_core::IInspectable_Vtbl,
-    Color: usize,
+    pub Color:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut Color) -> windows_core::HRESULT,
     pub SetColor: unsafe extern "system" fn(*mut core::ffi::c_void, Color) -> windows_core::HRESULT,
 }
 windows_core::imp::define_interface!(

@@ -18,8 +18,8 @@ use crate::{
     notifications::LimitNotificationTracker,
     popup,
     settings::{
-        NotificationSettings, PopupWidgetKind, ProviderKind, Settings, TotalSpendPresentation,
-        TrayWidget,
+        AccentColor, AppTheme, NotificationSettings, PopupWidgetKind, ProviderKind, Settings,
+        TotalSpendPresentation, TrayWidget,
     },
     settings_controls::update_accent_button,
     tray::{TrayManager, TrayMenuAction},
@@ -81,16 +81,25 @@ impl AppState {
     }
 
     fn replace_limits(&self, provider: ProviderKind, mut limits: RateLimits) {
-        if let Ok(mut current) = self.limits.lock() {
+        let persisted = if let Ok(mut current) = self.limits.lock() {
             // Quota polling must not erase the independently refreshed usage
             // history between its ten-minute scans.
             limits.usage = current.get(provider).usage.clone();
             *current.get_mut(provider) = limits.clone();
-            if let Err(error) =
+            Some(limits)
+        } else {
+            None
+        };
+        // Never hold the live UI snapshot while waiting for storage. Usage
+        // refreshes can legitimately keep the SQLite writer busy briefly.
+        if let Some(limits) = persisted
+            && let Err(error) =
                 crate::store::with_store(|store| store.save_limits(provider, &limits))
-            {
-                eprintln!("failed to persist {} limits: {error:#}", provider.display_name());
-            }
+        {
+            eprintln!(
+                "failed to persist {} limits: {error:#}",
+                provider.display_name()
+            );
         }
     }
 
@@ -195,6 +204,9 @@ impl AppState {
 
 #[derive(Clone, Debug, PartialEq)]
 struct UiState {
+    theme: AppTheme,
+    accent_color: AccentColor,
+    animations_enabled: bool,
     last_activation: String,
     error: Option<String>,
     /// Changes for every successful worker sample.  Rate-limit data lives only
@@ -264,6 +276,9 @@ impl SettingsTab {
 impl Default for UiState {
     fn default() -> Self {
         Self {
+            theme: AppTheme::Auto,
+            accent_color: AccentColor::Windows,
+            animations_enabled: true,
             last_activation: "Never".into(),
             error: None,
             limits_revision: 0,
@@ -405,9 +420,9 @@ fn visible_popup_widgets(
         .copied()
         .filter(|widget| match widget {
             PopupWidgetKind::TotalSpend => show_total_spend,
-            other => other.as_provider().is_some_and(|provider| {
-                provider_is_enabled(provider, codex, claude, cursor)
-            }),
+            other => other
+                .as_provider()
+                .is_some_and(|provider| provider_is_enabled(provider, codex, claude, cursor)),
         })
         .collect()
 }
@@ -489,8 +504,7 @@ fn reduce_pager(mut state: PagerState, action: PagerAction) -> PagerState {
             if target == state.current {
                 return state;
             }
-            state.direction =
-                PagerDirection::between(state.current, target, &state.provider_order);
+            state.direction = PagerDirection::between(state.current, target, &state.provider_order);
             state.outgoing = Some(state.current);
             state.current = target;
             state.pending = None;
@@ -645,13 +659,12 @@ fn commit_widget_drag(
         COMMITTING.with(|flag| flag.set(false));
         return;
     }
-    let show_total_spend = ui.show_total_spend_on_all_tab
-        && {
-            let enabled = usize::from(ui.codex_enabled)
-                + usize::from(ui.claude_enabled)
-                + usize::from(ui.cursor_enabled);
-            enabled > 1
-        };
+    let show_total_spend = ui.show_total_spend_on_all_tab && {
+        let enabled = usize::from(ui.codex_enabled)
+            + usize::from(ui.claude_enabled)
+            + usize::from(ui.cursor_enabled);
+        enabled > 1
+    };
     let mut scratch = Settings {
         popup_order: ui.popup_order.clone(),
         providers: crate::settings::ProviderSettings {
@@ -733,7 +746,7 @@ fn with_widget_drop_target(
     // Visual ring only — null fill so it does not steal hits on its own.
     let outline: Element = border(Element::Empty)
         .border_thickness(Thickness::uniform(1.0))
-        .border_brush(ThemeRef::SystemAttention)
+        .border_brush(ThemeRef::Accent)
         .corner_radius(6.0)
         .opacity(if show_outline { 1.0 } else { 0.0 })
         .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -998,6 +1011,9 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let border_inset = 96.0 / f64::from(dpi);
     let inner_corner_radius = (window_corner_radius - border_inset).max(0.0);
     let (ui, set_ui) = cx.use_async_state(UiState {
+        theme: state.settings.theme,
+        accent_color: state.settings.accent_color,
+        animations_enabled: state.settings.animations_enabled,
         error: state.startup_error.clone(),
         last_activation: format_last_activation(&RateLimits::default(), state.last_activation_at),
         show_used_percentage: state.settings.show_used_percentage,
@@ -1018,6 +1034,13 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             .map(|update| update.version),
         ..UiState::default()
     });
+    cx.use_effect(
+        (ui.theme, ui.accent_color, ui.animations_enabled),
+        move || {
+            crate::theme::set_animations_enabled(ui.animations_enabled);
+            crate::theme::apply_appearance(ui.theme, ui.accent_color);
+        },
+    );
     // Rendering observes the same snapshot that the tray consumes; UiState
     // deliberately contains only view metadata, never a second copy of limits.
     let limits = state.current_limits();
@@ -1035,7 +1058,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     // input or provider event. This changes only the elapsed-time label; it
     // never requests fresh limits.
     let (clock_tick, set_clock_tick) = cx.use_async_state(0_u64);
-    let page_animations_enabled = popup::animations_enabled();
+    let page_animations_enabled = ui.animations_enabled && popup::system_animations_enabled();
 
     cx.use_effect_with_cleanup(
         (
@@ -1334,9 +1357,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     };
 
     let body = build_body(selected_view, false);
-    let outgoing_body = pager
-        .outgoing
-        .map(|view| build_body(view, true));
+    let outgoing_body = pager.outgoing.map(|view| build_body(view, true));
 
     let quit_or_update = if ui.update_version.is_some() {
         update_accent_button("Update", || {
@@ -1416,18 +1437,12 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     "Codex",
                     PopupView::Codex,
                 ),
-                ProviderKind::Claude => (
-                    "provider-tab-claude",
-                    "claude",
-                    "Claude",
-                    PopupView::Claude,
-                ),
-                ProviderKind::Cursor => (
-                    "provider-tab-cursor",
-                    "cursor",
-                    "Cursor",
-                    PopupView::Cursor,
-                ),
+                ProviderKind::Claude => {
+                    ("provider-tab-claude", "claude", "Claude", PopupView::Claude)
+                }
+                ProviderKind::Cursor => {
+                    ("provider-tab-cursor", "cursor", "Cursor", PopupView::Cursor)
+                }
             };
             provider_tabs.push(popup_tab_button(
                 tab_id,
@@ -1446,19 +1461,19 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             ));
         }
         hstack(provider_tabs)
-        .spacing(2.0)
-        .horizontal_alignment(HorizontalAlignment::Left)
-        .vertical_alignment(VerticalAlignment::Center)
-        // Provider marks are native swap-chain children. Recreate the whole
-        // selector when membership, order, tint mode, or theme changes;
-        // otherwise WinUI reconciliation can retain a prior tab's text/icon.
-        .with_key(format!(
-            "provider-tabs-{}-{}-{}",
-            provider_order_key(&enabled_provider_order),
-            ui.use_colored_provider_icons,
-            color_scheme as i32
-        ))
-        .into()
+            .spacing(2.0)
+            .horizontal_alignment(HorizontalAlignment::Left)
+            .vertical_alignment(VerticalAlignment::Center)
+            // Provider marks are native swap-chain children. Recreate the whole
+            // selector when membership, order, tint mode, or theme changes;
+            // otherwise WinUI reconciliation can retain a prior tab's text/icon.
+            .with_key(format!(
+                "provider-tabs-{}-{}-{}",
+                provider_order_key(&enabled_provider_order),
+                ui.use_colored_provider_icons,
+                color_scheme as i32
+            ))
+            .into()
     } else {
         vstack((
             body_strong("Codex Minibar").foreground(ThemeRef::SecondaryText),
@@ -1648,14 +1663,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     } else {
         0.0
     };
-    let current_page = build_page(
-        body,
-        selected_view,
-        "current",
-        incoming_from,
-        0.0,
-        true,
-    );
+    let current_page = build_page(body, selected_view, "current", incoming_from, 0.0, true);
     let outgoing_page = match (pager.outgoing, outgoing_body) {
         (Some(view), Some(body)) => build_page(
             body,
@@ -2027,6 +2035,9 @@ fn start_background_bridge(
         let mut limit_notifications = HashMap::<ProviderKind, LimitNotificationTracker>::new();
         let mut update_phase = updates.snapshot();
         let mut ui = UiState {
+            theme: state.settings.theme,
+            accent_color: state.settings.accent_color,
+            animations_enabled: state.settings.animations_enabled,
             error: state.startup_error.clone(),
             last_activation: format_last_activation(&RateLimits::default(), fallback_attempt),
             show_used_percentage: state.settings.show_used_percentage,
@@ -2073,6 +2084,9 @@ fn start_background_bridge(
             let providers_changed = ui.codex_enabled != settings.providers.codex_enabled
                 || ui.claude_enabled != settings.providers.claude_enabled
                 || ui.cursor_enabled != settings.providers.cursor_enabled;
+            ui.theme = settings.theme;
+            ui.accent_color = settings.accent_color;
+            ui.animations_enabled = settings.animations_enabled;
             ui.show_used_percentage = settings.show_used_percentage;
             ui.show_usage_pace = settings.show_usage_pace;
             ui.show_banked_resets = settings.show_banked_resets;
@@ -2481,7 +2495,7 @@ fn popup_tab_button(
         .into();
     let selection_marker: Element = border(Element::Empty)
         .height(2.0)
-        .background(ThemeRef::SystemAttention)
+        .background(ThemeRef::Accent)
         .opacity(if selected { 1.0 } else { 0.0 })
         .corner_radius(1.0)
         .margin(Thickness {
@@ -2499,8 +2513,7 @@ fn popup_tab_button(
         layers.push(
             body_strong(label)
                 .foreground(if selected {
-                    // Match usage progress / "% left" chrome, not Windows accent text.
-                    ThemeRef::SystemAttention
+                    ThemeRef::Accent
                 } else if hovered {
                     ThemeRef::PrimaryText
                 } else {
@@ -2782,7 +2795,7 @@ fn limit_card(
     disabled: bool,
     color_scheme: ColorScheme,
 ) -> Element {
-    let accent = ThemeRef::SystemAttention;
+    let accent = ThemeRef::Accent;
     let (remaining_label, progress, show_reset, pace) = if disabled {
         ("Disabled".into(), 100.0, false, None)
     } else {
@@ -2889,7 +2902,7 @@ fn credits_card(limits: &RateLimits) -> Element {
             .vertical_alignment(VerticalAlignment::Center),
             text_block(value)
                 .font_weight(600)
-                .foreground(ThemeRef::SystemAttention)
+                .foreground(ThemeRef::Accent)
                 .vertical_alignment(VerticalAlignment::Center)
                 .horizontal_alignment(HorizontalAlignment::Right)
                 .grid_column(1),
@@ -2935,7 +2948,7 @@ fn reset_credits_card(limits: &RateLimits) -> Element {
         grid((
             text_block(count_label)
                 .font_weight(600)
-                .foreground(ThemeRef::SystemAttention)
+                .foreground(ThemeRef::Accent)
                 .vertical_alignment(VerticalAlignment::Center),
             vstack((
                 text_block(expiration_label),
@@ -3055,7 +3068,10 @@ fn combined_usage_card(
         .into_iter()
         .filter(|(_, enabled, _)| *enabled)
         .map(|(provider, _, provider_limits)| {
-            (provider, combined_usage_spend(&provider_limits.usage, period))
+            (
+                provider,
+                combined_usage_spend(&provider_limits.usage, period),
+            )
         })
         .collect();
     entries.sort_by(|(_, left), (_, right)| right.cmp(left));
@@ -3071,13 +3087,10 @@ fn combined_usage_card(
         }
     };
 
-    let mut title_trailing_items: Vec<Element> = vec![combined_usage_period_selector(
-        period,
-        set_period,
-        hovered_period,
-        set_hovered_period,
-    )
-    .into()];
+    let mut title_trailing_items: Vec<Element> = vec![
+        combined_usage_period_selector(period, set_period, hovered_period, set_hovered_period)
+            .into(),
+    ];
     if let Some(handle) = drag_handle {
         title_trailing_items.push(handle);
     }
@@ -3159,7 +3172,9 @@ fn combined_usage_progress_content(
     sorted_entries.sort_by(|(_, left), (_, right)| right.cmp(left));
 
     vstack((
-        text_block(format_spend(total_spend)).font_size(22.0).font_weight(600),
+        text_block(format_spend(total_spend))
+            .font_size(22.0)
+            .font_weight(600),
         combined_usage_progress_bar(&sorted_entries, color_scheme),
         combined_usage_grouped_totals(&sorted_entries, color_scheme),
     ))
@@ -3167,7 +3182,10 @@ fn combined_usage_progress_content(
     .into()
 }
 
-fn combined_usage_progress_bar(entries: &[(ProviderKind, u64)], color_scheme: ColorScheme) -> Element {
+fn combined_usage_progress_bar(
+    entries: &[(ProviderKind, u64)],
+    color_scheme: ColorScheme,
+) -> Element {
     let total_spend = entries
         .iter()
         .fold(0_u64, |total, (_, spend)| total.saturating_add(*spend));
@@ -3255,22 +3273,21 @@ fn combined_usage_period_button(
         body_strong(period.label())
             .foreground(ThemeRef::TertiaryText)
             .opacity(if !is_selected && !hovered { 1.0 } else { 0.0 })
-            .with_opacity_transition(Duration::from_millis(200))
+            .with_opacity_transition(crate::theme::duration(Duration::from_millis(200)))
             .relative_align_h_center()
             .relative_align_v_center()
             .into(),
         body_strong(period.label())
             .foreground(ThemeRef::SecondaryText)
             .opacity(if !is_selected && hovered { 1.0 } else { 0.0 })
-            .with_opacity_transition(Duration::from_millis(200))
+            .with_opacity_transition(crate::theme::duration(Duration::from_millis(200)))
             .relative_align_h_center()
             .relative_align_v_center()
             .into(),
         body_strong(period.label())
-            // Match usage progress / "% left" chrome, not Windows accent text.
-            .foreground(ThemeRef::SystemAttention)
+            .foreground(ThemeRef::Accent)
             .opacity(if is_selected { 1.0 } else { 0.0 })
-            .with_opacity_transition(Duration::from_millis(200))
+            .with_opacity_transition(crate::theme::duration(Duration::from_millis(200)))
             .relative_align_h_center()
             .relative_align_v_center()
             .into(),
@@ -3535,7 +3552,7 @@ fn usage_activity_chart(statistics: &crate::usage::UsageStatistics) -> Element {
                 .width(bar_width)
                 .height(height)
                 .corner_radius(1.5)
-                .background(ThemeRef::SystemAttention)
+                .background(ThemeRef::Accent)
                 .opacity(if tokens == 0 { 0.2 } else { 1.0 })
                 .vertical_alignment(VerticalAlignment::Bottom)
                 .into()
@@ -3920,10 +3937,7 @@ mod tests {
 
     #[test]
     fn pager_queues_only_the_latest_destination() {
-        let state = reduce_pager(
-            PagerState::default(),
-            PagerAction::Select(PopupView::Codex),
-        );
+        let state = reduce_pager(PagerState::default(), PagerAction::Select(PopupView::Codex));
         assert_eq!(state.outgoing, Some(PopupView::All));
         assert_eq!(state.current, PopupView::Codex);
         assert_eq!(state.direction, PagerDirection::Forward);
@@ -3968,9 +3982,11 @@ mod tests {
             assert_eq!(views.contains(&PopupView::Codex), codex);
             assert_eq!(views.contains(&PopupView::Claude), claude);
             assert_eq!(views.contains(&PopupView::Cursor), cursor);
-            assert!(views
-                .windows(2)
-                .all(|pair| pair[0].order(&providers) < pair[1].order(&providers)));
+            assert!(
+                views
+                    .windows(2)
+                    .all(|pair| pair[0].order(&providers) < pair[1].order(&providers))
+            );
             assert_eq!(
                 views.len(),
                 1 + usize::from(codex) + usize::from(claude) + usize::from(cursor)
@@ -3997,10 +4013,7 @@ mod tests {
 
     #[test]
     fn stale_pager_completion_cannot_end_a_newer_transition() {
-        let state = reduce_pager(
-            PagerState::default(),
-            PagerAction::Select(PopupView::Codex),
-        );
+        let state = reduce_pager(PagerState::default(), PagerAction::Select(PopupView::Codex));
         let unchanged = reduce_pager(
             state.clone(),
             PagerAction::AnimationFinished(state.animation_id.wrapping_sub(1)),

@@ -4,9 +4,9 @@
 //! from this WAL database — the only on-disk persistence for provider data.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
 };
 
@@ -66,7 +66,7 @@ impl ProviderStore {
         .context("configure sqlite")?;
         let store = Self { conn };
         store.migrate()?;
-        store.purge_legacy_json_caches();
+        store.migrate_legacy_json_caches();
         Ok(store)
     }
 
@@ -219,18 +219,29 @@ impl ProviderStore {
         days: &[DailyTokenUsage],
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
-            "DELETE FROM usage_daily WHERE provider = ?1",
-            params![provider.id()],
-        )?;
+        let mut retained = BTreeSet::new();
         {
             let mut insert = tx.prepare(
                 "INSERT INTO usage_daily(
                     provider, date, input_tokens, cached_input_tokens, output_tokens,
                     requests, estimated_cost_microusd, priced_requests
-                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(provider, date) DO UPDATE SET
+                    input_tokens=excluded.input_tokens,
+                    cached_input_tokens=excluded.cached_input_tokens,
+                    output_tokens=excluded.output_tokens,
+                    requests=excluded.requests,
+                    estimated_cost_microusd=excluded.estimated_cost_microusd,
+                    priced_requests=excluded.priced_requests
+                 WHERE input_tokens IS NOT excluded.input_tokens
+                    OR cached_input_tokens IS NOT excluded.cached_input_tokens
+                    OR output_tokens IS NOT excluded.output_tokens
+                    OR requests IS NOT excluded.requests
+                    OR estimated_cost_microusd IS NOT excluded.estimated_cost_microusd
+                    OR priced_requests IS NOT excluded.priced_requests",
             )?;
             for entry in days {
+                retained.insert(entry.date.to_string());
                 insert.execute(params![
                     provider.id(),
                     entry.date.to_string(),
@@ -241,6 +252,19 @@ impl ProviderStore {
                     entry.usage.estimated_cost_microusd as i64,
                     entry.usage.priced_requests as i64,
                 ])?;
+            }
+        }
+        let existing = {
+            let mut statement = tx.prepare("SELECT date FROM usage_daily WHERE provider = ?1")?;
+            let rows = statement.query_map(params![provider.id()], |row| row.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        for date in existing {
+            if !retained.contains(&date) {
+                tx.execute(
+                    "DELETE FROM usage_daily WHERE provider = ?1 AND date = ?2",
+                    params![provider.id(), date],
+                )?;
             }
         }
         tx.commit()?;
@@ -352,26 +376,38 @@ impl ProviderStore {
 
     pub(crate) fn save_codex_cache(&self, cache: &UsageCache) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
-            "DELETE FROM scan_files WHERE provider = ?1",
-            params![ProviderKind::Codex.id()],
-        )?;
-        tx.execute(
-            "DELETE FROM usage_file_daily WHERE provider = ?1",
-            params![ProviderKind::Codex.id()],
-        )?;
+        let mut retained_files = BTreeSet::new();
+        let mut retained_days = BTreeSet::new();
         {
             let mut scan = tx.prepare(
                 "INSERT INTO scan_files(provider, path, offset, meta_json)
-                 VALUES(?1, ?2, ?3, ?4)",
+                 VALUES(?1, ?2, ?3, ?4)
+                 ON CONFLICT(provider, path) DO UPDATE SET
+                    offset=excluded.offset,
+                    meta_json=excluded.meta_json
+                 WHERE offset IS NOT excluded.offset OR meta_json IS NOT excluded.meta_json",
             )?;
             let mut daily = tx.prepare(
                 "INSERT INTO usage_file_daily(
                     provider, path, date, input_tokens, cached_input_tokens, output_tokens,
                     requests, estimated_cost_microusd, priced_requests
-                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT(provider, path, date) DO UPDATE SET
+                    input_tokens=excluded.input_tokens,
+                    cached_input_tokens=excluded.cached_input_tokens,
+                    output_tokens=excluded.output_tokens,
+                    requests=excluded.requests,
+                    estimated_cost_microusd=excluded.estimated_cost_microusd,
+                    priced_requests=excluded.priced_requests
+                 WHERE input_tokens IS NOT excluded.input_tokens
+                    OR cached_input_tokens IS NOT excluded.cached_input_tokens
+                    OR output_tokens IS NOT excluded.output_tokens
+                    OR requests IS NOT excluded.requests
+                    OR estimated_cost_microusd IS NOT excluded.estimated_cost_microusd
+                    OR priced_requests IS NOT excluded.priced_requests",
             )?;
             for (path, file) in &cache.files {
+                retained_files.insert(path.clone());
                 let meta = serde_json::to_string(&CodexFileMeta {
                     current_model: file.current_model.clone(),
                     fast_service_tier: file.fast_service_tier,
@@ -383,6 +419,7 @@ impl ProviderStore {
                     meta
                 ])?;
                 for entry in &file.daily {
+                    retained_days.insert((path.clone(), entry.date.to_string()));
                     daily.execute(params![
                         ProviderKind::Codex.id(),
                         path,
@@ -397,6 +434,7 @@ impl ProviderStore {
                 }
             }
         }
+        delete_stale_file_rows(&tx, &retained_files, &retained_days)?;
         tx.commit()?;
 
         let flags = json!({
@@ -477,33 +515,54 @@ impl ProviderStore {
 
     pub(crate) fn save_claude_cache(&self, cache: &ClaudeUsageCache) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
-            "DELETE FROM scan_files WHERE provider = ?1",
-            params![ProviderKind::Claude.id()],
-        )?;
-        tx.execute(
-            "DELETE FROM usage_events WHERE provider = ?1",
-            params![ProviderKind::Claude.id()],
-        )?;
+        let mut retained_files = BTreeSet::new();
+        let mut retained_events = BTreeSet::new();
         {
             let mut scan = tx.prepare(
                 "INSERT INTO scan_files(provider, path, offset, meta_json)
-                 VALUES(?1, ?2, ?3, '{}')",
+                 VALUES(?1, ?2, ?3, '{}')
+                 ON CONFLICT(provider, path) DO UPDATE SET offset=excluded.offset
+                 WHERE offset IS NOT excluded.offset",
             )?;
             let mut events = tx.prepare(
                 "INSERT INTO usage_events(
                     provider, path, event_ord, ts, message_id, request_id,
                     is_sidechain, has_speed, input_tokens, cached_input_tokens,
                     output_tokens, requests, estimated_cost_microusd, priced_requests
-                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                 ON CONFLICT(provider, path, event_ord) DO UPDATE SET
+                    ts=excluded.ts,
+                    message_id=excluded.message_id,
+                    request_id=excluded.request_id,
+                    is_sidechain=excluded.is_sidechain,
+                    has_speed=excluded.has_speed,
+                    input_tokens=excluded.input_tokens,
+                    cached_input_tokens=excluded.cached_input_tokens,
+                    output_tokens=excluded.output_tokens,
+                    requests=excluded.requests,
+                    estimated_cost_microusd=excluded.estimated_cost_microusd,
+                    priced_requests=excluded.priced_requests
+                 WHERE ts IS NOT excluded.ts
+                    OR message_id IS NOT excluded.message_id
+                    OR request_id IS NOT excluded.request_id
+                    OR is_sidechain IS NOT excluded.is_sidechain
+                    OR has_speed IS NOT excluded.has_speed
+                    OR input_tokens IS NOT excluded.input_tokens
+                    OR cached_input_tokens IS NOT excluded.cached_input_tokens
+                    OR output_tokens IS NOT excluded.output_tokens
+                    OR requests IS NOT excluded.requests
+                    OR estimated_cost_microusd IS NOT excluded.estimated_cost_microusd
+                    OR priced_requests IS NOT excluded.priced_requests",
             )?;
             for (path, file) in &cache.files {
+                retained_files.insert(path.clone());
                 scan.execute(params![
                     ProviderKind::Claude.id(),
                     path,
                     file.offset as i64
                 ])?;
                 for (event_ord, entry) in file.entries.iter().enumerate() {
+                    retained_events.insert((path.clone(), event_ord as i64));
                     events.execute(params![
                         ProviderKind::Claude.id(),
                         path,
@@ -523,6 +582,7 @@ impl ProviderStore {
                 }
             }
         }
+        delete_stale_event_rows(&tx, &retained_files, &retained_events)?;
         tx.commit()?;
 
         let flags = json!({ "cache_version": cache.version });
@@ -570,7 +630,10 @@ impl ProviderStore {
              ON CONFLICT(provider) DO UPDATE SET
                 usage_fetched_at=COALESCE(excluded.usage_fetched_at, provider_meta.usage_fetched_at),
                 schema_version=excluded.schema_version,
-                flags_json=excluded.flags_json",
+                flags_json=excluded.flags_json
+             WHERE provider_meta.usage_fetched_at IS NOT COALESCE(excluded.usage_fetched_at, provider_meta.usage_fetched_at)
+                OR provider_meta.schema_version IS NOT excluded.schema_version
+                OR provider_meta.flags_json IS NOT excluded.flags_json",
             params![provider.id(), fetched, schema_version, flags],
         )?;
         Ok(())
@@ -579,29 +642,196 @@ impl ProviderStore {
     fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         self.conn.execute(
             "INSERT INTO meta(key, value) VALUES(?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value
+             WHERE meta.value IS NOT excluded.value",
             params![key, value],
         )?;
         Ok(())
     }
 
-    /// Deletes leftover per-provider JSON caches from the pre-SQLite scheme.
-    /// SQLite is the only persistence path; old files are not imported.
-    fn purge_legacy_json_caches(&self) {
+    /// Imports the previous JSON caches once so upgrading does not force a
+    /// multi-gigabyte rescan of local session logs. Malformed caches remain on
+    /// disk and the normal scanner can recover without losing their evidence.
+    fn migrate_legacy_json_caches(&self) {
         let Ok(config) = config_dir() else {
             return;
         };
-        for name in [
-            "usage-cache.json",
-            "claude-usage-cache.json",
-            "cursor-usage-cache.json",
-        ] {
-            let path = config.join(name);
-            if path.is_file() {
-                let _ = fs::remove_file(&path);
-            }
+
+        let codex = config.join("usage-cache.json");
+        if self.provider_has_scan_cache(ProviderKind::Codex).unwrap_or(false)
+            || self.import_codex_json(&codex).unwrap_or(false)
+        {
+            let _ = fs::remove_file(codex);
+        }
+
+        let claude = config.join("claude-usage-cache.json");
+        if self.provider_has_scan_cache(ProviderKind::Claude).unwrap_or(false)
+            || self.import_claude_json(&claude).unwrap_or(false)
+        {
+            let _ = fs::remove_file(claude);
+        }
+
+        let cursor = config.join("cursor-usage-cache.json");
+        if self.provider_has_daily_cache(ProviderKind::Cursor).unwrap_or(false)
+            || self.import_cursor_json(&cursor).unwrap_or(false)
+        {
+            let _ = fs::remove_file(cursor);
         }
     }
+
+    fn provider_has_scan_cache(&self, provider: ProviderKind) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM scan_files WHERE provider = ?1)",
+            params![provider.id()],
+            |row| row.get(0),
+        )?)
+    }
+
+    fn provider_has_daily_cache(&self, provider: ProviderKind) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM usage_daily WHERE provider = ?1)",
+            params![provider.id()],
+            |row| row.get(0),
+        )?)
+    }
+
+    fn import_codex_json(&self, path: &Path) -> Result<bool> {
+        let Ok(bytes) = fs::read(path) else {
+            return Ok(false);
+        };
+        let Ok(mut cache) = serde_json::from_slice::<UsageCache>(&bytes) else {
+            return Ok(false);
+        };
+        if cache.version > CODEX_CACHE_VERSION {
+            return Ok(false);
+        }
+        if cache.version != CODEX_CACHE_VERSION {
+            cache.pricing_rebuild_needed = true;
+        }
+        self.save_codex_cache(&cache)?;
+        Ok(true)
+    }
+
+    fn import_claude_json(&self, path: &Path) -> Result<bool> {
+        let Ok(bytes) = fs::read(path) else {
+            return Ok(false);
+        };
+        let Ok(cache) = serde_json::from_slice::<ClaudeUsageCache>(&bytes) else {
+            return Ok(false);
+        };
+        if cache.version != CLAUDE_CACHE_VERSION {
+            return Ok(false);
+        }
+        self.save_claude_cache(&cache)?;
+        let stats = crate::usage::statistics_from_claude_cache(
+            &cache,
+            CACHE_RETENTION_DAYS as u16,
+        );
+        self.replace_usage_daily(ProviderKind::Claude, &stats.daily)?;
+        Ok(true)
+    }
+
+    fn import_cursor_json(&self, path: &Path) -> Result<bool> {
+        let Ok(bytes) = fs::read(path) else {
+            return Ok(false);
+        };
+        let Ok(cache) = serde_json::from_slice::<LegacyCursorUsageCache>(&bytes) else {
+            return Ok(false);
+        };
+        if cache.version != CURSOR_USAGE_VERSION {
+            return Ok(false);
+        }
+        self.replace_usage_daily(ProviderKind::Cursor, &cache.daily)?;
+        self.set_usage_fetched_at(ProviderKind::Cursor, cache.fetched_at)?;
+        Ok(true)
+    }
+}
+
+#[derive(Deserialize)]
+struct LegacyCursorUsageCache {
+    version: u8,
+    fetched_at: DateTime<Utc>,
+    daily: Vec<DailyTokenUsage>,
+}
+
+fn delete_stale_file_rows(
+    tx: &rusqlite::Transaction<'_>,
+    retained_files: &BTreeSet<String>,
+    retained_days: &BTreeSet<(String, String)>,
+) -> Result<()> {
+    let provider = ProviderKind::Codex.id();
+    let existing_files = {
+        let mut statement = tx.prepare("SELECT path FROM scan_files WHERE provider = ?1")?;
+        let rows = statement.query_map(params![provider], |row| row.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for path in existing_files {
+        if !retained_files.contains(&path) {
+            tx.execute(
+                "DELETE FROM scan_files WHERE provider = ?1 AND path = ?2",
+                params![provider, path],
+            )?;
+        }
+    }
+
+    let existing_days = {
+        let mut statement = tx.prepare(
+            "SELECT path, date FROM usage_file_daily WHERE provider = ?1",
+        )?;
+        let rows = statement.query_map(params![provider], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (path, date) in existing_days {
+        if !retained_days.contains(&(path.clone(), date.clone())) {
+            tx.execute(
+                "DELETE FROM usage_file_daily WHERE provider = ?1 AND path = ?2 AND date = ?3",
+                params![provider, path, date],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn delete_stale_event_rows(
+    tx: &rusqlite::Transaction<'_>,
+    retained_files: &BTreeSet<String>,
+    retained_events: &BTreeSet<(String, i64)>,
+) -> Result<()> {
+    let provider = ProviderKind::Claude.id();
+    let existing_files = {
+        let mut statement = tx.prepare("SELECT path FROM scan_files WHERE provider = ?1")?;
+        let rows = statement.query_map(params![provider], |row| row.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for path in existing_files {
+        if !retained_files.contains(&path) {
+            tx.execute(
+                "DELETE FROM scan_files WHERE provider = ?1 AND path = ?2",
+                params![provider, path],
+            )?;
+        }
+    }
+
+    let existing_events = {
+        let mut statement = tx.prepare(
+            "SELECT path, event_ord FROM usage_events WHERE provider = ?1",
+        )?;
+        let rows = statement.query_map(params![provider], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (path, event_ord) in existing_events {
+        if !retained_events.contains(&(path.clone(), event_ord)) {
+            tx.execute(
+                "DELETE FROM usage_events WHERE provider = ?1 AND path = ?2 AND event_ord = ?3",
+                params![provider, path, event_ord],
+            )?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -668,14 +898,45 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn test_store(path: &Path) -> ProviderStore {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+        let store = ProviderStore { conn };
+        store.migrate().unwrap();
+        store
+    }
+
+    fn sample_codex_cache() -> UsageCache {
+        UsageCache {
+            version: CODEX_CACHE_VERSION,
+            pricing_rebuild_needed: false,
+            files: BTreeMap::from([(
+                "sessions/sample.jsonl".into(),
+                CachedSessionFile {
+                    offset: 42,
+                    daily: vec![DailyTokenUsage {
+                        date: Local::now().date_naive(),
+                        usage: TokenUsage {
+                            input_tokens: 10,
+                            output_tokens: 5,
+                            requests: 1,
+                            priced_requests: 1,
+                            estimated_cost_microusd: 100,
+                            ..Default::default()
+                        },
+                    }],
+                    current_model: Some("gpt-5".into()),
+                    fast_service_tier: false,
+                },
+            )]),
+        }
+    }
+
     #[test]
     fn round_trips_usage_daily() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("test.sqlite");
-        let conn = Connection::open(&path).unwrap();
-        conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
-        let mut store = ProviderStore { conn };
-        store.migrate().unwrap();
+        let store = test_store(&path);
         let days = vec![DailyTokenUsage {
             date: NaiveDate::from_ymd_opt(2026, 7, 14).unwrap(),
             usage: TokenUsage {
@@ -693,5 +954,44 @@ mod tests {
         let stats = store.load_usage_daily(ProviderKind::Cursor, 30).unwrap();
         assert_eq!(stats.daily.len(), 1);
         assert_eq!(stats.history.requests, 1);
+    }
+
+    #[test]
+    fn unchanged_codex_cache_does_not_rewrite_rows() {
+        let dir = tempdir().unwrap();
+        let store = test_store(&dir.path().join("test.sqlite"));
+        let cache = sample_codex_cache();
+
+        store.save_codex_cache(&cache).unwrap();
+        let changes_after_first_save = store.conn.total_changes();
+        store.save_codex_cache(&cache).unwrap();
+
+        assert_eq!(store.conn.total_changes(), changes_after_first_save);
+    }
+
+    #[test]
+    fn codex_json_migration_preserves_offsets_and_daily_usage() {
+        let dir = tempdir().unwrap();
+        let store = test_store(&dir.path().join("test.sqlite"));
+        let legacy_path = dir.path().join("usage-cache.json");
+        fs::write(
+            &legacy_path,
+            serde_json::to_vec_pretty(&sample_codex_cache()).unwrap(),
+        )
+        .unwrap();
+
+        assert!(store.import_codex_json(&legacy_path).unwrap());
+        let migrated = store.load_codex_cache().unwrap();
+        let file = migrated.files.get("sessions/sample.jsonl").unwrap();
+        assert_eq!(file.offset, 42);
+        assert_eq!(file.daily[0].usage.total_tokens(), 15);
+        assert_eq!(
+            store
+                .load_usage_daily(ProviderKind::Codex, 30)
+                .unwrap()
+                .history
+                .requests,
+            1
+        );
     }
 }

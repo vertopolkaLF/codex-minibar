@@ -190,6 +190,7 @@ fn start_worker_with_channels(
     let usage_join = {
         let event_sender = event_sender.clone();
         thread::spawn(move || {
+            enter_background_processing_mode();
             run_usage_task(
                 usage_provider,
                 history_retention_days,
@@ -236,6 +237,20 @@ fn start_worker_with_channels(
         commands: command_sender,
         events: None,
         join: Some(join),
+    }
+}
+
+/// Usage scans are maintenance work. On Windows, background mode lowers CPU,
+/// memory, and disk-I/O priority so a cold multi-gigabyte history rebuild does
+/// not compete with input handling or the foreground application.
+fn enter_background_processing_mode() {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::System::Threading::{
+            GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN,
+        };
+
+        let _ = SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
     }
 }
 

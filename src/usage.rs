@@ -555,7 +555,7 @@ pub fn refresh_claude_usage_statistics(history_days: u16) -> Result<UsageStatist
             .retain(|entry| entry.timestamp.with_timezone(&Local).date_naive() >= oldest);
     }
     cache.version = CLAUDE_CACHE_VERSION;
-    let stats = claude_statistics_from_cache(&cache, history_days);
+    let stats = statistics_from_claude_cache(&cache, history_days);
     store::with_store(|store| {
         store.save_claude_cache(&cache)?;
         store.replace_usage_daily(ProviderKind::Claude, &stats.daily)
@@ -563,7 +563,10 @@ pub fn refresh_claude_usage_statistics(history_days: u16) -> Result<UsageStatist
     Ok(stats)
 }
 
-fn claude_statistics_from_cache(cache: &ClaudeUsageCache, history_days: u16) -> UsageStatistics {
+pub(crate) fn statistics_from_claude_cache(
+    cache: &ClaudeUsageCache,
+    history_days: u16,
+) -> UsageStatistics {
     let days: Vec<DailyTokenUsage> = deduplicate_claude_entries(cache)
         .into_iter()
         .map(|entry| DailyTokenUsage {

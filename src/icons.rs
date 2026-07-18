@@ -25,7 +25,9 @@ pub fn geom(name: &str) -> IconGeom {
         "chat-centered-text" => include_str!("../assets/icons/ph-chat-centered-text.svg"),
         "download-simple" => include_str!("../assets/icons/ph-download-simple.svg"),
         "plugs-connected" => include_str!("../assets/icons/ph-plugs-connected.svg"),
-        "arrows-clockwise" | "popup-refresh" => include_str!("../assets/icons/ph-arrows-clockwise.svg"),
+        "arrows-clockwise" | "popup-refresh" => {
+            include_str!("../assets/icons/ph-arrows-clockwise.svg")
+        }
         "sliders" | "popup-settings" => include_str!("../assets/icons/ph-sliders.svg"),
         "power" | "popup-power" => include_str!("../assets/icons/ph-power.svg"),
         "caret-down" => include_str!("../assets/icons/ph-caret-down.svg"),
@@ -34,6 +36,7 @@ pub fn geom(name: &str) -> IconGeom {
         "flag" => include_str!("../assets/icons/ph-flag.svg"),
         "at" => include_str!("../assets/icons/ph-at.svg"),
         "house" => include_str!("../assets/icons/ph-house.svg"),
+        "paint-brush" => include_str!("../assets/icons/ph-paint-brush.svg"),
         "bell" => include_str!("../assets/icons/ph-bell.svg"),
         "info" => include_str!("../assets/icons/ph-info.svg"),
         _ => panic!("unknown Phosphor icon: {name}"),
@@ -84,7 +87,10 @@ pub fn element(name: &'static str, size: f64, color: Color) -> Element {
         }
     }));
     let icon: Element = host.into();
-    icon.with_key(format!("ph-{name}-{:02X}{:02X}{:02X}", color.r, color.g, color.b))
+    icon.with_key(format!(
+        "ph-{name}-{:02X}{:02X}{:02X}",
+        color.r, color.g, color.b
+    ))
 }
 
 /// Render an icon filled with the live Windows accent theme brush.

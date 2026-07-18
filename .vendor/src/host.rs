@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use super::*;
@@ -6,6 +7,8 @@ use bindings::*;
 
 thread_local! {
     static ROOT_FRAMEWORK_ELEMENT: RefCell<Option<FrameworkElement>> = const { RefCell::new(None) };
+    static ALL_ROOT_FRAMEWORK_ELEMENTS: RefCell<Vec<FrameworkElement>> = const { RefCell::new(Vec::new()) };
+    static ORIGINAL_ACCENT_COLORS: RefCell<HashMap<&'static str, Color>> = RefCell::new(HashMap::new());
     static ROOT_WINDOW: RefCell<Option<Window>> = const { RefCell::new(None) };
     /// Queued theme; applied once `ROOT_FRAMEWORK_ELEMENT` is available.
     static PENDING_THEME: Cell<Option<ElementTheme>> = const { Cell::new(None) };
@@ -38,12 +41,45 @@ pub fn set_requested_theme(theme: RequestedTheme) {
     // so create_window's Default does not stick on a later host's first paint.
     PENDING_THEME.with(|p| p.set(Some(element_theme)));
 
-    ROOT_FRAMEWORK_ELEMENT.with(|cell| {
-        if let Some(ife) = cell.borrow().as_ref() {
+    ALL_ROOT_FRAMEWORK_ELEMENTS.with(|cell| {
+        for ife in cell.borrow().iter() {
             let _ = ife.SetRequestedTheme(element_theme);
-            update_titlebar_theme();
         }
     });
+    update_titlebar_theme();
+}
+
+/// Update the live WinUI accent brushes in place for every open surface.
+/// Existing controls retain references to these brush objects, so replacing a
+/// resource-dictionary entry would not repaint them. Passing `None` restores
+/// the colors captured from Windows before the first override.
+pub fn set_accent_color(color: Option<(u8, u8, u8)>) -> windows_core::Result<()> {
+    use windows_collections::IMap;
+
+    const BRUSH_KEYS: [(&str, u8); 8] = [
+        ("AccentFillColorDefaultBrush", 255),
+        ("AccentFillColorSecondaryBrush", 230),
+        ("AccentFillColorTertiaryBrush", 204),
+        ("AccentFillColorDisabledBrush", 102),
+        ("AccentTextFillColorPrimaryBrush", 255),
+        ("AccentTextFillColorSecondaryBrush", 230),
+        ("AccentTextFillColorTertiaryBrush", 204),
+        ("AccentTextFillColorDisabledBrush", 102),
+    ];
+    let resources = Application::Current()?.Resources()?;
+    let map = resources.cast::<IMap<windows_core::IInspectable, windows_core::IInspectable>>()?;
+
+    for (key_name, alpha) in BRUSH_KEYS {
+        let key = windows_reference::IReference::from(windows_core::HSTRING::from(key_name));
+        let brush = map.Lookup(&key)?.cast::<SolidColorBrush>()?;
+        let original = ORIGINAL_ACCENT_COLORS.with(|colors| {
+            let mut colors = colors.borrow_mut();
+            Ok::<_, windows_core::Error>(*colors.entry(key_name).or_insert(brush.Color()?))
+        })?;
+        let next = color.map_or(original, |(r, g, b)| Color { a: alpha, r, g, b });
+        brush.SetColor(next)?;
+    }
+    Ok(())
 }
 
 fn update_titlebar_theme() {
@@ -279,11 +315,13 @@ impl ReactorHost {
                                 );
                                 ROOT_FRAMEWORK_ELEMENT
                                     .with(|cell| *cell.borrow_mut() = Some(fe.clone()));
+                                ALL_ROOT_FRAMEWORK_ELEMENTS
+                                    .with(|cell| cell.borrow_mut().push(fe.clone()));
 
                                 // Apply any theme that was requested before the
                                 // root element existed (e.g. from a first-mount
                                 // use_effect).
-                                if let Some(theme) = PENDING_THEME.with(|p| p.take()) {
+                                if let Some(theme) = PENDING_THEME.with(|p| p.get()) {
                                     let _ = fe.SetRequestedTheme(theme);
                                     update_titlebar_theme();
                                 }
@@ -481,7 +519,9 @@ impl ReactorHost {
         let presenter = app_window.Presenter()?.cast::<IOverlappedPresenter3>()?;
         presenter.SetPreferredMinimumHeight(Some(1))?;
         presenter.SetPreferredMaximumHeight(Some(
-            dip_to_px(max_height_dip).saturating_add(nc_height_px).max(1),
+            dip_to_px(max_height_dip)
+                .saturating_add(nc_height_px)
+                .max(1),
         ))?;
         Ok(())
     }
@@ -625,8 +665,6 @@ fn create_window(
     })?;
 
     app_window.SetPresenterByKind(AppWindowPresenterKind::Overlapped)?;
-    set_requested_theme(RequestedTheme::Default);
-
     let outer_size = app_window.Size()?;
     let inner_size = app_window_2.ClientSize()?;
     let nc_width_px = outer_size.width.saturating_sub(inner_size.width);

@@ -7,7 +7,89 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 18;
+pub const SETTINGS_VERSION: u32 = 19;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppTheme {
+    #[default]
+    Auto,
+    Light,
+    Dark,
+}
+
+impl AppTheme {
+    pub const fn index(self) -> i32 {
+        match self {
+            Self::Auto => 0,
+            Self::Light => 1,
+            Self::Dark => 2,
+        }
+    }
+
+    pub const fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Light,
+            2 => Self::Dark,
+            _ => Self::Auto,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccentColor {
+    #[default]
+    Windows,
+    Blue,
+    Purple,
+    Pink,
+    Red,
+    Orange,
+    Green,
+    Teal,
+}
+
+impl AccentColor {
+    pub const fn index(self) -> i32 {
+        match self {
+            Self::Windows => 0,
+            Self::Blue => 1,
+            Self::Purple => 2,
+            Self::Pink => 3,
+            Self::Red => 4,
+            Self::Orange => 5,
+            Self::Green => 6,
+            Self::Teal => 7,
+        }
+    }
+
+    pub const fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Blue,
+            2 => Self::Purple,
+            3 => Self::Pink,
+            4 => Self::Red,
+            5 => Self::Orange,
+            6 => Self::Green,
+            7 => Self::Teal,
+            _ => Self::Windows,
+        }
+    }
+
+    pub const fn rgb(self) -> Option<(u8, u8, u8)> {
+        match self {
+            Self::Windows => None,
+            Self::Blue => Some((0x00, 0x78, 0xD4)),
+            Self::Purple => Some((0x88, 0x17, 0x98)),
+            Self::Pink => Some((0xE3, 0x00, 0x8C)),
+            Self::Red => Some((0xD1, 0x34, 0x38)),
+            Self::Orange => Some((0xCA, 0x50, 0x10)),
+            Self::Green => Some((0x10, 0x7C, 0x10)),
+            Self::Teal => Some((0x00, 0x83, 0x8C)),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -144,12 +226,7 @@ pub enum PopupWidgetKind {
 }
 
 impl PopupWidgetKind {
-    pub const ALL: [Self; 4] = [
-        Self::TotalSpend,
-        Self::Codex,
-        Self::Claude,
-        Self::Cursor,
-    ];
+    pub const ALL: [Self; 4] = [Self::TotalSpend, Self::Codex, Self::Claude, Self::Cursor];
 
     pub fn default_order() -> Vec<Self> {
         Self::ALL.to_vec()
@@ -310,6 +387,11 @@ pub struct Settings {
     /// flow. Keeping this persisted makes onboarding resilient to a close or
     /// reboot between its two pages.
     pub onboarding_completed: bool,
+    pub theme: AppTheme,
+    pub accent_color: AccentColor,
+    /// App-level accessibility override. The Windows animation preference is
+    /// still honored when this remains enabled.
+    pub animations_enabled: bool,
     pub providers: ProviderSettings,
     /// Display order for All-tab widgets (Total Spend + providers) and footer tabs.
     pub popup_order: Vec<PopupWidgetKind>,
@@ -339,6 +421,9 @@ impl Default for Settings {
         Self {
             version: SETTINGS_VERSION,
             onboarding_completed: false,
+            theme: AppTheme::Auto,
+            accent_color: AccentColor::Windows,
+            animations_enabled: true,
             providers: ProviderSettings::default(),
             popup_order: PopupWidgetKind::default_order(),
             use_colored_provider_icons: false,
@@ -393,9 +478,7 @@ impl Settings {
         settings.validate()?;
         let tray_widgets_normalized = settings.normalize_tray_widget_providers();
         let popup_order_normalized = settings.normalize_popup_order();
-        if original_version < SETTINGS_VERSION
-            || tray_widgets_normalized
-            || popup_order_normalized
+        if original_version < SETTINGS_VERSION || tray_widgets_normalized || popup_order_normalized
         {
             settings.save(path)?;
         }
@@ -522,8 +605,7 @@ impl Settings {
             return false;
         }
 
-        let visible_set: std::collections::HashSet<_> =
-            before_visible.iter().copied().collect();
+        let visible_set: std::collections::HashSet<_> = before_visible.iter().copied().collect();
         let mut sequence = after_visible.into_iter();
         let mut rebuilt = Vec::with_capacity(self.popup_order.len());
         for widget in &self.popup_order {
@@ -589,6 +671,7 @@ impl Settings {
 
     /// Applies settings whose effect lives outside the render tree.
     pub fn apply_runtime_effects(&self) -> Result<()> {
+        crate::theme::set_animations_enabled(self.animations_enabled);
         apply_startup_registration(self.start_at_login)
     }
 
@@ -831,8 +914,14 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     .and_then(|value| value.as_str().map(str::to_owned));
                 let claude_enabled = selected.as_deref() == Some("claude");
                 let mut providers = toml::map::Map::new();
-                providers.insert("codex_enabled".into(), toml::Value::Boolean(!claude_enabled));
-                providers.insert("claude_enabled".into(), toml::Value::Boolean(claude_enabled));
+                providers.insert(
+                    "codex_enabled".into(),
+                    toml::Value::Boolean(!claude_enabled),
+                );
+                providers.insert(
+                    "claude_enabled".into(),
+                    toml::Value::Boolean(claude_enabled),
+                );
                 root.insert("providers".into(), toml::Value::Table(providers));
                 root.insert("version".into(), toml::Value::Integer(8));
                 version = 8;
@@ -981,6 +1070,19 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.insert("version".into(), toml::Value::Integer(18));
                 version = 18;
             }
+            18 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("theme")
+                    .or_insert(toml::Value::String("auto".into()));
+                root.entry("accent_color")
+                    .or_insert(toml::Value::String("windows".into()));
+                root.entry("animations_enabled")
+                    .or_insert(toml::Value::Boolean(true));
+                root.insert("version".into(), toml::Value::Integer(19));
+                version = 19;
+            }
             unsupported => anyhow::bail!("no migration path from settings version {unsupported}"),
         }
     }
@@ -996,6 +1098,9 @@ mod tests {
         let value = Settings::default();
         assert!(!value.providers.codex_enabled);
         assert!(!value.providers.claude_enabled);
+        assert_eq!(value.theme, AppTheme::Auto);
+        assert_eq!(value.accent_color, AccentColor::Windows);
+        assert!(value.animations_enabled);
         assert!(!value.use_colored_provider_icons);
         assert!(!value.replace_chatgpt_logo_with_codex);
         assert!(!value.automatic_activation);
@@ -1006,7 +1111,10 @@ mod tests {
         assert!(value.show_banked_resets);
         assert!(value.show_usage_stats);
         assert!(value.show_total_spend_on_all_tab);
-        assert_eq!(value.total_spend_presentation, TotalSpendPresentation::Donut);
+        assert_eq!(
+            value.total_spend_presentation,
+            TotalSpendPresentation::Donut
+        );
         assert_eq!(value.history_retention_days, 30);
         assert!(value.tray_widgets.is_empty());
         assert_eq!(value.popup_order, PopupWidgetKind::default_order());
@@ -1055,11 +1163,16 @@ tray_widgets = []
         assert!(migrated.show_banked_resets);
         assert!(migrated.show_usage_stats);
         assert!(migrated.show_total_spend_on_all_tab);
-        assert_eq!(migrated.total_spend_presentation, TotalSpendPresentation::Donut);
+        assert_eq!(
+            migrated.total_spend_presentation,
+            TotalSpendPresentation::Donut
+        );
         assert_eq!(migrated.history_retention_days, 30);
-        assert!(fs::read_to_string(path)
-            .unwrap()
-            .contains(&format!("version = {SETTINGS_VERSION}")));
+        assert!(
+            fs::read_to_string(path)
+                .unwrap()
+                .contains(&format!("version = {SETTINGS_VERSION}"))
+        );
     }
 
     #[test]
@@ -1113,9 +1226,11 @@ tray_widgets = []
         let migrated = Settings::load_or_create(&path).unwrap();
         assert!(!migrated.providers.codex_enabled);
         assert!(migrated.providers.claude_enabled);
-        assert!(fs::read_to_string(path)
-            .unwrap()
-            .contains(&format!("version = {SETTINGS_VERSION}")));
+        assert!(
+            fs::read_to_string(path)
+                .unwrap()
+                .contains(&format!("version = {SETTINGS_VERSION}"))
+        );
     }
 
     #[test]
@@ -1222,6 +1337,10 @@ tray_widgets = []
         let loaded = Settings::load_or_create(&path).unwrap();
 
         assert_eq!(loaded.tray_widgets[0].provider, ProviderKind::Claude);
-        assert!(fs::read_to_string(path).unwrap().contains("provider = \"claude\""));
+        assert!(
+            fs::read_to_string(path)
+                .unwrap()
+                .contains("provider = \"claude\"")
+        );
     }
 }

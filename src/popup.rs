@@ -38,14 +38,13 @@ use windows_sys::Win32::{
             GetAsyncKeyState, SetFocus, VK_ESCAPE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
         },
         WindowsAndMessaging::{
-            DispatchMessageW, FindWindowW, GWL_EXSTYLE, GWL_STYLE,
-            GetCursorPos, GetWindowLongW, GetWindowRect, HWND_TOPMOST, MSG, PM_REMOVE,
-            PeekMessageW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOREDRAW, SWP_NOSIZE,
-            SWP_NOZORDER, SPI_GETCLIENTAREAANIMATION, SWP_SHOWWINDOW, SetForegroundWindow,
-            SetWindowLongW, SetWindowPos, SystemParametersInfoW, TranslateMessage,
-            WS_CAPTION, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-            WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX,
-            WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+            DispatchMessageW, FindWindowW, GWL_EXSTYLE, GWL_STYLE, GetCursorPos, GetWindowLongW,
+            GetWindowRect, HWND_TOPMOST, MSG, PM_REMOVE, PeekMessageW, SPI_GETCLIENTAREAANIMATION,
+            SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOREDRAW, SWP_NOSIZE, SWP_NOZORDER,
+            SWP_SHOWWINDOW, SetForegroundWindow, SetWindowLongW, SetWindowPos,
+            SystemParametersInfoW, TranslateMessage, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_LAYERED,
+            WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+            WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
         },
     },
 };
@@ -67,11 +66,8 @@ const BODY_SPACING: i32 = 12;
 const FOOTER_HEIGHT: i32 = 61; // padding + icon row + top border
 const CHROME_HEIGHT: i32 = 4; // outer border + inset
 /// Baseline height when the two standard limit cards and footer are shown.
-pub const POPUP_HEIGHT: i32 = BODY_PAD_Y
-    + LIMIT_CARD_HEIGHT * 2
-    + BODY_SPACING
-    + FOOTER_HEIGHT
-    + CHROME_HEIGHT;
+pub const POPUP_HEIGHT: i32 =
+    BODY_PAD_Y + LIMIT_CARD_HEIGHT * 2 + BODY_SPACING + FOOTER_HEIGHT + CHROME_HEIGHT;
 /// Smallest popup: two limit cards plus the footer.
 pub const POPUP_HEIGHT_MIN: i32 = POPUP_HEIGHT;
 /// Temporary safety ceiling before the popup is assigned to a monitor.
@@ -281,7 +277,7 @@ fn ease_entrance(progress: f64) -> f64 {
 }
 
 /// Respect the Windows "Animation effects" accessibility preference.
-pub fn animations_enabled() -> bool {
+pub fn system_animations_enabled() -> bool {
     let mut enabled = 1i32;
     let ok = unsafe {
         SystemParametersInfoW(
@@ -292,6 +288,10 @@ pub fn animations_enabled() -> bool {
         )
     };
     ok == 0 || enabled != 0
+}
+
+pub fn animations_enabled() -> bool {
+    crate::theme::animations_enabled()
 }
 
 /// Fluent gentle exit: the surface gains speed as it leaves.
@@ -808,7 +808,8 @@ fn animation_frame() {
     {
         let mut motion = popup_motion();
         if let Some(height) = motion.height.as_ref() {
-            let progress = elapsed_progress(height.started_at, height.duration, now).clamp(0.0, 1.0);
+            let progress =
+                elapsed_progress(height.started_at, height.duration, now).clamp(0.0, 1.0);
             let value = lerp_i32(height.from_dip, height.to_dip, ease_existing(progress));
             height_frame = Some(value);
             if progress >= 1.0 {
@@ -819,7 +820,8 @@ fn animation_frame() {
 
         if let Some(window) = motion.window.as_ref() {
             active_window_kind = Some(window.kind);
-            let progress = elapsed_progress(window.started_at, window.duration, now).clamp(0.0, 1.0);
+            let progress =
+                elapsed_progress(window.started_at, window.duration, now).clamp(0.0, 1.0);
             let eased = match window.kind {
                 WindowMotionKind::Opening => ease_entrance(progress),
                 WindowMotionKind::Closing => ease_exit(progress),
@@ -1370,8 +1372,14 @@ mod tests {
             bottom: 700,
         };
 
-        assert_eq!(monitor_clip_bounds(window(1_520), monitor), (0, 0, 380, 300));
-        assert_eq!(monitor_clip_bounds(window(1_720), monitor), (0, 0, 200, 300));
+        assert_eq!(
+            monitor_clip_bounds(window(1_520), monitor),
+            (0, 0, 380, 300)
+        );
+        assert_eq!(
+            monitor_clip_bounds(window(1_720), monitor),
+            (0, 0, 200, 300)
+        );
         assert_eq!(monitor_clip_bounds(window(1_920), monitor), (0, 0, 0, 300));
     }
 }

@@ -2,23 +2,23 @@
 
 use std::{
     rc::Rc,
-    sync::{mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use codex_minibar::{
-    app::{app, AppState},
+    app::{AppState, app},
     notifications,
     popup::{self, FALLBACK_CLIENT_HEIGHT_LIMIT, POPUP_WIDTH},
+    provider::start_enabled_workers,
     scheduler::ActivationState,
     settings::Settings,
     single_instance::{self, SingleInstance},
     store,
     updater::{
-        show_post_update_success_if_needed, sync_installed_display_version, UpdateController,
+        UpdateController, show_post_update_success_if_needed, sync_installed_display_version,
     },
-    provider::start_enabled_workers,
     worker::WorkerEvent,
 };
 use windows_reactor::*;
@@ -70,8 +70,8 @@ fn run() -> Result<()> {
     // The host stays parked until Auto content reports its natural size. Never
     // expose an intentionally oversized first client area: that was the black
     // strip visible below the top-aligned XAML chrome.
-    let initial_height = popup::height_for(startup_error.as_deref())
-        .min(FALLBACK_CLIENT_HEIGHT_LIMIT);
+    let initial_height =
+        popup::height_for(startup_error.as_deref()).min(FALLBACK_CLIENT_HEIGHT_LIMIT);
     popup::set_client_height_dip(initial_height);
     let state = Arc::new(AppState {
         settings,
@@ -94,6 +94,10 @@ fn run() -> Result<()> {
 
     App::new()
         .run_custom(move |_| {
+            codex_minibar::theme::apply_appearance(
+                state.settings.theme,
+                state.settings.accent_color,
+            );
             // Unlike `App::render`, this builds the WinUI host without calling
             // `Window::Activate`. The tray popup is the sole code path that
             // makes its HWND visible.
@@ -134,7 +138,7 @@ fn show_error(message: &str) {
     {
         use std::ffi::OsStr;
         use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
 
         let text: Vec<u16> = OsStr::new(message)
             .encode_wide()
