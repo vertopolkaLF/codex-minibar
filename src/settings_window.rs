@@ -4,9 +4,12 @@
 //! details; both surfaces share tokens from [`crate::theme`].
 
 use crate::notifications;
+#[cfg(any())]
+use crate::settings::TraySource;
 use crate::settings::{
     AccentColor, AppTheme, LimitRefreshInterval, LimitValue, PopupWidgetKind, ProviderKind,
-    Settings, TotalSpendPresentation, TrayPresentation, TraySource, TrayWidget,
+    Settings, TotalSpendPresentation, TrayColorMode, TrayFixedColor, TrayIndicator,
+    TrayPresentation, TrayWidget, TrayWidgetKind,
 };
 use crate::settings_controls::{
     settings_action_card, settings_control_card, settings_info_card, settings_slider_content,
@@ -20,6 +23,7 @@ use crate::updater::{
 use anyhow::Context;
 use std::{
     cell::RefCell,
+    collections::HashMap,
     path::PathBuf,
     rc::Rc,
     sync::{Arc, mpsc::Sender},
@@ -35,6 +39,22 @@ const ONBOARDING_WINDOW_TITLE: &str = "Welcome to Codex Minibar";
 
 thread_local! {
     static HOST: RefCell<Option<Rc<ReactorHost>>> = const { RefCell::new(None) };
+    static LIVE_SETTINGS_STATE: RefCell<Option<SettingsWindowState>> = const { RefCell::new(None) };
+    static TRAY_PREVIEW_MOUNTS: RefCell<HashMap<String, windows_core::IInspectable>> =
+        RefCell::new(HashMap::new());
+}
+
+pub fn sync_open_window(settings: Settings, ui_dispatcher: UiMarshaller) {
+    if !is_open() {
+        return;
+    }
+    ui_dispatcher.dispatch(move || {
+        LIVE_SETTINGS_STATE.with(|state| {
+            if let Some(state) = state.borrow().as_ref() {
+                state.apply(&settings);
+            }
+        });
+    });
 }
 
 #[derive(Clone)]
@@ -74,9 +94,12 @@ impl SettingsWindowState {
         self.theme.call(settings.theme);
         self.accent_color.call(settings.accent_color);
         self.animations_enabled.call(settings.animations_enabled);
-        self.codex_enabled.call(settings.providers.codex_enabled);
-        self.claude_enabled.call(settings.providers.claude_enabled);
-        self.cursor_enabled.call(settings.providers.cursor_enabled);
+        self.codex_enabled
+            .call(settings.providers.is_enabled(ProviderKind::Codex));
+        self.claude_enabled
+            .call(settings.providers.is_enabled(ProviderKind::Claude));
+        self.cursor_enabled
+            .call(settings.providers.is_enabled(ProviderKind::Cursor));
         self.popup_order.call(settings.popup_order.clone());
         self.use_colored_provider_icons
             .call(settings.use_colored_provider_icons);
@@ -619,9 +642,21 @@ fn onboarding_render(
                 .on_click(move || {
                     let mut completed = (*settings).clone();
                     completed.onboarding_completed = true;
-                    completed.providers.codex_enabled = codex_enabled;
-                    completed.providers.claude_enabled = claude_enabled;
-                    completed.providers.cursor_enabled = cursor_enabled;
+                    completed.providers = crate::settings::ProviderSettings::from_enabled(
+                        crate::provider_registry::PROVIDERS
+                            .iter()
+                            .filter(|provider| match provider.kind {
+                                ProviderKind::Codex => codex_enabled,
+                                ProviderKind::Claude => claude_enabled,
+                                ProviderKind::Cursor => cursor_enabled,
+                            })
+                            .map(|provider| provider.kind),
+                    );
+                    completed.tray_widgets = crate::provider_registry::PROVIDERS
+                        .iter()
+                        .filter(|provider| completed.providers.is_enabled(provider.kind))
+                        .map(|provider| TrayWidget::for_provider(provider.kind))
+                        .collect();
                     completed.start_at_login = start_at_login;
                     completed.automatic_activation = automatic_activation;
                     completed.limit_refresh_interval = limit_refresh_interval;
@@ -886,7 +921,8 @@ pub fn render(
         );
     }
 
-    let (codex_enabled, set_codex_enabled) = cx.use_state(settings.providers.codex_enabled);
+    let (codex_enabled, set_codex_enabled) =
+        cx.use_state(settings.providers.is_enabled(ProviderKind::Codex));
     let (theme, set_theme) = cx.use_state(settings.theme);
     let (accent_color, set_accent_color) = cx.use_state(settings.accent_color);
     let (animations_enabled, set_animations_enabled) = cx.use_state(settings.animations_enabled);
@@ -894,8 +930,10 @@ pub fn render(
         crate::theme::set_animations_enabled(animations_enabled);
         crate::theme::apply_appearance(theme, accent_color);
     });
-    let (claude_enabled, set_claude_enabled) = cx.use_state(settings.providers.claude_enabled);
-    let (cursor_enabled, set_cursor_enabled) = cx.use_state(settings.providers.cursor_enabled);
+    let (claude_enabled, set_claude_enabled) =
+        cx.use_state(settings.providers.is_enabled(ProviderKind::Claude));
+    let (cursor_enabled, set_cursor_enabled) =
+        cx.use_state(settings.providers.is_enabled(ProviderKind::Cursor));
     let (popup_order, set_popup_order) = cx.use_state(settings.popup_order.clone());
     let (use_colored_provider_icons, set_use_colored_provider_icons) =
         cx.use_state(settings.use_colored_provider_icons);
@@ -934,9 +972,44 @@ pub fn render(
         cx.use_async_state(0.0_f64);
     let (hovered_card_id, set_hovered_card_id) = cx.use_state(None::<String>);
     let (tray_widgets, set_tray_widgets) = cx.use_state(settings.tray_widgets.clone());
+    let (expanded_tray_widget, set_expanded_tray_widget) = cx.use_state(None::<String>);
+    let (removed_tray_widget, set_removed_tray_widget) = cx.use_state(None::<(usize, TrayWidget)>);
     let (check_for_updates, set_check_for_updates) = cx.use_state(settings.check_for_updates);
     let (notify_on_update, set_notify_on_update) =
         cx.use_state(settings.notifications.update_available);
+
+    LIVE_SETTINGS_STATE.with(|state| {
+        *state.borrow_mut() = Some(SettingsWindowState {
+            theme: set_theme.clone(),
+            accent_color: set_accent_color.clone(),
+            animations_enabled: set_animations_enabled.clone(),
+            codex_enabled: set_codex_enabled.clone(),
+            claude_enabled: set_claude_enabled.clone(),
+            cursor_enabled: set_cursor_enabled.clone(),
+            popup_order: set_popup_order.clone(),
+            use_colored_provider_icons: set_use_colored_provider_icons.clone(),
+            replace_chatgpt_logo_with_codex: set_replace_chatgpt_logo_with_codex.clone(),
+            automatic_activation: set_automatic_activation.clone(),
+            limit_refresh_interval: set_limit_refresh_interval.clone(),
+            start_at_login: set_start_at_login.clone(),
+            show_used_percentage: set_show_used_percentage.clone(),
+            show_usage_pace: set_show_usage_pace.clone(),
+            show_banked_resets: set_show_banked_resets.clone(),
+            show_usage_stats: set_show_usage_stats.clone(),
+            show_total_spend_on_all_tab: set_show_total_spend_on_all_tab.clone(),
+            total_spend_presentation: set_total_spend_presentation.clone(),
+            show_account_name: set_show_account_name.clone(),
+            activation_failure: set_activation_failure.clone(),
+            limits_reset: set_limits_reset.clone(),
+            low_usage_enabled: set_low_usage_enabled.clone(),
+            low_usage_threshold: set_low_usage_threshold.clone(),
+            weekly_low_usage_enabled: set_weekly_low_usage_enabled.clone(),
+            weekly_low_usage_threshold: set_weekly_low_usage_threshold.clone(),
+            tray_widgets: set_tray_widgets.clone(),
+            check_for_updates: set_check_for_updates.clone(),
+            notify_on_update: set_notify_on_update.clone(),
+        });
+    });
 
     // Padding lives on tab content (inside the scroller), not on this pane, so
     // LayerFill crops flush to the window edge while long tabs stay scrollable.
@@ -973,6 +1046,8 @@ pub fn render(
             weekly_low_usage_expanded,
             weekly_low_usage_expand_progress,
             &tray_widgets,
+            &expanded_tray_widget,
+            &removed_tray_widget,
             &hovered_card_id,
             check_for_updates,
             notify_on_update,
@@ -1007,6 +1082,8 @@ pub fn render(
             set_weekly_low_usage_expanded,
             set_weekly_low_usage_expand_progress,
             set_tray_widgets,
+            set_expanded_tray_widget,
+            set_removed_tray_widget,
             set_hovered_card_id,
             set_check_for_updates,
             set_notify_on_update,
@@ -1163,6 +1240,8 @@ fn tab_content(
     weekly_low_usage_expanded: bool,
     weekly_low_usage_expand_progress: f64,
     tray_widgets: &[TrayWidget],
+    expanded_tray_widget: &Option<String>,
+    removed_tray_widget: &Option<(usize, TrayWidget)>,
     hovered_card_id: &Option<String>,
     check_for_updates: bool,
     notify_on_update: bool,
@@ -1197,6 +1276,8 @@ fn tab_content(
     set_weekly_low_usage_expanded: SetState<bool>,
     set_weekly_low_usage_expand_progress: AsyncSetState<f64>,
     set_tray_widgets: SetState<Vec<TrayWidget>>,
+    set_expanded_tray_widget: SetState<Option<String>>,
+    set_removed_tray_widget: SetState<Option<(usize, TrayWidget)>>,
     set_hovered_card_id: SetState<Option<String>>,
     set_check_for_updates: SetState<bool>,
     set_notify_on_update: SetState<bool>,
@@ -1288,7 +1369,7 @@ fn tab_content(
                     Some("How often enabled providers fetch the current limits."),
                     ComboBox::new(["30 seconds", "1 minute", "5 minutes", "10 minutes", "15 minutes"])
                         .selected_index(limit_refresh_interval.index())
-                        .on_selection_changed(move |choice| {
+                        .on_selection_changed(move |choice: i32| {
                             let value = LimitRefreshInterval::from_index(choice);
                             set_limit_refresh_interval.call(value);
                             persist_update(apply_limit_refresh_interval.clone(), move |settings| {
@@ -1698,7 +1779,11 @@ fn tab_content(
                 tray_settings_cards(
                     tray_widgets,
                     &enabled_providers,
+                    expanded_tray_widget,
+                    removed_tray_widget,
                     set_tray_widgets,
+                    set_expanded_tray_widget,
+                    set_removed_tray_widget,
                     settings_tx.clone(),
                 ),
             )
@@ -2340,7 +2425,808 @@ fn about_action_card(
     .into()
 }
 
+fn tray_widget_summary(widget: &TrayWidget) -> String {
+    if widget.kind == TrayWidgetKind::AppIcon {
+        return "App icon".into();
+    }
+    let labels = widget
+        .indicators
+        .iter()
+        .map(|indicator| {
+            let Some(provider) = indicator.provider() else {
+                return format!("Unsupported {}", indicator.provider_id);
+            };
+            let metric = crate::provider_registry::metric(provider, &indicator.metric_id)
+                .map(|metric| metric.label.to_owned())
+                .unwrap_or_else(|| indicator.metric_id.clone());
+            format!("{} {metric}", provider.display_name())
+        })
+        .collect::<Vec<_>>();
+    if labels.is_empty() {
+        "Empty widget".into()
+    } else {
+        labels.join(" · ")
+    }
+}
+
+fn tray_preview_limits() -> &'static crate::limits::ProviderLimits {
+    static LIMITS: std::sync::OnceLock<crate::limits::ProviderLimits> = std::sync::OnceLock::new();
+    LIMITS.get_or_init(|| {
+        let window = |used_percent| crate::limits::LimitWindow {
+            used_percent: Some(used_percent),
+            resets_at: None,
+            duration_minutes: Some(300),
+        };
+        crate::limits::ProviderLimits::from_entries([
+            (
+                ProviderKind::Codex,
+                crate::limits::RateLimits {
+                    primary: window(38),
+                    secondary: window(70),
+                    ..Default::default()
+                },
+            ),
+            (
+                ProviderKind::Claude,
+                crate::limits::RateLimits {
+                    primary: window(55),
+                    secondary: window(12),
+                    ..Default::default()
+                },
+            ),
+            (
+                ProviderKind::Cursor,
+                crate::limits::RateLimits {
+                    secondary: window(18),
+                    additional_limits: vec![crate::limits::AdditionalLimit {
+                        id: "cursor-api".into(),
+                        title: "API".into(),
+                        window: window(47),
+                    }],
+                    ..Default::default()
+                },
+            ),
+        ])
+    })
+}
+
+fn tray_widget_preview(widget: &TrayWidget) -> Element {
+    let pixels = crate::tray::render_widget(widget, tray_preview_limits());
+    let preview_id = widget.id.clone();
+
+    // Swap-chain preview painters normally run only on mount. Settings need
+    // true live feedback, so repaint the retained native panel in place while
+    // keeping the surrounding Expander identity stable.
+    TRAY_PREVIEW_MOUNTS.with(|mounts| {
+        if let Some(native) = mounts.borrow().get(&preview_id).cloned()
+            && let Err(error) = crate::acrylic::install_tray_pixels_into(native, &pixels)
+        {
+            eprintln!("Could not update tray preview: {error:?}");
+        }
+    });
+
+    let pixels_for_mount = pixels.clone();
+    let id_for_mount = preview_id.clone();
+    let id_for_unmount = preview_id.clone();
+    let mut host = swap_chain_panel().width(32.0).height(32.0);
+    host.mounted = Some(Callback::new(
+        move |native: Option<windows_core::IInspectable>| {
+            if let Some(native) = native {
+                if let Err(error) =
+                    crate::acrylic::install_tray_pixels_into(native.clone(), &pixels_for_mount)
+                {
+                    eprintln!("Could not install tray preview: {error:?}");
+                }
+                TRAY_PREVIEW_MOUNTS.with(|mounts| {
+                    mounts.borrow_mut().insert(id_for_mount.clone(), native);
+                });
+            }
+        },
+    ));
+    host.unmounted = Some(Callback::new(
+        move |_: Option<windows_core::IInspectable>| {
+            TRAY_PREVIEW_MOUNTS.with(|mounts| {
+                mounts.borrow_mut().remove(&id_for_unmount);
+            });
+        },
+    ));
+    let preview: Element = host.into();
+    preview.with_key(format!("tray-preview-{preview_id}"))
+}
+
+fn tray_presentation_index(presentation: TrayPresentation) -> i32 {
+    match presentation.canonical_percentage() {
+        TrayPresentation::StackedBars => 1,
+        TrayPresentation::NestedRings => 2,
+        TrayPresentation::ResetTime => 3,
+        TrayPresentation::ResetCountdown => 4,
+        _ => 0,
+    }
+}
+
+fn tray_presentation_from_index(index: i32) -> TrayPresentation {
+    match index {
+        1 => TrayPresentation::StackedBars,
+        2 => TrayPresentation::NestedRings,
+        3 => TrayPresentation::ResetTime,
+        4 => TrayPresentation::ResetCountdown,
+        _ => TrayPresentation::StackedNumbers,
+    }
+}
+
+fn tray_color_mode_index(mode: TrayColorMode) -> i32 {
+    match mode {
+        TrayColorMode::Status => 0,
+        TrayColorMode::Fixed => 1,
+        TrayColorMode::Provider => 2,
+        TrayColorMode::Accent => 3,
+        TrayColorMode::Monochrome => 4,
+    }
+}
+
+fn tray_color_mode_from_index(index: i32) -> TrayColorMode {
+    match index {
+        1 => TrayColorMode::Fixed,
+        2 => TrayColorMode::Provider,
+        3 => TrayColorMode::Accent,
+        4 => TrayColorMode::Monochrome,
+        _ => TrayColorMode::Status,
+    }
+}
+
+// Segoe Fluent chevron glyphs used by WinUI's native SymbolIcon host.
+const CHEVRON_UP_SYMBOL: Symbol = Symbol(0xE70E);
+const CHEVRON_DOWN_SYMBOL: Symbol = Symbol(0xE70D);
+
 fn tray_settings_cards(
+    widgets: &[TrayWidget],
+    enabled_providers: &[ProviderKind],
+    expanded_widget: &Option<String>,
+    removed_widget: &Option<(usize, TrayWidget)>,
+    set_widgets: SetState<Vec<TrayWidget>>,
+    set_expanded_widget: SetState<Option<String>>,
+    set_removed_widget: SetState<Option<(usize, TrayWidget)>>,
+    settings_tx: Sender<Settings>,
+) -> Vec<Element> {
+    let mut rows = Vec::new();
+    if let Some((removed_index, removed)) = removed_widget.clone() {
+        let widgets_for_undo = widgets.to_vec();
+        let undo_setter = set_widgets.clone();
+        let clear_removed = set_removed_widget.clone();
+        let undo_tx = settings_tx.clone();
+        let providers_for_undo = enabled_providers.to_vec();
+        rows.push(
+            border(
+                hstack((
+                    text_block("Widget removed")
+                        .font_size(13.0)
+                        .vertical_alignment(VerticalAlignment::Center),
+                    Button::new("Undo").on_click(move || {
+                        let mut next = widgets_for_undo.clone();
+                        next.insert(removed_index.min(next.len()), removed.clone());
+                        persist_tray_widgets(
+                            undo_setter.clone(),
+                            undo_tx.clone(),
+                            next,
+                            &providers_for_undo,
+                        );
+                        clear_removed.call(None);
+                    }),
+                ))
+                .spacing(10.0),
+            )
+            .padding(Thickness::uniform(10.0))
+            .background(ThemeRef::LayerFill)
+            .corner_radius(6.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .with_opacity_transition(duration(CONTROL_FAST_ANIMATION))
+            .with_key("tray-widget-undo")
+            .into(),
+        );
+    }
+    if widgets.is_empty() {
+        rows.push(settings_info_card("Tray icon", "App icon").with_key("tray-empty"));
+    }
+
+    for (index, widget) in widgets.iter().cloned().enumerate() {
+        let widget_id = widget.id.clone();
+        let is_expanded = expanded_widget.as_deref() == Some(widget_id.as_str());
+        let expand_id = widget_id.clone();
+        let expand_setter = set_expanded_widget.clone();
+        let header_id = widget_id.clone();
+        let widgets_for_up = widgets.to_vec();
+        let up_setter = set_widgets.clone();
+        let up_tx = settings_tx.clone();
+        let providers_for_up = enabled_providers.to_vec();
+        let widgets_for_down = widgets.to_vec();
+        let down_setter = set_widgets.clone();
+        let down_tx = settings_tx.clone();
+        let providers_for_down = enabled_providers.to_vec();
+
+        let reorder_buttons = vstack((
+            Button::new("")
+                .icon(CHEVRON_UP_SYMBOL)
+                .width(24.0)
+                .height(24.0)
+                .padding(Thickness::uniform(0.0))
+                .enabled(index > 0)
+                .tooltip("Move widget up")
+                .on_click(move || {
+                    if index == 0 {
+                        return;
+                    }
+                    let mut next = widgets_for_up.clone();
+                    next.swap(index, index - 1);
+                    persist_tray_widgets(up_setter.clone(), up_tx.clone(), next, &providers_for_up);
+                }),
+            Button::new("")
+                .icon(CHEVRON_DOWN_SYMBOL)
+                .width(24.0)
+                .height(24.0)
+                .padding(Thickness::uniform(0.0))
+                .enabled(index + 1 < widgets.len())
+                .tooltip("Move widget down")
+                .on_click(move || {
+                    if index + 1 >= widgets_for_down.len() {
+                        return;
+                    }
+                    let mut next = widgets_for_down.clone();
+                    next.swap(index, index + 1);
+                    persist_tray_widgets(
+                        down_setter.clone(),
+                        down_tx.clone(),
+                        next,
+                        &providers_for_down,
+                    );
+                }),
+        ))
+        .spacing(2.0)
+        .horizontal_alignment(HorizontalAlignment::Center);
+        let header = grid((
+            reorder_buttons
+                .grid_column(0)
+                .vertical_alignment(VerticalAlignment::Center),
+            tray_widget_preview(&widget)
+                .grid_column(1)
+                .vertical_alignment(VerticalAlignment::Center),
+            vstack((
+                text_block(format!("Widget {}", index + 1))
+                    .font_size(14.0)
+                    .semibold(),
+                text_block(tray_widget_summary(&widget))
+                    .font_size(12.0)
+                    .foreground(ThemeRef::SecondaryText),
+            ))
+            .spacing(2.0)
+            .grid_column(2),
+        ))
+        .columns([
+            GridLength::Pixel(28.0),
+            GridLength::Pixel(32.0),
+            GridLength::Star(1.0),
+        ])
+        .column_spacing(8.0)
+        .rows([GridLength::Auto])
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .with_key(format!("tray-header-{header_id}"));
+
+        let content: Element = if widget.kind == TrayWidgetKind::AppIcon {
+            let widgets_for_duplicate = widgets.to_vec();
+            let duplicate_setter = set_widgets.clone();
+            let duplicate_tx = settings_tx.clone();
+            let providers_for_duplicate = enabled_providers.to_vec();
+            let widgets_for_remove = widgets.to_vec();
+            let remove_setter = set_widgets.clone();
+            let removed_setter = set_removed_widget.clone();
+            let remove_tx = settings_tx.clone();
+            let providers_for_remove = enabled_providers.to_vec();
+            hstack((
+                Button::new("Duplicate").on_click(move || {
+                    let mut next = widgets_for_duplicate.clone();
+                    next.insert(index + 1, TrayWidget::app_icon());
+                    persist_tray_widgets(
+                        duplicate_setter.clone(),
+                        duplicate_tx.clone(),
+                        next,
+                        &providers_for_duplicate,
+                    );
+                }),
+                Button::new("Remove").on_click(move || {
+                    let mut next = widgets_for_remove.clone();
+                    let removed = next.remove(index);
+                    removed_setter.call(Some((index, removed)));
+                    persist_tray_widgets(
+                        remove_setter.clone(),
+                        remove_tx.clone(),
+                        next,
+                        &providers_for_remove,
+                    );
+                }),
+            ))
+            .spacing(8.0)
+            .into()
+        } else {
+            let mut fields = Vec::<Element>::new();
+            let mut appearance_controls = Vec::<Element>::new();
+
+            let widgets_for_presentation = widgets.to_vec();
+            let presentation_setter = set_widgets.clone();
+            let presentation_tx = settings_tx.clone();
+            let providers_for_presentation = enabled_providers.to_vec();
+            appearance_controls.push(
+                ComboBox::new([
+                    "Numbers",
+                    "Progress bars",
+                    "Rings",
+                    "Reset time",
+                    "Countdown",
+                ])
+                .header("Appearance")
+                .grid_column(0)
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .selected_index(tray_presentation_index(widget.presentation))
+                .on_selection_changed(move |choice| {
+                    let mut next = widgets_for_presentation.clone();
+                    next[index].presentation = tray_presentation_from_index(choice);
+                    persist_tray_widgets(
+                        presentation_setter.clone(),
+                        presentation_tx.clone(),
+                        next,
+                        &providers_for_presentation,
+                    );
+                })
+                .into(),
+            );
+
+            let widgets_for_color = widgets.to_vec();
+            let color_setter = set_widgets.clone();
+            let color_tx = settings_tx.clone();
+            let providers_for_color = enabled_providers.to_vec();
+            appearance_controls.push(
+                ComboBox::new(["Status", "Fixed", "Provider", "App accent", "Monochrome"])
+                    .header("Color")
+                    .grid_column(1)
+                    .horizontal_alignment(HorizontalAlignment::Stretch)
+                    .selected_index(tray_color_mode_index(widget.color_mode))
+                    .on_selection_changed(move |choice| {
+                        let mut next = widgets_for_color.clone();
+                        next[index].color_mode = tray_color_mode_from_index(choice);
+                        persist_tray_widgets(
+                            color_setter.clone(),
+                            color_tx.clone(),
+                            next,
+                            &providers_for_color,
+                        );
+                    })
+                    .into(),
+            );
+            fields.push(
+                grid(appearance_controls)
+                    .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
+                    .column_spacing(12.0)
+                    .horizontal_alignment(HorizontalAlignment::Stretch)
+                    .into(),
+            );
+
+            if widget.color_mode == TrayColorMode::Fixed {
+                let widgets_for_picker = widgets.to_vec();
+                let picker_setter = set_widgets.clone();
+                let picker_tx = settings_tx.clone();
+                let providers_for_picker = enabled_providers.to_vec();
+                fields.push(
+                    ColorPicker::new(ColorArgb::new(
+                        widget.fixed_color.red,
+                        widget.fixed_color.green,
+                        widget.fixed_color.blue,
+                    ))
+                    .alpha_enabled(false)
+                    .on_color_changed(move |(_, red, green, blue)| {
+                        let mut next = widgets_for_picker.clone();
+                        next[index].fixed_color = TrayFixedColor { red, green, blue };
+                        persist_tray_widgets(
+                            picker_setter.clone(),
+                            picker_tx.clone(),
+                            next,
+                            &providers_for_picker,
+                        );
+                    })
+                    .into(),
+                );
+            }
+
+            fields.push(settings_section_heading("Indicators"));
+            for (indicator_index, indicator) in widget.indicators.iter().cloned().enumerate() {
+                let provider_options = crate::provider_registry::PROVIDERS;
+                let known_provider = indicator.provider();
+                let mut provider_labels = provider_options
+                    .iter()
+                    .map(|provider| provider.display_name.to_owned())
+                    .collect::<Vec<_>>();
+                let provider_index = known_provider
+                    .and_then(|provider| {
+                        provider_options
+                            .iter()
+                            .position(|descriptor| descriptor.kind == provider)
+                    })
+                    .unwrap_or_else(|| {
+                        provider_labels.push(format!("Unsupported ({})", indicator.provider_id));
+                        provider_labels.len() - 1
+                    }) as i32;
+                let metric_provider = known_provider.unwrap_or(ProviderKind::Codex);
+                let metrics = crate::provider_registry::descriptor(metric_provider).metrics;
+                let mut metric_labels = metrics
+                    .iter()
+                    .map(|metric| metric.label.to_owned())
+                    .collect::<Vec<_>>();
+                let metric_index = metrics
+                    .iter()
+                    .position(|metric| metric.id == indicator.metric_id)
+                    .unwrap_or_else(|| {
+                        metric_labels.push(format!("Unavailable ({})", indicator.metric_id));
+                        metric_labels.len() - 1
+                    }) as i32;
+
+                let widgets_for_provider = widgets.to_vec();
+                let provider_setter = set_widgets.clone();
+                let provider_tx = settings_tx.clone();
+                let enabled_for_provider = enabled_providers.to_vec();
+                let widgets_for_metric = widgets.to_vec();
+                let metric_setter = set_widgets.clone();
+                let metric_tx = settings_tx.clone();
+                let enabled_for_metric = enabled_providers.to_vec();
+                let widgets_for_value = widgets.to_vec();
+                let value_setter = set_widgets.clone();
+                let value_tx = settings_tx.clone();
+                let enabled_for_value = enabled_providers.to_vec();
+                let widgets_for_remove = widgets.to_vec();
+                let remove_setter = set_widgets.clone();
+                let removed_setter = set_removed_widget.clone();
+                let remove_tx = settings_tx.clone();
+                let enabled_for_remove = enabled_providers.to_vec();
+                let widgets_for_indicator_up = widgets.to_vec();
+                let indicator_up_setter = set_widgets.clone();
+                let indicator_up_tx = settings_tx.clone();
+                let enabled_for_indicator_up = enabled_providers.to_vec();
+                let widgets_for_indicator_down = widgets.to_vec();
+                let indicator_down_setter = set_widgets.clone();
+                let indicator_down_tx = settings_tx.clone();
+                let enabled_for_indicator_down = enabled_providers.to_vec();
+
+                let indicator_reorder = vstack((
+                    Button::new("")
+                        .icon(CHEVRON_UP_SYMBOL)
+                        .width(24.0)
+                        .height(24.0)
+                        .padding(Thickness::uniform(0.0))
+                        .enabled(indicator_index > 0)
+                        .tooltip("Move indicator up")
+                        .on_click(move || {
+                            if indicator_index == 0 {
+                                return;
+                            }
+                            let mut next = widgets_for_indicator_up.clone();
+                            next[index]
+                                .indicators
+                                .swap(indicator_index, indicator_index - 1);
+                            persist_tray_widgets(
+                                indicator_up_setter.clone(),
+                                indicator_up_tx.clone(),
+                                next,
+                                &enabled_for_indicator_up,
+                            );
+                        }),
+                    Button::new("")
+                        .icon(CHEVRON_DOWN_SYMBOL)
+                        .width(24.0)
+                        .height(24.0)
+                        .padding(Thickness::uniform(0.0))
+                        .enabled(indicator_index + 1 < widget.indicators.len())
+                        .tooltip("Move indicator down")
+                        .on_click(move || {
+                            let mut next = widgets_for_indicator_down.clone();
+                            if indicator_index + 1 >= next[index].indicators.len() {
+                                return;
+                            }
+                            next[index]
+                                .indicators
+                                .swap(indicator_index, indicator_index + 1);
+                            persist_tray_widgets(
+                                indicator_down_setter.clone(),
+                                indicator_down_tx.clone(),
+                                next,
+                                &enabled_for_indicator_down,
+                            );
+                        }),
+                ))
+                .spacing(2.0)
+                .horizontal_alignment(HorizontalAlignment::Center);
+
+                let indicator_fields = vec![
+                    indicator_reorder
+                        .grid_column(0)
+                        .vertical_alignment(VerticalAlignment::Bottom)
+                        .into(),
+                    ComboBox::new(provider_labels)
+                        .header("Provider")
+                        .grid_column(1)
+                        .horizontal_alignment(HorizontalAlignment::Stretch)
+                        .selected_index(provider_index)
+                        .on_selection_changed(move |choice: i32| {
+                            let Some(descriptor) =
+                                crate::provider_registry::PROVIDERS.get(choice.max(0) as usize)
+                            else {
+                                return;
+                            };
+                            let mut next = widgets_for_provider.clone();
+                            next[index].indicators[indicator_index].provider_id =
+                                descriptor.id.into();
+                            next[index].indicators[indicator_index].metric_id = descriptor
+                                .default_tray_metrics
+                                .first()
+                                .copied()
+                                .unwrap_or("unknown")
+                                .into();
+                            persist_tray_widgets(
+                                provider_setter.clone(),
+                                provider_tx.clone(),
+                                next,
+                                &enabled_for_provider,
+                            );
+                        })
+                        .into(),
+                    ComboBox::new(metric_labels)
+                        .header("Metric")
+                        .grid_column(2)
+                        .horizontal_alignment(HorizontalAlignment::Stretch)
+                        .selected_index(metric_index)
+                        .with_key(format!(
+                            "tray-metric-{}-{indicator_index}-{}",
+                            widget.id, indicator.provider_id
+                        ))
+                        .on_selection_changed(move |choice: i32| {
+                            let Some(metric) = metrics.get(choice.max(0) as usize) else {
+                                return;
+                            };
+                            let mut next = widgets_for_metric.clone();
+                            next[index].indicators[indicator_index].metric_id = metric.id.into();
+                            persist_tray_widgets(
+                                metric_setter.clone(),
+                                metric_tx.clone(),
+                                next,
+                                &enabled_for_metric,
+                            );
+                        })
+                        .into(),
+                    ComboBox::new(["Remaining", "Used"])
+                        .header("Value")
+                        .grid_column(3)
+                        .horizontal_alignment(HorizontalAlignment::Stretch)
+                        .selected_index(if indicator.limit_value == LimitValue::Remaining {
+                            0
+                        } else {
+                            1
+                        })
+                        .on_selection_changed(move |choice| {
+                            let mut next = widgets_for_value.clone();
+                            next[index].indicators[indicator_index].limit_value = if choice == 1 {
+                                LimitValue::Used
+                            } else {
+                                LimitValue::Remaining
+                            };
+                            persist_tray_widgets(
+                                value_setter.clone(),
+                                value_tx.clone(),
+                                next,
+                                &enabled_for_value,
+                            );
+                        })
+                        .into(),
+                    Button::new("")
+                        .icon(Symbol::Delete)
+                        .grid_column(4)
+                        .width(24.0)
+                        .height(24.0)
+                        .padding(Thickness::uniform(0.0))
+                        .tooltip("Remove indicator")
+                        .vertical_alignment(VerticalAlignment::Bottom)
+                        .on_click(move || {
+                            let mut next = widgets_for_remove.clone();
+                            next[index].indicators.remove(indicator_index);
+                            if next[index].indicators.is_empty() {
+                                let removed = next.remove(index);
+                                removed_setter.call(Some((index, removed)));
+                            }
+                            persist_tray_widgets(
+                                remove_setter.clone(),
+                                remove_tx.clone(),
+                                next,
+                                &enabled_for_remove,
+                            );
+                        })
+                        .into(),
+                ];
+                fields.push(
+                    border(
+                        grid(indicator_fields)
+                            .columns([
+                                GridLength::Pixel(28.0),
+                                GridLength::Star(1.0),
+                                GridLength::Star(1.5),
+                                GridLength::Star(1.0),
+                                GridLength::Pixel(24.0),
+                            ])
+                            .column_spacing(12.0)
+                            .horizontal_alignment(HorizontalAlignment::Stretch),
+                    )
+                    .padding(Thickness::uniform(12.0))
+                    .background(ThemeRef::CardBackground)
+                    .corner_radius(8.0)
+                    .border_thickness(Thickness::uniform(1.0))
+                    .border_brush(ThemeRef::CardStroke)
+                    .horizontal_alignment(HorizontalAlignment::Stretch)
+                    .with_key(format!("tray-indicator-{}-{indicator_index}", widget.id))
+                    .with_translation_transition(duration(CONTROL_FAST_ANIMATION))
+                    .into(),
+                );
+            }
+
+            let mut widget_actions = Vec::<Element>::new();
+            if widget.indicators.len() < 3 {
+                let widgets_for_add = widgets.to_vec();
+                let add_setter = set_widgets.clone();
+                let add_tx = settings_tx.clone();
+                let enabled_for_add = enabled_providers.to_vec();
+                let fallback_provider = widget
+                    .indicators
+                    .last()
+                    .and_then(TrayIndicator::provider)
+                    .or_else(|| enabled_providers.first().copied())
+                    .unwrap_or(ProviderKind::Codex);
+                widget_actions.push(
+                    Button::new("Add indicator")
+                        .on_click(move || {
+                            let descriptor =
+                                crate::provider_registry::descriptor(fallback_provider);
+                            let metric = descriptor
+                                .default_tray_metrics
+                                .first()
+                                .copied()
+                                .unwrap_or("unknown");
+                            let mut next = widgets_for_add.clone();
+                            next[index]
+                                .indicators
+                                .push(TrayIndicator::new(fallback_provider, metric));
+                            persist_tray_widgets(
+                                add_setter.clone(),
+                                add_tx.clone(),
+                                next,
+                                &enabled_for_add,
+                            );
+                        })
+                        .into(),
+                );
+            }
+
+            let widgets_for_duplicate = widgets.to_vec();
+            let duplicate_setter = set_widgets.clone();
+            let duplicate_tx = settings_tx.clone();
+            let enabled_for_duplicate = enabled_providers.to_vec();
+            let widgets_for_remove = widgets.to_vec();
+            let remove_setter = set_widgets.clone();
+            let removed_setter = set_removed_widget.clone();
+            let remove_tx = settings_tx.clone();
+            let enabled_for_remove = enabled_providers.to_vec();
+            widget_actions.push(
+                Button::new("Duplicate")
+                    .on_click(move || {
+                        let mut next = widgets_for_duplicate.clone();
+                        let copy = next[index].duplicate_with_new_id();
+                        next.insert(index + 1, copy);
+                        persist_tray_widgets(
+                            duplicate_setter.clone(),
+                            duplicate_tx.clone(),
+                            next,
+                            &enabled_for_duplicate,
+                        );
+                    })
+                    .into(),
+            );
+            widget_actions.push(
+                Button::new("Remove")
+                    .on_click(move || {
+                        let mut next = widgets_for_remove.clone();
+                        let removed = next.remove(index);
+                        removed_setter.call(Some((index, removed)));
+                        persist_tray_widgets(
+                            remove_setter.clone(),
+                            remove_tx.clone(),
+                            next,
+                            &enabled_for_remove,
+                        );
+                    })
+                    .into(),
+            );
+            fields.push(
+                hstack(widget_actions)
+                    .spacing(8.0)
+                    .horizontal_alignment(HorizontalAlignment::Left)
+                    .into(),
+            );
+            vstack(fields).spacing(10.0).into()
+        };
+
+        let row: Element = Expander::new(content)
+            .header_content(header)
+            .expanded(is_expanded)
+            .with_translation_transition(duration(CONTROL_FAST_ANIMATION))
+            .with_opacity_transition(duration(CONTROL_FAST_ANIMATION))
+            .on_expanding(move |expanded: bool| {
+                expand_setter.call(expanded.then(|| expand_id.clone()));
+            })
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .with_key(format!("tray-widget-{widget_id}"))
+            .into();
+        rows.push(row);
+    }
+
+    let first_enabled = enabled_providers
+        .first()
+        .copied()
+        .unwrap_or(ProviderKind::Codex);
+    let mut add_actions = Vec::<Element>::new();
+    let widgets_for_custom = widgets.to_vec();
+    let custom_setter = set_widgets.clone();
+    let custom_tx = settings_tx.clone();
+    let providers_for_custom = enabled_providers.to_vec();
+    let expanded_for_custom = set_expanded_widget.clone();
+    let widgets_for_app = widgets.to_vec();
+    let app_setter = set_widgets;
+    let providers_for_app = enabled_providers.to_vec();
+    add_actions.push(
+        Button::new("Add widget")
+            .accent()
+            .enabled(!enabled_providers.is_empty())
+            .on_click(move || {
+                let mut next = widgets_for_custom.clone();
+                let widget = TrayWidget::custom_for_provider(first_enabled);
+                let id = widget.id.clone();
+                next.push(widget);
+                persist_tray_widgets(
+                    custom_setter.clone(),
+                    custom_tx.clone(),
+                    next,
+                    &providers_for_custom,
+                );
+                expanded_for_custom.call(Some(id));
+            })
+            .into(),
+    );
+    add_actions.push(
+        Button::new("Add app icon")
+            .on_click(move || {
+                let mut next = widgets_for_app.clone();
+                next.push(TrayWidget::app_icon());
+                persist_tray_widgets(
+                    app_setter.clone(),
+                    settings_tx.clone(),
+                    next,
+                    &providers_for_app,
+                );
+            })
+            .into(),
+    );
+    rows.push(
+        hstack(add_actions)
+            .spacing(8.0)
+            .horizontal_alignment(HorizontalAlignment::Left)
+            .with_key("tray-add-actions")
+            .into(),
+    );
+    rows
+}
+
+#[cfg(any())]
+fn legacy_tray_settings_cards(
     widgets: &[TrayWidget],
     enabled_providers: &[ProviderKind],
     set_widgets: SetState<Vec<TrayWidget>>,
@@ -2588,6 +3474,7 @@ fn tray_settings_cards(
     cards
 }
 
+#[cfg(any())]
 fn source_index(source: &TraySource) -> i32 {
     match source {
         TraySource::Combined => 0,
@@ -2597,6 +3484,7 @@ fn source_index(source: &TraySource) -> i32 {
     }
 }
 
+#[cfg(any())]
 fn source_from_index(index: i32) -> TraySource {
     match index {
         1 => TraySource::Primary,
@@ -2606,6 +3494,7 @@ fn source_from_index(index: i32) -> TraySource {
     }
 }
 
+#[cfg(any())]
 fn presentation_options(source: &TraySource) -> Vec<(&'static str, TrayPresentation)> {
     match source {
         TraySource::Combined => vec![
@@ -2625,6 +3514,7 @@ fn presentation_options(source: &TraySource) -> Vec<(&'static str, TrayPresentat
     }
 }
 
+#[cfg(any())]
 fn default_presentation(source: &TraySource) -> TrayPresentation {
     presentation_options(source)[0].1.clone()
 }
@@ -2633,9 +3523,12 @@ fn persist_tray_widgets(
     setter: SetState<Vec<TrayWidget>>,
     settings_tx: Sender<Settings>,
     widgets: Vec<TrayWidget>,
-    enabled_providers: &[ProviderKind],
+    _enabled_providers: &[ProviderKind],
 ) {
-    let widgets = normalize_tray_widget_providers(widgets, enabled_providers);
+    let mut widgets = widgets;
+    for widget in &mut widgets {
+        widget.normalize();
+    }
     setter.call(widgets.clone());
     persist_update(settings_tx, move |settings| settings.tray_widgets = widgets);
 }
@@ -2657,6 +3550,7 @@ fn enabled_providers(
         .collect()
 }
 
+#[cfg(any())]
 fn normalize_tray_widget_providers(
     mut widgets: Vec<TrayWidget>,
     enabled_providers: &[ProviderKind],
@@ -2680,27 +3574,8 @@ fn persist_provider_enabled(
     widgets: Vec<TrayWidget>,
 ) {
     setter.call(enabled);
-    let providers = match provider {
-        ProviderKind::Codex => enabled_providers(
-            &ProviderKind::default_order(),
-            enabled,
-            other_provider_enabled,
-            cursor_enabled,
-        ),
-        ProviderKind::Claude => enabled_providers(
-            &ProviderKind::default_order(),
-            other_provider_enabled,
-            enabled,
-            cursor_enabled,
-        ),
-        ProviderKind::Cursor => enabled_providers(
-            &ProviderKind::default_order(),
-            other_provider_enabled,
-            false,
-            enabled,
-        ),
-    };
-    widgets_setter.call(normalize_tray_widget_providers(widgets, &providers));
+    let _ = (other_provider_enabled, cursor_enabled);
+    widgets_setter.call(widgets);
     persist_update(settings_tx, move |settings| {
         settings.providers.set_enabled(provider, enabled);
     });
@@ -2716,15 +3591,12 @@ fn persist_cursor_enabled(
     widgets: Vec<TrayWidget>,
 ) {
     setter.call(enabled);
-    let providers = enabled_providers(
-        &ProviderKind::default_order(),
-        codex_enabled,
-        claude_enabled,
-        enabled,
-    );
-    widgets_setter.call(normalize_tray_widget_providers(widgets, &providers));
+    let _ = (codex_enabled, claude_enabled);
+    widgets_setter.call(widgets);
     persist_update(settings_tx, move |settings| {
-        settings.providers.cursor_enabled = enabled;
+        settings
+            .providers
+            .set_enabled(ProviderKind::Cursor, enabled);
     });
 }
 
@@ -2752,7 +3624,7 @@ pub(crate) fn persist_update(settings_tx: Sender<Settings>, update: impl FnOnce(
     let result = Settings::default_path().and_then(|path| {
         let mut settings = Settings::load_or_create(&path)?;
         update(&mut settings);
-        settings.normalize_tray_widget_providers();
+        settings.normalize_tray_widgets();
         // Persist first so a flaky side effect cannot block live UI updates.
         settings.save(&path)?;
         if let Err(error) = settings.apply_runtime_effects() {
@@ -2770,7 +3642,7 @@ pub(crate) fn persist_update(settings_tx: Sender<Settings>, update: impl FnOnce(
 
 fn replace_settings(settings_tx: Sender<Settings>, mut settings: Settings) -> anyhow::Result<()> {
     let path = Settings::default_path()?;
-    settings.normalize_tray_widget_providers();
+    settings.normalize_tray_widgets();
     settings.save(&path)?;
     if let Err(error) = settings.apply_runtime_effects() {
         eprintln!("failed to apply runtime settings effects: {error:#}");

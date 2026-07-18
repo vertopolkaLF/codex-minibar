@@ -1,16 +1,10 @@
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    sync::mpsc::Sender,
-    thread,
-    time::Duration,
-};
+use std::{collections::HashMap, path::PathBuf, sync::mpsc::Sender, thread, time::Duration};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 use crate::{
     claude::{ClaudeActivator, ClaudeClient},
-    codex::{first_available, CodexActivator, CodexClient},
+    codex::{CodexActivator, CodexClient, first_available},
     cursor::{CursorActivator, CursorClient},
     settings::{ProviderKind, Settings},
     worker::{self, WorkerEvent, WorkerHandle},
@@ -27,7 +21,10 @@ pub fn start_enabled_workers(
 ) -> (ProviderWorkers, Vec<String>) {
     let mut workers = ProviderWorkers::new();
     let mut errors = Vec::new();
-    for provider in [ProviderKind::Codex, ProviderKind::Claude, ProviderKind::Cursor] {
+    for provider in crate::provider_registry::PROVIDERS
+        .iter()
+        .map(|descriptor| descriptor.kind)
+    {
         if !settings.providers.is_enabled(provider) {
             continue;
         }
@@ -92,11 +89,15 @@ pub fn start_provider_worker(
                 WorkerEvent::UsageUpdated(usage) => {
                     Some(WorkerEvent::ProviderUsageUpdated(provider, usage))
                 }
-                WorkerEvent::ActivationSucceeded => Some(WorkerEvent::ProviderActivationSucceeded(provider)),
+                WorkerEvent::ActivationSucceeded => {
+                    Some(WorkerEvent::ProviderActivationSucceeded(provider))
+                }
                 WorkerEvent::ActivationFailed(error) => {
                     Some(WorkerEvent::ProviderActivationFailed(provider, error))
                 }
-                WorkerEvent::PollFailed(error) => Some(WorkerEvent::ProviderPollFailed(provider, error)),
+                WorkerEvent::PollFailed(error) => {
+                    Some(WorkerEvent::ProviderPollFailed(provider, error))
+                }
                 WorkerEvent::Stopped => None,
                 // Only the worker itself emits unscoped events. Passing any
                 // already-scoped value through avoids silently losing data if

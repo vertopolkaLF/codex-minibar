@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::usage::UsageStatistics;
 use crate::settings::ProviderKind;
+use crate::usage::UsageStatistics;
 
 /// Windows longer than this are treated as weekly (or similar), not the 5h session.
 const SHORT_WINDOW_MAX_MINUTES: u32 = 12 * 60;
@@ -131,26 +131,31 @@ pub struct RateLimits {
 /// merged: a Claude weekly limit must not overwrite Codex's five-hour window.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ProviderLimits {
-    pub codex: RateLimits,
-    pub claude: RateLimits,
-    pub cursor: RateLimits,
+    values: std::collections::HashMap<ProviderKind, RateLimits>,
 }
 
 impl ProviderLimits {
     pub fn get(&self, provider: ProviderKind) -> &RateLimits {
-        match provider {
-            ProviderKind::Codex => &self.codex,
-            ProviderKind::Claude => &self.claude,
-            ProviderKind::Cursor => &self.cursor,
-        }
+        static EMPTY: std::sync::OnceLock<RateLimits> = std::sync::OnceLock::new();
+        self.values
+            .get(&provider)
+            .unwrap_or_else(|| EMPTY.get_or_init(RateLimits::default))
     }
 
     pub fn get_mut(&mut self, provider: ProviderKind) -> &mut RateLimits {
-        match provider {
-            ProviderKind::Codex => &mut self.codex,
-            ProviderKind::Claude => &mut self.claude,
-            ProviderKind::Cursor => &mut self.cursor,
+        self.values.entry(provider).or_default()
+    }
+
+    pub fn from_entries(entries: impl IntoIterator<Item = (ProviderKind, RateLimits)>) -> Self {
+        Self {
+            values: entries.into_iter().collect(),
         }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (ProviderKind, &RateLimits)> {
+        self.values
+            .iter()
+            .map(|(provider, limits)| (*provider, limits))
     }
 }
 
