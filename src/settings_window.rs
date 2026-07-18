@@ -16,7 +16,7 @@ use crate::settings_controls::{
     settings_slider_content, settings_toggle_card, settings_toggle_card_with_description,
     settings_toggle_expander, update_available_nav_card,
 };
-use crate::theme::{CONTROL_FAST_ANIMATION, duration};
+use crate::theme::{CONTROL_FAST_ANIMATION, CONTROL_NORMAL_ANIMATION, duration};
 use crate::updater::{
     ISSUES_URL, RELEASES_URL, REPO_URL, UpdateController, UpdatePhase, current_version,
 };
@@ -26,7 +26,11 @@ use std::{
     collections::HashMap,
     path::PathBuf,
     rc::Rc,
-    sync::{Arc, mpsc::Sender},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+        mpsc::Sender,
+    },
     thread,
     time::Duration,
 };
@@ -36,6 +40,18 @@ const WINDOW_WIDTH: f64 = 760.0;
 const WINDOW_HEIGHT: f64 = 520.0;
 const SETTINGS_WINDOW_TITLE: &str = "Codex Minibar Settings";
 const ONBOARDING_WINDOW_TITLE: &str = "Welcome to Codex Minibar";
+
+/// Generation counter so overlapping indicator-modal open/close animations don't race.
+static INDICATOR_MODAL_ANIM_GEN: AtomicU64 = AtomicU64::new(0);
+/// CSS `#000a` → `#000000aa` backdrop behind the indicator edit card.
+const INDICATOR_MODAL_SCRIM: Color = Color {
+    a: 0xaa,
+    r: 0,
+    g: 0,
+    b: 0,
+};
+const INDICATOR_MODAL_WIDTH: f64 = 520.0;
+const INDICATOR_MODAL_RADIUS: f64 = 12.0;
 
 thread_local! {
     static HOST: RefCell<Option<Rc<ReactorHost>>> = const { RefCell::new(None) };
@@ -973,6 +989,9 @@ pub fn render(
     let (hovered_card_id, set_hovered_card_id) = cx.use_state(None::<String>);
     let (tray_widgets, set_tray_widgets) = cx.use_state(settings.tray_widgets.clone());
     let (expanded_tray_widget, set_expanded_tray_widget) = cx.use_state(None::<String>);
+    let (editing_tray_indicator, set_editing_tray_indicator) =
+        cx.use_async_state(None::<(String, usize)>);
+    let (indicator_modal_visible, set_indicator_modal_visible) = cx.use_async_state(false);
     let (removed_tray_widget, set_removed_tray_widget) = cx.use_state(None::<(usize, TrayWidget)>);
     let (check_for_updates, set_check_for_updates) = cx.use_state(settings.check_for_updates);
     let (notify_on_update, set_notify_on_update) =
@@ -1047,6 +1066,7 @@ pub fn render(
             weekly_low_usage_expand_progress,
             &tray_widgets,
             &expanded_tray_widget,
+            &editing_tray_indicator,
             &removed_tray_widget,
             &hovered_card_id,
             check_for_updates,
@@ -1081,8 +1101,10 @@ pub fn render(
             set_weekly_low_usage_threshold,
             set_weekly_low_usage_expanded,
             set_weekly_low_usage_expand_progress,
-            set_tray_widgets,
+            set_tray_widgets.clone(),
             set_expanded_tray_widget,
+            set_editing_tray_indicator.clone(),
+            set_indicator_modal_visible.clone(),
             set_removed_tray_widget,
             set_hovered_card_id,
             set_check_for_updates,
@@ -1157,9 +1179,55 @@ pub fn render(
         .columns([GridLength::Pixel(220.0), GridLength::Star(1.0)])
         .rows([GridLength::Star(1.0)])
         .background(Color::transparent());
+
+    let window_body = grid((title_bar.grid_row(0), shell.grid_row(1)))
+        .rows([GridLength::Auto, GridLength::Star(1.0)])
+        .columns([GridLength::Star(1.0)])
+        .background(Color::transparent());
+
+    let tray_providers: Vec<ProviderKind> = popup_order
+        .iter()
+        .filter_map(|widget| widget.as_provider())
+        .collect();
+    let tray_enabled_providers =
+        enabled_providers(&tray_providers, codex_enabled, claude_enabled, cursor_enabled);
+    let window_body: Element = if let Some(editing) = editing_tray_indicator.as_ref() {
+        let overlay = tray_indicator_edit_overlay(
+            &tray_widgets,
+            &tray_enabled_providers,
+            editing,
+            indicator_modal_visible,
+            set_tray_widgets.clone(),
+            set_editing_tray_indicator.clone(),
+            set_indicator_modal_visible.clone(),
+            settings_tx.clone(),
+        );
+        match overlay {
+            Some(overlay) => relative_panel::<Vec<Element>>(vec![
+                window_body
+                    .relative_align_left()
+                    .relative_align_right()
+                    .relative_align_top()
+                    .relative_align_bottom()
+                    .into(),
+                overlay
+                    .relative_align_left()
+                    .relative_align_right()
+                    .relative_align_top()
+                    .relative_align_bottom(),
+            ])
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .vertical_alignment(VerticalAlignment::Stretch)
+            .into(),
+            None => window_body.into(),
+        }
+    } else {
+        window_body.into()
+    };
+
     let mica = {
         let mut host = swap_chain_panel()
-            .grid_row_span(2)
+            .grid_row_span(1)
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .vertical_alignment(VerticalAlignment::Stretch);
         host.mounted = Some(Callback::new(|native: Option<_>| {
@@ -1171,11 +1239,22 @@ pub fn render(
         }));
         host
     };
-    grid((mica, title_bar.grid_row(0), shell.grid_row(1)))
-        .rows([GridLength::Auto, GridLength::Star(1.0)])
-        .columns([GridLength::Star(1.0)])
-        .background(Color::transparent())
-        .into()
+    relative_panel::<Vec<Element>>(vec![
+        mica.relative_align_left()
+            .relative_align_right()
+            .relative_align_top()
+            .relative_align_bottom()
+            .into(),
+        window_body
+            .relative_align_left()
+            .relative_align_right()
+            .relative_align_top()
+            .relative_align_bottom(),
+    ])
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .vertical_alignment(VerticalAlignment::Stretch)
+    .background(Color::transparent())
+    .into()
 }
 
 fn settings_title_icon_uri() -> String {
@@ -1241,6 +1320,7 @@ fn tab_content(
     weekly_low_usage_expand_progress: f64,
     tray_widgets: &[TrayWidget],
     expanded_tray_widget: &Option<String>,
+    editing_tray_indicator: &Option<(String, usize)>,
     removed_tray_widget: &Option<(usize, TrayWidget)>,
     hovered_card_id: &Option<String>,
     check_for_updates: bool,
@@ -1277,6 +1357,8 @@ fn tab_content(
     set_weekly_low_usage_expand_progress: AsyncSetState<f64>,
     set_tray_widgets: SetState<Vec<TrayWidget>>,
     set_expanded_tray_widget: SetState<Option<String>>,
+    set_editing_tray_indicator: AsyncSetState<Option<(String, usize)>>,
+    set_indicator_modal_visible: AsyncSetState<bool>,
     set_removed_tray_widget: SetState<Option<(usize, TrayWidget)>>,
     set_hovered_card_id: SetState<Option<String>>,
     set_check_for_updates: SetState<bool>,
@@ -1780,9 +1862,12 @@ fn tab_content(
                     tray_widgets,
                     &enabled_providers,
                     expanded_tray_widget,
+                    editing_tray_indicator,
                     removed_tray_widget,
                     set_tray_widgets,
                     set_expanded_tray_widget,
+                    set_editing_tray_indicator,
+                    set_indicator_modal_visible,
                     set_removed_tray_widget,
                     settings_tx.clone(),
                 ),
@@ -2425,6 +2510,34 @@ fn about_action_card(
     .into()
 }
 
+fn tray_color_mode_label(mode: TrayColorMode) -> &'static str {
+    match mode {
+        TrayColorMode::Status => "Status color",
+        TrayColorMode::Fixed => "Fixed color",
+        TrayColorMode::Provider => "Provider color",
+        TrayColorMode::Accent => "App accent",
+        TrayColorMode::Monochrome => "Monochrome",
+    }
+}
+
+fn tray_indicator_summary(indicator: &TrayIndicator) -> String {
+    let Some(provider) = indicator.provider() else {
+        return format!("Unsupported {}", indicator.provider_id);
+    };
+    let metric = crate::provider_registry::metric(provider, &indicator.metric_id)
+        .map(|metric| metric.label.to_owned())
+        .unwrap_or_else(|| indicator.metric_id.clone());
+    let value = match indicator.limit_value {
+        LimitValue::Used => "Used",
+        LimitValue::Remaining => "Remaining",
+    };
+    format!(
+        "{} · {metric} · {value} · {}",
+        provider.display_name(),
+        tray_color_mode_label(indicator.color_mode)
+    )
+}
+
 fn tray_widget_summary(widget: &TrayWidget) -> String {
     if widget.kind == TrayWidgetKind::AppIcon {
         return "App icon".into();
@@ -2432,15 +2545,7 @@ fn tray_widget_summary(widget: &TrayWidget) -> String {
     let labels = widget
         .indicators
         .iter()
-        .map(|indicator| {
-            let Some(provider) = indicator.provider() else {
-                return format!("Unsupported {}", indicator.provider_id);
-            };
-            let metric = crate::provider_registry::metric(provider, &indicator.metric_id)
-                .map(|metric| metric.label.to_owned())
-                .unwrap_or_else(|| indicator.metric_id.clone());
-            format!("{} {metric}", provider.display_name())
-        })
+        .map(tray_indicator_summary)
         .collect::<Vec<_>>();
     if labels.is_empty() {
         "Empty widget".into()
@@ -2581,20 +2686,68 @@ const TRAY_REORDER_ICON_FONT: &str = "Segoe Fluent Icons";
 /// Match the settings card chevron glyph size.
 const TRAY_REORDER_ICON_SIZE: f64 = 12.0;
 const TRAY_REORDER_BUTTON_SIZE: f64 = 18.0;
-/// Match ComboBox / input control height; trash glyph is intentionally smaller.
-const TRAY_REMOVE_BUTTON_SIZE: f64 = 32.0;
-const TRAY_REMOVE_ICON_SIZE: f64 = 14.0;
+
+fn open_indicator_edit_modal(
+    widget_id: String,
+    indicator_index: usize,
+    set_editing: AsyncSetState<Option<(String, usize)>>,
+    set_visible: AsyncSetState<bool>,
+) {
+    let anim_id = INDICATOR_MODAL_ANIM_GEN.fetch_add(1, Ordering::Relaxed) + 1;
+    set_editing.call(Some((widget_id, indicator_index)));
+    set_visible.call(false);
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(16));
+        if INDICATOR_MODAL_ANIM_GEN.load(Ordering::Relaxed) != anim_id {
+            return;
+        }
+        set_visible.call(true);
+    });
+}
+
+fn close_indicator_edit_modal(
+    set_editing: AsyncSetState<Option<(String, usize)>>,
+    set_visible: AsyncSetState<bool>,
+) {
+    let anim_id = INDICATOR_MODAL_ANIM_GEN.fetch_add(1, Ordering::Relaxed) + 1;
+    set_visible.call(false);
+    let wait = duration(CONTROL_NORMAL_ANIMATION);
+    if wait.is_zero() {
+        set_editing.call(None);
+        return;
+    }
+    thread::spawn(move || {
+        thread::sleep(wait);
+        if INDICATOR_MODAL_ANIM_GEN.load(Ordering::Relaxed) != anim_id {
+            return;
+        }
+        set_editing.call(None);
+    });
+}
+
+fn clear_indicator_edit_modal(
+    set_editing: AsyncSetState<Option<(String, usize)>>,
+    set_visible: AsyncSetState<bool>,
+) {
+    INDICATOR_MODAL_ANIM_GEN.fetch_add(1, Ordering::Relaxed);
+    set_visible.call(false);
+    set_editing.call(None);
+}
 
 fn tray_settings_cards(
     widgets: &[TrayWidget],
     enabled_providers: &[ProviderKind],
     expanded_widget: &Option<String>,
+    editing_indicator: &Option<(String, usize)>,
     removed_widget: &Option<(usize, TrayWidget)>,
     set_widgets: SetState<Vec<TrayWidget>>,
     set_expanded_widget: SetState<Option<String>>,
+    set_editing_indicator: AsyncSetState<Option<(String, usize)>>,
+    set_indicator_modal_visible: AsyncSetState<bool>,
     set_removed_widget: SetState<Option<(usize, TrayWidget)>>,
     settings_tx: Sender<Settings>,
 ) -> Vec<Element> {
+    let _ = editing_indicator;
     let mut rows = Vec::new();
     if let Some((removed_index, removed)) = removed_widget.clone() {
         let widgets_for_undo = widgets.to_vec();
@@ -2779,13 +2932,12 @@ fn tray_settings_cards(
             .into()
         } else {
             let mut fields = Vec::<Element>::new();
-            let mut appearance_controls = Vec::<Element>::new();
 
             let widgets_for_presentation = widgets.to_vec();
             let presentation_setter = set_widgets.clone();
             let presentation_tx = settings_tx.clone();
             let providers_for_presentation = enabled_providers.to_vec();
-            appearance_controls.push(
+            fields.push(
                 ComboBox::new([
                     "Numbers",
                     "Progress bars",
@@ -2794,337 +2946,79 @@ fn tray_settings_cards(
                     "Countdown",
                 ])
                 .header("Appearance")
-                .grid_column(0)
                 .horizontal_alignment(HorizontalAlignment::Stretch)
                 .selected_index(tray_presentation_index(widget.presentation))
-                .on_selection_changed(move |choice| {
-                    let mut next = widgets_for_presentation.clone();
-                    next[index].presentation = tray_presentation_from_index(choice);
-                    persist_tray_widgets(
-                        presentation_setter.clone(),
-                        presentation_tx.clone(),
-                        next,
-                        &providers_for_presentation,
-                    );
+                .on_selection_changed({
+                    let providers_for_empty = enabled_providers.to_vec();
+                    move |choice| {
+                        let mut next = widgets_for_presentation.clone();
+                        next[index].presentation = tray_presentation_from_index(choice);
+                        if next[index].presentation.is_reset_clock() {
+                            next[index].indicators.truncate(1);
+                            if next[index].indicators.is_empty() {
+                                let provider = providers_for_empty
+                                    .first()
+                                    .copied()
+                                    .unwrap_or(ProviderKind::Codex);
+                                let descriptor = crate::provider_registry::descriptor(provider);
+                                let metric = descriptor
+                                    .default_tray_metrics
+                                    .first()
+                                    .copied()
+                                    .unwrap_or("unknown");
+                                next[index]
+                                    .indicators
+                                    .push(TrayIndicator::new(provider, metric));
+                            }
+                        }
+                        persist_tray_widgets(
+                            presentation_setter.clone(),
+                            presentation_tx.clone(),
+                            next,
+                            &providers_for_presentation,
+                        );
+                    }
                 })
                 .into(),
             );
 
-            let widgets_for_color = widgets.to_vec();
-            let color_setter = set_widgets.clone();
-            let color_tx = settings_tx.clone();
-            let providers_for_color = enabled_providers.to_vec();
-            appearance_controls.push(
-                ComboBox::new(["Status", "Fixed", "Provider", "App accent", "Monochrome"])
-                    .header("Color")
-                    .grid_column(1)
-                    .horizontal_alignment(HorizontalAlignment::Stretch)
-                    .selected_index(tray_color_mode_index(widget.color_mode))
-                    .on_selection_changed(move |choice| {
-                        let mut next = widgets_for_color.clone();
-                        next[index].color_mode = tray_color_mode_from_index(choice);
-                        persist_tray_widgets(
-                            color_setter.clone(),
-                            color_tx.clone(),
-                            next,
-                            &providers_for_color,
-                        );
-                    })
-                    .into(),
-            );
-            fields.push(
-                grid(appearance_controls)
-                    .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
-                    .column_spacing(12.0)
-                    .horizontal_alignment(HorizontalAlignment::Stretch)
-                    .into(),
-            );
-
-            if widget.color_mode == TrayColorMode::Fixed {
-                let widgets_for_picker = widgets.to_vec();
-                let picker_setter = set_widgets.clone();
-                let picker_tx = settings_tx.clone();
-                let providers_for_picker = enabled_providers.to_vec();
-                fields.push(
-                    ColorPicker::new(ColorArgb::new(
-                        widget.fixed_color.red,
-                        widget.fixed_color.green,
-                        widget.fixed_color.blue,
-                    ))
-                    .alpha_enabled(false)
-                    .on_color_changed(move |(_, red, green, blue)| {
-                        let mut next = widgets_for_picker.clone();
-                        next[index].fixed_color = TrayFixedColor { red, green, blue };
-                        persist_tray_widgets(
-                            picker_setter.clone(),
-                            picker_tx.clone(),
-                            next,
-                            &providers_for_picker,
-                        );
-                    })
-                    .into(),
-                );
-            }
-
-            fields.push(settings_section_heading("Indicators"));
-            for (indicator_index, indicator) in widget.indicators.iter().cloned().enumerate() {
-                let provider_options = crate::provider_registry::PROVIDERS;
-                let known_provider = indicator.provider();
-                let mut provider_labels = provider_options
-                    .iter()
-                    .map(|provider| provider.display_name.to_owned())
-                    .collect::<Vec<_>>();
-                let provider_index = known_provider
-                    .and_then(|provider| {
-                        provider_options
-                            .iter()
-                            .position(|descriptor| descriptor.kind == provider)
-                    })
-                    .unwrap_or_else(|| {
-                        provider_labels.push(format!("Unsupported ({})", indicator.provider_id));
-                        provider_labels.len() - 1
-                    }) as i32;
-                let metric_provider = known_provider.unwrap_or(ProviderKind::Codex);
-                let metrics = crate::provider_registry::descriptor(metric_provider).metrics;
-                let mut metric_labels = metrics
-                    .iter()
-                    .map(|metric| metric.label.to_owned())
-                    .collect::<Vec<_>>();
-                let metric_index = metrics
-                    .iter()
-                    .position(|metric| metric.id == indicator.metric_id)
-                    .unwrap_or_else(|| {
-                        metric_labels.push(format!("Unavailable ({})", indicator.metric_id));
-                        metric_labels.len() - 1
-                    }) as i32;
-
-                let widgets_for_provider = widgets.to_vec();
-                let provider_setter = set_widgets.clone();
-                let provider_tx = settings_tx.clone();
-                let enabled_for_provider = enabled_providers.to_vec();
-                let widgets_for_metric = widgets.to_vec();
-                let metric_setter = set_widgets.clone();
-                let metric_tx = settings_tx.clone();
-                let enabled_for_metric = enabled_providers.to_vec();
-                let widgets_for_value = widgets.to_vec();
-                let value_setter = set_widgets.clone();
-                let value_tx = settings_tx.clone();
-                let enabled_for_value = enabled_providers.to_vec();
-                let widgets_for_remove = widgets.to_vec();
-                let remove_setter = set_widgets.clone();
-                let removed_setter = set_removed_widget.clone();
-                let remove_tx = settings_tx.clone();
-                let enabled_for_remove = enabled_providers.to_vec();
-                let widgets_for_indicator_up = widgets.to_vec();
-                let indicator_up_setter = set_widgets.clone();
-                let indicator_up_tx = settings_tx.clone();
-                let enabled_for_indicator_up = enabled_providers.to_vec();
-                let widgets_for_indicator_down = widgets.to_vec();
-                let indicator_down_setter = set_widgets.clone();
-                let indicator_down_tx = settings_tx.clone();
-                let enabled_for_indicator_down = enabled_providers.to_vec();
-
-                let indicator_reorder = vstack((
-                    Button::new(CHEVRON_UP_GLYPH)
-                        .subtle()
-                        .font_family(TRAY_REORDER_ICON_FONT)
-                        .font_size(TRAY_REORDER_ICON_SIZE)
-                        .width(TRAY_REORDER_BUTTON_SIZE)
-                        .height(TRAY_REORDER_BUTTON_SIZE)
-                        .min_width(TRAY_REORDER_BUTTON_SIZE)
-                        .min_height(TRAY_REORDER_BUTTON_SIZE)
-                        .max_width(TRAY_REORDER_BUTTON_SIZE)
-                        .max_height(TRAY_REORDER_BUTTON_SIZE)
-                        .padding(Thickness::uniform(0.0))
-                        .enabled(indicator_index > 0)
-                        .tooltip("Move indicator up")
-                        .on_click(move || {
-                            if indicator_index == 0 {
-                                return;
-                            }
-                            let mut next = widgets_for_indicator_up.clone();
-                            next[index]
-                                .indicators
-                                .swap(indicator_index, indicator_index - 1);
-                            persist_tray_widgets(
-                                indicator_up_setter.clone(),
-                                indicator_up_tx.clone(),
-                                next,
-                                &enabled_for_indicator_up,
-                            );
-                        }),
-                    Button::new(CHEVRON_DOWN_GLYPH)
-                        .subtle()
-                        .font_family(TRAY_REORDER_ICON_FONT)
-                        .font_size(TRAY_REORDER_ICON_SIZE)
-                        .width(TRAY_REORDER_BUTTON_SIZE)
-                        .height(TRAY_REORDER_BUTTON_SIZE)
-                        .min_width(TRAY_REORDER_BUTTON_SIZE)
-                        .min_height(TRAY_REORDER_BUTTON_SIZE)
-                        .max_width(TRAY_REORDER_BUTTON_SIZE)
-                        .max_height(TRAY_REORDER_BUTTON_SIZE)
-                        .padding(Thickness::uniform(0.0))
-                        .enabled(indicator_index + 1 < widget.indicators.len())
-                        .tooltip("Move indicator down")
-                        .on_click(move || {
-                            let mut next = widgets_for_indicator_down.clone();
-                            if indicator_index + 1 >= next[index].indicators.len() {
-                                return;
-                            }
-                            next[index]
-                                .indicators
-                                .swap(indicator_index, indicator_index + 1);
-                            persist_tray_widgets(
-                                indicator_down_setter.clone(),
-                                indicator_down_tx.clone(),
-                                next,
-                                &enabled_for_indicator_down,
-                            );
-                        }),
-                ))
-                .spacing(0.0)
-                .horizontal_alignment(HorizontalAlignment::Center);
-
-                let indicator_fields = vec![
-                    indicator_reorder
-                        .grid_column(0)
-                        .vertical_alignment(VerticalAlignment::Center)
-                        .into(),
-                    ComboBox::new(provider_labels)
-                        .header("Provider")
-                        .grid_column(1)
-                        .horizontal_alignment(HorizontalAlignment::Stretch)
-                        .selected_index(provider_index)
-                        .on_selection_changed(move |choice: i32| {
-                            let Some(descriptor) =
-                                crate::provider_registry::PROVIDERS.get(choice.max(0) as usize)
-                            else {
-                                return;
-                            };
-                            let mut next = widgets_for_provider.clone();
-                            next[index].indicators[indicator_index].provider_id =
-                                descriptor.id.into();
-                            next[index].indicators[indicator_index].metric_id = descriptor
-                                .default_tray_metrics
-                                .first()
-                                .copied()
-                                .unwrap_or("unknown")
-                                .into();
-                            persist_tray_widgets(
-                                provider_setter.clone(),
-                                provider_tx.clone(),
-                                next,
-                                &enabled_for_provider,
-                            );
-                        })
-                        .into(),
-                    ComboBox::new(metric_labels)
-                        .header("Metric")
-                        .grid_column(2)
-                        .horizontal_alignment(HorizontalAlignment::Stretch)
-                        .selected_index(metric_index)
-                        .with_key(format!(
-                            "tray-metric-{}-{indicator_index}-{}",
-                            widget.id, indicator.provider_id
-                        ))
-                        .on_selection_changed(move |choice: i32| {
-                            let Some(metric) = metrics.get(choice.max(0) as usize) else {
-                                return;
-                            };
-                            let mut next = widgets_for_metric.clone();
-                            next[index].indicators[indicator_index].metric_id = metric.id.into();
-                            persist_tray_widgets(
-                                metric_setter.clone(),
-                                metric_tx.clone(),
-                                next,
-                                &enabled_for_metric,
-                            );
-                        })
-                        .into(),
-                    ComboBox::new(["Remaining", "Used"])
-                        .header("Value")
-                        .grid_column(3)
-                        .horizontal_alignment(HorizontalAlignment::Stretch)
-                        .selected_index(if indicator.limit_value == LimitValue::Remaining {
-                            0
-                        } else {
-                            1
-                        })
-                        .on_selection_changed(move |choice| {
-                            let mut next = widgets_for_value.clone();
-                            next[index].indicators[indicator_index].limit_value = if choice == 1 {
-                                LimitValue::Used
-                            } else {
-                                LimitValue::Remaining
-                            };
-                            persist_tray_widgets(
-                                value_setter.clone(),
-                                value_tx.clone(),
-                                next,
-                                &enabled_for_value,
-                            );
-                        })
-                        .into(),
-                    Button::new("")
-                        .icon(Symbol::Delete)
-                        .grid_column(4)
-                        .font_size(TRAY_REMOVE_ICON_SIZE)
-                        .width(TRAY_REMOVE_BUTTON_SIZE)
-                        .height(TRAY_REMOVE_BUTTON_SIZE)
-                        .min_width(TRAY_REMOVE_BUTTON_SIZE)
-                        .min_height(TRAY_REMOVE_BUTTON_SIZE)
-                        .max_width(TRAY_REMOVE_BUTTON_SIZE)
-                        .max_height(TRAY_REMOVE_BUTTON_SIZE)
-                        .padding(Thickness::uniform(0.0))
-                        .tooltip("Remove indicator")
-                        .vertical_alignment(VerticalAlignment::Bottom)
-                        .on_click(move || {
-                            let mut next = widgets_for_remove.clone();
-                            next[index].indicators.remove(indicator_index);
-                            if next[index].indicators.is_empty() {
-                                let removed = next.remove(index);
-                                removed_setter.call(Some((index, removed)));
-                            }
-                            persist_tray_widgets(
-                                remove_setter.clone(),
-                                remove_tx.clone(),
-                                next,
-                                &enabled_for_remove,
-                            );
-                        })
-                        .into(),
-                ];
-                fields.push(
-                    border(
-                        grid(indicator_fields)
-                            .columns([
-                                GridLength::Pixel(TRAY_REORDER_BUTTON_SIZE),
-                                GridLength::Star(1.0),
-                                GridLength::Star(1.5),
-                                GridLength::Star(1.0),
-                                GridLength::Pixel(TRAY_REMOVE_BUTTON_SIZE),
-                            ])
-                            .column_spacing(12.0)
-                            .horizontal_alignment(HorizontalAlignment::Stretch),
-                    )
-                    .padding(Thickness::uniform(12.0))
-                    .background(ThemeRef::CardBackground)
-                    .corner_radius(8.0)
-                    .border_thickness(Thickness::uniform(1.0))
-                    .border_brush(ThemeRef::CardStroke)
-                    .horizontal_alignment(HorizontalAlignment::Stretch)
-                    .with_key(format!("tray-indicator-{}-{indicator_index}", widget.id))
-                    .with_translation_transition(duration(CONTROL_FAST_ANIMATION))
-                    .into(),
-                );
+            if widget.presentation.is_reset_clock() {
+                fields.push(tray_time_parameter_fields(
+                    index,
+                    &widget,
+                    widgets,
+                    enabled_providers,
+                    set_widgets.clone(),
+                    settings_tx.clone(),
+                ));
+            } else {
+                fields.push(settings_section_heading("Indicators"));
+                for (indicator_index, indicator) in widget.indicators.iter().cloned().enumerate() {
+                    fields.push(tray_indicator_summary_card(
+                        index,
+                        indicator_index,
+                        &indicator,
+                        &widget,
+                        widgets,
+                        enabled_providers,
+                        set_widgets.clone(),
+                        set_editing_indicator.clone(),
+                        set_indicator_modal_visible.clone(),
+                        set_removed_widget.clone(),
+                        settings_tx.clone(),
+                    ));
+                }
             }
 
             let mut widget_actions = Vec::<Element>::new();
-            if widget.indicators.len() < 3 {
+            if !widget.presentation.is_reset_clock() && widget.indicators.len() < 3 {
                 let widgets_for_add = widgets.to_vec();
                 let add_setter = set_widgets.clone();
                 let add_tx = settings_tx.clone();
                 let enabled_for_add = enabled_providers.to_vec();
+                let edit_added = set_editing_indicator.clone();
+                let show_added = set_indicator_modal_visible.clone();
+                let widget_id_for_add = widget.id.clone();
                 let fallback_provider = widget
                     .indicators
                     .last()
@@ -3142,6 +3036,7 @@ fn tray_settings_cards(
                                 .copied()
                                 .unwrap_or("unknown");
                             let mut next = widgets_for_add.clone();
+                            let new_index = next[index].indicators.len();
                             next[index]
                                 .indicators
                                 .push(TrayIndicator::new(fallback_provider, metric));
@@ -3150,6 +3045,12 @@ fn tray_settings_cards(
                                 add_tx.clone(),
                                 next,
                                 &enabled_for_add,
+                            );
+                            open_indicator_edit_modal(
+                                widget_id_for_add.clone(),
+                                new_index,
+                                edit_added.clone(),
+                                show_added.clone(),
                             );
                         })
                         .into(),
@@ -3165,6 +3066,9 @@ fn tray_settings_cards(
             let removed_setter = set_removed_widget.clone();
             let remove_tx = settings_tx.clone();
             let enabled_for_remove = enabled_providers.to_vec();
+            let clear_editing = set_editing_indicator.clone();
+            let clear_visible = set_indicator_modal_visible.clone();
+            let removed_widget_id = widget.id.clone();
             widget_actions.push(
                 Button::new("Duplicate")
                     .on_click(move || {
@@ -3185,6 +3089,8 @@ fn tray_settings_cards(
                     .on_click(move || {
                         let mut next = widgets_for_remove.clone();
                         let removed = next.remove(index);
+                        clear_indicator_edit_modal(clear_editing.clone(), clear_visible.clone());
+                        let _ = removed_widget_id;
                         removed_setter.call(Some((index, removed)));
                         persist_tray_widgets(
                             remove_setter.clone(),
@@ -3267,6 +3173,718 @@ fn tray_settings_cards(
             .into(),
     );
     rows
+}
+
+fn tray_time_parameter_fields(
+    widget_index: usize,
+    widget: &TrayWidget,
+    widgets: &[TrayWidget],
+    enabled_providers: &[ProviderKind],
+    set_widgets: SetState<Vec<TrayWidget>>,
+    settings_tx: Sender<Settings>,
+) -> Element {
+    let indicator = widget
+        .indicators
+        .first()
+        .cloned()
+        .unwrap_or_else(|| {
+            let provider = enabled_providers
+                .first()
+                .copied()
+                .unwrap_or(ProviderKind::Codex);
+            let descriptor = crate::provider_registry::descriptor(provider);
+            let metric = descriptor
+                .default_tray_metrics
+                .first()
+                .copied()
+                .unwrap_or("unknown");
+            TrayIndicator::new(provider, metric)
+        });
+    let indicator_index = 0usize;
+
+    let provider_options = crate::provider_registry::PROVIDERS;
+    let known_provider = indicator.provider();
+    let mut provider_labels = provider_options
+        .iter()
+        .map(|provider| provider.display_name.to_owned())
+        .collect::<Vec<_>>();
+    let provider_index = known_provider
+        .and_then(|provider| {
+            provider_options
+                .iter()
+                .position(|descriptor| descriptor.kind == provider)
+        })
+        .unwrap_or_else(|| {
+            provider_labels.push(format!("Unsupported ({})", indicator.provider_id));
+            provider_labels.len() - 1
+        }) as i32;
+    let metric_provider = known_provider.unwrap_or(ProviderKind::Codex);
+    let metrics = crate::provider_registry::descriptor(metric_provider).metrics;
+    let mut metric_labels = metrics
+        .iter()
+        .map(|metric| metric.label.to_owned())
+        .collect::<Vec<_>>();
+    let metric_index = metrics
+        .iter()
+        .position(|metric| metric.id == indicator.metric_id)
+        .unwrap_or_else(|| {
+            metric_labels.push(format!("Unavailable ({})", indicator.metric_id));
+            metric_labels.len() - 1
+        }) as i32;
+
+    let widgets_for_provider = widgets.to_vec();
+    let provider_setter = set_widgets.clone();
+    let provider_tx = settings_tx.clone();
+    let enabled_for_provider = enabled_providers.to_vec();
+    let provider_box = ComboBox::new(provider_labels)
+        .header("Provider")
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .selected_index(provider_index)
+        .on_selection_changed(move |choice: i32| {
+            let Some(descriptor) =
+                crate::provider_registry::PROVIDERS.get(choice.max(0) as usize)
+            else {
+                return;
+            };
+            let mut next = widgets_for_provider.clone();
+            if next[widget_index].indicators.is_empty() {
+                next[widget_index]
+                    .indicators
+                    .push(TrayIndicator::new(descriptor.kind, "unknown"));
+            }
+            next[widget_index].indicators[indicator_index].provider_id = descriptor.id.into();
+            next[widget_index].indicators[indicator_index].metric_id = descriptor
+                .default_tray_metrics
+                .first()
+                .copied()
+                .unwrap_or("unknown")
+                .into();
+            persist_tray_widgets(
+                provider_setter.clone(),
+                provider_tx.clone(),
+                next,
+                &enabled_for_provider,
+            );
+        });
+
+    let widgets_for_metric = widgets.to_vec();
+    let metric_setter = set_widgets.clone();
+    let metric_tx = settings_tx.clone();
+    let enabled_for_metric = enabled_providers.to_vec();
+    let metric_box = ComboBox::new(metric_labels)
+        .header("Metric")
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .selected_index(metric_index)
+        .with_key(format!(
+            "tray-time-metric-{}-{}",
+            widget.id, indicator.provider_id
+        ))
+        .on_selection_changed(move |choice: i32| {
+            let Some(metric) = metrics.get(choice.max(0) as usize) else {
+                return;
+            };
+            let mut next = widgets_for_metric.clone();
+            if next[widget_index].indicators.is_empty() {
+                return;
+            }
+            next[widget_index].indicators[indicator_index].metric_id = metric.id.into();
+            persist_tray_widgets(
+                metric_setter.clone(),
+                metric_tx.clone(),
+                next,
+                &enabled_for_metric,
+            );
+        });
+
+    let widgets_for_color = widgets.to_vec();
+    let color_setter = set_widgets.clone();
+    let color_tx = settings_tx.clone();
+    let providers_for_color = enabled_providers.to_vec();
+    let color_box = ComboBox::new(["Status", "Fixed", "Provider", "App accent", "Monochrome"])
+        .header("Color")
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .selected_index(tray_color_mode_index(indicator.color_mode))
+        .on_selection_changed(move |choice| {
+            let mut next = widgets_for_color.clone();
+            if next[widget_index].indicators.is_empty() {
+                return;
+            }
+            next[widget_index].indicators[indicator_index].color_mode =
+                tray_color_mode_from_index(choice);
+            persist_tray_widgets(
+                color_setter.clone(),
+                color_tx.clone(),
+                next,
+                &providers_for_color,
+            );
+        });
+
+    let mut fields = Vec::<Element>::new();
+    fields.push(
+        grid((
+            provider_box.grid_column(0).grid_row(0),
+            metric_box.grid_column(1).grid_row(0),
+            color_box.grid_column(0).grid_row(1).grid_column_span(2),
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
+        .rows([GridLength::Auto, GridLength::Auto])
+        .column_spacing(12.0)
+        .row_spacing(12.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .into(),
+    );
+
+    if indicator.color_mode == TrayColorMode::Fixed {
+        let widgets_for_picker = widgets.to_vec();
+        let picker_setter = set_widgets;
+        let picker_tx = settings_tx;
+        let providers_for_picker = enabled_providers.to_vec();
+        fields.push(
+            border(
+                ColorPicker::new(ColorArgb::new(
+                    indicator.fixed_color.red,
+                    indicator.fixed_color.green,
+                    indicator.fixed_color.blue,
+                ))
+                .alpha_enabled(false)
+                .hex_input_visible(true)
+                .color_slider_visible(true)
+                .color_channel_text_input_visible(false)
+                .on_color_changed(move |(_, red, green, blue)| {
+                    let mut next = widgets_for_picker.clone();
+                    if next[widget_index].indicators.is_empty() {
+                        return;
+                    }
+                    next[widget_index].indicators[indicator_index].fixed_color =
+                        TrayFixedColor { red, green, blue };
+                    persist_tray_widgets(
+                        picker_setter.clone(),
+                        picker_tx.clone(),
+                        next,
+                        &providers_for_picker,
+                    );
+                }),
+            )
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .min_height(180.0)
+            .into(),
+        );
+    }
+
+    vstack(fields)
+        .spacing(12.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .with_key(format!("tray-time-fields-{}", widget.id))
+        .into()
+}
+
+fn tray_indicator_summary_card(
+    widget_index: usize,
+    indicator_index: usize,
+    indicator: &TrayIndicator,
+    widget: &TrayWidget,
+    widgets: &[TrayWidget],
+    enabled_providers: &[ProviderKind],
+    set_widgets: SetState<Vec<TrayWidget>>,
+    set_editing_indicator: AsyncSetState<Option<(String, usize)>>,
+    set_indicator_modal_visible: AsyncSetState<bool>,
+    set_removed_widget: SetState<Option<(usize, TrayWidget)>>,
+    settings_tx: Sender<Settings>,
+) -> Element {
+    let widget_id = widget.id.clone();
+    let widgets_for_up = widgets.to_vec();
+    let up_setter = set_widgets.clone();
+    let up_tx = settings_tx.clone();
+    let enabled_for_up = enabled_providers.to_vec();
+    let widgets_for_down = widgets.to_vec();
+    let down_setter = set_widgets.clone();
+    let down_tx = settings_tx.clone();
+    let enabled_for_down = enabled_providers.to_vec();
+    let widgets_for_remove = widgets.to_vec();
+    let remove_setter = set_widgets;
+    let removed_setter = set_removed_widget;
+    let remove_tx = settings_tx;
+    let enabled_for_remove = enabled_providers.to_vec();
+    let clear_editing = set_editing_indicator.clone();
+    let clear_visible = set_indicator_modal_visible.clone();
+    let open_editor = set_editing_indicator;
+    let show_editor = set_indicator_modal_visible;
+    let edit_widget_id = widget_id.clone();
+
+    let reorder = vstack((
+        Button::new(CHEVRON_UP_GLYPH)
+            .subtle()
+            .font_family(TRAY_REORDER_ICON_FONT)
+            .font_size(TRAY_REORDER_ICON_SIZE)
+            .width(TRAY_REORDER_BUTTON_SIZE)
+            .height(TRAY_REORDER_BUTTON_SIZE)
+            .min_width(TRAY_REORDER_BUTTON_SIZE)
+            .min_height(TRAY_REORDER_BUTTON_SIZE)
+            .max_width(TRAY_REORDER_BUTTON_SIZE)
+            .max_height(TRAY_REORDER_BUTTON_SIZE)
+            .padding(Thickness::uniform(0.0))
+            .enabled(indicator_index > 0)
+            .tooltip("Move indicator up")
+            .on_click(move || {
+                if indicator_index == 0 {
+                    return;
+                }
+                let mut next = widgets_for_up.clone();
+                next[widget_index]
+                    .indicators
+                    .swap(indicator_index, indicator_index - 1);
+                persist_tray_widgets(up_setter.clone(), up_tx.clone(), next, &enabled_for_up);
+            }),
+        Button::new(CHEVRON_DOWN_GLYPH)
+            .subtle()
+            .font_family(TRAY_REORDER_ICON_FONT)
+            .font_size(TRAY_REORDER_ICON_SIZE)
+            .width(TRAY_REORDER_BUTTON_SIZE)
+            .height(TRAY_REORDER_BUTTON_SIZE)
+            .min_width(TRAY_REORDER_BUTTON_SIZE)
+            .min_height(TRAY_REORDER_BUTTON_SIZE)
+            .max_width(TRAY_REORDER_BUTTON_SIZE)
+            .max_height(TRAY_REORDER_BUTTON_SIZE)
+            .padding(Thickness::uniform(0.0))
+            .enabled(indicator_index + 1 < widget.indicators.len())
+            .tooltip("Move indicator down")
+            .on_click(move || {
+                let mut next = widgets_for_down.clone();
+                if indicator_index + 1 >= next[widget_index].indicators.len() {
+                    return;
+                }
+                next[widget_index]
+                    .indicators
+                    .swap(indicator_index, indicator_index + 1);
+                persist_tray_widgets(
+                    down_setter.clone(),
+                    down_tx.clone(),
+                    next,
+                    &enabled_for_down,
+                );
+            }),
+    ))
+    .spacing(0.0)
+    .vertical_alignment(VerticalAlignment::Center);
+
+    border(
+        grid((
+            reorder
+                .grid_column(0)
+                .vertical_alignment(VerticalAlignment::Center),
+            vstack((
+                text_block(tray_indicator_summary(indicator))
+                    .font_size(14.0)
+                    .semibold()
+                    .wrap(),
+                text_block(format!("Indicator {}", indicator_index + 1))
+                    .font_size(12.0)
+                    .foreground(ThemeRef::SecondaryText),
+            ))
+            .spacing(2.0)
+            .vertical_alignment(VerticalAlignment::Center)
+            .grid_column(1),
+            hstack((
+                Button::new("Edit").on_click(move || {
+                    open_indicator_edit_modal(
+                        edit_widget_id.clone(),
+                        indicator_index,
+                        open_editor.clone(),
+                        show_editor.clone(),
+                    );
+                }),
+                Button::new("Remove").on_click(move || {
+                    let mut next = widgets_for_remove.clone();
+                    next[widget_index].indicators.remove(indicator_index);
+                    if next[widget_index].indicators.is_empty() {
+                        let removed = next.remove(widget_index);
+                        clear_indicator_edit_modal(clear_editing.clone(), clear_visible.clone());
+                        removed_setter.call(Some((widget_index, removed)));
+                    } else {
+                        clear_indicator_edit_modal(clear_editing.clone(), clear_visible.clone());
+                    }
+                    persist_tray_widgets(
+                        remove_setter.clone(),
+                        remove_tx.clone(),
+                        next,
+                        &enabled_for_remove,
+                    );
+                }),
+            ))
+            .spacing(8.0)
+            .vertical_alignment(VerticalAlignment::Center)
+            .horizontal_alignment(HorizontalAlignment::Right)
+            .grid_column(2),
+        ))
+        .columns([
+            GridLength::Pixel(TRAY_REORDER_BUTTON_SIZE),
+            GridLength::Star(1.0),
+            GridLength::Auto,
+        ])
+        .column_spacing(12.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch),
+    )
+    .padding(Thickness {
+        left: 12.0,
+        top: 12.0,
+        right: 12.0,
+        bottom: 12.0,
+    })
+    .background(ThemeRef::CardBackground)
+    .corner_radius(8.0)
+    .border_thickness(Thickness::uniform(1.0))
+    .border_brush(ThemeRef::CardStroke)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .min_height(60.0)
+    .with_key(format!("tray-indicator-{}-{indicator_index}", widget.id))
+    .with_translation_transition(duration(CONTROL_FAST_ANIMATION))
+    .into()
+}
+
+fn tray_indicator_edit_overlay(
+    widgets: &[TrayWidget],
+    enabled_providers: &[ProviderKind],
+    editing: &(String, usize),
+    visible: bool,
+    set_widgets: SetState<Vec<TrayWidget>>,
+    set_editing_indicator: AsyncSetState<Option<(String, usize)>>,
+    set_indicator_modal_visible: AsyncSetState<bool>,
+    settings_tx: Sender<Settings>,
+) -> Option<Element> {
+    let (widget_id, indicator_index) = editing;
+    let (widget_index, widget) = widgets
+        .iter()
+        .cloned()
+        .enumerate()
+        .find(|(_, widget)| widget.id == *widget_id)?;
+    let indicator = widget.indicators.get(*indicator_index)?.clone();
+
+    let dismiss_editing = set_editing_indicator.clone();
+    let dismiss_visible = set_indicator_modal_visible.clone();
+    let form = tray_indicator_edit_form(
+        widget_index,
+        *indicator_index,
+        &indicator,
+        &widget,
+        widgets,
+        enabled_providers,
+        set_widgets,
+        set_editing_indicator,
+        set_indicator_modal_visible,
+        settings_tx,
+    );
+
+    let anim = duration(CONTROL_NORMAL_ANIMATION);
+    let card = border(
+        scroll_viewer(
+            border(form).padding(Thickness {
+                left: 24.0,
+                top: 24.0,
+                right: 24.0,
+                bottom: 24.0,
+            }),
+        )
+        .horizontal_scroll_bar_visibility(ScrollBarVisibility::Disabled)
+        .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Stretch),
+    )
+    .background(ThemeRef::SolidBackground)
+    .corner_radius(INDICATOR_MODAL_RADIUS)
+    .border_thickness(Thickness::uniform(1.0))
+    .border_brush(ThemeRef::CardStroke)
+    .width(INDICATOR_MODAL_WIDTH)
+    .horizontal_alignment(HorizontalAlignment::Center)
+    .vertical_alignment(VerticalAlignment::Stretch)
+    .on_tapped(|| {})
+    .with_key(format!(
+        "tray-indicator-modal-{}-{indicator_index}",
+        widget.id
+    ));
+
+    // 1+18+1 star rows → middle band is 90% of the window height.
+    Some(
+        relative_panel::<Vec<Element>>(vec![
+            border(Element::Empty)
+                .background(INDICATOR_MODAL_SCRIM)
+                .opacity(if visible { 1.0 } else { 0.0 })
+                .relative_align_left()
+                .relative_align_right()
+                .relative_align_top()
+                .relative_align_bottom()
+                .on_tapped(move || {
+                    close_indicator_edit_modal(dismiss_editing.clone(), dismiss_visible.clone());
+                })
+                .with_opacity_transition(anim)
+                .into(),
+            grid((
+                border(Element::Empty).grid_row(0),
+                card.opacity(if visible { 1.0 } else { 0.0 })
+                    .with_opacity_transition(anim)
+                    .grid_row(1),
+                border(Element::Empty).grid_row(2),
+            ))
+            .columns([GridLength::Star(1.0)])
+            .rows([
+                GridLength::Star(1.0),
+                GridLength::Star(18.0),
+                GridLength::Star(1.0),
+            ])
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .vertical_alignment(VerticalAlignment::Stretch)
+            .relative_align_left()
+            .relative_align_right()
+            .relative_align_top()
+            .relative_align_bottom()
+            .into(),
+        ])
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Stretch)
+        .with_key("tray-indicator-edit-overlay")
+        .into(),
+    )
+}
+
+fn tray_indicator_edit_form(
+    widget_index: usize,
+    indicator_index: usize,
+    indicator: &TrayIndicator,
+    widget: &TrayWidget,
+    widgets: &[TrayWidget],
+    enabled_providers: &[ProviderKind],
+    set_widgets: SetState<Vec<TrayWidget>>,
+    set_editing_indicator: AsyncSetState<Option<(String, usize)>>,
+    set_indicator_modal_visible: AsyncSetState<bool>,
+    settings_tx: Sender<Settings>,
+) -> Element {
+    let provider_options = crate::provider_registry::PROVIDERS;
+    let known_provider = indicator.provider();
+    let mut provider_labels = provider_options
+        .iter()
+        .map(|provider| provider.display_name.to_owned())
+        .collect::<Vec<_>>();
+    let provider_index = known_provider
+        .and_then(|provider| {
+            provider_options
+                .iter()
+                .position(|descriptor| descriptor.kind == provider)
+        })
+        .unwrap_or_else(|| {
+            provider_labels.push(format!("Unsupported ({})", indicator.provider_id));
+            provider_labels.len() - 1
+        }) as i32;
+    let metric_provider = known_provider.unwrap_or(ProviderKind::Codex);
+    let metrics = crate::provider_registry::descriptor(metric_provider).metrics;
+    let mut metric_labels = metrics
+        .iter()
+        .map(|metric| metric.label.to_owned())
+        .collect::<Vec<_>>();
+    let metric_index = metrics
+        .iter()
+        .position(|metric| metric.id == indicator.metric_id)
+        .unwrap_or_else(|| {
+            metric_labels.push(format!("Unavailable ({})", indicator.metric_id));
+            metric_labels.len() - 1
+        }) as i32;
+
+    let mut fields = Vec::<Element>::new();
+    let close_editing = set_editing_indicator;
+    let close_visible = set_indicator_modal_visible;
+    fields.push(
+        grid((
+            hstack((
+                tray_widget_preview(widget)
+                    .vertical_alignment(VerticalAlignment::Center),
+                text_block(format!("Edit indicator {}", indicator_index + 1))
+                    .font_size(24.0)
+                    .bold()
+                    .vertical_alignment(VerticalAlignment::Center),
+            ))
+            .spacing(12.0)
+            .vertical_alignment(VerticalAlignment::Center)
+            .grid_column(0),
+            Button::new("Done")
+                .accent()
+                .on_click(move || {
+                    close_indicator_edit_modal(close_editing.clone(), close_visible.clone());
+                })
+                .vertical_alignment(VerticalAlignment::Center)
+                .grid_column(1),
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Auto])
+        .column_spacing(12.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .into(),
+    );
+
+    fields.push(
+        text_block(tray_indicator_summary(indicator))
+            .font_size(14.0)
+            .foreground(ThemeRef::SecondaryText)
+            .into(),
+    );
+
+    let widgets_for_provider = widgets.to_vec();
+    let provider_setter = set_widgets.clone();
+    let provider_tx = settings_tx.clone();
+    let enabled_for_provider = enabled_providers.to_vec();
+    let provider_box = ComboBox::new(provider_labels)
+        .header("Provider")
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .selected_index(provider_index)
+        .on_selection_changed(move |choice: i32| {
+            let Some(descriptor) =
+                crate::provider_registry::PROVIDERS.get(choice.max(0) as usize)
+            else {
+                return;
+            };
+            let mut next = widgets_for_provider.clone();
+            next[widget_index].indicators[indicator_index].provider_id = descriptor.id.into();
+            next[widget_index].indicators[indicator_index].metric_id = descriptor
+                .default_tray_metrics
+                .first()
+                .copied()
+                .unwrap_or("unknown")
+                .into();
+            persist_tray_widgets(
+                provider_setter.clone(),
+                provider_tx.clone(),
+                next,
+                &enabled_for_provider,
+            );
+        });
+
+    let widgets_for_metric = widgets.to_vec();
+    let metric_setter = set_widgets.clone();
+    let metric_tx = settings_tx.clone();
+    let enabled_for_metric = enabled_providers.to_vec();
+    let metric_box = ComboBox::new(metric_labels)
+        .header("Metric")
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .selected_index(metric_index)
+        .with_key(format!(
+            "tray-metric-modal-{}-{indicator_index}-{}",
+            widget.id, indicator.provider_id
+        ))
+        .on_selection_changed(move |choice: i32| {
+            let Some(metric) = metrics.get(choice.max(0) as usize) else {
+                return;
+            };
+            let mut next = widgets_for_metric.clone();
+            next[widget_index].indicators[indicator_index].metric_id = metric.id.into();
+            persist_tray_widgets(
+                metric_setter.clone(),
+                metric_tx.clone(),
+                next,
+                &enabled_for_metric,
+            );
+        });
+
+    let widgets_for_value = widgets.to_vec();
+    let value_setter = set_widgets.clone();
+    let value_tx = settings_tx.clone();
+    let enabled_for_value = enabled_providers.to_vec();
+    let value_box = ComboBox::new(["Remaining", "Used"])
+        .header("Value")
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .selected_index(if indicator.limit_value == LimitValue::Remaining {
+            0
+        } else {
+            1
+        })
+        .on_selection_changed(move |choice| {
+            let mut next = widgets_for_value.clone();
+            next[widget_index].indicators[indicator_index].limit_value = if choice == 1 {
+                LimitValue::Used
+            } else {
+                LimitValue::Remaining
+            };
+            persist_tray_widgets(
+                value_setter.clone(),
+                value_tx.clone(),
+                next,
+                &enabled_for_value,
+            );
+        });
+
+    // Color is per-indicator so stacked tray glyphs can use different palettes.
+    let widgets_for_color = widgets.to_vec();
+    let color_setter = set_widgets.clone();
+    let color_tx = settings_tx.clone();
+    let providers_for_color = enabled_providers.to_vec();
+    let color_box = ComboBox::new(["Status", "Fixed", "Provider", "App accent", "Monochrome"])
+        .header("Color")
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .selected_index(tray_color_mode_index(indicator.color_mode))
+        .on_selection_changed(move |choice| {
+            let mut next = widgets_for_color.clone();
+            next[widget_index].indicators[indicator_index].color_mode =
+                tray_color_mode_from_index(choice);
+            persist_tray_widgets(
+                color_setter.clone(),
+                color_tx.clone(),
+                next,
+                &providers_for_color,
+            );
+        });
+
+    fields.push(
+        grid((
+            provider_box.grid_column(0).grid_row(0),
+            metric_box.grid_column(1).grid_row(0),
+            value_box.grid_column(0).grid_row(1),
+            color_box.grid_column(1).grid_row(1),
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
+        .rows([GridLength::Auto, GridLength::Auto])
+        .column_spacing(12.0)
+        .row_spacing(12.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .into(),
+    );
+
+    if indicator.color_mode == TrayColorMode::Fixed {
+        let widgets_for_picker = widgets.to_vec();
+        let picker_setter = set_widgets;
+        let picker_tx = settings_tx;
+        let providers_for_picker = enabled_providers.to_vec();
+        fields.push(
+            border(
+                ColorPicker::new(ColorArgb::new(
+                    indicator.fixed_color.red,
+                    indicator.fixed_color.green,
+                    indicator.fixed_color.blue,
+                ))
+                .alpha_enabled(false)
+                .hex_input_visible(true)
+                .color_slider_visible(true)
+                .color_channel_text_input_visible(false)
+                .on_color_changed(move |(_, red, green, blue)| {
+                    let mut next = widgets_for_picker.clone();
+                    next[widget_index].indicators[indicator_index].fixed_color =
+                        TrayFixedColor { red, green, blue };
+                    persist_tray_widgets(
+                        picker_setter.clone(),
+                        picker_tx.clone(),
+                        next,
+                        &providers_for_picker,
+                    );
+                }),
+            )
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .min_height(220.0)
+            .into(),
+        );
+    }
+
+    vstack(fields)
+        .spacing(16.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .with_key(format!(
+            "tray-indicator-form-{}-{indicator_index}",
+            widget.id
+        ))
+        .into()
 }
 
 #[cfg(any())]

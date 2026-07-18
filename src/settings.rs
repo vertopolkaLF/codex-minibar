@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 20;
+pub const SETTINGS_VERSION: u32 = 21;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -314,6 +314,10 @@ impl TrayPresentation {
             other => other,
         }
     }
+
+    pub const fn is_reset_clock(self) -> bool {
+        matches!(self, Self::ResetTime | Self::ResetCountdown)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -393,6 +397,10 @@ pub struct TrayIndicator {
     pub metric_id: String,
     #[serde(default)]
     pub limit_value: LimitValue,
+    #[serde(default)]
+    pub color_mode: TrayColorMode,
+    #[serde(default)]
+    pub fixed_color: TrayFixedColor,
 }
 
 impl TrayIndicator {
@@ -401,6 +409,8 @@ impl TrayIndicator {
             provider_id: provider.id().into(),
             metric_id: metric_id.into(),
             limit_value: LimitValue::Remaining,
+            color_mode: TrayColorMode::Status,
+            fixed_color: TrayFixedColor::default(),
         }
     }
 
@@ -432,10 +442,6 @@ pub struct TrayWidget {
     pub indicators: Vec<TrayIndicator>,
     #[serde(default = "default_tray_presentation")]
     pub presentation: TrayPresentation,
-    #[serde(default)]
-    pub color_mode: TrayColorMode,
-    #[serde(default)]
-    pub fixed_color: TrayFixedColor,
 }
 
 fn default_tray_presentation() -> TrayPresentation {
@@ -459,8 +465,6 @@ impl TrayWidget {
                 .map(|metric| TrayIndicator::new(provider, *metric))
                 .collect(),
             presentation: TrayPresentation::StackedNumbers,
-            color_mode: TrayColorMode::Status,
-            fixed_color: TrayFixedColor::default(),
         }
     }
 
@@ -477,8 +481,6 @@ impl TrayWidget {
             kind: TrayWidgetKind::Limits,
             indicators: vec![TrayIndicator::new(provider, metric)],
             presentation: TrayPresentation::StackedNumbers,
-            color_mode: TrayColorMode::Status,
-            fixed_color: TrayFixedColor::default(),
         }
     }
 
@@ -488,8 +490,6 @@ impl TrayWidget {
             kind: TrayWidgetKind::AppIcon,
             indicators: Vec::new(),
             presentation: TrayPresentation::StackedNumbers,
-            color_mode: TrayColorMode::Monochrome,
-            fixed_color: TrayFixedColor::default(),
         }
     }
 
@@ -527,6 +527,10 @@ impl TrayWidget {
         }
         if self.indicators.len() > 3 {
             self.indicators.truncate(3);
+            changed = true;
+        }
+        if self.presentation.is_reset_clock() && self.indicators.len() > 1 {
+            self.indicators.truncate(1);
             changed = true;
         }
         changed
@@ -1381,6 +1385,39 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.insert("version".into(), toml::Value::Integer(20));
                 version = 20;
             }
+            20 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                if let Some(toml::Value::Array(widgets)) = root.get_mut("tray_widgets") {
+                    for value in widgets.iter_mut() {
+                        let Some(widget) = value.as_table_mut() else {
+                            continue;
+                        };
+                        let color_mode = widget
+                            .remove("color_mode")
+                            .unwrap_or_else(|| toml::Value::String("status".into()));
+                        let fixed_color = widget.remove("fixed_color");
+                        let Some(toml::Value::Array(indicators)) = widget.get_mut("indicators")
+                        else {
+                            continue;
+                        };
+                        for indicator_value in indicators.iter_mut() {
+                            let Some(indicator) = indicator_value.as_table_mut() else {
+                                continue;
+                            };
+                            indicator
+                                .entry("color_mode")
+                                .or_insert(color_mode.clone());
+                            if let Some(fixed_color) = fixed_color.clone() {
+                                indicator.entry("fixed_color").or_insert(fixed_color);
+                            }
+                        }
+                    }
+                }
+                root.insert("version".into(), toml::Value::Integer(21));
+                version = 21;
+            }
             unsupported => anyhow::bail!("no migration path from settings version {unsupported}"),
         }
     }
@@ -1696,6 +1733,38 @@ cursor_enabled = false
         assert_eq!(
             loaded.tray_widgets[0].indicators[0].limit_value,
             LimitValue::Used
+        );
+    }
+
+    #[test]
+    fn migrates_v20_widget_color_onto_each_indicator() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(
+            &path,
+            r#"version = 20
+tray_widgets = [
+  { id = "tray-1", kind = "limits", presentation = "stacked_numbers", color_mode = "provider",
+    indicators = [
+      { provider = "codex", metric_id = "codex.session", limit_value = "remaining" },
+      { provider = "claude", metric_id = "claude.session", limit_value = "used" }
+    ] }
+]
+"#,
+        )
+        .unwrap();
+
+        let loaded = Settings::load_or_create(&path).unwrap();
+
+        assert_eq!(loaded.version, SETTINGS_VERSION);
+        assert_eq!(loaded.tray_widgets.len(), 1);
+        assert_eq!(
+            loaded.tray_widgets[0].indicators[0].color_mode,
+            TrayColorMode::Provider
+        );
+        assert_eq!(
+            loaded.tray_widgets[0].indicators[1].color_mode,
+            TrayColorMode::Provider
         );
     }
 }

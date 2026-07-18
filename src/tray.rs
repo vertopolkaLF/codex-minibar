@@ -133,20 +133,18 @@ fn percent(window: &LimitWindow, value: LimitValue) -> Option<u8> {
 fn stacked_reset_label(reset: Option<DateTime<Utc>>, countdown: bool) -> String {
     if countdown {
         return reset.map_or_else(
-            || "?".into(),
+            || "?\n?".into(),
             |value| {
                 let minutes = (value - Utc::now()).num_minutes().max(0);
-                if minutes < 60 {
-                    minutes.to_string()
-                } else {
-                    format!("{}\n{:02}", minutes / 60, minutes % 60)
-                }
+                // Always hours on top, minutes on bottom — same stacked layout
+                // whether the remaining time is under an hour or not.
+                format!("{}\n{:02}", minutes / 60, minutes % 60)
             },
         );
     }
     reset
         .map(|value| value.with_timezone(&Local).format("%H\n%M").to_string())
-        .unwrap_or_else(|| "?".into())
+        .unwrap_or_else(|| "?\n?".into())
 }
 
 #[cfg(test)]
@@ -242,12 +240,12 @@ struct ResolvedIndicator {
 }
 
 fn indicator_color(
-    widget: &TrayWidget,
+    indicator: &crate::settings::TrayIndicator,
     provider: ProviderKind,
     remaining: Option<u8>,
     accent: [u8; 3],
 ) -> [u8; 3] {
-    match widget.color_mode {
+    match indicator.color_mode {
         TrayColorMode::Status => match remaining {
             Some(0..=15) => [230, 74, 72],
             Some(16..=50) => [245, 158, 11],
@@ -255,9 +253,9 @@ fn indicator_color(
             None => tray_text_color(system_uses_light_theme()),
         },
         TrayColorMode::Fixed => [
-            widget.fixed_color.red,
-            widget.fixed_color.green,
-            widget.fixed_color.blue,
+            indicator.fixed_color.red,
+            indicator.fixed_color.green,
+            indicator.fixed_color.blue,
         ],
         TrayColorMode::Provider => {
             let (red, green, blue) = provider_registry::descriptor(provider).brand_rgb;
@@ -288,7 +286,7 @@ fn resolve_indicators(
             Some(ResolvedIndicator {
                 displayed_percent: percent(window, indicator.limit_value),
                 reset: window.resets_at,
-                color: indicator_color(widget, provider, remaining, accent),
+                color: indicator_color(indicator, provider, remaining, accent),
             })
         })
         .collect()
@@ -315,17 +313,28 @@ pub fn render_widget_with_accent(
         TrayPresentation::NestedRings => render_rings(&indicators),
         TrayPresentation::ResetTime | TrayPresentation::ResetCountdown => {
             let countdown = widget.presentation == TrayPresentation::ResetCountdown;
-            render_text_lines(
-                &indicators
-                    .iter()
-                    .map(|indicator| {
-                        (
-                            stacked_reset_label(indicator.reset, countdown).replace('\n', ":"),
-                            indicator.color,
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-            )
+            // One provider: two stacked glyph lines (hours top, minutes bottom).
+            // Multiple providers: one HH:MM line per indicator.
+            if indicators.len() == 1 {
+                let indicator = &indicators[0];
+                let lines = stacked_reset_label(indicator.reset, countdown)
+                    .lines()
+                    .map(|line| (line.to_owned(), indicator.color))
+                    .collect::<Vec<_>>();
+                render_text_lines(&lines)
+            } else {
+                render_text_lines(
+                    &indicators
+                        .iter()
+                        .map(|indicator| {
+                            (
+                                stacked_reset_label(indicator.reset, countdown).replace('\n', ":"),
+                                indicator.color,
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }
         }
         _ => render_text_lines(
             &indicators
@@ -392,13 +401,13 @@ fn text_font_size(lines: &[&str]) -> f32 {
         .max()
         .unwrap_or(0);
     // Windows downscales our 32px source to the 16px notification-area slot.
-    // Leave enough horizontal padding for `100` on either stacked line so the
-    // third digit stays crisp instead of being clipped at the icon edge.
+    // Reset/countdown use two stacked lines (hours / minutes) — keep those
+    // glyphs as large as the slot can still resolve cleanly.
     match (lines.len(), widest_line) {
         (0 | 1, 0..=2) => 24.0,
         (0 | 1, _) => 17.0,
-        (2, 0..=2) => 15.0,
-        (2, _) => 12.0,
+        (2, 0..=2) => 18.0,
+        (2, _) => 14.0,
         (_, 0..=2) => 10.0,
         (_, _) => 8.0,
     }
