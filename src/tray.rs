@@ -185,7 +185,7 @@ fn tray_text_color(uses_light_theme: bool) -> [u8; 3] {
 /// surfaces. Treat an unreadable value as light so tray text never disappears
 /// against the ordinary light notification area.
 #[cfg(windows)]
-fn system_uses_light_theme() -> bool {
+pub(crate) fn system_uses_light_theme() -> bool {
     use windows_sys::Win32::{
         Foundation::ERROR_SUCCESS,
         System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW},
@@ -216,7 +216,7 @@ fn system_uses_light_theme() -> bool {
 }
 
 #[cfg(not(windows))]
-fn system_uses_light_theme() -> bool {
+pub(crate) fn system_uses_light_theme() -> bool {
     true
 }
 

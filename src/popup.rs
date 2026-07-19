@@ -511,10 +511,13 @@ pub fn set_client_height_dip(height_dip: i32) {
 
 /// Re-apply size constraints after Win32 chrome is stripped (stale NC metrics).
 pub fn sync_host_constraints() {
+    let height = CLIENT_HEIGHT_DIP
+        .load(Ordering::SeqCst)
+        .clamp(80, max_client_height_dip());
+    CLIENT_HEIGHT_DIP.store(height, Ordering::SeqCst);
     POPUP_HOST.with(|slot| {
         if let Some(host) = slot.borrow().as_ref() {
             let _ = host.relax_height_constraints(f64::from(max_client_height_dip()));
-            let height = CLIENT_HEIGHT_DIP.load(Ordering::SeqCst);
             let _ = host.resize_client(f64::from(POPUP_WIDTH), f64::from(height));
             APPLIED_CLIENT_HEIGHT_DIP.store(height, Ordering::SeqCst);
         }
@@ -1186,6 +1189,11 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
 
     let dpi = monitor_dpi(hmonitor);
     update_height_limit_for_monitor(monitor, dpi);
+    // WinUI can leave a hidden AppWindow at the presenter's maximum height while
+    // the reactor still holds the correct content target. Reapply that target
+    // before reading native bounds; otherwise popup_pixel_size preserves the stale
+    // oversized HWND until a tab switch happens to publish a different height.
+    sync_host_constraints();
     let corner_px = (i64::from(WINDOW_CORNER_RADIUS_DIP) * i64::from(dpi) / 96) as i32;
     CORNER_RADIUS_PX.store(corner_px.max(1), Ordering::SeqCst);
 

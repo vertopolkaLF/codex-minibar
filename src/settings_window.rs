@@ -58,6 +58,16 @@ thread_local! {
     static LIVE_SETTINGS_STATE: RefCell<Option<SettingsWindowState>> = const { RefCell::new(None) };
     static TRAY_PREVIEW_MOUNTS: RefCell<HashMap<String, windows_core::IInspectable>> =
         RefCell::new(HashMap::new());
+    static TRAY_PREVIEW_CACHE: RefCell<HashMap<String, TrayPreviewCacheEntry>> =
+        RefCell::new(HashMap::new());
+}
+
+struct TrayPreviewCacheEntry {
+    widget: TrayWidget,
+    accent: [u8; 3],
+    uses_light_theme: bool,
+    minute_bucket: u64,
+    pixels: Arc<Vec<u8>>,
 }
 
 pub fn sync_open_window(settings: Settings, ui_dispatcher: UiMarshaller) {
@@ -2596,21 +2606,56 @@ fn tray_preview_limits() -> &'static crate::limits::ProviderLimits {
 }
 
 fn tray_widget_preview(widget: &TrayWidget) -> Element {
-    let pixels = crate::tray::render_widget(widget, tray_preview_limits());
     let preview_id = widget.id.clone();
-
-    // Swap-chain preview painters normally run only on mount. Settings need
-    // true live feedback, so repaint the retained native panel in place while
-    // keeping the surrounding card identity stable.
-    TRAY_PREVIEW_MOUNTS.with(|mounts| {
-        if let Some(native) = mounts.borrow().get(&preview_id).cloned()
-            && let Err(error) = crate::acrylic::install_tray_pixels_into(native, &pixels)
+    let accent = crate::theme::current_accent_rgb();
+    let uses_light_theme = crate::tray::system_uses_light_theme();
+    let minute_bucket = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs() / 60);
+    let (pixels, pixels_changed) = TRAY_PREVIEW_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(entry) = cache.get(&preview_id)
+            && entry.widget == *widget
+            && entry.accent == accent
+            && entry.uses_light_theme == uses_light_theme
+            && entry.minute_bucket == minute_bucket
         {
-            eprintln!("Could not update tray preview: {error:?}");
+            return (Arc::clone(&entry.pixels), false);
         }
+
+        let pixels = Arc::new(crate::tray::render_widget_with_accent(
+            widget,
+            tray_preview_limits(),
+            accent,
+        ));
+        cache.insert(
+            preview_id.clone(),
+            TrayPreviewCacheEntry {
+                widget: widget.clone(),
+                accent,
+                uses_light_theme,
+                minute_bucket,
+                pixels: Arc::clone(&pixels),
+            },
+        );
+        (pixels, true)
     });
 
-    let pixels_for_mount = pixels.clone();
+    // Swap-chain preview painters normally run only on mount. Settings need
+    // true live feedback. Repaint the retained native panel only when preview
+    // inputs changed; root settings rerenders must not reinstall identical pixels.
+    if pixels_changed {
+        TRAY_PREVIEW_MOUNTS.with(|mounts| {
+            if let Some(native) = mounts.borrow().get(&preview_id).cloned()
+                && let Err(error) =
+                    crate::acrylic::install_tray_pixels_into(native, pixels.as_slice())
+            {
+                eprintln!("Could not update tray preview: {error:?}");
+            }
+        });
+    }
+
+    let pixels_for_mount = Arc::clone(&pixels);
     let id_for_mount = preview_id.clone();
     let id_for_unmount = preview_id.clone();
     let mut host = swap_chain_panel().width(32.0).height(32.0);
@@ -2618,7 +2663,10 @@ fn tray_widget_preview(widget: &TrayWidget) -> Element {
         move |native: Option<windows_core::IInspectable>| {
             if let Some(native) = native {
                 if let Err(error) =
-                    crate::acrylic::install_tray_pixels_into(native.clone(), &pixels_for_mount)
+                    crate::acrylic::install_tray_pixels_into(
+                        native.clone(),
+                        pixels_for_mount.as_slice(),
+                    )
                 {
                     eprintln!("Could not install tray preview: {error:?}");
                 }
@@ -2632,6 +2680,9 @@ fn tray_widget_preview(widget: &TrayWidget) -> Element {
         move |_: Option<windows_core::IInspectable>| {
             TRAY_PREVIEW_MOUNTS.with(|mounts| {
                 mounts.borrow_mut().remove(&id_for_unmount);
+            });
+            TRAY_PREVIEW_CACHE.with(|cache| {
+                cache.borrow_mut().remove(&id_for_unmount);
             });
         },
     ));
@@ -2895,7 +2946,11 @@ fn tray_settings_cards(
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .with_key(format!("tray-header-{header_id}"));
 
-        let content: Element = if widget.kind == TrayWidgetKind::AppIcon {
+        // Collapsed cards need headers only. Building their declarative editor trees
+        // eagerly allocates many callbacks and clones the complete widget list per action.
+        let content: Element = if !is_expanded {
+            Element::Empty
+        } else if widget.kind == TrayWidgetKind::AppIcon {
             let widgets_for_duplicate = widgets.to_vec();
             let duplicate_setter = set_widgets.clone();
             let duplicate_tx = settings_tx.clone();
