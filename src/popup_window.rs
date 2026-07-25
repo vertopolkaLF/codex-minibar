@@ -1573,10 +1573,12 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                       from_x: f32,
                       to_x: f32,
                       measure_height: bool| {
+        // Limit snapshots update for every provider poll. They must update the
+        // existing reactive tree rather than remount this entire page: doing
+        // so also recreates its unmanaged SwapChainPanel/XAML children and
+        // steadily grows the WinUI compositor's retained allocation.
         let body_layout_key = format!(
-            "popup-page-{role}-{}-{}-{:?}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
-            pager.animation_id,
-            ui.limits_revision,
+            "popup-page-{role}-{:?}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
             ui.error,
             ui.show_banked_resets,
             ui.show_usage_stats,
