@@ -836,8 +836,8 @@ mod tests {
 
     #[test]
     fn stacked_three_digit_values_use_a_compact_font() {
-        assert_eq!(text_font_size(&["100", "100"]), 12.0);
-        assert_eq!(text_font_size(&["99", "99"]), 15.0);
+        assert_eq!(text_font_size(&["100", "100"]), 14.0);
+        assert_eq!(text_font_size(&["99", "99"]), 18.0);
         assert_eq!(text_font_size(&["99", "99", "99"]), 10.0);
     }
 

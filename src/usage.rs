@@ -829,14 +829,15 @@ mod tests {
 
     #[test]
     fn prices_codex_by_logged_model_and_service_tier() {
+        // Stay under the 272k long-context threshold so this exercises the
+        // base rates; the long-context tier has its own test.
         let standard =
-            codex_estimated_cost_microusd(Some("gpt-5.4"), 1_000_000, 1_000_000, 1_000_000, false)
+            codex_estimated_cost_microusd(Some("gpt-5.4"), 200_000, 100_000, 100_000, false)
                 .unwrap();
-        assert_eq!(standard, 15_250_000);
-        let fast =
-            codex_estimated_cost_microusd(Some("gpt-5.4"), 1_000_000, 1_000_000, 1_000_000, true)
-                .unwrap();
-        assert_eq!(fast, 30_500_000);
+        assert_eq!(standard, 1_775_000);
+        let fast = codex_estimated_cost_microusd(Some("gpt-5.4"), 200_000, 100_000, 100_000, true)
+            .unwrap();
+        assert_eq!(fast, 3_550_000);
         assert!(codex_estimated_cost_microusd(Some("unknown-model"), 1, 0, 1, false).is_some());
     }
 

@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    path::PathBuf,
     process::{Child, Command, Stdio},
     sync::Arc,
     thread,
@@ -14,6 +15,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
+    claude_desktop,
     limits::{AdditionalLimit, LimitWindow, RateLimits},
     usage,
     worker::{Activator, LimitProvider, UsageProvider},
@@ -21,7 +23,6 @@ use crate::{
 
 const OAUTH_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const OAUTH_PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
-const OAUTH_ACCOUNT_SETTINGS_URL: &str = "https://api.anthropic.com/api/oauth/account/settings";
 const OAUTH_BETA: &str = "oauth-2025-04-20";
 const FALLBACK_CLAUDE_CODE_VERSION: &str = "2.1.0";
 const PROFILE_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 60);
@@ -30,16 +31,13 @@ pub const ACTIVATION_PROMPT: &str = "reply with letter a";
 
 /// Detect a local Claude Code installation without starting it. A signed-in
 /// credentials directory is also a useful signal for portable/npm installs
-/// whose launcher is no longer present on PATH in the current process.
+/// whose launcher is no longer present on PATH in the current process, and the
+/// desktop app counts too: it ships its own Claude Code and never writes a
+/// credentials file.
 pub fn is_installed() -> bool {
-    let credentials_present = BaseDirs::new().is_some_and(|directories| {
-        directories
-            .home_dir()
-            .join(".claude")
-            .join(".credentials.json")
-            .is_file()
-    });
-    credentials_present || path_contains_executable("claude")
+    credentials_path().is_some_and(|path| path.is_file())
+        || path_contains_executable("claude")
+        || claude_desktop::is_installed()
 }
 
 fn path_contains_executable(name: &str) -> bool {
@@ -107,7 +105,21 @@ impl Activator for ClaudeActivator {
 }
 
 fn activation_command() -> Command {
-    let mut command = Command::new("claude");
+    activation_command_for(activation_program())
+}
+
+/// Prefer the launcher on PATH, then the `claude.exe` the desktop app unpacks
+/// for its embedded Claude Code. Falling back to the bare name keeps the error
+/// message about a missing CLI rather than a missing desktop install.
+fn activation_program() -> PathBuf {
+    if path_contains_executable("claude") {
+        return PathBuf::from("claude");
+    }
+    claude_desktop::bundled_cli().unwrap_or_else(|| PathBuf::from("claude"))
+}
+
+fn activation_command_for(program: PathBuf) -> Command {
+    let mut command = Command::new(program);
     command.args([
         "-p",
         ACTIVATION_PROMPT,
@@ -188,9 +200,7 @@ impl ClaudeClient {
 
     pub fn read_rate_limits(&mut self) -> Result<RateLimits> {
         let credentials = load_credentials()?;
-        if credentials.expires_at.is_some_and(|expires_at| expires_at <= Utc::now()) {
-            bail!("Claude login has expired. Run `claude` to sign in again.");
-        }
+        let sign_in_hint = credentials.source.sign_in_hint();
 
         // `ureq` is built without its default Rustls backend. Configure the
         // native TLS adapter explicitly so Claude's HTTPS endpoint uses the
@@ -214,7 +224,7 @@ impl ClaudeClient {
         let body = match response {
             Ok(response) => response.into_string().context("read Claude OAuth response")?,
             Err(ureq::Error::Status(401, _)) => {
-                bail!("Claude OAuth request was unauthorized. Run `claude` to sign in again.")
+                bail!("Claude OAuth request was unauthorized. {sign_in_hint}")
             }
             Err(ureq::Error::Status(429, _)) => {
                 bail!("Claude usage endpoint is rate limited. Try again in a few minutes.")
@@ -225,17 +235,21 @@ impl ClaudeClient {
             Err(error) => return Err(error).context("request Claude OAuth usage"),
         };
         let mut limits = parse_usage_response(&body, Utc::now())?;
+        // Both credential files record the plan next to the token, so the
+        // common case needs no request at all to label it.
+        let local_plan_type = plan_type_from_account_fields(
+            credentials.subscription_type.clone(),
+            credentials.rate_limit_tier.clone(),
+        );
         let reset_schedule = reset_schedule(&limits);
         if self.account_cache.needs_refresh(&reset_schedule) {
             // Account metadata stays separate from quota reads. Cache it for
-            // 30 minutes and refresh immediately when any reset changes.
+            // 30 minutes and refresh immediately when any reset changes. One
+            // profile request covers both the name and the plan fallback.
+            let profile = fetch_profile(&agent, &credentials.access_token).ok();
             self.account_cache.record(
-                fetch_account_name(&agent, &credentials.access_token)
-                    .ok()
-                    .flatten(),
-                fetch_plan_type(&agent, &credentials.access_token)
-                    .ok()
-                    .flatten(),
+                profile.as_ref().and_then(|profile| profile.account_name.clone()),
+                profile.and_then(|profile| profile.plan_type),
                 reset_schedule,
             );
         }
@@ -245,7 +259,7 @@ impl ClaudeClient {
         if let Some(account_name) = self.account_cache.account_name.clone() {
             limits.account_name = Some(account_name);
         }
-        limits.plan_type = self.account_cache.plan_type.clone();
+        limits.plan_type = local_plan_type.or_else(|| self.account_cache.plan_type.clone());
         Ok(limits)
     }
 }
@@ -298,18 +312,81 @@ struct OAuthCredentials {
     access_token: String,
     #[serde(rename = "expiresAt")]
     expires_at_millis: Option<i64>,
+    #[serde(rename = "subscriptionType")]
+    subscription_type: Option<String>,
+    #[serde(rename = "rateLimitTier")]
+    rate_limit_tier: Option<String>,
 }
 
 struct Credentials {
     access_token: String,
     expires_at: Option<DateTime<Utc>>,
+    /// Both the CLI credentials file and the desktop token cache record the
+    /// plan next to the token, so neither path needs a request to label it.
+    subscription_type: Option<String>,
+    rate_limit_tier: Option<String>,
+    source: CredentialSource,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CredentialSource {
+    Cli,
+    Desktop,
+}
+
+impl CredentialSource {
+    /// How to get a fresh session back for this source.
+    fn sign_in_hint(self) -> &'static str {
+        match self {
+            Self::Cli => "Run `claude` to sign in again.",
+            Self::Desktop => "Open the Claude desktop app to sign in again.",
+        }
+    }
+}
+
+impl Credentials {
+    fn is_expired(&self) -> bool {
+        self.expires_at
+            .is_some_and(|expires_at| expires_at <= Utc::now())
+    }
+}
+
+fn credentials_path() -> Option<PathBuf> {
+    BaseDirs::new()
+        .map(|directories| directories.home_dir().join(".claude").join(".credentials.json"))
+}
+
+/// Collects every local Claude session and prefers a live one. Both sources
+/// yield byte-identical usage data, so ordering only decides whose expiry we
+/// follow: the desktop app refreshes its token whenever it is open, while the
+/// CLI refreshes only when `claude` runs, so the desktop session goes stale
+/// less often. A stale session on either side never masks a live one.
 fn load_credentials() -> Result<Credentials> {
-    let directories = BaseDirs::new()
+    let attempts = [load_desktop_credentials(), load_cli_credentials()];
+    let mut errors = Vec::new();
+    let mut expired = None;
+    for attempt in attempts {
+        match attempt {
+            Ok(credentials) if !credentials.is_expired() => return Ok(credentials),
+            Ok(credentials) => expired = expired.or(Some(credentials)),
+            Err(error) => errors.push(format!("{error:#}")),
+        }
+    }
+    if let Some(credentials) = expired {
+        bail!(
+            "Claude login has expired. {}",
+            credentials.source.sign_in_hint()
+        );
+    }
+    bail!(
+        "no Claude login found. Install Claude Code or the Claude desktop app and sign in first ({})",
+        errors.join("; ")
+    )
+}
+
+fn load_cli_credentials() -> Result<Credentials> {
+    let path = credentials_path()
         .context("could not resolve the home directory for Claude credentials")?;
-    let home = directories.home_dir();
-    let path = home.join(".claude").join(".credentials.json");
     let contents = fs::read(&path).with_context(|| {
         format!(
             "read {} (install Claude Code and sign in first)",
@@ -329,6 +406,20 @@ fn load_credentials() -> Result<Credentials> {
     Ok(Credentials {
         access_token,
         expires_at,
+        subscription_type: oauth.subscription_type,
+        rate_limit_tier: oauth.rate_limit_tier,
+        source: CredentialSource::Cli,
+    })
+}
+
+fn load_desktop_credentials() -> Result<Credentials> {
+    let session = claude_desktop::load_session()?;
+    Ok(Credentials {
+        access_token: session.access_token,
+        expires_at: session.expires_at,
+        subscription_type: session.subscription_type,
+        rate_limit_tier: session.rate_limit_tier,
+        source: CredentialSource::Desktop,
     })
 }
 
@@ -357,18 +448,15 @@ struct OAuthProfileAccount {
     full_name: Option<String>,
     display_name: Option<String>,
     email: Option<String>,
+    has_claude_max: Option<bool>,
+    has_claude_pro: Option<bool>,
 }
 
 #[derive(Deserialize)]
 struct OAuthProfileOrganization {
     name: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct OAuthAccountSettingsResponse {
-    #[serde(rename = "subscriptionType")]
-    subscription_type: Option<String>,
-    #[serde(rename = "rateLimitTier")]
+    organization_type: Option<String>,
+    seat_tier: Option<String>,
     rate_limit_tier: Option<String>,
 }
 
@@ -438,7 +526,15 @@ pub fn parse_usage_response(response: &str, sampled_at: DateTime<Utc>) -> Result
     .normalized(sampled_at))
 }
 
-fn fetch_account_name(agent: &ureq::Agent, access_token: &str) -> Result<Option<String>> {
+/// Identity and plan both come from the profile endpoint. The former
+/// `account/settings` endpoint no longer reports `subscriptionType` or
+/// `rateLimitTier` at all, so it is not consulted.
+struct AccountProfile {
+    account_name: Option<String>,
+    plan_type: Option<String>,
+}
+
+fn fetch_profile(agent: &ureq::Agent, access_token: &str) -> Result<AccountProfile> {
     let response = agent
         .get(OAUTH_PROFILE_URL)
         .set("Authorization", &format!("Bearer {access_token}"))
@@ -453,59 +549,63 @@ fn fetch_account_name(agent: &ureq::Agent, access_token: &str) -> Result<Option<
     let body = response
         .into_string()
         .context("read Claude OAuth profile response")?;
-    parse_account_name(&body)
+    parse_profile(&body)
 }
 
-fn parse_account_name(response: &str) -> Result<Option<String>> {
+fn parse_profile(response: &str) -> Result<AccountProfile> {
     let profile: OAuthProfileResponse =
         serde_json::from_str(response).context("parse Claude OAuth profile")?;
-    let (person_name, email) = profile.account.map_or((None, None), |account| {
+    let (person_name, email, has_max, has_pro) =
+        profile.account.map_or((None, None, false, false), |account| {
+            (
+                non_empty(account.full_name).or_else(|| non_empty(account.display_name)),
+                non_empty(account.email),
+                account.has_claude_max.unwrap_or_default(),
+                account.has_claude_pro.unwrap_or_default(),
+            )
+        });
+    let (organization_name, plan_type) = profile.organization.map_or((None, None), |organization| {
         (
-            non_empty(account.full_name).or_else(|| non_empty(account.display_name)),
-            non_empty(account.email),
+            non_empty(organization.name),
+            // A seat or organization type names the plan directly; the
+            // rate-limit tier is the weakest signal and usually opaque
+            // (`default_raven`), so it is consulted last.
+            plan_type_from_tier(organization.seat_tier)
+                .or_else(|| plan_type_from_tier(organization.organization_type))
+                .or_else(|| plan_type_from_tier(organization.rate_limit_tier)),
         )
     });
-    Ok(person_name
-        .or_else(|| profile.organization.and_then(|organization| non_empty(organization.name)))
-        .or(email))
+    Ok(AccountProfile {
+        account_name: person_name.or(organization_name).or(email),
+        plan_type: plan_type.or_else(|| {
+            // Personal entitlement flags only matter when no organization
+            // named a plan, so a team seat is not relabelled by them.
+            has_max
+                .then(|| "max".to_owned())
+                .or_else(|| has_pro.then(|| "pro".to_owned()))
+        }),
+    })
 }
 
-fn fetch_plan_type(agent: &ureq::Agent, access_token: &str) -> Result<Option<String>> {
-    let response = agent
-        .get(OAUTH_ACCOUNT_SETTINGS_URL)
-        .set("Authorization", &format!("Bearer {access_token}"))
-        .set("Accept", "application/json")
-        .set("anthropic-beta", OAUTH_BETA)
-        .set(
-            "User-Agent",
-            &format!("claude-code/{FALLBACK_CLAUDE_CODE_VERSION}"),
-        )
-        .call()
-        .context("request Claude OAuth account settings")?;
-    let body = response
-        .into_string()
-        .context("read Claude OAuth account settings")?;
-    parse_plan_type(&body)
+/// Shared by both credential files, which report the same two fields.
+fn plan_type_from_account_fields(
+    subscription_type: Option<String>,
+    rate_limit_tier: Option<String>,
+) -> Option<String> {
+    non_empty(subscription_type).or_else(|| plan_type_from_tier(rate_limit_tier))
 }
 
-fn parse_plan_type(response: &str) -> Result<Option<String>> {
-    let settings: OAuthAccountSettingsResponse =
-        serde_json::from_str(response).context("parse Claude OAuth account settings")?;
-    if let Some(subscription_type) = non_empty(settings.subscription_type) {
-        return Ok(Some(subscription_type));
-    }
-
-    // Older accounts may only report an internal rate-limit tier. Infer a
-    // visible subscription tier only from unambiguous identifiers; generic
-    // values such as `default` remain intentionally absent from the UI.
-    let plan = non_empty(settings.rate_limit_tier).and_then(|tier| {
+/// Infers a visible subscription tier from an internal tier identifier such as
+/// `team_standard` or `claude_team`. Only unambiguous identifiers count;
+/// generic values like `default_raven` stay intentionally absent from the UI.
+fn plan_type_from_tier(tier: Option<String>) -> Option<String> {
+    non_empty(tier).and_then(|tier| {
         let tier = tier.to_ascii_lowercase();
         ["enterprise", "team", "max", "pro"]
             .into_iter()
             .find(|plan| tier.split(|character: char| !character.is_alphanumeric()).any(|part| part == *plan))
             .map(str::to_owned)
-    });
-    Ok(plan)
+    })
 }
 
 /// The OAuth endpoint's current shape puts promotional/model-only weekly
@@ -655,38 +755,81 @@ mod tests {
 
     #[test]
     fn profile_name_falls_back_to_organization_then_email() {
-        let name = parse_account_name(
+        let name = parse_profile(
             r#"{"account":{"full_name":"Ada Lovelace","email":"ada@example.com"},"organization":{"name":"Example Studio"}}"#,
         )
         .unwrap();
-        assert_eq!(name.as_deref(), Some("Ada Lovelace"));
+        assert_eq!(name.account_name.as_deref(), Some("Ada Lovelace"));
 
-        let organization_name = parse_account_name(
+        let organization_name = parse_profile(
             r#"{"account":{"full_name":" ","email":"ada@example.com"},"organization":{"name":"Example Studio"}}"#,
         )
         .unwrap();
-        assert_eq!(organization_name.as_deref(), Some("Example Studio"));
+        assert_eq!(organization_name.account_name.as_deref(), Some("Example Studio"));
 
-        let email = parse_account_name(r#"{"account":{"email":"ada@example.com"},"organization":{}}"#)
+        let email = parse_profile(r#"{"account":{"email":"ada@example.com"},"organization":{}}"#)
             .unwrap();
-        assert_eq!(email.as_deref(), Some("ada@example.com"));
+        assert_eq!(email.account_name.as_deref(), Some("ada@example.com"));
     }
 
     #[test]
-    fn account_settings_prefer_the_explicit_subscription_type() {
+    fn profile_plan_prefers_the_seat_tier_over_personal_entitlements() {
+        // Shape observed live: a team seat whose rate-limit tier is opaque.
+        let team = parse_profile(
+            r#"{"account":{"full_name":"Ada","has_claude_max":false,"has_claude_pro":false},"organization":{"name":"Example","organization_type":"claude_team","seat_tier":"team_standard","rate_limit_tier":"default_raven"}}"#,
+        )
+        .unwrap();
+        assert_eq!(team.plan_type.as_deref(), Some("team"));
+
+        // A team seat is not relabelled by a personal Max entitlement.
+        let both = parse_profile(
+            r#"{"account":{"has_claude_max":true},"organization":{"seat_tier":"team_standard"}}"#,
+        )
+        .unwrap();
+        assert_eq!(both.plan_type.as_deref(), Some("team"));
+
+        let personal = parse_profile(
+            r#"{"account":{"has_claude_max":true,"has_claude_pro":false},"organization":{"rate_limit_tier":"default_raven"}}"#,
+        )
+        .unwrap();
+        assert_eq!(personal.plan_type.as_deref(), Some("max"));
+
+        let pro = parse_profile(r#"{"account":{"has_claude_pro":true},"organization":{}}"#).unwrap();
+        assert_eq!(pro.plan_type.as_deref(), Some("pro"));
+
+        let unknown = parse_profile(r#"{"account":{},"organization":{"rate_limit_tier":"default"}}"#)
+            .unwrap();
+        assert_eq!(unknown.plan_type, None);
+    }
+
+    #[test]
+    fn credential_files_prefer_the_explicit_subscription_type() {
         assert_eq!(
-            parse_plan_type(r#"{"subscriptionType":"pro","rateLimitTier":"default_claude_max_20x"}"#)
-                .unwrap()
-                .as_deref(),
+            plan_type_from_account_fields(
+                Some("pro".into()),
+                Some("default_claude_max_20x".into())
+            )
+            .as_deref(),
             Some("pro")
         );
         assert_eq!(
-            parse_plan_type(r#"{"rateLimitTier":"default_claude_max_20x"}"#)
-                .unwrap()
-                .as_deref(),
+            plan_type_from_account_fields(None, Some("default_claude_max_20x".into())).as_deref(),
             Some("max")
         );
-        assert_eq!(parse_plan_type(r#"{"rateLimitTier":"default"}"#).unwrap(), None);
+        assert_eq!(plan_type_from_account_fields(None, Some("default".into())), None);
+        // The live value on a team account carries no usable tier keyword.
+        assert_eq!(plan_type_from_account_fields(None, Some("default_raven".into())), None);
+    }
+
+    #[test]
+    fn cli_credentials_carry_the_plan_alongside_the_token() {
+        let file: CredentialFile = serde_json::from_str(
+            r#"{"claudeAiOauth":{"accessToken":"token","expiresAt":1785183619245,"subscriptionType":"team","rateLimitTier":"default_raven"}}"#,
+        )
+        .unwrap();
+        let oauth = file.oauth.unwrap();
+        assert_eq!(oauth.subscription_type.as_deref(), Some("team"));
+        assert_eq!(oauth.rate_limit_tier.as_deref(), Some("default_raven"));
     }
 
     #[test]
@@ -726,7 +869,7 @@ mod tests {
 
     #[test]
     fn activation_uses_the_minimal_haiku_command() {
-        let command = activation_command();
+        let command = activation_command_for(PathBuf::from("claude"));
         assert_eq!(command.get_program().to_string_lossy(), "claude");
         assert_eq!(
             command
