@@ -2588,6 +2588,23 @@ fn tab_content(
                     set_hovered_card_id.clone(),
                 )
                 .with_key("log-open-file"),
+                settings_action_card(
+                    "Current and archived application logs",
+                    "Open logs folder",
+                    || {
+                        if let Err(error) = crate::logger::open_folder() {
+                            eprintln!("failed to open logs folder: {error:#}");
+                            notifications::show(
+                                "Could not open logs folder",
+                                &error.to_string(),
+                            );
+                        }
+                    },
+                    "log-open-folder",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("log-open-folder"),
                 log_view_card(log_content).with_key("log-live-tail"),
             ],
         ),
