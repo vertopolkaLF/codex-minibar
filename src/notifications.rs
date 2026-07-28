@@ -97,6 +97,7 @@ pub fn initialize() {
 
 /// Shows a Windows toast. Failures are logged; callers should not abort on them.
 pub fn show(title: &str, body: &str) {
+    crate::logger::info(format!("Notification shown: {title} — {body}"));
     #[cfg(windows)]
     if let Err(error) = windows_impl::show(title, body, None) {
         eprintln!("failed to show Windows notification: {error:#}");
@@ -216,9 +217,10 @@ impl LimitNotificationTracker {
 }
 
 /// A reset toast is valid only after the previously advertised deadline has
-/// elapsed and the provider moves it forward by at least five minutes. `None ->
-/// Some` is just delayed metadata becoming available, and sub-minute
-/// corrections are not resets.
+/// elapsed, the replacement deadline is still ahead of us, and the provider
+/// moves it forward by at least five minutes. `None -> Some` is just delayed
+/// metadata becoming available, sub-minute corrections are not resets, and
+/// replacing one stale deadline with another is not a new active window.
 fn reset_has_occurred(
     previous: Option<DateTime<Utc>>,
     current: Option<DateTime<Utc>>,
@@ -229,7 +231,10 @@ fn reset_has_occurred(
     };
     let previous = reset_minute(previous);
     let current = reset_minute(current);
-    previous <= reset_minute(now) && current - previous >= NEW_WINDOW_MINIMUM_ADVANCE
+    let now = reset_minute(now);
+    previous <= now
+        && current > now
+        && current - previous >= NEW_WINDOW_MINIMUM_ADVANCE
 }
 
 fn reset_minute(reset: DateTime<Utc>) -> DateTime<Utc> {
@@ -325,6 +330,19 @@ mod tests {
         assert!(reset_has_occurred(Some(previous), Some(next), previous));
         assert!(!reset_has_occurred(Some(previous), Some(previous), previous));
         assert!(!reset_has_occurred(None, Some(next), previous));
+    }
+
+    #[test]
+    fn reset_rejects_a_new_deadline_that_is_already_stale() {
+        let previous = Utc.with_ymd_and_hms(2026, 7, 14, 12, 0, 0).unwrap();
+        let stale_replacement = Utc.with_ymd_and_hms(2026, 7, 14, 17, 0, 0).unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 7, 14, 18, 0, 0).unwrap();
+
+        assert!(!reset_has_occurred(
+            Some(previous),
+            Some(stale_replacement),
+            now,
+        ));
     }
 
     #[test]

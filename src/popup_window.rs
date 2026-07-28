@@ -2327,10 +2327,12 @@ fn start_background_bridge(
                         continue;
                     }
                     crate::logger::info(format!(
-                        "{} limits received: session used={:?}%, reset={:?}",
+                        "{} limits received: session used={:?}%, reset={:?}; weekly used={:?}%, reset={:?}",
                         provider.display_name(),
                         limits.primary.used_percent,
-                        limits.primary.resets_at
+                        limits.primary.resets_at,
+                        limits.secondary.used_percent,
+                        limits.secondary.resets_at,
                     ));
                     // Publish once, then let both native tray and WinUI render
                     // from that exact snapshot.
