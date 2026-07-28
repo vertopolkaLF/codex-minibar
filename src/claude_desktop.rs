@@ -41,32 +41,75 @@ pub struct DesktopSession {
 }
 
 /// `%APPDATA%\Claude` — the desktop app's Electron user-data directory.
-pub fn config_root() -> Option<PathBuf> {
-    BaseDirs::new().map(|directories| directories.config_dir().join("Claude"))
+/// Every known Claude Desktop user-data directory. The direct installer uses
+/// `%APPDATA%\\Claude`, while the Microsoft Store/MSIX build is sandboxed under
+/// `%LOCALAPPDATA%\\Packages\\Claude_pzs8sxrjxfjjc\\LocalCache\\Roaming\\Claude`.
+/// The latter is discovered from the package identity rather than an installed
+/// version, because WindowsApps versions change on every Store update.
+fn config_roots() -> Vec<PathBuf> {
+    let mut roots = BaseDirs::new()
+        .map(|directories| vec![directories.config_dir().join("Claude")])
+        .unwrap_or_default();
+
+    #[cfg(windows)]
+    if let Some(packages) = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .map(|local| local.join("Packages"))
+    {
+        if let Ok(entries) = fs::read_dir(packages) {
+            for entry in entries.flatten() {
+                let package_name = entry.file_name();
+                let Some(package_name) = package_name.to_str() else {
+                    continue;
+                };
+                if is_store_package_name(package_name) {
+                    roots.push(
+                        entry
+                            .path()
+                            .join("LocalCache")
+                            .join("Roaming")
+                            .join("Claude"),
+                    );
+                }
+            }
+        }
+    }
+
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+fn is_store_package_name(name: &str) -> bool {
+    name.starts_with("Claude_") && name.ends_with("pzs8sxrjxfjjc")
 }
 
 /// The `claude.exe` the desktop app unpacks for its embedded Claude Code. This
 /// is the only launcher available when the CLI was never installed on PATH.
 pub fn bundled_cli() -> Option<PathBuf> {
-    let versions = config_root()?.join("claude-code");
     let mut best: Option<(semver::Version, PathBuf)> = None;
-    for entry in fs::read_dir(versions).ok()?.flatten() {
-        let executable = entry.path().join("claude.exe");
-        if !executable.is_file() {
-            continue;
-        }
-        let Some(version) = entry
-            .file_name()
-            .to_str()
-            .and_then(|name| semver::Version::parse(name).ok())
-        else {
+    for root in config_roots() {
+        let Ok(entries) = fs::read_dir(root.join("claude-code")) else {
             continue;
         };
-        if best
-            .as_ref()
-            .is_none_or(|(best_version, _)| version > *best_version)
-        {
-            best = Some((version, executable));
+        for entry in entries.flatten() {
+            let executable = entry.path().join("claude.exe");
+            if !executable.is_file() {
+                continue;
+            }
+            let Some(version) = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| semver::Version::parse(name).ok())
+            else {
+                continue;
+            };
+            if best
+                .as_ref()
+                .is_none_or(|(best_version, _)| version > *best_version)
+            {
+                best = Some((version, executable));
+            }
         }
     }
     best.map(|(_, executable)| executable)
@@ -78,36 +121,56 @@ pub fn is_installed() -> bool {
     if bundled_cli().is_some() {
         return true;
     }
-    config_root().is_some_and(|root| {
-        read_config(&root).is_ok_and(|config| config.token_caches().next().is_some())
-    })
+    config_roots()
+        .into_iter()
+        .any(|root| read_config(&root).is_ok_and(|config| config.token_caches().next().is_some()))
 }
 
 pub fn load_session() -> Result<DesktopSession> {
-    let root = config_root().context("could not resolve %APPDATA% for the Claude desktop app")?;
-    let config = read_config(&root)?;
-    let master_key = master_key(&root)?;
-
     let mut best: Option<(SessionRank, DesktopSession)> = None;
-    for envelope in config.token_caches() {
-        // A cache that fails to decrypt or parse is not fatal: the other cache
-        // key, or the CLI credentials file, may still hold a usable session.
-        let Ok(entries) = decrypt_token_cache(envelope, &master_key) else {
-            continue;
+    let mut errors = Vec::new();
+    for root in config_roots() {
+        let config = match read_config(&root) {
+            Ok(config) => config,
+            Err(error) => {
+                errors.push(format!("{}: {error:#}", root.display()));
+                continue;
+            }
         };
-        for (scopes, entry) in entries {
-            let Some(session) = entry.into_session() else {
+        let master_key = match master_key(&root) {
+            Ok(master_key) => master_key,
+            Err(error) => {
+                errors.push(format!("{}: {error:#}", root.display()));
+                continue;
+            }
+        };
+        for envelope in config.token_caches() {
+            // A cache that fails to decrypt or parse is not fatal: the other cache
+            // key, or the CLI credentials file, may still hold a usable session.
+            let Ok(entries) = decrypt_token_cache(envelope, &master_key) else {
                 continue;
             };
-            let rank = SessionRank::of(&scopes, &session);
-            if best.as_ref().is_none_or(|(best_rank, _)| rank > *best_rank) {
-                best = Some((rank, session));
+            for (scopes, entry) in entries {
+                let Some(session) = entry.into_session() else {
+                    continue;
+                };
+                let rank = SessionRank::of(&scopes, &session);
+                if best.as_ref().is_none_or(|(best_rank, _)| rank > *best_rank) {
+                    best = Some((rank, session));
+                }
             }
         }
     }
-    best.map(|(_, session)| session).context(
-        "the Claude desktop app has no usable OAuth session; open Claude and sign in first",
-    )
+    best.map(|(_, session)| session).with_context(|| {
+        if errors.is_empty() {
+            "the Claude desktop app has no usable OAuth session; open Claude and sign in first".to_owned()
+        } else {
+            format!(
+                "the Claude desktop app has no usable OAuth session; open Claude and sign in first ({})",
+                errors.join("; ")
+            )
+        }
+    })
 }
 
 /// Ordering used to pick between cached sessions: Claude Code scope first, then
@@ -178,8 +241,12 @@ impl CachedToken {
 
 fn read_config(root: &PathBuf) -> Result<DesktopConfig> {
     let path = root.join("config.json");
-    let contents = fs::read(&path)
-        .with_context(|| format!("read {} (install the Claude desktop app first)", path.display()))?;
+    let contents = fs::read(&path).with_context(|| {
+        format!(
+            "read {} (install the Claude desktop app first)",
+            path.display()
+        )
+    })?;
     serde_json::from_slice(&contents).with_context(|| format!("parse {}", path.display()))
 }
 
@@ -286,7 +353,10 @@ fn unprotect(data: &[u8]) -> Result<Vec<u8>> {
         )
     } != 0;
     if !succeeded {
-        bail!("CryptUnprotectData failed: {}", std::io::Error::last_os_error());
+        bail!(
+            "CryptUnprotectData failed: {}",
+            std::io::Error::last_os_error()
+        );
     }
     // SAFETY: CryptUnprotectData reported a buffer of `cbData` readable bytes.
     let key = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
@@ -397,5 +467,17 @@ mod tests {
         }
         .into_session()
         .is_none());
+    }
+
+    #[test]
+    fn recognizes_the_microsoft_store_package_identity() {
+        assert!(is_store_package_name("Claude_pzs8sxrjxfjjc"));
+        assert!(is_store_package_name(
+            "Claude_1.24012.9.0_x64__pzs8sxrjxfjjc"
+        ));
+        assert!(!is_store_package_name(
+            "Claude_1.24012.9.0_x64__otherpublisher"
+        ));
+        assert!(!is_store_package_name("NotClaude_pzs8sxrjxfjjc"));
     }
 }
