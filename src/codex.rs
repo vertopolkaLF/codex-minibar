@@ -7,12 +7,12 @@ use std::{
     time::{Duration as StdDuration, Instant},
 };
 
-use anyhow::{anyhow, bail, Context, Result};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use anyhow::{Context, Result, anyhow, bail};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{TimeZone, Utc};
 use directories::BaseDirs;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::limits::{
     Credits, LimitWindow, RateLimitResetCredit, RateLimitResetCreditsSummary, RateLimits,
@@ -42,10 +42,7 @@ impl UsageProvider for CodexClient {
         usage::load_cached_usage_statistics(history_days)
     }
 
-    fn refresh_usage_statistics(
-        &mut self,
-        history_days: u16,
-    ) -> Result<usage::UsageStatistics> {
+    fn refresh_usage_statistics(&mut self, history_days: u16) -> Result<usage::UsageStatistics> {
         usage::refresh_usage_statistics(history_days)
     }
 }
@@ -496,7 +493,9 @@ mod tests {
         };
 
         assert_eq!(
-            account_name_from_id_token(&token(r#"{"name":"Ada Lovelace","email":"ada@example.com"}"#)),
+            account_name_from_id_token(&token(
+                r#"{"name":"Ada Lovelace","email":"ada@example.com"}"#
+            )),
             Some("Ada Lovelace".into())
         );
         assert_eq!(

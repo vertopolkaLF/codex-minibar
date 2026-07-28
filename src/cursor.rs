@@ -5,13 +5,18 @@
 //! memory, and query the same dashboard endpoints used by Cursor itself.
 //! The UI deliberately exposes its Auto and API lanes, not blended Total Usage.
 
-use std::{collections::BTreeMap, env, path::{Path, PathBuf}, time::Duration};
+use std::{
+    collections::BTreeMap,
+    env,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
-use anyhow::{bail, Context, Result};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use anyhow::{Context, Result, bail};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveDate, Utc};
 use rusqlite::{Connection, OpenFlags};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::{
     limits::{AdditionalLimit, LimitWindow, RateLimits},
@@ -92,8 +97,10 @@ impl CursorClient {
         // valid desktop sessions. The dashboard's REST summary carries the
         // same Auto/API counters for current plans, so either source is
         // sufficient; only fail when both are unusable.
-        let usage = self
-            .connect_post("/aiserver.v1.DashboardService/GetCurrentPeriodUsage", &token);
+        let usage = self.connect_post(
+            "/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
+            &token,
+        );
         let summary = self.usage_summary(&token);
         match (usage, summary) {
             (Ok(usage), Ok(summary)) => map_usage(Some(&usage), Some(&summary)),
@@ -113,15 +120,20 @@ impl CursorClient {
             .agent
             .post(&format!("{API_BASE}/oauth/token"))
             .set("Content-Type", "application/json")
-            .send_string(&json!({
-                "grant_type": "refresh_token",
-                "client_id": CURSOR_CLIENT_ID,
-                "refresh_token": auth.refresh_token,
-            }).to_string())
+            .send_string(
+                &json!({
+                    "grant_type": "refresh_token",
+                    "client_id": CURSOR_CLIENT_ID,
+                    "refresh_token": auth.refresh_token,
+                })
+                .to_string(),
+            )
             .context("refresh Cursor access token")?
             .into_string()
             .context("read Cursor token refresh response")
-            .and_then(|body| serde_json::from_str(&body).context("parse Cursor token refresh response"))?;
+            .and_then(|body| {
+                serde_json::from_str(&body).context("parse Cursor token refresh response")
+            })?;
         response
             .get("access_token")
             .and_then(Value::as_str)
@@ -147,7 +159,10 @@ impl CursorClient {
         let user_id = cursor_user_id(token).context("Cursor token has no user identity")?;
         self.agent
             .get(&format!("{CURSOR_BASE}/api/usage-summary"))
-            .set("Cookie", &format!("WorkosCursorSessionToken={user_id}%3A%3A{token}"))
+            .set(
+                "Cookie",
+                &format!("WorkosCursorSessionToken={user_id}%3A%3A{token}"),
+            )
             .call()
             .context("request Cursor usage summary")?
             .into_string()
@@ -206,7 +221,10 @@ impl CursorClient {
             .query("endDate", &now.timestamp_millis().to_string())
             .query("strategy", "tokens")
             .set("Accept", "text/csv")
-            .set("Cookie", &format!("WorkosCursorSessionToken={user_id}%3A%3A{token}"))
+            .set(
+                "Cookie",
+                &format!("WorkosCursorSessionToken={user_id}%3A%3A{token}"),
+            )
             .call()
             .context("request Cursor usage export")?
             .into_string()
@@ -243,9 +261,16 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
     let mut reader = csv::ReaderBuilder::new()
         .trim(csv::Trim::All)
         .from_reader(csv_text.as_bytes());
-    let headers = reader.headers().context("read Cursor usage export headers")?.clone();
-    let column = |name: &str| headers.iter().position(|header| header == name)
-        .with_context(|| format!("Cursor usage export is missing {name}"));
+    let headers = reader
+        .headers()
+        .context("read Cursor usage export headers")?
+        .clone();
+    let column = |name: &str| {
+        headers
+            .iter()
+            .position(|header| header == name)
+            .with_context(|| format!("Cursor usage export is missing {name}"))
+    };
     let date_column = column(DATE)?;
     let model_column = column(MODEL)?;
     let cache_write_column = column(CACHE_WRITE)?;
@@ -256,12 +281,22 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
     let mut daily = BTreeMap::<NaiveDate, TokenUsage>::new();
     for row in reader.records() {
         let Ok(row) = row else { continue };
-        let Some(date) = row.get(date_column).and_then(cursor_export_date) else { continue };
+        let Some(date) = row.get(date_column).and_then(cursor_export_date) else {
+            continue;
+        };
         let model = row.get(model_column).unwrap_or_default();
-        let Some(cache_write) = row.get(cache_write_column).and_then(cursor_export_tokens) else { continue };
-        let Some(input) = row.get(input_column).and_then(cursor_export_tokens) else { continue };
-        let Some(cache_read) = row.get(cache_read_column).and_then(cursor_export_tokens) else { continue };
-        let Some(output) = row.get(output_column).and_then(cursor_export_tokens) else { continue };
+        let Some(cache_write) = row.get(cache_write_column).and_then(cursor_export_tokens) else {
+            continue;
+        };
+        let Some(input) = row.get(input_column).and_then(cursor_export_tokens) else {
+            continue;
+        };
+        let Some(cache_read) = row.get(cache_read_column).and_then(cursor_export_tokens) else {
+            continue;
+        };
+        let Some(output) = row.get(output_column).and_then(cursor_export_tokens) else {
+            continue;
+        };
         let usage = daily.entry(date).or_default();
         usage.input_tokens = usage
             .input_tokens
@@ -273,9 +308,16 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
         // Export rows are aggregates rather than individual requests; retain a
         // row count so the common usage card can still report activity.
         usage.requests = usage.requests.saturating_add(1);
-        usage.estimated_cost_microusd = usage
-            .estimated_cost_microusd
-            .saturating_add(cursor_estimated_cost_microusd(model, cache_write, input, cache_read, output));
+        usage.estimated_cost_microusd =
+            usage
+                .estimated_cost_microusd
+                .saturating_add(cursor_estimated_cost_microusd(
+                    model,
+                    cache_write,
+                    input,
+                    cache_read,
+                    output,
+                ));
         usage.priced_requests = usage.priced_requests.saturating_add(1);
     }
 
@@ -333,14 +375,19 @@ fn cursor_export_date(value: &str) -> Option<NaiveDate> {
 
 fn cursor_export_tokens(value: &str) -> Option<u64> {
     let normalized = value.trim().replace(',', "");
-    if normalized.is_empty() { Some(0) } else { normalized.parse().ok() }
+    if normalized.is_empty() {
+        Some(0)
+    } else {
+        normalized.parse().ok()
+    }
 }
 
 impl Activator for CursorActivator {
     fn activate(&mut self) -> Result<()> {
         // Cursor billing windows are calendar-based; unlike Codex/Claude,
-        // there is no harmless request that starts a session window.
-        Ok(())
+        // there is no operation that starts a session window. Keep this hard
+        // failure as a final guard against future command-routing regressions.
+        bail!("Cursor does not support session-window activation")
     }
 }
 
@@ -355,8 +402,12 @@ impl CursorAuth {
         let db = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .with_context(|| format!("open Cursor session database at {}", db_path.display()))?;
         let value = |key: &str| -> Result<String> {
-            db.query_row("SELECT value FROM ItemTable WHERE key = ?1 LIMIT 1", [key], |row| row.get(0))
-                .with_context(|| format!("read {key} from Cursor session database"))
+            db.query_row(
+                "SELECT value FROM ItemTable WHERE key = ?1 LIMIT 1",
+                [key],
+                |row| row.get(0),
+            )
+            .with_context(|| format!("read {key} from Cursor session database"))
         };
         Ok(Self {
             access_token: value(ACCESS_TOKEN_KEY)?,
@@ -374,8 +425,8 @@ fn cursor_state_db() -> PathBuf {
 }
 
 fn token_needs_refresh(token: &str) -> bool {
-    let Some(exp) = jwt_payload(token)
-        .and_then(|payload| payload.get("exp").and_then(Value::as_i64))
+    let Some(exp) =
+        jwt_payload(token).and_then(|payload| payload.get("exp").and_then(Value::as_i64))
     else {
         return true;
     };
@@ -444,12 +495,20 @@ fn map_usage(usage: Option<&Value>, summary: Option<&Value>) -> Result<RateLimit
     })
 }
 
-fn billing_cycle(summary: Option<&Value>, usage: Option<&Value>) -> (Option<DateTime<Utc>>, Option<u32>) {
+fn billing_cycle(
+    summary: Option<&Value>,
+    usage: Option<&Value>,
+) -> (Option<DateTime<Utc>>, Option<u32>) {
     let start = summary
         .and_then(|value| value.get("billingCycleStart"))
         .and_then(Value::as_str)
         .and_then(parse_time)
-        .or_else(|| usage.and_then(|usage| usage.get("startOfMonth")).and_then(Value::as_str).and_then(parse_time));
+        .or_else(|| {
+            usage
+                .and_then(|usage| usage.get("startOfMonth"))
+                .and_then(Value::as_str)
+                .and_then(parse_time)
+        });
     let end = summary
         .and_then(|value| value.get("billingCycleEnd"))
         .and_then(Value::as_str)
@@ -458,16 +517,22 @@ fn billing_cycle(summary: Option<&Value>, usage: Option<&Value>) -> (Option<Date
         (Some(start), Some(end)) if end > start => u32::try_from((end - start).num_minutes()).ok(),
         _ => Some(31 * 24 * 60),
     };
-    let reset = end.or_else(|| start.map(|start| start + chrono::Duration::minutes(i64::from(duration.unwrap_or(44_640)))));
+    let reset = end.or_else(|| {
+        start.map(|start| start + chrono::Duration::minutes(i64::from(duration.unwrap_or(44_640))))
+    });
     (reset, duration)
 }
 
 fn parse_time(value: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(value).ok().map(|time| time.with_timezone(&Utc))
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|time| time.with_timezone(&Utc))
 }
 
 fn number(value: Option<&Value>) -> Option<f64> {
-    value.and_then(Value::as_f64).or_else(|| value.and_then(Value::as_i64).map(|value| value as f64))
+    value
+        .and_then(Value::as_f64)
+        .or_else(|| value.and_then(Value::as_i64).map(|value| value as f64))
 }
 
 #[cfg(test)]
@@ -529,5 +594,11 @@ mod tests {
         );
         assert_eq!(statistics.today.total_tokens(), 20);
         assert_eq!(statistics.history.requests, 1);
+    }
+
+    #[test]
+    fn cursor_activation_can_never_report_success() {
+        let error = CursorActivator.activate().unwrap_err();
+        assert!(error.to_string().contains("does not support"));
     }
 }

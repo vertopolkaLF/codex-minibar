@@ -156,22 +156,19 @@ impl LimitNotificationTracker {
         }
 
         let now = Utc::now();
-        let primary_reset = reset_has_occurred(
-            self.primary_resets_at,
-            limits.primary.resets_at,
-            now,
-        );
-        let secondary_reset = reset_has_occurred(
-            self.secondary_resets_at,
-            limits.secondary.resets_at,
-            now,
-        );
+        let primary_reset =
+            reset_has_occurred(self.primary_resets_at, limits.primary.resets_at, now);
+        let secondary_reset =
+            reset_has_occurred(self.secondary_resets_at, limits.secondary.resets_at, now);
 
         if primary_reset {
             if settings.limits_changed {
                 show(
                     "5-hour limit reset",
-                    &format!("Your {} 5-hour usage window has reset.", provider.display_name()),
+                    &format!(
+                        "Your {} 5-hour usage window has reset.",
+                        provider.display_name()
+                    ),
                 );
             }
         }
@@ -181,7 +178,10 @@ impl LimitNotificationTracker {
             if settings.limits_changed {
                 show(
                     "Weekly limit reset",
-                    &format!("Your {} weekly usage window has reset.", provider.display_name()),
+                    &format!(
+                        "Your {} weekly usage window has reset.",
+                        provider.display_name()
+                    ),
                 );
             }
         }
@@ -232,9 +232,7 @@ fn reset_has_occurred(
     let previous = reset_minute(previous);
     let current = reset_minute(current);
     let now = reset_minute(now);
-    previous <= now
-        && current > now
-        && current - previous >= NEW_WINDOW_MINIMUM_ADVANCE
+    previous <= now && current > now && current - previous >= NEW_WINDOW_MINIMUM_ADVANCE
 }
 
 fn reset_minute(reset: DateTime<Utc>) -> DateTime<Utc> {
@@ -326,9 +324,17 @@ mod tests {
         let previous = Utc.with_ymd_and_hms(2026, 7, 14, 12, 0, 0).unwrap();
         let next = Utc.with_ymd_and_hms(2026, 7, 14, 17, 0, 0).unwrap();
 
-        assert!(!reset_has_occurred(Some(previous), Some(next), previous - chrono::Duration::seconds(1)));
+        assert!(!reset_has_occurred(
+            Some(previous),
+            Some(next),
+            previous - chrono::Duration::seconds(1)
+        ));
         assert!(reset_has_occurred(Some(previous), Some(next), previous));
-        assert!(!reset_has_occurred(Some(previous), Some(previous), previous));
+        assert!(!reset_has_occurred(
+            Some(previous),
+            Some(previous),
+            previous
+        ));
         assert!(!reset_has_occurred(None, Some(next), previous));
     }
 

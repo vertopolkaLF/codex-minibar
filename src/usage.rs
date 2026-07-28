@@ -181,7 +181,10 @@ fn statistics_from_cache(cache: &UsageCache, history_days: u16) -> UsageStatisti
 }
 
 /// Merges same-day rows and builds today/history totals for the requested window.
-pub(crate) fn statistics_from_daily(days: &[DailyTokenUsage], history_days: u16) -> UsageStatistics {
+pub(crate) fn statistics_from_daily(
+    days: &[DailyTokenUsage],
+    history_days: u16,
+) -> UsageStatistics {
     let history_days = history_days.clamp(1, 365);
     let today = Local::now().date_naive();
     let first_day = today - Duration::days(i64::from(history_days.saturating_sub(1)));

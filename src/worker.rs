@@ -287,7 +287,13 @@ fn run_limit_task(
         if next_poll <= Instant::now() {
             // Schedule from the end of each request. A manual refresh replaces
             // the previous deadline instead of leaving a stale timer behind.
-            match tick(&mut provider, &mut activator, &mut state, automatic_activation, &scheduled_activations) {
+            match tick(
+                &mut provider,
+                &mut activator,
+                &mut state,
+                automatic_activation,
+                &scheduled_activations,
+            ) {
                 Ok(worker_events) => {
                     let _ = state.save(&state_path);
                     for event in worker_events {
@@ -415,8 +421,14 @@ fn tick(
     let mut events = Vec::new();
 
     let now = Utc::now();
-    let scheduled_due = scheduler::due_scheduled_activation(scheduled_activations, state, now);
-    let automatic_due = automatic_activation
+    // The UI hides an absent 5h window via this same predicate. Never turn
+    // "this account has no session window" into a request to activate one.
+    let session_window_available = !limits.five_hour_disabled();
+    let scheduled_due = session_window_available
+        .then(|| scheduler::due_scheduled_activation(scheduled_activations, state, now))
+        .flatten();
+    let automatic_due = session_window_available
+        && automatic_activation
         && !scheduler::scheduled_activation_within(
             scheduled_activations,
             now,
@@ -450,7 +462,7 @@ fn tick(
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
-    use chrono::TimeZone;
+    use chrono::{Datelike, Local, TimeZone, Timelike};
 
     use super::*;
     use crate::limits::LimitWindow;
@@ -521,7 +533,7 @@ mod tests {
         let mut provider = ScriptedProvider::new(vec![
             limits_at(15, 0),
             limits_at(15, 0),
-            limits_at(15, 1),
+            limits_at(20, 1),
             limits_at(20, 1),
             limits_at(20, 1),
         ]);
@@ -534,9 +546,42 @@ mod tests {
         assert_eq!(activator.0, 0);
         tick(&mut provider, &mut activator, &mut state, true, &[]).unwrap();
         assert_eq!(activator.0, 1);
-        assert_eq!(state.last_seen_resets_at, limits_at(20, 1).primary.resets_at);
+        assert_eq!(
+            state.last_seen_resets_at,
+            limits_at(20, 1).primary.resets_at
+        );
         tick(&mut provider, &mut activator, &mut state, true, &[]).unwrap();
         assert_eq!(activator.0, 1);
+    }
+
+    #[test]
+    fn absent_session_window_blocks_automatic_and_scheduled_activation() {
+        let local_now = Local::now();
+        let schedule = ScheduledActivation {
+            id: "due-now".into(),
+            provider_id: crate::settings::ProviderKind::Codex.id().into(),
+            weekday: local_now.weekday().num_days_from_monday() as u8,
+            time_minutes: (local_now.hour() * 60 + local_now.minute()) as u16,
+            enabled: true,
+        };
+        let mut activator = CountingActivator(0);
+        let mut state = ActivationState::default();
+        let events = tick(
+            &mut ScriptedProvider::new(vec![RateLimits::default()]),
+            &mut activator,
+            &mut state,
+            true,
+            &[schedule],
+        )
+        .unwrap();
+
+        assert_eq!(activator.0, 0);
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            WorkerEvent::ActivationStarted
+                | WorkerEvent::ActivationSucceeded
+                | WorkerEvent::ActivationFailed(_)
+        )));
     }
 
     struct FailingActivator;
@@ -553,7 +598,7 @@ mod tests {
             ..ActivationState::default()
         };
         let events = tick(
-            &mut ScriptedProvider::new(vec![limits_at(15, 1)]),
+            &mut ScriptedProvider::new(vec![limits_at(15, 5)]),
             &mut FailingActivator,
             &mut state,
             true,
@@ -566,7 +611,10 @@ mod tests {
                 .find(|event| matches!(event, WorkerEvent::ActivationFailed(_))),
             Some(WorkerEvent::ActivationFailed(_))
         ));
-        assert_eq!(state.last_seen_resets_at, limits_at(15, 0).primary.resets_at);
+        assert_eq!(
+            state.last_seen_resets_at,
+            limits_at(15, 0).primary.resets_at
+        );
     }
 
     #[test]
@@ -588,12 +636,21 @@ mod tests {
         });
 
         // Cached snapshot, then the initial local-log scan.
-        assert!(matches!(events_rx.recv_timeout(Duration::from_secs(1)), Ok(WorkerEvent::UsageUpdated(_))));
-        assert!(matches!(events_rx.recv_timeout(Duration::from_secs(1)), Ok(WorkerEvent::UsageUpdated(_))));
+        assert!(matches!(
+            events_rx.recv_timeout(Duration::from_secs(1)),
+            Ok(WorkerEvent::UsageUpdated(_))
+        ));
+        assert!(matches!(
+            events_rx.recv_timeout(Duration::from_secs(1)),
+            Ok(WorkerEvent::UsageUpdated(_))
+        ));
         assert_eq!(refreshes.load(Ordering::SeqCst), 1);
 
         commands_tx.send(WorkerCommand::Refresh).unwrap();
-        assert!(matches!(events_rx.recv_timeout(Duration::from_secs(1)), Ok(WorkerEvent::UsageUpdated(_))));
+        assert!(matches!(
+            events_rx.recv_timeout(Duration::from_secs(1)),
+            Ok(WorkerEvent::UsageUpdated(_))
+        ));
         assert_eq!(refreshes.load(Ordering::SeqCst), 2);
 
         commands_tx.send(WorkerCommand::Shutdown).unwrap();

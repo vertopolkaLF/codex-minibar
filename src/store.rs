@@ -39,10 +39,7 @@ pub fn shared() -> Result<Arc<Mutex<ProviderStore>>> {
     }
     let store = Arc::new(Mutex::new(ProviderStore::open()?));
     let _ = SHARED.set(Arc::clone(&store));
-    Ok(SHARED
-        .get()
-        .map(Arc::clone)
-        .unwrap_or(store))
+    Ok(SHARED.get().map(Arc::clone).unwrap_or(store))
 }
 
 pub struct ProviderStore {
@@ -144,10 +141,12 @@ impl ProviderStore {
 
     pub fn hydrate_provider_limits(&self, history_days: u16) -> Result<ProviderLimits> {
         let mut limits = ProviderLimits::default();
-        for provider in [ProviderKind::Codex, ProviderKind::Claude, ProviderKind::Cursor] {
-            let mut snapshot = self
-                .load_limits(provider)?
-                .unwrap_or_default();
+        for provider in [
+            ProviderKind::Codex,
+            ProviderKind::Claude,
+            ProviderKind::Cursor,
+        ] {
+            let mut snapshot = self.load_limits(provider)?.unwrap_or_default();
             snapshot.usage = self.load_usage_daily(provider, history_days)?;
             *limits.get_mut(provider) = snapshot;
         }
@@ -155,9 +154,9 @@ impl ProviderStore {
     }
 
     pub fn load_limits(&self, provider: ProviderKind) -> Result<Option<RateLimits>> {
-        let mut statement = self.conn.prepare(
-            "SELECT payload_json FROM limits WHERE provider = ?1",
-        )?;
+        let mut statement = self
+            .conn
+            .prepare("SELECT payload_json FROM limits WHERE provider = ?1")?;
         let payload: Option<String> = statement
             .query_row(params![provider.id()], |row| row.get(0))
             .optional()?;
@@ -256,7 +255,8 @@ impl ProviderStore {
         }
         let existing = {
             let mut statement = tx.prepare("SELECT date FROM usage_daily WHERE provider = ?1")?;
-            let rows = statement.query_map(params![provider.id()], |row| row.get::<_, String>(0))?;
+            let rows =
+                statement.query_map(params![provider.id()], |row| row.get::<_, String>(0))?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
         for date in existing {
@@ -320,9 +320,9 @@ impl ProviderStore {
 
         let mut files = BTreeMap::new();
         {
-            let mut statement = self.conn.prepare(
-                "SELECT path, offset, meta_json FROM scan_files WHERE provider = ?1",
-            )?;
+            let mut statement = self
+                .conn
+                .prepare("SELECT path, offset, meta_json FROM scan_files WHERE provider = ?1")?;
             let rows = statement.query_map(params![ProviderKind::Codex.id()], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -332,8 +332,7 @@ impl ProviderStore {
             })?;
             for row in rows {
                 let (path, offset, meta_json) = row?;
-                let meta: CodexFileMeta =
-                    serde_json::from_str(&meta_json).unwrap_or_default();
+                let meta: CodexFileMeta = serde_json::from_str(&meta_json).unwrap_or_default();
                 files.insert(
                     path,
                     CachedSessionFile {
@@ -466,9 +465,9 @@ impl ProviderStore {
 
         let mut files = BTreeMap::new();
         {
-            let mut statement = self.conn.prepare(
-                "SELECT path, offset FROM scan_files WHERE provider = ?1",
-            )?;
+            let mut statement = self
+                .conn
+                .prepare("SELECT path, offset FROM scan_files WHERE provider = ?1")?;
             let rows = statement.query_map(params![ProviderKind::Claude.id()], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
             })?;
@@ -556,11 +555,7 @@ impl ProviderStore {
             )?;
             for (path, file) in &cache.files {
                 retained_files.insert(path.clone());
-                scan.execute(params![
-                    ProviderKind::Claude.id(),
-                    path,
-                    file.offset as i64
-                ])?;
+                scan.execute(params![ProviderKind::Claude.id(), path, file.offset as i64])?;
                 for (event_ord, entry) in file.entries.iter().enumerate() {
                     retained_events.insert((path.clone(), event_ord as i64));
                     events.execute(params![
@@ -616,14 +611,12 @@ impl ProviderStore {
     ) -> Result<()> {
         let existing_flags = self.provider_flags(provider)?;
         let flags = flags_json.unwrap_or_else(|| existing_flags.to_string());
-        let fetched = usage_fetched_at
-            .map(|at| at.to_rfc3339())
-            .or_else(|| {
-                self.usage_fetched_at(provider)
-                    .ok()
-                    .flatten()
-                    .map(|at| at.to_rfc3339())
-            });
+        let fetched = usage_fetched_at.map(|at| at.to_rfc3339()).or_else(|| {
+            self.usage_fetched_at(provider)
+                .ok()
+                .flatten()
+                .map(|at| at.to_rfc3339())
+        });
         self.conn.execute(
             "INSERT INTO provider_meta(provider, usage_fetched_at, schema_version, flags_json)
              VALUES(?1, ?2, ?3, ?4)
@@ -658,21 +651,27 @@ impl ProviderStore {
         };
 
         let codex = config.join("usage-cache.json");
-        if self.provider_has_scan_cache(ProviderKind::Codex).unwrap_or(false)
+        if self
+            .provider_has_scan_cache(ProviderKind::Codex)
+            .unwrap_or(false)
             || self.import_codex_json(&codex).unwrap_or(false)
         {
             let _ = fs::remove_file(codex);
         }
 
         let claude = config.join("claude-usage-cache.json");
-        if self.provider_has_scan_cache(ProviderKind::Claude).unwrap_or(false)
+        if self
+            .provider_has_scan_cache(ProviderKind::Claude)
+            .unwrap_or(false)
             || self.import_claude_json(&claude).unwrap_or(false)
         {
             let _ = fs::remove_file(claude);
         }
 
         let cursor = config.join("cursor-usage-cache.json");
-        if self.provider_has_daily_cache(ProviderKind::Cursor).unwrap_or(false)
+        if self
+            .provider_has_daily_cache(ProviderKind::Cursor)
+            .unwrap_or(false)
             || self.import_cursor_json(&cursor).unwrap_or(false)
         {
             let _ = fs::remove_file(cursor);
@@ -723,10 +722,7 @@ impl ProviderStore {
             return Ok(false);
         }
         self.save_claude_cache(&cache)?;
-        let stats = crate::usage::statistics_from_claude_cache(
-            &cache,
-            CACHE_RETENTION_DAYS as u16,
-        );
+        let stats = crate::usage::statistics_from_claude_cache(&cache, CACHE_RETENTION_DAYS as u16);
         self.replace_usage_daily(ProviderKind::Claude, &stats.daily)?;
         Ok(true)
     }
@@ -775,9 +771,8 @@ fn delete_stale_file_rows(
     }
 
     let existing_days = {
-        let mut statement = tx.prepare(
-            "SELECT path, date FROM usage_file_daily WHERE provider = ?1",
-        )?;
+        let mut statement =
+            tx.prepare("SELECT path, date FROM usage_file_daily WHERE provider = ?1")?;
         let rows = statement.query_map(params![provider], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;
@@ -815,9 +810,8 @@ fn delete_stale_event_rows(
     }
 
     let existing_events = {
-        let mut statement = tx.prepare(
-            "SELECT path, event_ord FROM usage_events WHERE provider = ?1",
-        )?;
+        let mut statement =
+            tx.prepare("SELECT path, event_ord FROM usage_events WHERE provider = ?1")?;
         let rows = statement.query_map(params![provider], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })?;

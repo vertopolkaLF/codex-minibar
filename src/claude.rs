@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use directories::BaseDirs;
 use serde::Deserialize;
@@ -35,15 +35,13 @@ pub const ACTIVATION_PROMPT: &str = "reply with letter a";
 /// desktop app counts too: it ships its own Claude Code and never writes a
 /// credentials file.
 pub fn is_installed(explicit: Option<&Path>) -> bool {
-    first_available(explicit).is_some()
-        || credentials_path().is_some_and(|path| path.is_file())
+    first_available(explicit).is_some() || credentials_path().is_some_and(|path| path.is_file())
 }
 
 /// Resolves a Claude Code launcher without spawning it. An explicit folder is
 /// searched first; legacy explicit file paths remain supported for upgrades.
 pub fn first_available(explicit: Option<&Path>) -> Option<PathBuf> {
-    claude_desktop::bundled_cli()
-        .or_else(|| cli_available(explicit))
+    claude_desktop::bundled_cli().or_else(|| cli_available(explicit))
 }
 
 /// Finds only a standalone Claude Code CLI, excluding the launcher bundled by
@@ -228,7 +226,10 @@ impl ClaudeClient {
             .build();
         let response = agent
             .get(OAUTH_USAGE_URL)
-            .set("Authorization", &format!("Bearer {}", credentials.access_token))
+            .set(
+                "Authorization",
+                &format!("Bearer {}", credentials.access_token),
+            )
             .set("Accept", "application/json")
             .set("Content-Type", "application/json")
             .set("anthropic-beta", OAUTH_BETA)
@@ -238,7 +239,9 @@ impl ClaudeClient {
             )
             .call();
         let body = match response {
-            Ok(response) => response.into_string().context("read Claude OAuth response")?,
+            Ok(response) => response
+                .into_string()
+                .context("read Claude OAuth response")?,
             Err(ureq::Error::Status(401, _)) => {
                 bail!("Claude OAuth request was unauthorized. {sign_in_hint}")
             }
@@ -264,7 +267,9 @@ impl ClaudeClient {
             // profile request covers both the name and the plan fallback.
             let profile = fetch_profile(&agent, &credentials.access_token).ok();
             self.account_cache.record(
-                profile.as_ref().and_then(|profile| profile.account_name.clone()),
+                profile
+                    .as_ref()
+                    .and_then(|profile| profile.account_name.clone()),
                 profile.and_then(|profile| profile.plan_type),
                 reset_schedule,
             );
@@ -307,7 +312,10 @@ fn reset_schedule(limits: &RateLimits) -> Vec<(String, Option<DateTime<Utc>>)> {
 }
 
 impl UsageProvider for ClaudeClient {
-    fn load_cached_usage_statistics(&mut self, history_days: u16) -> Result<usage::UsageStatistics> {
+    fn load_cached_usage_statistics(
+        &mut self,
+        history_days: u16,
+    ) -> Result<usage::UsageStatistics> {
         usage::load_cached_claude_usage_statistics(history_days)
     }
 
@@ -368,8 +376,12 @@ impl Credentials {
 }
 
 fn credentials_path() -> Option<PathBuf> {
-    BaseDirs::new()
-        .map(|directories| directories.home_dir().join(".claude").join(".credentials.json"))
+    BaseDirs::new().map(|directories| {
+        directories
+            .home_dir()
+            .join(".claude")
+            .join(".credentials.json")
+    })
 }
 
 /// Collects every local Claude session and prefers a live one. Both sources
@@ -409,13 +421,16 @@ fn load_cli_credentials() -> Result<Credentials> {
             path.display()
         )
     })?;
-    let file: CredentialFile = serde_json::from_slice(&contents)
-        .with_context(|| format!("parse {}", path.display()))?;
-    let oauth = file
-        .oauth
-        .context("Claude credentials do not contain a Claude OAuth session; run `claude` to sign in")?;
+    let file: CredentialFile =
+        serde_json::from_slice(&contents).with_context(|| format!("parse {}", path.display()))?;
+    let oauth = file.oauth.context(
+        "Claude credentials do not contain a Claude OAuth session; run `claude` to sign in",
+    )?;
     let access_token = oauth.access_token.trim().to_owned();
-    anyhow::ensure!(!access_token.is_empty(), "Claude OAuth access token is empty");
+    anyhow::ensure!(
+        !access_token.is_empty(),
+        "Claude OAuth access token is empty"
+    );
     let expires_at = oauth
         .expires_at_millis
         .and_then(|milliseconds| DateTime::from_timestamp_millis(milliseconds));
@@ -505,7 +520,8 @@ struct OAuthUsageWindow {
 }
 
 pub fn parse_usage_response(response: &str, sampled_at: DateTime<Utc>) -> Result<RateLimits> {
-    let response: OAuthUsageResponse = serde_json::from_str(response).context("parse Claude OAuth usage")?;
+    let response: OAuthUsageResponse =
+        serde_json::from_str(response).context("parse Claude OAuth usage")?;
     let primary = parse_window(response.five_hour, Some(5 * 60));
     let secondary = parse_window(response.seven_day, Some(7 * 24 * 60));
     let mut additional_limits = response
@@ -572,25 +588,28 @@ fn parse_profile(response: &str) -> Result<AccountProfile> {
     let profile: OAuthProfileResponse =
         serde_json::from_str(response).context("parse Claude OAuth profile")?;
     let (person_name, email, has_max, has_pro) =
-        profile.account.map_or((None, None, false, false), |account| {
+        profile
+            .account
+            .map_or((None, None, false, false), |account| {
+                (
+                    non_empty(account.full_name).or_else(|| non_empty(account.display_name)),
+                    non_empty(account.email),
+                    account.has_claude_max.unwrap_or_default(),
+                    account.has_claude_pro.unwrap_or_default(),
+                )
+            });
+    let (organization_name, plan_type) =
+        profile.organization.map_or((None, None), |organization| {
             (
-                non_empty(account.full_name).or_else(|| non_empty(account.display_name)),
-                non_empty(account.email),
-                account.has_claude_max.unwrap_or_default(),
-                account.has_claude_pro.unwrap_or_default(),
+                non_empty(organization.name),
+                // A seat or organization type names the plan directly; the
+                // rate-limit tier is the weakest signal and usually opaque
+                // (`default_raven`), so it is consulted last.
+                plan_type_from_tier(organization.seat_tier)
+                    .or_else(|| plan_type_from_tier(organization.organization_type))
+                    .or_else(|| plan_type_from_tier(organization.rate_limit_tier)),
             )
         });
-    let (organization_name, plan_type) = profile.organization.map_or((None, None), |organization| {
-        (
-            non_empty(organization.name),
-            // A seat or organization type names the plan directly; the
-            // rate-limit tier is the weakest signal and usually opaque
-            // (`default_raven`), so it is consulted last.
-            plan_type_from_tier(organization.seat_tier)
-                .or_else(|| plan_type_from_tier(organization.organization_type))
-                .or_else(|| plan_type_from_tier(organization.rate_limit_tier)),
-        )
-    });
     Ok(AccountProfile {
         account_name: person_name.or(organization_name).or(email),
         plan_type: plan_type.or_else(|| {
@@ -619,7 +638,10 @@ fn plan_type_from_tier(tier: Option<String>) -> Option<String> {
         let tier = tier.to_ascii_lowercase();
         ["enterprise", "team", "max", "pro"]
             .into_iter()
-            .find(|plan| tier.split(|character: char| !character.is_alphanumeric()).any(|part| part == *plan))
+            .find(|plan| {
+                tier.split(|character: char| !character.is_alphanumeric())
+                    .any(|part| part == *plan)
+            })
             .map(str::to_owned)
     })
 }
@@ -736,7 +758,11 @@ fn additional_limit_title(id: &str) -> String {
             let Some(first) = characters.next() else {
                 return String::new();
             };
-            format!("{}{}", first.to_uppercase(), characters.as_str().to_lowercase())
+            format!(
+                "{}{}",
+                first.to_uppercase(),
+                characters.as_str().to_lowercase()
+            )
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -764,7 +790,8 @@ mod tests {
 
     #[test]
     fn accepts_a_weekly_only_oauth_response() {
-        let limits = parse_usage_response(r#"{"seven_day":{"utilization":42}}"#, Utc::now()).unwrap();
+        let limits =
+            parse_usage_response(r#"{"seven_day":{"utilization":42}}"#, Utc::now()).unwrap();
         assert!(limits.primary.is_empty());
         assert_eq!(limits.secondary.used_percent, Some(42));
     }
@@ -781,10 +808,13 @@ mod tests {
             r#"{"account":{"full_name":" ","email":"ada@example.com"},"organization":{"name":"Example Studio"}}"#,
         )
         .unwrap();
-        assert_eq!(organization_name.account_name.as_deref(), Some("Example Studio"));
+        assert_eq!(
+            organization_name.account_name.as_deref(),
+            Some("Example Studio")
+        );
 
-        let email = parse_profile(r#"{"account":{"email":"ada@example.com"},"organization":{}}"#)
-            .unwrap();
+        let email =
+            parse_profile(r#"{"account":{"email":"ada@example.com"},"organization":{}}"#).unwrap();
         assert_eq!(email.account_name.as_deref(), Some("ada@example.com"));
     }
 
@@ -810,11 +840,13 @@ mod tests {
         .unwrap();
         assert_eq!(personal.plan_type.as_deref(), Some("max"));
 
-        let pro = parse_profile(r#"{"account":{"has_claude_pro":true},"organization":{}}"#).unwrap();
+        let pro =
+            parse_profile(r#"{"account":{"has_claude_pro":true},"organization":{}}"#).unwrap();
         assert_eq!(pro.plan_type.as_deref(), Some("pro"));
 
-        let unknown = parse_profile(r#"{"account":{},"organization":{"rate_limit_tier":"default"}}"#)
-            .unwrap();
+        let unknown =
+            parse_profile(r#"{"account":{},"organization":{"rate_limit_tier":"default"}}"#)
+                .unwrap();
         assert_eq!(unknown.plan_type, None);
     }
 
@@ -832,9 +864,15 @@ mod tests {
             plan_type_from_account_fields(None, Some("default_claude_max_20x".into())).as_deref(),
             Some("max")
         );
-        assert_eq!(plan_type_from_account_fields(None, Some("default".into())), None);
+        assert_eq!(
+            plan_type_from_account_fields(None, Some("default".into())),
+            None
+        );
         // The live value on a team account carries no usable tier keyword.
-        assert_eq!(plan_type_from_account_fields(None, Some("default_raven".into())), None);
+        assert_eq!(
+            plan_type_from_account_fields(None, Some("default_raven".into())),
+            None
+        );
     }
 
     #[test]
@@ -854,11 +892,18 @@ mod tests {
         let mut cache = ClaudeAccountCache::default();
         assert!(cache.needs_refresh(&schedule));
 
-        cache.record(Some("Ada Lovelace".into()), Some("pro".into()), schedule.clone());
+        cache.record(
+            Some("Ada Lovelace".into()),
+            Some("pro".into()),
+            schedule.clone(),
+        );
         assert!(!cache.needs_refresh(&schedule));
         assert_eq!(cache.plan_type.as_deref(), Some("pro"));
 
-        let changed_schedule = vec![("primary".into(), None), ("secondary".into(), Some(Utc::now()))];
+        let changed_schedule = vec![
+            ("primary".into(), None),
+            ("secondary".into(), Some(Utc::now())),
+        ];
         assert!(cache.needs_refresh(&changed_schedule));
 
         cache.checked_at = Some(Instant::now() - PROFILE_REFRESH_INTERVAL);
@@ -874,10 +919,16 @@ mod tests {
         .unwrap();
 
         assert_eq!(limits.additional_limits.len(), 2);
-        assert_eq!(limits.additional_limits[0].id, "claude-weekly-scoped-claude-fable-5-promo");
+        assert_eq!(
+            limits.additional_limits[0].id,
+            "claude-weekly-scoped-claude-fable-5-promo"
+        );
         assert_eq!(limits.additional_limits[0].title, "Fable only");
         assert_eq!(limits.additional_limits[0].window.used_percent, Some(42));
-        assert_eq!(limits.additional_limits[0].window.duration_minutes, Some(10_080));
+        assert_eq!(
+            limits.additional_limits[0].window.duration_minutes,
+            Some(10_080)
+        );
         assert_eq!(limits.additional_limits[1].title, "Opus");
         assert_eq!(limits.account_name.as_deref(), Some("example"));
         assert_eq!(limits.plan_type, None);

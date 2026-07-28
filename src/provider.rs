@@ -51,6 +51,8 @@ pub fn start_provider_worker(
     events: Sender<WorkerEvent>,
 ) -> Result<WorkerHandle> {
     let activation_path = provider_activation_path(provider, activation_path);
+    let automatic_activation = settings.automatic_activation
+        && crate::provider_registry::descriptor(provider).supports_activation;
     let mut worker = match provider {
         ProviderKind::Codex => {
             let executable = first_available(settings.codex_path.as_deref())?;
@@ -60,7 +62,7 @@ pub fn start_provider_worker(
                 CodexClient::new(&executable),
                 CodexActivator::new(executable),
                 activation_path,
-                settings.automatic_activation,
+                automatic_activation,
                 schedules_for(provider, settings),
                 settings.history_retention_days,
                 Duration::from_secs(settings.limit_refresh_interval.seconds()),
@@ -75,7 +77,7 @@ pub fn start_provider_worker(
                 ClaudeClient::new(),
                 ClaudeActivator::new(Some(executable)),
                 activation_path,
-                settings.automatic_activation,
+                automatic_activation,
                 schedules_for(provider, settings),
                 settings.history_retention_days,
                 Duration::from_secs(settings.limit_refresh_interval.seconds()),
@@ -137,7 +139,13 @@ pub fn start_provider_worker(
     Ok(worker)
 }
 
-fn schedules_for(provider: ProviderKind, settings: &Settings) -> Vec<crate::settings::ScheduledActivation> {
+fn schedules_for(
+    provider: ProviderKind,
+    settings: &Settings,
+) -> Vec<crate::settings::ScheduledActivation> {
+    if !crate::provider_registry::descriptor(provider).supports_activation {
+        return Vec::new();
+    }
     settings
         .scheduled_activations
         .iter()

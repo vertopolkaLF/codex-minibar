@@ -145,7 +145,11 @@ impl AppState {
             |mut workers| {
                 disabled
                     .iter()
-                    .chain(restart.iter().filter(|provider| settings.providers.is_enabled(**provider)))
+                    .chain(
+                        restart
+                            .iter()
+                            .filter(|provider| settings.providers.is_enabled(**provider)),
+                    )
                     .filter_map(|provider| workers.remove(provider))
                     .collect()
             },
@@ -2182,12 +2186,16 @@ fn start_background_bridge(
             }
             for (provider, commands) in state.worker_commands() {
                 let _ = commands.send(WorkerCommand::SetAutomaticActivation(
-                    settings.automatic_activation,
+                    settings.automatic_activation
+                        && crate::provider_registry::descriptor(provider).supports_activation,
                 ));
                 let schedules = settings
                     .scheduled_activations
                     .iter()
-                    .filter(|rule| rule.provider() == Some(provider))
+                    .filter(|rule| {
+                        crate::provider_registry::descriptor(provider).supports_activation
+                            && rule.provider() == Some(provider)
+                    })
                     .cloned()
                     .collect();
                 let _ = commands.send(WorkerCommand::SetScheduledActivations(schedules));
@@ -2383,7 +2391,10 @@ fn start_background_bridge(
                     crate::logger::info(format!("{} activation started", provider.display_name()));
                 }
                 Ok(WorkerEvent::ProviderActivationSucceeded(provider)) => {
-                    crate::logger::info(format!("{} activation succeeded", provider.display_name()));
+                    crate::logger::info(format!(
+                        "{} activation succeeded",
+                        provider.display_name()
+                    ));
                     ui.last_activation = format!(
                         "{} succeeded at {}",
                         provider.display_name(),
@@ -2395,7 +2406,10 @@ fn start_background_bridge(
                     set_ui.call(ui.clone());
                 }
                 Ok(WorkerEvent::ProviderActivationFailed(provider, error)) => {
-                    crate::logger::info(format!("{} activation failed: {error}", provider.display_name()));
+                    crate::logger::info(format!(
+                        "{} activation failed: {error}",
+                        provider.display_name()
+                    ));
                     ui.last_activation = format!(
                         "{} failed at {}: {error}",
                         provider.display_name(),
@@ -2404,7 +2418,10 @@ fn start_background_bridge(
                     set_ui.call(ui.clone());
                 }
                 Ok(WorkerEvent::ProviderPollFailed(provider, error)) => {
-                    crate::logger::info(format!("{} polling failed: {error}", provider.display_name()));
+                    crate::logger::info(format!(
+                        "{} polling failed: {error}",
+                        provider.display_name()
+                    ));
                     ui.set_popup_error(format!("{}: {error}", provider.display_name()));
                     ui.refreshing = false;
                     set_ui.call(ui.clone());

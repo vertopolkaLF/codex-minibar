@@ -26,6 +26,9 @@ pub struct ProviderDescriptor {
     pub display_name: &'static str,
     pub icon: &'static str,
     pub brand_rgb: (u8, u8, u8),
+    /// Whether the provider exposes a real operation that starts a fresh
+    /// session limit window.
+    pub supports_activation: bool,
     /// Stable metrics shown before runtime-discovered provider-specific lanes.
     pub metrics: &'static [MetricDescriptor],
     /// Ordered metrics used by onboarding and the provider preset.
@@ -78,6 +81,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         display_name: "Codex",
         icon: "codex",
         brand_rgb: (128, 159, 255),
+        supports_activation: true,
         metrics: CODEX_METRICS,
         default_tray_metrics: &["codex.session", "codex.weekly"],
     },
@@ -87,6 +91,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         display_name: "Claude",
         icon: "claude",
         brand_rgb: (217, 119, 87),
+        supports_activation: true,
         metrics: CLAUDE_METRICS,
         default_tray_metrics: &["claude.session", "claude.weekly"],
     },
@@ -96,6 +101,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         display_name: "Cursor",
         icon: "cursor",
         brand_rgb: (145, 151, 164),
+        supports_activation: false,
         metrics: CURSOR_METRICS,
         default_tray_metrics: &["cursor.auto", "cursor.api"],
     },
@@ -224,5 +230,12 @@ mod tests {
                 assert!(ids.insert(metric.id));
             }
         }
+    }
+
+    #[test]
+    fn only_providers_with_real_session_windows_support_activation() {
+        assert!(descriptor(ProviderKind::Codex).supports_activation);
+        assert!(descriptor(ProviderKind::Claude).supports_activation);
+        assert!(!descriptor(ProviderKind::Cursor).supports_activation);
     }
 }

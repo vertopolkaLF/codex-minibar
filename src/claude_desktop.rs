@@ -12,9 +12,9 @@
 
 use std::{fs, path::PathBuf};
 
-use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
-use anyhow::{anyhow, bail, Context, Result};
-use base64::{engine::general_purpose::STANDARD, Engine};
+use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
+use anyhow::{Context, Result, anyhow, bail};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use chrono::{DateTime, Utc};
 use directories::BaseDirs;
 use serde::Deserialize;
@@ -328,7 +328,7 @@ fn decrypt_oscrypt_v10(envelope: &str, master_key: &[u8]) -> Result<Vec<u8>> {
 fn unprotect(data: &[u8]) -> Result<Vec<u8>> {
     use windows_sys::Win32::{
         Foundation::LocalFree,
-        Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB},
+        Security::Cryptography::{CRYPT_INTEGER_BLOB, CryptUnprotectData},
     };
 
     let mut input = CRYPT_INTEGER_BLOB {
@@ -459,14 +459,16 @@ mod tests {
 
     #[test]
     fn discards_entries_without_a_token() {
-        assert!(CachedToken {
-            token: Some("  ".into()),
-            expires_at_millis: None,
-            subscription_type: None,
-            rate_limit_tier: None,
-        }
-        .into_session()
-        .is_none());
+        assert!(
+            CachedToken {
+                token: Some("  ".into()),
+                expires_at_millis: None,
+                subscription_type: None,
+                rate_limit_tier: None,
+            }
+            .into_session()
+            .is_none()
+        );
     }
 
     #[test]

@@ -255,7 +255,10 @@ impl Default for ScheduledActivation {
 
 impl ScheduledActivation {
     pub fn new(provider: ProviderKind) -> Self {
-        Self { provider_id: provider.id().into(), ..Self::default() }
+        Self {
+            provider_id: provider.id().into(),
+            ..Self::default()
+        }
     }
 
     pub fn provider(&self) -> Option<ProviderKind> {
@@ -280,7 +283,10 @@ fn new_scheduled_activation_id() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|duration| duration.as_nanos()).unwrap_or_default();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
     let sequence = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     format!("schedule-{timestamp:x}-{sequence:x}")
 }
@@ -811,7 +817,10 @@ impl Settings {
                 // Drop only the section that failed rather than wiping everything.
                 if let Some(root) = document.as_table_mut() {
                     root.insert("tray_widgets".into(), toml::Value::Array(Vec::new()));
-                    root.insert("scheduled_activations".into(), toml::Value::Array(Vec::new()));
+                    root.insert(
+                        "scheduled_activations".into(),
+                        toml::Value::Array(Vec::new()),
+                    );
                 }
                 match document.try_into::<Self>() {
                     Ok(settings) => {
@@ -834,7 +843,10 @@ impl Settings {
             return None;
         };
         root.insert("tray_widgets".into(), toml::Value::Array(Vec::new()));
-        root.insert("scheduled_activations".into(), toml::Value::Array(Vec::new()));
+        root.insert(
+            "scheduled_activations".into(),
+            toml::Value::Array(Vec::new()),
+        );
         root.insert(
             "notifications".into(),
             toml::Value::Table(toml::map::Map::new()),
@@ -1292,10 +1304,7 @@ fn convert_legacy_tray_widget(widget: &mut toml::map::Map<String, toml::Value>, 
         .map(|metric_id| {
             let mut indicator = toml::map::Map::new();
             indicator.insert("provider".into(), toml::Value::String(provider.clone()));
-            indicator.insert(
-                "metric_id".into(),
-                toml::Value::String(metric_id.into()),
-            );
+            indicator.insert("metric_id".into(), toml::Value::String(metric_id.into()));
             indicator.insert(
                 "limit_value".into(),
                 toml::Value::String(limit_value.clone()),
@@ -1685,9 +1694,7 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                             let Some(indicator) = indicator_value.as_table_mut() else {
                                 continue;
                             };
-                            indicator
-                                .entry("color_mode")
-                                .or_insert(color_mode.clone());
+                            indicator.entry("color_mode").or_insert(color_mode.clone());
                             if let Some(fixed_color) = fixed_color.clone() {
                                 indicator.entry("fixed_color").or_insert(fixed_color);
                             }

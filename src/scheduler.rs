@@ -46,10 +46,18 @@ pub fn next_scheduled_activation(rule: &ScheduledActivation, now: DateTime<Utc>)
     let candidate = Local
         .with_ymd_and_hms(date.year(), date.month(), date.day(), hour, minute, 0)
         .single()
-        .or_else(|| Local.with_ymd_and_hms(date.year(), date.month(), date.day(), hour, minute, 0).earliest())
+        .or_else(|| {
+            Local
+                .with_ymd_and_hms(date.year(), date.month(), date.day(), hour, minute, 0)
+                .earliest()
+        })
         .unwrap_or(local_now)
         .with_timezone(&Utc);
-    if candidate > now { candidate } else { candidate + Duration::days(7) }
+    if candidate > now {
+        candidate
+    } else {
+        candidate + Duration::days(7)
+    }
 }
 
 /// Finds a rule due since the last poll. A six-hour grace period fires a
@@ -59,21 +67,33 @@ pub fn due_scheduled_activation<'a>(
     state: &ActivationState,
     now: DateTime<Utc>,
 ) -> Option<(&'a ScheduledActivation, DateTime<Utc>)> {
-    rules.iter().filter(|rule| rule.enabled).filter_map(|rule| {
-        let occurrence = next_scheduled_activation(rule, now) - Duration::days(7);
-        (now - occurrence <= AUTO_ACTIVATION_SCHEDULE_GUARD
-            && state.fired_scheduled_occurrences.get(&rule.id) != Some(&occurrence))
+    rules
+        .iter()
+        .filter(|rule| rule.enabled)
+        .filter_map(|rule| {
+            let occurrence = next_scheduled_activation(rule, now) - Duration::days(7);
+            (now - occurrence <= AUTO_ACTIVATION_SCHEDULE_GUARD
+                && state.fired_scheduled_occurrences.get(&rule.id) != Some(&occurrence))
             .then_some((rule, occurrence))
-    }).min_by_key(|(_, occurrence)| *occurrence)
+        })
+        .min_by_key(|(_, occurrence)| *occurrence)
 }
 
-pub fn scheduled_activation_within(rules: &[ScheduledActivation], now: DateTime<Utc>, within: Duration) -> bool {
-    rules.iter().filter(|rule| rule.enabled).any(|rule| next_scheduled_activation(rule, now) - now <= within)
+pub fn scheduled_activation_within(
+    rules: &[ScheduledActivation],
+    now: DateTime<Utc>,
+    within: Duration,
+) -> bool {
+    rules
+        .iter()
+        .filter(|rule| rule.enabled)
+        .any(|rule| next_scheduled_activation(rule, now) - now <= within)
 }
 
 impl ActivationState {
     pub fn record_scheduled_activation(&mut self, rule_id: &str, occurrence: DateTime<Utc>) {
-        self.fired_scheduled_occurrences.insert(rule_id.into(), occurrence);
+        self.fired_scheduled_occurrences
+            .insert(rule_id.into(), occurrence);
     }
 }
 
@@ -88,6 +108,11 @@ impl ActivationState {
     /// observation. Seconds and fractional-second jitter are ignored; the
     /// first sample only establishes a baseline.
     pub fn decide(&self, primary: &LimitWindow) -> Decision {
+        // An empty primary window means the provider does not currently expose
+        // a session limit. It is not evidence of an available-but-idle window.
+        if primary.is_empty() {
+            return Decision::Skip;
+        }
         let Some(resets_at) = primary.resets_at else {
             return if self.attempted_without_active_window {
                 Decision::Skip
@@ -213,12 +238,12 @@ mod tests {
     }
 
     #[test]
-    fn activates_once_when_the_session_is_not_activated() {
+    fn never_activates_when_the_session_window_is_absent() {
         let mut state = ActivationState {
             last_seen_resets_at: Some(at(15, 0)),
             ..ActivationState::default()
         };
-        assert_eq!(state.decide(&LimitWindow::default()), Decision::ActivateNow);
+        assert_eq!(state.decide(&LimitWindow::default()), Decision::Skip);
         state.record_attempt(at(10, 0));
         assert_eq!(state.decide(&LimitWindow::default()), Decision::Skip);
         state.observe(&LimitWindow::default());

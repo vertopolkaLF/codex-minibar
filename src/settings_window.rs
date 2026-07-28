@@ -8,8 +8,8 @@ use crate::notifications;
 use crate::settings::TraySource;
 use crate::settings::{
     AccentColor, AppTheme, LimitRefreshInterval, LimitValue, PopupWidgetKind, ProviderKind,
-    ScheduledActivation, Settings, TotalSpendPresentation, TrayColorMode, TrayFixedColor, TrayIndicator,
-    TrayPresentation, TrayWidget, TrayWidgetKind,
+    ScheduledActivation, Settings, TotalSpendPresentation, TrayColorMode, TrayFixedColor,
+    TrayIndicator, TrayPresentation, TrayWidget, TrayWidgetKind,
 };
 use crate::settings_controls::{
     settings_action_card, settings_content_expander, settings_control_card, settings_info_card,
@@ -137,13 +137,22 @@ impl SettingsWindowState {
         self.cursor_enabled
             .call(settings.providers.is_enabled(ProviderKind::Cursor));
         self.codex_path.call(
-            settings.codex_path.as_ref().map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
+            settings
+                .codex_path
+                .as_ref()
+                .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
         );
         self.claude_path.call(
-            settings.claude_path.as_ref().map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
+            settings
+                .claude_path
+                .as_ref()
+                .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
         );
         self.cursor_path.call(
-            settings.cursor_path.as_ref().map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
+            settings
+                .cursor_path
+                .as_ref()
+                .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
         );
         self.popup_order.call(settings.popup_order.clone());
         self.use_colored_provider_icons
@@ -321,7 +330,10 @@ impl ProviderInstallStatus {
     }
 }
 
-fn provider_install_status(provider: ProviderKind, configured_folder: &str) -> ProviderInstallStatus {
+fn provider_install_status(
+    provider: ProviderKind,
+    configured_folder: &str,
+) -> ProviderInstallStatus {
     let configured_folder = (!configured_folder.trim().is_empty())
         .then(|| std::path::Path::new(configured_folder.trim()));
     let (app, cli, used) = match provider {
@@ -376,39 +388,45 @@ fn provider_install_status(provider: ProviderKind, configured_folder: &str) -> P
 
 fn provider_install_status_card(status: &ProviderInstallStatus) -> Element {
     if status.checking {
-        return border(text_block("Checking installed app and CLI…").font_size(12.0).opacity(0.72))
-            .padding(Thickness::uniform(8.0))
-            .background(ThemeRef::SubtleFill)
-            .corner_radius(6.0)
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .into();
-    }
-    let status_line = |label: &str,
-                       path: Option<&String>,
-                       used: bool,
-                       unavailable: bool|
-     -> Element {
-        let mut title = Vec::<Element>::new();
-        if used {
-            title.push(
-                crate::icons::element("check-circle-fill", 15.0, Color::rgb(65, 184, 131))
-                    .vertical_alignment(VerticalAlignment::Center),
-            );
-        }
-        title.push(text_block(format!("{label}:")).font_size(12.0).bold().into());
-        let detail = if unavailable {
-            "Not applicable".into()
-        } else {
-            path.cloned().unwrap_or_else(|| "Not found".into())
-        };
-        vstack((
-            hstack(title).spacing(5.0),
-            text_block(detail).font_size(12.0).opacity(0.72).wrap(),
-        ))
-        .spacing(2.0)
+        return border(
+            text_block("Checking installed app and CLI…")
+                .font_size(12.0)
+                .opacity(0.72),
+        )
+        .padding(Thickness::uniform(8.0))
+        .background(ThemeRef::SubtleFill)
+        .corner_radius(6.0)
         .horizontal_alignment(HorizontalAlignment::Stretch)
-        .into()
-    };
+        .into();
+    }
+    let status_line =
+        |label: &str, path: Option<&String>, used: bool, unavailable: bool| -> Element {
+            let mut title = Vec::<Element>::new();
+            if used {
+                title.push(
+                    crate::icons::element("check-circle-fill", 15.0, Color::rgb(65, 184, 131))
+                        .vertical_alignment(VerticalAlignment::Center),
+                );
+            }
+            title.push(
+                text_block(format!("{label}:"))
+                    .font_size(12.0)
+                    .bold()
+                    .into(),
+            );
+            let detail = if unavailable {
+                "Not applicable".into()
+            } else {
+                path.cloned().unwrap_or_else(|| "Not found".into())
+            };
+            vstack((
+                hstack(title).spacing(5.0),
+                text_block(detail).font_size(12.0).opacity(0.72).wrap(),
+            ))
+            .spacing(2.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .into()
+        };
     border(
         vstack((
             status_line(
@@ -434,11 +452,7 @@ fn provider_install_status_card(status: &ProviderInstallStatus) -> Element {
     .into()
 }
 
-fn persist_provider_folder(
-    provider: ProviderKind,
-    value: String,
-    settings_tx: Sender<Settings>,
-) {
+fn persist_provider_folder(provider: ProviderKind, value: String, settings_tx: Sender<Settings>) {
     let generation = match provider {
         ProviderKind::Codex => &CODEX_PATH_SAVE_GEN,
         ProviderKind::Claude => &CLAUDE_PATH_SAVE_GEN,
@@ -1059,15 +1073,16 @@ pub fn render(
     let (selected, set_selected) = cx.use_state(Tab::default());
     let (rendered_tab, set_rendered_tab) = cx.use_async_state(Tab::default());
     let (page_visible, set_page_visible) = cx.use_async_state(true);
-    let (log_content, set_log_content) =
-        cx.use_async_state(crate::logger::tail_lines(100).unwrap_or_else(|error| error.to_string()));
+    let (log_content, set_log_content) = cx
+        .use_async_state(crate::logger::tail_lines(100).unwrap_or_else(|error| error.to_string()));
     cx.use_effect((), move || {
         let set_log_content = set_log_content.clone();
-        std::thread::spawn(move || loop {
-            set_log_content.call(
-                crate::logger::tail_lines(100).unwrap_or_else(|error| error.to_string()),
-            );
-            std::thread::sleep(Duration::from_millis(500));
+        std::thread::spawn(move || {
+            loop {
+                set_log_content
+                    .call(crate::logger::tail_lines(100).unwrap_or_else(|error| error.to_string()));
+                std::thread::sleep(Duration::from_millis(500));
+            }
         });
     });
     let theme_navigation_guard = cx.use_ref(false);
@@ -1177,13 +1192,22 @@ pub fn render(
     let (cursor_enabled, set_cursor_enabled) =
         cx.use_state(settings.providers.is_enabled(ProviderKind::Cursor));
     let (codex_path, set_codex_path) = cx.use_state(
-        settings.codex_path.as_ref().map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
+        settings
+            .codex_path
+            .as_ref()
+            .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
     );
     let (claude_path, set_claude_path) = cx.use_state(
-        settings.claude_path.as_ref().map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
+        settings
+            .claude_path
+            .as_ref()
+            .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
     );
     let (cursor_path, set_cursor_path) = cx.use_state(
-        settings.cursor_path.as_ref().map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
+        settings
+            .cursor_path
+            .as_ref()
+            .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
     );
     let (codex_provider_expanded, set_codex_provider_expanded) = cx.use_state(false);
     let (claude_provider_expanded, set_claude_provider_expanded) = cx.use_state(false);
@@ -1503,8 +1527,12 @@ pub fn render(
         .iter()
         .filter_map(|widget| widget.as_provider())
         .collect();
-    let tray_enabled_providers =
-        enabled_providers(&tray_providers, codex_enabled, claude_enabled, cursor_enabled);
+    let tray_enabled_providers = enabled_providers(
+        &tray_providers,
+        codex_enabled,
+        claude_enabled,
+        cursor_enabled,
+    );
     let window_body: Element = if let Some(editing) = editing_tray_indicator.as_ref() {
         let overlay = tray_indicator_edit_overlay(
             &tray_widgets,
@@ -2692,8 +2720,9 @@ fn scheduled_activation_cards(
     // A schedule can only target a currently enabled provider. Keeping the
     // available choices in the card also avoids separate, provider-specific
     // add buttons that made the narrow settings content overflow.
-    let available_providers: Vec<ProviderKind> = [ProviderKind::Codex, ProviderKind::Claude]
+    let available_providers: Vec<ProviderKind> = ProviderKind::ALL
         .into_iter()
+        .filter(|provider| crate::provider_registry::descriptor(*provider).supports_activation)
         .filter(|provider| match provider {
             ProviderKind::Codex => provider_enabled[0],
             ProviderKind::Claude => provider_enabled[1],
@@ -2705,7 +2734,13 @@ fn scheduled_activation_cards(
         .map(|provider| provider.display_name().to_string())
         .collect();
     const WEEKDAYS: [&str; 7] = [
-        "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
     ];
     let mut rows: Vec<Element> = vec![
         text_block("Start a provider's 5-hour limit window at a chosen local time. Automatic activation is paused for the six hours before each scheduled run.")
@@ -2744,7 +2779,11 @@ fn scheduled_activation_cards(
         let remove_tx = settings_tx.clone();
         let selected_provider = schedule
             .provider()
-            .and_then(|provider| available_providers.iter().position(|candidate| *candidate == provider))
+            .and_then(|provider| {
+                available_providers
+                    .iter()
+                    .position(|candidate| *candidate == provider)
+            })
             .unwrap_or(0) as i32;
         let provider_choices = available_providers.clone();
         // Match the proven settings-card header layout: RelativePanel pins the
@@ -2767,7 +2806,10 @@ fn scheduled_activation_cards(
                 .off_content("")
                 .on_toggled(move |enabled| {
                     let mut next = schedules_for_enabled.clone();
-                    if let Some(rule) = next.iter_mut().find(|rule| rule.id == schedule_id_for_enabled) {
+                    if let Some(rule) = next
+                        .iter_mut()
+                        .find(|rule| rule.id == schedule_id_for_enabled)
+                    {
                         if rule.enabled == enabled {
                             return;
                         }
@@ -2794,15 +2836,16 @@ fn scheduled_activation_cards(
                 .into(),
         ];
         let header = relative_panel(header_children)
-        .min_height(60.0)
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .background(Color::transparent());
+            .min_height(60.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .background(Color::transparent());
         let action_row = grid((
             ComboBox::new(provider_labels.clone())
                 .selected_index(selected_provider)
                 .horizontal_alignment(HorizontalAlignment::Stretch)
                 .on_selection_changed(move |value: i32| {
-                    let Some(provider) = provider_choices.get(value.max(0) as usize).copied() else {
+                    let Some(provider) = provider_choices.get(value.max(0) as usize).copied()
+                    else {
                         return;
                     };
                     let mut next = schedules_for_provider.clone();
@@ -2895,25 +2938,25 @@ fn scheduled_activation_cards(
             .relative_align_top()
             .into();
         let shell_children: Vec<Element> = vec![
-                border(Element::Empty)
-                    .background(ThemeRef::CardBackground)
-                    .corner_radius(8.0)
-                    .border_thickness(Thickness::uniform(1.0))
-                    .border_brush(ThemeRef::CardStroke)
-                    .relative_align_left()
-                    .relative_align_right()
-                    .relative_align_top()
-                    .relative_align_bottom()
-                    .into(),
-                card_content,
-            ];
+            border(Element::Empty)
+                .background(ThemeRef::CardBackground)
+                .corner_radius(8.0)
+                .border_thickness(Thickness::uniform(1.0))
+                .border_brush(ThemeRef::CardStroke)
+                .relative_align_left()
+                .relative_align_right()
+                .relative_align_top()
+                .relative_align_bottom()
+                .into(),
+            card_content,
+        ];
         rows.push(
             relative_panel(shell_children)
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .with_translation_transition(duration(CONTROL_NORMAL_ANIMATION))
-            .with_opacity_transition(duration(CONTROL_NORMAL_ANIMATION))
-            .with_key(format!("schedule-rule-{}", schedule.id))
-            .into(),
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .with_translation_transition(duration(CONTROL_NORMAL_ANIMATION))
+                .with_opacity_transition(duration(CONTROL_NORMAL_ANIMATION))
+                .with_key(format!("schedule-rule-{}", schedule.id))
+                .into(),
         );
     }
 
@@ -2934,7 +2977,9 @@ fn persist_schedules(
     schedules: Vec<ScheduledActivation>,
 ) {
     setter.call(schedules.clone());
-    persist_update(settings_tx, move |settings| settings.scheduled_activations = schedules);
+    persist_update(settings_tx, move |settings| {
+        settings.scheduled_activations = schedules
+    });
 }
 
 fn log_view_card(log_content: &str) -> Element {
@@ -3480,12 +3525,10 @@ fn tray_widget_preview(widget: &TrayWidget) -> Element {
     host.mounted = Some(Callback::new(
         move |native: Option<windows_core::IInspectable>| {
             if let Some(native) = native {
-                if let Err(error) =
-                    crate::acrylic::install_tray_pixels_into(
-                        native.clone(),
-                        pixels_for_mount.as_slice(),
-                    )
-                {
+                if let Err(error) = crate::acrylic::install_tray_pixels_into(
+                    native.clone(),
+                    pixels_for_mount.as_slice(),
+                ) {
                     eprintln!("Could not install tray preview: {error:?}");
                 }
                 TRAY_PREVIEW_MOUNTS.with(|mounts| {
@@ -3983,9 +4026,14 @@ fn tray_settings_cards(
             vstack(fields).spacing(10.0).into()
         };
 
-        let row: Element = settings_content_expander(header, is_expanded, move |expanded: bool| {
-            expand_setter.call(expanded.then(|| expand_id.clone()));
-        }, content)
+        let row: Element = settings_content_expander(
+            header,
+            is_expanded,
+            move |expanded: bool| {
+                expand_setter.call(expanded.then(|| expand_id.clone()));
+            },
+            content,
+        )
         .with_translation_transition(duration(CONTROL_FAST_ANIMATION))
         .with_opacity_transition(duration(CONTROL_FAST_ANIMATION))
         .with_key(format!("tray-widget-{widget_id}"));
@@ -4056,23 +4104,19 @@ fn tray_time_parameter_fields(
     set_widgets: SetState<Vec<TrayWidget>>,
     settings_tx: Sender<Settings>,
 ) -> Element {
-    let indicator = widget
-        .indicators
-        .first()
-        .cloned()
-        .unwrap_or_else(|| {
-            let provider = enabled_providers
-                .first()
-                .copied()
-                .unwrap_or(ProviderKind::Codex);
-            let descriptor = crate::provider_registry::descriptor(provider);
-            let metric = descriptor
-                .default_tray_metrics
-                .first()
-                .copied()
-                .unwrap_or("unknown");
-            TrayIndicator::new(provider, metric)
-        });
+    let indicator = widget.indicators.first().cloned().unwrap_or_else(|| {
+        let provider = enabled_providers
+            .first()
+            .copied()
+            .unwrap_or(ProviderKind::Codex);
+        let descriptor = crate::provider_registry::descriptor(provider);
+        let metric = descriptor
+            .default_tray_metrics
+            .first()
+            .copied()
+            .unwrap_or("unknown");
+        TrayIndicator::new(provider, metric)
+    });
     let indicator_index = 0usize;
 
     let provider_options = crate::provider_registry::PROVIDERS;
@@ -4114,8 +4158,7 @@ fn tray_time_parameter_fields(
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .selected_index(provider_index)
         .on_selection_changed(move |choice: i32| {
-            let Some(descriptor) =
-                crate::provider_registry::PROVIDERS.get(choice.max(0) as usize)
+            let Some(descriptor) = crate::provider_registry::PROVIDERS.get(choice.max(0) as usize)
             else {
                 return;
             };
@@ -4449,14 +4492,12 @@ fn tray_indicator_edit_overlay(
 
     let anim = duration(CONTROL_NORMAL_ANIMATION);
     let card = border(
-        scroll_viewer(
-            border(form).padding(Thickness {
-                left: 24.0,
-                top: 24.0,
-                right: 24.0,
-                bottom: 24.0,
-            }),
-        )
+        scroll_viewer(border(form).padding(Thickness {
+            left: 24.0,
+            top: 24.0,
+            right: 24.0,
+            bottom: 24.0,
+        }))
         .horizontal_scroll_bar_visibility(ScrollBarVisibility::Disabled)
         .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
         .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -4566,8 +4607,7 @@ fn tray_indicator_edit_form(
     fields.push(
         grid((
             hstack((
-                tray_widget_preview(widget)
-                    .vertical_alignment(VerticalAlignment::Center),
+                tray_widget_preview(widget).vertical_alignment(VerticalAlignment::Center),
                 text_block(format!("Edit indicator {}", indicator_index + 1))
                     .font_size(24.0)
                     .bold()
@@ -4606,8 +4646,7 @@ fn tray_indicator_edit_form(
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .selected_index(provider_index)
         .on_selection_changed(move |choice: i32| {
-            let Some(descriptor) =
-                crate::provider_registry::PROVIDERS.get(choice.max(0) as usize)
+            let Some(descriptor) = crate::provider_registry::PROVIDERS.get(choice.max(0) as usize)
             else {
                 return;
             };
@@ -5264,7 +5303,7 @@ fn choose_settings_file(_save: bool) -> anyhow::Result<Option<PathBuf>> {
 #[cfg(windows)]
 fn choose_provider_folder() -> anyhow::Result<Option<PathBuf>> {
     use windows_sys::Win32::UI::Shell::{
-        ILFree, BROWSEINFOW, BIF_EDITBOX, BIF_NEWDIALOGSTYLE, BIF_RETURNONLYFSDIRS,
+        BIF_EDITBOX, BIF_NEWDIALOGSTYLE, BIF_RETURNONLYFSDIRS, BROWSEINFOW, ILFree,
         SHBrowseForFolderW, SHGetPathFromIDListW,
     };
 
