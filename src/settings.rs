@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 24;
+pub const SETTINGS_VERSION: u32 = 25;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -225,6 +225,64 @@ impl ProviderKind {
     pub fn default_order() -> Vec<Self> {
         Self::ALL.to_vec()
     }
+}
+
+/// A weekly local-time rule for starting a provider's 5-hour limit window.
+/// `weekday` follows Chrono's Monday = 0 convention and `time_minutes` is the
+/// number of minutes after local midnight. Keeping this as a separate type
+/// leaves room for more scheduled actions in the future.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ScheduledActivation {
+    pub id: String,
+    pub provider_id: String,
+    pub weekday: u8,
+    pub time_minutes: u16,
+    pub enabled: bool,
+}
+
+impl Default for ScheduledActivation {
+    fn default() -> Self {
+        Self {
+            id: new_scheduled_activation_id(),
+            provider_id: ProviderKind::Codex.id().into(),
+            weekday: 0,
+            time_minutes: 9 * 60,
+            enabled: true,
+        }
+    }
+}
+
+impl ScheduledActivation {
+    pub fn new(provider: ProviderKind) -> Self {
+        Self { provider_id: provider.id().into(), ..Self::default() }
+    }
+
+    pub fn provider(&self) -> Option<ProviderKind> {
+        ProviderKind::from_id(&self.provider_id)
+    }
+
+    pub fn normalize(&mut self) -> bool {
+        let weekday = self.weekday.min(6);
+        let time_minutes = self.time_minutes.min(23 * 60 + 59);
+        let mut changed = weekday != self.weekday || time_minutes != self.time_minutes;
+        self.weekday = weekday;
+        self.time_minutes = time_minutes;
+        if self.id.trim().is_empty() {
+            self.id = new_scheduled_activation_id();
+            changed = true;
+        }
+        changed
+    }
+}
+
+fn new_scheduled_activation_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|duration| duration.as_nanos()).unwrap_or_default();
+    let sequence = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    format!("schedule-{timestamp:x}-{sequence:x}")
 }
 
 /// Ordered slots on the popup All tab, including Total Spend.
@@ -623,6 +681,8 @@ pub struct Settings {
     pub use_colored_provider_icons: bool,
     pub replace_chatgpt_logo_with_codex: bool,
     pub automatic_activation: bool,
+    /// Weekly activations, each bound to exactly one provider.
+    pub scheduled_activations: Vec<ScheduledActivation>,
     pub limit_refresh_interval: LimitRefreshInterval,
     pub start_at_login: bool,
     pub show_used_percentage: bool,
@@ -664,6 +724,7 @@ impl Default for Settings {
             use_colored_provider_icons: false,
             replace_chatgpt_logo_with_codex: false,
             automatic_activation: false,
+            scheduled_activations: Vec::new(),
             limit_refresh_interval: LimitRefreshInterval::default(),
             start_at_login: true,
             show_used_percentage: false,
@@ -750,6 +811,7 @@ impl Settings {
                 // Drop only the section that failed rather than wiping everything.
                 if let Some(root) = document.as_table_mut() {
                     root.insert("tray_widgets".into(), toml::Value::Array(Vec::new()));
+                    root.insert("scheduled_activations".into(), toml::Value::Array(Vec::new()));
                 }
                 match document.try_into::<Self>() {
                     Ok(settings) => {
@@ -772,6 +834,7 @@ impl Settings {
             return None;
         };
         root.insert("tray_widgets".into(), toml::Value::Array(Vec::new()));
+        root.insert("scheduled_activations".into(), toml::Value::Array(Vec::new()));
         root.insert(
             "notifications".into(),
             toml::Value::Table(toml::map::Map::new()),
@@ -809,6 +872,15 @@ impl Settings {
         if weekly != self.notifications.weekly_low_usage_threshold_percent {
             self.notifications.weekly_low_usage_threshold_percent = weekly;
             changed = true;
+        }
+        let mut schedule_ids = std::collections::HashSet::new();
+        for schedule in &mut self.scheduled_activations {
+            changed |= schedule.normalize();
+            if !schedule_ids.insert(schedule.id.clone()) {
+                schedule.id = new_scheduled_activation_id();
+                schedule_ids.insert(schedule.id.clone());
+                changed = true;
+            }
         }
         if self.version < SETTINGS_VERSION {
             self.version = SETTINGS_VERSION;

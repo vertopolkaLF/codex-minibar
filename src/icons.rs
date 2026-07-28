@@ -27,6 +27,8 @@ pub fn geom(name: &str) -> IconGeom {
         "chat-centered-text" => include_str!("../assets/icons/ph-chat-centered-text.svg"),
         "download-simple" => include_str!("../assets/icons/ph-download-simple.svg"),
         "plugs-connected" => include_str!("../assets/icons/ph-plugs-connected.svg"),
+        "clock" => include_str!("../assets/icons/ph-clock.svg"),
+        "scroll" => include_str!("../assets/icons/ph-scroll.svg"),
         "arrows-clockwise" | "popup-refresh" => {
             include_str!("../assets/icons/ph-arrows-clockwise.svg")
         }

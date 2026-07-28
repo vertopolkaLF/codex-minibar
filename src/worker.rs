@@ -14,7 +14,8 @@ use chrono::Utc;
 
 use crate::{
     limits::RateLimits,
-    scheduler::{ActivationState, Decision},
+    scheduler::{self, ActivationState, Decision},
+    settings::ScheduledActivation,
     usage::UsageStatistics,
 };
 
@@ -33,11 +34,12 @@ pub trait Activator: Send + 'static {
     fn activate(&mut self) -> Result<()>;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WorkerCommand {
     Refresh,
     SetLimitRefreshInterval(Duration),
     SetAutomaticActivation(bool),
+    SetScheduledActivations(Vec<ScheduledActivation>),
     SetHistoryRetentionDays(u16),
     Shutdown,
 }
@@ -104,6 +106,7 @@ pub fn start_worker(
     activator: impl Activator,
     state_path: PathBuf,
     automatic_activation: bool,
+    scheduled_activations: Vec<ScheduledActivation>,
     history_retention_days: u16,
     poll_interval: Duration,
 ) -> WorkerHandle {
@@ -115,6 +118,7 @@ pub fn start_worker(
         activator,
         state_path,
         automatic_activation,
+        scheduled_activations,
         history_retention_days,
         poll_interval,
         command_sender,
@@ -135,6 +139,7 @@ pub fn start_worker_with_event_sender(
     activator: impl Activator,
     state_path: PathBuf,
     automatic_activation: bool,
+    scheduled_activations: Vec<ScheduledActivation>,
     history_retention_days: u16,
     poll_interval: Duration,
     event_sender: Sender<WorkerEvent>,
@@ -146,6 +151,7 @@ pub fn start_worker_with_event_sender(
         activator,
         state_path,
         automatic_activation,
+        scheduled_activations,
         history_retention_days,
         poll_interval,
         command_sender,
@@ -162,6 +168,7 @@ fn start_worker_with_channels(
     activator: impl Activator,
     state_path: PathBuf,
     automatic_activation: bool,
+    scheduled_activations: Vec<ScheduledActivation>,
     history_retention_days: u16,
     poll_interval: Duration,
     command_sender: Sender<WorkerCommand>,
@@ -182,6 +189,7 @@ fn start_worker_with_channels(
                 activator,
                 state_path,
                 automatic_activation,
+                scheduled_activations,
                 poll_interval,
                 limit_commands_rx,
                 event_sender,
@@ -220,6 +228,9 @@ fn start_worker_with_channels(
                 }
                 WorkerCommand::SetAutomaticActivation(enabled) => {
                     let _ = limit_commands.send(WorkerCommand::SetAutomaticActivation(enabled));
+                }
+                WorkerCommand::SetScheduledActivations(schedules) => {
+                    let _ = limit_commands.send(WorkerCommand::SetScheduledActivations(schedules));
                 }
                 WorkerCommand::SetHistoryRetentionDays(days) => {
                     let _ = usage_commands.send(WorkerCommand::SetHistoryRetentionDays(days));
@@ -262,6 +273,7 @@ fn run_limit_task(
     mut activator: impl Activator,
     state_path: PathBuf,
     mut automatic_activation: bool,
+    mut scheduled_activations: Vec<ScheduledActivation>,
     mut poll_interval: Duration,
     commands: Receiver<WorkerCommand>,
     events: Sender<WorkerEvent>,
@@ -275,7 +287,7 @@ fn run_limit_task(
         if next_poll <= Instant::now() {
             // Schedule from the end of each request. A manual refresh replaces
             // the previous deadline instead of leaving a stale timer behind.
-            match tick(&mut provider, &mut activator, &mut state, automatic_activation) {
+            match tick(&mut provider, &mut activator, &mut state, automatic_activation, &scheduled_activations) {
                 Ok(worker_events) => {
                     let _ = state.save(&state_path);
                     for event in worker_events {
@@ -300,6 +312,13 @@ fn run_limit_task(
             Ok(WorkerCommand::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
             Ok(WorkerCommand::SetAutomaticActivation(enabled)) => {
                 automatic_activation = enabled;
+            }
+            Ok(WorkerCommand::SetScheduledActivations(schedules)) => {
+                if scheduled_activations == schedules {
+                    continue;
+                }
+                scheduled_activations = schedules;
+                next_poll = Instant::now();
             }
             Ok(WorkerCommand::SetLimitRefreshInterval(interval)) => {
                 poll_interval = interval;
@@ -339,7 +358,8 @@ fn run_usage_task(
             }
             Ok(WorkerCommand::Refresh)
             | Ok(WorkerCommand::SetLimitRefreshInterval(_))
-            | Ok(WorkerCommand::SetAutomaticActivation(_)) => {}
+            | Ok(WorkerCommand::SetAutomaticActivation(_))
+            | Ok(WorkerCommand::SetScheduledActivations(_)) => {}
             Err(RecvTimeoutError::Timeout) => {}
         }
     }
@@ -359,6 +379,7 @@ fn run_usage_task(
             Ok(WorkerCommand::Refresh)
             | Ok(WorkerCommand::SetLimitRefreshInterval(_))
             | Ok(WorkerCommand::SetAutomaticActivation(_))
+            | Ok(WorkerCommand::SetScheduledActivations(_))
             | Err(RecvTimeoutError::Timeout) => {}
         }
     }
@@ -369,11 +390,21 @@ fn tick(
     activator: &mut impl Activator,
     state: &mut ActivationState,
     automatic_activation: bool,
+    scheduled_activations: &[ScheduledActivation],
 ) -> Result<Vec<WorkerEvent>> {
     let mut limits = provider.read_limits()?;
     let mut events = Vec::new();
 
-    if automatic_activation && state.decide(&limits.primary) == Decision::ActivateNow {
+    let now = Utc::now();
+    let scheduled_due = scheduler::due_scheduled_activation(scheduled_activations, state, now);
+    let automatic_due = automatic_activation
+        && !scheduler::scheduled_activation_within(
+            scheduled_activations,
+            now,
+            scheduler::AUTO_ACTIVATION_SCHEDULE_GUARD,
+        )
+        && state.decide(&limits.primary) == Decision::ActivateNow;
+    if scheduled_due.is_some() || automatic_due {
         state.record_attempt(Utc::now());
         events.push(WorkerEvent::ActivationStarted);
         match activator.activate() {
@@ -382,6 +413,9 @@ fn tick(
                     limits = fresh;
                 }
                 state.observe(&limits.primary);
+                if let Some((rule, occurrence)) = scheduled_due {
+                    state.record_scheduled_activation(&rule.id, occurrence);
+                }
                 events.push(WorkerEvent::ActivationSucceeded);
             }
             Err(error) => events.push(WorkerEvent::ActivationFailed(error.to_string())),
@@ -475,14 +509,14 @@ mod tests {
         let mut activator = CountingActivator(0);
         let mut state = ActivationState::default();
 
-        tick(&mut provider, &mut activator, &mut state, true).unwrap();
+        tick(&mut provider, &mut activator, &mut state, true, &[]).unwrap();
         assert_eq!(activator.0, 0);
-        tick(&mut provider, &mut activator, &mut state, true).unwrap();
+        tick(&mut provider, &mut activator, &mut state, true, &[]).unwrap();
         assert_eq!(activator.0, 0);
-        tick(&mut provider, &mut activator, &mut state, true).unwrap();
+        tick(&mut provider, &mut activator, &mut state, true, &[]).unwrap();
         assert_eq!(activator.0, 1);
         assert_eq!(state.last_seen_resets_at, limits_at(20, 1).primary.resets_at);
-        tick(&mut provider, &mut activator, &mut state, true).unwrap();
+        tick(&mut provider, &mut activator, &mut state, true, &[]).unwrap();
         assert_eq!(activator.0, 1);
     }
 
@@ -504,6 +538,7 @@ mod tests {
             &mut FailingActivator,
             &mut state,
             true,
+            &[],
         )
         .unwrap();
         assert!(matches!(

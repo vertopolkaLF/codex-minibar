@@ -309,6 +309,19 @@ impl Default for UiState {
 }
 
 impl UiState {
+    /// Shows an error in the popup and records it once per distinct message.
+    /// Polling can retry many times a second; duplicate popup errors would make
+    /// the diagnostic log unreadable.
+    fn set_popup_error(&mut self, error: impl Into<String>) {
+        let error = error.into();
+        if self.error.as_deref() != Some(error.as_str()) {
+            crate::logger::info(format!("Popup error: {error}"));
+        }
+        self.error = Some(error);
+    }
+}
+
+impl UiState {
     /// Marks the shared rate-limit snapshot as changed so `AsyncSetState` does
     /// not discard an otherwise identical UI state as a no-op.
     fn observe_limits_update(&mut self) {
@@ -2074,13 +2087,16 @@ fn start_background_bridge(
             update_version: update_version_from_phase(&update_phase),
             ..UiState::default()
         };
+        if let Some(error) = ui.error.as_deref() {
+            crate::logger::info(format!("Popup error: {error}"));
+        }
 
         if let Err(error) = tray.sync(
             &widgets,
             &state.current_limits(),
             update_available_from_phase(&update_phase),
         ) {
-            ui.error = Some(error.to_string());
+            ui.set_popup_error(error.to_string());
             set_ui.call(ui.clone());
         }
 
@@ -2147,7 +2163,7 @@ fn start_background_bridge(
             if providers_changed || !restart.is_empty() {
                 let provider_errors = state.sync_provider_workers(&settings, &restart);
                 if !provider_errors.is_empty() {
-                    ui.error = Some(provider_errors.join("\n"));
+                    ui.set_popup_error(provider_errors.join("\n"));
                 }
             }
             // Repaint the existing native icons in place. Recreating them makes
@@ -2157,12 +2173,19 @@ fn start_background_bridge(
                 &state.current_limits(),
                 update_available_from_phase(&phase),
             ) {
-                ui.error = Some(error.to_string());
+                ui.set_popup_error(error.to_string());
             }
-            for (_, commands) in state.worker_commands() {
+            for (provider, commands) in state.worker_commands() {
                 let _ = commands.send(WorkerCommand::SetAutomaticActivation(
                     settings.automatic_activation,
                 ));
+                let schedules = settings
+                    .scheduled_activations
+                    .iter()
+                    .filter(|rule| rule.provider() == Some(provider))
+                    .cloned()
+                    .collect();
+                let _ = commands.send(WorkerCommand::SetScheduledActivations(schedules));
                 let _ = commands.send(WorkerCommand::SetLimitRefreshInterval(Duration::from_secs(
                     settings.limit_refresh_interval.seconds(),
                 )));
@@ -2212,7 +2235,7 @@ fn start_background_bridge(
                 &state.current_limits(),
                 update_available_from_phase(update_phase),
             ) {
-                ui.error = Some(error.to_string());
+                ui.set_popup_error(error.to_string());
             }
             set_ui.call(ui.clone());
         };
@@ -2232,7 +2255,7 @@ fn start_background_bridge(
                 popup::pump_messages();
                 drain_toast_update();
                 if let Err(error) = tray.refresh_system_theme(&widgets, &state.current_limits()) {
-                    ui.error = Some(error.to_string());
+                    ui.set_popup_error(error.to_string());
                     set_ui.call(ui.clone());
                 }
                 drain_settings(
@@ -2265,7 +2288,7 @@ fn start_background_bridge(
             popup::pump_messages();
             drain_toast_update();
             if let Err(error) = tray.refresh_system_theme(&widgets, &state.current_limits()) {
-                ui.error = Some(error.to_string());
+                ui.set_popup_error(error.to_string());
                 set_ui.call(ui.clone());
             }
             drain_settings(
@@ -2318,7 +2341,7 @@ fn start_background_bridge(
                         &limits,
                         update_available_from_phase(&update_phase),
                     ) {
-                        ui.error = Some(error.to_string());
+                        ui.set_popup_error(error.to_string());
                     } else {
                         ui.error = None;
                     }
@@ -2375,7 +2398,7 @@ fn start_background_bridge(
                 }
                 Ok(WorkerEvent::ProviderPollFailed(provider, error)) => {
                     crate::logger::info(format!("{} polling failed: {error}", provider.display_name()));
-                    ui.error = Some(format!("{}: {error}", provider.display_name()));
+                    ui.set_popup_error(format!("{}: {error}", provider.display_name()));
                     ui.refreshing = false;
                     set_ui.call(ui.clone());
                 }

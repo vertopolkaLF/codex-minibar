@@ -61,6 +61,7 @@ pub fn start_provider_worker(
                 CodexActivator::new(executable),
                 activation_path,
                 settings.automatic_activation,
+                schedules_for(provider, settings),
                 settings.history_retention_days,
                 Duration::from_secs(settings.limit_refresh_interval.seconds()),
             )
@@ -75,6 +76,7 @@ pub fn start_provider_worker(
                 ClaudeActivator::new(Some(executable)),
                 activation_path,
                 settings.automatic_activation,
+                schedules_for(provider, settings),
                 settings.history_retention_days,
                 Duration::from_secs(settings.limit_refresh_interval.seconds()),
             )
@@ -89,6 +91,7 @@ pub fn start_provider_worker(
                 CursorActivator,
                 activation_path,
                 false,
+                Vec::new(),
                 settings.history_retention_days,
                 Duration::from_secs(settings.limit_refresh_interval.seconds()),
             )
@@ -132,6 +135,15 @@ pub fn start_provider_worker(
         }
     });
     Ok(worker)
+}
+
+fn schedules_for(provider: ProviderKind, settings: &Settings) -> Vec<crate::settings::ScheduledActivation> {
+    settings
+        .scheduled_activations
+        .iter()
+        .filter(|rule| rule.provider() == Some(provider))
+        .cloned()
+        .collect()
 }
 
 fn provider_activation_path(provider: ProviderKind, base_path: PathBuf) -> PathBuf {

@@ -1,10 +1,14 @@
 use std::{fs, path::Path};
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Duration, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, Local, TimeZone, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::limits::LimitWindow;
+use crate::settings::ScheduledActivation;
+
+/// Auto activation must leave the upcoming planned window untouched.
+pub const AUTO_ACTIVATION_SCHEDULE_GUARD: Duration = Duration::hours(6);
 
 /// A real 5-hour window advance moves the deadline by hours. Smaller changes
 /// are API timestamp jitter, including a value rounding across a minute.
@@ -26,6 +30,51 @@ pub struct ActivationState {
     /// active 5h window after one attempt.
     #[serde(default)]
     pub attempted_without_active_window: bool,
+    /// The exact weekly occurrence already fired for each schedule rule.
+    #[serde(default)]
+    pub fired_scheduled_occurrences: std::collections::HashMap<String, DateTime<Utc>>,
+}
+
+/// Returns the next local-time occurrence of a weekly rule after `now`.
+pub fn next_scheduled_activation(rule: &ScheduledActivation, now: DateTime<Utc>) -> DateTime<Utc> {
+    let local_now = now.with_timezone(&Local);
+    let today = local_now.date_naive();
+    let days = (u32::from(rule.weekday) + 7 - today.weekday().num_days_from_monday()) % 7;
+    let date = today + Duration::days(i64::from(days));
+    let hour = u32::from(rule.time_minutes / 60);
+    let minute = u32::from(rule.time_minutes % 60);
+    let candidate = Local
+        .with_ymd_and_hms(date.year(), date.month(), date.day(), hour, minute, 0)
+        .single()
+        .or_else(|| Local.with_ymd_and_hms(date.year(), date.month(), date.day(), hour, minute, 0).earliest())
+        .unwrap_or(local_now)
+        .with_timezone(&Utc);
+    if candidate > now { candidate } else { candidate + Duration::days(7) }
+}
+
+/// Finds a rule due since the last poll. A six-hour grace period fires a
+/// planned activation after wake/resume without replaying stale calendar work.
+pub fn due_scheduled_activation<'a>(
+    rules: &'a [ScheduledActivation],
+    state: &ActivationState,
+    now: DateTime<Utc>,
+) -> Option<(&'a ScheduledActivation, DateTime<Utc>)> {
+    rules.iter().filter(|rule| rule.enabled).filter_map(|rule| {
+        let occurrence = next_scheduled_activation(rule, now) - Duration::days(7);
+        (now - occurrence <= AUTO_ACTIVATION_SCHEDULE_GUARD
+            && state.fired_scheduled_occurrences.get(&rule.id) != Some(&occurrence))
+            .then_some((rule, occurrence))
+    }).min_by_key(|(_, occurrence)| *occurrence)
+}
+
+pub fn scheduled_activation_within(rules: &[ScheduledActivation], now: DateTime<Utc>, within: Duration) -> bool {
+    rules.iter().filter(|rule| rule.enabled).any(|rule| next_scheduled_activation(rule, now) - now <= within)
+}
+
+impl ActivationState {
+    pub fn record_scheduled_activation(&mut self, rule_id: &str, occurrence: DateTime<Utc>) {
+        self.fired_scheduled_occurrences.insert(rule_id.into(), occurrence);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -199,5 +248,38 @@ mod tests {
         state.record_attempt(at(10, 0));
         state.save(&path).unwrap();
         assert_eq!(ActivationState::load_or_default(&path).unwrap(), state);
+    }
+
+    fn schedule_at_local(when: DateTime<Local>) -> ScheduledActivation {
+        ScheduledActivation {
+            id: "test-rule".into(),
+            provider_id: "codex".into(),
+            weekday: when.weekday().num_days_from_monday() as u8,
+            time_minutes: (when.hour() * 60 + when.minute()) as u16,
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn scheduled_occurrence_is_due_once_after_its_local_time() {
+        let now = Utc::now();
+        let rule = schedule_at_local((now - Duration::minutes(1)).with_timezone(&Local));
+        let mut state = ActivationState::default();
+        let rules = [rule.clone()];
+        let (due_rule, occurrence) = due_scheduled_activation(&rules, &state, now).unwrap();
+        assert_eq!(due_rule.id, rule.id);
+        state.record_scheduled_activation(&rule.id, occurrence);
+        assert!(due_scheduled_activation(&[rule], &state, now).is_none());
+    }
+
+    #[test]
+    fn upcoming_schedule_blocks_automatic_activation_for_six_hours() {
+        let now = Utc::now();
+        let rule = schedule_at_local((now + Duration::hours(2)).with_timezone(&Local));
+        assert!(scheduled_activation_within(
+            &[rule],
+            now,
+            AUTO_ACTIVATION_SCHEDULE_GUARD
+        ));
     }
 }

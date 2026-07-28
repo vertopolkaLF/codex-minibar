@@ -8,7 +8,7 @@ use crate::notifications;
 use crate::settings::TraySource;
 use crate::settings::{
     AccentColor, AppTheme, LimitRefreshInterval, LimitValue, PopupWidgetKind, ProviderKind,
-    Settings, TotalSpendPresentation, TrayColorMode, TrayFixedColor, TrayIndicator,
+    ScheduledActivation, Settings, TotalSpendPresentation, TrayColorMode, TrayFixedColor, TrayIndicator,
     TrayPresentation, TrayWidget, TrayWidgetKind,
 };
 use crate::settings_controls::{
@@ -103,6 +103,7 @@ struct SettingsWindowState {
     use_colored_provider_icons: SetState<bool>,
     replace_chatgpt_logo_with_codex: SetState<bool>,
     automatic_activation: SetState<bool>,
+    scheduled_activations: SetState<Vec<ScheduledActivation>>,
     limit_refresh_interval: SetState<LimitRefreshInterval>,
     start_at_login: SetState<bool>,
     show_used_percentage: SetState<bool>,
@@ -151,6 +152,8 @@ impl SettingsWindowState {
             .call(settings.replace_chatgpt_logo_with_codex);
         self.automatic_activation
             .call(settings.automatic_activation);
+        self.scheduled_activations
+            .call(settings.scheduled_activations.clone());
         self.limit_refresh_interval
             .call(settings.limit_refresh_interval);
         self.start_at_login.call(settings.start_at_login);
@@ -991,6 +994,7 @@ enum Tab {
     General,
     Appearance,
     Providers,
+    Schedule,
     Tray,
     Notifications,
     Advanced,
@@ -1004,6 +1008,7 @@ impl Tab {
             Self::General => "general",
             Self::Appearance => "appearance",
             Self::Providers => "providers",
+            Self::Schedule => "schedule",
             Self::Tray => "tray",
             Self::Notifications => "notifications",
             Self::Advanced => "advanced",
@@ -1017,6 +1022,7 @@ impl Tab {
             "appearance" => Self::Appearance,
             "tray" => Self::Tray,
             "providers" => Self::Providers,
+            "schedule" => Self::Schedule,
             "notifications" => Self::Notifications,
             "advanced" => Self::Advanced,
             "log" => Self::Log,
@@ -1079,6 +1085,9 @@ pub fn render(
             NavViewItem::new("Providers")
                 .tag("providers")
                 .icon_path(crate::icons::data("plugs-connected"), nav_icon_color),
+            NavViewItem::new("Schedule")
+                .tag("schedule")
+                .icon_path(crate::icons::data("clock"), nav_icon_color),
             NavViewItem::new("Tray")
                 .tag("tray")
                 .icon_path(crate::icons::data("chat-centered-text"), nav_icon_color),
@@ -1093,7 +1102,7 @@ pub fn render(
                 .icon_path(crate::icons::data("sliders"), nav_icon_color),
             NavViewItem::new("Log")
                 .tag("log")
-                .icon_path(crate::icons::data("chat-centered-text"), nav_icon_color),
+                .icon_path(crate::icons::data("scroll"), nav_icon_color),
             NavViewItem::new("About & Updates")
                 .tag("about")
                 .icon_path(crate::icons::data("info"), nav_icon_color),
@@ -1228,6 +1237,8 @@ pub fn render(
     let (start_at_login, set_start_at_login) = cx.use_state(settings.start_at_login);
     let (automatic_activation, set_automatic_activation) =
         cx.use_state(settings.automatic_activation);
+    let (scheduled_activations, set_scheduled_activations) =
+        cx.use_state(settings.scheduled_activations.clone());
     let (limit_refresh_interval, set_limit_refresh_interval) =
         cx.use_state(settings.limit_refresh_interval);
     let (show_used_percentage, set_show_used_percentage) =
@@ -1284,6 +1295,7 @@ pub fn render(
             use_colored_provider_icons: set_use_colored_provider_icons.clone(),
             replace_chatgpt_logo_with_codex: set_replace_chatgpt_logo_with_codex.clone(),
             automatic_activation: set_automatic_activation.clone(),
+            scheduled_activations: set_scheduled_activations.clone(),
             limit_refresh_interval: set_limit_refresh_interval.clone(),
             start_at_login: set_start_at_login.clone(),
             show_used_percentage: set_show_used_percentage.clone(),
@@ -1333,6 +1345,7 @@ pub fn render(
             use_colored_provider_icons,
             replace_chatgpt_logo_with_codex,
             automatic_activation,
+            &scheduled_activations,
             limit_refresh_interval,
             start_at_login,
             show_used_percentage,
@@ -1381,6 +1394,7 @@ pub fn render(
             set_use_colored_provider_icons,
             set_replace_chatgpt_logo_with_codex,
             set_automatic_activation,
+            set_scheduled_activations.clone(),
             set_limit_refresh_interval,
             set_start_at_login,
             set_show_used_percentage,
@@ -1611,6 +1625,7 @@ fn tab_content(
     use_colored_provider_icons: bool,
     replace_chatgpt_logo_with_codex: bool,
     automatic_activation: bool,
+    scheduled_activations: &[ScheduledActivation],
     limit_refresh_interval: LimitRefreshInterval,
     start_at_login: bool,
     show_used_percentage: bool,
@@ -1659,6 +1674,7 @@ fn tab_content(
     set_use_colored_provider_icons: SetState<bool>,
     set_replace_chatgpt_logo_with_codex: SetState<bool>,
     set_automatic_activation: SetState<bool>,
+    set_scheduled_activations: SetState<Vec<ScheduledActivation>>,
     set_limit_refresh_interval: SetState<LimitRefreshInterval>,
     set_start_at_login: SetState<bool>,
     set_show_used_percentage: SetState<bool>,
@@ -2272,6 +2288,15 @@ fn tab_content(
             }
             ("Providers", rows)
         }
+        Tab::Schedule => (
+            "Schedule",
+            scheduled_activation_cards(
+                scheduled_activations,
+                &[codex_enabled, claude_enabled, cursor_enabled],
+                set_scheduled_activations.clone(),
+                settings_tx.clone(),
+            ),
+        ),
         Tab::Tray => {
             let providers: Vec<ProviderKind> = popup_order
                 .iter()
@@ -2457,6 +2482,7 @@ fn tab_content(
                 use_colored_provider_icons: set_use_colored_provider_icons,
                 replace_chatgpt_logo_with_codex: set_replace_chatgpt_logo_with_codex,
                 automatic_activation: set_automatic_activation,
+                scheduled_activations: set_scheduled_activations.clone(),
                 limit_refresh_interval: set_limit_refresh_interval,
                 start_at_login: set_start_at_login,
                 show_used_percentage: set_show_used_percentage,
@@ -2591,6 +2617,42 @@ fn tab_content(
 
     let heading: Element = if tab == Tab::About {
         Element::Empty
+    } else if tab == Tab::Schedule {
+        let provider = if codex_enabled {
+            Some(ProviderKind::Codex)
+        } else if claude_enabled {
+            Some(ProviderKind::Claude)
+        } else {
+            None
+        };
+        if let Some(provider) = provider {
+            let existing = scheduled_activations.to_vec();
+            let setter = set_scheduled_activations.clone();
+            let tx = settings_tx.clone();
+            grid((
+                text_block(title)
+                    .font_size(28.0)
+                    .bold()
+                    .grid_column(0)
+                    .vertical_alignment(VerticalAlignment::Center),
+                Button::new("Add activation")
+                    .accent()
+                    .on_click(move || {
+                        let mut next = existing.clone();
+                        next.push(ScheduledActivation::new(provider));
+                        persist_schedules(setter.clone(), tx.clone(), next);
+                    })
+                    .grid_column(1)
+                    .vertical_alignment(VerticalAlignment::Center),
+            ))
+            .columns([GridLength::Star(1.0), GridLength::Auto])
+            .rows([GridLength::Auto])
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .grid_row(0)
+            .into()
+        } else {
+            text_block(title).font_size(28.0).bold().grid_row(0).into()
+        }
     } else {
         text_block(title).font_size(28.0).bold().grid_row(0).into()
     };
@@ -2602,6 +2664,260 @@ fn tab_content(
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .vertical_alignment(VerticalAlignment::Top)
         .into()
+}
+
+fn scheduled_activation_cards(
+    schedules: &[ScheduledActivation],
+    provider_enabled: &[bool; 3],
+    set_schedules: SetState<Vec<ScheduledActivation>>,
+    settings_tx: Sender<Settings>,
+) -> Vec<Element> {
+    // A schedule can only target a currently enabled provider. Keeping the
+    // available choices in the card also avoids separate, provider-specific
+    // add buttons that made the narrow settings content overflow.
+    let available_providers: Vec<ProviderKind> = [ProviderKind::Codex, ProviderKind::Claude]
+        .into_iter()
+        .filter(|provider| match provider {
+            ProviderKind::Codex => provider_enabled[0],
+            ProviderKind::Claude => provider_enabled[1],
+            ProviderKind::Cursor => false,
+        })
+        .collect();
+    let provider_labels: Vec<String> = available_providers
+        .iter()
+        .map(|provider| provider.display_name().to_string())
+        .collect();
+    const WEEKDAYS: [&str; 7] = [
+        "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+    ];
+    let mut rows: Vec<Element> = vec![
+        text_block("Start a provider's 5-hour limit window at a chosen local time. Automatic activation is paused for the six hours before each scheduled run.")
+            .foreground(ThemeRef::SecondaryText)
+            .wrap()
+            .margin(Thickness {
+                left: 0.0,
+                top: 0.0,
+                right: 0.0,
+                bottom: 8.0,
+            })
+            .with_key("schedule-description")
+            .into(),
+    ];
+    let time_labels: Vec<String> = (0..48)
+        .map(|slot| format!("{:02}:{:02}", slot / 2, (slot % 2) * 30))
+        .collect();
+
+    for (index, schedule) in schedules.iter().enumerate() {
+        let schedule_id = schedule.id.clone();
+        let schedule_id_for_enabled = schedule_id.clone();
+        let schedules_for_enabled = schedules.to_vec();
+        let enabled_setter = set_schedules.clone();
+        let enabled_tx = settings_tx.clone();
+        let schedules_for_provider = schedules.to_vec();
+        let provider_setter = set_schedules.clone();
+        let provider_tx = settings_tx.clone();
+        let schedules_for_day = schedules.to_vec();
+        let day_setter = set_schedules.clone();
+        let day_tx = settings_tx.clone();
+        let schedules_for_time = schedules.to_vec();
+        let time_setter = set_schedules.clone();
+        let time_tx = settings_tx.clone();
+        let schedules_for_remove = schedules.to_vec();
+        let remove_setter = set_schedules.clone();
+        let remove_tx = settings_tx.clone();
+        let selected_provider = schedule
+            .provider()
+            .and_then(|provider| available_providers.iter().position(|candidate| *candidate == provider))
+            .unwrap_or(0) as i32;
+        let provider_choices = available_providers.clone();
+        // Match the proven settings-card header layout: RelativePanel pins the
+        // switch to the card edge, and the explicit 50px width removes WinUI's
+        // invisible content slot from the switch template.
+        let header_children: Vec<Element> = vec![
+            text_block("Activate limit")
+                .font_size(14.0)
+                .margin(Thickness {
+                    left: 16.0,
+                    top: 14.0,
+                    right: 82.0,
+                    bottom: 14.0,
+                })
+                .relative_align_left()
+                .relative_align_v_center()
+                .into(),
+            ToggleSwitch::new(schedule.enabled)
+                .on_content("")
+                .off_content("")
+                .on_toggled(move |enabled| {
+                    let mut next = schedules_for_enabled.clone();
+                    if let Some(rule) = next.iter_mut().find(|rule| rule.id == schedule_id_for_enabled) {
+                        if rule.enabled == enabled {
+                            return;
+                        }
+                        rule.enabled = enabled;
+                    } else {
+                        return;
+                    }
+                    persist_schedules(enabled_setter.clone(), enabled_tx.clone(), next);
+                })
+                .min_width(0.0)
+                .max_width(50.0)
+                .width(50.0)
+                .margin(Thickness {
+                    left: 0.0,
+                    top: 0.0,
+                    // Compensate for the WinUI ToggleSwitch template's trailing
+                    // slot so the visible track, not merely its layout box,
+                    // shares the delete button's right edge.
+                    right: 7.0,
+                    bottom: 0.0,
+                })
+                .relative_align_right()
+                .relative_align_v_center()
+                .into(),
+        ];
+        let header = relative_panel(header_children)
+        .min_height(60.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .background(Color::transparent());
+        let action_row = grid((
+            ComboBox::new(provider_labels.clone())
+                .selected_index(selected_provider)
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .on_selection_changed(move |value: i32| {
+                    let Some(provider) = provider_choices.get(value.max(0) as usize).copied() else {
+                        return;
+                    };
+                    let mut next = schedules_for_provider.clone();
+                    if let Some(rule) = next.get_mut(index) {
+                        if rule.provider_id == provider.id() {
+                            return;
+                        }
+                        rule.provider_id = provider.id().into();
+                    } else {
+                        return;
+                    }
+                    persist_schedules(provider_setter.clone(), provider_tx.clone(), next);
+                })
+                .grid_column(0),
+            ComboBox::new(WEEKDAYS)
+                .selected_index(i32::from(schedule.weekday.min(6)))
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .on_selection_changed(move |value: i32| {
+                    let mut next = schedules_for_day.clone();
+                    if let Some(rule) = next.get_mut(index) {
+                        let weekday = value.clamp(0, 6) as u8;
+                        if rule.weekday == weekday {
+                            return;
+                        }
+                        rule.weekday = weekday;
+                    } else {
+                        return;
+                    }
+                    persist_schedules(day_setter.clone(), day_tx.clone(), next);
+                })
+                .grid_column(1),
+            ComboBox::new(time_labels.clone())
+                .selected_index(i32::from((schedule.time_minutes / 30).min(47)))
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .on_selection_changed(move |value: i32| {
+                    let mut next = schedules_for_time.clone();
+                    if let Some(rule) = next.get_mut(index) {
+                        let time_minutes = value.clamp(0, 47) as u16 * 30;
+                        if rule.time_minutes == time_minutes {
+                            return;
+                        }
+                        rule.time_minutes = time_minutes;
+                    } else {
+                        return;
+                    }
+                    persist_schedules(time_setter.clone(), time_tx.clone(), next);
+                })
+                .grid_column(2),
+            Button::new("\u{E74D}")
+                .font_family("Segoe Fluent Icons")
+                .font_size(14.0)
+                .width(32.0)
+                .height(32.0)
+                .min_width(32.0)
+                .min_height(32.0)
+                .padding(Thickness::uniform(0.0))
+                .tooltip("Remove activation")
+                .on_click(move || {
+                    let next = schedules_for_remove
+                        .iter()
+                        .filter(|rule| rule.id != schedule_id)
+                        .cloned()
+                        .collect();
+                    persist_schedules(remove_setter.clone(), remove_tx.clone(), next);
+                })
+                .grid_column(3),
+        ))
+        .columns([
+            GridLength::Star(1.0),
+            GridLength::Star(1.0),
+            GridLength::Star(1.0),
+            GridLength::Auto,
+        ])
+        .rows([GridLength::Auto])
+        .column_spacing(8.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch);
+        let body = border(action_row)
+            .padding(Thickness {
+                left: 16.0,
+                top: 0.0,
+                right: 16.0,
+                bottom: 14.0,
+            })
+            .horizontal_alignment(HorizontalAlignment::Stretch);
+        let card_content: Element = vstack((header, body))
+            .spacing(0.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .relative_align_left()
+            .relative_align_right()
+            .relative_align_top()
+            .into();
+        let shell_children: Vec<Element> = vec![
+                border(Element::Empty)
+                    .background(ThemeRef::CardBackground)
+                    .corner_radius(8.0)
+                    .border_thickness(Thickness::uniform(1.0))
+                    .border_brush(ThemeRef::CardStroke)
+                    .relative_align_left()
+                    .relative_align_right()
+                    .relative_align_top()
+                    .relative_align_bottom()
+                    .into(),
+                card_content,
+            ];
+        rows.push(
+            relative_panel(shell_children)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .with_translation_transition(duration(CONTROL_NORMAL_ANIMATION))
+            .with_opacity_transition(duration(CONTROL_NORMAL_ANIMATION))
+            .with_key(format!("schedule-rule-{}", schedule.id))
+            .into(),
+        );
+    }
+
+    if available_providers.is_empty() {
+        rows.push(
+            text_block("Enable a provider in Providers to add a limit activation schedule.")
+                .foreground(ThemeRef::SecondaryText)
+                .wrap()
+                .into(),
+        );
+    }
+    rows
+}
+
+fn persist_schedules(
+    setter: SetState<Vec<ScheduledActivation>>,
+    settings_tx: Sender<Settings>,
+    schedules: Vec<ScheduledActivation>,
+) {
+    setter.call(schedules.clone());
+    persist_update(settings_tx, move |settings| settings.scheduled_activations = schedules);
 }
 
 fn log_view_card(log_content: &str) -> Element {
