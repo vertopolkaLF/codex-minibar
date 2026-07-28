@@ -351,9 +351,13 @@ fn run_usage_task(
         match commands.recv_timeout(Duration::from_millis(100)) {
             Ok(WorkerCommand::Shutdown) | Err(RecvTimeoutError::Disconnected) => return,
             Ok(WorkerCommand::SetHistoryRetentionDays(days)) => {
-                history_retention_days = days.clamp(1, 365);
-                if let Ok(usage) = provider.load_cached_usage_statistics(history_retention_days) {
-                    let _ = events.send(WorkerEvent::UsageUpdated(usage));
+                let days = days.clamp(1, 365);
+                if days != history_retention_days {
+                    history_retention_days = days;
+                    if let Ok(usage) = provider.load_cached_usage_statistics(history_retention_days)
+                    {
+                        let _ = events.send(WorkerEvent::UsageUpdated(usage));
+                    }
                 }
             }
             Ok(WorkerCommand::Refresh)
@@ -364,23 +368,38 @@ fn run_usage_task(
         }
     }
 
+    // Preserve this deadline while processing commands that belong to the
+    // limit task. Otherwise every settings update wakes this task and turns a
+    // ten-minute maintenance scan into a tight loop.
+    let mut next_refresh = Instant::now();
     loop {
-        if let Ok(usage) = provider.refresh_usage_statistics(history_retention_days) {
-            let _ = events.send(WorkerEvent::UsageUpdated(usage));
+        if next_refresh <= Instant::now() {
+            if let Ok(usage) = provider.refresh_usage_statistics(history_retention_days) {
+                let _ = events.send(WorkerEvent::UsageUpdated(usage));
+            }
+            next_refresh = Instant::now() + USAGE_STATS_INTERVAL;
+            continue;
         }
-        match commands.recv_timeout(USAGE_STATS_INTERVAL) {
+
+        match commands.recv_timeout(next_refresh.saturating_duration_since(Instant::now())) {
             Ok(WorkerCommand::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
             Ok(WorkerCommand::SetHistoryRetentionDays(days)) => {
-                history_retention_days = days.clamp(1, 365);
-                if let Ok(usage) = provider.load_cached_usage_statistics(history_retention_days) {
-                    let _ = events.send(WorkerEvent::UsageUpdated(usage));
+                let days = days.clamp(1, 365);
+                if days != history_retention_days {
+                    history_retention_days = days;
+                    if let Ok(usage) = provider.load_cached_usage_statistics(history_retention_days)
+                    {
+                        let _ = events.send(WorkerEvent::UsageUpdated(usage));
+                    }
+                    next_refresh = Instant::now();
                 }
             }
-            Ok(WorkerCommand::Refresh)
-            | Ok(WorkerCommand::SetLimitRefreshInterval(_))
+            Ok(WorkerCommand::Refresh) | Err(RecvTimeoutError::Timeout) => {
+                next_refresh = Instant::now();
+            }
+            Ok(WorkerCommand::SetLimitRefreshInterval(_))
             | Ok(WorkerCommand::SetAutomaticActivation(_))
-            | Ok(WorkerCommand::SetScheduledActivations(_))
-            | Err(RecvTimeoutError::Timeout) => {}
+            | Ok(WorkerCommand::SetScheduledActivations(_)) => {}
         }
     }
 }
@@ -582,6 +601,86 @@ mod tests {
     }
 
     #[test]
+    fn unrelated_commands_do_not_restart_usage_scan_or_republish_cache() {
+        let (commands_tx, commands_rx) = mpsc::channel();
+        let (events_tx, events_rx) = mpsc::channel();
+        let limits_ready = Arc::new(AtomicBool::new(true));
+        let refreshes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider = CountingUsageProvider {
+            refreshes: Arc::clone(&refreshes),
+        };
+        let task = thread::spawn(move || {
+            run_usage_task(provider, 30, commands_rx, events_tx, limits_ready);
+        });
+
+        assert!(matches!(
+            events_rx.recv_timeout(Duration::from_secs(1)),
+            Ok(WorkerEvent::UsageUpdated(_))
+        ));
+        assert!(matches!(
+            events_rx.recv_timeout(Duration::from_secs(1)),
+            Ok(WorkerEvent::UsageUpdated(_))
+        ));
+        assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+
+        commands_tx
+            .send(WorkerCommand::SetAutomaticActivation(true))
+            .unwrap();
+        commands_tx
+            .send(WorkerCommand::SetScheduledActivations(Vec::new()))
+            .unwrap();
+        commands_tx
+            .send(WorkerCommand::SetLimitRefreshInterval(Duration::from_secs(
+                60,
+            )))
+            .unwrap();
+        commands_tx
+            .send(WorkerCommand::SetHistoryRetentionDays(30))
+            .unwrap();
+
+        assert!(matches!(
+            events_rx.recv_timeout(Duration::from_millis(200)),
+            Err(RecvTimeoutError::Timeout)
+        ));
+        assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+
+        commands_tx.send(WorkerCommand::Shutdown).unwrap();
+        task.join().unwrap();
+    }
+
+    #[test]
+    fn changed_history_range_reloads_cache_and_scans_once() {
+        let (commands_tx, commands_rx) = mpsc::channel();
+        let (events_tx, events_rx) = mpsc::channel();
+        let limits_ready = Arc::new(AtomicBool::new(true));
+        let refreshes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider = CountingUsageProvider {
+            refreshes: Arc::clone(&refreshes),
+        };
+        let task = thread::spawn(move || {
+            run_usage_task(provider, 30, commands_rx, events_tx, limits_ready);
+        });
+
+        assert!(events_rx.recv_timeout(Duration::from_secs(1)).is_ok());
+        assert!(events_rx.recv_timeout(Duration::from_secs(1)).is_ok());
+        assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+
+        commands_tx
+            .send(WorkerCommand::SetHistoryRetentionDays(90))
+            .unwrap();
+        assert!(events_rx.recv_timeout(Duration::from_secs(1)).is_ok());
+        assert!(events_rx.recv_timeout(Duration::from_secs(1)).is_ok());
+        assert_eq!(refreshes.load(Ordering::SeqCst), 2);
+        assert!(matches!(
+            events_rx.recv_timeout(Duration::from_millis(200)),
+            Err(RecvTimeoutError::Timeout)
+        ));
+
+        commands_tx.send(WorkerCommand::Shutdown).unwrap();
+        task.join().unwrap();
+    }
+
+    #[test]
     fn cached_usage_is_published_before_first_limits_update() {
         let (commands_tx, commands_rx) = mpsc::channel();
         let (events_tx, events_rx) = mpsc::channel();
@@ -600,6 +699,18 @@ mod tests {
         assert!(matches!(
             events_rx.recv_timeout(Duration::from_secs(1)),
             Ok(WorkerEvent::UsageUpdated(_))
+        ));
+        assert_eq!(refreshes.load(Ordering::SeqCst), 0);
+
+        commands_tx
+            .send(WorkerCommand::SetHistoryRetentionDays(30))
+            .unwrap();
+        commands_tx
+            .send(WorkerCommand::SetAutomaticActivation(true))
+            .unwrap();
+        assert!(matches!(
+            events_rx.recv_timeout(Duration::from_millis(200)),
+            Err(RecvTimeoutError::Timeout)
         ));
         assert_eq!(refreshes.load(Ordering::SeqCst), 0);
 

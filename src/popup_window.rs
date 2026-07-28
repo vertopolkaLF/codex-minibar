@@ -51,6 +51,14 @@ fn format_last_activation(limits: &RateLimits, fallback_attempt: Option<DateTime
         .unwrap_or_else(|| "Never".into())
 }
 
+fn refresh_all_workers(commands: &[(ProviderKind, Sender<WorkerCommand>)]) -> bool {
+    let mut requested = false;
+    for (_, commands) in commands {
+        requested |= commands.send(WorkerCommand::Refresh).is_ok();
+    }
+    requested
+}
+
 /// Shared startup state handed from `main` into the reactor render tree.
 pub struct AppState {
     pub settings: Settings,
@@ -1155,10 +1163,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         let set_ui = set_ui.clone();
         let ui = ui.clone();
         move || {
-            if commands
-                .iter()
-                .any(|(_, commands)| commands.send(WorkerCommand::Refresh).is_ok())
-            {
+            if refresh_all_workers(&commands) {
                 let mut ui = ui.clone();
                 ui.refreshing = true;
                 set_ui.call(ui);
@@ -3827,6 +3832,23 @@ mod tests {
             "Waiting for first update..."
         );
         assert_eq!(format_reset_in(None), "Unavailable");
+    }
+
+    #[test]
+    fn popup_refresh_is_sent_to_every_provider_worker() {
+        let (codex_tx, codex_rx) = std::sync::mpsc::channel();
+        let (claude_tx, claude_rx) = std::sync::mpsc::channel();
+        let (cursor_tx, cursor_rx) = std::sync::mpsc::channel();
+        let commands = vec![
+            (ProviderKind::Codex, codex_tx),
+            (ProviderKind::Claude, claude_tx),
+            (ProviderKind::Cursor, cursor_tx),
+        ];
+
+        assert!(refresh_all_workers(&commands));
+        assert_eq!(codex_rx.try_recv(), Ok(WorkerCommand::Refresh));
+        assert_eq!(claude_rx.try_recv(), Ok(WorkerCommand::Refresh));
+        assert_eq!(cursor_rx.try_recv(), Ok(WorkerCommand::Refresh));
     }
 
     #[test]
