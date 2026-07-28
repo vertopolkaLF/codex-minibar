@@ -2298,6 +2298,12 @@ fn start_background_bridge(
                     {
                         continue;
                     }
+                    crate::logger::info(format!(
+                        "{} limits received: session used={:?}%, reset={:?}",
+                        provider.display_name(),
+                        limits.primary.used_percent,
+                        limits.primary.resets_at
+                    ));
                     // Publish once, then let both native tray and WinUI render
                     // from that exact snapshot.
                     state.replace_limits(provider, limits);
@@ -2331,21 +2337,35 @@ fn start_background_bridge(
                     {
                         continue;
                     }
+                    crate::logger::info(format!(
+                        "{} usage received: today={} tokens, history={} tokens",
+                        provider.display_name(),
+                        usage.today.total_tokens(),
+                        usage.history.total_tokens()
+                    ));
                     state.replace_usage(provider, usage);
                     // Usage stats affect only the popup, but they share the
                     // reactive snapshot revision with quota updates.
                     ui.observe_limits_update();
                     set_ui.call(ui.clone());
                 }
+                Ok(WorkerEvent::ProviderActivationStarted(provider)) => {
+                    crate::logger::info(format!("{} activation started", provider.display_name()));
+                }
                 Ok(WorkerEvent::ProviderActivationSucceeded(provider)) => {
+                    crate::logger::info(format!("{} activation succeeded", provider.display_name()));
                     ui.last_activation = format!(
                         "{} succeeded at {}",
                         provider.display_name(),
                         format_activation_at(Utc::now())
                     );
+                    if notification_settings.activation_success {
+                        notifications::show_activation_succeeded(provider);
+                    }
                     set_ui.call(ui.clone());
                 }
                 Ok(WorkerEvent::ProviderActivationFailed(provider, error)) => {
+                    crate::logger::info(format!("{} activation failed: {error}", provider.display_name()));
                     ui.last_activation = format!(
                         "{} failed at {}: {error}",
                         provider.display_name(),
@@ -2354,6 +2374,7 @@ fn start_background_bridge(
                     set_ui.call(ui.clone());
                 }
                 Ok(WorkerEvent::ProviderPollFailed(provider, error)) => {
+                    crate::logger::info(format!("{} polling failed: {error}", provider.display_name()));
                     ui.error = Some(format!("{}: {error}", provider.display_name()));
                     ui.refreshing = false;
                     set_ui.call(ui.clone());
@@ -2362,6 +2383,7 @@ fn start_background_bridge(
                 Ok(
                     WorkerEvent::LimitsUpdated(_)
                     | WorkerEvent::UsageUpdated(_)
+                    | WorkerEvent::ActivationStarted
                     | WorkerEvent::ActivationSucceeded
                     | WorkerEvent::ActivationFailed(_)
                     | WorkerEvent::PollFailed(_),
@@ -2851,7 +2873,7 @@ fn limit_card(
             .flatten();
         (label, f64::from(percentage.unwrap_or(0)), true, pace)
     };
-    let reset = format_reset_in(window.resets_at);
+    let reset = window.resets_at.map(|at| format_reset_in(Some(at)));
 
     let header: Element = if let Some(pace) = pace {
         grid((
@@ -2878,6 +2900,24 @@ fn limit_card(
             .into()
     };
 
+    let reset_status: Element = match reset {
+        Some(reset) => hstack((
+            text_block("Resets in")
+                .foreground(ThemeRef::TertiaryText)
+                .vertical_alignment(VerticalAlignment::Center),
+            text_block(reset).vertical_alignment(VerticalAlignment::Center),
+        ))
+        .spacing(6.0)
+        .horizontal_alignment(HorizontalAlignment::Right)
+        .vertical_alignment(VerticalAlignment::Center)
+        .into(),
+        None => text_block("Session is not activated")
+            .foreground(Color::rgb(255, 255, 255))
+            .horizontal_alignment(HorizontalAlignment::Right)
+            .vertical_alignment(VerticalAlignment::Center)
+            .into(),
+    };
+
     let footer: Element = if show_reset {
         grid((
             hstack((text_block(remaining_label)
@@ -2885,15 +2925,7 @@ fn limit_card(
                 .foreground(accent.clone())
                 .vertical_alignment(VerticalAlignment::Center),))
             .vertical_alignment(VerticalAlignment::Center),
-            hstack((
-                text_block("Resets in")
-                    .foreground(ThemeRef::TertiaryText)
-                    .vertical_alignment(VerticalAlignment::Center),
-                text_block(reset).vertical_alignment(VerticalAlignment::Center),
-            ))
-            .spacing(6.0)
-            .horizontal_alignment(HorizontalAlignment::Right)
-            .vertical_alignment(VerticalAlignment::Center),
+            reset_status.grid_column(1),
         ))
         .columns([GridLength::Star(1.0), GridLength::Auto])
         .rows([GridLength::Auto])

@@ -46,6 +46,7 @@ pub enum WorkerCommand {
 pub enum WorkerEvent {
     LimitsUpdated(RateLimits),
     UsageUpdated(UsageStatistics),
+    ActivationStarted,
     ActivationSucceeded,
     ActivationFailed(String),
     PollFailed(String),
@@ -53,6 +54,7 @@ pub enum WorkerEvent {
     /// A provider-scoped event emitted by the multi-provider coordinator.
     ProviderLimitsUpdated(crate::settings::ProviderKind, RateLimits),
     ProviderUsageUpdated(crate::settings::ProviderKind, UsageStatistics),
+    ProviderActivationStarted(crate::settings::ProviderKind),
     ProviderActivationSucceeded(crate::settings::ProviderKind),
     ProviderActivationFailed(crate::settings::ProviderKind, String),
     ProviderPollFailed(crate::settings::ProviderKind, String),
@@ -373,6 +375,7 @@ fn tick(
 
     if automatic_activation && state.decide(&limits.primary) == Decision::ActivateNow {
         state.record_attempt(Utc::now());
+        events.push(WorkerEvent::ActivationStarted);
         match activator.activate() {
             Ok(()) => {
                 if let Ok(fresh) = provider.read_limits() {

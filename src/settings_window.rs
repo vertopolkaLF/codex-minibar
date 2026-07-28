@@ -112,6 +112,7 @@ struct SettingsWindowState {
     show_total_spend_on_all_tab: SetState<bool>,
     total_spend_presentation: SetState<TotalSpendPresentation>,
     show_account_name: SetState<bool>,
+    activation_success: SetState<bool>,
     activation_failure: SetState<bool>,
     limits_reset: SetState<bool>,
     low_usage_enabled: SetState<bool>,
@@ -163,6 +164,8 @@ impl SettingsWindowState {
         self.total_spend_presentation
             .call(settings.total_spend_presentation);
         self.show_account_name.call(settings.show_account_name);
+        self.activation_success
+            .call(settings.notifications.activation_success);
         self.activation_failure
             .call(settings.notifications.activation_failure);
         self.limits_reset
@@ -991,6 +994,7 @@ enum Tab {
     Tray,
     Notifications,
     Advanced,
+    Log,
     About,
 }
 
@@ -1003,6 +1007,7 @@ impl Tab {
             Self::Tray => "tray",
             Self::Notifications => "notifications",
             Self::Advanced => "advanced",
+            Self::Log => "log",
             Self::About => "about",
         }
     }
@@ -1014,6 +1019,7 @@ impl Tab {
             "providers" => Self::Providers,
             "notifications" => Self::Notifications,
             "advanced" => Self::Advanced,
+            "log" => Self::Log,
             "about" => Self::About,
             _ => Self::General,
         }
@@ -1047,6 +1053,17 @@ pub fn render(
     let (selected, set_selected) = cx.use_state(Tab::default());
     let (rendered_tab, set_rendered_tab) = cx.use_async_state(Tab::default());
     let (page_visible, set_page_visible) = cx.use_async_state(true);
+    let (log_content, set_log_content) =
+        cx.use_async_state(crate::logger::tail_lines(100).unwrap_or_else(|error| error.to_string()));
+    cx.use_effect((), move || {
+        let set_log_content = set_log_content.clone();
+        std::thread::spawn(move || loop {
+            set_log_content.call(
+                crate::logger::tail_lines(100).unwrap_or_else(|error| error.to_string()),
+            );
+            std::thread::sleep(Duration::from_millis(500));
+        });
+    });
     let theme_navigation_guard = cx.use_ref(false);
     let theme_navigation_guard_timer = cx.use_ref(None::<DispatcherTimer>);
 
@@ -1074,6 +1091,9 @@ pub fn render(
             NavViewItem::new("Advanced")
                 .tag("advanced")
                 .icon_path(crate::icons::data("sliders"), nav_icon_color),
+            NavViewItem::new("Log")
+                .tag("log")
+                .icon_path(crate::icons::data("chat-centered-text"), nav_icon_color),
             NavViewItem::new("About & Updates")
                 .tag("about")
                 .icon_path(crate::icons::data("info"), nav_icon_color),
@@ -1220,6 +1240,8 @@ pub fn render(
     let (total_spend_presentation, set_total_spend_presentation) =
         cx.use_state(settings.total_spend_presentation);
     let (show_account_name, set_show_account_name) = cx.use_state(settings.show_account_name);
+    let (activation_success, set_activation_success) =
+        cx.use_state(settings.notifications.activation_success);
     let (activation_failure, set_activation_failure) =
         cx.use_state(settings.notifications.activation_failure);
     let (limits_reset, set_limits_reset) = cx.use_state(settings.notifications.limits_changed);
@@ -1271,6 +1293,7 @@ pub fn render(
             show_total_spend_on_all_tab: set_show_total_spend_on_all_tab.clone(),
             total_spend_presentation: set_total_spend_presentation.clone(),
             show_account_name: set_show_account_name.clone(),
+            activation_success: set_activation_success.clone(),
             activation_failure: set_activation_failure.clone(),
             limits_reset: set_limits_reset.clone(),
             low_usage_enabled: set_low_usage_enabled.clone(),
@@ -1319,6 +1342,7 @@ pub fn render(
             show_total_spend_on_all_tab,
             total_spend_presentation,
             show_account_name,
+            activation_success,
             activation_failure,
             limits_reset,
             low_usage_enabled,
@@ -1337,6 +1361,7 @@ pub fn render(
             check_for_updates,
             notify_on_update,
             &update_phase,
+            &log_content,
             set_codex_enabled,
             set_theme,
             set_accent_color,
@@ -1365,6 +1390,7 @@ pub fn render(
             set_show_total_spend_on_all_tab,
             set_total_spend_presentation,
             set_show_account_name,
+            set_activation_success,
             set_activation_failure,
             set_limits_reset,
             set_low_usage_enabled,
@@ -1594,6 +1620,7 @@ fn tab_content(
     show_total_spend_on_all_tab: bool,
     total_spend_presentation: TotalSpendPresentation,
     show_account_name: bool,
+    activation_success: bool,
     activation_failure: bool,
     limits_reset: bool,
     low_usage_enabled: bool,
@@ -1612,6 +1639,7 @@ fn tab_content(
     check_for_updates: bool,
     notify_on_update: bool,
     update_phase: &UpdatePhase,
+    log_content: &str,
     set_codex_enabled: SetState<bool>,
     set_theme: SetState<AppTheme>,
     set_accent_color: SetState<AccentColor>,
@@ -1640,6 +1668,7 @@ fn tab_content(
     set_show_total_spend_on_all_tab: SetState<bool>,
     set_total_spend_presentation: SetState<TotalSpendPresentation>,
     set_show_account_name: SetState<bool>,
+    set_activation_success: SetState<bool>,
     set_activation_failure: SetState<bool>,
     set_limits_reset: SetState<bool>,
     set_low_usage_enabled: SetState<bool>,
@@ -1685,6 +1714,7 @@ fn tab_content(
     let apply_show_total_spend_on_all_tab = settings_tx.clone();
     let apply_total_spend_presentation = settings_tx.clone();
     let apply_show_account_name = settings_tx.clone();
+    let apply_activation_success = settings_tx.clone();
     let apply_activation_failure = settings_tx.clone();
     let apply_limits_reset = settings_tx.clone();
     let apply_low_usage_enabled = settings_tx.clone();
@@ -2270,6 +2300,24 @@ fn tab_content(
             "Notifications",
             vec![
                 settings_toggle_card(
+                    "Activation successes",
+                    activation_success,
+                    move |value| {
+                        persist_bool(
+                            set_activation_success.clone(),
+                            apply_activation_success.clone(),
+                            value,
+                            |settings, value| {
+                                settings.notifications.activation_success = value;
+                            },
+                        );
+                    },
+                    "notif-activation-success",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("notif-activation-success"),
+                settings_toggle_card(
                     "Activation failures",
                     activation_failure,
                     move |value| {
@@ -2418,6 +2466,7 @@ fn tab_content(
                 show_total_spend_on_all_tab: set_show_total_spend_on_all_tab,
                 total_spend_presentation: set_total_spend_presentation,
                 show_account_name: set_show_account_name,
+                activation_success: set_activation_success,
                 activation_failure: set_activation_failure,
                 limits_reset: set_limits_reset,
                 low_usage_enabled: set_low_usage_enabled,
@@ -2496,6 +2545,26 @@ fn tab_content(
             ],
         )
         }
+        Tab::Log => (
+            "Log",
+            vec![
+                settings_action_card(
+                    "Application log",
+                    "Open log.txt",
+                    || {
+                        if let Err(error) = crate::logger::open() {
+                            eprintln!("failed to open log.txt: {error:#}");
+                            notifications::show("Could not open log.txt", &error.to_string());
+                        }
+                    },
+                    "log-open-file",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("log-open-file"),
+                log_view_card(log_content).with_key("log-live-tail"),
+            ],
+        ),
         Tab::About => (
             "About & Updates",
             about_settings_cards(
@@ -2533,6 +2602,32 @@ fn tab_content(
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .vertical_alignment(VerticalAlignment::Top)
         .into()
+}
+
+fn log_view_card(log_content: &str) -> Element {
+    border(
+        scroll_viewer(
+            border(
+                text_block(if log_content.is_empty() {
+                    "No log events yet."
+                } else {
+                    log_content
+                })
+                .font_size(12.0)
+                .wrap(),
+            )
+            .padding(Thickness::uniform(12.0)),
+        )
+        .horizontal_scroll_bar_visibility(ScrollBarVisibility::Disabled)
+        .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
+        .height(340.0),
+    )
+    .background(ThemeRef::CardBackground)
+    .corner_radius(8.0)
+    .border_thickness(Thickness::uniform(1.0))
+    .border_brush(ThemeRef::CardStroke)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .into()
 }
 
 fn settings_section_heading(title: impl Into<String>) -> Element {

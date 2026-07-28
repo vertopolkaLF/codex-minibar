@@ -32,7 +32,13 @@ pub fn start_enabled_workers(
             Ok(worker) => {
                 workers.insert(provider, worker);
             }
-            Err(error) => errors.push(format!("{}: {error:#}", provider.display_name())),
+            Err(error) => {
+                crate::logger::info(format!(
+                    "{} worker failed to start: {error:#}",
+                    provider.display_name()
+                ));
+                errors.push(format!("{}: {error:#}", provider.display_name()));
+            }
         }
     }
     (workers, errors)
@@ -48,6 +54,7 @@ pub fn start_provider_worker(
     let mut worker = match provider {
         ProviderKind::Codex => {
             let executable = first_available(settings.codex_path.as_deref())?;
+            crate::logger::info(format!("Codex executable: {}", executable.display()));
             worker::start_worker(
                 CodexClient::new(&executable),
                 CodexClient::new(&executable),
@@ -58,24 +65,34 @@ pub fn start_provider_worker(
                 Duration::from_secs(settings.limit_refresh_interval.seconds()),
             )
         }
-        ProviderKind::Claude => worker::start_worker(
-            ClaudeClient::new(),
-            ClaudeClient::new(),
-            ClaudeActivator::new(settings.claude_path.clone()),
-            activation_path,
-            settings.automatic_activation,
-            settings.history_retention_days,
-            Duration::from_secs(settings.limit_refresh_interval.seconds()),
-        ),
-        ProviderKind::Cursor => worker::start_worker(
-            CursorClient::new(),
-            CursorClient::new(),
-            CursorActivator,
-            activation_path,
-            false,
-            settings.history_retention_days,
-            Duration::from_secs(settings.limit_refresh_interval.seconds()),
-        ),
+        ProviderKind::Claude => {
+            let executable = crate::claude::first_available(settings.claude_path.as_deref())
+                .unwrap_or_else(|| PathBuf::from("claude"));
+            crate::logger::info(format!("Claude executable: {}", executable.display()));
+            worker::start_worker(
+                ClaudeClient::new(),
+                ClaudeClient::new(),
+                ClaudeActivator::new(Some(executable)),
+                activation_path,
+                settings.automatic_activation,
+                settings.history_retention_days,
+                Duration::from_secs(settings.limit_refresh_interval.seconds()),
+            )
+        }
+        ProviderKind::Cursor => {
+            let executable = crate::cursor::installation_path(settings.cursor_path.as_deref())
+                .unwrap_or_else(|| PathBuf::from("Cursor.exe"));
+            crate::logger::info(format!("Cursor executable: {}", executable.display()));
+            worker::start_worker(
+                CursorClient::new(),
+                CursorClient::new(),
+                CursorActivator,
+                activation_path,
+                false,
+                settings.history_retention_days,
+                Duration::from_secs(settings.limit_refresh_interval.seconds()),
+            )
+        }
     };
     let source_events = worker
         .take_events()
@@ -88,6 +105,9 @@ pub fn start_provider_worker(
                 }
                 WorkerEvent::UsageUpdated(usage) => {
                     Some(WorkerEvent::ProviderUsageUpdated(provider, usage))
+                }
+                WorkerEvent::ActivationStarted => {
+                    Some(WorkerEvent::ProviderActivationStarted(provider))
                 }
                 WorkerEvent::ActivationSucceeded => {
                     Some(WorkerEvent::ProviderActivationSucceeded(provider))

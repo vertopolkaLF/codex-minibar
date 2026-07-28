@@ -28,6 +28,7 @@ fn run() -> Result<()> {
     sync_installed_display_version();
     show_post_update_success_if_needed();
     let path = Settings::default_path()?;
+    codex_minibar::logger::initialize(&path)?;
     let mut settings = Settings::load_or_create(&path)?;
     if let Err(error) = settings.reconcile_startup_from_registry(&path) {
         eprintln!("failed to reconcile startup setting: {error:#}");

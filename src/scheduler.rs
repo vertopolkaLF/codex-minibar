@@ -15,6 +15,10 @@ pub struct ActivationState {
     /// Last command attempt, successful or not. Surfaced in the UI.
     #[serde(default)]
     pub last_attempt_at: Option<DateTime<Utc>>,
+    /// Prevent repeated activation attempts while a provider still reports no
+    /// active 5h window after one attempt.
+    #[serde(default)]
+    pub attempted_without_active_window: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,7 +32,11 @@ impl ActivationState {
     /// observation. The first sample only establishes a baseline.
     pub fn decide(&self, primary: &LimitWindow) -> Decision {
         let Some(resets_at) = primary.resets_at else {
-            return Decision::Skip;
+            return if self.attempted_without_active_window {
+                Decision::Skip
+            } else {
+                Decision::ActivateNow
+            };
         };
         match self.last_seen_resets_at {
             Some(previous) if previous != resets_at => Decision::ActivateNow,
@@ -40,11 +48,13 @@ impl ActivationState {
     pub fn observe(&mut self, primary: &LimitWindow) {
         if let Some(resets_at) = primary.resets_at {
             self.last_seen_resets_at = Some(resets_at);
+            self.attempted_without_active_window = false;
         }
     }
 
     pub fn record_attempt(&mut self, now: DateTime<Utc>) {
         self.last_attempt_at = Some(now);
+        self.attempted_without_active_window = true;
     }
 
     pub fn load_or_default(path: &Path) -> Result<Self> {
@@ -107,11 +117,13 @@ mod tests {
     }
 
     #[test]
-    fn skips_when_resets_at_is_missing() {
+    fn activates_once_when_the_session_is_not_activated() {
         let mut state = ActivationState {
             last_seen_resets_at: Some(at(15, 0)),
             ..ActivationState::default()
         };
+        assert_eq!(state.decide(&LimitWindow::default()), Decision::ActivateNow);
+        state.record_attempt(at(10, 0));
         assert_eq!(state.decide(&LimitWindow::default()), Decision::Skip);
         state.observe(&LimitWindow::default());
         assert_eq!(state.last_seen_resets_at, Some(at(15, 0)));

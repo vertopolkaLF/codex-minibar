@@ -118,6 +118,17 @@ pub fn show_update_available(version: &str, release_url: &str) {
     }
 }
 
+/// Toast after a provider successfully starts a fresh 5h limit window.
+pub fn show_activation_succeeded(provider: ProviderKind) {
+    show(
+        "5h limit window activated",
+        &format!(
+            "5h limit window for {} was successfully activated.",
+            provider.display_name()
+        ),
+    );
+}
+
 /// Tracks previous limit snapshots so reset / low-usage toasts fire once.
 #[derive(Debug, Default)]
 pub struct LimitNotificationTracker {

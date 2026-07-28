@@ -7,6 +7,7 @@ pub mod cursor;
 pub mod discovery;
 pub mod icons;
 pub mod limits;
+pub mod logger;
 pub mod notifications;
 pub mod popup;
 pub mod popup_window;
