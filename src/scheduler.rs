@@ -1,15 +1,22 @@
 use std::{fs, path::Path};
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::limits::LimitWindow;
 
+/// A real 5-hour window advance moves the deadline by hours. Smaller changes
+/// are API timestamp jitter, including a value rounding across a minute.
+const NEW_WINDOW_MINIMUM_ADVANCE: Duration = Duration::minutes(5);
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActivationState {
-    /// Last observed primary `resets_at`. A change means the 5h window moved
-    /// (real reset or the sliding "not yet activated" clock) and we should activate.
+    /// Last observed primary `resets_at`, normalized to a whole minute.
+    ///
+    /// Claude's endpoint can vary seconds and fractional seconds of the same
+    /// deadline on consecutive reads. That is not a new window and must never
+    /// retrigger an activation.
     #[serde(default, alias = "last_activated_reset")]
     pub last_seen_resets_at: Option<DateTime<Utc>>,
     /// Last command attempt, successful or not. Surfaced in the UI.
@@ -29,7 +36,8 @@ pub enum Decision {
 
 impl ActivationState {
     /// Activate only when the primary reset timestamp changed since the last
-    /// observation. The first sample only establishes a baseline.
+    /// observation. Seconds and fractional-second jitter are ignored; the
+    /// first sample only establishes a baseline.
     pub fn decide(&self, primary: &LimitWindow) -> Decision {
         let Some(resets_at) = primary.resets_at else {
             return if self.attempted_without_active_window {
@@ -38,16 +46,20 @@ impl ActivationState {
                 Decision::ActivateNow
             };
         };
+        let resets_at = normalize_reset(resets_at);
         match self.last_seen_resets_at {
-            Some(previous) if previous != resets_at => Decision::ActivateNow,
+            Some(previous) if is_new_window(normalize_reset(previous), resets_at) => {
+                Decision::ActivateNow
+            }
             _ => Decision::Skip,
         }
     }
 
-    /// Remember the latest primary reset time so the next poll can detect drift.
+    /// Remember the latest primary reset time so the next poll can detect a
+    /// real new window rather than endpoint timestamp jitter.
     pub fn observe(&mut self, primary: &LimitWindow) {
         if let Some(resets_at) = primary.resets_at {
-            self.last_seen_resets_at = Some(resets_at);
+            self.last_seen_resets_at = Some(normalize_reset(resets_at));
             self.attempted_without_active_window = false;
         }
     }
@@ -79,6 +91,17 @@ impl ActivationState {
     }
 }
 
+fn normalize_reset(reset: DateTime<Utc>) -> DateTime<Utc> {
+    reset
+        .with_second(0)
+        .and_then(|value| value.with_nanosecond(0))
+        .unwrap_or(reset)
+}
+
+fn is_new_window(previous: DateTime<Utc>, current: DateTime<Utc>) -> bool {
+    current - previous >= NEW_WINDOW_MINIMUM_ADVANCE
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,10 +126,34 @@ mod tests {
     }
 
     #[test]
-    fn activates_when_resets_at_changes() {
+    fn activates_when_reset_moves_to_a_new_window() {
         let mut state = ActivationState::default();
         state.observe(&window_at(at(15, 0)));
-        assert_eq!(state.decide(&window_at(at(15, 1))), Decision::ActivateNow);
+        assert_eq!(state.decide(&window_at(at(15, 5))), Decision::ActivateNow);
+    }
+
+    #[test]
+    fn skips_sub_minute_reset_jitter() {
+        let mut state = ActivationState::default();
+        let initial = Utc
+            .with_ymd_and_hms(2026, 7, 10, 15, 0, 42)
+            .unwrap()
+            .with_nanosecond(824_588_000)
+            .unwrap();
+        let jittered = Utc
+            .with_ymd_and_hms(2026, 7, 10, 15, 0, 59)
+            .unwrap()
+            .with_nanosecond(965_796_000)
+            .unwrap();
+        state.observe(&window_at(initial));
+        assert_eq!(state.decide(&window_at(jittered)), Decision::Skip);
+    }
+
+    #[test]
+    fn skips_a_one_minute_rounding_boundary() {
+        let mut state = ActivationState::default();
+        state.observe(&window_at(at(15, 0)));
+        assert_eq!(state.decide(&window_at(at(15, 1))), Decision::Skip);
     }
 
     #[test]

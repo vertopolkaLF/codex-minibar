@@ -1,6 +1,6 @@
 //! Windows toast notifications for rate-limit events.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Timelike, Utc};
 
 use crate::limits::RateLimits;
 use crate::settings::{NotificationSettings, ProviderKind};
@@ -13,6 +13,7 @@ pub const TOAST_PROTOCOL_UPDATE: &str = "codex-minibar:update";
 
 const TOAST_ACTION_TRIGGER: &str = ".toast-action";
 const TOAST_ACTION_UPDATE_NOW: &str = "update_now";
+const NEW_WINDOW_MINIMUM_ADVANCE: Duration = Duration::minutes(5);
 
 /// Returns true when this process was spawned by the update toast protocol link.
 pub fn launched_via_toast_update() -> bool {
@@ -153,10 +154,17 @@ impl LimitNotificationTracker {
             return;
         }
 
-        let primary_reset = self.primary_resets_at != limits.primary.resets_at
-            && limits.primary.resets_at.is_some();
-        let secondary_reset = self.secondary_resets_at != limits.secondary.resets_at
-            && limits.secondary.resets_at.is_some();
+        let now = Utc::now();
+        let primary_reset = reset_has_occurred(
+            self.primary_resets_at,
+            limits.primary.resets_at,
+            now,
+        );
+        let secondary_reset = reset_has_occurred(
+            self.secondary_resets_at,
+            limits.secondary.resets_at,
+            now,
+        );
 
         if primary_reset {
             if settings.limits_changed {
@@ -205,6 +213,30 @@ impl LimitNotificationTracker {
         self.primary_resets_at = limits.primary.resets_at;
         self.secondary_resets_at = limits.secondary.resets_at;
     }
+}
+
+/// A reset toast is valid only after the previously advertised deadline has
+/// elapsed and the provider moves it forward by at least five minutes. `None ->
+/// Some` is just delayed metadata becoming available, and sub-minute
+/// corrections are not resets.
+fn reset_has_occurred(
+    previous: Option<DateTime<Utc>>,
+    current: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> bool {
+    let (Some(previous), Some(current)) = (previous, current) else {
+        return false;
+    };
+    let previous = reset_minute(previous);
+    let current = reset_minute(current);
+    previous <= reset_minute(now) && current - previous >= NEW_WINDOW_MINIMUM_ADVANCE
+}
+
+fn reset_minute(reset: DateTime<Utc>) -> DateTime<Utc> {
+    reset
+        .with_second(0)
+        .and_then(|value| value.with_nanosecond(0))
+        .unwrap_or(reset)
 }
 
 fn can_notify_weekly(limits: &RateLimits) -> bool {
@@ -282,6 +314,45 @@ mod tests {
 
         assert!(!can_notify_weekly(&limits));
         assert!(can_notify_weekly(&RateLimits::default()));
+    }
+
+    #[test]
+    fn reset_requires_the_previous_deadline_to_have_elapsed() {
+        let previous = Utc.with_ymd_and_hms(2026, 7, 14, 12, 0, 0).unwrap();
+        let next = Utc.with_ymd_and_hms(2026, 7, 14, 17, 0, 0).unwrap();
+
+        assert!(!reset_has_occurred(Some(previous), Some(next), previous - chrono::Duration::seconds(1)));
+        assert!(reset_has_occurred(Some(previous), Some(next), previous));
+        assert!(!reset_has_occurred(Some(previous), Some(previous), previous));
+        assert!(!reset_has_occurred(None, Some(next), previous));
+    }
+
+    #[test]
+    fn reset_ignores_sub_minute_deadline_corrections_after_expiry() {
+        let previous = Utc
+            .with_ymd_and_hms(2026, 7, 14, 12, 0, 2)
+            .unwrap()
+            .with_nanosecond(100_000_000)
+            .unwrap();
+        let corrected = previous.with_nanosecond(900_000_000).unwrap();
+
+        assert!(!reset_has_occurred(
+            Some(previous),
+            Some(corrected),
+            previous + chrono::Duration::minutes(1),
+        ));
+    }
+
+    #[test]
+    fn reset_ignores_a_one_minute_rounding_boundary() {
+        let previous = Utc.with_ymd_and_hms(2026, 7, 14, 12, 59, 0).unwrap();
+        let rounded = Utc.with_ymd_and_hms(2026, 7, 14, 13, 0, 0).unwrap();
+
+        assert!(!reset_has_occurred(
+            Some(previous),
+            Some(rounded),
+            previous + chrono::Duration::minutes(1),
+        ));
     }
 
     #[test]
