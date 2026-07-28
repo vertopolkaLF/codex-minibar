@@ -61,7 +61,7 @@ pub fn start_provider_worker(
         ProviderKind::Claude => worker::start_worker(
             ClaudeClient::new(),
             ClaudeClient::new(),
-            ClaudeActivator::new(),
+            ClaudeActivator::new(settings.claude_path.clone()),
             activation_path,
             settings.automatic_activation,
             settings.history_retention_days,

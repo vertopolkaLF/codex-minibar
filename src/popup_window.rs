@@ -126,7 +126,7 @@ impl AppState {
     }
 
     /// Applies provider toggles without disturbing workers that remain enabled.
-    fn sync_provider_workers(&self, settings: &Settings) -> Vec<String> {
+    fn sync_provider_workers(&self, settings: &Settings, restart: &[ProviderKind]) -> Vec<String> {
         let disabled = crate::provider_registry::PROVIDERS
             .iter()
             .map(|descriptor| descriptor.kind)
@@ -137,6 +137,7 @@ impl AppState {
             |mut workers| {
                 disabled
                     .iter()
+                    .chain(restart.iter().filter(|provider| settings.providers.is_enabled(**provider)))
                     .filter_map(|provider| workers.remove(provider))
                     .collect()
             },
@@ -145,7 +146,9 @@ impl AppState {
             worker.shutdown();
         }
         if let Ok(mut commands) = self.commands.lock() {
-            commands.retain(|provider, _| settings.providers.is_enabled(*provider));
+            commands.retain(|provider, _| {
+                settings.providers.is_enabled(*provider) && !restart.contains(provider)
+            });
         }
         if let Ok(mut limits) = self.limits.lock() {
             for provider in &disabled {
@@ -225,6 +228,9 @@ struct UiState {
     popup_order: Vec<PopupWidgetKind>,
     use_colored_provider_icons: bool,
     replace_chatgpt_logo_with_codex: bool,
+    codex_path: Option<std::path::PathBuf>,
+    claude_path: Option<std::path::PathBuf>,
+    cursor_path: Option<std::path::PathBuf>,
     update_version: Option<String>,
 }
 
@@ -294,6 +300,9 @@ impl Default for UiState {
             popup_order: PopupWidgetKind::default_order(),
             use_colored_provider_icons: false,
             replace_chatgpt_logo_with_codex: false,
+            codex_path: None,
+            claude_path: None,
+            cursor_path: None,
             update_version: None,
         }
     }
@@ -2059,6 +2068,9 @@ fn start_background_bridge(
             popup_order: state.settings.popup_order.clone(),
             use_colored_provider_icons: state.settings.use_colored_provider_icons,
             replace_chatgpt_logo_with_codex: state.settings.replace_chatgpt_logo_with_codex,
+            codex_path: state.settings.codex_path.clone(),
+            claude_path: state.settings.claude_path.clone(),
+            cursor_path: state.settings.cursor_path.clone(),
             update_version: update_version_from_phase(&update_phase),
             ..UiState::default()
         };
@@ -2121,8 +2133,19 @@ fn start_background_bridge(
             // work. In particular, changing provider icons must never wait on
             // a worker lock, network request, or provider lifecycle change.
             set_ui.call(ui.clone());
-            if providers_changed {
-                let provider_errors = state.sync_provider_workers(&settings);
+            let restart = [
+                (ProviderKind::Codex, settings.codex_path != ui.codex_path),
+                (ProviderKind::Claude, settings.claude_path != ui.claude_path),
+                (ProviderKind::Cursor, settings.cursor_path != ui.cursor_path),
+            ]
+            .into_iter()
+            .filter_map(|(provider, changed)| changed.then_some(provider))
+            .collect::<Vec<_>>();
+            ui.codex_path = settings.codex_path.clone();
+            ui.claude_path = settings.claude_path.clone();
+            ui.cursor_path = settings.cursor_path.clone();
+            if providers_changed || !restart.is_empty() {
+                let provider_errors = state.sync_provider_workers(&settings, &restart);
                 if !provider_errors.is_empty() {
                     ui.error = Some(provider_errors.join("\n"));
                 }

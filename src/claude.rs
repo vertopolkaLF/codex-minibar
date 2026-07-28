@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Arc,
     thread,
@@ -34,44 +34,63 @@ pub const ACTIVATION_PROMPT: &str = "reply with letter a";
 /// whose launcher is no longer present on PATH in the current process, and the
 /// desktop app counts too: it ships its own Claude Code and never writes a
 /// credentials file.
-pub fn is_installed() -> bool {
-    credentials_path().is_some_and(|path| path.is_file())
-        || path_contains_executable("claude")
-        || claude_desktop::is_installed()
+pub fn is_installed(explicit: Option<&Path>) -> bool {
+    first_available(explicit).is_some()
+        || credentials_path().is_some_and(|path| path.is_file())
 }
 
-fn path_contains_executable(name: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|directory| {
-        #[cfg(windows)]
-        {
-            [".exe", ".cmd", ".ps1", ".bat"]
-                .into_iter()
-                .any(|extension| directory.join(format!("{name}{extension}")).is_file())
-        }
-        #[cfg(not(windows))]
-        {
-            directory.join(name).is_file()
-        }
-    })
+/// Resolves a Claude Code launcher without spawning it. An explicit folder is
+/// searched first; legacy explicit file paths remain supported for upgrades.
+pub fn first_available(explicit: Option<&Path>) -> Option<PathBuf> {
+    claude_desktop::bundled_cli()
+        .or_else(|| cli_available(explicit))
+}
+
+/// Finds only a standalone Claude Code CLI, excluding the launcher bundled by
+/// Claude Desktop. Used by the UI to report both installations clearly.
+pub fn cli_available(explicit: Option<&Path>) -> Option<PathBuf> {
+    explicit.and_then(explicit_launcher).or_else(path_launcher)
+}
+
+fn explicit_launcher(path: &Path) -> Option<PathBuf> {
+    if path.is_file() {
+        return Some(path.to_path_buf());
+    }
+    launcher_in(path)
+}
+
+fn path_launcher() -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).find_map(|directory| launcher_in(&directory))
+}
+
+fn launcher_in(directory: &Path) -> Option<PathBuf> {
+    #[cfg(windows)]
+    let names = ["claude.exe", "claude.cmd", "claude.ps1", "claude.bat"];
+    #[cfg(not(windows))]
+    let names = ["claude"];
+    names
+        .into_iter()
+        .map(|name| directory.join(name))
+        .find(|path| path.is_file())
 }
 
 /// Starts Claude Code's five-hour window with the smallest supported prompt.
 pub struct ClaudeActivator {
     timeout: Duration,
+    executable: Option<PathBuf>,
 }
 
 impl ClaudeActivator {
-    pub fn new() -> Self {
+    pub fn new(executable: Option<PathBuf>) -> Self {
         Self {
             timeout: Duration::from_secs(120),
+            executable,
         }
     }
 
     pub fn activate_minimal(&self) -> Result<()> {
-        let mut child = activation_command()
+        let mut child = activation_command(self.executable.as_deref())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -94,7 +113,7 @@ impl ClaudeActivator {
 
 impl Default for ClaudeActivator {
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }
 
@@ -104,18 +123,15 @@ impl Activator for ClaudeActivator {
     }
 }
 
-fn activation_command() -> Command {
-    activation_command_for(activation_program())
+fn activation_command(explicit: Option<&Path>) -> Command {
+    activation_command_for(activation_program(explicit))
 }
 
 /// Prefer the launcher on PATH, then the `claude.exe` the desktop app unpacks
 /// for its embedded Claude Code. Falling back to the bare name keeps the error
 /// message about a missing CLI rather than a missing desktop install.
-fn activation_program() -> PathBuf {
-    if path_contains_executable("claude") {
-        return PathBuf::from("claude");
-    }
-    claude_desktop::bundled_cli().unwrap_or_else(|| PathBuf::from("claude"))
+fn activation_program(explicit: Option<&Path>) -> PathBuf {
+    first_available(explicit).unwrap_or_else(|| PathBuf::from("claude"))
 }
 
 fn activation_command_for(program: PathBuf) -> Command {

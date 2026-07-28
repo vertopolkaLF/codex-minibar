@@ -43,6 +43,11 @@ const ONBOARDING_WINDOW_TITLE: &str = "Welcome to Codex Minibar";
 
 /// Generation counter so overlapping indicator-modal open/close animations don't race.
 static INDICATOR_MODAL_ANIM_GEN: AtomicU64 = AtomicU64::new(0);
+/// Debounces filesystem/registry provider detection while a path is edited.
+static PROVIDER_STATUS_GEN: AtomicU64 = AtomicU64::new(0);
+static CODEX_PATH_SAVE_GEN: AtomicU64 = AtomicU64::new(0);
+static CLAUDE_PATH_SAVE_GEN: AtomicU64 = AtomicU64::new(0);
+static CURSOR_PATH_SAVE_GEN: AtomicU64 = AtomicU64::new(0);
 /// CSS `#000a` → `#000000aa` backdrop behind the indicator edit card.
 const INDICATOR_MODAL_SCRIM: Color = Color {
     a: 0xaa,
@@ -91,6 +96,9 @@ struct SettingsWindowState {
     codex_enabled: SetState<bool>,
     claude_enabled: SetState<bool>,
     cursor_enabled: SetState<bool>,
+    codex_path: SetState<String>,
+    claude_path: SetState<String>,
+    cursor_path: SetState<String>,
     popup_order: SetState<Vec<PopupWidgetKind>>,
     use_colored_provider_icons: SetState<bool>,
     replace_chatgpt_logo_with_codex: SetState<bool>,
@@ -126,6 +134,15 @@ impl SettingsWindowState {
             .call(settings.providers.is_enabled(ProviderKind::Claude));
         self.cursor_enabled
             .call(settings.providers.is_enabled(ProviderKind::Cursor));
+        self.codex_path.call(
+            settings.codex_path.as_ref().map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
+        );
+        self.claude_path.call(
+            settings.claude_path.as_ref().map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
+        );
+        self.cursor_path.call(
+            settings.cursor_path.as_ref().map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
+        );
         self.popup_order.call(settings.popup_order.clone());
         self.use_colored_provider_icons
             .call(settings.use_colored_provider_icons);
@@ -266,9 +283,179 @@ pub fn open_onboarding(settings_tx: Sender<Settings>) -> windows_core::Result<()
 fn detected_providers(settings: &Settings) -> [bool; 3] {
     [
         crate::codex::is_installed(settings.codex_path.as_deref()),
-        crate::claude::is_installed(),
-        crate::cursor::is_installed(),
+        crate::claude::is_installed(settings.claude_path.as_deref()),
+        crate::cursor::is_installed(settings.cursor_path.as_deref()),
     ]
+}
+
+#[derive(Clone, PartialEq)]
+struct ProviderInstallStatus {
+    app: Option<String>,
+    cli: Option<String>,
+    used: Option<ProviderInstallSource>,
+    cli_applicable: bool,
+    checking: bool,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum ProviderInstallSource {
+    App,
+    Cli,
+}
+
+impl ProviderInstallStatus {
+    fn checking() -> Self {
+        Self {
+            app: None,
+            cli: None,
+            used: None,
+            cli_applicable: true,
+            checking: true,
+        }
+    }
+}
+
+fn provider_install_status(provider: ProviderKind, configured_folder: &str) -> ProviderInstallStatus {
+    let configured_folder = (!configured_folder.trim().is_empty())
+        .then(|| std::path::Path::new(configured_folder.trim()));
+    let (app, cli, used) = match provider {
+        ProviderKind::Codex => {
+            let candidates = crate::discovery::discover(configured_folder);
+            let app = candidates
+                .iter()
+                .find(|candidate| candidate.source == crate::discovery::CandidateSource::DesktopApp)
+                .map(|candidate| candidate.path.as_path());
+            let cli = candidates
+                .iter()
+                .find(|candidate| candidate.source != crate::discovery::CandidateSource::DesktopApp)
+                .map(|candidate| candidate.path.as_path());
+            let used = candidates.first().map(|candidate| match candidate.source {
+                crate::discovery::CandidateSource::DesktopApp => ProviderInstallSource::App,
+                _ => ProviderInstallSource::Cli,
+            });
+            (
+                app.map(|path| path.display().to_string()),
+                cli.map(|path| path.display().to_string()),
+                used,
+            )
+        }
+        ProviderKind::Claude => {
+            let app = crate::claude_desktop::bundled_cli();
+            let cli = crate::claude::cli_available(configured_folder);
+            let used = if app.is_some() {
+                Some(ProviderInstallSource::App)
+            } else {
+                cli.as_ref().map(|_| ProviderInstallSource::Cli)
+            };
+            (
+                app.map(|path| path.display().to_string()),
+                cli.map(|path| path.display().to_string()),
+                used,
+            )
+        }
+        ProviderKind::Cursor => {
+            let app = crate::cursor::installation_path(configured_folder);
+            let used = app.as_ref().map(|_| ProviderInstallSource::App);
+            (app.map(|path| path.display().to_string()), None, used)
+        }
+    };
+    ProviderInstallStatus {
+        app,
+        cli,
+        used,
+        cli_applicable: provider != ProviderKind::Cursor,
+        checking: false,
+    }
+}
+
+fn provider_install_status_card(status: &ProviderInstallStatus) -> Element {
+    if status.checking {
+        return border(text_block("Checking installed app and CLI…").font_size(12.0).opacity(0.72))
+            .padding(Thickness::uniform(8.0))
+            .background(ThemeRef::SubtleFill)
+            .corner_radius(6.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .into();
+    }
+    let status_line = |label: &str,
+                       path: Option<&String>,
+                       used: bool,
+                       unavailable: bool|
+     -> Element {
+        let mut title = Vec::<Element>::new();
+        if used {
+            title.push(
+                crate::icons::element("check-circle-fill", 15.0, Color::rgb(65, 184, 131))
+                    .vertical_alignment(VerticalAlignment::Center),
+            );
+        }
+        title.push(text_block(format!("{label}:")).font_size(12.0).bold().into());
+        let detail = if unavailable {
+            "Not applicable".into()
+        } else {
+            path.cloned().unwrap_or_else(|| "Not found".into())
+        };
+        vstack((
+            hstack(title).spacing(5.0),
+            text_block(detail).font_size(12.0).opacity(0.72).wrap(),
+        ))
+        .spacing(2.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .into()
+    };
+    border(
+        vstack((
+            status_line(
+                "Desktop App",
+                status.app.as_ref(),
+                status.used == Some(ProviderInstallSource::App),
+                false,
+            ),
+            status_line(
+                "CLI",
+                status.cli.as_ref(),
+                status.used == Some(ProviderInstallSource::Cli),
+                !status.cli_applicable,
+            ),
+        ))
+        .spacing(8.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch),
+    )
+    .padding(Thickness::uniform(8.0))
+    .background(ThemeRef::SubtleFill)
+    .corner_radius(6.0)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .into()
+}
+
+fn persist_provider_folder(
+    provider: ProviderKind,
+    value: String,
+    settings_tx: Sender<Settings>,
+) {
+    let generation = match provider {
+        ProviderKind::Codex => &CODEX_PATH_SAVE_GEN,
+        ProviderKind::Claude => &CLAUDE_PATH_SAVE_GEN,
+        ProviderKind::Cursor => &CURSOR_PATH_SAVE_GEN,
+    };
+    let revision = generation.fetch_add(1, Ordering::Relaxed) + 1;
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(300));
+        let generation = match provider {
+            ProviderKind::Codex => &CODEX_PATH_SAVE_GEN,
+            ProviderKind::Claude => &CLAUDE_PATH_SAVE_GEN,
+            ProviderKind::Cursor => &CURSOR_PATH_SAVE_GEN,
+        };
+        if generation.load(Ordering::Relaxed) != revision {
+            return;
+        }
+        let folder = (!value.trim().is_empty()).then(|| PathBuf::from(value.trim()));
+        persist_update(settings_tx, move |settings| match provider {
+            ProviderKind::Codex => settings.codex_path = folder,
+            ProviderKind::Claude => settings.claude_path = folder,
+            ProviderKind::Cursor => settings.cursor_path = folder,
+        });
+    });
 }
 
 /// On WM_CLOSE / SC_CLOSE, hide the window while it still looks correct, then
@@ -960,6 +1147,59 @@ pub fn render(
         cx.use_state(settings.providers.is_enabled(ProviderKind::Claude));
     let (cursor_enabled, set_cursor_enabled) =
         cx.use_state(settings.providers.is_enabled(ProviderKind::Cursor));
+    let (codex_path, set_codex_path) = cx.use_state(
+        settings.codex_path.as_ref().map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
+    );
+    let (claude_path, set_claude_path) = cx.use_state(
+        settings.claude_path.as_ref().map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
+    );
+    let (cursor_path, set_cursor_path) = cx.use_state(
+        settings.cursor_path.as_ref().map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
+    );
+    let (codex_provider_expanded, set_codex_provider_expanded) = cx.use_state(false);
+    let (claude_provider_expanded, set_claude_provider_expanded) = cx.use_state(false);
+    let (cursor_provider_expanded, set_cursor_provider_expanded) = cx.use_state(false);
+    let (codex_provider_expand_progress, set_codex_provider_expand_progress) =
+        cx.use_async_state(0.0_f64);
+    let (claude_provider_expand_progress, set_claude_provider_expand_progress) =
+        cx.use_async_state(0.0_f64);
+    let (cursor_provider_expand_progress, set_cursor_provider_expand_progress) =
+        cx.use_async_state(0.0_f64);
+    let (codex_install_status, set_codex_install_status) =
+        cx.use_async_state(ProviderInstallStatus::checking());
+    let (claude_install_status, set_claude_install_status) =
+        cx.use_async_state(ProviderInstallStatus::checking());
+    let (cursor_install_status, set_cursor_install_status) =
+        cx.use_async_state(ProviderInstallStatus::checking());
+    let status_codex_path = codex_path.clone();
+    let status_claude_path = claude_path.clone();
+    let status_cursor_path = cursor_path.clone();
+    cx.use_effect(
+        (codex_path.clone(), claude_path.clone(), cursor_path.clone()),
+        move || {
+            let generation = PROVIDER_STATUS_GEN.fetch_add(1, Ordering::Relaxed) + 1;
+            set_codex_install_status.call(ProviderInstallStatus::checking());
+            set_claude_install_status.call(ProviderInstallStatus::checking());
+            set_cursor_install_status.call(ProviderInstallStatus::checking());
+            let codex_status = set_codex_install_status.clone();
+            let claude_status = set_claude_install_status.clone();
+            let cursor_status = set_cursor_install_status.clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(250));
+                if PROVIDER_STATUS_GEN.load(Ordering::Relaxed) != generation {
+                    return;
+                }
+                let codex = provider_install_status(ProviderKind::Codex, &status_codex_path);
+                let claude = provider_install_status(ProviderKind::Claude, &status_claude_path);
+                let cursor = provider_install_status(ProviderKind::Cursor, &status_cursor_path);
+                if PROVIDER_STATUS_GEN.load(Ordering::Relaxed) == generation {
+                    codex_status.call(codex);
+                    claude_status.call(claude);
+                    cursor_status.call(cursor);
+                }
+            });
+        },
+    );
     let (popup_order, set_popup_order) = cx.use_state(settings.popup_order.clone());
     let (use_colored_provider_icons, set_use_colored_provider_icons) =
         cx.use_state(settings.use_colored_provider_icons);
@@ -1015,6 +1255,9 @@ pub fn render(
             codex_enabled: set_codex_enabled.clone(),
             claude_enabled: set_claude_enabled.clone(),
             cursor_enabled: set_cursor_enabled.clone(),
+            codex_path: set_codex_path.clone(),
+            claude_path: set_claude_path.clone(),
+            cursor_path: set_cursor_path.clone(),
             popup_order: set_popup_order.clone(),
             use_colored_provider_icons: set_use_colored_provider_icons.clone(),
             replace_chatgpt_logo_with_codex: set_replace_chatgpt_logo_with_codex.clone(),
@@ -1051,6 +1294,18 @@ pub fn render(
             codex_enabled,
             claude_enabled,
             cursor_enabled,
+            &codex_path,
+            &claude_path,
+            &cursor_path,
+            codex_provider_expanded,
+            claude_provider_expanded,
+            cursor_provider_expanded,
+            codex_provider_expand_progress,
+            claude_provider_expand_progress,
+            cursor_provider_expand_progress,
+            &codex_install_status,
+            &claude_install_status,
+            &cursor_install_status,
             &popup_order,
             use_colored_provider_icons,
             replace_chatgpt_logo_with_codex,
@@ -1088,6 +1343,15 @@ pub fn render(
             set_animations_enabled,
             set_claude_enabled,
             set_cursor_enabled,
+            set_codex_path,
+            set_claude_path,
+            set_cursor_path,
+            set_codex_provider_expanded,
+            set_claude_provider_expanded,
+            set_cursor_provider_expanded,
+            set_codex_provider_expand_progress,
+            set_claude_provider_expand_progress,
+            set_cursor_provider_expand_progress,
             set_popup_order,
             set_use_colored_provider_icons,
             set_replace_chatgpt_logo_with_codex,
@@ -1305,6 +1569,18 @@ fn tab_content(
     codex_enabled: bool,
     claude_enabled: bool,
     cursor_enabled: bool,
+    codex_path: &str,
+    claude_path: &str,
+    cursor_path: &str,
+    codex_provider_expanded: bool,
+    claude_provider_expanded: bool,
+    cursor_provider_expanded: bool,
+    codex_provider_expand_progress: f64,
+    claude_provider_expand_progress: f64,
+    cursor_provider_expand_progress: f64,
+    codex_install_status: &ProviderInstallStatus,
+    claude_install_status: &ProviderInstallStatus,
+    cursor_install_status: &ProviderInstallStatus,
     popup_order: &[PopupWidgetKind],
     use_colored_provider_icons: bool,
     replace_chatgpt_logo_with_codex: bool,
@@ -1342,6 +1618,15 @@ fn tab_content(
     set_animations_enabled: SetState<bool>,
     set_claude_enabled: SetState<bool>,
     set_cursor_enabled: SetState<bool>,
+    set_codex_path: SetState<String>,
+    set_claude_path: SetState<String>,
+    set_cursor_path: SetState<String>,
+    set_codex_provider_expanded: SetState<bool>,
+    set_claude_provider_expanded: SetState<bool>,
+    set_cursor_provider_expanded: SetState<bool>,
+    set_codex_provider_expand_progress: AsyncSetState<f64>,
+    set_claude_provider_expand_progress: AsyncSetState<f64>,
+    set_cursor_provider_expand_progress: AsyncSetState<f64>,
     set_popup_order: SetState<Vec<PopupWidgetKind>>,
     set_use_colored_provider_icons: SetState<bool>,
     set_replace_chatgpt_logo_with_codex: SetState<bool>,
@@ -1385,6 +1670,9 @@ fn tab_content(
     let apply_codex_enabled = settings_tx.clone();
     let apply_claude_enabled = settings_tx.clone();
     let apply_cursor_enabled = settings_tx.clone();
+    let apply_codex_path = settings_tx.clone();
+    let apply_claude_path = settings_tx.clone();
+    let apply_cursor_path = settings_tx.clone();
     let apply_use_colored_provider_icons = settings_tx.clone();
     let apply_replace_chatgpt_logo_with_codex = settings_tx.clone();
     let apply_automatic_activation = settings_tx.clone();
@@ -1748,68 +2036,83 @@ fn tab_content(
                             tray_widget_setter_for_cursor_toggle.clone(),
                         ),
                     };
-                let toggle = match provider {
-                    ProviderKind::Codex => settings_toggle_card_with_description(
-                        title,
-                        description,
-                        enabled,
-                        move |value| {
-                            persist_provider_enabled(
-                                setter.clone(),
-                                tray_setter.clone(),
-                                apply_tx.clone(),
+                let (path, path_label, path_description, placeholder, expanded, expand_progress, set_expanded, set_expand_progress) = match provider {
+                    ProviderKind::Codex => (codex_path, "Codex CLI folder (optional)", "Choose the folder containing codex.exe, codex.cmd, or codex.ps1. Leave it empty for automatic scanning.", r"C:\\Users\\you\\AppData\\Roaming\\npm", codex_provider_expanded, codex_provider_expand_progress, set_codex_provider_expanded.clone(), set_codex_provider_expand_progress.clone()),
+                    ProviderKind::Claude => (claude_path, "Claude Code CLI folder (optional)", "Choose the folder containing claude.exe, claude.cmd, or claude.ps1. Leave it empty for automatic scanning.", r"C:\\Users\\you\\AppData\\Roaming\\npm", claude_provider_expanded, claude_provider_expand_progress, set_claude_provider_expanded.clone(), set_claude_provider_expand_progress.clone()),
+                    ProviderKind::Cursor => (cursor_path, "Cursor app folder (optional)", "Choose the folder containing Cursor.exe. Leave it empty for automatic scanning; usage still comes from Cursor's signed-in local profile.", r"C:\\Users\\you\\AppData\\Local\\Programs\\Cursor", cursor_provider_expanded, cursor_provider_expand_progress, set_cursor_provider_expanded.clone(), set_cursor_provider_expand_progress.clone()),
+                };
+                let install_status = match provider {
+                    ProviderKind::Codex => codex_install_status,
+                    ProviderKind::Claude => claude_install_status,
+                    ProviderKind::Cursor => cursor_install_status,
+                };
+                let codex_path_setter = set_codex_path.clone();
+                let claude_path_setter = set_claude_path.clone();
+                let cursor_path_setter = set_cursor_path.clone();
+                let codex_path_tx = apply_codex_path.clone();
+                let claude_path_tx = apply_claude_path.clone();
+                let cursor_path_tx = apply_cursor_path.clone();
+                let path_input: Element = match provider {
+                    ProviderKind::Codex => text_box(path)
+                        .placeholder_text(placeholder)
+                        .on_text_changed(move |value: String| {
+                            codex_path_setter.call(value.clone());
+                            persist_provider_folder(
                                 ProviderKind::Codex,
                                 value,
-                                other_a,
-                                other_b,
-                                tray_snapshot.clone(),
+                                codex_path_tx.clone(),
                             );
-                        },
-                        "providers-codex",
-                        hovered_card_id,
-                        set_hovered_card_id.clone(),
-                    ),
-                    ProviderKind::Claude => settings_toggle_card_with_description(
-                        title,
-                        description,
-                        enabled,
-                        move |value| {
-                            persist_provider_enabled(
-                                setter.clone(),
-                                tray_setter.clone(),
-                                apply_tx.clone(),
+                        })
+                        .height(32.0)
+                        .into(),
+                    ProviderKind::Claude => text_box(path)
+                        .placeholder_text(placeholder)
+                        .on_text_changed(move |value: String| {
+                            claude_path_setter.call(value.clone());
+                            persist_provider_folder(
                                 ProviderKind::Claude,
                                 value,
-                                other_a,
-                                other_b,
-                                tray_snapshot.clone(),
+                                claude_path_tx.clone(),
                             );
-                        },
-                        "providers-claude",
-                        hovered_card_id,
-                        set_hovered_card_id.clone(),
-                    ),
-                    ProviderKind::Cursor => settings_toggle_card_with_description(
-                        title,
-                        description,
-                        enabled,
-                        move |value| {
-                            persist_cursor_enabled(
-                                setter.clone(),
-                                tray_setter.clone(),
-                                apply_tx.clone(),
+                        })
+                        .height(32.0)
+                        .into(),
+                    ProviderKind::Cursor => text_box(path)
+                        .placeholder_text(placeholder)
+                        .on_text_changed(move |value: String| {
+                            cursor_path_setter.call(value.clone());
+                            persist_provider_folder(
+                                ProviderKind::Cursor,
                                 value,
-                                other_a,
-                                other_b,
-                                tray_snapshot.clone(),
+                                cursor_path_tx.clone(),
                             );
-                        },
-                        "providers-cursor",
-                        hovered_card_id,
-                        set_hovered_card_id.clone(),
-                    ),
+                        })
+                        .height(32.0)
+                        .into(),
                 };
-                rows.push(toggle.with_key(format!("providers-{}", provider.id())));
+                let details = vstack((
+                    text_block(description.unwrap_or_default())
+                        .font_size(12.0)
+                        .opacity(0.72)
+                        .wrap(),
+                    provider_install_status_card(install_status),
+                    vstack((
+                        text_block(path_label).font_size(12.0),
+                        text_block(path_description).font_size(11.0).opacity(0.72).wrap(),
+                        path_input,
+                    ))
+                    .spacing(3.0)
+                    .horizontal_alignment(HorizontalAlignment::Stretch),
+                ))
+                .spacing(8.0)
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .vertical_alignment(VerticalAlignment::Top);
+                let card = match provider {
+                    ProviderKind::Codex => settings_toggle_expander(title, description, enabled, move |value| persist_provider_enabled(setter.clone(), tray_setter.clone(), apply_tx.clone(), ProviderKind::Codex, value, other_a, other_b, tray_snapshot.clone()), expanded, expand_progress, None, set_expanded, set_expand_progress, "providers-codex", hovered_card_id, set_hovered_card_id.clone(), details),
+                    ProviderKind::Claude => settings_toggle_expander(title, description, enabled, move |value| persist_provider_enabled(setter.clone(), tray_setter.clone(), apply_tx.clone(), ProviderKind::Claude, value, other_a, other_b, tray_snapshot.clone()), expanded, expand_progress, None, set_expanded, set_expand_progress, "providers-claude", hovered_card_id, set_hovered_card_id.clone(), details),
+                    ProviderKind::Cursor => settings_toggle_expander(title, description, enabled, move |value| persist_cursor_enabled(setter.clone(), tray_setter.clone(), apply_tx.clone(), value, other_a, other_b, tray_snapshot.clone()), expanded, expand_progress, None, set_expanded, set_expand_progress, "providers-cursor", hovered_card_id, set_hovered_card_id.clone(), details),
+                };
+                rows.push(card.with_key(format!("providers-{}", provider.id())));
             }
             rows.push(
                 settings_section_heading("Customization")
@@ -1924,6 +2227,7 @@ fn tab_content(
                 .with_key("notif-limits-reset"),
                 settings_toggle_expander(
                     format!("When session usage is down to {low_usage_threshold}%"),
+                    None,
                     low_usage_enabled,
                     move |value| {
                         persist_bool(
@@ -1937,6 +2241,7 @@ fn tab_content(
                     },
                     low_usage_expanded,
                     low_usage_expand_progress,
+                    Some(78.0),
                     set_low_usage_expanded,
                     set_low_usage_expand_progress,
                     "notif-low-usage",
@@ -1966,6 +2271,7 @@ fn tab_content(
                     format!(
                         "When weekly usage is down to {weekly_low_usage_threshold}%"
                     ),
+                    None,
                     weekly_low_usage_enabled,
                     move |value| {
                         persist_bool(
@@ -1979,6 +2285,7 @@ fn tab_content(
                     },
                     weekly_low_usage_expanded,
                     weekly_low_usage_expand_progress,
+                    Some(78.0),
                     set_weekly_low_usage_expanded,
                     set_weekly_low_usage_expand_progress,
                     "notif-weekly-low-usage",
@@ -2015,6 +2322,9 @@ fn tab_content(
                 codex_enabled: set_codex_enabled,
                 claude_enabled: set_claude_enabled,
                 cursor_enabled: set_cursor_enabled,
+                codex_path: set_codex_path,
+                claude_path: set_claude_path,
+                cursor_path: set_cursor_path,
                 popup_order: set_popup_order,
                 use_colored_provider_icons: set_use_colored_provider_icons,
                 replace_chatgpt_logo_with_codex: set_replace_chatgpt_logo_with_codex,

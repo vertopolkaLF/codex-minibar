@@ -5,7 +5,7 @@
 //! memory, and query the same dashboard endpoints used by Cursor itself.
 //! The UI deliberately exposes its Auto and API lanes, not blended Total Usage.
 
-use std::{collections::BTreeMap, env, path::PathBuf, time::Duration};
+use std::{collections::BTreeMap, env, path::{Path, PathBuf}, time::Duration};
 
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -32,28 +32,42 @@ const USAGE_CACHE_TTL: ChronoDuration = ChronoDuration::minutes(10);
 
 /// Detect the Cursor desktop application from its local installation or its
 /// VS Code state database. No database is opened and no network call is made.
-pub fn is_installed() -> bool {
-    if cursor_state_db().is_file() {
-        return true;
-    }
+pub fn is_installed(explicit: Option<&Path>) -> bool {
+    installation_path(explicit).is_some() || cursor_state_db().is_file()
+}
 
-    #[cfg(windows)]
-    {
-        let local_app_data = env::var_os("LOCALAPPDATA").map(PathBuf::from);
-        let program_files = env::var_os("ProgramFiles").map(PathBuf::from);
-        return local_app_data
-            .into_iter()
-            .map(|path| path.join("Programs/Cursor/Cursor.exe"))
-            .chain(
-                program_files
+/// Resolves Cursor.exe without opening its profile database. The configured
+/// value is a folder; accepting a file keeps pre-release settings compatible.
+pub fn installation_path(explicit: Option<&Path>) -> Option<PathBuf> {
+    explicit
+        .and_then(|path| {
+            if path.is_file() {
+                Some(path.to_path_buf())
+            } else {
+                let executable = path.join("Cursor.exe");
+                executable.is_file().then_some(executable)
+            }
+        })
+        .or_else(|| {
+            #[cfg(windows)]
+            {
+                let local_app_data = env::var_os("LOCALAPPDATA").map(PathBuf::from);
+                let program_files = env::var_os("ProgramFiles").map(PathBuf::from);
+                local_app_data
                     .into_iter()
-                    .map(|path| path.join("Cursor/Cursor.exe")),
-            )
-            .any(|path| path.is_file());
-    }
-
-    #[cfg(not(windows))]
-    false
+                    .map(|path| path.join("Programs/Cursor/Cursor.exe"))
+                    .chain(
+                        program_files
+                            .into_iter()
+                            .map(|path| path.join("Cursor/Cursor.exe")),
+                    )
+                    .find(|path| path.is_file())
+            }
+            #[cfg(not(windows))]
+            {
+                None
+            }
+        })
 }
 
 pub struct CursorClient {

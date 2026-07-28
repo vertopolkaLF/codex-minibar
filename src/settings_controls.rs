@@ -19,9 +19,6 @@ const CARD_TRAILING_RESERVE: f64 = 148.0;
 /// Space between the toggle and the expander chevron (Windows Settings ≈ 6px).
 const TOGGLE_CHEVRON_GAP: f64 = 6.0;
 const CHEVRON_SIZE: f64 = 28.0;
-/// Divider + slider block height used while animating expand/collapse.
-const EXPAND_BODY_HEIGHT: f64 = 78.0;
-
 /// Generation counter so overlapping expand animations don't fight.
 static EXPAND_ANIM_GEN: AtomicU64 = AtomicU64::new(0);
 
@@ -236,10 +233,12 @@ pub(crate) fn animate_expand_progress(
 /// header row (except the toggle itself) expands/collapses with animation.
 pub(crate) fn settings_toggle_expander(
     label: impl Into<String>,
+    description: Option<&str>,
     enabled: bool,
     on_toggled: impl IntoCallback<bool>,
     expanded: bool,
     expand_progress: f64,
+    expanded_body_height: Option<f64>,
     set_expanded: SetState<bool>,
     set_expand_progress: AsyncSetState<f64>,
     card_id: &'static str,
@@ -313,6 +312,16 @@ pub(crate) fn settings_toggle_expander(
     .relative_align_right()
     .relative_align_v_center();
 
+    let label_content: Element = match description {
+        Some(description) => vstack((
+            text_block(label).font_size(14.0).wrap(),
+            text_block(description).font_size(12.0).opacity(0.72).wrap(),
+        ))
+        .spacing(2.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .into(),
+        None => text_block(label).wrap().into(),
+    };
     let header_children: Vec<Element> = vec![
         // Transparent fill so empty header space is hit-testable (null bg is not).
         border(Element::Empty)
@@ -326,12 +335,12 @@ pub(crate) fn settings_toggle_expander(
                 move || toggle_expand()
             })
             .into(),
-        text_block(label)
+        label_content
             .margin(Thickness {
                 left: CARD_PADDING_X,
-                top: 0.0,
-                right: 0.0,
-                bottom: 0.0,
+                top: CARD_CONTENT_PADDING_Y,
+                right: 148.0,
+                bottom: CARD_CONTENT_PADDING_Y,
             })
             .relative_align_left()
             .relative_align_v_center()
@@ -344,12 +353,11 @@ pub(crate) fn settings_toggle_expander(
     ];
 
     let header = relative_panel(header_children)
-        .height(CARD_ROW_HEIGHT)
+        .min_height(CARD_ROW_HEIGHT)
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .background(Color::transparent());
 
-    let body_height = EXPAND_BODY_HEIGHT * progress;
-    let body = border(
+    let body_content = border(
         vstack((
             border(Element::Empty)
                 .height(1.0)
@@ -374,9 +382,21 @@ pub(crate) fn settings_toggle_expander(
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .opacity(progress),
     )
-    .height(body_height)
-    .max_height(body_height)
     .horizontal_alignment(HorizontalAlignment::Stretch);
+    let body: Element = match expanded_body_height {
+        Some(expanded_body_height) => {
+            let body_height = expanded_body_height * progress;
+            body_content
+                .height(body_height)
+                .max_height(body_height)
+                .into()
+        }
+        None if expanded => body_content
+            .with_opacity_transition(duration(CONTROL_NORMAL_ANIMATION))
+            .with_translation_transition(duration(CONTROL_NORMAL_ANIMATION))
+            .into(),
+        None => Element::Empty,
+    };
 
     let shell_children: Vec<Element> = {
         let (base, hover) = card_background_layers(hovered);
@@ -459,9 +479,9 @@ pub(crate) fn settings_content_expander(
             .into()
             .margin(Thickness {
                 left: CARD_PADDING_X,
-                top: 0.0,
+                top: CARD_CONTENT_PADDING_Y,
                 right: CARD_PADDING_X + CHEVRON_SIZE + TOGGLE_CHEVRON_GAP,
-                bottom: 0.0,
+                bottom: CARD_CONTENT_PADDING_Y,
             })
             .relative_align_left()
             .relative_align_right()
@@ -471,7 +491,9 @@ pub(crate) fn settings_content_expander(
     ];
 
     let header_row = relative_panel(header_children)
-        .height(CARD_ROW_HEIGHT)
+        // Never crop a wrapped description: the 60px row is a minimum, not
+        // a fixed height. Vertical padding must remain visible on every card.
+        .min_height(CARD_ROW_HEIGHT)
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .background(Color::transparent());
 
@@ -498,6 +520,8 @@ pub(crate) fn settings_content_expander(
         ))
         .spacing(0.0)
         .horizontal_alignment(HorizontalAlignment::Stretch)
+        .with_opacity_transition(duration(CONTROL_NORMAL_ANIMATION))
+        .with_translation_transition(duration(CONTROL_NORMAL_ANIMATION))
         .into()
     } else {
         Element::Empty

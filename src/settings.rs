@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 22;
+pub const SETTINGS_VERSION: u32 = 24;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -636,7 +636,15 @@ pub struct Settings {
     /// Last selected Total Spend time range on the All tab.
     pub total_spend_period: TotalSpendPeriod,
     pub show_account_name: bool,
+    /// Optional explicit Codex CLI launcher. When unset, discovery continues
+    /// to search PATH, the desktop app, and the normal install locations.
     pub codex_path: Option<PathBuf>,
+    /// Optional explicit Claude Code CLI launcher. When unset, discovery
+    /// continues to search PATH and the Claude desktop app.
+    pub claude_path: Option<PathBuf>,
+    /// Optional explicit Cursor desktop-app launcher. When unset, discovery
+    /// continues to inspect the normal installation and profile locations.
+    pub cursor_path: Option<PathBuf>,
     pub tray_widgets: Vec<TrayWidget>,
     pub notifications: NotificationSettings,
     pub history_retention_days: u16,
@@ -667,6 +675,8 @@ impl Default for Settings {
             total_spend_period: TotalSpendPeriod::default(),
             show_account_name: false,
             codex_path: None,
+            claude_path: None,
+            cursor_path: None,
             // An empty list intentionally means "show the ordinary app icon".
             tray_widgets: Vec::new(),
             notifications: NotificationSettings::default(),
@@ -1627,6 +1637,24 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     .expect("settings root was checked above")
                     .insert("version".into(), toml::Value::Integer(22));
                 version = 22;
+            }
+            22 => {
+                // `codex_path` remains optional: absent means automatic
+                // discovery, which preserves existing installations exactly.
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .insert("version".into(), toml::Value::Integer(23));
+                version = 23;
+            }
+            23 => {
+                // The new provider paths are optional. Missing values retain
+                // automatic discovery for Claude and Cursor.
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .insert("version".into(), toml::Value::Integer(24));
+                version = 24;
             }
             // Unknown future/gap versions: stamp current and keep decoding with
             // serde defaults rather than refusing to start.

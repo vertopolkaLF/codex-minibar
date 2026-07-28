@@ -23,7 +23,19 @@ pub fn discover(explicit: Option<&Path>) -> Vec<CodexCandidate> {
     let mut seen = HashSet::new();
 
     if let Some(path) = explicit {
-        push_candidate(&mut candidates, &mut seen, path, CandidateSource::Explicit);
+        if path.is_dir() {
+            for name in executable_names() {
+                push_candidate(
+                    &mut candidates,
+                    &mut seen,
+                    &path.join(name),
+                    CandidateSource::Explicit,
+                );
+            }
+        } else {
+            // Keep accepting the old file-shaped setting during migration.
+            push_candidate(&mut candidates, &mut seen, path, CandidateSource::Explicit);
+        }
     }
 
     for path in desktop_app_locations() {
