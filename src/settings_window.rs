@@ -2053,7 +2053,11 @@ fn tab_content(
                 let claude_path_tx = apply_claude_path.clone();
                 let cursor_path_tx = apply_cursor_path.clone();
                 let path_input: Element = match provider {
-                    ProviderKind::Codex => text_box(path)
+                    ProviderKind::Codex => {
+                        let picker_setter = set_codex_path.clone();
+                        let picker_tx = apply_codex_path.clone();
+                        grid((
+                            text_box(path)
                         .placeholder_text(placeholder)
                         .on_text_changed(move |value: String| {
                             codex_path_setter.call(value.clone());
@@ -2064,8 +2068,36 @@ fn tab_content(
                             );
                         })
                         .height(32.0)
-                        .into(),
-                    ProviderKind::Claude => text_box(path)
+                        .grid_column(0),
+                            Button::new("")
+                                .icon(Symbol::Folder)
+                                .width(44.0)
+                                .height(32.0)
+                                .on_click(move || match choose_provider_folder() {
+                                    Ok(Some(folder)) => {
+                                        let value = folder.display().to_string();
+                                        picker_setter.call(value.clone());
+                                        persist_provider_folder(
+                                            ProviderKind::Codex,
+                                            value,
+                                            picker_tx.clone(),
+                                        );
+                                    }
+                                    Ok(None) => {}
+                                    Err(error) => eprintln!("failed to choose Codex folder: {error:#}"),
+                                })
+                                .grid_column(1),
+                        ))
+                        .columns([GridLength::Star(1.0), GridLength::Auto])
+                        .column_spacing(8.0)
+                        .horizontal_alignment(HorizontalAlignment::Stretch)
+                        .into()
+                    }
+                    ProviderKind::Claude => {
+                        let picker_setter = set_claude_path.clone();
+                        let picker_tx = apply_claude_path.clone();
+                        grid((
+                            text_box(path)
                         .placeholder_text(placeholder)
                         .on_text_changed(move |value: String| {
                             claude_path_setter.call(value.clone());
@@ -2076,8 +2108,36 @@ fn tab_content(
                             );
                         })
                         .height(32.0)
-                        .into(),
-                    ProviderKind::Cursor => text_box(path)
+                        .grid_column(0),
+                            Button::new("")
+                                .icon(Symbol::Folder)
+                                .width(44.0)
+                                .height(32.0)
+                                .on_click(move || match choose_provider_folder() {
+                                    Ok(Some(folder)) => {
+                                        let value = folder.display().to_string();
+                                        picker_setter.call(value.clone());
+                                        persist_provider_folder(
+                                            ProviderKind::Claude,
+                                            value,
+                                            picker_tx.clone(),
+                                        );
+                                    }
+                                    Ok(None) => {}
+                                    Err(error) => eprintln!("failed to choose Claude folder: {error:#}"),
+                                })
+                                .grid_column(1),
+                        ))
+                        .columns([GridLength::Star(1.0), GridLength::Auto])
+                        .column_spacing(8.0)
+                        .horizontal_alignment(HorizontalAlignment::Stretch)
+                        .into()
+                    }
+                    ProviderKind::Cursor => {
+                        let picker_setter = set_cursor_path.clone();
+                        let picker_tx = apply_cursor_path.clone();
+                        grid((
+                            text_box(path)
                         .placeholder_text(placeholder)
                         .on_text_changed(move |value: String| {
                             cursor_path_setter.call(value.clone());
@@ -2088,13 +2148,33 @@ fn tab_content(
                             );
                         })
                         .height(32.0)
-                        .into(),
+                        .grid_column(0),
+                            Button::new("")
+                                .icon(Symbol::Folder)
+                                .width(44.0)
+                                .height(32.0)
+                                .on_click(move || match choose_provider_folder() {
+                                    Ok(Some(folder)) => {
+                                        let value = folder.display().to_string();
+                                        picker_setter.call(value.clone());
+                                        persist_provider_folder(
+                                            ProviderKind::Cursor,
+                                            value,
+                                            picker_tx.clone(),
+                                        );
+                                    }
+                                    Ok(None) => {}
+                                    Err(error) => eprintln!("failed to choose Cursor folder: {error:#}"),
+                                })
+                                .grid_column(1),
+                        ))
+                        .columns([GridLength::Star(1.0), GridLength::Auto])
+                        .column_spacing(8.0)
+                        .horizontal_alignment(HorizontalAlignment::Stretch)
+                        .into()
+                    }
                 };
                 let details = vstack((
-                    text_block(description.unwrap_or_default())
-                        .font_size(12.0)
-                        .opacity(0.72)
-                        .wrap(),
                     provider_install_status_card(install_status),
                     vstack((
                         text_block(path_label).font_size(12.0),
@@ -4751,6 +4831,43 @@ fn choose_settings_file(save: bool) -> anyhow::Result<Option<PathBuf>> {
 #[cfg(not(windows))]
 fn choose_settings_file(_save: bool) -> anyhow::Result<Option<PathBuf>> {
     anyhow::bail!("settings import and export are only available on Windows")
+}
+
+#[cfg(windows)]
+fn choose_provider_folder() -> anyhow::Result<Option<PathBuf>> {
+    use windows_sys::Win32::UI::Shell::{
+        ILFree, BROWSEINFOW, BIF_EDITBOX, BIF_NEWDIALOGSTYLE, BIF_RETURNONLYFSDIRS,
+        SHBrowseForFolderW, SHGetPathFromIDListW,
+    };
+
+    let title = "Choose the folder containing the provider files\0"
+        .encode_utf16()
+        .collect::<Vec<_>>();
+    let mut display_name = [0_u16; 260];
+    let mut dialog: BROWSEINFOW = unsafe { std::mem::zeroed() };
+    dialog.pszDisplayName = display_name.as_mut_ptr();
+    dialog.lpszTitle = title.as_ptr();
+    dialog.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_EDITBOX;
+
+    let item_id_list = unsafe { SHBrowseForFolderW(&dialog) };
+    if item_id_list.is_null() {
+        return Ok(None);
+    }
+
+    let mut path = [0_u16; 32_768];
+    let found_path = unsafe { SHGetPathFromIDListW(item_id_list, path.as_mut_ptr()) } != 0;
+    unsafe { ILFree(item_id_list) };
+    if !found_path {
+        return Ok(None);
+    }
+
+    let length = path.iter().position(|&unit| unit == 0).unwrap_or(0);
+    Ok(Some(PathBuf::from(String::from_utf16(&path[..length])?)))
+}
+
+#[cfg(not(windows))]
+fn choose_provider_folder() -> anyhow::Result<Option<PathBuf>> {
+    anyhow::bail!("provider folder selection is only available on Windows")
 }
 
 #[cfg(windows)]
