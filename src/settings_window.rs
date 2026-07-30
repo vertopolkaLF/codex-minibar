@@ -2944,7 +2944,7 @@ fn scheduled_activation_cards(
         ))
         .columns([
             GridLength::Star(1.0),
-            GridLength::Star(1.0),
+            GridLength::Star(2.0),
             GridLength::Auto,
         ])
         .rows([GridLength::Auto, GridLength::Auto])
