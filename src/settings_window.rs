@@ -2824,7 +2824,7 @@ fn scheduled_activation_cards(
             })
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .grid_row(1)
-            .grid_column_span(4);
+            .grid_column_span(3);
         // Match the proven settings-card header layout: RelativePanel pins the
         // switch to the card edge, and the explicit 50px width removes WinUI's
         // invisible content slot from the switch template.
@@ -2903,6 +2903,9 @@ fn scheduled_activation_cards(
                 .clock_identifier("24HourClock")
                 .minute_increment(5)
                 .time_minutes(schedule.time_minutes)
+                .height(40.0)
+                .min_height(40.0)
+                .max_height(40.0)
                 .horizontal_alignment(HorizontalAlignment::Stretch)
                 .on_selected_time_changed(move |time: TimeSpan| {
                     let mut next = schedules_for_time.clone();
@@ -2918,8 +2921,7 @@ fn scheduled_activation_cards(
                     }
                     persist_schedules(time_setter.clone(), time_tx.clone(), next);
                 })
-                .grid_column(1)
-                .grid_column_span(2),
+                .grid_column(1),
             Button::new("\u{E74D}")
                 .font_family("Segoe Fluent Icons")
                 .font_size(14.0)
@@ -2937,11 +2939,10 @@ fn scheduled_activation_cards(
                         .collect();
                     persist_schedules(remove_setter.clone(), remove_tx.clone(), next);
                 })
-                .grid_column(3),
+                .grid_column(2),
             weekday_selector,
         ))
         .columns([
-            GridLength::Star(1.0),
             GridLength::Star(1.0),
             GridLength::Star(1.0),
             GridLength::Auto,
