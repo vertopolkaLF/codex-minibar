@@ -1245,6 +1245,16 @@ impl ElementExt for RichTextBlock {
     }
 }
 
+impl ElementExt for TimePicker {
+    fn modifiers_mut(&mut self) -> Option<&mut Modifiers> {
+        Some(&mut self.modifiers)
+    }
+    fn with_key(mut self, key: impl Into<String>) -> Self {
+        self.key = Some(key.into());
+        self
+    }
+}
+
 impl ElementExt for Element {
     fn modifiers_mut(&mut self) -> Option<&mut Modifiers> {
         Self::modifiers_mut(self)

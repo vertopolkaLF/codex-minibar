@@ -555,12 +555,45 @@ mod tests {
     }
 
     #[test]
+    fn delayed_reset_deadline_does_not_repeat_successful_activation() {
+        let without_deadline = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(0),
+                resets_at: None,
+                duration_minutes: Some(300),
+            },
+            sampled_at: Utc::now(),
+            ..RateLimits::default()
+        };
+        let mut provider = ScriptedProvider::new(vec![
+            limits_at(15, 0),
+            without_deadline.clone(),
+            without_deadline,
+            limits_at(20, 0),
+        ]);
+        let mut activator = CountingActivator(0);
+        let mut state = ActivationState::default();
+
+        tick(&mut provider, &mut activator, &mut state, true, &[]).unwrap();
+        tick(&mut provider, &mut activator, &mut state, true, &[]).unwrap();
+        assert_eq!(activator.0, 1);
+
+        tick(&mut provider, &mut activator, &mut state, true, &[]).unwrap();
+        assert_eq!(activator.0, 1);
+        assert_eq!(
+            state.last_seen_resets_at,
+            limits_at(20, 0).primary.resets_at
+        );
+    }
+
+    #[test]
     fn absent_session_window_blocks_automatic_and_scheduled_activation() {
         let local_now = Local::now();
         let schedule = ScheduledActivation {
             id: "due-now".into(),
             provider_id: crate::settings::ProviderKind::Codex.id().into(),
             weekday: local_now.weekday().num_days_from_monday() as u8,
+            weekdays: vec![local_now.weekday().num_days_from_monday() as u8],
             time_minutes: (local_now.hour() * 60 + local_now.minute()) as u16,
             enabled: true,
         };

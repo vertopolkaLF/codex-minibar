@@ -7,6 +7,7 @@ pub struct TimePicker {
     pub header: Option<String>,
     pub clock_identifier: String,
     pub minute_increment: i32,
+    pub time_minutes: u16,
     pub is_enabled: bool,
     pub on_selected_time_changed: Option<Callback<TimeSpan>>,
 }
@@ -19,6 +20,7 @@ impl Default for TimePicker {
             header: None,
             clock_identifier: "12HourClock".to_string(),
             minute_increment: 1,
+            time_minutes: 0,
             is_enabled: true,
             on_selected_time_changed: None,
         }
@@ -46,6 +48,12 @@ impl TimePicker {
 
     pub fn minute_increment(mut self, v: i32) -> Self {
         self.minute_increment = v;
+        self
+    }
+
+    /// Minutes after midnight in the local clock used by the picker.
+    pub fn time_minutes(mut self, value: u16) -> Self {
+        self.time_minutes = value.min(23 * 60 + 59);
         self
     }
 

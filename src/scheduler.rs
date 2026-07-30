@@ -35,11 +35,15 @@ pub struct ActivationState {
     pub fired_scheduled_occurrences: std::collections::HashMap<String, DateTime<Utc>>,
 }
 
-/// Returns the next local-time occurrence of a weekly rule after `now`.
-pub fn next_scheduled_activation(rule: &ScheduledActivation, now: DateTime<Utc>) -> DateTime<Utc> {
+/// Returns the next local-time occurrence on one selected weekday after `now`.
+fn next_scheduled_activation_on(
+    rule: &ScheduledActivation,
+    weekday: u8,
+    now: DateTime<Utc>,
+) -> DateTime<Utc> {
     let local_now = now.with_timezone(&Local);
     let today = local_now.date_naive();
-    let days = (u32::from(rule.weekday) + 7 - today.weekday().num_days_from_monday()) % 7;
+    let days = (u32::from(weekday) + 7 - today.weekday().num_days_from_monday()) % 7;
     let date = today + Duration::days(i64::from(days));
     let hour = u32::from(rule.time_minutes / 60);
     let minute = u32::from(rule.time_minutes % 60);
@@ -60,6 +64,16 @@ pub fn next_scheduled_activation(rule: &ScheduledActivation, now: DateTime<Utc>)
     }
 }
 
+/// Returns the earliest next occurrence among all selected weekdays.
+pub fn next_scheduled_activation(rule: &ScheduledActivation, now: DateTime<Utc>) -> DateTime<Utc> {
+    rule.weekdays
+        .iter()
+        .copied()
+        .map(|weekday| next_scheduled_activation_on(rule, weekday, now))
+        .min()
+        .unwrap_or_else(|| next_scheduled_activation_on(rule, rule.weekday, now))
+}
+
 /// Finds a rule due since the last poll. A six-hour grace period fires a
 /// planned activation after wake/resume without replaying stale calendar work.
 pub fn due_scheduled_activation<'a>(
@@ -70,11 +84,18 @@ pub fn due_scheduled_activation<'a>(
     rules
         .iter()
         .filter(|rule| rule.enabled)
-        .filter_map(|rule| {
-            let occurrence = next_scheduled_activation(rule, now) - Duration::days(7);
+        .flat_map(|rule| {
+            rule.weekdays
+                .iter()
+                .copied()
+                .map(move |weekday| (rule, weekday))
+        })
+        .filter_map(|(rule, weekday)| {
+            let occurrence =
+                next_scheduled_activation_on(rule, weekday, now) - Duration::days(7);
             (now - occurrence <= AUTO_ACTIVATION_SCHEDULE_GUARD
                 && state.fired_scheduled_occurrences.get(&rule.id) != Some(&occurrence))
-            .then_some((rule, occurrence))
+                .then_some((rule, occurrence))
         })
         .min_by_key(|(_, occurrence)| *occurrence)
 }
@@ -120,6 +141,12 @@ impl ActivationState {
                 Decision::ActivateNow
             };
         };
+        // A reset deadline can appear one poll after a successful activation.
+        // Treat that as confirmation of the attempt, not as another new
+        // window. `observe` will store the deadline and clear the guard.
+        if self.attempted_without_active_window {
+            return Decision::Skip;
+        }
         let resets_at = normalize_reset(resets_at);
         match self.last_seen_resets_at {
             Some(previous) if is_new_window(normalize_reset(previous), resets_at) => {
@@ -238,6 +265,18 @@ mod tests {
     }
 
     #[test]
+    fn reset_appearing_after_activation_attempt_is_confirmation() {
+        let mut state = ActivationState::default();
+        state.observe(&window_at(at(15, 0)));
+        state.record_attempt(at(15, 1));
+
+        assert_eq!(state.decide(&window_at(at(20, 0))), Decision::Skip);
+        state.observe(&window_at(at(20, 0)));
+        assert_eq!(state.last_seen_resets_at, Some(at(20, 0)));
+        assert!(!state.attempted_without_active_window);
+    }
+
+    #[test]
     fn never_activates_when_the_session_window_is_absent() {
         let mut state = ActivationState {
             last_seen_resets_at: Some(at(15, 0)),
@@ -280,6 +319,7 @@ mod tests {
             id: "test-rule".into(),
             provider_id: "codex".into(),
             weekday: when.weekday().num_days_from_monday() as u8,
+            weekdays: vec![when.weekday().num_days_from_monday() as u8],
             time_minutes: (when.hour() * 60 + when.minute()) as u16,
             enabled: true,
         }
@@ -306,5 +346,25 @@ mod tests {
             now,
             AUTO_ACTIVATION_SCHEDULE_GUARD
         ));
+    }
+
+    #[test]
+    fn a_multi_day_rule_recognizes_the_latest_selected_day_as_due() {
+        let now = Utc::now();
+        let local_now = now.with_timezone(&Local);
+        let today = local_now.weekday().num_days_from_monday() as u8;
+        let tomorrow = (today + 1) % 7;
+        let rule = ScheduledActivation {
+            id: "weekdays".into(),
+            provider_id: "claude".into(),
+            weekday: today,
+            weekdays: vec![today, tomorrow],
+            time_minutes: (local_now.hour() * 60 + local_now.minute()) as u16,
+            enabled: true,
+        };
+
+        let (_, occurrence) = due_scheduled_activation(&[rule], &ActivationState::default(), now)
+            .expect("today's occurrence should be within the catch-up window");
+        assert_eq!(occurrence.with_timezone(&Local).weekday().num_days_from_monday() as u8, today);
     }
 }

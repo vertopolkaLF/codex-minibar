@@ -15093,6 +15093,15 @@ impl ITimePicker {
             .ok()
         }
     }
+    pub(crate) fn SetTime(&self, value: windows_time::TimeSpan) -> windows_core::Result<()> {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetTime)(
+                windows_core::Interface::as_raw(self),
+                value,
+            )
+            .ok()
+        }
+    }
     pub(crate) fn SelectedTimeChanged<F>(
         &self,
         handler: F,
@@ -15142,7 +15151,10 @@ pub struct ITimePicker_Vtbl {
     pub SetMinuteIncrement:
         unsafe extern "system" fn(*mut core::ffi::c_void, i32) -> windows_core::HRESULT,
     Time: usize,
-    SetTime: usize,
+    pub SetTime: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        windows_time::TimeSpan,
+    ) -> windows_core::HRESULT,
     LightDismissOverlayMode: usize,
     SetLightDismissOverlayMode: usize,
     SelectedTime: usize,

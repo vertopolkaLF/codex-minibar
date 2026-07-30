@@ -2734,13 +2734,7 @@ fn scheduled_activation_cards(
         .map(|provider| provider.display_name().to_string())
         .collect();
     const WEEKDAYS: [&str; 7] = [
-        "Monday",
-        "Tuesday",
-        "Wednesday",
-        "Thursday",
-        "Friday",
-        "Saturday",
-        "Sunday",
+        "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun",
     ];
     let mut rows: Vec<Element> = vec![
         text_block("Start a provider's 5-hour limit window at a chosen local time. Automatic activation is paused for the six hours before each scheduled run.")
@@ -2755,10 +2749,6 @@ fn scheduled_activation_cards(
             .with_key("schedule-description")
             .into(),
     ];
-    let time_labels: Vec<String> = (0..48)
-        .map(|slot| format!("{:02}:{:02}", slot / 2, (slot % 2) * 30))
-        .collect();
-
     for (index, schedule) in schedules.iter().enumerate() {
         let schedule_id = schedule.id.clone();
         let schedule_id_for_enabled = schedule_id.clone();
@@ -2768,9 +2758,6 @@ fn scheduled_activation_cards(
         let schedules_for_provider = schedules.to_vec();
         let provider_setter = set_schedules.clone();
         let provider_tx = settings_tx.clone();
-        let schedules_for_day = schedules.to_vec();
-        let day_setter = set_schedules.clone();
-        let day_tx = settings_tx.clone();
         let schedules_for_time = schedules.to_vec();
         let time_setter = set_schedules.clone();
         let time_tx = settings_tx.clone();
@@ -2786,6 +2773,58 @@ fn scheduled_activation_cards(
             })
             .unwrap_or(0) as i32;
         let provider_choices = available_providers.clone();
+        let weekday_buttons: Vec<Element> = WEEKDAYS
+            .iter()
+            .enumerate()
+            .map(|(weekday, label)| {
+                let schedules = schedules.to_vec();
+                let setter = set_schedules.clone();
+                let tx = settings_tx.clone();
+                let schedule_id = schedule.id.clone();
+                ToggleButton::new(*label, schedule.occurs_on(weekday as u8))
+                    .on_checked(move |checked| {
+                        let mut next = schedules.clone();
+                        let Some(rule) = next.iter_mut().find(|rule| rule.id == schedule_id) else {
+                            return;
+                        };
+                        let day = weekday as u8;
+                        if checked {
+                            if rule.weekdays.contains(&day) {
+                                return;
+                            }
+                            rule.weekdays.push(day);
+                            rule.weekdays.sort_unstable();
+                        } else {
+                            // A rule with no selected days could never fire. Keep
+                            // its last day selected rather than saving a dead rule.
+                            if rule.weekdays.len() == 1 && rule.weekdays[0] == day {
+                                return;
+                            }
+                            rule.weekdays.retain(|candidate| *candidate != day);
+                        }
+                        rule.weekday = *rule.weekdays.first().unwrap_or(&0);
+                        persist_schedules(setter.clone(), tx.clone(), next);
+                    })
+                    .grid_column(weekday as i32)
+                    .min_width(0.0)
+                    .horizontal_alignment(HorizontalAlignment::Stretch)
+                    .with_key(format!("schedule-{}-weekday-{weekday}", schedule.id))
+                    .into()
+            })
+            .collect();
+        let weekday_selector = grid(weekday_buttons)
+            .columns(vec![GridLength::Star(1.0); 7])
+            .rows([GridLength::Auto])
+            .column_spacing(4.0)
+            .margin(Thickness {
+                left: 0.0,
+                top: 10.0,
+                right: 0.0,
+                bottom: 0.0,
+            })
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .grid_row(1)
+            .grid_column_span(4);
         // Match the proven settings-card header layout: RelativePanel pins the
         // switch to the card edge, and the explicit 50px width removes WinUI's
         // invisible content slot from the switch template.
@@ -2860,30 +2899,16 @@ fn scheduled_activation_cards(
                     persist_schedules(provider_setter.clone(), provider_tx.clone(), next);
                 })
                 .grid_column(0),
-            ComboBox::new(WEEKDAYS)
-                .selected_index(i32::from(schedule.weekday.min(6)))
+            TimePicker::new()
+                .clock_identifier("24HourClock")
+                .minute_increment(5)
+                .time_minutes(schedule.time_minutes)
                 .horizontal_alignment(HorizontalAlignment::Stretch)
-                .on_selection_changed(move |value: i32| {
-                    let mut next = schedules_for_day.clone();
-                    if let Some(rule) = next.get_mut(index) {
-                        let weekday = value.clamp(0, 6) as u8;
-                        if rule.weekday == weekday {
-                            return;
-                        }
-                        rule.weekday = weekday;
-                    } else {
-                        return;
-                    }
-                    persist_schedules(day_setter.clone(), day_tx.clone(), next);
-                })
-                .grid_column(1),
-            ComboBox::new(time_labels.clone())
-                .selected_index(i32::from((schedule.time_minutes / 30).min(47)))
-                .horizontal_alignment(HorizontalAlignment::Stretch)
-                .on_selection_changed(move |value: i32| {
+                .on_selected_time_changed(move |time: TimeSpan| {
                     let mut next = schedules_for_time.clone();
                     if let Some(rule) = next.get_mut(index) {
-                        let time_minutes = value.clamp(0, 47) as u16 * 30;
+                        let time_minutes = (time.duration / (60 * 10_000_000))
+                            .clamp(0, i64::from(23 * 60 + 59)) as u16;
                         if rule.time_minutes == time_minutes {
                             return;
                         }
@@ -2893,7 +2918,8 @@ fn scheduled_activation_cards(
                     }
                     persist_schedules(time_setter.clone(), time_tx.clone(), next);
                 })
-                .grid_column(2),
+                .grid_column(1)
+                .grid_column_span(2),
             Button::new("\u{E74D}")
                 .font_family("Segoe Fluent Icons")
                 .font_size(14.0)
@@ -2912,6 +2938,7 @@ fn scheduled_activation_cards(
                     persist_schedules(remove_setter.clone(), remove_tx.clone(), next);
                 })
                 .grid_column(3),
+            weekday_selector,
         ))
         .columns([
             GridLength::Star(1.0),
@@ -2919,7 +2946,7 @@ fn scheduled_activation_cards(
             GridLength::Star(1.0),
             GridLength::Auto,
         ])
-        .rows([GridLength::Auto])
+        .rows([GridLength::Auto, GridLength::Auto])
         .column_spacing(8.0)
         .horizontal_alignment(HorizontalAlignment::Stretch);
         let body = border(action_row)

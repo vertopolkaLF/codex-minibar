@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 25;
+pub const SETTINGS_VERSION: u32 = 26;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -228,15 +228,18 @@ impl ProviderKind {
 }
 
 /// A weekly local-time rule for starting a provider's 5-hour limit window.
-/// `weekday` follows Chrono's Monday = 0 convention and `time_minutes` is the
-/// number of minutes after local midnight. Keeping this as a separate type
-/// leaves room for more scheduled actions in the future.
+/// Weekdays use Chrono's Monday = 0 convention and `time_minutes` is the
+/// number of minutes after local midnight. `weekday` is retained solely to
+/// migrate the original one-day schedule shape without dropping a user's rule.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ScheduledActivation {
     pub id: String,
     pub provider_id: String,
+    #[serde(default)]
     pub weekday: u8,
+    #[serde(default)]
+    pub weekdays: Vec<u8>,
     pub time_minutes: u16,
     pub enabled: bool,
 }
@@ -247,6 +250,7 @@ impl Default for ScheduledActivation {
             id: new_scheduled_activation_id(),
             provider_id: ProviderKind::Codex.id().into(),
             weekday: 0,
+            weekdays: vec![0],
             time_minutes: 9 * 60,
             enabled: true,
         }
@@ -265,11 +269,29 @@ impl ScheduledActivation {
         ProviderKind::from_id(&self.provider_id)
     }
 
+    pub fn occurs_on(&self, weekday: u8) -> bool {
+        self.weekdays.contains(&weekday)
+    }
+
     pub fn normalize(&mut self) -> bool {
         let weekday = self.weekday.min(6);
         let time_minutes = self.time_minutes.min(23 * 60 + 59);
-        let mut changed = weekday != self.weekday || time_minutes != self.time_minutes;
+        let mut weekdays = self
+            .weekdays
+            .iter()
+            .copied()
+            .filter(|day| *day <= 6)
+            .collect::<Vec<_>>();
+        weekdays.sort_unstable();
+        weekdays.dedup();
+        if weekdays.is_empty() {
+            weekdays.push(weekday);
+        }
+        let mut changed = weekday != self.weekday
+            || time_minutes != self.time_minutes
+            || weekdays != self.weekdays;
         self.weekday = weekday;
+        self.weekdays = weekdays;
         self.time_minutes = time_minutes;
         if self.id.trim().is_empty() {
             self.id = new_scheduled_activation_id();

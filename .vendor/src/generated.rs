@@ -820,7 +820,7 @@ pub fn text_box_bindings(w: &TextBox) -> PropBindings {
     out
 }
 pub fn time_picker_bindings(w: &TimePicker) -> PropBindings {
-    let mut out = Vec::with_capacity(5usize);
+    let mut out = Vec::with_capacity(6usize);
     out.push(Binding::Event(
         Event::SelectedTimeChanged,
         w.on_selected_time_changed
@@ -841,6 +841,10 @@ pub fn time_picker_bindings(w: &TimePicker) -> PropBindings {
     out.push(Binding::Prop(
         Prop::MinuteIncrement,
         PropValue::I32(w.minute_increment),
+    ));
+    out.push(Binding::Prop(
+        Prop::Time,
+        PropValue::I32(i32::from(w.time_minutes)),
     ));
     out
 }

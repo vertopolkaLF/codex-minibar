@@ -1,6 +1,6 @@
 [package]
 name = "codex-minibar"
-version = "0.3.8"
+version = "0.3.9"
 edition = "2024"
 description = "Windows tray companion for monitoring Codex usage limits"
 license = "Apache-2.0"

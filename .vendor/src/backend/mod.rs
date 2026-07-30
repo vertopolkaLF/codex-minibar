@@ -248,6 +248,7 @@ pub enum Prop {
     Text,
     TextWrapping,
     TextWrappingWrap,
+    Time,
     Title,
     Value,
     VerticalAlignment,
