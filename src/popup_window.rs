@@ -1077,9 +1077,10 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let (pager, pager_dispatch) = cx.use_reducer_fn(reduce_pager, PagerState::default());
     let (hovered_combined_usage_period, set_hovered_combined_usage_period) =
         cx.use_state(None::<TotalSpendPeriod>);
-    // Relative timestamps need a render tick even while the popup receives no
-    // input or provider event. This changes only the elapsed-time label; it
-    // never requests fresh limits.
+    // Relative timestamps need an occasional render tick while the popup is
+    // visible. `prepare_show_on_ui_thread` requests an immediate render on
+    // every open, so there is no reason to reconcile the entire hidden WinUI
+    // tree once per second for the lifetime of the process.
     let (clock_tick, set_clock_tick) = cx.use_async_state(0_u64);
     let page_animations_enabled = ui.animations_enabled && popup::system_animations_enabled();
 
@@ -1154,9 +1155,11 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             thread::spawn(move || {
                 let mut tick = 0_u64;
                 loop {
-                    thread::sleep(Duration::from_secs(1));
-                    tick = tick.wrapping_add(1);
-                    set_clock_tick.call(tick);
+                    thread::sleep(Duration::from_secs(60));
+                    if popup::is_visible() {
+                        tick = tick.wrapping_add(1);
+                        set_clock_tick.call(tick);
+                    }
                 }
             });
         }

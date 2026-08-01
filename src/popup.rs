@@ -1145,9 +1145,13 @@ pub fn hide() {
 /// to activate another WinUI window.
 pub fn prepare_show_on_ui_thread() -> bool {
     let activated = POPUP_HOST.with(|slot| {
-        slot.borrow()
-            .as_ref()
-            .is_some_and(|host| host.activate_now().is_ok())
+        slot.borrow().as_ref().is_some_and(|host| {
+            // The hidden popup no longer burns a full reconciliation every
+            // second merely to age relative timestamps. Reconcile once on
+            // every show so the first presented frame is current.
+            windows_reactor::request_ui_rerender_on_ui_thread();
+            host.activate_now().is_ok()
+        })
     });
     hide_from_switchers();
     activated
