@@ -564,6 +564,10 @@ mod platform {
 
     pub struct TrayManager {
         icons: Vec<TrayIcon>,
+        /// Last RGBA payloads pushed to Explorer. Avoid recreating identical
+        /// HICONs on every provider poll — that churn was a GDI/handle tax.
+        last_pixels: Vec<Vec<u8>>,
+        last_tooltips: Vec<String>,
         update_available: bool,
         uses_light_theme: bool,
         next_theme_check: Instant,
@@ -580,6 +584,8 @@ mod platform {
         pub fn new() -> Self {
             Self {
                 icons: Vec::new(),
+                last_pixels: Vec::new(),
+                last_tooltips: Vec::new(),
                 update_available: false,
                 uses_light_theme: system_uses_light_theme(),
                 next_theme_check: Instant::now(),
@@ -599,30 +605,48 @@ mod platform {
             // No configured widgets is a deliberate state: retain one ordinary app icon.
             let icon_count = widgets.len().max(1);
             self.icons.truncate(icon_count);
+            self.last_pixels.truncate(icon_count);
+            self.last_tooltips.truncate(icon_count);
             while self.icons.len() < icon_count {
                 let index = self.icons.len();
                 let widget = widget_for_icon(index, widgets);
-                let icon = make_icon(widget, limits)?;
+                let pixels = icon_pixels(widget, limits);
+                let tooltip = widget
+                    .map(|widget| widget_tooltip(widget, limits))
+                    .unwrap_or_else(|| "Codex Minibar".into());
                 let tray = TrayIconBuilder::new()
-                    .with_icon(icon)
+                    .with_icon(icon_from_pixels(&pixels)?)
                     .with_menu(Box::new(make_menu(update_available)?))
-                    .with_tooltip(
-                        widget
-                            .map(|widget| widget_tooltip(widget, limits))
-                            .unwrap_or_else(|| "Codex Minibar".into()),
-                    )
+                    .with_tooltip(tooltip.clone())
                     .with_menu_on_left_click(false)
                     .build()
                     .context("create tray icon")?;
                 self.icons.push(tray);
+                self.last_pixels.push(pixels);
+                self.last_tooltips.push(tooltip);
             }
             for (index, tray) in self.icons.iter().enumerate() {
                 let widget = widget_for_icon(index, widgets);
-                tray.set_icon(Some(make_icon(widget, limits)?))?;
+                let pixels = icon_pixels(widget, limits);
+                if self.last_pixels.get(index) != Some(&pixels) {
+                    tray.set_icon(Some(icon_from_pixels(&pixels)?))?;
+                    if index < self.last_pixels.len() {
+                        self.last_pixels[index] = pixels;
+                    } else {
+                        self.last_pixels.push(pixels);
+                    }
+                }
                 let tooltip = widget
                     .map(|widget| widget_tooltip(widget, limits))
                     .unwrap_or_else(|| "Codex Minibar".into());
-                tray.set_tooltip(Some(&tooltip))?;
+                if self.last_tooltips.get(index) != Some(&tooltip) {
+                    tray.set_tooltip(Some(&tooltip))?;
+                    if index < self.last_tooltips.len() {
+                        self.last_tooltips[index] = tooltip;
+                    } else {
+                        self.last_tooltips.push(tooltip);
+                    }
+                }
                 if menu_changed {
                     tray.set_menu(Some(Box::new(make_menu(update_available)?)));
                 }
@@ -657,6 +681,8 @@ mod platform {
             update_available: bool,
         ) -> Result<()> {
             self.icons.clear();
+            self.last_pixels.clear();
+            self.last_tooltips.clear();
             self.sync(widgets, limits, update_available)
         }
 
@@ -700,16 +726,16 @@ mod platform {
         }
     }
 
-    fn make_icon(widget: Option<&TrayWidget>, limits: &ProviderLimits) -> Result<Icon> {
-        Icon::from_rgba(
-            widget.map_or_else(
-                || app_icon_pixels().to_vec(),
-                |widget| render_widget(widget, limits),
-            ),
-            ICON_SIZE as u32,
-            ICON_SIZE as u32,
+    fn icon_pixels(widget: Option<&TrayWidget>, limits: &ProviderLimits) -> Vec<u8> {
+        widget.map_or_else(
+            || app_icon_pixels().to_vec(),
+            |widget| render_widget(widget, limits),
         )
-        .context("create RGBA tray icon")
+    }
+
+    fn icon_from_pixels(pixels: &[u8]) -> Result<Icon> {
+        Icon::from_rgba(pixels.to_vec(), ICON_SIZE as u32, ICON_SIZE as u32)
+            .context("create RGBA tray icon")
     }
 
     fn make_menu(update_available: bool) -> Result<Menu> {

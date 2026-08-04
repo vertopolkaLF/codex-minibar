@@ -91,6 +91,11 @@ pub fn element(name: &'static str, size: f64, color: Color) -> Element {
             eprintln!("Could not install Phosphor icon: {error:?}");
         }
     }));
+    host.unmounted = Some(Callback::new(move |native: Option<_>| {
+        if let Some(native) = native {
+            let _ = crate::acrylic::clear_children(native);
+        }
+    }));
     let icon: Element = host.into();
     icon.with_key(format!(
         "ph-{name}-{:02X}{:02X}{:02X}",
@@ -110,6 +115,11 @@ pub fn accent_element(name: &'static str, size: f64) -> Element {
                 crate::acrylic::install_accent_icon_into(native, icon.path, icon.canvas)
         {
             eprintln!("Could not install accent Phosphor icon: {error:?}");
+        }
+    }));
+    host.unmounted = Some(Callback::new(move |native: Option<_>| {
+        if let Some(native) = native {
+            let _ = crate::acrylic::clear_children(native);
         }
     }));
     let icon: Element = host.into();

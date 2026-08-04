@@ -347,6 +347,7 @@ fn park(hwnd: HWND) {
     }
     PENDING_GROW_HEIGHT_DIP.store(0, Ordering::SeqCst);
     PINNED_WIN_BOTTOM_PX.store(0, Ordering::SeqCst);
+    stop_rendering_if_idle();
     unsafe {
         // Preserve the HWND/XAML compositor between shows. An empty region and
         // an off-screen position are invisible without `SWP_HIDEWINDOW`, which
@@ -441,11 +442,32 @@ pub fn register_host(host: Rc<ReactorHost>) {
         commit_pending_grow_height();
     });
     POPUP_HOST.with(|slot| *slot.borrow_mut() = Some(host));
+    // Do not subscribe CompositionTarget.Rendering here. A permanent
+    // subscription keeps the compositor spinning for the whole process life
+    // and was a major contributor to multi-hour working-set growth. Motion
+    // paths call [`ensure_rendering`] only while an animation is active.
+}
+
+/// Attach the compositor clock while shell motion is running.
+fn ensure_rendering() {
     POPUP_RENDERING.with(|slot| {
         if slot.borrow().is_none() {
             *slot.borrow_mut() = on_rendering(animation_frame).ok();
         }
     });
+}
+
+/// Drop the compositor clock once every shell animation has finished.
+fn stop_rendering_if_idle() {
+    let idle = {
+        let motion = popup_motion();
+        motion.window.is_none() && motion.height.is_none()
+    };
+    if idle {
+        POPUP_RENDERING.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+    }
 }
 
 /// Resize to the body's natural height plus the fixed footer and popup chrome.
@@ -495,6 +517,8 @@ pub fn set_client_height_dip(height_dip: i32) {
         height.from_dip = applied;
         height.to_dip = height_dip;
         height.started_at = Instant::now();
+        drop(motion);
+        ensure_rendering();
         return;
     }
 
@@ -507,6 +531,8 @@ pub fn set_client_height_dip(height_dip: i32) {
         started_at: Instant::now(),
         duration: HEIGHT_ANIMATION_DURATION,
     });
+    drop(motion);
+    ensure_rendering();
 }
 
 /// Re-apply size constraints after Win32 chrome is stripped (stale NC metrics).
@@ -871,6 +897,7 @@ fn animation_frame() {
         Some(WindowMotionKind::Closing) => park(hwnd),
         None => {}
     }
+    stop_rendering_if_idle();
 }
 
 fn finish_opening(hwnd: HWND) {
@@ -1136,6 +1163,7 @@ pub fn hide() {
         started_at: Instant::now(),
         duration: CLOSE_ANIMATION_DURATION,
     });
+    ensure_rendering();
 }
 
 /// Synchronize XAML composition before a native show. Must run on the UI thread.
@@ -1239,6 +1267,7 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
             started_at: Instant::now(),
             duration: OPEN_ANIMATION_DURATION,
         });
+        ensure_rendering();
     }
 }
 

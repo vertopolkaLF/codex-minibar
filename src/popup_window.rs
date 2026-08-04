@@ -59,6 +59,25 @@ fn refresh_all_workers(commands: &[(ProviderKind, Sender<WorkerCommand>)]) -> bo
     requested
 }
 
+/// Hidden tray popups must not rebuild their WinUI tree on every provider poll.
+/// Remounting unmanaged SwapChainPanel/XAML children steadily grows the
+/// compositor working set (observed multi-GB after long idle runs).
+fn popup_ui_should_publish() -> bool {
+    popup::is_visible() || crate::settings_window::is_open()
+}
+
+fn publish_popup_ui(set_ui: &AsyncSetState<UiState>, ui: &UiState) {
+    if popup_ui_should_publish() {
+        set_ui.call(ui.clone());
+    }
+}
+
+/// Push the latest view state before a show so the first frame is current even
+/// after a stretch of suppressed background polls.
+fn flush_popup_ui(set_ui: &AsyncSetState<UiState>, ui: &UiState) {
+    set_ui.call(ui.clone());
+}
+
 /// Shared startup state handed from `main` into the reactor render tree.
 pub struct AppState {
     pub settings: Settings,
@@ -1611,9 +1630,12 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         // existing reactive tree rather than remount this entire page: doing
         // so also recreates its unmanaged SwapChainPanel/XAML children and
         // steadily grows the WinUI compositor's retained allocation.
+        //
+        // Key only error presence, not the message text: PollFailed can emit a
+        // new string every minute and would otherwise remount the whole page.
         let body_layout_key = format!(
-            "popup-page-{role}-{:?}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
-            ui.error,
+            "popup-page-{role}-{}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
+            ui.error.is_some(),
             ui.show_banked_resets,
             ui.show_usage_stats,
             ui.show_total_spend_on_all_tab,
@@ -1748,7 +1770,13 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 }
             }
         }));
-        host
+        host.unmounted = Some(Callback::new(|native: Option<_>| {
+            if let Some(native) = native {
+                let _ = crate::acrylic::clear_children(native);
+            }
+        }));
+        let mica: Element = host.into();
+        mica.with_key("popup-mica")
     };
 
     border(
@@ -2109,7 +2137,7 @@ fn start_background_bridge(
             update_available_from_phase(&update_phase),
         ) {
             ui.set_popup_error(error.to_string());
-            set_ui.call(ui.clone());
+            flush_popup_ui(&set_ui, &ui);
         }
 
         // Keep trying until the WinUI window exists, then park it as a popup.
@@ -2160,7 +2188,7 @@ fn start_background_bridge(
             // Presentation settings must visibly apply before any background
             // work. In particular, changing provider icons must never wait on
             // a worker lock, network request, or provider lifecycle change.
-            set_ui.call(ui.clone());
+            flush_popup_ui(set_ui, ui);
             let restart = [
                 (ProviderKind::Codex, settings.codex_path != ui.codex_path),
                 (ProviderKind::Claude, settings.claude_path != ui.claude_path),
@@ -2212,7 +2240,7 @@ fn start_background_bridge(
                     settings.history_retention_days,
                 ));
             }
-            set_ui.call(ui.clone());
+            flush_popup_ui(set_ui, ui);
         };
 
         let drain_settings = |ui: &mut UiState,
@@ -2253,7 +2281,7 @@ fn start_background_bridge(
             ) {
                 ui.set_popup_error(error.to_string());
             }
-            set_ui.call(ui.clone());
+            publish_popup_ui(set_ui, ui);
         };
 
         let drain_toast_update = || {
@@ -2266,13 +2294,13 @@ fn start_background_bridge(
         };
 
         let Some(events) = events else {
-            set_ui.call(ui.clone());
+            publish_popup_ui(&set_ui, &ui);
             loop {
                 popup::pump_messages();
                 drain_toast_update();
                 if let Err(error) = tray.refresh_system_theme(&widgets, &state.current_limits()) {
                     ui.set_popup_error(error.to_string());
-                    set_ui.call(ui.clone());
+                    publish_popup_ui(&set_ui, &ui);
                 }
                 drain_settings(
                     &mut ui,
@@ -2305,7 +2333,7 @@ fn start_background_bridge(
             drain_toast_update();
             if let Err(error) = tray.refresh_system_theme(&widgets, &state.current_limits()) {
                 ui.set_popup_error(error.to_string());
-                set_ui.call(ui.clone());
+                publish_popup_ui(&set_ui, &ui);
             }
             drain_settings(
                 &mut ui,
@@ -2369,7 +2397,7 @@ fn start_background_bridge(
                     }
                     ui.observe_limits_update();
                     ui.refreshing = false;
-                    set_ui.call(ui.clone());
+                    publish_popup_ui(&set_ui, &ui);
                 }
                 Ok(WorkerEvent::ProviderUsageUpdated(provider, usage)) => {
                     if (provider == ProviderKind::Codex && !ui.codex_enabled)
@@ -2388,7 +2416,7 @@ fn start_background_bridge(
                     // Usage stats affect only the popup, but they share the
                     // reactive snapshot revision with quota updates.
                     ui.observe_limits_update();
-                    set_ui.call(ui.clone());
+                    publish_popup_ui(&set_ui, &ui);
                 }
                 Ok(WorkerEvent::ProviderActivationStarted(provider)) => {
                     crate::logger::info(format!("{} activation started", provider.display_name()));
@@ -2406,7 +2434,7 @@ fn start_background_bridge(
                     if notification_settings.activation_success {
                         notifications::show_activation_succeeded(provider);
                     }
-                    set_ui.call(ui.clone());
+                    publish_popup_ui(&set_ui, &ui);
                 }
                 Ok(WorkerEvent::ProviderActivationFailed(provider, error)) => {
                     crate::logger::info(format!(
@@ -2418,7 +2446,7 @@ fn start_background_bridge(
                         provider.display_name(),
                         format_activation_at(Utc::now())
                     );
-                    set_ui.call(ui.clone());
+                    publish_popup_ui(&set_ui, &ui);
                 }
                 Ok(WorkerEvent::ProviderPollFailed(provider, error)) => {
                     crate::logger::info(format!(
@@ -2427,7 +2455,7 @@ fn start_background_bridge(
                     ));
                     ui.set_popup_error(format!("{}: {error}", provider.display_name()));
                     ui.refreshing = false;
-                    set_ui.call(ui.clone());
+                    publish_popup_ui(&set_ui, &ui);
                 }
                 // All live provider workers are forwarded as scoped events.
                 Ok(
@@ -2452,8 +2480,8 @@ fn pump_tray_and_dismiss(
     ui_dispatcher: &UiMarshaller,
     settings_tx: &Sender<Settings>,
     state: &AppState,
-    _ui: &mut UiState,
-    _set_ui: &AsyncSetState<UiState>,
+    ui: &mut UiState,
+    set_ui: &AsyncSetState<UiState>,
 ) -> bool {
     use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
 
@@ -2479,6 +2507,9 @@ fn pump_tray_and_dismiss(
                 // Activation and motion publication both belong to WinUI's
                 // thread. Publishing the animation from this tray worker used
                 // to strand the HWND just beyond the monitor edge forever.
+                // Flush suppressed background UiState so the first frame sees
+                // the latest limits/error/activation text.
+                flush_popup_ui(set_ui, ui);
                 let (ready_tx, ready_rx) = std::sync::mpsc::channel();
                 ui_dispatcher.dispatch(move || {
                     let ready = popup::prepare_show_on_ui_thread();
@@ -2510,6 +2541,7 @@ fn pump_tray_and_dismiss(
             TrayMenuAction::Settings => {
                 let settings_tx = settings_tx.clone();
                 let updates = Arc::clone(&state.updates);
+                flush_popup_ui(set_ui, ui);
                 ui_dispatcher.dispatch(move || {
                     // Opening Settings from the tray menu should provide the
                     // same always-visible live preview as opening it from the
@@ -3423,8 +3455,12 @@ fn combined_usage_period_button(
         .into()
 }
 
-/// Draws a true circular ring with native WinUI arc paths. The XAML host is
-/// keyed by its data so a live refresh replaces its geometry as well as text.
+/// Draws a true circular ring with native WinUI arc paths.
+///
+/// The swap-chain host key stays stable across spend refreshes. Remounting it
+/// on every usage update recreated unmanaged XAML children and grew the WinUI
+/// compositor working set over long runs. Geometry is reinstalled in place
+/// when the series fingerprint changes.
 fn combined_usage_donut(
     entries: &[(ProviderKind, u64)],
     total_spend: u64,
@@ -3432,26 +3468,76 @@ fn combined_usage_donut(
     color_scheme: ColorScheme,
 ) -> Element {
     const SIZE: f64 = 124.0;
+    thread_local! {
+        static DONUT_MOUNTS: std::cell::RefCell<
+            std::collections::HashMap<String, windows_core::IInspectable>,
+        > = std::cell::RefCell::new(std::collections::HashMap::new());
+        static DONUT_SERIES: std::cell::RefCell<std::collections::HashMap<String, u64>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+
     let xaml = combined_usage_donut_xaml(entries, total_spend, color_scheme);
     let series_key = entries.iter().fold(0_u64, |hash, (provider, spend)| {
         hash.wrapping_mul(31)
             .wrapping_add(*spend)
             .wrapping_add(*provider as u64)
     });
-    let key = format!(
-        "spend-donut-{}-{total_spend}-{series_key}-{:?}",
-        period.key(),
-        color_scheme
-    );
-    let mut host = swap_chain_panel().width(SIZE).height(SIZE);
-    host.mounted = Some(Callback::new(move |native: Option<_>| {
-        if let Some(native) = native
-            && let Err(error) = crate::acrylic::install_spend_donut_into(native, &xaml)
-        {
-            eprintln!("Could not install spend donut: {error:?}");
+    // Stable host identity — theme/period changes remount; spend updates do not.
+    let host_key = format!("spend-donut-{}-{:?}", period.key(), color_scheme);
+    let series_fingerprint = series_key.wrapping_add(total_spend);
+
+    let series_changed = DONUT_SERIES.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        match cache.get(&host_key) {
+            Some(previous) if *previous == series_fingerprint => false,
+            _ => {
+                cache.insert(host_key.clone(), series_fingerprint);
+                true
+            }
         }
-    }));
-    let donut: Element = host.with_key(key).into();
+    });
+    if series_changed {
+        DONUT_MOUNTS.with(|mounts| {
+            if let Some(native) = mounts.borrow().get(&host_key).cloned()
+                && let Err(error) = crate::acrylic::install_spend_donut_into(native, &xaml)
+            {
+                eprintln!("Could not update spend donut: {error:?}");
+            }
+        });
+    }
+
+    let xaml_for_mount = xaml.clone();
+    let key_for_mount = host_key.clone();
+    let key_for_unmount = host_key.clone();
+    let mut host = swap_chain_panel().width(SIZE).height(SIZE);
+    host.mounted = Some(Callback::new(
+        move |native: Option<windows_core::IInspectable>| {
+            if let Some(native) = native {
+                if let Err(error) =
+                    crate::acrylic::install_spend_donut_into(native.clone(), &xaml_for_mount)
+                {
+                    eprintln!("Could not install spend donut: {error:?}");
+                }
+                DONUT_MOUNTS.with(|mounts| {
+                    mounts.borrow_mut().insert(key_for_mount.clone(), native);
+                });
+            }
+        },
+    ));
+    host.unmounted = Some(Callback::new(
+        move |native: Option<windows_core::IInspectable>| {
+            if let Some(native) = native {
+                let _ = crate::acrylic::clear_children(native);
+            }
+            DONUT_MOUNTS.with(|mounts| {
+                mounts.borrow_mut().remove(&key_for_unmount);
+            });
+            DONUT_SERIES.with(|cache| {
+                cache.borrow_mut().remove(&key_for_unmount);
+            });
+        },
+    ));
+    let donut: Element = host.with_key(host_key).into();
 
     grid((
         donut,

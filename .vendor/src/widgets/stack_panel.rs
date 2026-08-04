@@ -23,9 +23,15 @@ impl StackPanel {
     /// those content-only changes as well.
     pub fn on_resize(mut self, f: impl Fn(f64, f64) + 'static) -> Self {
         let f = Rc::new(f);
-        let previous = self.mounted.take();
+        let previous_mounted = self.mounted.take();
+        let previous_unmounted = self.unmounted.take();
+        // Revoker must Drop on unmount. `mem::forget` left SizeChanged handlers
+        // (and their strong COM captures) alive forever after remount cycles.
+        let revoker_slot: Rc<RefCell<Option<windows_core::EventRevoker>>> =
+            Rc::new(RefCell::new(None));
+        let revoker_for_mount = Rc::clone(&revoker_slot);
         self.mounted = Some(Callback::new(move |native: Option<windows_core::IInspectable>| {
-            if let Some(ref callback) = previous {
+            if let Some(ref callback) = previous_mounted {
                 callback.invoke(native.clone());
             }
             let Some(native) = native else {
@@ -35,9 +41,9 @@ impl StackPanel {
                 return;
             };
             let callback = f.clone();
-            let measurement_element = native.clone();
+            let measure_target = native.clone();
             let measure = move || {
-                if let Ok(size) = measurement_element
+                if let Ok(size) = measure_target
                     .cast::<bindings::IUIElement>()
                     .and_then(|element| element.DesiredSize())
                 {
@@ -61,23 +67,26 @@ impl StackPanel {
             }
 
             let callback = f.clone();
-            let measurement_element = native.clone();
-            let revoker: Rc<RefCell<Option<windows_core::EventRevoker>>> =
-                Rc::new(RefCell::new(None));
-            if let Ok(revoker_value) = element.SizeChanged(move |_sender, args| {
+            if let Ok(revoker_value) = element.SizeChanged(move |sender, args| {
                 if let Some(args) = args.as_ref()
                     && let Ok(size) = args.NewSize()
                 {
-                    let desired = measurement_element
-                        .cast::<bindings::IUIElement>()
-                        .and_then(|element| element.DesiredSize())
+                    let desired = sender
+                        .as_ref()
+                        .and_then(|sender| sender.cast::<bindings::IUIElement>().ok())
+                        .and_then(|element| element.DesiredSize().ok())
                         .unwrap_or(size);
                     callback(desired.width as f64, desired.height as f64);
                 }
             }) {
-                *revoker.borrow_mut() = Some(revoker_value);
-                // Keep the subscription alive for the native element's lifetime.
-                std::mem::forget(revoker);
+                *revoker_for_mount.borrow_mut() = Some(revoker_value);
+            }
+        }));
+        let revoker_for_unmount = Rc::clone(&revoker_slot);
+        self.unmounted = Some(Callback::new(move |native: Option<windows_core::IInspectable>| {
+            *revoker_for_unmount.borrow_mut() = None;
+            if let Some(ref callback) = previous_unmounted {
+                callback.invoke(native);
             }
         }));
         self

@@ -164,6 +164,15 @@ pub fn install_accent_github_icon_into(mount: windows_core::IInspectable) -> Res
     install_into_inner(mount, accent_github_xaml())
 }
 
+/// Drop every hosted XAML child. Call from swap-chain `unmounted` handlers so
+/// WinUI compositor visuals are released instead of lingering after the host
+/// control is recycled or destroyed.
+pub fn clear_children(mount: windows_core::IInspectable) -> Result<()> {
+    let panel: IPanel = mount.cast()?;
+    panel.Children()?.Clear()?;
+    Ok(())
+}
+
 fn install_into_inner(mount: windows_core::IInspectable, xaml: &str) -> Result<()> {
     let panel: IPanel = mount.cast()?;
     let children = panel.Children()?;

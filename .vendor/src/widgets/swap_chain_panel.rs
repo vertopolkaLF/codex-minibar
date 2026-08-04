@@ -109,6 +109,12 @@ impl SwapChainPanel {
     pub fn on_resize(mut self, f: impl Fn(f64, f64) + 'static) -> Self {
         let f = Rc::new(f);
         let prev = self.mounted.take();
+        let previous_unmounted = self.unmounted.take();
+        // Revoker must Drop on unmount. Forgetting it pinned SizeChanged
+        // handlers across remounts and retained compositor surfaces.
+        let revoker_slot: Rc<RefCell<Option<windows_core::EventRevoker>>> =
+            Rc::new(RefCell::new(None));
+        let revoker_for_mount = Rc::clone(&revoker_slot);
         self.mounted = Some(Callback::new(move |native: Option<windows_core::IInspectable>| {
             if let Some(ref cb) = prev {
                 cb.invoke(native.clone());
@@ -119,23 +125,22 @@ impl SwapChainPanel {
             // Subscribe to SizeChanged on the FrameworkElement.
             if let Ok(fe) = native.cast::<bindings::IFrameworkElement>() {
                 let f = f.clone();
-                // Store the revoker so the subscription lives as long as the control.
-                let revoker: Rc<RefCell<Option<windows_core::EventRevoker>>> =
-                    Rc::new(RefCell::new(None));
-                let r = fe.SizeChanged(move |_sender, args| {
+                if let Ok(revoker_val) = fe.SizeChanged(move |_sender, args| {
                     if let Some(args) = args.as_ref()
                         && let Ok(s) = args.NewSize()
                     {
                         f(s.width as f64, s.height as f64);
                     }
-                });
-                if let Ok(revoker_val) = r {
-                    *revoker.borrow_mut() = Some(revoker_val);
-                    // Leak the Rc so the subscription outlives this scope.
-                    // The revoker prevent leaks — it revokes on Drop when
-                    // the control is destroyed.
-                    std::mem::forget(revoker);
+                }) {
+                    *revoker_for_mount.borrow_mut() = Some(revoker_val);
                 }
+            }
+        }));
+        let revoker_for_unmount = Rc::clone(&revoker_slot);
+        self.unmounted = Some(Callback::new(move |native: Option<windows_core::IInspectable>| {
+            *revoker_for_unmount.borrow_mut() = None;
+            if let Some(ref cb) = previous_unmounted {
+                cb.invoke(native);
             }
         }));
         self
