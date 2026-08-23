@@ -140,12 +140,20 @@ impl CodexClient {
     }
 
     pub fn read_rate_limits(&self) -> Result<RateLimits> {
+        // Desktop Codex dropped the legacy `untrusted` approval policy; only
+        // `never` / `on-request` remain. Keep `-a never` so rate-limit polls
+        // never block on an interactive approval prompt.
         let mut child = spawn_codex(
             &self.executable,
-            &["-s", "read-only", "-a", "untrusted", "app-server"],
+            &["-s", "read-only", "-a", "never", "app-server"],
         )?;
+        let stderr = child.stderr.take();
         let result = self.exchange(&mut child);
         terminate(&mut child);
+        let result = match (result, stderr) {
+            (Err(error), Some(stderr)) => Err(enrich_with_stderr(error, stderr)),
+            (result, _) => result,
+        };
         result.map(|mut limits| {
             // The account name is a display-only claim from the locally
             // authenticated Codex session. Never let a missing or malformed
@@ -185,6 +193,9 @@ impl CodexClient {
             json!({"clientInfo": {"name": "Codex Minibar", "version": env!("CARGO_PKG_VERSION")}}),
         )?;
         wait_for_response(&receiver, 1, self.timeout)?;
+        // Complete the JSON-RPC initialize handshake required by current
+        // Codex app-server builds before any other method is accepted.
+        send_notification(&mut stdin, "initialized", json!({}))?;
         send_request(&mut stdin, 2, "account/rateLimits/read", Value::Null)?;
         let response = wait_for_response(&receiver, 2, self.timeout)?;
         parse_rate_limits(&response, Utc::now())
@@ -239,6 +250,24 @@ fn send_request(stdin: &mut impl Write, id: u64, method: &str, params: Value) ->
     Ok(())
 }
 
+fn send_notification(stdin: &mut impl Write, method: &str, params: Value) -> Result<()> {
+    serde_json::to_writer(&mut *stdin, &json!({"method": method, "params": params}))?;
+    stdin.write_all(b"\n")?;
+    stdin.flush()?;
+    Ok(())
+}
+
+fn enrich_with_stderr(error: anyhow::Error, mut stderr: impl std::io::Read) -> anyhow::Error {
+    let mut message = String::new();
+    let _ = stderr.read_to_string(&mut message);
+    let message = message.trim();
+    if message.is_empty() {
+        error
+    } else {
+        error.context(format!("codex stderr: {message}"))
+    }
+}
+
 fn wait_for_response(
     receiver: &mpsc::Receiver<String>,
     id: u64,
@@ -247,9 +276,15 @@ fn wait_for_response(
     let deadline = std::time::Instant::now() + timeout;
     loop {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        let line = receiver
-            .recv_timeout(remaining)
-            .context("Codex app-server response timed out")?;
+        let line = match receiver.recv_timeout(remaining) {
+            Ok(line) => line,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                bail!("Codex app-server response timed out");
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                bail!("Codex app-server exited before responding");
+            }
+        };
         let value: Value =
             serde_json::from_str(&line).context("invalid JSON from Codex app-server")?;
         if value.get("id").and_then(Value::as_u64) == Some(id) {
