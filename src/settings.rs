@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 26;
+pub const SETTINGS_VERSION: u32 = 27;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -141,6 +141,8 @@ pub enum ProviderKind {
     Codex,
     Claude,
     Cursor,
+    OpenCodeZen,
+    OpenCodeGo,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,13 +197,21 @@ impl ProviderSettings {
 }
 
 impl ProviderKind {
-    pub const ALL: [Self; 3] = [Self::Codex, Self::Claude, Self::Cursor];
+    pub const ALL: [Self; 5] = [
+        Self::Codex,
+        Self::Claude,
+        Self::Cursor,
+        Self::OpenCodeZen,
+        Self::OpenCodeGo,
+    ];
 
     pub const fn id(self) -> &'static str {
         match self {
             Self::Codex => "codex",
             Self::Claude => "claude",
             Self::Cursor => "cursor",
+            Self::OpenCodeZen => "opencode",
+            Self::OpenCodeGo => "opencode-go",
         }
     }
 
@@ -210,6 +220,8 @@ impl ProviderKind {
             "codex" => Some(Self::Codex),
             "claude" => Some(Self::Claude),
             "cursor" => Some(Self::Cursor),
+            "opencode" => Some(Self::OpenCodeZen),
+            "opencode-go" => Some(Self::OpenCodeGo),
             _ => None,
         }
     }
@@ -219,6 +231,8 @@ impl ProviderKind {
             Self::Codex => "Codex",
             Self::Claude => "Claude",
             Self::Cursor => "Cursor",
+            Self::OpenCodeZen => "OpenCode Zen",
+            Self::OpenCodeGo => "OpenCode Go",
         }
     }
 
@@ -321,10 +335,19 @@ pub enum PopupWidgetKind {
     Codex,
     Claude,
     Cursor,
+    OpenCodeZen,
+    OpenCodeGo,
 }
 
 impl PopupWidgetKind {
-    pub const ALL: [Self; 4] = [Self::TotalSpend, Self::Codex, Self::Claude, Self::Cursor];
+    pub const ALL: [Self; 6] = [
+        Self::TotalSpend,
+        Self::Codex,
+        Self::Claude,
+        Self::Cursor,
+        Self::OpenCodeZen,
+        Self::OpenCodeGo,
+    ];
 
     pub fn default_order() -> Vec<Self> {
         Self::ALL.to_vec()
@@ -336,6 +359,8 @@ impl PopupWidgetKind {
             Self::Codex => "codex",
             Self::Claude => "claude",
             Self::Cursor => "cursor",
+            Self::OpenCodeZen => "open_code_zen",
+            Self::OpenCodeGo => "open_code_go",
         }
     }
 
@@ -345,6 +370,8 @@ impl PopupWidgetKind {
             Self::Codex => Some(ProviderKind::Codex),
             Self::Claude => Some(ProviderKind::Claude),
             Self::Cursor => Some(ProviderKind::Cursor),
+            Self::OpenCodeZen => Some(ProviderKind::OpenCodeZen),
+            Self::OpenCodeGo => Some(ProviderKind::OpenCodeGo),
         }
     }
 
@@ -353,6 +380,8 @@ impl PopupWidgetKind {
             ProviderKind::Codex => Self::Codex,
             ProviderKind::Claude => Self::Claude,
             ProviderKind::Cursor => Self::Cursor,
+            ProviderKind::OpenCodeZen => Self::OpenCodeZen,
+            ProviderKind::OpenCodeGo => Self::OpenCodeGo,
         }
     }
 }
@@ -569,6 +598,9 @@ impl TrayWidget {
 
     pub fn for_provider(provider: ProviderKind) -> Self {
         let descriptor = crate::provider_registry::descriptor(provider);
+        if descriptor.default_tray_metrics.is_empty() {
+            return Self::app_icon();
+        }
         Self {
             id: new_tray_widget_id(),
             kind: TrayWidgetKind::Limits,
@@ -584,6 +616,9 @@ impl TrayWidget {
 
     pub fn custom_for_provider(provider: ProviderKind) -> Self {
         let descriptor = crate::provider_registry::descriptor(provider);
+        if descriptor.default_tray_metrics.is_empty() {
+            return Self::app_icon();
+        }
         let metric = descriptor
             .default_tray_metrics
             .first()
@@ -733,6 +768,13 @@ pub struct Settings {
     /// Optional explicit Cursor desktop-app launcher. When unset, discovery
     /// continues to inspect the normal installation and profile locations.
     pub cursor_path: Option<PathBuf>,
+    /// Non-secret revisions used to make manual OpenCode key changes refresh
+    /// already-running workers immediately. The key material lives in the
+    /// protected secrets store, never in this file.
+    #[serde(default)]
+    pub opencode_zen_credentials_revision: u64,
+    #[serde(default)]
+    pub opencode_go_credentials_revision: u64,
     pub tray_widgets: Vec<TrayWidget>,
     pub notifications: NotificationSettings,
     pub history_retention_days: u16,
@@ -766,6 +808,8 @@ impl Default for Settings {
             codex_path: None,
             claude_path: None,
             cursor_path: None,
+            opencode_zen_credentials_revision: 0,
+            opencode_go_credentials_revision: 0,
             // An empty list intentionally means "show the ordinary app icon".
             tray_widgets: Vec::new(),
             notifications: NotificationSettings::default(),
@@ -1616,7 +1660,7 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     }
                 }
                 for provider in ProviderKind::ALL {
-                    let id = provider.id();
+                    let id = PopupWidgetKind::from_provider(provider).id();
                     if !popup_order.iter().any(|value| value.as_str() == Some(id)) {
                         popup_order.push(toml::Value::String(id.into()));
                     }
@@ -1757,6 +1801,19 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     .insert("version".into(), toml::Value::Integer(24));
                 version = 24;
             }
+            26 => {
+                // Manual OpenCode keys are stored outside settings. These
+                // non-secret revisions only wake already-running workers.
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("opencode_zen_credentials_revision")
+                    .or_insert(toml::Value::Integer(0));
+                root.entry("opencode_go_credentials_revision")
+                    .or_insert(toml::Value::Integer(0));
+                root.insert("version".into(), toml::Value::Integer(27));
+                version = 27;
+            }
             // Unknown future/gap versions: stamp current and keep decoding with
             // serde defaults rather than refusing to start.
             _ => {
@@ -1814,6 +1871,26 @@ mod tests {
         assert!(!value.notifications.weekly_low_usage_enabled);
         assert_eq!(value.notifications.weekly_low_usage_threshold_percent, 20);
         assert!(value.notifications.update_available);
+    }
+
+    #[test]
+    fn opencode_provider_ids_and_popup_ids_are_distinct_and_stable() {
+        assert_eq!(ProviderKind::OpenCodeZen.id(), "opencode");
+        assert_eq!(ProviderKind::OpenCodeGo.id(), "opencode-go");
+        assert_eq!(
+            PopupWidgetKind::from_provider(ProviderKind::OpenCodeZen).id(),
+            "open_code_zen"
+        );
+        assert_eq!(
+            PopupWidgetKind::from_provider(ProviderKind::OpenCodeGo).id(),
+            "open_code_go"
+        );
+    }
+
+    #[test]
+    fn zen_cannot_create_a_fake_tray_metric_widget() {
+        assert!(TrayWidget::for_provider(ProviderKind::OpenCodeZen).is_app_icon());
+        assert!(TrayWidget::custom_for_provider(ProviderKind::OpenCodeZen).is_app_icon());
     }
 
     #[test]
@@ -1963,6 +2040,8 @@ tray_widgets = []
                 PopupWidgetKind::Codex,
                 PopupWidgetKind::TotalSpend,
                 PopupWidgetKind::Claude,
+                PopupWidgetKind::OpenCodeZen,
+                PopupWidgetKind::OpenCodeGo,
             ]
         );
         assert!(settings.move_popup_widget(

@@ -98,6 +98,16 @@ pub fn start_provider_worker(
                 Duration::from_secs(settings.limit_refresh_interval.seconds()),
             )
         }
+        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => worker::start_worker(
+            crate::opencode::OpenCodeClient::new(provider)?,
+            crate::opencode::OpenCodeClient::new(provider)?,
+            crate::opencode::OpenCodeClient::new(provider)?,
+            activation_path,
+            false,
+            Vec::new(),
+            settings.history_retention_days,
+            Duration::from_secs(settings.limit_refresh_interval.seconds()),
+        ),
     };
     let source_events = worker
         .take_events()
@@ -163,5 +173,7 @@ fn provider_activation_path(provider: ProviderKind, base_path: PathBuf) -> PathB
         // would suppress or duplicate an activation whenever both are enabled.
         ProviderKind::Claude => base_path.with_file_name("activation-claude.toml"),
         ProviderKind::Cursor => base_path.with_file_name("activation-cursor.toml"),
+        ProviderKind::OpenCodeZen => base_path.with_file_name("activation-opencode-zen.toml"),
+        ProviderKind::OpenCodeGo => base_path.with_file_name("activation-opencode-go.toml"),
     }
 }

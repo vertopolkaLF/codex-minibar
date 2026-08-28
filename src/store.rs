@@ -141,11 +141,7 @@ impl ProviderStore {
 
     pub fn hydrate_provider_limits(&self, history_days: u16) -> Result<ProviderLimits> {
         let mut limits = ProviderLimits::default();
-        for provider in [
-            ProviderKind::Codex,
-            ProviderKind::Claude,
-            ProviderKind::Cursor,
-        ] {
+        for provider in ProviderKind::ALL {
             let mut snapshot = self.load_limits(provider)?.unwrap_or_default();
             snapshot.usage = self.load_usage_daily(provider, history_days)?;
             *limits.get_mut(provider) = snapshot;
@@ -932,7 +928,7 @@ mod tests {
         let path = dir.path().join("test.sqlite");
         let store = test_store(&path);
         let days = vec![DailyTokenUsage {
-            date: NaiveDate::from_ymd_opt(2026, 7, 14).unwrap(),
+            date: Local::now().date_naive(),
             usage: TokenUsage {
                 input_tokens: 10,
                 output_tokens: 5,

@@ -43,16 +43,17 @@ Codex Minibar reads the usage data exposed by a locally authenticated Codex CLI/
 - Optionally start Codex automatically to activate a fresh five-hour window.
 - Start with Windows, update in place from GitHub Releases, and retain history locally.
 - Detect Codex installations automatically, with an override for a custom executable path.
-- Enable Codex and Claude independently in **Settings → Providers**. Both refresh at the same time; Claude reuses its local OAuth session from Claude Code and no credential is copied into this app.
+- Enable Codex, Claude, OpenCode Zen, and OpenCode Go independently in **Settings → Providers**. Providers refresh at the same time; OpenCode usage is read from its local SQLite history and Go quota is read from the account API.
 
 ## Requirements
 
 - Windows 10 or Windows 11 (64-bit ARM or x64).
-- A locally installed and authenticated Codex CLI/Desktop app or Claude Code.
+- A locally installed and authenticated Codex CLI/Desktop app, Claude Code, or OpenCode.
 
-The app does not ask for or store provider credentials. It talks to the local Codex app server,
-or reads Claude Code's existing local OAuth session to request its usage endpoint, and stores its
-own settings and usage history in your Windows user profile.
+The app does not copy provider credentials into its ordinary settings file. It talks to the local
+Codex app server, reads Claude Code's existing local OAuth session, or reads OpenCode's local
+configuration/history. Optional OpenCode manual API keys are protected with Windows user-scoped
+DPAPI storage. The app stores its own settings and usage history in your Windows user profile.
 
 ## Install
 
