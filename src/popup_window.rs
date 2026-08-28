@@ -182,7 +182,7 @@ impl AppState {
             });
         }
         if let Ok(mut limits) = self.limits.lock() {
-            for provider in disabled.iter().chain(restart.iter()) {
+            for provider in &disabled {
                 *limits.get_mut(*provider) = RateLimits::default();
             }
         }
@@ -256,14 +256,18 @@ struct UiState {
     codex_enabled: bool,
     claude_enabled: bool,
     cursor_enabled: bool,
+    opencode_zen_enabled: bool,
+    opencode_go_enabled: bool,
     openrouter_enabled: bool,
+    opencode_zen_credentials_revision: u64,
+    opencode_go_credentials_revision: u64,
+    openrouter_credentials_revision: u64,
     popup_order: Vec<PopupWidgetKind>,
     use_colored_provider_icons: bool,
     replace_chatgpt_logo_with_codex: bool,
     codex_path: Option<std::path::PathBuf>,
     claude_path: Option<std::path::PathBuf>,
     cursor_path: Option<std::path::PathBuf>,
-    openrouter_api_key_dpapi: Option<String>,
     update_version: Option<String>,
 }
 
@@ -330,14 +334,18 @@ impl Default for UiState {
             codex_enabled: true,
             claude_enabled: false,
             cursor_enabled: false,
+            opencode_zen_enabled: false,
+            opencode_go_enabled: false,
+            opencode_zen_credentials_revision: 0,
+            opencode_go_credentials_revision: 0,
             openrouter_enabled: false,
+            openrouter_credentials_revision: 0,
             popup_order: PopupWidgetKind::default_order(),
             use_colored_provider_icons: false,
             replace_chatgpt_logo_with_codex: false,
             codex_path: None,
             claude_path: None,
             cursor_path: None,
-            openrouter_api_key_dpapi: None,
             update_version: None,
         }
     }
@@ -375,6 +383,8 @@ enum PopupView {
     Codex,
     Claude,
     Cursor,
+    OpenCodeZen,
+    OpenCodeGo,
     OpenRouter,
 }
 
@@ -384,6 +394,8 @@ impl PopupView {
             ProviderKind::Codex => Self::Codex,
             ProviderKind::Claude => Self::Claude,
             ProviderKind::Cursor => Self::Cursor,
+            ProviderKind::OpenCodeZen => Self::OpenCodeZen,
+            ProviderKind::OpenCodeGo => Self::OpenCodeGo,
             ProviderKind::OpenRouter => Self::OpenRouter,
         }
     }
@@ -394,6 +406,8 @@ impl PopupView {
             Self::Codex => Some(ProviderKind::Codex),
             Self::Claude => Some(ProviderKind::Claude),
             Self::Cursor => Some(ProviderKind::Cursor),
+            Self::OpenCodeZen => Some(ProviderKind::OpenCodeZen),
+            Self::OpenCodeGo => Some(ProviderKind::OpenCodeGo),
             Self::OpenRouter => Some(ProviderKind::OpenRouter),
         }
     }
@@ -417,6 +431,8 @@ fn enabled_popup_views(
     codex: bool,
     claude: bool,
     cursor: bool,
+    opencode_zen: bool,
+    opencode_go: bool,
     openrouter: bool,
 ) -> Vec<PopupView> {
     let mut views = vec![PopupView::All];
@@ -428,6 +444,8 @@ fn enabled_popup_views(
             ProviderKind::Codex => codex,
             ProviderKind::Claude => claude,
             ProviderKind::Cursor => cursor,
+            ProviderKind::OpenCodeZen => opencode_zen,
+            ProviderKind::OpenCodeGo => opencode_go,
             ProviderKind::OpenRouter => openrouter,
         };
         if enabled {
@@ -465,18 +483,32 @@ fn provider_is_enabled(
     codex: bool,
     claude: bool,
     cursor: bool,
+    opencode_zen: bool,
+    opencode_go: bool,
     openrouter: bool,
 ) -> bool {
     match provider {
         ProviderKind::Codex => codex,
         ProviderKind::Claude => claude,
         ProviderKind::Cursor => cursor,
+        ProviderKind::OpenCodeZen => opencode_zen,
+        ProviderKind::OpenCodeGo => opencode_go,
         ProviderKind::OpenRouter => openrouter,
     }
 }
 
-fn total_spend_provider_count(codex: bool, claude: bool, cursor: bool) -> usize {
-    usize::from(codex) + usize::from(claude) + usize::from(cursor)
+fn total_spend_provider_count(
+    codex: bool,
+    claude: bool,
+    cursor: bool,
+    opencode_zen: bool,
+    opencode_go: bool,
+) -> usize {
+    usize::from(codex)
+        + usize::from(claude)
+        + usize::from(cursor)
+        + usize::from(opencode_zen)
+        + usize::from(opencode_go)
 }
 
 fn visible_popup_widgets(
@@ -485,6 +517,8 @@ fn visible_popup_widgets(
     codex: bool,
     claude: bool,
     cursor: bool,
+    opencode_zen: bool,
+    opencode_go: bool,
     openrouter: bool,
 ) -> Vec<PopupWidgetKind> {
     popup_order
@@ -493,7 +527,15 @@ fn visible_popup_widgets(
         .filter(|widget| match widget {
             PopupWidgetKind::TotalSpend => show_total_spend,
             other => other.as_provider().is_some_and(|provider| {
-                provider_is_enabled(provider, codex, claude, cursor, openrouter)
+                provider_is_enabled(
+                    provider,
+                    codex,
+                    claude,
+                    cursor,
+                    opencode_zen,
+                    opencode_go,
+                    openrouter,
+                )
             }),
         })
         .collect()
@@ -644,12 +686,16 @@ fn popup_sections(
         sections.push(PopupSection::Error);
     }
     if limits.is_free_plan() {
-        sections.push(PopupSection::Monthly);
+        if !limits.secondary.is_empty() {
+            sections.push(PopupSection::Monthly);
+        }
     } else {
         if !limits.five_hour_disabled() {
             sections.push(PopupSection::FiveHour);
         }
-        sections.push(PopupSection::Weekly);
+        if !limits.secondary.is_empty() {
+            sections.push(PopupSection::Weekly);
+        }
     }
     if show_banked_resets && limits.available_reset_count() > 0 {
         sections.push(PopupSection::BankedResets);
@@ -721,7 +767,13 @@ fn commit_widget_drag(
         return;
     }
     let show_total_spend = ui.show_total_spend_on_all_tab
-        && total_spend_provider_count(ui.codex_enabled, ui.claude_enabled, ui.cursor_enabled) > 1;
+        && total_spend_provider_count(
+            ui.codex_enabled,
+            ui.claude_enabled,
+            ui.cursor_enabled,
+            ui.opencode_zen_enabled,
+            ui.opencode_go_enabled,
+        ) > 1;
     let mut scratch = Settings {
         popup_order: ui.popup_order.clone(),
         providers: crate::settings::ProviderSettings::from_enabled(
@@ -731,6 +783,8 @@ fn commit_widget_drag(
                     ProviderKind::Codex => ui.codex_enabled,
                     ProviderKind::Claude => ui.claude_enabled,
                     ProviderKind::Cursor => ui.cursor_enabled,
+                    ProviderKind::OpenCodeZen => ui.opencode_zen_enabled,
+                    ProviderKind::OpenCodeGo => ui.opencode_go_enabled,
                     ProviderKind::OpenRouter => ui.openrouter_enabled,
                 })
                 .map(|descriptor| descriptor.kind),
@@ -1146,10 +1200,21 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         codex_enabled: state.settings.providers.is_enabled(ProviderKind::Codex),
         claude_enabled: state.settings.providers.is_enabled(ProviderKind::Claude),
         cursor_enabled: state.settings.providers.is_enabled(ProviderKind::Cursor),
+        opencode_zen_enabled: state
+            .settings
+            .providers
+            .is_enabled(ProviderKind::OpenCodeZen),
+        opencode_go_enabled: state
+            .settings
+            .providers
+            .is_enabled(ProviderKind::OpenCodeGo),
+        opencode_zen_credentials_revision: state.settings.opencode_zen_credentials_revision,
+        opencode_go_credentials_revision: state.settings.opencode_go_credentials_revision,
         openrouter_enabled: state
             .settings
             .providers
             .is_enabled(ProviderKind::OpenRouter),
+        openrouter_credentials_revision: state.settings.openrouter_credentials_revision,
         popup_order: state.settings.popup_order.clone(),
         use_colored_provider_icons: state.settings.use_colored_provider_icons,
         replace_chatgpt_logo_with_codex: state.settings.replace_chatgpt_logo_with_codex,
@@ -1215,6 +1280,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             ui.codex_enabled,
             ui.claude_enabled,
             ui.cursor_enabled,
+            ui.opencode_zen_enabled,
+            ui.opencode_go_enabled,
             ui.openrouter_enabled,
             popup_order_key(&ui.popup_order),
         ),
@@ -1228,6 +1295,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     PopupView::Codex => ui.codex_enabled,
                     PopupView::Claude => ui.claude_enabled,
                     PopupView::Cursor => ui.cursor_enabled,
+                    PopupView::OpenCodeZen => ui.opencode_zen_enabled,
+                    PopupView::OpenCodeGo => ui.opencode_go_enabled,
                     PopupView::OpenRouter => ui.openrouter_enabled,
                 };
                 if !available {
@@ -1292,6 +1361,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 ui.codex_enabled,
                 ui.claude_enabled,
                 ui.cursor_enabled,
+                ui.opencode_zen_enabled,
+                ui.opencode_go_enabled,
                 ui.openrouter_enabled,
             )
         })
@@ -1301,19 +1372,29 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         ui.codex_enabled,
         ui.claude_enabled,
         ui.cursor_enabled,
+        ui.opencode_zen_enabled,
+        ui.opencode_go_enabled,
         ui.openrouter_enabled,
     );
     let enabled_provider_count = enabled_views.len().saturating_sub(1);
     let show_provider_tabs = enabled_provider_count > 1;
     let selected_view = pager.current;
     let show_total_spend = ui.show_total_spend_on_all_tab
-        && total_spend_provider_count(ui.codex_enabled, ui.claude_enabled, ui.cursor_enabled) > 1;
+        && total_spend_provider_count(
+            ui.codex_enabled,
+            ui.claude_enabled,
+            ui.cursor_enabled,
+            ui.opencode_zen_enabled,
+            ui.opencode_go_enabled,
+        ) > 1;
     let all_tab_widgets = visible_popup_widgets(
         &ui.popup_order,
         show_total_spend && show_provider_tabs,
         ui.codex_enabled,
         ui.claude_enabled,
         ui.cursor_enabled,
+        ui.opencode_zen_enabled,
+        ui.opencode_go_enabled,
         ui.openrouter_enabled,
     );
     let can_reorder_widgets = selected_view == PopupView::All && all_tab_widgets.len() > 1;
@@ -1343,6 +1424,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 ui.codex_enabled,
                 ui.claude_enabled,
                 ui.cursor_enabled,
+                ui.opencode_zen_enabled,
+                ui.opencode_go_enabled,
                 ui.openrouter_enabled,
             );
             for (index, widget) in widgets.into_iter().enumerate() {
@@ -1368,6 +1451,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                             ui.codex_enabled,
                             ui.claude_enabled,
                             ui.cursor_enabled,
+                            ui.opencode_zen_enabled,
+                            ui.opencode_go_enabled,
                             ui.openrouter_enabled,
                             ui.total_spend_period,
                             on_period,
@@ -1452,6 +1537,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                         ui.codex_enabled,
                         ui.claude_enabled,
                         ui.cursor_enabled,
+                        ui.opencode_zen_enabled,
+                        ui.opencode_go_enabled,
                         ui.openrouter_enabled,
                     ) || retain_disabled_detail
                 })
@@ -1483,10 +1570,16 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 has_preceding_section = true;
             }
         }
-        if !ui.codex_enabled && !ui.claude_enabled && !ui.cursor_enabled && !ui.openrouter_enabled {
+        if !ui.codex_enabled
+            && !ui.claude_enabled
+            && !ui.cursor_enabled
+            && !ui.opencode_zen_enabled
+            && !ui.opencode_go_enabled
+            && !ui.openrouter_enabled
+        {
             body.push(
                 InfoBar::new("No providers enabled")
-                    .message("Enable Codex, Claude, Cursor, or OpenRouter in Settings > Providers.")
+                    .message("Enable a provider in Settings > Providers.")
                     .is_closable(false)
                     .with_key("popup-no-providers")
                     .into(),
@@ -1582,6 +1675,18 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 ProviderKind::Cursor => {
                     ("provider-tab-cursor", "cursor", "Cursor", PopupView::Cursor)
                 }
+                ProviderKind::OpenCodeZen => (
+                    "provider-tab-opencode-zen",
+                    "opencode",
+                    "OpenCode Zen",
+                    PopupView::OpenCodeZen,
+                ),
+                ProviderKind::OpenCodeGo => (
+                    "provider-tab-opencode-go",
+                    "opencode",
+                    "OpenCode Go",
+                    PopupView::OpenCodeGo,
+                ),
                 ProviderKind::OpenRouter => (
                     "provider-tab-openrouter",
                     "openrouter",
@@ -2215,17 +2320,27 @@ fn start_background_bridge(
             codex_enabled: state.settings.providers.is_enabled(ProviderKind::Codex),
             claude_enabled: state.settings.providers.is_enabled(ProviderKind::Claude),
             cursor_enabled: state.settings.providers.is_enabled(ProviderKind::Cursor),
+            opencode_zen_enabled: state
+                .settings
+                .providers
+                .is_enabled(ProviderKind::OpenCodeZen),
+            opencode_go_enabled: state
+                .settings
+                .providers
+                .is_enabled(ProviderKind::OpenCodeGo),
+            opencode_zen_credentials_revision: state.settings.opencode_zen_credentials_revision,
+            opencode_go_credentials_revision: state.settings.opencode_go_credentials_revision,
             openrouter_enabled: state
                 .settings
                 .providers
                 .is_enabled(ProviderKind::OpenRouter),
+            openrouter_credentials_revision: state.settings.openrouter_credentials_revision,
             popup_order: state.settings.popup_order.clone(),
             use_colored_provider_icons: state.settings.use_colored_provider_icons,
             replace_chatgpt_logo_with_codex: state.settings.replace_chatgpt_logo_with_codex,
             codex_path: state.settings.codex_path.clone(),
             claude_path: state.settings.claude_path.clone(),
             cursor_path: state.settings.cursor_path.clone(),
-            openrouter_api_key_dpapi: state.settings.openrouter_api_key_dpapi.clone(),
             update_version: update_version_from_phase(&update_phase),
             ..UiState::default()
         };
@@ -2262,7 +2377,17 @@ fn start_background_bridge(
                 != settings.providers.is_enabled(ProviderKind::Codex)
                 || ui.claude_enabled != settings.providers.is_enabled(ProviderKind::Claude)
                 || ui.cursor_enabled != settings.providers.is_enabled(ProviderKind::Cursor)
+                || ui.opencode_zen_enabled
+                    != settings.providers.is_enabled(ProviderKind::OpenCodeZen)
+                || ui.opencode_go_enabled
+                    != settings.providers.is_enabled(ProviderKind::OpenCodeGo)
                 || ui.openrouter_enabled != settings.providers.is_enabled(ProviderKind::OpenRouter);
+            let opencode_zen_credentials_changed =
+                ui.opencode_zen_credentials_revision != settings.opencode_zen_credentials_revision;
+            let opencode_go_credentials_changed =
+                ui.opencode_go_credentials_revision != settings.opencode_go_credentials_revision;
+            let openrouter_credentials_changed =
+                ui.openrouter_credentials_revision != settings.openrouter_credentials_revision;
             ui.theme = settings.theme;
             ui.accent_color = settings.accent_color;
             ui.animations_enabled = settings.animations_enabled;
@@ -2274,12 +2399,18 @@ fn start_background_bridge(
             ui.total_spend_presentation = settings.total_spend_presentation;
             ui.total_spend_period = settings.total_spend_period;
             ui.show_account_name = settings.show_account_name;
-            let openrouter_key_changed =
-                settings.openrouter_api_key_dpapi != ui.openrouter_api_key_dpapi;
             ui.codex_enabled = settings.providers.is_enabled(ProviderKind::Codex);
             ui.claude_enabled = settings.providers.is_enabled(ProviderKind::Claude);
             ui.cursor_enabled = settings.providers.is_enabled(ProviderKind::Cursor);
+            ui.opencode_zen_enabled = settings.providers.is_enabled(ProviderKind::OpenCodeZen);
+            ui.opencode_go_enabled = settings.providers.is_enabled(ProviderKind::OpenCodeGo);
+            ui.opencode_zen_credentials_revision = settings.opencode_zen_credentials_revision;
+            ui.opencode_go_credentials_revision = settings.opencode_go_credentials_revision;
             ui.openrouter_enabled = settings.providers.is_enabled(ProviderKind::OpenRouter);
+            ui.openrouter_credentials_revision = settings.openrouter_credentials_revision;
+            if openrouter_credentials_changed && let Ok(mut limits) = state.limits.lock() {
+                *limits.get_mut(ProviderKind::OpenRouter) = RateLimits::default();
+            }
             ui.popup_order = settings.popup_order.clone();
             ui.use_colored_provider_icons = settings.use_colored_provider_icons;
             ui.replace_chatgpt_logo_with_codex = settings.replace_chatgpt_logo_with_codex;
@@ -2299,7 +2430,6 @@ fn start_background_bridge(
                 (ProviderKind::Codex, settings.codex_path != ui.codex_path),
                 (ProviderKind::Claude, settings.claude_path != ui.claude_path),
                 (ProviderKind::Cursor, settings.cursor_path != ui.cursor_path),
-                (ProviderKind::OpenRouter, openrouter_key_changed),
             ]
             .into_iter()
             .filter_map(|(provider, changed)| changed.then_some(provider))
@@ -2307,7 +2437,6 @@ fn start_background_bridge(
             ui.codex_path = settings.codex_path.clone();
             ui.claude_path = settings.claude_path.clone();
             ui.cursor_path = settings.cursor_path.clone();
-            ui.openrouter_api_key_dpapi = settings.openrouter_api_key_dpapi.clone();
             if providers_changed || !restart.is_empty() {
                 let provider_errors = state.sync_provider_workers(&settings, &restart);
                 if !provider_errors.is_empty() {
@@ -2347,6 +2476,12 @@ fn start_background_bridge(
                 let _ = commands.send(WorkerCommand::SetHistoryRetentionDays(
                     settings.history_retention_days,
                 ));
+                if (provider == ProviderKind::OpenCodeZen && opencode_zen_credentials_changed)
+                    || (provider == ProviderKind::OpenCodeGo && opencode_go_credentials_changed)
+                    || (provider == ProviderKind::OpenRouter && openrouter_credentials_changed)
+                {
+                    let _ = commands.send(WorkerCommand::Refresh);
+                }
             }
             flush_popup_ui(set_ui, ui);
         };
@@ -2470,6 +2605,8 @@ fn start_background_bridge(
                     if (provider == ProviderKind::Codex && !ui.codex_enabled)
                         || (provider == ProviderKind::Claude && !ui.claude_enabled)
                         || (provider == ProviderKind::Cursor && !ui.cursor_enabled)
+                        || (provider == ProviderKind::OpenCodeZen && !ui.opencode_zen_enabled)
+                        || (provider == ProviderKind::OpenCodeGo && !ui.opencode_go_enabled)
                         || (provider == ProviderKind::OpenRouter && !ui.openrouter_enabled)
                     {
                         continue;
@@ -2512,6 +2649,8 @@ fn start_background_bridge(
                     if (provider == ProviderKind::Codex && !ui.codex_enabled)
                         || (provider == ProviderKind::Claude && !ui.claude_enabled)
                         || (provider == ProviderKind::Cursor && !ui.cursor_enabled)
+                        || (provider == ProviderKind::OpenCodeZen && !ui.opencode_zen_enabled)
+                        || (provider == ProviderKind::OpenCodeGo && !ui.opencode_go_enabled)
                         || (provider == ProviderKind::OpenRouter && !ui.openrouter_enabled)
                     {
                         continue;
@@ -2728,6 +2867,7 @@ fn popup_tab_button(
         Some("claude") => Color::rgb(217, 119, 87),
         // Match Total Spend: Cursor mark flips with the Windows text theme.
         Some("cursor") => combined_usage_color(ProviderKind::Cursor, color_scheme),
+        Some("opencode") => combined_usage_color(ProviderKind::OpenCodeZen, color_scheme),
         Some("openrouter") => combined_usage_color(ProviderKind::OpenRouter, color_scheme),
         _ => idle_icon_color,
     };
@@ -3261,6 +3401,43 @@ fn usage_statistics_card(provider: ProviderKind, limits: &RateLimits) -> Element
         .border_brush(ThemeRef::CardStroke)
         .into();
     }
+    if is_cost_provider(provider) {
+        let metrics = grid((
+            usage_value_metric(
+                "Today spend",
+                format_spend(statistics.today.estimated_cost_microusd),
+                statistics.today.requests,
+            ),
+            usage_value_metric(
+                &format!("Last {} days spend", statistics.history_days),
+                format_spend(statistics.history.estimated_cost_microusd),
+                statistics.history.requests,
+            )
+            .grid_column(1),
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
+        .rows([GridLength::Auto])
+        .horizontal_alignment(HorizontalAlignment::Stretch);
+        let detail = format!(
+            "{} requests · {} tokens",
+            statistics.history.requests,
+            format_token_count(statistics.history.total_tokens()),
+        );
+        return border(
+            vstack((
+                metrics,
+                usage_activity_chart(statistics, true),
+                caption(detail).foreground(ThemeRef::TertiaryText),
+            ))
+            .spacing(12.0),
+        )
+        .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+        .padding(Thickness::uniform(12.0))
+        .background(ThemeRef::CardBackground)
+        .border_thickness(Thickness::uniform(1.0))
+        .border_brush(ThemeRef::CardStroke)
+        .into();
+    }
     let period = statistics.history_days;
     let total = format_token_count(statistics.history.total_tokens());
     let today = format_token_count(statistics.today.total_tokens());
@@ -3289,7 +3466,7 @@ fn usage_statistics_card(provider: ProviderKind, limits: &RateLimits) -> Element
     .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
     .rows([GridLength::Auto])
     .horizontal_alignment(HorizontalAlignment::Stretch);
-    let chart = usage_activity_chart(statistics);
+    let chart = usage_activity_chart(statistics, false);
 
     border(
         vstack((
@@ -3313,6 +3490,8 @@ fn combined_usage_card(
     codex_enabled: bool,
     claude_enabled: bool,
     cursor_enabled: bool,
+    opencode_zen_enabled: bool,
+    opencode_go_enabled: bool,
     openrouter_enabled: bool,
     period: TotalSpendPeriod,
     on_period: impl Fn(TotalSpendPeriod) + Clone + 'static,
@@ -3332,6 +3511,8 @@ fn combined_usage_card(
                 ProviderKind::Codex => codex_enabled,
                 ProviderKind::Claude => claude_enabled,
                 ProviderKind::Cursor => cursor_enabled,
+                ProviderKind::OpenCodeZen => opencode_zen_enabled,
+                ProviderKind::OpenCodeGo => opencode_go_enabled,
                 ProviderKind::OpenRouter => openrouter_enabled,
             };
             enabled.then(|| (descriptor.kind, limits.get(descriptor.kind)))
@@ -3815,6 +3996,10 @@ fn combined_usage_color(provider: ProviderKind, color_scheme: ColorScheme) -> Co
             ColorScheme::Light => Color::rgb(18, 18, 18),
             ColorScheme::Dark => Color::rgb(230, 230, 230),
         },
+        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => match color_scheme {
+            ColorScheme::Light => Color::rgb(75, 75, 75),
+            ColorScheme::Dark => Color::rgb(205, 205, 205),
+        },
         ProviderKind::OpenRouter => Color::rgb(0, 196, 140),
     }
 }
@@ -3840,9 +4025,33 @@ fn usage_tokens_and_cost_metric(label: &str, tokens: String, cost: String) -> El
     .into()
 }
 
+fn usage_value_metric(label: &str, value: String, requests: u64) -> Element {
+    vstack((
+        caption(label).foreground(ThemeRef::TertiaryText),
+        hstack((
+            text_block(value).font_weight(600),
+            caption(format!("{requests} requests"))
+                .foreground(ThemeRef::TertiaryText)
+                .vertical_alignment(VerticalAlignment::Center),
+        ))
+        .spacing(5.0)
+        .vertical_alignment(VerticalAlignment::Center),
+    ))
+    .spacing(1.0)
+    .vertical_alignment(VerticalAlignment::Center)
+    .into()
+}
+
+fn is_cost_provider(provider: ProviderKind) -> bool {
+    matches!(
+        provider,
+        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo
+    )
+}
+
 /// Compact, screenshot-style activity chart. For long histories, adjacent days
 /// are grouped into a single bar so the chart stays legible in the tray popup.
-fn usage_activity_chart(statistics: &crate::usage::UsageStatistics) -> Element {
+fn usage_activity_chart(statistics: &crate::usage::UsageStatistics, cost_based: bool) -> Element {
     const MAX_BARS: usize = 60;
     const CHART_HEIGHT: f64 = 56.0;
     const BAR_GAP: f64 = 2.0;
@@ -3856,7 +4065,21 @@ fn usage_activity_chart(statistics: &crate::usage::UsageStatistics) -> Element {
     let today = Local::now().date_naive();
     let first_day = today - ChronoDuration::days(days.saturating_sub(1) as i64);
     let daily: Vec<u64> = (0..days)
-        .map(|index| statistics.tokens_on(first_day + ChronoDuration::days(index as i64)))
+        .map(|index| {
+            let date = first_day + ChronoDuration::days(index as i64);
+            statistics
+                .daily
+                .iter()
+                .find(|entry| entry.date == date)
+                .map(|entry| {
+                    if cost_based {
+                        entry.usage.estimated_cost_microusd
+                    } else {
+                        entry.usage.total_tokens()
+                    }
+                })
+                .unwrap_or_default()
+        })
         .collect();
     let values = compact_activity_bars(&daily, MAX_BARS);
     let max_value = values.iter().copied().max().unwrap_or(0);
@@ -4173,6 +4396,27 @@ mod tests {
     }
 
     #[test]
+    fn zen_without_quota_windows_does_not_render_placeholder_limit_cards() {
+        let limits = RateLimits {
+            plan_type: Some("Zen · 2 models".into()),
+            usage: crate::usage::UsageStatistics {
+                history: crate::usage::TokenUsage {
+                    requests: 1,
+                    estimated_cost_microusd: 1_250_000,
+                    priced_requests: 1,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            popup_sections(&limits, true, true, false),
+            vec![PopupSection::UsageStatistics]
+        );
+    }
+
+    #[test]
     fn plan_names_use_sentence_case() {
         assert_eq!(capitalize_plan_name("PLUS"), "Plus");
         assert_eq!(capitalize_plan_name("  pro  "), "Pro");
@@ -4223,30 +4467,6 @@ mod tests {
         );
         // Heading + 5h + weekly + Fable (no separate plan metadata row).
         assert_eq!(cards.len(), 4);
-    }
-
-    #[test]
-    fn openrouter_cards_render_spending_without_fake_quota_cards() {
-        let limits = RateLimits {
-            spending: Some(SpendingSummary {
-                used_microusd: 4_250_000,
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let cards = provider_cards(
-            ProviderKind::OpenRouter,
-            true,
-            &limits,
-            false,
-            true,
-            false,
-            true,
-            false,
-            ColorScheme::Dark,
-            None,
-        );
-        assert_eq!(cards.len(), 2);
     }
 
     #[test]
@@ -4336,18 +4556,30 @@ mod tests {
     #[test]
     fn every_provider_membership_has_the_expected_tab_order() {
         let default_order = PopupWidgetKind::default_order();
-        for mask in 0_u8..16 {
+        for mask in 0_u8..64 {
             let codex = mask & 0b001 != 0;
             let claude = mask & 0b010 != 0;
             let cursor = mask & 0b100 != 0;
-            let openrouter = mask & 0b1000 != 0;
-            let views = enabled_popup_views(&default_order, codex, claude, cursor, openrouter);
+            let opencode_zen = mask & 0b01000 != 0;
+            let opencode_go = mask & 0b10000 != 0;
+            let openrouter = mask & 0b100000 != 0;
+            let views = enabled_popup_views(
+                &default_order,
+                codex,
+                claude,
+                cursor,
+                opencode_zen,
+                opencode_go,
+                openrouter,
+            );
             let providers = provider_order_from_popup(&default_order);
 
             assert_eq!(views.first(), Some(&PopupView::All));
             assert_eq!(views.contains(&PopupView::Codex), codex);
             assert_eq!(views.contains(&PopupView::Claude), claude);
             assert_eq!(views.contains(&PopupView::Cursor), cursor);
+            assert_eq!(views.contains(&PopupView::OpenCodeZen), opencode_zen);
+            assert_eq!(views.contains(&PopupView::OpenCodeGo), opencode_go);
             assert_eq!(views.contains(&PopupView::OpenRouter), openrouter);
             assert!(
                 views
@@ -4359,6 +4591,8 @@ mod tests {
                 1 + usize::from(codex)
                     + usize::from(claude)
                     + usize::from(cursor)
+                    + usize::from(opencode_zen)
+                    + usize::from(opencode_go)
                     + usize::from(openrouter)
             );
         }
@@ -4368,9 +4602,11 @@ mod tests {
             PopupWidgetKind::Cursor,
             PopupWidgetKind::Claude,
             PopupWidgetKind::Codex,
+            PopupWidgetKind::OpenCodeZen,
+            PopupWidgetKind::OpenCodeGo,
             PopupWidgetKind::OpenRouter,
         ];
-        let views = enabled_popup_views(&reversed, true, true, true, true);
+        let views = enabled_popup_views(&reversed, true, true, true, true, true, true);
         assert_eq!(
             views,
             vec![
@@ -4378,6 +4614,8 @@ mod tests {
                 PopupView::Cursor,
                 PopupView::Claude,
                 PopupView::Codex,
+                PopupView::OpenCodeZen,
+                PopupView::OpenCodeGo,
                 PopupView::OpenRouter,
             ]
         );

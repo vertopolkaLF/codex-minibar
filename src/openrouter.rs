@@ -8,33 +8,35 @@ use serde::Deserialize;
 
 use crate::{
     limits::{LimitWindow, RateLimits, SpendingSummary},
+    secrets,
     usage::UsageStatistics,
     worker::{Activator, LimitProvider, UsageProvider},
 };
 
 const API_URL: &str = "https://openrouter.ai/api/v1/key";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const SECRET_NAME: &str = "openrouter-api-key";
 
 pub struct OpenRouterClient {
-    api_key: String,
     agent: ureq::Agent,
 }
 
 pub struct OpenRouterActivator;
 
 impl OpenRouterClient {
-    pub fn new(api_key: String) -> Self {
+    pub fn new() -> Self {
         Self {
-            api_key,
             agent: ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build(),
         }
     }
 
     fn read_key(&self) -> Result<RateLimits> {
+        let api_key =
+            secrets::load(SECRET_NAME)?.context("OpenRouter API key is not configured")?;
         let response = self
             .agent
             .get(API_URL)
-            .set("Authorization", &format!("Bearer {}", self.api_key))
+            .set("Authorization", &format!("Bearer {api_key}"))
             .set("Accept", "application/json")
             .call()
             .context("request OpenRouter API-key usage")?;
@@ -43,6 +45,21 @@ impl OpenRouterClient {
             .context("read OpenRouter API-key response")?;
         parse_key_response(&body, Utc::now())
     }
+}
+
+pub fn is_installed() -> bool {
+    key_is_configured()
+}
+
+pub fn key_is_configured() -> bool {
+    secrets::load(SECRET_NAME)
+        .ok()
+        .flatten()
+        .is_some_and(|key| !key.trim().is_empty())
+}
+
+pub fn save_api_key(value: Option<&str>) -> Result<()> {
+    secrets::save(SECRET_NAME, value)
 }
 
 impl LimitProvider for OpenRouterClient {

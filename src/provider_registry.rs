@@ -76,6 +76,29 @@ const CURSOR_METRICS: &[MetricDescriptor] = &[
     },
 ];
 
+// Zen has no authoritative percentage/reset windows exposed by its API.
+// Local spend is rendered in the popup activity card, not as a fake tray
+// quota.
+const OPENCODE_ZEN_METRICS: &[MetricDescriptor] = &[];
+
+const OPENCODE_GO_METRICS: &[MetricDescriptor] = &[
+    MetricDescriptor {
+        id: "opencode-go.session",
+        label: "5h session",
+        source: MetricSource::Primary,
+    },
+    MetricDescriptor {
+        id: "opencode-go.weekly",
+        label: "Weekly",
+        source: MetricSource::Secondary,
+    },
+    MetricDescriptor {
+        id: "opencode-go.monthly",
+        label: "Monthly",
+        source: MetricSource::Additional("monthly"),
+    },
+];
+
 const OPENROUTER_METRICS: &[MetricDescriptor] = &[MetricDescriptor {
     id: "openrouter.limit",
     label: "Spending limit",
@@ -115,6 +138,32 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         include_in_total_spend: true,
         metrics: CURSOR_METRICS,
         default_tray_metrics: &["cursor.auto", "cursor.api"],
+    },
+    ProviderDescriptor {
+        kind: ProviderKind::OpenCodeZen,
+        id: "opencode",
+        display_name: "OpenCode Zen",
+        icon: "opencode",
+        brand_rgb: (128, 128, 128),
+        supports_activation: false,
+        include_in_total_spend: true,
+        metrics: OPENCODE_ZEN_METRICS,
+        default_tray_metrics: &[],
+    },
+    ProviderDescriptor {
+        kind: ProviderKind::OpenCodeGo,
+        id: "opencode-go",
+        display_name: "OpenCode Go",
+        icon: "opencode",
+        brand_rgb: (128, 128, 128),
+        supports_activation: false,
+        include_in_total_spend: true,
+        metrics: OPENCODE_GO_METRICS,
+        default_tray_metrics: &[
+            "opencode-go.session",
+            "opencode-go.weekly",
+            "opencode-go.monthly",
+        ],
     },
     ProviderDescriptor {
         kind: ProviderKind::OpenRouter,
@@ -259,7 +308,30 @@ mod tests {
         assert!(descriptor(ProviderKind::Codex).supports_activation);
         assert!(descriptor(ProviderKind::Claude).supports_activation);
         assert!(!descriptor(ProviderKind::Cursor).supports_activation);
+        assert!(!descriptor(ProviderKind::OpenCodeZen).supports_activation);
+        assert!(!descriptor(ProviderKind::OpenCodeGo).supports_activation);
         assert!(!descriptor(ProviderKind::OpenRouter).supports_activation);
         assert!(!descriptor(ProviderKind::OpenRouter).include_in_total_spend);
+    }
+
+    #[test]
+    fn opencode_registry_keeps_zen_popup_only_and_maps_go_monthly() {
+        assert!(descriptor(ProviderKind::OpenCodeZen).metrics.is_empty());
+        let limits = RateLimits {
+            additional_limits: vec![crate::limits::AdditionalLimit {
+                id: "monthly".into(),
+                title: "Monthly".into(),
+                window: LimitWindow {
+                    used_percent: Some(4),
+                    ..Default::default()
+                },
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            metric_window(ProviderKind::OpenCodeGo, &limits, "opencode-go.monthly")
+                .and_then(|window| window.used_percent),
+            Some(4)
+        );
     }
 }

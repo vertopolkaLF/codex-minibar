@@ -28,6 +28,13 @@ pub trait LimitProvider: Send + 'static {
 pub trait UsageProvider: Send + 'static {
     fn load_cached_usage_statistics(&mut self, history_days: u16) -> Result<UsageStatistics>;
     fn refresh_usage_statistics(&mut self, history_days: u16) -> Result<UsageStatistics>;
+
+    /// Some providers have useful local history even when their remote quota
+    /// endpoint is unavailable. The default keeps the existing lazy behavior
+    /// for Codex, Claude, and Cursor.
+    fn refresh_without_limits(&self) -> bool {
+        false
+    }
 }
 
 pub trait Activator: Send + 'static {
@@ -178,7 +185,7 @@ fn start_worker_with_channels(
 ) -> WorkerHandle {
     let (limit_commands, limit_commands_rx) = mpsc::channel();
     let (usage_commands, usage_commands_rx) = mpsc::channel();
-    let limits_ready = Arc::new(AtomicBool::new(false));
+    let limits_ready = Arc::new(AtomicBool::new(usage_provider.refresh_without_limits()));
 
     let limit_join = {
         let event_sender = event_sender.clone();
@@ -500,6 +507,7 @@ mod tests {
 
     struct CountingUsageProvider {
         refreshes: Arc<std::sync::atomic::AtomicUsize>,
+        refresh_without_limits: bool,
     }
 
     impl UsageProvider for CountingUsageProvider {
@@ -516,6 +524,10 @@ mod tests {
                 },
                 ..Default::default()
             })
+        }
+
+        fn refresh_without_limits(&self) -> bool {
+            self.refresh_without_limits
         }
     }
 
@@ -722,6 +734,7 @@ mod tests {
         let refreshes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let provider = CountingUsageProvider {
             refreshes: Arc::clone(&refreshes),
+            refresh_without_limits: false,
         };
         let task = thread::spawn(move || {
             run_usage_task(provider, 30, commands_rx, events_tx, limits_ready);
@@ -750,6 +763,34 @@ mod tests {
     }
 
     #[test]
+    fn providers_with_local_usage_can_scan_before_remote_limits() {
+        let (commands_tx, commands_rx) = mpsc::channel();
+        let (events_tx, events_rx) = mpsc::channel();
+        let refreshes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider = CountingUsageProvider {
+            refreshes: Arc::clone(&refreshes),
+            refresh_without_limits: true,
+        };
+        let limits_ready = Arc::new(AtomicBool::new(provider.refresh_without_limits()));
+        let task = thread::spawn(move || {
+            run_usage_task(provider, 30, commands_rx, events_tx, limits_ready);
+        });
+
+        assert!(matches!(
+            events_rx.recv_timeout(Duration::from_secs(1)),
+            Ok(WorkerEvent::UsageUpdated(_))
+        ));
+        assert!(matches!(
+            events_rx.recv_timeout(Duration::from_secs(1)),
+            Ok(WorkerEvent::UsageUpdated(_))
+        ));
+        assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+
+        commands_tx.send(WorkerCommand::Shutdown).unwrap();
+        task.join().unwrap();
+    }
+
+    #[test]
     fn unrelated_commands_do_not_restart_usage_scan_or_republish_cache() {
         let (commands_tx, commands_rx) = mpsc::channel();
         let (events_tx, events_rx) = mpsc::channel();
@@ -757,6 +798,7 @@ mod tests {
         let refreshes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let provider = CountingUsageProvider {
             refreshes: Arc::clone(&refreshes),
+            refresh_without_limits: false,
         };
         let task = thread::spawn(move || {
             run_usage_task(provider, 30, commands_rx, events_tx, limits_ready);
@@ -805,6 +847,7 @@ mod tests {
         let refreshes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let provider = CountingUsageProvider {
             refreshes: Arc::clone(&refreshes),
+            refresh_without_limits: false,
         };
         let task = thread::spawn(move || {
             run_usage_task(provider, 30, commands_rx, events_tx, limits_ready);
@@ -837,6 +880,7 @@ mod tests {
         let refreshes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let provider = CountingUsageProvider {
             refreshes: Arc::clone(&refreshes),
+            refresh_without_limits: false,
         };
         let task_limits_ready = Arc::clone(&limits_ready);
         let task = thread::spawn(move || {

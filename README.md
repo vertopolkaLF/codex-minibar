@@ -43,17 +43,18 @@ Codex Minibar reads the usage data exposed by a locally authenticated Codex CLI/
 - Optionally start Codex automatically to activate a fresh five-hour window.
 - Start with Windows, update in place from GitHub Releases, and retain history locally.
 - Detect Codex installations automatically, with an override for a custom executable path.
-- Enable Codex, Claude, Cursor, and OpenRouter independently in **Settings → Providers**. OpenRouter reads the usage and spending limit of a configured API key; the key is protected with Windows DPAPI and is never exported.
+- Enable Codex, Claude, Cursor, OpenCode Zen, OpenCode Go, and OpenRouter independently in **Settings → Providers**. Providers refresh at the same time; OpenCode usage is read from its local SQLite history, Go quota is read from the account API, and OpenRouter usage is read from the configured API key.
 
 ## Requirements
 
 - Windows 10 or Windows 11 (64-bit ARM or x64).
-- A locally installed and authenticated Codex CLI/Desktop app, Claude Code, Cursor, or an OpenRouter API key.
+- A locally installed and authenticated Codex CLI/Desktop app, Claude Code, Cursor, or OpenCode, or an OpenRouter API key.
 
-The app does not store provider credentials in plaintext. It talks to the local Codex app server,
-reads Claude Code's existing local OAuth session, reads Cursor's signed-in local profile, or
-requests OpenRouter key usage with the DPAPI-protected key. Its settings and usage history stay in
-your Windows user profile.
+The app does not copy provider credentials into its ordinary settings file. It talks to the local
+Codex app server, reads Claude Code's existing local OAuth session, reads OpenCode's local
+configuration/history, or requests OpenRouter key usage. Optional OpenCode and OpenRouter manual
+API keys are protected with Windows user-scoped DPAPI storage. The app stores its own settings and
+usage history in your Windows user profile.
 
 ## Install
 

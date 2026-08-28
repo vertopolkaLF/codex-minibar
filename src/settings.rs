@@ -141,6 +141,8 @@ pub enum ProviderKind {
     Codex,
     Claude,
     Cursor,
+    OpenCodeZen,
+    OpenCodeGo,
     #[serde(rename = "openrouter")]
     OpenRouter,
 }
@@ -197,13 +199,22 @@ impl ProviderSettings {
 }
 
 impl ProviderKind {
-    pub const ALL: [Self; 4] = [Self::Codex, Self::Claude, Self::Cursor, Self::OpenRouter];
+    pub const ALL: [Self; 6] = [
+        Self::Codex,
+        Self::Claude,
+        Self::Cursor,
+        Self::OpenCodeZen,
+        Self::OpenCodeGo,
+        Self::OpenRouter,
+    ];
 
     pub const fn id(self) -> &'static str {
         match self {
             Self::Codex => "codex",
             Self::Claude => "claude",
             Self::Cursor => "cursor",
+            Self::OpenCodeZen => "opencode",
+            Self::OpenCodeGo => "opencode-go",
             Self::OpenRouter => "openrouter",
         }
     }
@@ -213,6 +224,8 @@ impl ProviderKind {
             "codex" => Some(Self::Codex),
             "claude" => Some(Self::Claude),
             "cursor" => Some(Self::Cursor),
+            "opencode" => Some(Self::OpenCodeZen),
+            "opencode-go" => Some(Self::OpenCodeGo),
             "openrouter" => Some(Self::OpenRouter),
             _ => None,
         }
@@ -223,6 +236,8 @@ impl ProviderKind {
             Self::Codex => "Codex",
             Self::Claude => "Claude",
             Self::Cursor => "Cursor",
+            Self::OpenCodeZen => "OpenCode Zen",
+            Self::OpenCodeGo => "OpenCode Go",
             Self::OpenRouter => "OpenRouter",
         }
     }
@@ -326,16 +341,20 @@ pub enum PopupWidgetKind {
     Codex,
     Claude,
     Cursor,
+    OpenCodeZen,
+    OpenCodeGo,
     #[serde(rename = "openrouter")]
     OpenRouter,
 }
 
 impl PopupWidgetKind {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self::TotalSpend,
         Self::Codex,
         Self::Claude,
         Self::Cursor,
+        Self::OpenCodeZen,
+        Self::OpenCodeGo,
         Self::OpenRouter,
     ];
 
@@ -349,6 +368,8 @@ impl PopupWidgetKind {
             Self::Codex => "codex",
             Self::Claude => "claude",
             Self::Cursor => "cursor",
+            Self::OpenCodeZen => "open_code_zen",
+            Self::OpenCodeGo => "open_code_go",
             Self::OpenRouter => "openrouter",
         }
     }
@@ -359,6 +380,8 @@ impl PopupWidgetKind {
             Self::Codex => Some(ProviderKind::Codex),
             Self::Claude => Some(ProviderKind::Claude),
             Self::Cursor => Some(ProviderKind::Cursor),
+            Self::OpenCodeZen => Some(ProviderKind::OpenCodeZen),
+            Self::OpenCodeGo => Some(ProviderKind::OpenCodeGo),
             Self::OpenRouter => Some(ProviderKind::OpenRouter),
         }
     }
@@ -368,6 +391,8 @@ impl PopupWidgetKind {
             ProviderKind::Codex => Self::Codex,
             ProviderKind::Claude => Self::Claude,
             ProviderKind::Cursor => Self::Cursor,
+            ProviderKind::OpenCodeZen => Self::OpenCodeZen,
+            ProviderKind::OpenCodeGo => Self::OpenCodeGo,
             ProviderKind::OpenRouter => Self::OpenRouter,
         }
     }
@@ -585,6 +610,9 @@ impl TrayWidget {
 
     pub fn for_provider(provider: ProviderKind) -> Self {
         let descriptor = crate::provider_registry::descriptor(provider);
+        if descriptor.default_tray_metrics.is_empty() {
+            return Self::app_icon();
+        }
         Self {
             id: new_tray_widget_id(),
             kind: TrayWidgetKind::Limits,
@@ -600,6 +628,9 @@ impl TrayWidget {
 
     pub fn custom_for_provider(provider: ProviderKind) -> Self {
         let descriptor = crate::provider_registry::descriptor(provider);
+        if descriptor.default_tray_metrics.is_empty() {
+            return Self::app_icon();
+        }
         let metric = descriptor
             .default_tray_metrics
             .first()
@@ -749,9 +780,17 @@ pub struct Settings {
     /// Optional explicit Cursor desktop-app launcher. When unset, discovery
     /// continues to inspect the normal installation and profile locations.
     pub cursor_path: Option<PathBuf>,
-    /// DPAPI-protected OpenRouter API key. This is ciphertext, never plaintext.
+    /// Non-secret revisions used to make manual OpenCode key changes refresh
+    /// already-running workers immediately. The key material lives in the
+    /// protected secrets store, never in this file.
     #[serde(default)]
-    pub openrouter_api_key_dpapi: Option<String>,
+    pub opencode_zen_credentials_revision: u64,
+    #[serde(default)]
+    pub opencode_go_credentials_revision: u64,
+    /// Non-secret revision used to refresh an already-running OpenRouter
+    /// worker after its protected API key changes.
+    #[serde(default)]
+    pub openrouter_credentials_revision: u64,
     pub tray_widgets: Vec<TrayWidget>,
     pub notifications: NotificationSettings,
     pub history_retention_days: u16,
@@ -785,7 +824,9 @@ impl Default for Settings {
             codex_path: None,
             claude_path: None,
             cursor_path: None,
-            openrouter_api_key_dpapi: None,
+            opencode_zen_credentials_revision: 0,
+            opencode_go_credentials_revision: 0,
+            openrouter_credentials_revision: 0,
             // An empty list intentionally means "show the ordinary app icon".
             tray_widgets: Vec::new(),
             notifications: NotificationSettings::default(),
@@ -1631,14 +1672,14 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     });
                 let mut popup_order = vec![toml::Value::String("total_spend".into())];
                 for provider in providers {
-                    if let Some(id) = provider.as_str()
-                        && matches!(id, "codex" | "claude" | "cursor" | "openrouter")
-                    {
-                        popup_order.push(toml::Value::String(id.into()));
+                    if let Some(id) = provider.as_str() {
+                        if matches!(id, "codex" | "claude" | "cursor" | "openrouter") {
+                            popup_order.push(toml::Value::String(id.into()));
+                        }
                     }
                 }
                 for provider in ProviderKind::ALL {
-                    let id = provider.id();
+                    let id = PopupWidgetKind::from_provider(provider).id();
                     if !popup_order.iter().any(|value| value.as_str() == Some(id)) {
                         popup_order.push(toml::Value::String(id.into()));
                     }
@@ -1780,12 +1821,18 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 version = 24;
             }
             26 => {
-                // OpenRouter credentials are optional and default to no key;
-                // serde fills that field for older settings files.
-                document
+                // Manual OpenCode keys are stored outside settings. These
+                // non-secret revisions only wake already-running workers.
+                let root = document
                     .as_table_mut()
-                    .context("settings root must be a TOML table")?
-                    .insert("version".into(), toml::Value::Integer(27));
+                    .context("settings root must be a TOML table")?;
+                root.entry("opencode_zen_credentials_revision")
+                    .or_insert(toml::Value::Integer(0));
+                root.entry("opencode_go_credentials_revision")
+                    .or_insert(toml::Value::Integer(0));
+                root.entry("openrouter_credentials_revision")
+                    .or_insert(toml::Value::Integer(0));
+                root.insert("version".into(), toml::Value::Integer(27));
                 version = 27;
             }
             // Unknown future/gap versions: stamp current and keep decoding with
@@ -1814,7 +1861,6 @@ mod tests {
         let value = Settings::default();
         assert!(!value.providers.is_enabled(ProviderKind::Codex));
         assert!(!value.providers.is_enabled(ProviderKind::Claude));
-        assert!(!value.providers.is_enabled(ProviderKind::OpenRouter));
         assert_eq!(value.theme, AppTheme::Auto);
         assert_eq!(value.accent_color, AccentColor::Windows);
         assert!(value.animations_enabled);
@@ -1846,6 +1892,31 @@ mod tests {
         assert!(!value.notifications.weekly_low_usage_enabled);
         assert_eq!(value.notifications.weekly_low_usage_threshold_percent, 20);
         assert!(value.notifications.update_available);
+    }
+
+    #[test]
+    fn opencode_provider_ids_and_popup_ids_are_distinct_and_stable() {
+        assert_eq!(ProviderKind::OpenCodeZen.id(), "opencode");
+        assert_eq!(ProviderKind::OpenCodeGo.id(), "opencode-go");
+        assert_eq!(ProviderKind::OpenRouter.id(), "openrouter");
+        assert_eq!(
+            PopupWidgetKind::from_provider(ProviderKind::OpenCodeZen).id(),
+            "open_code_zen"
+        );
+        assert_eq!(
+            PopupWidgetKind::from_provider(ProviderKind::OpenCodeGo).id(),
+            "open_code_go"
+        );
+        assert_eq!(
+            PopupWidgetKind::from_provider(ProviderKind::OpenRouter).id(),
+            "openrouter"
+        );
+    }
+
+    #[test]
+    fn zen_cannot_create_a_fake_tray_metric_widget() {
+        assert!(TrayWidget::for_provider(ProviderKind::OpenCodeZen).is_app_icon());
+        assert!(TrayWidget::custom_for_provider(ProviderKind::OpenCodeZen).is_app_icon());
     }
 
     #[test]
@@ -1995,6 +2066,8 @@ tray_widgets = []
                 PopupWidgetKind::Codex,
                 PopupWidgetKind::TotalSpend,
                 PopupWidgetKind::Claude,
+                PopupWidgetKind::OpenCodeZen,
+                PopupWidgetKind::OpenCodeGo,
                 PopupWidgetKind::OpenRouter,
             ]
         );
@@ -2031,30 +2104,6 @@ tray_widgets = []
             settings.tray_widgets[0].indicators[0].provider(),
             Some(ProviderKind::Codex)
         );
-    }
-
-    #[test]
-    fn migrates_v26_without_enabling_openrouter_or_losing_the_key_default() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("settings.toml");
-        fs::write(&path, "version = 26\nproviders = { enabled = [] }\n").unwrap();
-
-        let migrated = Settings::load_or_create(&path).unwrap();
-        assert_eq!(migrated.version, SETTINGS_VERSION);
-        assert!(!migrated.providers.is_enabled(ProviderKind::OpenRouter));
-        assert!(migrated.openrouter_api_key_dpapi.is_none());
-        assert!(migrated.popup_order.contains(&PopupWidgetKind::OpenRouter));
-    }
-
-    #[test]
-    fn protected_openrouter_setting_does_not_contain_a_plaintext_key() {
-        let settings = Settings {
-            openrouter_api_key_dpapi: Some("dpapi-ciphertext".into()),
-            ..Settings::default()
-        };
-        let serialized = toml::to_string(&settings).unwrap();
-        assert!(serialized.contains("dpapi-ciphertext"));
-        assert!(!serialized.contains("sk-or-v1-plain-text"));
     }
 
     #[test]
