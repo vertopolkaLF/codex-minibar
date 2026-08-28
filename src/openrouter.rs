@@ -23,6 +23,12 @@ pub struct OpenRouterClient {
 
 pub struct OpenRouterActivator;
 
+impl Default for OpenRouterClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OpenRouterClient {
     pub fn new() -> Self {
         Self {
