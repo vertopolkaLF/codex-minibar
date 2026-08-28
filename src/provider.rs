@@ -1,11 +1,12 @@
 use std::{collections::HashMap, path::PathBuf, sync::mpsc::Sender, thread, time::Duration};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 
 use crate::{
     claude::{ClaudeActivator, ClaudeClient},
     codex::{CodexActivator, CodexClient, first_available},
     cursor::{CursorActivator, CursorClient},
+    openrouter::{OpenRouterActivator, OpenRouterClient},
     settings::{ProviderKind, Settings},
     worker::{self, WorkerEvent, WorkerHandle},
 };
@@ -98,6 +99,24 @@ pub fn start_provider_worker(
                 Duration::from_secs(settings.limit_refresh_interval.seconds()),
             )
         }
+        ProviderKind::OpenRouter => {
+            let protected = settings
+                .openrouter_api_key_dpapi
+                .as_deref()
+                .context("OpenRouter API key is not configured")?;
+            let api_key =
+                crate::secrets::unprotect(protected).context("decrypt OpenRouter API key")?;
+            worker::start_worker(
+                OpenRouterClient::new(api_key.clone()),
+                OpenRouterClient::new(api_key),
+                OpenRouterActivator,
+                activation_path,
+                false,
+                Vec::new(),
+                settings.history_retention_days,
+                Duration::from_secs(settings.limit_refresh_interval.seconds()),
+            )
+        }
     };
     let source_events = worker
         .take_events()
@@ -129,10 +148,10 @@ pub fn start_provider_worker(
                 // a future provider delegates another coordinator.
                 event => Some(event),
             };
-            if let Some(event) = mapped {
-                if events.send(event).is_err() {
-                    break;
-                }
+            if let Some(event) = mapped
+                && events.send(event).is_err()
+            {
+                break;
             }
         }
     });
@@ -163,5 +182,6 @@ fn provider_activation_path(provider: ProviderKind, base_path: PathBuf) -> PathB
         // would suppress or duplicate an activation whenever both are enabled.
         ProviderKind::Claude => base_path.with_file_name("activation-claude.toml"),
         ProviderKind::Cursor => base_path.with_file_name("activation-cursor.toml"),
+        ProviderKind::OpenRouter => base_path.with_file_name("activation-openrouter.toml"),
     }
 }

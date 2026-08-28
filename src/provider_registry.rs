@@ -29,6 +29,8 @@ pub struct ProviderDescriptor {
     /// Whether the provider exposes a real operation that starts a fresh
     /// session limit window.
     pub supports_activation: bool,
+    /// Whether the provider contributes date-scoped token history to Total Spend.
+    pub include_in_total_spend: bool,
     /// Stable metrics shown before runtime-discovered provider-specific lanes.
     pub metrics: &'static [MetricDescriptor],
     /// Ordered metrics used by onboarding and the provider preset.
@@ -74,6 +76,12 @@ const CURSOR_METRICS: &[MetricDescriptor] = &[
     },
 ];
 
+const OPENROUTER_METRICS: &[MetricDescriptor] = &[MetricDescriptor {
+    id: "openrouter.limit",
+    label: "Spending limit",
+    source: MetricSource::Primary,
+}];
+
 pub const PROVIDERS: &[ProviderDescriptor] = &[
     ProviderDescriptor {
         kind: ProviderKind::Codex,
@@ -82,6 +90,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         icon: "codex",
         brand_rgb: (128, 159, 255),
         supports_activation: true,
+        include_in_total_spend: true,
         metrics: CODEX_METRICS,
         default_tray_metrics: &["codex.session", "codex.weekly"],
     },
@@ -92,6 +101,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         icon: "claude",
         brand_rgb: (217, 119, 87),
         supports_activation: true,
+        include_in_total_spend: true,
         metrics: CLAUDE_METRICS,
         default_tray_metrics: &["claude.session", "claude.weekly"],
     },
@@ -102,8 +112,20 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         icon: "cursor",
         brand_rgb: (145, 151, 164),
         supports_activation: false,
+        include_in_total_spend: true,
         metrics: CURSOR_METRICS,
         default_tray_metrics: &["cursor.auto", "cursor.api"],
+    },
+    ProviderDescriptor {
+        kind: ProviderKind::OpenRouter,
+        id: "openrouter",
+        display_name: "OpenRouter",
+        icon: "openrouter",
+        brand_rgb: (0, 196, 140),
+        supports_activation: false,
+        include_in_total_spend: false,
+        metrics: OPENROUTER_METRICS,
+        default_tray_metrics: &["openrouter.limit"],
     },
 ];
 
@@ -237,5 +259,7 @@ mod tests {
         assert!(descriptor(ProviderKind::Codex).supports_activation);
         assert!(descriptor(ProviderKind::Claude).supports_activation);
         assert!(!descriptor(ProviderKind::Cursor).supports_activation);
+        assert!(!descriptor(ProviderKind::OpenRouter).supports_activation);
+        assert!(!descriptor(ProviderKind::OpenRouter).include_in_total_spend);
     }
 }

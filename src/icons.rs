@@ -22,6 +22,7 @@ pub fn geom(name: &str) -> IconGeom {
         "codex" => include_str!("../assets/icons/openai-iconify.svg"),
         "claude" => include_str!("../assets/icons/claude-iconify.svg"),
         "cursor" => include_str!("../assets/icons/cursor-iconify.svg"),
+        "openrouter" => include_str!("../assets/icons/openrouter-iconify.svg"),
         // Reserved for the ChatGPT provider when it is added to ProviderKind.
         "chatgpt" => include_str!("../assets/icons/chatgpt-iconify.svg"),
         "chat-centered-text" => include_str!("../assets/icons/ph-chat-centered-text.svg"),

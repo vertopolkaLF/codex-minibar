@@ -32,6 +32,18 @@ pub struct AdditionalLimit {
     pub window: LimitWindow,
 }
 
+/// Provider-reported spending information which is not necessarily a quota
+/// percentage. OpenRouter can report usage even when a key has no spending
+/// limit, so this stays separate from [`LimitWindow`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SpendingSummary {
+    pub used_microusd: u64,
+    pub limit_microusd: Option<u64>,
+    pub remaining_microusd: Option<u64>,
+    pub resets_at: Option<DateTime<Utc>>,
+    pub reset_kind: Option<String>,
+}
+
 /// Pace tip on a usage progress bar (even-burn marker position).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PaceTip {
@@ -149,6 +161,10 @@ pub struct RateLimits {
     pub reset_credits: Option<RateLimitResetCreditsSummary>,
     /// Provider-specific quota windows beyond primary and secondary.
     pub additional_limits: Vec<AdditionalLimit>,
+    /// Optional provider-reported spending summary, such as an OpenRouter key
+    /// budget. Existing providers leave this unset.
+    #[serde(default)]
+    pub spending: Option<SpendingSummary>,
     /// Token statistics computed from local Codex session logs.
     pub usage: UsageStatistics,
 }

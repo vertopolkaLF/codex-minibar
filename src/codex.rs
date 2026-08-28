@@ -322,6 +322,7 @@ pub fn parse_rate_limits(
         credits: parse_credits(limits.get("credits")),
         reset_credits: parse_reset_credits(response.pointer("/result/rateLimitResetCredits")),
         additional_limits: Default::default(),
+        spending: None,
         usage: Default::default(),
     }
     .normalized(sampled_at))

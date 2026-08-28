@@ -91,11 +91,10 @@ pub fn due_scheduled_activation<'a>(
                 .map(move |weekday| (rule, weekday))
         })
         .filter_map(|(rule, weekday)| {
-            let occurrence =
-                next_scheduled_activation_on(rule, weekday, now) - Duration::days(7);
+            let occurrence = next_scheduled_activation_on(rule, weekday, now) - Duration::days(7);
             (now - occurrence <= AUTO_ACTIVATION_SCHEDULE_GUARD
                 && state.fired_scheduled_occurrences.get(&rule.id) != Some(&occurrence))
-                .then_some((rule, occurrence))
+            .then_some((rule, occurrence))
         })
         .min_by_key(|(_, occurrence)| *occurrence)
 }
@@ -419,6 +418,12 @@ mod tests {
 
         let (_, occurrence) = due_scheduled_activation(&[rule], &ActivationState::default(), now)
             .expect("today's occurrence should be within the catch-up window");
-        assert_eq!(occurrence.with_timezone(&Local).weekday().num_days_from_monday() as u8, today);
+        assert_eq!(
+            occurrence
+                .with_timezone(&Local)
+                .weekday()
+                .num_days_from_monday() as u8,
+            today
+        );
     }
 }

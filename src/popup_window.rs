@@ -13,7 +13,7 @@ use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
 use windows_reactor::*;
 
 use crate::{
-    limits::{LimitWindow, PaceTip, ProviderLimits, RateLimits},
+    limits::{LimitWindow, PaceTip, ProviderLimits, RateLimits, SpendingSummary},
     notifications,
     notifications::LimitNotificationTracker,
     popup,
@@ -182,7 +182,7 @@ impl AppState {
             });
         }
         if let Ok(mut limits) = self.limits.lock() {
-            for provider in &disabled {
+            for provider in disabled.iter().chain(restart.iter()) {
                 *limits.get_mut(*provider) = RateLimits::default();
             }
         }
@@ -256,12 +256,14 @@ struct UiState {
     codex_enabled: bool,
     claude_enabled: bool,
     cursor_enabled: bool,
+    openrouter_enabled: bool,
     popup_order: Vec<PopupWidgetKind>,
     use_colored_provider_icons: bool,
     replace_chatgpt_logo_with_codex: bool,
     codex_path: Option<std::path::PathBuf>,
     claude_path: Option<std::path::PathBuf>,
     cursor_path: Option<std::path::PathBuf>,
+    openrouter_api_key_dpapi: Option<String>,
     update_version: Option<String>,
 }
 
@@ -328,12 +330,14 @@ impl Default for UiState {
             codex_enabled: true,
             claude_enabled: false,
             cursor_enabled: false,
+            openrouter_enabled: false,
             popup_order: PopupWidgetKind::default_order(),
             use_colored_provider_icons: false,
             replace_chatgpt_logo_with_codex: false,
             codex_path: None,
             claude_path: None,
             cursor_path: None,
+            openrouter_api_key_dpapi: None,
             update_version: None,
         }
     }
@@ -371,6 +375,7 @@ enum PopupView {
     Codex,
     Claude,
     Cursor,
+    OpenRouter,
 }
 
 impl PopupView {
@@ -379,6 +384,7 @@ impl PopupView {
             ProviderKind::Codex => Self::Codex,
             ProviderKind::Claude => Self::Claude,
             ProviderKind::Cursor => Self::Cursor,
+            ProviderKind::OpenRouter => Self::OpenRouter,
         }
     }
 
@@ -388,6 +394,7 @@ impl PopupView {
             Self::Codex => Some(ProviderKind::Codex),
             Self::Claude => Some(ProviderKind::Claude),
             Self::Cursor => Some(ProviderKind::Cursor),
+            Self::OpenRouter => Some(ProviderKind::OpenRouter),
         }
     }
 
@@ -410,6 +417,7 @@ fn enabled_popup_views(
     codex: bool,
     claude: bool,
     cursor: bool,
+    openrouter: bool,
 ) -> Vec<PopupView> {
     let mut views = vec![PopupView::All];
     for widget in popup_order {
@@ -420,6 +428,7 @@ fn enabled_popup_views(
             ProviderKind::Codex => codex,
             ProviderKind::Claude => claude,
             ProviderKind::Cursor => cursor,
+            ProviderKind::OpenRouter => openrouter,
         };
         if enabled {
             views.push(PopupView::from_provider(provider));
@@ -451,12 +460,23 @@ fn popup_order_key(popup_order: &[PopupWidgetKind]) -> String {
         .join("-")
 }
 
-fn provider_is_enabled(provider: ProviderKind, codex: bool, claude: bool, cursor: bool) -> bool {
+fn provider_is_enabled(
+    provider: ProviderKind,
+    codex: bool,
+    claude: bool,
+    cursor: bool,
+    openrouter: bool,
+) -> bool {
     match provider {
         ProviderKind::Codex => codex,
         ProviderKind::Claude => claude,
         ProviderKind::Cursor => cursor,
+        ProviderKind::OpenRouter => openrouter,
     }
+}
+
+fn total_spend_provider_count(codex: bool, claude: bool, cursor: bool) -> usize {
+    usize::from(codex) + usize::from(claude) + usize::from(cursor)
 }
 
 fn visible_popup_widgets(
@@ -465,15 +485,16 @@ fn visible_popup_widgets(
     codex: bool,
     claude: bool,
     cursor: bool,
+    openrouter: bool,
 ) -> Vec<PopupWidgetKind> {
     popup_order
         .iter()
         .copied()
         .filter(|widget| match widget {
             PopupWidgetKind::TotalSpend => show_total_spend,
-            other => other
-                .as_provider()
-                .is_some_and(|provider| provider_is_enabled(provider, codex, claude, cursor)),
+            other => other.as_provider().is_some_and(|provider| {
+                provider_is_enabled(provider, codex, claude, cursor, openrouter)
+            }),
         })
         .collect()
 }
@@ -699,12 +720,8 @@ fn commit_widget_drag(
         COMMITTING.with(|flag| flag.set(false));
         return;
     }
-    let show_total_spend = ui.show_total_spend_on_all_tab && {
-        let enabled = usize::from(ui.codex_enabled)
-            + usize::from(ui.claude_enabled)
-            + usize::from(ui.cursor_enabled);
-        enabled > 1
-    };
+    let show_total_spend = ui.show_total_spend_on_all_tab
+        && total_spend_provider_count(ui.codex_enabled, ui.claude_enabled, ui.cursor_enabled) > 1;
     let mut scratch = Settings {
         popup_order: ui.popup_order.clone(),
         providers: crate::settings::ProviderSettings::from_enabled(
@@ -714,6 +731,7 @@ fn commit_widget_drag(
                     ProviderKind::Codex => ui.codex_enabled,
                     ProviderKind::Claude => ui.claude_enabled,
                     ProviderKind::Cursor => ui.cursor_enabled,
+                    ProviderKind::OpenRouter => ui.openrouter_enabled,
                 })
                 .map(|descriptor| descriptor.kind),
         ),
@@ -879,6 +897,7 @@ fn provider_cards(
 ) -> Vec<Element> {
     let (monthly_label, primary_label, secondary_label) = match provider {
         ProviderKind::Cursor => ("Auto + Composer", "Auto + Composer", "Auto + Composer"),
+        ProviderKind::OpenRouter => ("Spending", "Spending", "Spending"),
         _ => ("Monthly", "5h Session", "Weekly"),
     };
     let mut trailing: Vec<Element> = Vec::new();
@@ -946,6 +965,14 @@ fn provider_cards(
         ))
         .into(),
     ];
+    if provider == ProviderKind::OpenRouter {
+        if let Some(spending) = limits.spending.as_ref() {
+            cards.push(
+                spending_card(spending).with_key(format!("{}-spending", provider.display_name())),
+            );
+        }
+        return cards;
+    }
     // Cursor usage is fetched from a remote CSV export rather than scanned
     // from a local session log. Keep its card visible while that export is
     // still empty or delayed, so the feature does not look like it vanished.
@@ -1031,6 +1058,56 @@ fn provider_cards(
     cards
 }
 
+fn spending_card(spending: &SpendingSummary) -> Element {
+    let used = format_usd(spending.used_microusd as f64 / 1_000_000.0);
+    let amount = spending.limit_microusd.map_or_else(
+        || used.clone(),
+        |limit| format!("{used} / {}", format_usd(limit as f64 / 1_000_000.0)),
+    );
+    let detail = match spending.remaining_microusd {
+        Some(remaining) => format!(
+            "{} remaining{}",
+            format_usd(remaining as f64 / 1_000_000.0),
+            spending
+                .resets_at
+                .map(|reset| format!(" · resets in {}", format_reset_in(Some(reset))))
+                .unwrap_or_default()
+        ),
+        None => "No spending limit".into(),
+    };
+
+    border(
+        grid((
+            vstack((
+                text_block("SPENDING").foreground(ThemeRef::TertiaryText),
+                caption(detail).foreground(ThemeRef::TertiaryText),
+            ))
+            .spacing(2.0)
+            .vertical_alignment(VerticalAlignment::Center),
+            text_block(amount)
+                .font_weight(600)
+                .foreground(ThemeRef::Accent)
+                .vertical_alignment(VerticalAlignment::Center)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .grid_column(1),
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Auto])
+        .rows([GridLength::Auto])
+        .horizontal_alignment(HorizontalAlignment::Stretch),
+    )
+    .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+    .padding(Thickness {
+        left: 16.0,
+        top: 12.0,
+        right: 16.0,
+        bottom: 12.0,
+    })
+    .background(ThemeRef::CardBackground)
+    .border_thickness(Thickness::uniform(1.0))
+    .border_brush(ThemeRef::CardStroke)
+    .into()
+}
+
 fn latest_sampled_at(limits: &ProviderLimits) -> chrono::DateTime<Utc> {
     crate::provider_registry::PROVIDERS
         .iter()
@@ -1069,6 +1146,10 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         codex_enabled: state.settings.providers.is_enabled(ProviderKind::Codex),
         claude_enabled: state.settings.providers.is_enabled(ProviderKind::Claude),
         cursor_enabled: state.settings.providers.is_enabled(ProviderKind::Cursor),
+        openrouter_enabled: state
+            .settings
+            .providers
+            .is_enabled(ProviderKind::OpenRouter),
         popup_order: state.settings.popup_order.clone(),
         use_colored_provider_icons: state.settings.use_colored_provider_icons,
         replace_chatgpt_logo_with_codex: state.settings.replace_chatgpt_logo_with_codex,
@@ -1134,6 +1215,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             ui.codex_enabled,
             ui.claude_enabled,
             ui.cursor_enabled,
+            ui.openrouter_enabled,
             popup_order_key(&ui.popup_order),
         ),
         {
@@ -1146,6 +1228,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     PopupView::Codex => ui.codex_enabled,
                     PopupView::Claude => ui.claude_enabled,
                     PopupView::Cursor => ui.cursor_enabled,
+                    PopupView::OpenRouter => ui.openrouter_enabled,
                 };
                 if !available {
                     pager_dispatch.call(PagerAction::Select(PopupView::All));
@@ -1209,6 +1292,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 ui.codex_enabled,
                 ui.claude_enabled,
                 ui.cursor_enabled,
+                ui.openrouter_enabled,
             )
         })
         .collect::<Vec<_>>();
@@ -1217,23 +1301,26 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         ui.codex_enabled,
         ui.claude_enabled,
         ui.cursor_enabled,
+        ui.openrouter_enabled,
     );
     let enabled_provider_count = enabled_views.len().saturating_sub(1);
     let show_provider_tabs = enabled_provider_count > 1;
     let selected_view = pager.current;
+    let show_total_spend = ui.show_total_spend_on_all_tab
+        && total_spend_provider_count(ui.codex_enabled, ui.claude_enabled, ui.cursor_enabled) > 1;
     let all_tab_widgets = visible_popup_widgets(
         &ui.popup_order,
-        ui.show_total_spend_on_all_tab && show_provider_tabs,
+        show_total_spend && show_provider_tabs,
         ui.codex_enabled,
         ui.claude_enabled,
         ui.cursor_enabled,
+        ui.openrouter_enabled,
     );
     let can_reorder_widgets = selected_view == PopupView::All && all_tab_widgets.len() > 1;
     let build_body = |view: PopupView, retain_disabled_detail: bool| {
         let show_usage_stats =
             ui.show_usage_stats && (!show_provider_tabs || view != PopupView::All);
-        let show_total_spend =
-            ui.show_total_spend_on_all_tab && show_provider_tabs && view == PopupView::All;
+        let show_total_spend = show_total_spend && view == PopupView::All;
 
         let mut body: Vec<Element> = Vec::new();
         let mut has_preceding_section = false;
@@ -1256,6 +1343,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 ui.codex_enabled,
                 ui.claude_enabled,
                 ui.cursor_enabled,
+                ui.openrouter_enabled,
             );
             for (index, widget) in widgets.into_iter().enumerate() {
                 let is_first = index == 0 && !has_preceding_section;
@@ -1280,6 +1368,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                             ui.codex_enabled,
                             ui.claude_enabled,
                             ui.cursor_enabled,
+                            ui.openrouter_enabled,
                             ui.total_spend_period,
                             on_period,
                             hovered_combined_usage_period,
@@ -1306,7 +1395,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                         let provider = provider_widget.as_provider().expect("provider widget");
                         let limits_for_provider = limits.get(provider);
                         let show_banked = match provider {
-                            ProviderKind::Cursor => false,
+                            ProviderKind::Cursor | ProviderKind::OpenRouter => false,
                             _ => ui.show_banked_resets,
                         };
                         let handle = can_reorder_widgets.then(|| {
@@ -1363,6 +1452,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                         ui.codex_enabled,
                         ui.claude_enabled,
                         ui.cursor_enabled,
+                        ui.openrouter_enabled,
                     ) || retain_disabled_detail
                 })
                 .into_iter()
@@ -1370,7 +1460,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             for provider in providers_for_view {
                 let limits_for_provider = limits.get(provider);
                 let show_banked = match provider {
-                    ProviderKind::Cursor => false,
+                    ProviderKind::Cursor | ProviderKind::OpenRouter => false,
                     _ => ui.show_banked_resets,
                 };
                 body.push(
@@ -1393,10 +1483,10 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 has_preceding_section = true;
             }
         }
-        if !ui.codex_enabled && !ui.claude_enabled && !ui.cursor_enabled {
+        if !ui.codex_enabled && !ui.claude_enabled && !ui.cursor_enabled && !ui.openrouter_enabled {
             body.push(
                 InfoBar::new("No providers enabled")
-                    .message("Enable Codex, Claude, or Cursor in Settings > Providers.")
+                    .message("Enable Codex, Claude, Cursor, or OpenRouter in Settings > Providers.")
                     .is_closable(false)
                     .with_key("popup-no-providers")
                     .into(),
@@ -1492,6 +1582,12 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 ProviderKind::Cursor => {
                     ("provider-tab-cursor", "cursor", "Cursor", PopupView::Cursor)
                 }
+                ProviderKind::OpenRouter => (
+                    "provider-tab-openrouter",
+                    "openrouter",
+                    "OpenRouter",
+                    PopupView::OpenRouter,
+                ),
             };
             provider_tabs.push(popup_tab_button(
                 tab_id,
@@ -1634,7 +1730,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         // Key only error presence, not the message text: PollFailed can emit a
         // new string every minute and would otherwise remount the whole page.
         let body_layout_key = format!(
-            "popup-page-{role}-{}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
+            "popup-page-{role}-{}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
             ui.error.is_some(),
             ui.show_banked_resets,
             ui.show_usage_stats,
@@ -1645,6 +1741,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             ui.codex_enabled,
             ui.claude_enabled,
             ui.cursor_enabled,
+            ui.openrouter_enabled,
             popup_order_key(&ui.popup_order),
             color_scheme as i32,
             view,
@@ -2118,12 +2215,17 @@ fn start_background_bridge(
             codex_enabled: state.settings.providers.is_enabled(ProviderKind::Codex),
             claude_enabled: state.settings.providers.is_enabled(ProviderKind::Claude),
             cursor_enabled: state.settings.providers.is_enabled(ProviderKind::Cursor),
+            openrouter_enabled: state
+                .settings
+                .providers
+                .is_enabled(ProviderKind::OpenRouter),
             popup_order: state.settings.popup_order.clone(),
             use_colored_provider_icons: state.settings.use_colored_provider_icons,
             replace_chatgpt_logo_with_codex: state.settings.replace_chatgpt_logo_with_codex,
             codex_path: state.settings.codex_path.clone(),
             claude_path: state.settings.claude_path.clone(),
             cursor_path: state.settings.cursor_path.clone(),
+            openrouter_api_key_dpapi: state.settings.openrouter_api_key_dpapi.clone(),
             update_version: update_version_from_phase(&update_phase),
             ..UiState::default()
         };
@@ -2159,7 +2261,8 @@ fn start_background_bridge(
             let providers_changed = ui.codex_enabled
                 != settings.providers.is_enabled(ProviderKind::Codex)
                 || ui.claude_enabled != settings.providers.is_enabled(ProviderKind::Claude)
-                || ui.cursor_enabled != settings.providers.is_enabled(ProviderKind::Cursor);
+                || ui.cursor_enabled != settings.providers.is_enabled(ProviderKind::Cursor)
+                || ui.openrouter_enabled != settings.providers.is_enabled(ProviderKind::OpenRouter);
             ui.theme = settings.theme;
             ui.accent_color = settings.accent_color;
             ui.animations_enabled = settings.animations_enabled;
@@ -2171,9 +2274,12 @@ fn start_background_bridge(
             ui.total_spend_presentation = settings.total_spend_presentation;
             ui.total_spend_period = settings.total_spend_period;
             ui.show_account_name = settings.show_account_name;
+            let openrouter_key_changed =
+                settings.openrouter_api_key_dpapi != ui.openrouter_api_key_dpapi;
             ui.codex_enabled = settings.providers.is_enabled(ProviderKind::Codex);
             ui.claude_enabled = settings.providers.is_enabled(ProviderKind::Claude);
             ui.cursor_enabled = settings.providers.is_enabled(ProviderKind::Cursor);
+            ui.openrouter_enabled = settings.providers.is_enabled(ProviderKind::OpenRouter);
             ui.popup_order = settings.popup_order.clone();
             ui.use_colored_provider_icons = settings.use_colored_provider_icons;
             ui.replace_chatgpt_logo_with_codex = settings.replace_chatgpt_logo_with_codex;
@@ -2193,6 +2299,7 @@ fn start_background_bridge(
                 (ProviderKind::Codex, settings.codex_path != ui.codex_path),
                 (ProviderKind::Claude, settings.claude_path != ui.claude_path),
                 (ProviderKind::Cursor, settings.cursor_path != ui.cursor_path),
+                (ProviderKind::OpenRouter, openrouter_key_changed),
             ]
             .into_iter()
             .filter_map(|(provider, changed)| changed.then_some(provider))
@@ -2200,6 +2307,7 @@ fn start_background_bridge(
             ui.codex_path = settings.codex_path.clone();
             ui.claude_path = settings.claude_path.clone();
             ui.cursor_path = settings.cursor_path.clone();
+            ui.openrouter_api_key_dpapi = settings.openrouter_api_key_dpapi.clone();
             if providers_changed || !restart.is_empty() {
                 let provider_errors = state.sync_provider_workers(&settings, &restart);
                 if !provider_errors.is_empty() {
@@ -2362,6 +2470,7 @@ fn start_background_bridge(
                     if (provider == ProviderKind::Codex && !ui.codex_enabled)
                         || (provider == ProviderKind::Claude && !ui.claude_enabled)
                         || (provider == ProviderKind::Cursor && !ui.cursor_enabled)
+                        || (provider == ProviderKind::OpenRouter && !ui.openrouter_enabled)
                     {
                         continue;
                     }
@@ -2403,6 +2512,7 @@ fn start_background_bridge(
                     if (provider == ProviderKind::Codex && !ui.codex_enabled)
                         || (provider == ProviderKind::Claude && !ui.claude_enabled)
                         || (provider == ProviderKind::Cursor && !ui.cursor_enabled)
+                        || (provider == ProviderKind::OpenRouter && !ui.openrouter_enabled)
                     {
                         continue;
                     }
@@ -2618,6 +2728,7 @@ fn popup_tab_button(
         Some("claude") => Color::rgb(217, 119, 87),
         // Match Total Spend: Cursor mark flips with the Windows text theme.
         Some("cursor") => combined_usage_color(ProviderKind::Cursor, color_scheme),
+        Some("openrouter") => combined_usage_color(ProviderKind::OpenRouter, color_scheme),
         _ => idle_icon_color,
     };
     let tab_width = if label.is_some() {
@@ -3202,6 +3313,7 @@ fn combined_usage_card(
     codex_enabled: bool,
     claude_enabled: bool,
     cursor_enabled: bool,
+    openrouter_enabled: bool,
     period: TotalSpendPeriod,
     on_period: impl Fn(TotalSpendPeriod) + Clone + 'static,
     hovered_period: Option<TotalSpendPeriod>,
@@ -3213,10 +3325,14 @@ fn combined_usage_card(
     let mut entries: Vec<_> = crate::provider_registry::PROVIDERS
         .iter()
         .filter_map(|descriptor| {
+            if !descriptor.include_in_total_spend {
+                return None;
+            }
             let enabled = match descriptor.kind {
                 ProviderKind::Codex => codex_enabled,
                 ProviderKind::Claude => claude_enabled,
                 ProviderKind::Cursor => cursor_enabled,
+                ProviderKind::OpenRouter => openrouter_enabled,
             };
             enabled.then(|| (descriptor.kind, limits.get(descriptor.kind)))
         })
@@ -3699,6 +3815,7 @@ fn combined_usage_color(provider: ProviderKind, color_scheme: ColorScheme) -> Co
             ColorScheme::Light => Color::rgb(18, 18, 18),
             ColorScheme::Dark => Color::rgb(230, 230, 230),
         },
+        ProviderKind::OpenRouter => Color::rgb(0, 196, 140),
     }
 }
 
@@ -4109,6 +4226,30 @@ mod tests {
     }
 
     #[test]
+    fn openrouter_cards_render_spending_without_fake_quota_cards() {
+        let limits = RateLimits {
+            spending: Some(SpendingSummary {
+                used_microusd: 4_250_000,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let cards = provider_cards(
+            ProviderKind::OpenRouter,
+            true,
+            &limits,
+            false,
+            true,
+            false,
+            true,
+            false,
+            ColorScheme::Dark,
+            None,
+        );
+        assert_eq!(cards.len(), 2);
+    }
+
+    #[test]
     fn sections_keep_banked_resets_singleton() {
         let mut limits = plan_limits("plus");
         limits.reset_credits = Some(crate::limits::RateLimitResetCreditsSummary {
@@ -4195,17 +4336,19 @@ mod tests {
     #[test]
     fn every_provider_membership_has_the_expected_tab_order() {
         let default_order = PopupWidgetKind::default_order();
-        for mask in 0_u8..8 {
+        for mask in 0_u8..16 {
             let codex = mask & 0b001 != 0;
             let claude = mask & 0b010 != 0;
             let cursor = mask & 0b100 != 0;
-            let views = enabled_popup_views(&default_order, codex, claude, cursor);
+            let openrouter = mask & 0b1000 != 0;
+            let views = enabled_popup_views(&default_order, codex, claude, cursor, openrouter);
             let providers = provider_order_from_popup(&default_order);
 
             assert_eq!(views.first(), Some(&PopupView::All));
             assert_eq!(views.contains(&PopupView::Codex), codex);
             assert_eq!(views.contains(&PopupView::Claude), claude);
             assert_eq!(views.contains(&PopupView::Cursor), cursor);
+            assert_eq!(views.contains(&PopupView::OpenRouter), openrouter);
             assert!(
                 views
                     .windows(2)
@@ -4213,7 +4356,10 @@ mod tests {
             );
             assert_eq!(
                 views.len(),
-                1 + usize::from(codex) + usize::from(claude) + usize::from(cursor)
+                1 + usize::from(codex)
+                    + usize::from(claude)
+                    + usize::from(cursor)
+                    + usize::from(openrouter)
             );
         }
 
@@ -4222,8 +4368,9 @@ mod tests {
             PopupWidgetKind::Cursor,
             PopupWidgetKind::Claude,
             PopupWidgetKind::Codex,
+            PopupWidgetKind::OpenRouter,
         ];
-        let views = enabled_popup_views(&reversed, true, true, true);
+        let views = enabled_popup_views(&reversed, true, true, true, true);
         assert_eq!(
             views,
             vec![
@@ -4231,6 +4378,7 @@ mod tests {
                 PopupView::Cursor,
                 PopupView::Claude,
                 PopupView::Codex,
+                PopupView::OpenRouter,
             ]
         );
     }

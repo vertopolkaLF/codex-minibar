@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 26;
+pub const SETTINGS_VERSION: u32 = 27;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -141,6 +141,8 @@ pub enum ProviderKind {
     Codex,
     Claude,
     Cursor,
+    #[serde(rename = "openrouter")]
+    OpenRouter,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,13 +197,14 @@ impl ProviderSettings {
 }
 
 impl ProviderKind {
-    pub const ALL: [Self; 3] = [Self::Codex, Self::Claude, Self::Cursor];
+    pub const ALL: [Self; 4] = [Self::Codex, Self::Claude, Self::Cursor, Self::OpenRouter];
 
     pub const fn id(self) -> &'static str {
         match self {
             Self::Codex => "codex",
             Self::Claude => "claude",
             Self::Cursor => "cursor",
+            Self::OpenRouter => "openrouter",
         }
     }
 
@@ -210,6 +213,7 @@ impl ProviderKind {
             "codex" => Some(Self::Codex),
             "claude" => Some(Self::Claude),
             "cursor" => Some(Self::Cursor),
+            "openrouter" => Some(Self::OpenRouter),
             _ => None,
         }
     }
@@ -219,6 +223,7 @@ impl ProviderKind {
             Self::Codex => "Codex",
             Self::Claude => "Claude",
             Self::Cursor => "Cursor",
+            Self::OpenRouter => "OpenRouter",
         }
     }
 
@@ -321,10 +326,18 @@ pub enum PopupWidgetKind {
     Codex,
     Claude,
     Cursor,
+    #[serde(rename = "openrouter")]
+    OpenRouter,
 }
 
 impl PopupWidgetKind {
-    pub const ALL: [Self; 4] = [Self::TotalSpend, Self::Codex, Self::Claude, Self::Cursor];
+    pub const ALL: [Self; 5] = [
+        Self::TotalSpend,
+        Self::Codex,
+        Self::Claude,
+        Self::Cursor,
+        Self::OpenRouter,
+    ];
 
     pub fn default_order() -> Vec<Self> {
         Self::ALL.to_vec()
@@ -336,6 +349,7 @@ impl PopupWidgetKind {
             Self::Codex => "codex",
             Self::Claude => "claude",
             Self::Cursor => "cursor",
+            Self::OpenRouter => "openrouter",
         }
     }
 
@@ -345,6 +359,7 @@ impl PopupWidgetKind {
             Self::Codex => Some(ProviderKind::Codex),
             Self::Claude => Some(ProviderKind::Claude),
             Self::Cursor => Some(ProviderKind::Cursor),
+            Self::OpenRouter => Some(ProviderKind::OpenRouter),
         }
     }
 
@@ -353,6 +368,7 @@ impl PopupWidgetKind {
             ProviderKind::Codex => Self::Codex,
             ProviderKind::Claude => Self::Claude,
             ProviderKind::Cursor => Self::Cursor,
+            ProviderKind::OpenRouter => Self::OpenRouter,
         }
     }
 }
@@ -733,6 +749,9 @@ pub struct Settings {
     /// Optional explicit Cursor desktop-app launcher. When unset, discovery
     /// continues to inspect the normal installation and profile locations.
     pub cursor_path: Option<PathBuf>,
+    /// DPAPI-protected OpenRouter API key. This is ciphertext, never plaintext.
+    #[serde(default)]
+    pub openrouter_api_key_dpapi: Option<String>,
     pub tray_widgets: Vec<TrayWidget>,
     pub notifications: NotificationSettings,
     pub history_retention_days: u16,
@@ -766,6 +785,7 @@ impl Default for Settings {
             codex_path: None,
             claude_path: None,
             cursor_path: None,
+            openrouter_api_key_dpapi: None,
             // An empty list intentionally means "show the ordinary app icon".
             tray_widgets: Vec::new(),
             notifications: NotificationSettings::default(),
@@ -1308,11 +1328,13 @@ fn convert_legacy_tray_widget(widget: &mut toml::map::Map<String, toml::Value>, 
     let primary = match provider.as_str() {
         "claude" => "claude.session",
         "cursor" => "cursor.auto",
+        "openrouter" => "openrouter.limit",
         _ => "codex.session",
     };
     let secondary = match provider.as_str() {
         "claude" => "claude.weekly",
         "cursor" => "cursor.auto",
+        "openrouter" => "openrouter.limit",
         _ => "codex.weekly",
     };
     let metric_ids: Vec<&str> = match source.as_str() {
@@ -1609,10 +1631,10 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     });
                 let mut popup_order = vec![toml::Value::String("total_spend".into())];
                 for provider in providers {
-                    if let Some(id) = provider.as_str() {
-                        if matches!(id, "codex" | "claude" | "cursor") {
-                            popup_order.push(toml::Value::String(id.into()));
-                        }
+                    if let Some(id) = provider.as_str()
+                        && matches!(id, "codex" | "claude" | "cursor" | "openrouter")
+                    {
+                        popup_order.push(toml::Value::String(id.into()));
                     }
                 }
                 for provider in ProviderKind::ALL {
@@ -1757,6 +1779,15 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     .insert("version".into(), toml::Value::Integer(24));
                 version = 24;
             }
+            26 => {
+                // OpenRouter credentials are optional and default to no key;
+                // serde fills that field for older settings files.
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .insert("version".into(), toml::Value::Integer(27));
+                version = 27;
+            }
             // Unknown future/gap versions: stamp current and keep decoding with
             // serde defaults rather than refusing to start.
             _ => {
@@ -1783,6 +1814,7 @@ mod tests {
         let value = Settings::default();
         assert!(!value.providers.is_enabled(ProviderKind::Codex));
         assert!(!value.providers.is_enabled(ProviderKind::Claude));
+        assert!(!value.providers.is_enabled(ProviderKind::OpenRouter));
         assert_eq!(value.theme, AppTheme::Auto);
         assert_eq!(value.accent_color, AccentColor::Windows);
         assert!(value.animations_enabled);
@@ -1963,6 +1995,7 @@ tray_widgets = []
                 PopupWidgetKind::Codex,
                 PopupWidgetKind::TotalSpend,
                 PopupWidgetKind::Claude,
+                PopupWidgetKind::OpenRouter,
             ]
         );
         assert!(settings.move_popup_widget(
@@ -1998,6 +2031,30 @@ tray_widgets = []
             settings.tray_widgets[0].indicators[0].provider(),
             Some(ProviderKind::Codex)
         );
+    }
+
+    #[test]
+    fn migrates_v26_without_enabling_openrouter_or_losing_the_key_default() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(&path, "version = 26\nproviders = { enabled = [] }\n").unwrap();
+
+        let migrated = Settings::load_or_create(&path).unwrap();
+        assert_eq!(migrated.version, SETTINGS_VERSION);
+        assert!(!migrated.providers.is_enabled(ProviderKind::OpenRouter));
+        assert!(migrated.openrouter_api_key_dpapi.is_none());
+        assert!(migrated.popup_order.contains(&PopupWidgetKind::OpenRouter));
+    }
+
+    #[test]
+    fn protected_openrouter_setting_does_not_contain_a_plaintext_key() {
+        let settings = Settings {
+            openrouter_api_key_dpapi: Some("dpapi-ciphertext".into()),
+            ..Settings::default()
+        };
+        let serialized = toml::to_string(&settings).unwrap();
+        assert!(serialized.contains("dpapi-ciphertext"));
+        assert!(!serialized.contains("sk-or-v1-plain-text"));
     }
 
     #[test]

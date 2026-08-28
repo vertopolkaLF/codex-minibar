@@ -96,6 +96,9 @@ struct SettingsWindowState {
     codex_enabled: SetState<bool>,
     claude_enabled: SetState<bool>,
     cursor_enabled: SetState<bool>,
+    openrouter_enabled: SetState<bool>,
+    openrouter_key_configured: SetState<bool>,
+    openrouter_key_input: SetState<String>,
     codex_path: SetState<String>,
     claude_path: SetState<String>,
     cursor_path: SetState<String>,
@@ -136,6 +139,13 @@ impl SettingsWindowState {
             .call(settings.providers.is_enabled(ProviderKind::Claude));
         self.cursor_enabled
             .call(settings.providers.is_enabled(ProviderKind::Cursor));
+        self.openrouter_enabled
+            .call(settings.providers.is_enabled(ProviderKind::OpenRouter));
+        self.openrouter_key_configured
+            .call(settings.openrouter_api_key_dpapi.is_some());
+        if settings.openrouter_api_key_dpapi.is_none() {
+            self.openrouter_key_input.call(String::new());
+        }
         self.codex_path.call(
             settings
                 .codex_path
@@ -295,11 +305,12 @@ pub fn open_onboarding(settings_tx: Sender<Settings>) -> windows_core::Result<()
     })
 }
 
-fn detected_providers(settings: &Settings) -> [bool; 3] {
+fn detected_providers(settings: &Settings) -> [bool; 4] {
     [
         crate::codex::is_installed(settings.codex_path.as_deref()),
         crate::claude::is_installed(settings.claude_path.as_deref()),
         crate::cursor::is_installed(settings.cursor_path.as_deref()),
+        settings.openrouter_api_key_dpapi.is_some(),
     ]
 }
 
@@ -376,12 +387,13 @@ fn provider_install_status(
             let used = app.as_ref().map(|_| ProviderInstallSource::App);
             (app.map(|path| path.display().to_string()), None, used)
         }
+        ProviderKind::OpenRouter => (None, None, None),
     };
     ProviderInstallStatus {
         app,
         cli,
         used,
-        cli_applicable: provider != ProviderKind::Cursor,
+        cli_applicable: !matches!(provider, ProviderKind::Cursor | ProviderKind::OpenRouter),
         checking: false,
     }
 }
@@ -457,6 +469,7 @@ fn persist_provider_folder(provider: ProviderKind, value: String, settings_tx: S
         ProviderKind::Codex => &CODEX_PATH_SAVE_GEN,
         ProviderKind::Claude => &CLAUDE_PATH_SAVE_GEN,
         ProviderKind::Cursor => &CURSOR_PATH_SAVE_GEN,
+        ProviderKind::OpenRouter => return,
     };
     let revision = generation.fetch_add(1, Ordering::Relaxed) + 1;
     thread::spawn(move || {
@@ -465,6 +478,7 @@ fn persist_provider_folder(provider: ProviderKind, value: String, settings_tx: S
             ProviderKind::Codex => &CODEX_PATH_SAVE_GEN,
             ProviderKind::Claude => &CLAUDE_PATH_SAVE_GEN,
             ProviderKind::Cursor => &CURSOR_PATH_SAVE_GEN,
+            ProviderKind::OpenRouter => return,
         };
         if generation.load(Ordering::Relaxed) != revision {
             return;
@@ -474,6 +488,7 @@ fn persist_provider_folder(provider: ProviderKind, value: String, settings_tx: S
             ProviderKind::Codex => settings.codex_path = folder,
             ProviderKind::Claude => settings.claude_path = folder,
             ProviderKind::Cursor => settings.cursor_path = folder,
+            ProviderKind::OpenRouter => {}
         });
     });
 }
@@ -630,7 +645,7 @@ enum OnboardingStep {
 fn onboarding_render(
     cx: &mut RenderCx,
     settings: Arc<Settings>,
-    detected: [bool; 3],
+    detected: [bool; 4],
     settings_tx: Sender<Settings>,
 ) -> Element {
     let color_scheme = cx.use_color_scheme();
@@ -641,6 +656,7 @@ fn onboarding_render(
     let (codex_enabled, set_codex_enabled) = cx.use_state(detected[0]);
     let (claude_enabled, set_claude_enabled) = cx.use_state(detected[1]);
     let (cursor_enabled, set_cursor_enabled) = cx.use_state(detected[2]);
+    let (openrouter_enabled, set_openrouter_enabled) = cx.use_state(detected[3]);
     let (start_at_login, set_start_at_login) = cx.use_state(settings.start_at_login);
     let (automatic_activation, set_automatic_activation) =
         cx.use_state(settings.automatic_activation);
@@ -705,6 +721,20 @@ fn onboarding_render(
                     set_hovered_card_id.clone(),
                 )
                 .with_key("onboarding-cursor"),
+                settings_toggle_card_with_description(
+                    "OpenRouter",
+                    Some(if detected[3] {
+                        "An encrypted API key is configured."
+                    } else {
+                        "Optional — configure an API key later in Settings > Providers."
+                    }),
+                    openrouter_enabled,
+                    move |value| set_openrouter_enabled.call(value),
+                    "onboarding-openrouter",
+                    &hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("onboarding-openrouter"),
             ],
         ),
         OnboardingStep::General => (
@@ -794,10 +824,15 @@ fn onboarding_render(
                     set_hovered_card_id.clone(),
                 )
                 .with_key("onboarding-show-usage-stats"),
-                if [codex_enabled, claude_enabled, cursor_enabled]
-                    .into_iter()
-                    .filter(|enabled| *enabled)
-                    .count()
+                if [
+                    codex_enabled,
+                    claude_enabled,
+                    cursor_enabled,
+                    openrouter_enabled,
+                ]
+                .into_iter()
+                .filter(|enabled| *enabled)
+                .count()
                     > 1
                 {
                     settings_toggle_card_with_description(
@@ -813,10 +848,15 @@ fn onboarding_render(
                 } else {
                     Element::Empty
                 },
-                if [codex_enabled, claude_enabled, cursor_enabled]
-                    .into_iter()
-                    .filter(|enabled| *enabled)
-                    .count()
+                if [
+                    codex_enabled,
+                    claude_enabled,
+                    cursor_enabled,
+                    openrouter_enabled,
+                ]
+                .into_iter()
+                .filter(|enabled| *enabled)
+                .count()
                     > 1
                 {
                     settings_control_card(
@@ -882,6 +922,7 @@ fn onboarding_render(
                                 ProviderKind::Codex => codex_enabled,
                                 ProviderKind::Claude => claude_enabled,
                                 ProviderKind::Cursor => cursor_enabled,
+                                ProviderKind::OpenRouter => openrouter_enabled,
                             })
                             .map(|provider| provider.kind),
                     );
@@ -1191,6 +1232,11 @@ pub fn render(
         cx.use_state(settings.providers.is_enabled(ProviderKind::Claude));
     let (cursor_enabled, set_cursor_enabled) =
         cx.use_state(settings.providers.is_enabled(ProviderKind::Cursor));
+    let (openrouter_enabled, set_openrouter_enabled) =
+        cx.use_state(settings.providers.is_enabled(ProviderKind::OpenRouter));
+    let (openrouter_key_configured, set_openrouter_key_configured) =
+        cx.use_state(settings.openrouter_api_key_dpapi.is_some());
+    let (openrouter_key_input, set_openrouter_key_input) = cx.use_state(String::new());
     let (codex_path, set_codex_path) = cx.use_state(
         settings
             .codex_path
@@ -1212,11 +1258,14 @@ pub fn render(
     let (codex_provider_expanded, set_codex_provider_expanded) = cx.use_state(false);
     let (claude_provider_expanded, set_claude_provider_expanded) = cx.use_state(false);
     let (cursor_provider_expanded, set_cursor_provider_expanded) = cx.use_state(false);
+    let (openrouter_provider_expanded, set_openrouter_provider_expanded) = cx.use_state(false);
     let (codex_provider_expand_progress, set_codex_provider_expand_progress) =
         cx.use_async_state(0.0_f64);
     let (claude_provider_expand_progress, set_claude_provider_expand_progress) =
         cx.use_async_state(0.0_f64);
     let (cursor_provider_expand_progress, set_cursor_provider_expand_progress) =
+        cx.use_async_state(0.0_f64);
+    let (openrouter_provider_expand_progress, set_openrouter_provider_expand_progress) =
         cx.use_async_state(0.0_f64);
     let (codex_install_status, set_codex_install_status) =
         cx.use_async_state(ProviderInstallStatus::checking());
@@ -1312,6 +1361,9 @@ pub fn render(
             codex_enabled: set_codex_enabled.clone(),
             claude_enabled: set_claude_enabled.clone(),
             cursor_enabled: set_cursor_enabled.clone(),
+            openrouter_enabled: set_openrouter_enabled.clone(),
+            openrouter_key_configured: set_openrouter_key_configured.clone(),
+            openrouter_key_input: set_openrouter_key_input.clone(),
             codex_path: set_codex_path.clone(),
             claude_path: set_claude_path.clone(),
             cursor_path: set_cursor_path.clone(),
@@ -1353,15 +1405,20 @@ pub fn render(
             codex_enabled,
             claude_enabled,
             cursor_enabled,
+            openrouter_enabled,
+            openrouter_key_configured,
+            &openrouter_key_input,
             &codex_path,
             &claude_path,
             &cursor_path,
             codex_provider_expanded,
             claude_provider_expanded,
             cursor_provider_expanded,
+            openrouter_provider_expanded,
             codex_provider_expand_progress,
             claude_provider_expand_progress,
             cursor_provider_expand_progress,
+            openrouter_provider_expand_progress,
             &codex_install_status,
             &claude_install_status,
             &cursor_install_status,
@@ -1405,15 +1462,20 @@ pub fn render(
             set_animations_enabled,
             set_claude_enabled,
             set_cursor_enabled,
+            set_openrouter_enabled,
+            set_openrouter_key_configured,
+            set_openrouter_key_input,
             set_codex_path,
             set_claude_path,
             set_cursor_path,
             set_codex_provider_expanded,
             set_claude_provider_expanded,
             set_cursor_provider_expanded,
+            set_openrouter_provider_expanded,
             set_codex_provider_expand_progress,
             set_claude_provider_expand_progress,
             set_cursor_provider_expand_progress,
+            set_openrouter_provider_expand_progress,
             set_popup_order,
             set_use_colored_provider_icons,
             set_replace_chatgpt_logo_with_codex,
@@ -1532,6 +1594,7 @@ pub fn render(
         codex_enabled,
         claude_enabled,
         cursor_enabled,
+        openrouter_enabled,
     );
     let window_body: Element = if let Some(editing) = editing_tray_indicator.as_ref() {
         let overlay = tray_indicator_edit_overlay(
@@ -1637,15 +1700,20 @@ fn tab_content(
     codex_enabled: bool,
     claude_enabled: bool,
     cursor_enabled: bool,
+    openrouter_enabled: bool,
+    openrouter_key_configured: bool,
+    openrouter_key_input: &str,
     codex_path: &str,
     claude_path: &str,
     cursor_path: &str,
     codex_provider_expanded: bool,
     claude_provider_expanded: bool,
     cursor_provider_expanded: bool,
+    openrouter_provider_expanded: bool,
     codex_provider_expand_progress: f64,
     claude_provider_expand_progress: f64,
     cursor_provider_expand_progress: f64,
+    openrouter_provider_expand_progress: f64,
     codex_install_status: &ProviderInstallStatus,
     claude_install_status: &ProviderInstallStatus,
     cursor_install_status: &ProviderInstallStatus,
@@ -1689,15 +1757,20 @@ fn tab_content(
     set_animations_enabled: SetState<bool>,
     set_claude_enabled: SetState<bool>,
     set_cursor_enabled: SetState<bool>,
+    set_openrouter_enabled: SetState<bool>,
+    set_openrouter_key_configured: SetState<bool>,
+    set_openrouter_key_input: SetState<String>,
     set_codex_path: SetState<String>,
     set_claude_path: SetState<String>,
     set_cursor_path: SetState<String>,
     set_codex_provider_expanded: SetState<bool>,
     set_claude_provider_expanded: SetState<bool>,
     set_cursor_provider_expanded: SetState<bool>,
+    set_openrouter_provider_expanded: SetState<bool>,
     set_codex_provider_expand_progress: AsyncSetState<f64>,
     set_claude_provider_expand_progress: AsyncSetState<f64>,
     set_cursor_provider_expand_progress: AsyncSetState<f64>,
+    set_openrouter_provider_expand_progress: AsyncSetState<f64>,
     set_popup_order: SetState<Vec<PopupWidgetKind>>,
     set_use_colored_provider_icons: SetState<bool>,
     set_replace_chatgpt_logo_with_codex: SetState<bool>,
@@ -1914,11 +1987,7 @@ fn tab_content(
                     set_hovered_card_id.clone(),
                 )
                 .with_key("general-show-usage-stats"),
-                if [codex_enabled, claude_enabled, cursor_enabled]
-                    .into_iter()
-                    .filter(|enabled| *enabled)
-                    .count()
-                    > 1
+                if total_spend_provider_count(codex_enabled, claude_enabled, cursor_enabled) > 1
                 {
                     settings_toggle_card_with_description(
                         "Show total spend in All tab",
@@ -1942,11 +2011,7 @@ fn tab_content(
                 } else {
                     Element::Empty
                 },
-                if [codex_enabled, claude_enabled, cursor_enabled]
-                    .into_iter()
-                    .filter(|enabled| *enabled)
-                    .count()
-                    > 1
+                if total_spend_provider_count(codex_enabled, claude_enabled, cursor_enabled) > 1
                 {
                     settings_control_card(
                         "Total spend layout",
@@ -2109,16 +2174,29 @@ fn tab_content(
                             tray_widgets_for_cursor_toggle.clone(),
                             tray_widget_setter_for_cursor_toggle.clone(),
                         ),
+                        ProviderKind::OpenRouter => (
+                            "OpenRouter",
+                            Some("Reads the selected OpenRouter API key's usage and spending limit."),
+                            openrouter_enabled,
+                            set_openrouter_enabled.clone(),
+                            settings_tx.clone(),
+                            codex_enabled,
+                            claude_enabled,
+                            tray_widgets.to_vec(),
+                            set_tray_widgets.clone(),
+                        ),
                     };
                 let (path, path_label, path_description, placeholder, expanded, expand_progress, set_expanded, set_expand_progress) = match provider {
                     ProviderKind::Codex => (codex_path, "Codex CLI folder (optional)", "Choose the folder containing codex.exe, codex.cmd, or codex.ps1. Leave it empty for automatic scanning.", r"C:\\Users\\you\\AppData\\Roaming\\npm", codex_provider_expanded, codex_provider_expand_progress, set_codex_provider_expanded.clone(), set_codex_provider_expand_progress.clone()),
                     ProviderKind::Claude => (claude_path, "Claude Code CLI folder (optional)", "Choose the folder containing claude.exe, claude.cmd, or claude.ps1. Leave it empty for automatic scanning.", r"C:\\Users\\you\\AppData\\Roaming\\npm", claude_provider_expanded, claude_provider_expand_progress, set_claude_provider_expanded.clone(), set_claude_provider_expand_progress.clone()),
                     ProviderKind::Cursor => (cursor_path, "Cursor app folder (optional)", "Choose the folder containing Cursor.exe. Leave it empty for automatic scanning; usage still comes from Cursor's signed-in local profile.", r"C:\\Users\\you\\AppData\\Local\\Programs\\Cursor", cursor_provider_expanded, cursor_provider_expand_progress, set_cursor_provider_expanded.clone(), set_cursor_provider_expand_progress.clone()),
+                    ProviderKind::OpenRouter => ("", "", "", "", openrouter_provider_expanded, openrouter_provider_expand_progress, set_openrouter_provider_expanded.clone(), set_openrouter_provider_expand_progress.clone()),
                 };
                 let install_status = match provider {
                     ProviderKind::Codex => codex_install_status,
                     ProviderKind::Claude => claude_install_status,
                     ProviderKind::Cursor => cursor_install_status,
+                    ProviderKind::OpenRouter => codex_install_status,
                 };
                 let codex_path_setter = set_codex_path.clone();
                 let claude_path_setter = set_claude_path.clone();
@@ -2247,24 +2325,88 @@ fn tab_content(
                         .horizontal_alignment(HorizontalAlignment::Stretch)
                         .into()
                     }
+                    ProviderKind::OpenRouter => {
+                        let key_setter = set_openrouter_key_input.clone();
+                        let configured_setter = set_openrouter_key_configured.clone();
+                        let save_tx = settings_tx.clone();
+                        let key_to_save = openrouter_key_input.to_owned();
+                        let clear_setter = set_openrouter_key_input.clone();
+                        let clear_configured = set_openrouter_key_configured.clone();
+                        let clear_tx = settings_tx.clone();
+                        vstack((
+                            text_block("OpenRouter API key")
+                                .font_size(12.0),
+                            PasswordBox::new()
+                                .value(openrouter_key_input)
+                                .placeholder_text(if openrouter_key_configured {
+                                    "A key is stored; enter a replacement"
+                                } else {
+                                    "sk-or-v1-…"
+                                })
+                                .on_password_changed(move |value| key_setter.call(value))
+                                .height(32.0),
+                            hstack((
+                                Button::new("Save")
+                                    .accent()
+                                    .enabled(!key_to_save.trim().is_empty())
+                                    .on_click(move || {
+                                        persist_openrouter_key(
+                                            configured_setter.clone(),
+                                            save_tx.clone(),
+                                            key_to_save.clone(),
+                                        );
+                                    }),
+                                Button::new("Remove")
+                                    .enabled(openrouter_key_configured)
+                                    .on_click(move || {
+                                        clear_setter.call(String::new());
+                                        persist_openrouter_key(
+                                            clear_configured.clone(),
+                                            clear_tx.clone(),
+                                            String::new(),
+                                        );
+                                    }),
+                            ))
+                            .spacing(8.0),
+                        ))
+                        .spacing(8.0)
+                        .horizontal_alignment(HorizontalAlignment::Stretch)
+                        .into()
+                    }
                 };
-                let details = vstack((
-                    provider_install_status_card(install_status),
+                let details: Element = if provider == ProviderKind::OpenRouter {
                     vstack((
-                        text_block(path_label).font_size(12.0),
-                        text_block(path_description).font_size(11.0).opacity(0.72).wrap(),
+                        text_block("The key is encrypted with Windows DPAPI and is never included in settings exports.")
+                            .font_size(11.0)
+                            .opacity(0.72)
+                            .wrap(),
                         path_input,
                     ))
-                    .spacing(3.0)
-                    .horizontal_alignment(HorizontalAlignment::Stretch),
-                ))
-                .spacing(8.0)
-                .horizontal_alignment(HorizontalAlignment::Stretch)
-                .vertical_alignment(VerticalAlignment::Top);
+                    .spacing(8.0)
+                    .horizontal_alignment(HorizontalAlignment::Stretch)
+                    .vertical_alignment(VerticalAlignment::Top)
+                    .into()
+                } else {
+                    vstack((
+                        provider_install_status_card(install_status),
+                        vstack((
+                            text_block(path_label).font_size(12.0),
+                            text_block(path_description).font_size(11.0).opacity(0.72).wrap(),
+                            path_input,
+                        ))
+                        .spacing(3.0)
+                        .horizontal_alignment(HorizontalAlignment::Stretch),
+                    ))
+                    .spacing(8.0)
+                    .horizontal_alignment(HorizontalAlignment::Stretch)
+                    .vertical_alignment(VerticalAlignment::Top)
+                    .into()
+                };
                 let card = match provider {
                     ProviderKind::Codex => settings_toggle_expander(title, description, enabled, move |value| persist_provider_enabled(setter.clone(), tray_setter.clone(), apply_tx.clone(), ProviderKind::Codex, value, other_a, other_b, tray_snapshot.clone()), expanded, expand_progress, None, set_expanded, set_expand_progress, "providers-codex", hovered_card_id, set_hovered_card_id.clone(), details),
                     ProviderKind::Claude => settings_toggle_expander(title, description, enabled, move |value| persist_provider_enabled(setter.clone(), tray_setter.clone(), apply_tx.clone(), ProviderKind::Claude, value, other_a, other_b, tray_snapshot.clone()), expanded, expand_progress, None, set_expanded, set_expand_progress, "providers-claude", hovered_card_id, set_hovered_card_id.clone(), details),
                     ProviderKind::Cursor => settings_toggle_expander(title, description, enabled, move |value| persist_cursor_enabled(setter.clone(), tray_setter.clone(), apply_tx.clone(), value, other_a, other_b, tray_snapshot.clone()), expanded, expand_progress, None, set_expanded, set_expand_progress, "providers-cursor", hovered_card_id, set_hovered_card_id.clone(), details),
+                    ProviderKind::OpenRouter => settings_toggle_expander(title, description, enabled, move |value| persist_provider_enabled(setter.clone(), tray_setter.clone(), apply_tx.clone(), ProviderKind::OpenRouter, value, other_a, other_b, tray_snapshot.clone()), expanded, expand_progress, None, set_expanded, set_expand_progress, "providers-openrouter", hovered_card_id, set_hovered_card_id.clone(), details),
                 };
                 rows.push(card.with_key(format!("providers-{}", provider.id())));
             }
@@ -2320,7 +2462,7 @@ fn tab_content(
             "Schedule",
             scheduled_activation_cards(
                 scheduled_activations,
-                &[codex_enabled, claude_enabled, cursor_enabled],
+                &[codex_enabled, claude_enabled, cursor_enabled, openrouter_enabled],
                 set_scheduled_activations.clone(),
                 settings_tx.clone(),
             ),
@@ -2331,7 +2473,13 @@ fn tab_content(
                 .filter_map(|widget| widget.as_provider())
                 .collect();
             let enabled_providers =
-                enabled_providers(&providers, codex_enabled, claude_enabled, cursor_enabled);
+                enabled_providers(
+                    &providers,
+                    codex_enabled,
+                    claude_enabled,
+                    cursor_enabled,
+                    openrouter_enabled,
+                );
             (
                 "Tray",
                 tray_settings_cards(
@@ -2503,6 +2651,9 @@ fn tab_content(
                 codex_enabled: set_codex_enabled,
                 claude_enabled: set_claude_enabled,
                 cursor_enabled: set_cursor_enabled,
+                openrouter_enabled: set_openrouter_enabled,
+                openrouter_key_configured: set_openrouter_key_configured,
+                openrouter_key_input: set_openrouter_key_input,
                 codex_path: set_codex_path,
                 claude_path: set_claude_path,
                 cursor_path: set_cursor_path,
@@ -2713,7 +2864,7 @@ fn tab_content(
 
 fn scheduled_activation_cards(
     schedules: &[ScheduledActivation],
-    provider_enabled: &[bool; 3],
+    provider_enabled: &[bool; 4],
     set_schedules: SetState<Vec<ScheduledActivation>>,
     settings_tx: Sender<Settings>,
 ) -> Vec<Element> {
@@ -2727,15 +2878,14 @@ fn scheduled_activation_cards(
             ProviderKind::Codex => provider_enabled[0],
             ProviderKind::Claude => provider_enabled[1],
             ProviderKind::Cursor => false,
+            ProviderKind::OpenRouter => false,
         })
         .collect();
     let provider_labels: Vec<String> = available_providers
         .iter()
         .map(|provider| provider.display_name().to_string())
         .collect();
-    const WEEKDAYS: [&str; 7] = [
-        "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun",
-    ];
+    const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     let mut rows: Vec<Element> = vec![
         text_block("Start a provider's 5-hour limit window at a chosen local time. Automatic activation is paused for the six hours before each scheduled run.")
             .foreground(ThemeRef::SecondaryText)
@@ -2911,7 +3061,8 @@ fn scheduled_activation_cards(
                     let mut next = schedules_for_time.clone();
                     if let Some(rule) = next.get_mut(index) {
                         let time_minutes = (time.duration / (60 * 10_000_000))
-                            .clamp(0, i64::from(23 * 60 + 59)) as u16;
+                            .clamp(0, i64::from(23 * 60 + 59))
+                            as u16;
                         if rule.time_minutes == time_minutes {
                             return;
                         }
@@ -5140,6 +5291,7 @@ fn enabled_providers(
     codex_enabled: bool,
     claude_enabled: bool,
     cursor_enabled: bool,
+    openrouter_enabled: bool,
 ) -> Vec<ProviderKind> {
     order
         .iter()
@@ -5148,8 +5300,13 @@ fn enabled_providers(
             ProviderKind::Codex => codex_enabled,
             ProviderKind::Claude => claude_enabled,
             ProviderKind::Cursor => cursor_enabled,
+            ProviderKind::OpenRouter => openrouter_enabled,
         })
         .collect()
+}
+
+fn total_spend_provider_count(codex: bool, claude: bool, cursor: bool) -> usize {
+    usize::from(codex) + usize::from(claude) + usize::from(cursor)
 }
 
 #[cfg(any())]
@@ -5199,6 +5356,27 @@ fn persist_cursor_enabled(
         settings
             .providers
             .set_enabled(ProviderKind::Cursor, enabled);
+    });
+}
+
+fn persist_openrouter_key(
+    configured_setter: SetState<bool>,
+    settings_tx: Sender<Settings>,
+    value: String,
+) {
+    let value = value.trim().to_owned();
+    let protected = if value.is_empty() {
+        Ok(None)
+    } else {
+        crate::secrets::protect(&value).map(Some)
+    };
+    let Ok(protected) = protected else {
+        eprintln!("failed to protect OpenRouter API key");
+        return;
+    };
+    configured_setter.call(protected.is_some());
+    persist_update(settings_tx, move |settings| {
+        settings.openrouter_api_key_dpapi = protected;
     });
 }
 
@@ -5260,14 +5438,24 @@ fn export_settings() -> anyhow::Result<()> {
         return Ok(());
     };
     let current_path = Settings::default_path()?;
-    Settings::load_or_create(&current_path)?.save(&path)
+    let mut settings = Settings::load_or_create(&current_path)?;
+    // DPAPI blobs are user-bound credentials, not portable settings. Never
+    // copy even ciphertext into an export file.
+    settings.openrouter_api_key_dpapi = None;
+    settings.save(&path)
 }
 
 fn import_settings() -> anyhow::Result<Option<Settings>> {
     let Some(path) = choose_settings_file(false)? else {
         return Ok(None);
     };
-    Settings::load_or_create(&path).map(Some)
+    let mut imported = Settings::load_or_create(&path)?;
+    // Imports intentionally do not disconnect a locally configured provider;
+    // exported files never contain credentials in the first place.
+    let current_path = Settings::default_path()?;
+    imported.openrouter_api_key_dpapi =
+        Settings::load_or_create(&current_path)?.openrouter_api_key_dpapi;
+    Ok(Some(imported))
 }
 
 #[cfg(windows)]
