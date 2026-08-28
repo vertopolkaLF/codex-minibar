@@ -434,7 +434,8 @@ fn tick(
             now,
             scheduler::AUTO_ACTIVATION_SCHEDULE_GUARD,
         )
-        && state.decide(&limits.primary) == Decision::ActivateNow;
+        && state.decide_with_unactivated(&limits.primary, limits.primary_window_is_unactivated)
+            == Decision::ActivateNow;
     if scheduled_due.is_some() || automatic_due {
         state.record_attempt(Utc::now());
         events.push(WorkerEvent::ActivationStarted);
@@ -443,7 +444,10 @@ fn tick(
                 if let Ok(fresh) = provider.read_limits() {
                     limits = fresh;
                 }
-                state.observe(&limits.primary);
+                state.observe_with_unactivated(
+                    &limits.primary,
+                    limits.primary_window_is_unactivated,
+                );
                 if let Some((rule, occurrence)) = scheduled_due {
                     state.record_scheduled_activation(&rule.id, occurrence);
                 }
@@ -452,7 +456,7 @@ fn tick(
             Err(error) => events.push(WorkerEvent::ActivationFailed(error.to_string())),
         }
     } else {
-        state.observe(&limits.primary);
+        state.observe_with_unactivated(&limits.primary, limits.primary_window_is_unactivated);
     }
 
     events.insert(0, WorkerEvent::LimitsUpdated(limits));
@@ -462,7 +466,7 @@ fn tick(
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
-    use chrono::{Datelike, Local, TimeZone, Timelike};
+    use chrono::{Datelike, Duration as ChronoDuration, Local, TimeZone, Timelike};
 
     use super::*;
     use crate::limits::LimitWindow;
@@ -552,6 +556,61 @@ mod tests {
         );
         tick(&mut provider, &mut activator, &mut state, true, &[]).unwrap();
         assert_eq!(activator.0, 1);
+    }
+
+    #[test]
+    fn tick_activates_codex_unactivated_window_once() {
+        let sampled_at = Utc.with_ymd_and_hms(2026, 7, 10, 15, 0, 0).unwrap();
+        let unactivated = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(0),
+                resets_at: Some(sampled_at + ChronoDuration::hours(5)),
+                duration_minutes: Some(300),
+            },
+            secondary: LimitWindow {
+                used_percent: Some(0),
+                resets_at: Some(sampled_at + ChronoDuration::days(7)),
+                duration_minutes: Some(10_080),
+            },
+            sampled_at,
+            primary_window_is_unactivated: true,
+            ..RateLimits::default()
+        };
+        let mut provider = ScriptedProvider::new(vec![unactivated.clone(), unactivated]);
+        let mut activator = CountingActivator(0);
+        let mut state = ActivationState::default();
+
+        tick(&mut provider, &mut activator, &mut state, true, &[]).unwrap();
+        assert_eq!(activator.0, 1);
+        tick(&mut provider, &mut activator, &mut state, true, &[]).unwrap();
+        assert_eq!(activator.0, 1);
+    }
+
+    #[test]
+    fn tick_ignores_unmarked_five_hour_placeholder_shape() {
+        let sampled_at = Utc.with_ymd_and_hms(2026, 7, 10, 15, 0, 0).unwrap();
+        let sample = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(0),
+                resets_at: Some(sampled_at + ChronoDuration::hours(5)),
+                duration_minutes: Some(300),
+            },
+            sampled_at,
+            ..RateLimits::default()
+        };
+        let mut activator = CountingActivator(0);
+        let mut state = ActivationState::default();
+
+        tick(
+            &mut ScriptedProvider::new(vec![sample]),
+            &mut activator,
+            &mut state,
+            true,
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(activator.0, 0);
     }
 
     #[test]

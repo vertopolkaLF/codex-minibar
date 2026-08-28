@@ -303,10 +303,13 @@ pub fn parse_rate_limits(
     let limits = response
         .pointer("/result/rateLimits")
         .context("missing result.rateLimits")?;
+    let primary = parse_window(limits.get("primary"));
+    let primary_window_is_unactivated = primary.looks_like_unactivated_five_hour(sampled_at);
     Ok(RateLimits {
-        primary: parse_window(limits.get("primary")),
+        primary,
         secondary: parse_window(limits.get("secondary")),
         sampled_at,
+        primary_window_is_unactivated,
         account_name: None,
         plan_type: limits
             .get("planType")
@@ -489,6 +492,7 @@ mod tests {
         assert_eq!(parsed.primary.remaining_percent(), Some(73));
         assert_eq!(parsed.primary.duration_minutes, Some(300));
         assert_eq!(parsed.secondary, LimitWindow::default());
+        assert!(!parsed.primary_window_is_unactivated);
         assert!(!parsed.five_hour_disabled());
     }
 
@@ -508,7 +512,30 @@ mod tests {
         assert_eq!(parsed.primary, LimitWindow::default());
         assert_eq!(parsed.secondary.used_percent, Some(14));
         assert_eq!(parsed.secondary.duration_minutes, Some(10_080));
+        assert!(!parsed.primary_window_is_unactivated);
         assert_eq!(parsed.effective_primary().used_percent, Some(14));
+    }
+
+    #[test]
+    fn marks_codex_unactivated_five_hour_window() {
+        let sampled_at = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
+        let value = json!({"result": {"rateLimits": {
+            "primary": {
+                "usedPercent": 0,
+                "resetsAt": sampled_at.timestamp() + 5 * 60 * 60,
+                "windowDurationMins": 300
+            },
+            "secondary": {
+                "usedPercent": 0,
+                "resetsAt": sampled_at.timestamp() + 7 * 24 * 60 * 60,
+                "windowDurationMins": 10080
+            }
+        }}});
+
+        let parsed = parse_rate_limits(&value, sampled_at).unwrap();
+        assert!(parsed.primary_window_is_unactivated);
+        assert_eq!(parsed.primary.duration_minutes, Some(300));
+        assert_eq!(parsed.secondary.duration_minutes, Some(10_080));
     }
 
     #[test]

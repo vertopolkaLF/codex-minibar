@@ -127,12 +127,26 @@ pub enum Decision {
 impl ActivationState {
     /// Activate only when the primary reset timestamp changed since the last
     /// observation. Seconds and fractional-second jitter are ignored; the
-    /// first sample only establishes a baseline.
+    /// first normal sample only establishes a baseline. Codex's synthetic
+    /// unactivated 5h sample is an exception and activates immediately.
     pub fn decide(&self, primary: &LimitWindow) -> Decision {
+        self.decide_with_unactivated(primary, false)
+    }
+
+    /// Variant of [`Self::decide`] for a provider that explicitly identified
+    /// Codex's synthetic, unactivated 5h response.
+    pub fn decide_with_unactivated(&self, primary: &LimitWindow, is_unactivated: bool) -> Decision {
         // An empty primary window means the provider does not currently expose
         // a session limit. It is not evidence of an available-but-idle window.
         if primary.is_empty() {
             return Decision::Skip;
+        }
+        if is_unactivated {
+            return if self.attempted_without_active_window {
+                Decision::Skip
+            } else {
+                Decision::ActivateNow
+            };
         }
         let Some(resets_at) = primary.resets_at else {
             return if self.attempted_without_active_window {
@@ -159,9 +173,17 @@ impl ActivationState {
     /// Remember the latest primary reset time so the next poll can detect a
     /// real new window rather than endpoint timestamp jitter.
     pub fn observe(&mut self, primary: &LimitWindow) {
+        self.observe_with_unactivated(primary, false);
+    }
+
+    /// Variant of [`Self::observe`] that preserves the Codex unactivated
+    /// marker until a non-synthetic response confirms the session started.
+    pub fn observe_with_unactivated(&mut self, primary: &LimitWindow, is_unactivated: bool) {
         if let Some(resets_at) = primary.resets_at {
             self.last_seen_resets_at = Some(normalize_reset(resets_at));
-            self.attempted_without_active_window = false;
+            if !is_unactivated {
+                self.attempted_without_active_window = false;
+            }
         }
     }
 
@@ -231,6 +253,38 @@ mod tests {
         let mut state = ActivationState::default();
         state.observe(&window_at(at(15, 0)));
         assert_eq!(state.decide(&window_at(at(15, 5))), Decision::ActivateNow);
+    }
+
+    #[test]
+    fn activates_on_codex_unactivated_five_hour_placeholder() {
+        let sampled_at = at(15, 0);
+        let primary = LimitWindow {
+            used_percent: Some(0),
+            resets_at: Some(sampled_at + Duration::hours(5)),
+            duration_minutes: Some(300),
+        };
+        let state = ActivationState::default();
+
+        assert_eq!(
+            state.decide_with_unactivated(&primary, true),
+            Decision::ActivateNow
+        );
+    }
+
+    #[test]
+    fn weekly_placeholder_does_not_trigger_activation() {
+        let sampled_at = at(15, 0);
+        let primary = LimitWindow {
+            used_percent: Some(0),
+            resets_at: Some(sampled_at + Duration::days(7)),
+            duration_minutes: Some(10_080),
+        };
+        let state = ActivationState::default();
+
+        assert_eq!(
+            state.decide_with_unactivated(&primary, false),
+            Decision::Skip
+        );
     }
 
     #[test]

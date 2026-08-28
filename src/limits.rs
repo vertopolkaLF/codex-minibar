@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::settings::ProviderKind;
@@ -6,6 +6,11 @@ use crate::usage::UsageStatistics;
 
 /// Windows longer than this are treated as weekly (or similar), not the 5h session.
 const SHORT_WINDOW_MAX_MINUTES: u32 = 12 * 60;
+const FIVE_HOUR_WINDOW_MINUTES: u32 = 5 * 60;
+/// Codex rounds the synthetic reset deadline and the request timestamp
+/// independently. Keep this small so a real active window is not mistaken for
+/// an unactivated one.
+const UNACTIVATED_RESET_TOLERANCE: Duration = Duration::minutes(5);
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LimitWindow {
@@ -73,6 +78,23 @@ impl LimitWindow {
             .unwrap_or(false)
     }
 
+    /// Codex reports a not-yet-started 5-hour quota as a nearly unused window
+    /// whose reset is synthesized at roughly `sampled_at + 5h`. Claude does
+    /// not need this heuristic because its unactivated session has no reset
+    /// deadline.
+    pub fn looks_like_unactivated_five_hour(&self, sampled_at: DateTime<Utc>) -> bool {
+        if self.duration_minutes != Some(FIVE_HOUR_WINDOW_MINUTES)
+            || !matches!(self.used_percent, Some(0..=1))
+        {
+            return false;
+        }
+        let Some(resets_at) = self.resets_at else {
+            return false;
+        };
+        let expected_reset = sampled_at + Duration::minutes(i64::from(FIVE_HOUR_WINDOW_MINUTES));
+        (resets_at - expected_reset).abs() <= UNACTIVATED_RESET_TOLERANCE
+    }
+
     /// Expected used % for an even burn across the current window.
     ///
     /// With 1h left in a 5h window this is 80%; when the bar shows remaining,
@@ -115,6 +137,10 @@ pub struct RateLimits {
     pub primary: LimitWindow,
     pub secondary: LimitWindow,
     pub sampled_at: DateTime<Utc>,
+    /// Provider-derived marker for Codex's synthetic, not-yet-started 5h
+    /// response. Other providers leave this false.
+    #[serde(default)]
+    pub primary_window_is_unactivated: bool,
     /// Human-readable account identity supplied by the provider, when available.
     pub account_name: Option<String>,
     pub plan_type: Option<String>,
@@ -168,6 +194,7 @@ impl RateLimits {
             && self.primary.looks_like_weekly(now)
         {
             self.secondary = std::mem::take(&mut self.primary);
+            self.primary_window_is_unactivated = false;
         }
         self
     }
@@ -297,6 +324,42 @@ mod tests {
         };
         let tip = weekly.pace_tip(false, now).unwrap();
         assert!((tip.percent - (100.0 - weekly.expected_used_percent(now).unwrap())).abs() < 0.01);
+    }
+
+    #[test]
+    fn detects_codex_unactivated_five_hour_placeholder() {
+        let sampled_at = Utc.with_ymd_and_hms(2026, 7, 12, 15, 0, 0).unwrap();
+        let window = LimitWindow {
+            used_percent: Some(0),
+            resets_at: Some(sampled_at + Duration::hours(5)),
+            duration_minutes: Some(300),
+        };
+
+        assert!(window.looks_like_unactivated_five_hour(sampled_at));
+    }
+
+    #[test]
+    fn weekly_placeholder_is_not_a_five_hour_placeholder() {
+        let sampled_at = Utc.with_ymd_and_hms(2026, 7, 12, 15, 0, 0).unwrap();
+        let window = LimitWindow {
+            used_percent: Some(0),
+            resets_at: Some(sampled_at + Duration::days(7)),
+            duration_minutes: Some(10_080),
+        };
+
+        assert!(!window.looks_like_unactivated_five_hour(sampled_at));
+    }
+
+    #[test]
+    fn used_five_hour_window_is_not_a_placeholder() {
+        let sampled_at = Utc.with_ymd_and_hms(2026, 7, 12, 15, 0, 0).unwrap();
+        let window = LimitWindow {
+            used_percent: Some(2),
+            resets_at: Some(sampled_at + Duration::hours(5)),
+            duration_minutes: Some(300),
+        };
+
+        assert!(!window.looks_like_unactivated_five_hour(sampled_at));
     }
 
     #[test]
