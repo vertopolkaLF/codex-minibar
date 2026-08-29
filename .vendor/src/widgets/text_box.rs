@@ -6,6 +6,9 @@ pub struct TextBox {
     pub modifiers: Modifiers,
     pub value: String,
     pub on_text_changed: Option<Callback<String>>,
+    /// Fired on Enter (single-line) and when the box loses focus.
+    /// Prefer this over [`Self::on_text_changed`] for expensive persistence.
+    pub on_commit: Option<Callback<String>>,
     pub placeholder_text: String,
     pub header: Option<String>,
     pub is_enabled: bool,
@@ -32,6 +35,13 @@ impl Widget for TextBox {
             Prop::Value,
             PropValue::Str(self.value.clone()),
         ));
+        if let Some(cb) = &self.on_commit {
+            let commit = EventHandler::Str(cb.clone());
+            out.push(Binding::Event(Event::LostFocus, Some(commit.clone())));
+            if !self.accepts_return {
+                out.push(Binding::Event(Event::Submit, Some(commit)));
+            }
+        }
         if let Some(BrushBinding::Direct(br)) = &self.border_brush {
             out.push(Binding::Prop(Prop::BorderBrush, PropValue::Color(*br)));
         }
@@ -48,6 +58,12 @@ impl Widget for TextBox {
 impl TextBox {
     pub fn on_text_changed(mut self, f: impl IntoCallback<String>) -> Self {
         self.on_text_changed = Some(f.into_callback());
+        self
+    }
+
+    /// Persist / apply the value on Enter or focus loss instead of every keystroke.
+    pub fn on_commit(mut self, f: impl IntoCallback<String>) -> Self {
+        self.on_commit = Some(f.into_callback());
         self
     }
 

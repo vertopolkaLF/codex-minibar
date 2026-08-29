@@ -972,40 +972,40 @@ fn provider_cards(
     if let Some(handle) = drag_handle {
         trailing.push(handle);
     }
-    let trailing_slot: Element = if trailing.is_empty() {
-        Element::Empty
-    } else {
-        hstack(trailing)
-            .spacing(4.0)
-            .horizontal_alignment(HorizontalAlignment::Right)
-            .vertical_alignment(VerticalAlignment::Center)
-            .grid_column(1)
-            .into()
-    };
+    let mut title_parts: Vec<Element> = vec![body_strong(provider.display_name())
+        .foreground(ThemeRef::SecondaryText)
+        .vertical_alignment(VerticalAlignment::Center)
+        .into()];
+    if let Some(plan) = limits
+        .plan_type
+        .as_deref()
+        .filter(|plan| !plan.trim().is_empty())
+    {
+        title_parts.push(
+            text_block(capitalize_plan_name(plan))
+                .font_weight(400)
+                .foreground(ThemeRef::TertiaryText)
+                .vertical_alignment(VerticalAlignment::Center)
+                .into(),
+        );
+    }
+    let title_row = hstack(title_parts)
+        .spacing(4.0)
+        .vertical_alignment(VerticalAlignment::Center)
+        .grid_column(0);
+    let mut heading_cells: Vec<Element> = vec![title_row.into()];
+    if !trailing.is_empty() {
+        heading_cells.push(
+            hstack(trailing)
+                .spacing(4.0)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .vertical_alignment(VerticalAlignment::Center)
+                .grid_column(1)
+                .into(),
+        );
+    }
     let mut cards: Vec<Element> = vec![
-        grid((
-            hstack((
-                body_strong(provider.display_name())
-                    .foreground(ThemeRef::SecondaryText)
-                    .vertical_alignment(VerticalAlignment::Center),
-                limits
-                    .plan_type
-                    .as_deref()
-                    .filter(|plan| !plan.trim().is_empty())
-                    .map(|plan| {
-                        text_block(capitalize_plan_name(plan))
-                            .font_weight(400)
-                            .foreground(ThemeRef::TertiaryText)
-                            .vertical_alignment(VerticalAlignment::Center)
-                            .into()
-                    })
-                    .unwrap_or(Element::Empty),
-            ))
-            .spacing(4.0)
-            .vertical_alignment(VerticalAlignment::Center)
-            .grid_column(0),
-            trailing_slot,
-        ))
+        grid(heading_cells)
         .columns([GridLength::Star(1.0), GridLength::Auto])
         .rows([GridLength::Auto])
         .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -1024,11 +1024,18 @@ fn provider_cards(
     ];
     if provider == ProviderKind::OpenRouter {
         if !limits.openrouter_accounts.is_empty() {
+            // Nest each account as its own keyed strip. A flat list of headings
+            // + key cards lets WinUI recycle siblings across account boundaries
+            // when membership flickers (keys loading/failing), so TEST2 can
+            // visually land under Pixelscan. Nested strips keep heading+keys
+            // glued together; remount the strip when its key set changes.
             for account in &limits.openrouter_accounts {
-                cards.push(
+                let mut account_strip: Vec<Element> = Vec::new();
+                account_strip.push(
                     openrouter_account_heading(account)
                         .with_key(format!("{}-account-heading", account.id)),
                 );
+                let mut key_identity = String::new();
                 for (index, api_key) in account.api_keys.iter().enumerate() {
                     let title = api_key
                         .label
@@ -1037,18 +1044,41 @@ fn provider_cards(
                         .filter(|label| !label.is_empty())
                         .map(str::to_owned)
                         .unwrap_or_else(|| format!("Key {}", index + 1));
-                    cards.push(
+                    let masked = api_key.masked_key.as_deref().unwrap_or("");
+                    if !key_identity.is_empty() {
+                        key_identity.push('\u{1f}');
+                    }
+                    key_identity.push_str(&api_key.id);
+                    key_identity.push('\u{1e}');
+                    key_identity.push_str(&title);
+                    key_identity.push('\u{1e}');
+                    key_identity.push_str(masked);
+                    account_strip.push(
                         spending_card_with_title(
-                            title,
+                            title.clone(),
                             api_key.masked_key.as_deref(),
                             &api_key.spending,
                             api_key.has_live_usage,
                             show_used_percentage,
                             color_scheme,
                         )
-                        .with_key(format!("{}-api-{}", account.id, api_key.id)),
+                        // Identity includes glyph-like content (title/mask) so a
+                        // recycled native card cannot keep a neighbor's text.
+                        .with_key(format!(
+                            "{}-api-{}-{}-{}",
+                            account.id, api_key.id, title, masked
+                        )),
                     );
                 }
+                cards.push(
+                    vstack(account_strip)
+                        .spacing(6.0)
+                        .with_key(format!(
+                            "openrouter-account-strip-{}-{}",
+                            account.id, key_identity
+                        ))
+                        .into(),
+                );
             }
         } else if let Some(spending) = limits.spending.as_ref() {
             cards.push(
@@ -1293,6 +1323,35 @@ fn openrouter_account_heading(account: &OpenRouterAccountSnapshot) -> Element {
             bottom: 0.0,
         })
         .into()
+}
+
+/// Stable membership fingerprint for OpenRouter popup chrome. Include account
+/// and API-key identities (not live usage) so the provider strip remounts when
+/// keys are added/removed/moved, preventing recycled cards under the wrong
+/// account heading.
+fn openrouter_accounts_strip_key(limits: &RateLimits) -> String {
+    let mut key = String::new();
+    for account in &limits.openrouter_accounts {
+        if !key.is_empty() {
+            key.push('\u{1d}');
+        }
+        key.push_str(&account.id);
+        key.push('\u{1f}');
+        key.push_str(&account.name);
+        for api_key in &account.api_keys {
+            key.push('\u{1e}');
+            key.push_str(&api_key.id);
+            if let Some(label) = api_key.label.as_deref() {
+                key.push(':');
+                key.push_str(label);
+            }
+            if let Some(masked) = api_key.masked_key.as_deref() {
+                key.push('@');
+                key.push_str(masked);
+            }
+        }
+    }
+    key
 }
 
 fn latest_sampled_at(limits: &ProviderLimits) -> chrono::DateTime<Utc> {
@@ -1637,9 +1696,14 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                         ))
                         .spacing(6.0)
                         .with_key(format!(
-                            "provider-{}-{}",
+                            "provider-{}-{}-{}",
                             provider.id(),
-                            if is_first { "first" } else { "rest" }
+                            if is_first { "first" } else { "rest" },
+                            if provider == ProviderKind::OpenRouter {
+                                openrouter_accounts_strip_key(limits_for_provider)
+                            } else {
+                                String::new()
+                            }
                         ))
                         .into()
                     }
@@ -1696,7 +1760,15 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                         None,
                     ))
                     .spacing(6.0)
-                    .with_key(format!("provider-{}", provider.id()))
+                    .with_key(format!(
+                        "provider-{}-{}",
+                        provider.id(),
+                        if provider == ProviderKind::OpenRouter {
+                            openrouter_accounts_strip_key(limits_for_provider)
+                        } else {
+                            String::new()
+                        }
+                    ))
                     .into(),
                 );
                 has_preceding_section = true;

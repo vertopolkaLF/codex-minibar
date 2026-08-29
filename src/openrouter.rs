@@ -178,16 +178,22 @@ impl LimitProvider for OpenRouterClient {
         let sampled_at = Utc::now();
         let mut accounts = Vec::new();
         for account in &self.accounts {
-            // A management key is preferred for account-level credits and the
-            // key directory. Keep the first API key as a compatibility
-            // fallback for users whose existing key is itself a management key.
-            let management_key = account
+            // Key display names must come only from this account's management
+            // key directory. Never fall back to an ordinary API key here — that
+            // can resolve names from a different OpenRouter org and make a key
+            // look like it belongs under the wrong account heading.
+            let key_names = account
+                .management_key
+                .as_deref()
+                .and_then(|key| self.read_key_names(key).ok())
+                .unwrap_or_default();
+            // A management key is preferred for account-level credits. Keep the
+            // first API key as a compatibility fallback for users whose existing
+            // key is itself a management key.
+            let credits_key = account
                 .management_key
                 .as_deref()
                 .or_else(|| account.api_keys.first().map(|key| key.value.as_str()));
-            let key_names = management_key
-                .and_then(|key| self.read_key_names(key).ok())
-                .unwrap_or_default();
 
             let mut api_keys = Vec::new();
             for api_key in &account.api_keys {
@@ -214,13 +220,22 @@ impl LimitProvider for OpenRouterClient {
 
                 let (label, spending, has_live_usage) = match live {
                     Some((resolved_label, live_spending)) => {
-                        let label = resolved_label.or_else(|| cached.label.clone());
+                        // Prefer the directory name for this key's own mask when
+                        // /key only returned a masked label. Never borrow another
+                        // key's cached title — cache is already account+key keyed.
+                        let label = resolved_label
+                            .or_else(|| {
+                                resolve_key_display_name(masked_key.as_deref(), &key_names)
+                            })
+                            .or_else(|| cached.label.clone());
                         let spending =
                             merge_key_spending(Some(&live_spending), &cached, sampled_at, true);
                         (label, spending, true)
                     }
                     None => (
-                        cached.label.clone(),
+                        cached.label.clone().or_else(|| {
+                            resolve_key_display_name(masked_key.as_deref(), &key_names)
+                        }),
                         merge_key_spending(None, &cached, sampled_at, false),
                         false,
                     ),
@@ -246,7 +261,7 @@ impl LimitProvider for OpenRouterClient {
             }
 
             let balance =
-                management_key.and_then(|key| self.read_account_balance(key).ok().flatten());
+                credits_key.and_then(|key| self.read_account_balance(key).ok().flatten());
             if api_keys.is_empty() && balance.is_none() {
                 continue;
             }
@@ -893,5 +908,63 @@ mod tests {
         assert_eq!(spending.remaining_microusd, Some(170_000_000));
         assert_eq!(spending.balance_microusd, Some(125_000_000));
         assert!(limits.account_name.is_none());
+    }
+
+    #[test]
+    fn never_moves_api_keys_between_account_snapshots() {
+        let sampled_at = Utc.with_ymd_and_hms(2026, 8, 19, 12, 30, 0).unwrap();
+        let leon_key = sample(
+            r#"{"data":{"name":"TEST2","label":"sk-or-v1-f12...662","usage":9,"limit":10,"limit_remaining":1,"limit_reset":"daily"}}"#,
+        );
+        let pixel_key = sample(
+            r#"{"data":{"name":"KEY 1","label":"sk-or-v1-a12...1f8","usage":0.04,"limit":null}}"#,
+        );
+        let limits = rate_limits_from_accounts(
+            vec![
+                OpenRouterAccountSnapshot {
+                    id: "leon-flame".into(),
+                    name: "Leon Flame".into(),
+                    api_keys: vec![OpenRouterApiKeySnapshot {
+                        id: "test2".into(),
+                        label: leon_key.account_name,
+                        masked_key: Some("sk-or-v1-f12...662".into()),
+                        spending: leon_key.spending.unwrap(),
+                        has_live_usage: true,
+                    }],
+                    balance_microusd: None,
+                },
+                OpenRouterAccountSnapshot {
+                    id: "pixelscan".into(),
+                    name: "Pixelscan".into(),
+                    api_keys: vec![OpenRouterApiKeySnapshot {
+                        id: "key-1".into(),
+                        label: pixel_key.account_name,
+                        masked_key: Some("sk-or-v1-a12...1f8".into()),
+                        spending: pixel_key.spending.unwrap(),
+                        has_live_usage: true,
+                    }],
+                    balance_microusd: Some(38_960_000),
+                },
+            ],
+            sampled_at,
+        );
+
+        assert_eq!(limits.openrouter_accounts[0].id, "leon-flame");
+        assert_eq!(
+            limits.openrouter_accounts[0].api_keys[0].label.as_deref(),
+            Some("TEST2")
+        );
+        assert_eq!(limits.openrouter_accounts[1].id, "pixelscan");
+        assert_eq!(
+            limits.openrouter_accounts[1].api_keys[0].label.as_deref(),
+            Some("KEY 1")
+        );
+        assert!(
+            limits.openrouter_accounts[1]
+                .api_keys
+                .iter()
+                .all(|key| key.id != "test2"),
+            "TEST2 must stay under Leon Flame and never appear under Pixelscan"
+        );
     }
 }

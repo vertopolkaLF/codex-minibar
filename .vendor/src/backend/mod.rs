@@ -339,10 +339,14 @@ pub enum Event {
     SelectedDatesChanged,
     SelectedTimeChanged,
     SelectionChanged,
+    /// Commit a text field: Enter key (single-line TextBox).
+    Submit,
     SuggestionChosen,
     TextChanged,
     Toggled,
     ValueChanged,
+    /// Control lost keyboard focus (UIElement.LostFocus).
+    LostFocus,
 }
 
 /// Typed wrapper around a callback for a specific [`Event`] payload shape.

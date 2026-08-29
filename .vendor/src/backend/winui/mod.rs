@@ -2541,6 +2541,44 @@ impl Backend for WinUIBackend {
             (Event::Closed, _) => {
                 // Flyout open/close events are not yet wired.
             }
+            (Event::LostFocus, Handle::TextBox(t)) => {
+                let ui: bindings::IUIElement = t.cast().unwrap();
+                let control = t.clone();
+                let handler = handler.clone();
+                revokers.push(
+                    ui.LostFocus(move |_sender, _args| {
+                        let v = control.Text().unwrap_or_default();
+                        handler.invoke_string(v);
+                    })
+                    .unwrap(),
+                );
+            }
+            (Event::Submit, Handle::TextBox(t)) => {
+                let ui: bindings::IUIElement = t.cast().unwrap();
+                let accelerators = ui.KeyboardAccelerators().unwrap();
+                // Submit owns Enter for this TextBox; clear so reattach does not stack.
+                diag::dropped(accelerators.Clear());
+                let ka = bindings::KeyboardAccelerator::new().unwrap();
+                let ika = ka.cast::<bindings::IKeyboardAccelerator>().unwrap();
+                diag::dropped(ika.SetKey(bindings::VirtualKey::Enter));
+                diag::dropped(ika.SetModifiers(bindings::VirtualKeyModifiers::None));
+                let control = t.clone();
+                let handler = handler.clone();
+                revokers.push(
+                    ika.Invoked(move |_sender, args| {
+                        if let Some(a) = args.as_ref() {
+                            diag::dropped(a.SetHandled(true));
+                        }
+                        let v = control.Text().unwrap_or_default();
+                        handler.invoke_string(v);
+                    })
+                    .unwrap(),
+                );
+                diag::dropped(accelerators.Append(&ka));
+                diag::dropped(ui.SetKeyboardAcceleratorPlacementMode(
+                    bindings::KeyboardAcceleratorPlacementMode::Hidden,
+                ));
+            }
             // Events handled by generated_attach_event::dispatch — if we reach here, the
             // control type was unexpected (generated dispatch returned None).
             (event, _) => {

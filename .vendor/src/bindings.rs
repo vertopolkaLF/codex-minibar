@@ -16224,6 +16224,44 @@ impl IUIElement {
             .and_then(|| windows_core::Type::from_abi(result__))
         }
     }
+    /// `UIElement.LostFocus`. Vtable slots are stubbed as `usize` in the
+    /// trimmed bindings; transmute to the real add/remove signatures.
+    pub(crate) fn LostFocus<F>(
+        &self,
+        handler: F,
+    ) -> windows_core::Result<windows_core::EventRevoker>
+    where
+        F: Fn(windows_core::Ref<windows_core::IInspectable>, windows_core::Ref<RoutedEventArgs>)
+            + 'static,
+    {
+        let handler: RoutedEventHandler = {
+            let com = windows_core::imp::DelegateBox::<RoutedEventHandler, F>::new(
+                &RoutedEventHandlerBox::<F>::VTABLE,
+                handler,
+            );
+            unsafe { core::mem::transmute(windows_core::imp::box_new(com)) }
+        };
+        unsafe {
+            let mut result__ = core::mem::zeroed();
+            type Add = unsafe extern "system" fn(
+                *mut core::ffi::c_void,
+                *mut core::ffi::c_void,
+                *mut i64,
+            ) -> windows_core::HRESULT;
+            type Remove =
+                unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_core::HRESULT;
+            let add: Add = core::mem::transmute(windows_core::Interface::vtable(self).LostFocus);
+            let remove: Remove =
+                core::mem::transmute(windows_core::Interface::vtable(self).RemoveLostFocus);
+            let token__ = add(
+                windows_core::Interface::as_raw(self),
+                windows_core::Interface::as_raw(&handler),
+                &mut result__,
+            )
+            .map(|| result__)?;
+            Ok(windows_core::EventRevoker::new(self.clone(), token__, remove))
+        }
+    }
     pub(crate) fn SetKeyboardAcceleratorPlacementMode(
         &self,
         value: KeyboardAcceleratorPlacementMode,

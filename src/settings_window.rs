@@ -575,10 +575,8 @@ fn openrouter_accounts_card(
     settings_tx: Sender<Settings>,
 ) -> Element {
     let mut account_cards: Vec<Element> = Vec::new();
-    for (account_index, account) in accounts.iter().enumerate() {
-        let account_name_setter = set_accounts.clone();
-        let account_name_accounts = accounts.to_vec();
-        let account_name_tx = settings_tx.clone();
+    for account in accounts {
+        let account_id = account.id.clone();
         let account_name = account.name.clone();
         let mut api_key_cards: Vec<Element> = Vec::new();
         for (key_index, key_id) in account.api_key_ids.iter().enumerate() {
@@ -598,7 +596,6 @@ fn openrouter_accounts_card(
             let clear_inputs = key_inputs.clone();
             let clear_input_setter = set_key_inputs.clone();
             let clear_tx = settings_tx.clone();
-            let remove_accounts = accounts.to_vec();
             let remove_account_id = account.id.clone();
             let remove_key_id = key_id.clone();
             let remove_setter = set_accounts.clone();
@@ -678,17 +675,25 @@ fn openrouter_accounts_card(
                                     );
                                     return;
                                 }
-                                let mut next = remove_accounts.clone();
-                                if let Some(account) = next
-                                    .iter_mut()
-                                    .find(|account| account.id == remove_account_id)
-                                {
-                                    account.api_key_ids.retain(|id| id != &remove_key_id);
-                                }
-                                persist_openrouter_accounts(
-                                    next,
+                                // Mutate the persisted account by stable id so a
+                                // stale UI snapshot cannot reassign the key row
+                                // to a neighboring account after list shifts.
+                                let account_id = remove_account_id.clone();
+                                let key_id = remove_key_id.clone();
+                                mutate_openrouter_accounts(
                                     remove_setter.clone(),
                                     remove_tx.clone(),
+                                    move |accounts| {
+                                        let Some(account) = accounts
+                                            .iter_mut()
+                                            .find(|account| account.id == account_id)
+                                        else {
+                                            return false;
+                                        };
+                                        let before = account.api_key_ids.len();
+                                        account.api_key_ids.retain(|id| id != &key_id);
+                                        account.api_key_ids.len() != before
+                                    },
                                 );
                             }),
                         ))
@@ -701,6 +706,7 @@ fn openrouter_accounts_card(
                 .background(ThemeRef::SubtleFill)
                 .corner_radius(6.0)
                 .horizontal_alignment(HorizontalAlignment::Stretch)
+                .with_key(format!("openrouter-api-card-{}-{key_id}", account.id))
                 .into(),
             );
         }
@@ -719,13 +725,15 @@ fn openrouter_accounts_card(
         let clear_management_inputs = management_inputs.clone();
         let clear_management_input_setter = set_management_inputs.clone();
         let clear_management_tx = settings_tx.clone();
-        let add_key_accounts = accounts.to_vec();
+        let add_key_account_id = account.id.clone();
         let add_key_setter = set_accounts.clone();
         let add_key_tx = settings_tx.clone();
         let remove_account = account.clone();
-        let remove_account_accounts = accounts.to_vec();
         let remove_account_setter = set_accounts.clone();
         let remove_account_tx = settings_tx.clone();
+        let rename_account_id = account.id.clone();
+        let rename_setter = set_accounts.clone();
+        let rename_tx = settings_tx.clone();
         account_cards.push(
             border(
                 vstack((
@@ -754,15 +762,15 @@ fn openrouter_accounts_card(
                                 );
                                 return;
                             }
-                            let next = remove_account_accounts
-                                .iter()
-                                .filter(|account| account.id != remove_account.id)
-                                .cloned()
-                                .collect();
-                            persist_openrouter_accounts(
-                                next,
+                            let removed_id = remove_account.id.clone();
+                            mutate_openrouter_accounts(
                                 remove_account_setter.clone(),
                                 remove_account_tx.clone(),
+                                move |accounts| {
+                                    let before = accounts.len();
+                                    accounts.retain(|account| account.id != removed_id);
+                                    accounts.len() != before
+                                },
                             );
                         }),
                     ))
@@ -770,15 +778,24 @@ fn openrouter_accounts_card(
                     .horizontal_alignment(HorizontalAlignment::Stretch),
                     text_box(account_name)
                         .placeholder_text("OpenRouter account name")
-                        .on_text_changed(move |value: String| {
-                            let mut next = account_name_accounts.clone();
-                            if let Some(account) = next.get_mut(account_index) {
-                                account.name = value;
-                            }
-                            persist_openrouter_accounts(
-                                next,
-                                account_name_setter.clone(),
-                                account_name_tx.clone(),
+                        .on_commit(move |value: String| {
+                            let account_id = rename_account_id.clone();
+                            mutate_openrouter_accounts(
+                                rename_setter.clone(),
+                                rename_tx.clone(),
+                                move |accounts| {
+                                    let Some(account) = accounts
+                                        .iter_mut()
+                                        .find(|account| account.id == account_id)
+                                    else {
+                                        return false;
+                                    };
+                                    if account.name == value {
+                                        return false;
+                                    }
+                                    account.name = value;
+                                    true
+                                },
                             );
                         })
                         .height(32.0),
@@ -844,16 +861,22 @@ fn openrouter_accounts_card(
                                 .animate_size(true),
                         ),
                     Button::new("Add API key").on_click(move || {
-                        let mut next = add_key_accounts.clone();
-                        if let Some(account) = next.get_mut(account_index) {
-                            account
-                                .api_key_ids
-                                .push(OpenRouterAccount::new_api_key_id());
-                        }
-                        persist_openrouter_accounts(
-                            next,
+                        let account_id = add_key_account_id.clone();
+                        mutate_openrouter_accounts(
                             add_key_setter.clone(),
                             add_key_tx.clone(),
+                            move |accounts| {
+                                let Some(account) = accounts
+                                    .iter_mut()
+                                    .find(|account| account.id == account_id)
+                                else {
+                                    return false;
+                                };
+                                account
+                                    .api_key_ids
+                                    .push(OpenRouterAccount::new_api_key_id());
+                                true
+                            },
                         );
                     }),
                 ))
@@ -866,11 +889,11 @@ fn openrouter_accounts_card(
             .border_thickness(Thickness::uniform(1.0))
             .border_brush(ThemeRef::CardStroke)
             .horizontal_alignment(HorizontalAlignment::Stretch)
+            .with_key(format!("openrouter-account-card-{account_id}"))
             .into(),
         );
     }
 
-    let add_account_accounts = accounts.to_vec();
     let add_account_setter = set_accounts;
     let add_account_tx = settings_tx;
     border(
@@ -889,12 +912,15 @@ fn openrouter_accounts_card(
                         .animate_size(true),
                 ),
             Button::new("Add account").on_click(move || {
-                let mut next = add_account_accounts.clone();
-                next.push(OpenRouterAccount::new(format!(
-                    "Account {}",
-                    next.len() + 1
-                )));
-                persist_openrouter_accounts(next, add_account_setter.clone(), add_account_tx.clone());
+                mutate_openrouter_accounts(
+                    add_account_setter.clone(),
+                    add_account_tx.clone(),
+                    move |accounts| {
+                        let next_index = accounts.len() + 1;
+                        accounts.push(OpenRouterAccount::new(format!("Account {next_index}")));
+                        true
+                    },
+                );
             }),
         ))
         .spacing(8.0)
@@ -910,16 +936,28 @@ fn openrouter_accounts_card(
     .into()
 }
 
-fn persist_openrouter_accounts(
-    accounts: Vec<OpenRouterAccount>,
+/// Apply an OpenRouter account-list mutation against the on-disk settings, never
+/// against a stale UI snapshot. Account membership is always addressed by
+/// stable account id so list shifts cannot move API keys between accounts.
+///
+/// The mutator returns `true` when it changed anything; no-ops skip the
+/// credentials revision bump so workers are not restarted for free.
+fn mutate_openrouter_accounts(
     setter: SetState<Vec<OpenRouterAccount>>,
     settings_tx: Sender<Settings>,
+    mutate: impl FnOnce(&mut Vec<OpenRouterAccount>) -> bool + 'static,
 ) {
-    setter.call(accounts.clone());
     persist_update(settings_tx, move |settings| {
+        // Include the synthetic legacy account when present so edits land on the
+        // same identities the Settings UI is showing.
+        let mut accounts = crate::openrouter::accounts_for_settings(settings);
+        if !mutate(&mut accounts) {
+            return;
+        }
         settings.openrouter_accounts = accounts;
         settings.openrouter_credentials_revision =
             settings.openrouter_credentials_revision.wrapping_add(1);
+        setter.call(crate::openrouter::accounts_for_settings(settings));
     });
 }
 
@@ -2894,7 +2932,7 @@ fn tab_content(
                         grid((
                             text_box(path)
                         .placeholder_text(placeholder)
-                        .on_text_changed(move |value: String| {
+                        .on_commit(move |value: String| {
                             codex_path_setter.call(value.clone());
                             persist_provider_folder(
                                 ProviderKind::Codex,
@@ -2934,7 +2972,7 @@ fn tab_content(
                         grid((
                             text_box(path)
                         .placeholder_text(placeholder)
-                        .on_text_changed(move |value: String| {
+                        .on_commit(move |value: String| {
                             claude_path_setter.call(value.clone());
                             persist_provider_folder(
                                 ProviderKind::Claude,
@@ -2974,7 +3012,7 @@ fn tab_content(
                         grid((
                             text_box(path)
                         .placeholder_text(placeholder)
-                        .on_text_changed(move |value: String| {
+                        .on_commit(move |value: String| {
                             cursor_path_setter.call(value.clone());
                             persist_provider_folder(
                                 ProviderKind::Cursor,
