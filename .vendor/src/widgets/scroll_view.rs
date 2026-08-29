@@ -25,6 +25,8 @@ pub struct ScrollView {
     pub horizontal_scroll_bar_visibility: ScrollingScrollBarVisibility,
     pub vertical_scroll_bar_visibility: ScrollingScrollBarVisibility,
     pub content_orientation: ScrollViewContentOrientation,
+    pub horizontal_scroll_mode: ScrollingScrollMode,
+    pub vertical_scroll_mode: ScrollingScrollMode,
 }
 
 impl Default for ScrollView {
@@ -36,6 +38,8 @@ impl Default for ScrollView {
             horizontal_scroll_bar_visibility: ScrollingScrollBarVisibility::Auto,
             vertical_scroll_bar_visibility: ScrollingScrollBarVisibility::Auto,
             content_orientation: ScrollViewContentOrientation::Vertical,
+            horizontal_scroll_mode: ScrollingScrollMode::Enabled,
+            vertical_scroll_mode: ScrollingScrollMode::Enabled,
         }
     }
 }
@@ -62,6 +66,16 @@ impl ScrollView {
         self.content_orientation = v;
         self
     }
+
+    pub fn horizontal_scroll_mode(mut self, v: ScrollingScrollMode) -> Self {
+        self.horizontal_scroll_mode = v;
+        self
+    }
+
+    pub fn vertical_scroll_mode(mut self, v: ScrollingScrollMode) -> Self {
+        self.vertical_scroll_mode = v;
+        self
+    }
 }
 
 impl Widget for ScrollView {
@@ -79,3 +93,4 @@ impl Widget for ScrollView {
 pub fn scroll_view(child: impl Into<Element>) -> ScrollView {
     ScrollView::new(child)
 }
+

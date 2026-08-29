@@ -161,6 +161,7 @@ struct PointerRevokerSet {
     moved: Option<windows_core::EventRevoker>,
     entered: Option<windows_core::EventRevoker>,
     exited: Option<windows_core::EventRevoker>,
+    wheel: Option<windows_core::EventRevoker>,
 }
 
 #[derive(Default)]
@@ -2911,6 +2912,19 @@ impl Backend for WinUIBackend {
                 .ok();
         }
 
+        if let Some(cb) = handlers.on_pointer_wheel.clone() {
+            let element = ui.clone();
+            tokens.wheel = ui
+                .PointerWheelChanged(move |_sender, args| {
+                    if let Some(args) = args.as_ref() {
+                        let _ = args.SetHandled(true);
+                    }
+                    let info = pointer_event_info(&element, args);
+                    cb.invoke(info);
+                })
+                .ok();
+        }
+
         self.pointer_revokers.borrow_mut().insert(id, tokens);
     }
 
@@ -3337,6 +3351,8 @@ fn pointer_event_info(
     info.is_left_button_pressed = props.IsLeftButtonPressed().unwrap_or(false);
     info.is_right_button_pressed = props.IsRightButtonPressed().unwrap_or(false);
     info.is_middle_button_pressed = props.IsMiddleButtonPressed().unwrap_or(false);
+    info.wheel_delta = props.MouseWheelDelta().unwrap_or(0);
+    info.wheel_is_horizontal = props.IsHorizontalMouseWheel().unwrap_or(false);
     info
 }
 

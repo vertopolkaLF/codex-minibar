@@ -636,6 +636,7 @@ pub struct PointerHandlers {
     pub on_pointer_moved: Option<Callback<PointerEventInfo>>,
     pub on_pointer_entered: Option<Callback<PointerEventInfo>>,
     pub on_pointer_exited: Option<Callback<()>>,
+    pub on_pointer_wheel: Option<Callback<PointerEventInfo>>,
 }
 
 impl PointerHandlers {
@@ -647,6 +648,7 @@ impl PointerHandlers {
             && self.on_pointer_moved.is_none()
             && self.on_pointer_entered.is_none()
             && self.on_pointer_exited.is_none()
+            && self.on_pointer_wheel.is_none()
     }
 }
 
@@ -662,6 +664,9 @@ pub struct PointerEventInfo {
     pub is_left_button_pressed: bool,
     pub is_right_button_pressed: bool,
     pub is_middle_button_pressed: bool,
+    /// Mouse-wheel delta from `PointerWheelChanged`. Zero for other pointer events.
+    pub wheel_delta: i32,
+    pub wheel_is_horizontal: bool,
 }
 
 // --- Accessibility ---

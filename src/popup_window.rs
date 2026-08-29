@@ -1319,6 +1319,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let ui_dispatcher = cx.use_ui_marshaller();
     let settings_tx = state.settings_tx.clone();
     let (hovered_action, set_hovered_action) = cx.use_state(Option::<String>::None);
+    let (tab_scroll_x, set_tab_scroll_x) = cx.use_state(0.0_f64);
     let (widget_drag, set_widget_drag) = cx.use_state(None::<WidgetDragState>);
     let (pager, pager_dispatch) = cx.use_reducer_fn(reduce_pager, PagerState::default());
     let (hovered_combined_usage_period, set_hovered_combined_usage_period) =
@@ -1723,6 +1724,29 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         // Build only live tabs — never pad with Element::Empty. Empty siblings
         // collapse during reconcile and let swap-chain hosts keep a prior
         // provider's pixels in another tab's slot.
+        let tab_content_width =
+            provider_tab_strip_content_width(enabled_provider_order.len());
+        let tab_viewport_width = provider_tab_strip_viewport_width();
+        let tab_max_offset = (tab_content_width - tab_viewport_width).max(0.0);
+        let tab_scroll_x = tab_scroll_x.clamp(0.0, tab_max_offset);
+        let on_tab_wheel = Callback::new({
+            let set_tab_scroll_x = set_tab_scroll_x.clone();
+            move |info: PointerEventInfo| {
+                if info.wheel_delta == 0 {
+                    return;
+                }
+                let step = f64::from(info.wheel_delta) / 120.0 * 48.0;
+                let dx = if info.wheel_is_horizontal {
+                    step
+                } else {
+                    -step
+                };
+                let next = (tab_scroll_x + dx).clamp(0.0, tab_max_offset);
+                if (next - tab_scroll_x).abs() > 0.5 {
+                    set_tab_scroll_x.call(next);
+                }
+            }
+        });
         let mut provider_tabs = vec![popup_tab_button(
             "provider-tab-all",
             None,
@@ -1733,6 +1757,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             color_scheme,
             &hovered_action,
             set_hovered_action.clone(),
+            on_tab_wheel.clone(),
             {
                 let pager_dispatch = pager_dispatch.clone();
                 move || pager_dispatch.call(PagerAction::Select(PopupView::All))
@@ -1785,6 +1810,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 color_scheme,
                 &hovered_action,
                 set_hovered_action.clone(),
+                on_tab_wheel.clone(),
                 {
                     let pager_dispatch = pager_dispatch.clone();
                     move || pager_dispatch.call(PagerAction::Select(view))
@@ -1797,27 +1823,27 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             ui.use_colored_provider_icons,
             color_scheme as i32
         );
-        // Horizontal ScrollView maps the normal mouse wheel to sideways
-        // scrolling (no Shift required) once the strip overflows the footer.
-        scroll_view(
+        horizontal_wheel_strip(
             hstack(provider_tabs)
                 .spacing(2.0)
                 .horizontal_alignment(HorizontalAlignment::Left)
                 .vertical_alignment(VerticalAlignment::Center)
-                // Provider marks are native swap-chain children. Recreate the
-                // whole selector when membership, order, tint mode, or theme
-                // changes; otherwise WinUI reconciliation can retain a prior
-                // tab's text/icon.
+                .margin(Thickness {
+                    left: -tab_scroll_x,
+                    top: 0.0,
+                    right: 0.0,
+                    bottom: 0.0,
+                })
+                // Provider marks are native swap-chain children. Recreate
+                // the whole selector when membership, order, tint mode, or
+                // theme changes; otherwise WinUI reconciliation can retain
+                // a prior tab's text/icon. Scroll offset stays out of the
+                // key so panning cannot recycle swap-chain hosts.
                 .with_key(tabs_key.clone()),
+            ICON_BUTTON_SIZE,
+            tabs_key,
+            on_tab_wheel,
         )
-        .content_orientation(ScrollViewContentOrientation::Horizontal)
-        .horizontal_scroll_bar_visibility(ScrollingScrollBarVisibility::Hidden)
-        .vertical_scroll_bar_visibility(ScrollingScrollBarVisibility::Hidden)
-        .vertical_alignment(VerticalAlignment::Center)
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .height(ICON_BUTTON_SIZE)
-        .with_key(format!("provider-tabs-scroller-{tabs_key}"))
-        .into()
     } else {
         vstack((
             body_strong("Codex Minibar").foreground(ThemeRef::SecondaryText),
@@ -1889,10 +1915,12 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 ui.update_version.is_some(),
                 color_scheme as i32
             ))
+            .canvas_z_index(1)
             .grid_column(1),
         ))
         .rows([GridLength::Auto])
         .columns([GridLength::Star(1.0), GridLength::Auto])
+        .column_spacing(8.0)
         .horizontal_alignment(HorizontalAlignment::Stretch),
     )
     .padding(Thickness {
@@ -2938,6 +2966,26 @@ fn pump_tray_and_dismiss(
 
 const ICON_BUTTON_SIZE: f64 = 36.0;
 const REORDER_BUTTON_SIZE: f64 = 28.0;
+const ALL_TAB_WIDTH: f64 = 44.0;
+const TAB_STRIP_SPACING: f64 = 2.0;
+const FOOTER_TAB_PADDING_LEFT: f64 = 14.0;
+const FOOTER_PADDING_RIGHT: f64 = 18.0;
+const FOOTER_COLUMN_SPACING: f64 = 8.0;
+const FOOTER_ACTION_SPACING: f64 = 4.0;
+const FOOTER_ACTION_COUNT: f64 = 3.0;
+
+fn provider_tab_strip_content_width(provider_count: usize) -> f64 {
+    ALL_TAB_WIDTH + provider_count as f64 * (ICON_BUTTON_SIZE + TAB_STRIP_SPACING)
+}
+
+fn provider_tab_strip_viewport_width() -> f64 {
+    f64::from(popup::POPUP_WIDTH)
+        - FOOTER_TAB_PADDING_LEFT
+        - FOOTER_PADDING_RIGHT
+        - FOOTER_COLUMN_SPACING
+        - (ICON_BUTTON_SIZE * FOOTER_ACTION_COUNT
+            + FOOTER_ACTION_SPACING * (FOOTER_ACTION_COUNT - 1.0))
+}
 
 /// Compact footer selector item for choosing the combined or provider view.
 fn popup_tab_button(
@@ -2950,6 +2998,7 @@ fn popup_tab_button(
     color_scheme: ColorScheme,
     hovered_action: &Option<String>,
     set_hovered_action: SetState<Option<String>>,
+    on_wheel: impl IntoCallback<PointerEventInfo>,
     on_click: impl IntoUnitCallback,
 ) -> Element {
     let hovered = hovered_action.as_deref() == Some(id);
@@ -2967,7 +3016,7 @@ fn popup_tab_button(
         _ => idle_icon_color,
     };
     let tab_width = if label.is_some() {
-        44.0
+        ALL_TAB_WIDTH
     } else {
         ICON_BUTTON_SIZE
     };
@@ -3038,6 +3087,17 @@ fn popup_tab_button(
         }
     }
     layers.push(selection_marker);
+    // Cover swap-chain icons so wheel hits a normal XAML element and
+    // bubbles here. SwapChainPanel often swallows wheel input.
+    layers.push(
+        border(Element::Empty)
+            .background(Color::transparent())
+            .relative_align_left()
+            .relative_align_right()
+            .relative_align_top()
+            .relative_align_bottom()
+            .into(),
+    );
 
     // `SwapChainPanel` paints only on mount. Keep the tab key stable across
     // hover so reconciliation cannot recycle another tab's native icon host.
@@ -3054,6 +3114,7 @@ fn popup_tab_button(
             set_on_enter.call(Some(id.to_string()));
         })
         .on_pointer_exited(move || set_on_exit.call(None))
+        .on_pointer_wheel(on_wheel)
         .on_tapped(on_click)
         .with_key(format!(
             "{id}-{}-{}-{}",

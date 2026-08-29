@@ -8238,6 +8238,16 @@ impl IFrameworkElement {
             .ok()
         }
     }
+    pub(crate) fn Parent(&self) -> windows_core::Result<DependencyObject> {
+        unsafe {
+            let mut result__ = core::mem::zeroed();
+            (windows_core::Interface::vtable(self).Parent)(
+                windows_core::Interface::as_raw(self),
+                &mut result__,
+            )
+            .and_then(|| windows_core::Type::from_abi(result__))
+        }
+    }
     pub(crate) fn SetRequestedTheme(&self, value: ElementTheme) -> windows_core::Result<()> {
         unsafe {
             (windows_core::Interface::vtable(self).SetRequestedTheme)(
@@ -8400,7 +8410,10 @@ pub struct IFrameworkElement_Vtbl {
         *mut core::ffi::c_void,
         *mut core::ffi::c_void,
     ) -> windows_core::HRESULT,
-    Parent: usize,
+    pub Parent: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
     FlowDirection: usize,
     SetFlowDirection: usize,
     RequestedTheme: usize,
@@ -11227,6 +11240,16 @@ impl windows_core::RuntimeType for IPointerPointProperties {
         windows_core::imp::ConstBuffer::for_interface::<Self>();
 }
 impl IPointerPointProperties {
+    pub(crate) fn IsHorizontalMouseWheel(&self) -> windows_core::Result<bool> {
+        unsafe {
+            let mut result__ = core::mem::zeroed();
+            (windows_core::Interface::vtable(self).IsHorizontalMouseWheel)(
+                windows_core::Interface::as_raw(self),
+                &mut result__,
+            )
+            .map(|| result__)
+        }
+    }
     pub(crate) fn IsLeftButtonPressed(&self) -> windows_core::Result<bool> {
         unsafe {
             let mut result__ = core::mem::zeroed();
@@ -11257,6 +11280,16 @@ impl IPointerPointProperties {
             .map(|| result__)
         }
     }
+    pub(crate) fn MouseWheelDelta(&self) -> windows_core::Result<i32> {
+        unsafe {
+            let mut result__ = core::mem::zeroed();
+            (windows_core::Interface::vtable(self).MouseWheelDelta)(
+                windows_core::Interface::as_raw(self),
+                &mut result__,
+            )
+            .map(|| result__)
+        }
+    }
 }
 #[repr(C)]
 pub struct IPointerPointProperties_Vtbl {
@@ -11265,7 +11298,8 @@ pub struct IPointerPointProperties_Vtbl {
     IsBarrelButtonPressed: usize,
     IsCanceled: usize,
     IsEraser: usize,
-    IsHorizontalMouseWheel: usize,
+    pub IsHorizontalMouseWheel:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_core::HRESULT,
     IsInRange: usize,
     IsInverted: usize,
     pub IsLeftButtonPressed:
@@ -11275,6 +11309,10 @@ pub struct IPointerPointProperties_Vtbl {
     IsPrimary: usize,
     pub IsRightButtonPressed:
         unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_core::HRESULT,
+    IsXButton1Pressed: usize,
+    IsXButton2Pressed: usize,
+    pub MouseWheelDelta:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut i32) -> windows_core::HRESULT,
 }
 windows_core::imp::define_interface!(
     IPointerRoutedEventArgs,
@@ -11286,6 +11324,15 @@ impl windows_core::RuntimeType for IPointerRoutedEventArgs {
         windows_core::imp::ConstBuffer::for_interface::<Self>();
 }
 impl IPointerRoutedEventArgs {
+    pub(crate) fn SetHandled(&self, value: bool) -> windows_core::Result<()> {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetHandled)(
+                windows_core::Interface::as_raw(self),
+                value,
+            )
+            .ok()
+        }
+    }
     pub(crate) fn GetCurrentPoint<P0>(&self, relativeto: P0) -> windows_core::Result<PointerPoint>
     where
         P0: windows_core::Param<UIElement>,
@@ -11307,7 +11354,8 @@ pub struct IPointerRoutedEventArgs_Vtbl {
     Pointer: usize,
     KeyModifiers: usize,
     Handled: usize,
-    SetHandled: usize,
+    pub SetHandled:
+        unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_core::HRESULT,
     IsGenerated: usize,
     pub GetCurrentPoint: unsafe extern "system" fn(
         *mut core::ffi::c_void,
@@ -12625,6 +12673,46 @@ impl IScrollView {
             .ok()
         }
     }
+    pub(crate) fn SetHorizontalScrollMode(
+        &self,
+        value: ScrollingScrollMode,
+    ) -> windows_core::Result<()> {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetHorizontalScrollMode)(
+                windows_core::Interface::as_raw(self),
+                value,
+            )
+            .ok()
+        }
+    }
+    pub(crate) fn SetVerticalScrollMode(
+        &self,
+        value: ScrollingScrollMode,
+    ) -> windows_core::Result<()> {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetVerticalScrollMode)(
+                windows_core::Interface::as_raw(self),
+                value,
+            )
+            .ok()
+        }
+    }
+    pub(crate) fn ScrollBy(
+        &self,
+        horizontal_offset_delta: f64,
+        vertical_offset_delta: f64,
+    ) -> windows_core::Result<i32> {
+        unsafe {
+            let mut result__ = core::mem::zeroed();
+            (windows_core::Interface::vtable(self).ScrollBy)(
+                windows_core::Interface::as_raw(self),
+                horizontal_offset_delta,
+                vertical_offset_delta,
+                &mut result__,
+            )
+            .map(|| result__)
+        }
+    }
 }
 #[repr(C)]
 pub struct IScrollView_Vtbl {
@@ -12661,6 +12749,51 @@ pub struct IScrollView_Vtbl {
     pub SetContentOrientation: unsafe extern "system" fn(
         *mut core::ffi::c_void,
         ScrollingContentOrientation,
+    ) -> windows_core::HRESULT,
+    // Padding through chain/rail modes to keep ScrollBy at the real slot.
+    HorizontalScrollChainMode: usize,
+    SetHorizontalScrollChainMode: usize,
+    VerticalScrollChainMode: usize,
+    SetVerticalScrollChainMode: usize,
+    HorizontalScrollRailMode: usize,
+    SetHorizontalScrollRailMode: usize,
+    VerticalScrollRailMode: usize,
+    SetVerticalScrollRailMode: usize,
+    HorizontalScrollMode: usize,
+    pub SetHorizontalScrollMode: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        ScrollingScrollMode,
+    ) -> windows_core::HRESULT,
+    VerticalScrollMode: usize,
+    pub SetVerticalScrollMode: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        ScrollingScrollMode,
+    ) -> windows_core::HRESULT,
+    ComputedHorizontalScrollBarVisibility: usize,
+    ComputedVerticalScrollBarVisibility: usize,
+    ZoomChainMode: usize,
+    SetZoomChainMode: usize,
+    ZoomMode: usize,
+    SetZoomMode: usize,
+    IgnoredInputKinds: usize,
+    SetIgnoredInputKinds: usize,
+    MinZoomFactor: usize,
+    SetMinZoomFactor: usize,
+    MaxZoomFactor: usize,
+    SetMaxZoomFactor: usize,
+    HorizontalAnchorRatio: usize,
+    SetHorizontalAnchorRatio: usize,
+    VerticalAnchorRatio: usize,
+    SetVerticalAnchorRatio: usize,
+    RegisterAnchorCandidate: usize,
+    UnregisterAnchorCandidate: usize,
+    ScrollTo: usize,
+    ScrollToWithOptions: usize,
+    pub ScrollBy: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        f64,
+        f64,
+        *mut i32,
     ) -> windows_core::HRESULT,
 }
 windows_core::imp::define_interface!(
@@ -16399,6 +16532,38 @@ impl IUIElement {
             ))
         }
     }
+    pub(crate) fn PointerWheelChanged<F>(
+        &self,
+        handler: F,
+    ) -> windows_core::Result<windows_core::EventRevoker>
+    where
+        F: Fn(
+                windows_core::Ref<windows_core::IInspectable>,
+                windows_core::Ref<PointerRoutedEventArgs>,
+            ) + 'static,
+    {
+        let handler: PointerEventHandler = {
+            let com = windows_core::imp::DelegateBox::<PointerEventHandler, F>::new(
+                &PointerEventHandlerBox::<F>::VTABLE,
+                handler,
+            );
+            unsafe { core::mem::transmute(windows_core::imp::box_new(com)) }
+        };
+        unsafe {
+            let mut result__ = core::mem::zeroed();
+            let token__ = (windows_core::Interface::vtable(self).PointerWheelChanged)(
+                windows_core::Interface::as_raw(self),
+                windows_core::Interface::as_raw(&handler),
+                &mut result__,
+            )
+            .map(|| result__)?;
+            Ok(windows_core::EventRevoker::new(
+                self.clone(),
+                token__,
+                windows_core::Interface::vtable(self).RemovePointerWheelChanged,
+            ))
+        }
+    }
     pub(crate) fn Tapped<F>(&self, handler: F) -> windows_core::Result<windows_core::EventRevoker>
     where
         F: Fn(
@@ -16683,8 +16848,13 @@ pub struct IUIElement_Vtbl {
     RemovePointerCaptureLost: usize,
     PointerCanceled: usize,
     RemovePointerCanceled: usize,
-    PointerWheelChanged: usize,
-    RemovePointerWheelChanged: usize,
+    pub PointerWheelChanged: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *mut i64,
+    ) -> windows_core::HRESULT,
+    pub RemovePointerWheelChanged:
+        unsafe extern "system" fn(*mut core::ffi::c_void, i64) -> windows_core::HRESULT,
     pub Tapped: unsafe extern "system" fn(
         *mut core::ffi::c_void,
         *mut core::ffi::c_void,
@@ -20933,6 +21103,22 @@ impl windows_core::TypeKind for ScrollingContentOrientation {
 impl windows_core::RuntimeType for ScrollingContentOrientation {
     const SIGNATURE: windows_core::imp::ConstBuffer = windows_core::imp::ConstBuffer::from_slice(
         b"enum(Microsoft.UI.Xaml.Controls.ScrollingContentOrientation;i4)",
+    );
+}
+#[repr(transparent)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub struct ScrollingScrollMode(pub i32);
+impl ScrollingScrollMode {
+    pub const Enabled: Self = Self(0);
+    pub const Disabled: Self = Self(1);
+    pub const Auto: Self = Self(2);
+}
+impl windows_core::TypeKind for ScrollingScrollMode {
+    type TypeKind = windows_core::CopyType;
+}
+impl windows_core::RuntimeType for ScrollingScrollMode {
+    const SIGNATURE: windows_core::imp::ConstBuffer = windows_core::imp::ConstBuffer::from_slice(
+        b"enum(Microsoft.UI.Xaml.Controls.ScrollingScrollMode;i4)",
     );
 }
 #[repr(transparent)]

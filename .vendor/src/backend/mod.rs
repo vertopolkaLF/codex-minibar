@@ -160,6 +160,7 @@ pub enum Prop {
     Height,
     HorizontalAlignment,
     HorizontalScrollBarVisibility,
+    HorizontalScrollMode,
     Icon,
     ImageSource,
     Initials,
@@ -254,6 +255,7 @@ pub enum Prop {
     Value,
     VerticalAlignment,
     VerticalScrollBarVisibility,
+    VerticalScrollMode,
     Width,
     YearVisible,
 }

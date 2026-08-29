@@ -1,3 +1,5 @@
+You are SUCK at WinUI 3. Especially windows-rs. Always check docs and examples before doing UI work.
+
 Always run `cargo check` after changes related to the app to ensure the code is correct. No need to run it after changes related to the website.
 
 Never launch the app itself.

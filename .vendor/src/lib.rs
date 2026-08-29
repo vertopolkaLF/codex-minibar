@@ -44,6 +44,7 @@ pub use bindings::PasswordRevealMode;
 pub use bindings::ScrollBarVisibility;
 pub use bindings::ScrollingContentOrientation;
 pub use bindings::ScrollingScrollBarVisibility;
+pub use bindings::ScrollingScrollMode;
 pub use bindings::Stretch;
 pub use bindings::Symbol;
 pub use bindings::TeachingTipPlacementMode;

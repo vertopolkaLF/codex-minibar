@@ -179,6 +179,9 @@ pub fn dispatch(handle: &Handle, prop: Prop, value: &PropValue) -> Result<bool> 
         (Prop::HorizontalScrollBarVisibility, PropValue::I32(v), Handle::ScrollViewer(h)) => {
             h.SetHorizontalScrollBarVisibility(ScrollBarVisibility(*v))?;
         }
+        (Prop::HorizontalScrollMode, PropValue::I32(v), Handle::ScrollView(h)) => {
+            h.SetHorizontalScrollMode(ScrollingScrollMode(*v))?;
+        }
         (Prop::Initials, PropValue::Str(v), Handle::PersonPicture(h)) => {
             h.SetInitials(v.as_str())?;
         }
@@ -525,6 +528,9 @@ pub fn dispatch(handle: &Handle, prop: Prop, value: &PropValue) -> Result<bool> 
         }
         (Prop::VerticalScrollBarVisibility, PropValue::I32(v), Handle::ScrollViewer(h)) => {
             h.SetVerticalScrollBarVisibility(ScrollBarVisibility(*v))?;
+        }
+        (Prop::VerticalScrollMode, PropValue::I32(v), Handle::ScrollView(h)) => {
+            h.SetVerticalScrollMode(ScrollingScrollMode(*v))?;
         }
         (Prop::YearVisible, PropValue::Bool(v), Handle::DatePicker(h)) => {
             h.SetYearVisible(*v)?;
