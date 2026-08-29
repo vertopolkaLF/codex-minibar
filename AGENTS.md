@@ -1,4 +1,4 @@
-You are SUCK at WinUI 3. Especially windows-rs. Always check docs and examples before doing UI work.
+Always check docs and examples before doing UI work. LLM doesn't have great knowledge of WinUI 3. especially windows-rs.
 
 Always run `cargo check` after changes related to the app to ensure the code is correct. No need to run it after changes related to the website.
 

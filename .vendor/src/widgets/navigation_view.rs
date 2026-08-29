@@ -5,6 +5,8 @@ pub struct NavViewItem {
     pub content: String,
     pub tag: Option<String>,
     pub icon_path: Option<(String, String)>,
+    /// Trailing glyph shown at the right edge of the label (e.g. drill-in chevron).
+    pub trailing_icon_path: Option<(String, String)>,
     pub is_header: bool,
     pub children: Vec<Self>,
 }
@@ -29,6 +31,10 @@ impl NavViewItem {
     /// Use arbitrary vector geometry and a caller-selected color.
     pub fn icon_path(mut self, data: impl Into<String>, color: impl Into<String>) -> Self {
         self.icon_path = Some((data.into(), color.into()));
+        self
+    }
+    pub fn trailing_icon_path(mut self, data: impl Into<String>, color: impl Into<String>) -> Self {
+        self.trailing_icon_path = Some((data.into(), color.into()));
         self
     }
     pub fn child(mut self, item: Self) -> Self {

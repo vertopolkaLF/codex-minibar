@@ -81,6 +81,60 @@ pub(super) fn string_as_textblock(s: &str) -> Result<bindings::TextBlock> {
     Ok(tb)
 }
 
+fn xml_escape_attr(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn nav_item_content(item: &NavViewItem) -> Result<bindings::UIElement> {
+    if let Some((path, color)) = &item.trailing_icon_path {
+        let label = xml_escape_attr(&item.content);
+        let path = xml_escape_attr(path);
+        let color = xml_escape_attr(color);
+        // PathIcon sizes from (0,0) to the path max, which left-pads directional
+        // glyphs. A 256 canvas matches the Phosphor viewBox so the caret is
+        // optically centered. NavigationViewItem sizes to content, so MinWidth
+        // reaches the pane's trailing edge.
+        let xaml = format!(
+            r#"<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" MinWidth="148" HorizontalAlignment="Stretch">
+  <Grid.ColumnDefinitions>
+    <ColumnDefinition Width="*"/>
+    <ColumnDefinition Width="Auto"/>
+  </Grid.ColumnDefinitions>
+  <TextBlock Text="{label}" VerticalAlignment="Center"/>
+  <Viewbox Grid.Column="1" Width="16" Height="16" VerticalAlignment="Center" Stretch="Uniform" Opacity="0.72" Margin="4,0,0,0">
+    <Canvas Width="256" Height="256">
+      <Path Data="{path}" Fill="{color}"/>
+    </Canvas>
+  </Viewbox>
+</Grid>"#
+        );
+        let factory: IXamlReaderStatics = {
+            static SHARED: windows_core::imp::FactoryCache<XamlReader, IXamlReaderStatics> =
+                windows_core::imp::FactoryCache::new();
+            SHARED.call(|factory| Ok(factory.clone()))?
+        };
+        unsafe {
+            let mut result = core::ptr::null_mut();
+            (windows_core::Interface::vtable(&factory).load)(
+                windows_core::Interface::as_raw(&factory),
+                core::mem::transmute_copy(&windows_core::HSTRING::from(xaml)),
+                &mut result,
+            )
+            .and_then(|| {
+                let inspectable: windows_core::IInspectable =
+                    windows_core::Type::from_abi(result)?;
+                inspectable.cast()
+            })
+        }
+    } else {
+        string_as_textblock(&item.content)?.cast()
+    }
+}
+
 pub(super) fn build_nav_view_item(item: &NavViewItem) -> Result<windows_core::IInspectable> {
     if item.is_header {
         let h = bindings::NavigationViewItemHeader::new()?;
@@ -89,10 +143,10 @@ pub(super) fn build_nav_view_item(item: &NavViewItem) -> Result<windows_core::II
         return h.cast();
     }
     let nv_item = bindings::NavigationViewItem::new()?;
-    let tb = string_as_textblock(&item.content)?;
+    let content = nav_item_content(item)?;
     nv_item
         .cast::<bindings::IContentControl>()?
-        .SetContent(&tb)?;
+        .SetContent(&content)?;
     let tag = item.tag.clone().unwrap_or_else(|| item.content.clone());
     let tag_inspectable = windows_reference::IReference::from(tag.as_str());
     nv_item

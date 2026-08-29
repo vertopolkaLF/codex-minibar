@@ -1696,6 +1696,183 @@ impl Tab {
     }
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum SettingsNavMode {
+    #[default]
+    Root,
+    Providers,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RenderedPage {
+    Root(Tab),
+    Provider(ProviderKind),
+}
+
+impl Default for RenderedPage {
+    fn default() -> Self {
+        Self::Root(Tab::default())
+    }
+}
+
+impl RenderedPage {
+    fn scroll_key(self) -> String {
+        match self {
+            Self::Root(tab) => format!("settings-scroll-{}", tab.tag()),
+            Self::Provider(provider) => format!("settings-scroll-provider-{}", provider.id()),
+        }
+    }
+
+    fn page_key(self) -> String {
+        match self {
+            Self::Root(tab) => format!("settings-page-{}", tab.tag()),
+            Self::Provider(provider) => format!("settings-page-provider-{}", provider.id()),
+        }
+    }
+}
+
+fn provider_order_from_popup(popup_order: &[PopupWidgetKind]) -> Vec<ProviderKind> {
+    popup_order
+        .iter()
+        .filter_map(|widget| widget.as_provider())
+        .collect()
+}
+
+fn first_provider_in_order(popup_order: &[PopupWidgetKind]) -> ProviderKind {
+    provider_order_from_popup(popup_order)
+        .into_iter()
+        .next()
+        .unwrap_or(ProviderKind::Codex)
+}
+
+fn fade_to_rendered_page(
+    set_page_visible: AsyncSetState<bool>,
+    set_rendered_page: AsyncSetState<RenderedPage>,
+    page: RenderedPage,
+) {
+    set_page_visible.call(false);
+    std::thread::spawn(move || {
+        std::thread::sleep(duration(Duration::from_millis(180)));
+        set_rendered_page.call(page);
+        set_page_visible.call(true);
+    });
+}
+
+fn root_nav_items(nav_icon_color: &str) -> [NavViewItem; 9] {
+    [
+        NavViewItem::new("General")
+            .tag("general")
+            .icon_path(crate::icons::data("house"), nav_icon_color),
+        NavViewItem::new("Providers")
+            .tag("providers")
+            .icon_path(crate::icons::data("plugs-connected"), nav_icon_color)
+            .trailing_icon_path(crate::icons::data("caret-right"), nav_icon_color),
+        NavViewItem::new("Schedule")
+            .tag("schedule")
+            .icon_path(crate::icons::data("clock"), nav_icon_color),
+        NavViewItem::new("Tray")
+            .tag("tray")
+            .icon_path(crate::icons::data("chat-centered-text"), nav_icon_color),
+        NavViewItem::new("Notifications")
+            .tag("notifications")
+            .icon_path(crate::icons::data("bell"), nav_icon_color),
+        NavViewItem::new("Appearance")
+            .tag("appearance")
+            .icon_path(crate::icons::data("paint-brush"), nav_icon_color),
+        NavViewItem::new("Advanced")
+            .tag("advanced")
+            .icon_path(crate::icons::data("sliders"), nav_icon_color),
+        NavViewItem::new("Log")
+            .tag("log")
+            .icon_path(crate::icons::data("scroll"), nav_icon_color),
+        NavViewItem::new("About & Updates")
+            .tag("about")
+            .icon_path(crate::icons::data("info"), nav_icon_color),
+    ]
+}
+
+fn providers_nav_items(popup_order: &[PopupWidgetKind], nav_icon_color: &str) -> Vec<NavViewItem> {
+    let mut items = vec![NavViewItem::header("Providers")];
+    for provider in provider_order_from_popup(popup_order) {
+        let descriptor = crate::provider_registry::descriptor(provider);
+        items.push(
+            NavViewItem::new(descriptor.display_name)
+                .tag(provider.id())
+                .icon_path(crate::icons::data(descriptor.icon), nav_icon_color),
+        );
+    }
+    items
+}
+
+fn providers_pane_add_footer(
+    set_openrouter_accounts: SetState<Vec<OpenRouterAccount>>,
+    settings_tx: Sender<Settings>,
+    set_selected_provider: SetState<ProviderKind>,
+    set_page_visible: AsyncSetState<bool>,
+    set_rendered_page: AsyncSetState<RenderedPage>,
+) -> Element {
+    let add_account_setter = set_openrouter_accounts;
+    let add_account_tx = settings_tx;
+    let select_openrouter = set_selected_provider;
+    let page_visible = set_page_visible;
+    let rendered_page = set_rendered_page;
+    border(
+        vstack((
+            text_block("Add OpenRouter accounts here. Other providers use a single signed-in session.")
+                .font_size(11.0)
+                .opacity(0.72)
+                .wrap(),
+            Button::new("Add")
+                .icon(Symbol::Add)
+                .menu_flyout(vec![
+                    menu_item("OpenRouter account"),
+                    menu_separator(),
+                    menu_item("Codex (single session)"),
+                    menu_item("Claude (single session)"),
+                    menu_item("Cursor (single session)"),
+                    menu_item("OpenCode Zen (single session)"),
+                    menu_item("OpenCode Go (single session)"),
+                ])
+                .on_item_clicked(move |choice: String| match choice.as_str() {
+                    "OpenRouter account" => {
+                        mutate_openrouter_accounts(
+                            add_account_setter.clone(),
+                            add_account_tx.clone(),
+                            move |accounts| {
+                                let next_index = accounts.len() + 1;
+                                accounts
+                                    .push(OpenRouterAccount::new(format!("Account {next_index}")));
+                                true
+                            },
+                        );
+                        select_openrouter.call(ProviderKind::OpenRouter);
+                        fade_to_rendered_page(
+                            page_visible.clone(),
+                            rendered_page.clone(),
+                            RenderedPage::Provider(ProviderKind::OpenRouter),
+                        );
+                    }
+                    _ => {
+                        notifications::show(
+                            "Single session",
+                            "This provider uses one signed-in session. Open its page to configure it.",
+                        );
+                    }
+                }),
+        ))
+        .spacing(8.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch),
+    )
+    .padding(Thickness {
+        left: 12.0,
+        top: 0.0,
+        right: 12.0,
+        bottom: 2.0,
+    })
+    .background(Color::transparent())
+    .into()
+}
+
 /// Root content for the independent WinUI settings window.
 pub fn render(
     cx: &mut RenderCx,
@@ -1720,8 +1897,12 @@ pub fn render(
             }
         });
     });
-    let (selected, set_selected) = cx.use_state(Tab::default());
-    let (rendered_tab, set_rendered_tab) = cx.use_async_state(Tab::default());
+    let (root_selected, set_root_selected) = cx.use_state(Tab::default());
+    let (nav_mode, set_nav_mode) = cx.use_state(SettingsNavMode::Root);
+    let (return_root_tab, set_return_root_tab) = cx.use_state(Tab::General);
+    let (selected_provider, set_selected_provider) =
+        cx.use_state(first_provider_in_order(&settings.popup_order));
+    let (rendered_page, set_rendered_page) = cx.use_async_state(RenderedPage::default());
     let (page_visible, set_page_visible) = cx.use_async_state(true);
     let (log_content, set_log_content) = cx
         .use_async_state(crate::logger::tail_lines(100).unwrap_or_else(|error| error.to_string()));
@@ -1737,96 +1918,6 @@ pub fn render(
     });
     let theme_navigation_guard = cx.use_ref(false);
     let theme_navigation_guard_timer = cx.use_ref(None::<DispatcherTimer>);
-
-    let nav_icon_color = match color_scheme {
-        ColorScheme::Dark => "#E6E6E6",
-        ColorScheme::Light => "#3A3A3A",
-    };
-    let mut navigation = NavigationView::new(
-        [
-            NavViewItem::new("General")
-                .tag("general")
-                .icon_path(crate::icons::data("house"), nav_icon_color),
-            NavViewItem::new("Providers")
-                .tag("providers")
-                .icon_path(crate::icons::data("plugs-connected"), nav_icon_color),
-            NavViewItem::new("Schedule")
-                .tag("schedule")
-                .icon_path(crate::icons::data("clock"), nav_icon_color),
-            NavViewItem::new("Tray")
-                .tag("tray")
-                .icon_path(crate::icons::data("chat-centered-text"), nav_icon_color),
-            NavViewItem::new("Notifications")
-                .tag("notifications")
-                .icon_path(crate::icons::data("bell"), nav_icon_color),
-            NavViewItem::new("Appearance")
-                .tag("appearance")
-                .icon_path(crate::icons::data("paint-brush"), nav_icon_color),
-            NavViewItem::new("Advanced")
-                .tag("advanced")
-                .icon_path(crate::icons::data("sliders"), nav_icon_color),
-            NavViewItem::new("Log")
-                .tag("log")
-                .icon_path(crate::icons::data("scroll"), nav_icon_color),
-            NavViewItem::new("About & Updates")
-                .tag("about")
-                .icon_path(crate::icons::data("info"), nav_icon_color),
-        ],
-        Element::Empty,
-    )
-    .selected_tag(selected.tag())
-    .on_selection_changed({
-        let set_rendered_tab = set_rendered_tab.clone();
-        let set_page_visible = set_page_visible.clone();
-        let theme_navigation_guard = theme_navigation_guard.clone();
-        move |tag: String| {
-            let next = Tab::from_tag(&tag);
-            if theme_navigation_guard.get_cloned() && next != selected {
-                return;
-            }
-            if next != selected {
-                set_page_visible.call(false);
-                set_selected.call(next);
-                let set_rendered_tab = set_rendered_tab.clone();
-                let set_page_visible = set_page_visible.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(duration(Duration::from_millis(180)));
-                    set_rendered_tab.call(next);
-                    set_page_visible.call(true);
-                });
-            }
-        }
-    })
-    .pane_display_mode(NavigationViewPaneDisplayMode::Left)
-    .pane_open(true)
-    .open_pane_length(220.0)
-    .settings_visible(false)
-    .back_button_visible(false)
-    .pane_toggle_button_visible(false)
-    .background(Color::transparent())
-    .width(220.0)
-    .horizontal_alignment(HorizontalAlignment::Left)
-    .vertical_alignment(VerticalAlignment::Stretch);
-    if let UpdatePhase::Available(update) = &update_phase {
-        let version = update.version.clone();
-        navigation = navigation.pane_footer(
-            border(update_available_nav_card(version, || {
-                if let Err(error) = crate::updater::apply_pending_update() {
-                    eprintln!("failed to apply update: {error:#}");
-                    notifications::show("Update failed", &format!("{error:#}"));
-                }
-            }))
-            // L/R inset is ours; PaneFooter already reserves bottom chrome,
-            // so keep bottom padding at 0 or the card floats too high off the edge.
-            .padding(Thickness {
-                left: 12.0,
-                top: 0.0,
-                right: 12.0,
-                bottom: 2.0,
-            })
-            .background(Color::transparent()),
-        );
-    }
 
     let (codex_enabled, set_codex_enabled) =
         cx.use_state(settings.providers.is_enabled(ProviderKind::Codex));
@@ -1873,24 +1964,126 @@ pub fn render(
             .as_ref()
             .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
     );
-    let (codex_provider_expanded, set_codex_provider_expanded) = cx.use_state(false);
-    let (claude_provider_expanded, set_claude_provider_expanded) = cx.use_state(false);
-    let (cursor_provider_expanded, set_cursor_provider_expanded) = cx.use_state(false);
-    let (opencode_zen_provider_expanded, set_opencode_zen_provider_expanded) = cx.use_state(false);
-    let (opencode_go_provider_expanded, set_opencode_go_provider_expanded) = cx.use_state(false);
-    let (openrouter_provider_expanded, set_openrouter_provider_expanded) = cx.use_state(false);
-    let (codex_provider_expand_progress, set_codex_provider_expand_progress) =
-        cx.use_async_state(0.0_f64);
-    let (claude_provider_expand_progress, set_claude_provider_expand_progress) =
-        cx.use_async_state(0.0_f64);
-    let (cursor_provider_expand_progress, set_cursor_provider_expand_progress) =
-        cx.use_async_state(0.0_f64);
-    let (opencode_zen_provider_expand_progress, set_opencode_zen_provider_expand_progress) =
-        cx.use_async_state(0.0_f64);
-    let (opencode_go_provider_expand_progress, set_opencode_go_provider_expand_progress) =
-        cx.use_async_state(0.0_f64);
-    let (openrouter_provider_expand_progress, set_openrouter_provider_expand_progress) =
-        cx.use_async_state(0.0_f64);
+    let (popup_order, set_popup_order) = cx.use_state(settings.popup_order.clone());
+
+    let nav_icon_color = match color_scheme {
+        ColorScheme::Dark => "#E6E6E6",
+        ColorScheme::Light => "#3A3A3A",
+    };
+    let nav_selected_tag = match nav_mode {
+        SettingsNavMode::Root => root_selected.tag().to_string(),
+        SettingsNavMode::Providers => selected_provider.id().to_string(),
+    };
+    let nav_menu_items: Vec<NavViewItem> = match nav_mode {
+        SettingsNavMode::Root => root_nav_items(nav_icon_color).into(),
+        SettingsNavMode::Providers => providers_nav_items(&popup_order, nav_icon_color),
+    };
+    let nav_key = match nav_mode {
+        SettingsNavMode::Root => "settings-nav-root".to_string(),
+        SettingsNavMode::Providers => format!("settings-nav-providers-{nav_icon_color}"),
+    };
+    let mut navigation = NavigationView::new(nav_menu_items, Element::Empty)
+        .with_key(nav_key)
+        .selected_tag(nav_selected_tag)
+        .on_selection_changed({
+            let set_rendered_page = set_rendered_page.clone();
+            let set_page_visible = set_page_visible.clone();
+            let theme_navigation_guard = theme_navigation_guard.clone();
+            let set_nav_mode = set_nav_mode.clone();
+            let set_return_root_tab = set_return_root_tab.clone();
+            let set_root_selected = set_root_selected.clone();
+            let set_selected_provider = set_selected_provider.clone();
+            let popup_order = popup_order.clone();
+            move |tag: String| {
+                if theme_navigation_guard.get_cloned() {
+                    return;
+                }
+                match nav_mode {
+                    SettingsNavMode::Root => {
+                        if tag == "providers" {
+                            let first = first_provider_in_order(&popup_order);
+                            let restore = if root_selected != Tab::Providers {
+                                root_selected
+                            } else {
+                                Tab::General
+                            };
+                            set_return_root_tab.call(restore);
+                            set_nav_mode.call(SettingsNavMode::Providers);
+                            set_selected_provider.call(first);
+                            fade_to_rendered_page(
+                                set_page_visible.clone(),
+                                set_rendered_page.clone(),
+                                RenderedPage::Provider(first),
+                            );
+                            return;
+                        }
+                        let next = Tab::from_tag(&tag);
+                        if next != root_selected {
+                            set_root_selected.call(next);
+                            fade_to_rendered_page(
+                                set_page_visible.clone(),
+                                set_rendered_page.clone(),
+                                RenderedPage::Root(next),
+                            );
+                        }
+                    }
+                    SettingsNavMode::Providers => {
+                        if let Some(provider) = ProviderKind::from_id(&tag)
+                            && provider != selected_provider
+                        {
+                            set_selected_provider.call(provider);
+                            fade_to_rendered_page(
+                                set_page_visible.clone(),
+                                set_rendered_page.clone(),
+                                RenderedPage::Provider(provider),
+                            );
+                        }
+                    }
+                }
+            }
+        })
+        .pane_display_mode(NavigationViewPaneDisplayMode::Left)
+        .pane_open(true)
+        .open_pane_length(220.0)
+        .settings_visible(false)
+        .back_button_visible(false)
+        .pane_toggle_button_visible(false)
+        .background(Color::transparent())
+        .width(220.0)
+        .horizontal_alignment(HorizontalAlignment::Left)
+        .vertical_alignment(VerticalAlignment::Stretch);
+    navigation = match nav_mode {
+        SettingsNavMode::Root => {
+            if let UpdatePhase::Available(update) = &update_phase {
+                let version = update.version.clone();
+                navigation.pane_footer(
+                    border(update_available_nav_card(version, || {
+                        if let Err(error) = crate::updater::apply_pending_update() {
+                            eprintln!("failed to apply update: {error:#}");
+                            notifications::show("Update failed", &format!("{error:#}"));
+                        }
+                    }))
+                    .padding(Thickness {
+                        left: 12.0,
+                        top: 0.0,
+                        right: 12.0,
+                        bottom: 2.0,
+                    })
+                    .background(Color::transparent()),
+                )
+            } else {
+                navigation
+            }
+        }
+        SettingsNavMode::Providers => navigation.pane_footer(providers_pane_add_footer(
+            set_openrouter_accounts.clone(),
+            settings_tx.clone(),
+            set_selected_provider.clone(),
+            set_page_visible.clone(),
+            set_rendered_page.clone(),
+        )),
+    };
+
     let (codex_install_status, set_codex_install_status) =
         cx.use_async_state(ProviderInstallStatus::checking());
     let (claude_install_status, set_claude_install_status) =
@@ -1944,7 +2137,6 @@ pub fn render(
             });
         },
     );
-    let (popup_order, set_popup_order) = cx.use_state(settings.popup_order.clone());
     let (use_colored_provider_icons, set_use_colored_provider_icons) =
         cx.use_state(settings.use_colored_provider_icons);
     let (replace_chatgpt_logo_with_codex, set_replace_chatgpt_logo_with_codex) =
@@ -2037,11 +2229,9 @@ pub fn render(
         });
     });
 
-    // Padding lives on tab content (inside the scroller), not on this pane, so
-    // LayerFill crops flush to the window edge while long tabs stay scrollable.
-    let page_scroller = scroll_viewer(
-        border(tab_content(
-            rendered_tab,
+    let settings_page_body = match rendered_page {
+        RenderedPage::Root(tab) => tab_content(
+            tab,
             theme,
             accent_color,
             animations_enabled,
@@ -2054,18 +2244,6 @@ pub fn render(
             &codex_path,
             &claude_path,
             &cursor_path,
-            codex_provider_expanded,
-            claude_provider_expanded,
-            cursor_provider_expanded,
-            opencode_zen_provider_expanded,
-            opencode_go_provider_expanded,
-            openrouter_provider_expanded,
-            codex_provider_expand_progress,
-            claude_provider_expand_progress,
-            cursor_provider_expand_progress,
-            opencode_zen_provider_expand_progress,
-            opencode_go_provider_expand_progress,
-            openrouter_provider_expand_progress,
             &codex_install_status,
             &claude_install_status,
             &cursor_install_status,
@@ -2128,18 +2306,6 @@ pub fn render(
             set_codex_path,
             set_claude_path,
             set_cursor_path,
-            set_codex_provider_expanded,
-            set_claude_provider_expanded,
-            set_cursor_provider_expanded,
-            set_opencode_zen_provider_expanded,
-            set_opencode_go_provider_expanded,
-            set_openrouter_provider_expanded,
-            set_codex_provider_expand_progress,
-            set_claude_provider_expand_progress,
-            set_cursor_provider_expand_progress,
-            set_opencode_zen_provider_expand_progress,
-            set_opencode_go_provider_expand_progress,
-            set_openrouter_provider_expand_progress,
             set_popup_order,
             set_use_colored_provider_icons,
             set_replace_chatgpt_logo_with_codex,
@@ -2178,21 +2344,69 @@ pub fn render(
             settings_tx.clone(),
             ui_dispatcher.clone(),
             updates.clone(),
-        ))
+        ),
+        RenderedPage::Provider(provider) => provider_page_content(
+            provider,
+            codex_enabled,
+            claude_enabled,
+            cursor_enabled,
+            opencode_zen_enabled,
+            opencode_go_enabled,
+            openrouter_enabled,
+            &codex_path,
+            &claude_path,
+            &cursor_path,
+            &codex_install_status,
+            &claude_install_status,
+            &cursor_install_status,
+            &opencode_zen_install_status,
+            &opencode_go_install_status,
+            &openrouter_install_status,
+            &opencode_zen_key_input,
+            &opencode_go_key_input,
+            &openrouter_accounts,
+            &openrouter_key_inputs,
+            &openrouter_management_inputs,
+            &tray_widgets,
+            &hovered_card_id,
+            set_codex_enabled,
+            set_claude_enabled,
+            set_cursor_enabled,
+            set_opencode_zen_enabled,
+            set_opencode_go_enabled,
+            set_openrouter_enabled,
+            set_opencode_zen_key_input,
+            set_opencode_go_key_input,
+            set_openrouter_accounts.clone(),
+            set_openrouter_key_inputs.clone(),
+            set_openrouter_management_inputs.clone(),
+            set_codex_path,
+            set_claude_path,
+            set_cursor_path,
+            set_tray_widgets.clone(),
+            set_hovered_card_id,
+            settings_tx.clone(),
+        ),
+    };
+
+    // Padding lives on tab content (inside the scroller), not on this pane, so
+    // LayerFill crops flush to the window edge while long tabs stay scrollable.
+    let page_scroller = scroll_viewer(
+        border(settings_page_body)
         .padding(Thickness {
             left: 32.0,
             top: 24.0,
             right: 32.0,
             bottom: 32.0,
         })
-        .with_key(format!("settings-page-{}", rendered_tab.tag()))
+        .with_key(rendered_page.page_key())
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .vertical_alignment(VerticalAlignment::Top),
     )
     // Keys are honored only in multi-child containers by windows-reactor.
     // The Grid below therefore remounts this native ScrollViewer on every
-    // rendered-tab change, guaranteeing a fresh zero scroll offset.
-    .with_key(format!("settings-scroll-{}", rendered_tab.tag()))
+    // rendered-page change, guaranteeing a fresh zero scroll offset.
+    .with_key(rendered_page.scroll_key())
     .horizontal_scroll_bar_visibility(ScrollBarVisibility::Disabled)
     .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
     .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -2233,9 +2447,27 @@ pub fn render(
         bottom: 0.0,
     })
     .vertical_alignment(VerticalAlignment::Center);
+    let providers_drill_in = nav_mode == SettingsNavMode::Providers;
     let title_bar = TitleBar::new("Codex Minibar Settings")
         .content(title_bar_icon)
-        .back_button_visible(false)
+        .back_button_visible(providers_drill_in)
+        .back_button_enabled(providers_drill_in)
+        .on_back_requested({
+            let set_nav_mode = set_nav_mode.clone();
+            let set_root_selected = set_root_selected.clone();
+            let set_page_visible = set_page_visible.clone();
+            let set_rendered_page = set_rendered_page.clone();
+            move || {
+                let restore = return_root_tab;
+                set_nav_mode.call(SettingsNavMode::Root);
+                set_root_selected.call(restore);
+                fade_to_rendered_page(
+                    set_page_visible.clone(),
+                    set_rendered_page.clone(),
+                    RenderedPage::Root(restore),
+                );
+            }
+        })
         .pane_toggle_button_visible(false)
         // Tall caption buttons so min/max/close fill the TitleBar height.
         .tall(true);
@@ -2358,6 +2590,415 @@ fn settings_about_icon_uri() -> String {
     format!("file:///{}", path.to_string_lossy().replace('\\', "/"))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn provider_page_content(
+    provider: ProviderKind,
+    codex_enabled: bool,
+    claude_enabled: bool,
+    cursor_enabled: bool,
+    opencode_zen_enabled: bool,
+    opencode_go_enabled: bool,
+    openrouter_enabled: bool,
+    codex_path: &str,
+    claude_path: &str,
+    cursor_path: &str,
+    codex_install_status: &ProviderInstallStatus,
+    claude_install_status: &ProviderInstallStatus,
+    cursor_install_status: &ProviderInstallStatus,
+    opencode_zen_install_status: &ProviderInstallStatus,
+    opencode_go_install_status: &ProviderInstallStatus,
+    openrouter_install_status: &ProviderInstallStatus,
+    opencode_zen_key_input: &str,
+    opencode_go_key_input: &str,
+    openrouter_accounts: &[OpenRouterAccount],
+    openrouter_key_inputs: &HashMap<String, String>,
+    openrouter_management_inputs: &HashMap<String, String>,
+    tray_widgets: &[TrayWidget],
+    hovered_card_id: &Option<String>,
+    set_codex_enabled: SetState<bool>,
+    set_claude_enabled: SetState<bool>,
+    set_cursor_enabled: SetState<bool>,
+    set_opencode_zen_enabled: SetState<bool>,
+    set_opencode_go_enabled: SetState<bool>,
+    set_openrouter_enabled: SetState<bool>,
+    set_opencode_zen_key_input: SetState<String>,
+    set_opencode_go_key_input: SetState<String>,
+    set_openrouter_accounts: SetState<Vec<OpenRouterAccount>>,
+    set_openrouter_key_inputs: SetState<HashMap<String, String>>,
+    set_openrouter_management_inputs: SetState<HashMap<String, String>>,
+    set_codex_path: SetState<String>,
+    set_claude_path: SetState<String>,
+    set_cursor_path: SetState<String>,
+    set_tray_widgets: SetState<Vec<TrayWidget>>,
+    set_hovered_card_id: SetState<Option<String>>,
+    settings_tx: Sender<Settings>,
+) -> Element {
+    let apply_codex_enabled = settings_tx.clone();
+    let apply_claude_enabled = settings_tx.clone();
+    let apply_cursor_enabled = settings_tx.clone();
+    let apply_codex_path = settings_tx.clone();
+    let apply_claude_path = settings_tx.clone();
+    let apply_cursor_path = settings_tx.clone();
+    let tray_widgets_for_codex_toggle = tray_widgets.to_vec();
+    let tray_widgets_for_claude_toggle = tray_widgets.to_vec();
+    let tray_widgets_for_cursor_toggle = tray_widgets.to_vec();
+    let tray_widgets_for_opencode_toggle = tray_widgets.to_vec();
+    let tray_widget_setter_for_codex_toggle = set_tray_widgets.clone();
+    let tray_widget_setter_for_claude_toggle = set_tray_widgets.clone();
+    let tray_widget_setter_for_cursor_toggle = set_tray_widgets.clone();
+    let tray_widget_setter_for_opencode_toggle = set_tray_widgets.clone();
+    let apply_opencode_zen_enabled = settings_tx.clone();
+    let apply_opencode_go_enabled = settings_tx.clone();
+    let apply_openrouter_enabled = settings_tx.clone();
+    let settings_tx_for_details = settings_tx.clone();
+
+    let enable_card = match provider {
+        ProviderKind::Codex => settings_toggle_card_with_description(
+                "Enabled",
+                Some("Reads limits from the locally signed-in Codex CLI or desktop app."),
+                codex_enabled,
+                move |value| {
+                    persist_provider_enabled(
+                        set_codex_enabled.clone(),
+                        tray_widget_setter_for_codex_toggle.clone(),
+                        apply_codex_enabled.clone(),
+                        ProviderKind::Codex,
+                        value,
+                        claude_enabled,
+                        cursor_enabled,
+                        tray_widgets_for_codex_toggle.clone(),
+                    )
+                },
+                "provider-codex-enabled",
+                hovered_card_id,
+                set_hovered_card_id.clone(),
+            ),
+        ProviderKind::Claude => settings_toggle_card_with_description(
+                "Enabled",
+                Some("Reads limits with the existing signed-in Claude Code OAuth session."),
+                claude_enabled,
+                move |value| {
+                    persist_provider_enabled(
+                        set_claude_enabled.clone(),
+                        tray_widget_setter_for_claude_toggle.clone(),
+                        apply_claude_enabled.clone(),
+                        ProviderKind::Claude,
+                        value,
+                        codex_enabled,
+                        cursor_enabled,
+                        tray_widgets_for_claude_toggle.clone(),
+                    )
+                },
+                "provider-claude-enabled",
+                hovered_card_id,
+                set_hovered_card_id.clone(),
+            ),
+        ProviderKind::Cursor => settings_toggle_card_with_description(
+                "Enabled",
+                Some("Reads your signed-in Cursor desktop app session and shows the current billing-cycle usage."),
+                cursor_enabled,
+                move |value| {
+                    persist_cursor_enabled(
+                        set_cursor_enabled.clone(),
+                        tray_widget_setter_for_cursor_toggle.clone(),
+                        apply_cursor_enabled.clone(),
+                        value,
+                        codex_enabled,
+                        claude_enabled,
+                        tray_widgets_for_cursor_toggle.clone(),
+                    )
+                },
+                "provider-cursor-enabled",
+                hovered_card_id,
+                set_hovered_card_id.clone(),
+            ),
+        ProviderKind::OpenCodeZen => settings_toggle_card_with_description(
+                "Enabled",
+                Some("Reads Zen authentication/models and local OpenCode usage history."),
+                opencode_zen_enabled,
+                move |value| {
+                    persist_provider_enabled(
+                        set_opencode_zen_enabled.clone(),
+                        tray_widget_setter_for_opencode_toggle.clone(),
+                        apply_opencode_zen_enabled.clone(),
+                        ProviderKind::OpenCodeZen,
+                        value,
+                        opencode_go_enabled,
+                        false,
+                        tray_widgets_for_opencode_toggle.clone(),
+                    )
+                },
+                "provider-opencode-zen-enabled",
+                hovered_card_id,
+                set_hovered_card_id.clone(),
+            ),
+        ProviderKind::OpenCodeGo => settings_toggle_card_with_description(
+                "Enabled",
+                Some("Reads account-wide Go quota windows and local OpenCode usage history."),
+                opencode_go_enabled,
+                move |value| {
+                    persist_provider_enabled(
+                        set_opencode_go_enabled.clone(),
+                        tray_widget_setter_for_opencode_toggle.clone(),
+                        apply_opencode_go_enabled.clone(),
+                        ProviderKind::OpenCodeGo,
+                        value,
+                        opencode_zen_enabled,
+                        false,
+                        tray_widgets_for_opencode_toggle.clone(),
+                    )
+                },
+                "provider-opencode-go-enabled",
+                hovered_card_id,
+                set_hovered_card_id.clone(),
+            ),
+        ProviderKind::OpenRouter => settings_toggle_card_with_description(
+                "Enabled",
+                Some("Reads API-key usage and spending limits; a management key also provides the account credit balance."),
+                openrouter_enabled,
+                move |value| {
+                    persist_provider_enabled(
+                        set_openrouter_enabled.clone(),
+                        tray_widget_setter_for_opencode_toggle.clone(),
+                        apply_openrouter_enabled.clone(),
+                        ProviderKind::OpenRouter,
+                        value,
+                        opencode_zen_enabled,
+                        opencode_go_enabled,
+                        tray_widgets_for_opencode_toggle.clone(),
+                    )
+                },
+                "provider-openrouter-enabled",
+                hovered_card_id,
+                set_hovered_card_id.clone(),
+            ),
+    };
+
+    let install_status = match provider {
+        ProviderKind::Codex => codex_install_status,
+        ProviderKind::Claude => claude_install_status,
+        ProviderKind::Cursor => cursor_install_status,
+        ProviderKind::OpenCodeZen => opencode_zen_install_status,
+        ProviderKind::OpenCodeGo => opencode_go_install_status,
+        ProviderKind::OpenRouter => openrouter_install_status,
+    };
+
+    let (path, path_label, path_description, placeholder) = match provider {
+        ProviderKind::Codex => (
+            codex_path,
+            "Codex CLI folder (optional)",
+            "Choose the folder containing codex.exe, codex.cmd, or codex.ps1. Leave it empty for automatic scanning.",
+            r"C:\\Users\\you\\AppData\\Roaming\\npm",
+        ),
+        ProviderKind::Claude => (
+            claude_path,
+            "Claude Code CLI folder (optional)",
+            "Choose the folder containing claude.exe, claude.cmd, or claude.ps1. Leave it empty for automatic scanning.",
+            r"C:\\Users\\you\\AppData\\Roaming\\npm",
+        ),
+        ProviderKind::Cursor => (
+            cursor_path,
+            "Cursor app folder (optional)",
+            "Choose the folder containing Cursor.exe. Leave it empty for automatic scanning; usage still comes from Cursor's signed-in local profile.",
+            r"C:\\Users\\you\\AppData\\Local\\Programs\\Cursor",
+        ),
+        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo | ProviderKind::OpenRouter => {
+            ("", "", "", "")
+        }
+    };
+
+    let codex_path_setter = set_codex_path.clone();
+    let claude_path_setter = set_claude_path.clone();
+    let cursor_path_setter = set_cursor_path.clone();
+    let codex_path_tx = apply_codex_path.clone();
+    let claude_path_tx = apply_claude_path.clone();
+    let cursor_path_tx = apply_cursor_path.clone();
+
+    let path_input: Element = match provider {
+        ProviderKind::Codex => {
+            let picker_setter = set_codex_path.clone();
+            let picker_tx = apply_codex_path.clone();
+            grid((
+                text_box(path)
+                    .placeholder_text(placeholder)
+                    .on_commit(move |value: String| {
+                        codex_path_setter.call(value.clone());
+                        persist_provider_folder(ProviderKind::Codex, value, codex_path_tx.clone());
+                    })
+                    .height(32.0)
+                    .grid_column(0),
+                Button::new("")
+                    .icon(Symbol::Folder)
+                    .width(44.0)
+                    .height(32.0)
+                    .on_click(move || match choose_provider_folder() {
+                        Ok(Some(folder)) => {
+                            let value = folder.display().to_string();
+                            picker_setter.call(value.clone());
+                            persist_provider_folder(ProviderKind::Codex, value, picker_tx.clone());
+                        }
+                        Ok(None) => {}
+                        Err(error) => eprintln!("failed to choose Codex folder: {error:#}"),
+                    })
+                    .grid_column(1),
+            ))
+            .columns([GridLength::Star(1.0), GridLength::Auto])
+            .column_spacing(8.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .into()
+        }
+        ProviderKind::Claude => {
+            let picker_setter = set_claude_path.clone();
+            let picker_tx = apply_claude_path.clone();
+            grid((
+                text_box(path)
+                    .placeholder_text(placeholder)
+                    .on_commit(move |value: String| {
+                        claude_path_setter.call(value.clone());
+                        persist_provider_folder(ProviderKind::Claude, value, claude_path_tx.clone());
+                    })
+                    .height(32.0)
+                    .grid_column(0),
+                Button::new("")
+                    .icon(Symbol::Folder)
+                    .width(44.0)
+                    .height(32.0)
+                    .on_click(move || match choose_provider_folder() {
+                        Ok(Some(folder)) => {
+                            let value = folder.display().to_string();
+                            picker_setter.call(value.clone());
+                            persist_provider_folder(ProviderKind::Claude, value, picker_tx.clone());
+                        }
+                        Ok(None) => {}
+                        Err(error) => eprintln!("failed to choose Claude folder: {error:#}"),
+                    })
+                    .grid_column(1),
+            ))
+            .columns([GridLength::Star(1.0), GridLength::Auto])
+            .column_spacing(8.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .into()
+        }
+        ProviderKind::Cursor => {
+            let picker_setter = set_cursor_path.clone();
+            let picker_tx = apply_cursor_path.clone();
+            grid((
+                text_box(path)
+                    .placeholder_text(placeholder)
+                    .on_commit(move |value: String| {
+                        cursor_path_setter.call(value.clone());
+                        persist_provider_folder(ProviderKind::Cursor, value, cursor_path_tx.clone());
+                    })
+                    .height(32.0)
+                    .grid_column(0),
+                Button::new("")
+                    .icon(Symbol::Folder)
+                    .width(44.0)
+                    .height(32.0)
+                    .on_click(move || match choose_provider_folder() {
+                        Ok(Some(folder)) => {
+                            let value = folder.display().to_string();
+                            picker_setter.call(value.clone());
+                            persist_provider_folder(ProviderKind::Cursor, value, picker_tx.clone());
+                        }
+                        Ok(None) => {}
+                        Err(error) => eprintln!("failed to choose Cursor folder: {error:#}"),
+                    })
+                    .grid_column(1),
+            ))
+            .columns([GridLength::Star(1.0), GridLength::Auto])
+            .column_spacing(8.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .into()
+        }
+        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo | ProviderKind::OpenRouter => {
+            Element::Empty
+        }
+    };
+
+    let details: Element = if matches!(provider, ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo) {
+        let (key_input, set_key_input) = match provider {
+            ProviderKind::OpenCodeZen => (opencode_zen_key_input, set_opencode_zen_key_input.clone()),
+            ProviderKind::OpenCodeGo => (opencode_go_key_input, set_opencode_go_key_input.clone()),
+            _ => unreachable!("OpenCode credentials branch"),
+        };
+        vstack((
+            opencode_detection_card(provider),
+            opencode_credentials_card(provider, key_input, set_key_input, settings_tx_for_details.clone()),
+        ))
+        .spacing(8.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Top)
+        .into()
+    } else if provider == ProviderKind::OpenRouter {
+        vstack((
+            settings_info_card(
+                "OpenRouter source",
+                if crate::openrouter::is_installed_for_accounts(openrouter_accounts) {
+                    "Protected account credentials"
+                } else {
+                    "No account credentials configured"
+                },
+            ),
+            openrouter_accounts_card(
+                openrouter_accounts,
+                set_openrouter_accounts.clone(),
+                openrouter_key_inputs,
+                set_openrouter_key_inputs.clone(),
+                openrouter_management_inputs,
+                set_openrouter_management_inputs.clone(),
+                settings_tx_for_details.clone(),
+            ),
+        ))
+        .spacing(8.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Top)
+        .into()
+    } else {
+        vstack((
+            provider_install_status_card(install_status),
+            vstack((
+                text_block(path_label).font_size(12.0),
+                text_block(path_description)
+                    .font_size(11.0)
+                    .opacity(0.72)
+                    .wrap(),
+                path_input,
+            ))
+            .spacing(3.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch),
+        ))
+        .spacing(8.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Top)
+        .into()
+    };
+
+    let mut rows = vec![enable_card.with_key(format!("provider-{}-enabled", provider.id()))];
+    rows.push(
+        details.with_key(format!("provider-{}-details", provider.id())),
+    );
+
+    let row_count = rows.len();
+    let cards = vstack(rows)
+        .spacing(4.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .with_key(format!("provider-{}-cards-{row_count}", provider.id()));
+    grid((
+        text_block(provider.display_name())
+            .font_size(28.0)
+            .bold()
+            .grid_row(0),
+        cards.grid_row(1),
+    ))
+    .columns([GridLength::Star(1.0)])
+    .rows([GridLength::Auto, GridLength::Auto])
+    .row_spacing(10.0)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .vertical_alignment(VerticalAlignment::Top)
+    .into()
+}
+
 fn tab_content(
     tab: Tab,
     theme: AppTheme,
@@ -2372,18 +3013,6 @@ fn tab_content(
     codex_path: &str,
     claude_path: &str,
     cursor_path: &str,
-    codex_provider_expanded: bool,
-    claude_provider_expanded: bool,
-    cursor_provider_expanded: bool,
-    opencode_zen_provider_expanded: bool,
-    opencode_go_provider_expanded: bool,
-    openrouter_provider_expanded: bool,
-    codex_provider_expand_progress: f64,
-    claude_provider_expand_progress: f64,
-    cursor_provider_expand_progress: f64,
-    opencode_zen_provider_expand_progress: f64,
-    opencode_go_provider_expand_progress: f64,
-    openrouter_provider_expand_progress: f64,
     codex_install_status: &ProviderInstallStatus,
     claude_install_status: &ProviderInstallStatus,
     cursor_install_status: &ProviderInstallStatus,
@@ -2446,18 +3075,6 @@ fn tab_content(
     set_codex_path: SetState<String>,
     set_claude_path: SetState<String>,
     set_cursor_path: SetState<String>,
-    set_codex_provider_expanded: SetState<bool>,
-    set_claude_provider_expanded: SetState<bool>,
-    set_cursor_provider_expanded: SetState<bool>,
-    set_opencode_zen_provider_expanded: SetState<bool>,
-    set_opencode_go_provider_expanded: SetState<bool>,
-    set_openrouter_provider_expanded: SetState<bool>,
-    set_codex_provider_expand_progress: AsyncSetState<f64>,
-    set_claude_provider_expand_progress: AsyncSetState<f64>,
-    set_cursor_provider_expand_progress: AsyncSetState<f64>,
-    set_opencode_zen_provider_expand_progress: AsyncSetState<f64>,
-    set_opencode_go_provider_expand_progress: AsyncSetState<f64>,
-    set_openrouter_provider_expand_progress: AsyncSetState<f64>,
     set_popup_order: SetState<Vec<PopupWidgetKind>>,
     set_use_colored_provider_icons: SetState<bool>,
     set_replace_chatgpt_logo_with_codex: SetState<bool>,
@@ -2500,12 +3117,6 @@ fn tab_content(
     let apply_theme = settings_tx.clone();
     let apply_accent_color = settings_tx.clone();
     let apply_animations_enabled = settings_tx.clone();
-    let apply_codex_enabled = settings_tx.clone();
-    let apply_claude_enabled = settings_tx.clone();
-    let apply_cursor_enabled = settings_tx.clone();
-    let apply_codex_path = settings_tx.clone();
-    let apply_claude_path = settings_tx.clone();
-    let apply_cursor_path = settings_tx.clone();
     let apply_use_colored_provider_icons = settings_tx.clone();
     let apply_replace_chatgpt_logo_with_codex = settings_tx.clone();
     let apply_automatic_activation = settings_tx.clone();
@@ -2529,12 +3140,6 @@ fn tab_content(
     let apply_notify_on_update = settings_tx.clone();
     let apply_settings_import = settings_tx.clone();
     let apply_settings_reset = settings_tx.clone();
-    let tray_widgets_for_codex_toggle = tray_widgets.to_vec();
-    let tray_widgets_for_claude_toggle = tray_widgets.to_vec();
-    let tray_widgets_for_cursor_toggle = tray_widgets.to_vec();
-    let tray_widget_setter_for_codex_toggle = set_tray_widgets.clone();
-    let tray_widget_setter_for_claude_toggle = set_tray_widgets.clone();
-    let tray_widget_setter_for_cursor_toggle = set_tray_widgets.clone();
     let (title, rows) = match tab {
         Tab::General => (
             "General",
@@ -2749,9 +3354,8 @@ fn tab_content(
                 .with_key("general-show-account-name"),
             ],
         ),
-        Tab::Appearance => (
-            "Appearance",
-            vec![
+        Tab::Appearance => {
+            let mut appearance_rows = vec![
                 settings_control_card(
                     "Color theme",
                     Some("Follow Windows or keep Codex Minibar light or dark."),
@@ -2825,311 +3429,8 @@ fn tab_content(
                     set_hovered_card_id.clone(),
                 )
                 .with_key("appearance-animations"),
-            ],
-        ),
-        Tab::Providers => {
-            let provider_order: Vec<ProviderKind> = popup_order
-                .iter()
-                .filter_map(|widget| widget.as_provider())
-                .collect();
-            let mut rows = Vec::new();
-            for provider in provider_order.iter().copied() {
-                let (title, description, enabled, setter, apply_tx, other_a, other_b, tray_snapshot, tray_setter) =
-                    match provider {
-                        ProviderKind::Codex => (
-                            "Codex",
-                            Some("Reads limits from the locally signed-in Codex CLI or desktop app."),
-                            codex_enabled,
-                            set_codex_enabled.clone(),
-                            apply_codex_enabled.clone(),
-                            claude_enabled,
-                            cursor_enabled,
-                            tray_widgets_for_codex_toggle.clone(),
-                            tray_widget_setter_for_codex_toggle.clone(),
-                        ),
-                        ProviderKind::Claude => (
-                            "Claude",
-                            Some("Reads limits with the existing signed-in Claude Code OAuth session."),
-                            claude_enabled,
-                            set_claude_enabled.clone(),
-                            apply_claude_enabled.clone(),
-                            codex_enabled,
-                            cursor_enabled,
-                            tray_widgets_for_claude_toggle.clone(),
-                            tray_widget_setter_for_claude_toggle.clone(),
-                        ),
-                        ProviderKind::Cursor => (
-                            "Cursor",
-                            Some("Reads your signed-in Cursor desktop app session and shows the current billing-cycle usage."),
-                            cursor_enabled,
-                            set_cursor_enabled.clone(),
-                            apply_cursor_enabled.clone(),
-                            codex_enabled,
-                            claude_enabled,
-                            tray_widgets_for_cursor_toggle.clone(),
-                            tray_widget_setter_for_cursor_toggle.clone(),
-                        ),
-                        ProviderKind::OpenCodeZen => (
-                            "OpenCode Zen",
-                            Some("Reads Zen authentication/models and local OpenCode usage history."),
-                            opencode_zen_enabled,
-                            set_opencode_zen_enabled.clone(),
-                            settings_tx.clone(),
-                            opencode_go_enabled,
-                            false,
-                            tray_widgets.to_vec(),
-                            set_tray_widgets.clone(),
-                        ),
-                        ProviderKind::OpenCodeGo => (
-                            "OpenCode Go",
-                            Some("Reads account-wide Go quota windows and local OpenCode usage history."),
-                            opencode_go_enabled,
-                            set_opencode_go_enabled.clone(),
-                            settings_tx.clone(),
-                            opencode_zen_enabled,
-                            false,
-                            tray_widgets.to_vec(),
-                            set_tray_widgets.clone(),
-                        ),
-                        ProviderKind::OpenRouter => (
-                            "OpenRouter",
-                            Some("Reads API-key usage and spending limits; a management key also provides the account credit balance."),
-                            openrouter_enabled,
-                            set_openrouter_enabled.clone(),
-                            settings_tx.clone(),
-                            opencode_zen_enabled,
-                            opencode_go_enabled,
-                            tray_widgets.to_vec(),
-                            set_tray_widgets.clone(),
-                        ),
-                    };
-                let (path, path_label, path_description, placeholder, expanded, expand_progress, set_expanded, set_expand_progress) = match provider {
-                    ProviderKind::Codex => (codex_path, "Codex CLI folder (optional)", "Choose the folder containing codex.exe, codex.cmd, or codex.ps1. Leave it empty for automatic scanning.", r"C:\\Users\\you\\AppData\\Roaming\\npm", codex_provider_expanded, codex_provider_expand_progress, set_codex_provider_expanded.clone(), set_codex_provider_expand_progress.clone()),
-                    ProviderKind::Claude => (claude_path, "Claude Code CLI folder (optional)", "Choose the folder containing claude.exe, claude.cmd, or claude.ps1. Leave it empty for automatic scanning.", r"C:\\Users\\you\\AppData\\Roaming\\npm", claude_provider_expanded, claude_provider_expand_progress, set_claude_provider_expanded.clone(), set_claude_provider_expand_progress.clone()),
-                    ProviderKind::Cursor => (cursor_path, "Cursor app folder (optional)", "Choose the folder containing Cursor.exe. Leave it empty for automatic scanning; usage still comes from Cursor's signed-in local profile.", r"C:\\Users\\you\\AppData\\Local\\Programs\\Cursor", cursor_provider_expanded, cursor_provider_expand_progress, set_cursor_provider_expanded.clone(), set_cursor_provider_expand_progress.clone()),
-                    ProviderKind::OpenCodeZen => ("", "", "", "", opencode_zen_provider_expanded, opencode_zen_provider_expand_progress, set_opencode_zen_provider_expanded.clone(), set_opencode_zen_provider_expand_progress.clone()),
-                    ProviderKind::OpenCodeGo => ("", "", "", "", opencode_go_provider_expanded, opencode_go_provider_expand_progress, set_opencode_go_provider_expanded.clone(), set_opencode_go_provider_expand_progress.clone()),
-                    ProviderKind::OpenRouter => ("", "", "", "", openrouter_provider_expanded, openrouter_provider_expand_progress, set_openrouter_provider_expanded.clone(), set_openrouter_provider_expand_progress.clone()),
-                };
-                let install_status = match provider {
-                    ProviderKind::Codex => codex_install_status,
-                    ProviderKind::Claude => claude_install_status,
-                    ProviderKind::Cursor => cursor_install_status,
-                    ProviderKind::OpenCodeZen => opencode_zen_install_status,
-                    ProviderKind::OpenCodeGo => opencode_go_install_status,
-                    ProviderKind::OpenRouter => openrouter_install_status,
-                };
-                let codex_path_setter = set_codex_path.clone();
-                let claude_path_setter = set_claude_path.clone();
-                let cursor_path_setter = set_cursor_path.clone();
-                let codex_path_tx = apply_codex_path.clone();
-                let claude_path_tx = apply_claude_path.clone();
-                let cursor_path_tx = apply_cursor_path.clone();
-                let path_input: Element = match provider {
-                    ProviderKind::Codex => {
-                        let picker_setter = set_codex_path.clone();
-                        let picker_tx = apply_codex_path.clone();
-                        grid((
-                            text_box(path)
-                        .placeholder_text(placeholder)
-                        .on_commit(move |value: String| {
-                            codex_path_setter.call(value.clone());
-                            persist_provider_folder(
-                                ProviderKind::Codex,
-                                value,
-                                codex_path_tx.clone(),
-                            );
-                        })
-                        .height(32.0)
-                        .grid_column(0),
-                            Button::new("")
-                                .icon(Symbol::Folder)
-                                .width(44.0)
-                                .height(32.0)
-                                .on_click(move || match choose_provider_folder() {
-                                    Ok(Some(folder)) => {
-                                        let value = folder.display().to_string();
-                                        picker_setter.call(value.clone());
-                                        persist_provider_folder(
-                                            ProviderKind::Codex,
-                                            value,
-                                            picker_tx.clone(),
-                                        );
-                                    }
-                                    Ok(None) => {}
-                                    Err(error) => eprintln!("failed to choose Codex folder: {error:#}"),
-                                })
-                                .grid_column(1),
-                        ))
-                        .columns([GridLength::Star(1.0), GridLength::Auto])
-                        .column_spacing(8.0)
-                        .horizontal_alignment(HorizontalAlignment::Stretch)
-                        .into()
-                    }
-                    ProviderKind::Claude => {
-                        let picker_setter = set_claude_path.clone();
-                        let picker_tx = apply_claude_path.clone();
-                        grid((
-                            text_box(path)
-                        .placeholder_text(placeholder)
-                        .on_commit(move |value: String| {
-                            claude_path_setter.call(value.clone());
-                            persist_provider_folder(
-                                ProviderKind::Claude,
-                                value,
-                                claude_path_tx.clone(),
-                            );
-                        })
-                        .height(32.0)
-                        .grid_column(0),
-                            Button::new("")
-                                .icon(Symbol::Folder)
-                                .width(44.0)
-                                .height(32.0)
-                                .on_click(move || match choose_provider_folder() {
-                                    Ok(Some(folder)) => {
-                                        let value = folder.display().to_string();
-                                        picker_setter.call(value.clone());
-                                        persist_provider_folder(
-                                            ProviderKind::Claude,
-                                            value,
-                                            picker_tx.clone(),
-                                        );
-                                    }
-                                    Ok(None) => {}
-                                    Err(error) => eprintln!("failed to choose Claude folder: {error:#}"),
-                                })
-                                .grid_column(1),
-                        ))
-                        .columns([GridLength::Star(1.0), GridLength::Auto])
-                        .column_spacing(8.0)
-                        .horizontal_alignment(HorizontalAlignment::Stretch)
-                        .into()
-                    }
-                    ProviderKind::Cursor => {
-                        let picker_setter = set_cursor_path.clone();
-                        let picker_tx = apply_cursor_path.clone();
-                        grid((
-                            text_box(path)
-                        .placeholder_text(placeholder)
-                        .on_commit(move |value: String| {
-                            cursor_path_setter.call(value.clone());
-                            persist_provider_folder(
-                                ProviderKind::Cursor,
-                                value,
-                                cursor_path_tx.clone(),
-                            );
-                        })
-                        .height(32.0)
-                        .grid_column(0),
-                            Button::new("")
-                                .icon(Symbol::Folder)
-                                .width(44.0)
-                                .height(32.0)
-                                .on_click(move || match choose_provider_folder() {
-                                    Ok(Some(folder)) => {
-                                        let value = folder.display().to_string();
-                                        picker_setter.call(value.clone());
-                                        persist_provider_folder(
-                                            ProviderKind::Cursor,
-                                            value,
-                                            picker_tx.clone(),
-                                        );
-                                    }
-                                    Ok(None) => {}
-                                    Err(error) => eprintln!("failed to choose Cursor folder: {error:#}"),
-                                })
-                                .grid_column(1),
-                        ))
-                        .columns([GridLength::Star(1.0), GridLength::Auto])
-                        .column_spacing(8.0)
-                        .horizontal_alignment(HorizontalAlignment::Stretch)
-                        .into()
-                    }
-                    ProviderKind::OpenCodeZen
-                    | ProviderKind::OpenCodeGo
-                    | ProviderKind::OpenRouter => Element::Empty,
-                };
-                let details = if matches!(
-                    provider,
-                    ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo
-                ) {
-                    let (key_input, set_key_input) = match provider {
-                        ProviderKind::OpenCodeZen => (
-                            opencode_zen_key_input,
-                            set_opencode_zen_key_input.clone(),
-                        ),
-                        ProviderKind::OpenCodeGo => (
-                            opencode_go_key_input,
-                            set_opencode_go_key_input.clone(),
-                        ),
-                        _ => unreachable!("OpenCode credentials branch"),
-                    };
-                    vstack((
-                        opencode_detection_card(provider),
-                        opencode_credentials_card(
-                            provider,
-                            key_input,
-                            set_key_input,
-                            settings_tx.clone(),
-                        ),
-                    ))
-                        .spacing(8.0)
-                        .horizontal_alignment(HorizontalAlignment::Stretch)
-                        .vertical_alignment(VerticalAlignment::Top)
-                } else if provider == ProviderKind::OpenRouter {
-                    vstack((
-                        settings_info_card(
-                            "OpenRouter source",
-                            if crate::openrouter::is_installed_for_accounts(openrouter_accounts) {
-                                "Protected account credentials"
-                            } else {
-                                "No account credentials configured"
-                            },
-                        ),
-                        openrouter_accounts_card(
-                            openrouter_accounts,
-                            set_openrouter_accounts.clone(),
-                            openrouter_key_inputs,
-                            set_openrouter_key_inputs.clone(),
-                            openrouter_management_inputs,
-                            set_openrouter_management_inputs.clone(),
-                            settings_tx.clone(),
-                        ),
-                    ))
-                    .spacing(8.0)
-                    .horizontal_alignment(HorizontalAlignment::Stretch)
-                    .vertical_alignment(VerticalAlignment::Top)
-                } else {
-                    vstack((
-                        provider_install_status_card(install_status),
-                        vstack((
-                            text_block(path_label).font_size(12.0),
-                            text_block(path_description).font_size(11.0).opacity(0.72).wrap(),
-                            path_input,
-                        ))
-                        .spacing(3.0)
-                        .horizontal_alignment(HorizontalAlignment::Stretch),
-                    ))
-                    .spacing(8.0)
-                    .horizontal_alignment(HorizontalAlignment::Stretch)
-                    .vertical_alignment(VerticalAlignment::Top)
-                };
-                let card = match provider {
-                    ProviderKind::Codex => settings_toggle_expander(title, description, enabled, move |value| persist_provider_enabled(setter.clone(), tray_setter.clone(), apply_tx.clone(), ProviderKind::Codex, value, other_a, other_b, tray_snapshot.clone()), expanded, expand_progress, None, set_expanded, set_expand_progress, "providers-codex", hovered_card_id, set_hovered_card_id.clone(), details),
-                    ProviderKind::Claude => settings_toggle_expander(title, description, enabled, move |value| persist_provider_enabled(setter.clone(), tray_setter.clone(), apply_tx.clone(), ProviderKind::Claude, value, other_a, other_b, tray_snapshot.clone()), expanded, expand_progress, None, set_expanded, set_expand_progress, "providers-claude", hovered_card_id, set_hovered_card_id.clone(), details),
-                    ProviderKind::Cursor => settings_toggle_expander(title, description, enabled, move |value| persist_cursor_enabled(setter.clone(), tray_setter.clone(), apply_tx.clone(), value, other_a, other_b, tray_snapshot.clone()), expanded, expand_progress, None, set_expanded, set_expand_progress, "providers-cursor", hovered_card_id, set_hovered_card_id.clone(), details),
-                    ProviderKind::OpenCodeZen => settings_toggle_expander(title, description, enabled, move |value| persist_provider_enabled(setter.clone(), tray_setter.clone(), apply_tx.clone(), ProviderKind::OpenCodeZen, value, other_a, other_b, tray_snapshot.clone()), expanded, expand_progress, None, set_expanded, set_expand_progress, "providers-opencode-zen", hovered_card_id, set_hovered_card_id.clone(), details),
-                    ProviderKind::OpenCodeGo => settings_toggle_expander(title, description, enabled, move |value| persist_provider_enabled(setter.clone(), tray_setter.clone(), apply_tx.clone(), ProviderKind::OpenCodeGo, value, other_a, other_b, tray_snapshot.clone()), expanded, expand_progress, None, set_expanded, set_expand_progress, "providers-opencode-go", hovered_card_id, set_hovered_card_id.clone(), details),
-                    ProviderKind::OpenRouter => settings_toggle_expander(title, description, enabled, move |value| persist_provider_enabled(setter.clone(), tray_setter.clone(), apply_tx.clone(), ProviderKind::OpenRouter, value, other_a, other_b, tray_snapshot.clone()), expanded, expand_progress, None, set_expanded, set_expand_progress, "providers-openrouter", hovered_card_id, set_hovered_card_id.clone(), details),
-                };
-                rows.push(card.with_key(format!("providers-{}", provider.id())));
-            }
-            rows.push(
-                settings_section_heading("Customization")
-                    .with_key("providers-customization-heading"),
-            );
-            rows.push(
+                settings_section_heading("Providers")
+                    .with_key("appearance-providers-heading"),
                 settings_toggle_card(
                     "Use colored provider icons",
                     use_colored_provider_icons,
@@ -3143,14 +3444,14 @@ fn tab_content(
                             },
                         );
                     },
-                    "providers-colored-icons",
+                    "appearance-colored-icons",
                     hovered_card_id,
                     set_hovered_card_id.clone(),
                 )
-                .with_key("providers-colored-icons"),
-            );
+                .with_key("appearance-colored-icons"),
+            ];
             if codex_enabled {
-                rows.push(
+                appearance_rows.push(
                     settings_toggle_card(
                         "Replace ChatGPT logo with Codex",
                         replace_chatgpt_logo_with_codex,
@@ -3164,15 +3465,16 @@ fn tab_content(
                                 },
                             );
                         },
-                        "providers-codex-logo",
+                        "appearance-codex-logo",
                         hovered_card_id,
                         set_hovered_card_id.clone(),
                     )
-                    .with_key("providers-codex-logo"),
+                    .with_key("appearance-codex-logo"),
                 );
             }
-            ("Providers", rows)
+            ("Appearance", appearance_rows)
         }
+        Tab::Providers => unreachable!("Providers drill-in uses provider_page_content"),
         Tab::Schedule => (
             "Schedule",
             scheduled_activation_cards(

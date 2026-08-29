@@ -37,6 +37,7 @@ pub fn geom(name: &str) -> IconGeom {
         "sliders" | "popup-settings" => include_str!("../assets/icons/ph-sliders.svg"),
         "power" | "popup-power" => include_str!("../assets/icons/ph-power.svg"),
         "caret-down" => include_str!("../assets/icons/ph-caret-down.svg"),
+        "caret-right" => include_str!("../assets/icons/ph-caret-right.svg"),
         "check-circle-fill" => include_str!("../assets/icons/ph-check-circle-fill.svg"),
         "github-logo" => include_str!("../assets/icons/ph-github-logo.svg"),
         "package" => include_str!("../assets/icons/ph-package.svg"),
