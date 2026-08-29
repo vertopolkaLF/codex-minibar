@@ -110,8 +110,8 @@ pub fn start_provider_worker(
             Duration::from_secs(settings.limit_refresh_interval.seconds()),
         ),
         ProviderKind::OpenRouter => worker::start_worker(
-            OpenRouterClient::new(),
-            OpenRouterClient::new(),
+            OpenRouterClient::new(settings)?,
+            OpenRouterClient::new(settings)?,
             crate::openrouter::OpenRouterActivator,
             activation_path,
             false,

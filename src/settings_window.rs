@@ -7,9 +7,9 @@ use crate::notifications;
 #[cfg(any())]
 use crate::settings::TraySource;
 use crate::settings::{
-    AccentColor, AppTheme, LimitRefreshInterval, LimitValue, PopupWidgetKind, ProviderKind,
-    ScheduledActivation, Settings, TotalSpendPresentation, TrayColorMode, TrayFixedColor,
-    TrayIndicator, TrayPresentation, TrayWidget, TrayWidgetKind,
+    AccentColor, AppTheme, LimitRefreshInterval, LimitValue, OpenRouterAccount, PopupWidgetKind,
+    ProviderKind, ScheduledActivation, Settings, TotalSpendPresentation, TrayColorMode,
+    TrayFixedColor, TrayIndicator, TrayPresentation, TrayWidget, TrayWidgetKind,
 };
 use crate::settings_controls::{
     settings_action_card, settings_content_expander, settings_control_card, settings_info_card,
@@ -99,6 +99,7 @@ struct SettingsWindowState {
     opencode_zen_enabled: SetState<bool>,
     opencode_go_enabled: SetState<bool>,
     openrouter_enabled: SetState<bool>,
+    openrouter_accounts: SetState<Vec<OpenRouterAccount>>,
     codex_path: SetState<String>,
     claude_path: SetState<String>,
     cursor_path: SetState<String>,
@@ -145,6 +146,8 @@ impl SettingsWindowState {
             .call(settings.providers.is_enabled(ProviderKind::OpenCodeGo));
         self.openrouter_enabled
             .call(settings.providers.is_enabled(ProviderKind::OpenRouter));
+        self.openrouter_accounts
+            .call(crate::openrouter::accounts_for_settings(settings));
         self.codex_path.call(
             settings
                 .codex_path
@@ -306,7 +309,9 @@ fn detected_providers(settings: &Settings) -> [bool; 6] {
         crate::cursor::is_installed(settings.cursor_path.as_deref()),
         crate::opencode::is_installed(ProviderKind::OpenCodeZen),
         crate::opencode::is_installed(ProviderKind::OpenCodeGo),
-        crate::openrouter::is_installed(),
+        crate::openrouter::is_installed_for_accounts(&crate::openrouter::accounts_for_settings(
+            settings,
+        )),
     ]
 }
 
@@ -390,7 +395,7 @@ fn provider_install_status(
         }
         ProviderKind::OpenRouter => {
             let detected = crate::openrouter::is_installed();
-            let detail = detected.then(|| "OpenRouter API key is configured".into());
+            let detail = detected.then(|| "OpenRouter account credentials are configured".into());
             (detail, None, detected.then_some(ProviderInstallSource::App))
         }
     };
@@ -560,74 +565,402 @@ fn opencode_detection_card(provider: ProviderKind) -> Element {
     .into()
 }
 
-fn openrouter_credentials_card(
-    key_input: &str,
-    set_key_input: SetState<String>,
+fn openrouter_accounts_card(
+    accounts: &[OpenRouterAccount],
+    set_accounts: SetState<Vec<OpenRouterAccount>>,
+    key_inputs: &HashMap<String, String>,
+    set_key_inputs: SetState<HashMap<String, String>>,
+    management_inputs: &HashMap<String, String>,
+    set_management_inputs: SetState<HashMap<String, String>>,
     settings_tx: Sender<Settings>,
 ) -> Element {
-    let key_saved = crate::openrouter::key_is_configured();
-    let save_input = key_input.to_owned();
-    let save_setter = set_key_input.clone();
-    let save_tx = settings_tx.clone();
-    let clear_setter = set_key_input.clone();
-    let clear_tx = settings_tx;
-    let status = if key_saved {
-        "An OpenRouter API key is saved in protected Windows user storage."
-    } else {
-        "No OpenRouter API key is configured yet."
-    };
+    let mut account_cards: Vec<Element> = Vec::new();
+    for (account_index, account) in accounts.iter().enumerate() {
+        let account_name_setter = set_accounts.clone();
+        let account_name_accounts = accounts.to_vec();
+        let account_name_tx = settings_tx.clone();
+        let account_name = account.name.clone();
+        let mut api_key_cards: Vec<Element> = Vec::new();
+        for (key_index, key_id) in account.api_key_ids.iter().enumerate() {
+            let input_id = format!("{}:{key_id}", account.id);
+            let input_value = key_inputs.get(&input_id).cloned().unwrap_or_default();
+            let key_saved = crate::openrouter::api_key_is_configured(&account.id, key_id);
+            let save_account_id = account.id.clone();
+            let save_key_id = key_id.clone();
+            let save_input = input_value.clone();
+            let save_input_id = input_id.clone();
+            let save_inputs = key_inputs.clone();
+            let save_input_setter = set_key_inputs.clone();
+            let save_tx = settings_tx.clone();
+            let clear_account_id = account.id.clone();
+            let clear_key_id = key_id.clone();
+            let clear_input_id = input_id.clone();
+            let clear_inputs = key_inputs.clone();
+            let clear_input_setter = set_key_inputs.clone();
+            let clear_tx = settings_tx.clone();
+            let remove_accounts = accounts.to_vec();
+            let remove_account_id = account.id.clone();
+            let remove_key_id = key_id.clone();
+            let remove_setter = set_accounts.clone();
+            let remove_tx = settings_tx.clone();
+            api_key_cards.push(
+                border(
+                    vstack((
+                        text_block(format!("API key {}", key_index + 1))
+                            .font_size(12.0)
+                            .bold(),
+                        text_block(if key_saved {
+                            "Saved in protected Windows user storage."
+                        } else {
+                            "No API key configured yet."
+                        })
+                        .font_size(11.0)
+                        .opacity(0.72)
+                        .wrap(),
+                        PasswordBox::new()
+                            .value(input_value)
+                            .placeholder_text(if key_saved {
+                                "Enter a replacement API key"
+                            } else {
+                                "Paste an OpenRouter API key"
+                            })
+                            .on_password_changed({
+                                let input_id = input_id.clone();
+                                let inputs = key_inputs.clone();
+                                let setter = set_key_inputs.clone();
+                                move |value: String| {
+                                    let mut next = inputs.clone();
+                                    next.insert(input_id.clone(), value);
+                                    setter.call(next);
+                                }
+                            })
+                            .height(32.0),
+                        hstack((
+                            Button::new("Save key").on_click(move || {
+                                let value = save_input.trim().to_owned();
+                                if value.is_empty() {
+                                    notifications::show(
+                                        "OpenRouter key not saved",
+                                        "Paste an API key before saving it.",
+                                    );
+                                    return;
+                                }
+                                persist_openrouter_api_key(
+                                    save_account_id.clone(),
+                                    save_key_id.clone(),
+                                    Some(value),
+                                    save_input_id.clone(),
+                                    save_inputs.clone(),
+                                    save_input_setter.clone(),
+                                    save_tx.clone(),
+                                );
+                            }),
+                            Button::new("Clear").on_click(move || {
+                                persist_openrouter_api_key(
+                                    clear_account_id.clone(),
+                                    clear_key_id.clone(),
+                                    None,
+                                    clear_input_id.clone(),
+                                    clear_inputs.clone(),
+                                    clear_input_setter.clone(),
+                                    clear_tx.clone(),
+                                );
+                            }),
+                            Button::new("Remove").on_click(move || {
+                                if let Err(error) = crate::openrouter::save_account_api_key(
+                                    &remove_account_id,
+                                    &remove_key_id,
+                                    None,
+                                ) {
+                                    notifications::show(
+                                        "OpenRouter key not removed",
+                                        &format!("{error:#}"),
+                                    );
+                                    return;
+                                }
+                                let mut next = remove_accounts.clone();
+                                if let Some(account) = next
+                                    .iter_mut()
+                                    .find(|account| account.id == remove_account_id)
+                                {
+                                    account.api_key_ids.retain(|id| id != &remove_key_id);
+                                }
+                                persist_openrouter_accounts(
+                                    next,
+                                    remove_setter.clone(),
+                                    remove_tx.clone(),
+                                );
+                            }),
+                        ))
+                        .spacing(8.0),
+                    ))
+                    .spacing(6.0)
+                    .horizontal_alignment(HorizontalAlignment::Stretch),
+                )
+                .padding(Thickness::uniform(8.0))
+                .background(ThemeRef::SubtleFill)
+                .corner_radius(6.0)
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .into(),
+            );
+        }
+
+        let management_input = management_inputs
+            .get(&account.id)
+            .cloned()
+            .unwrap_or_default();
+        let management_saved = crate::openrouter::management_key_is_configured(&account.id);
+        let save_management_account_id = account.id.clone();
+        let save_management_input = management_input.clone();
+        let save_management_inputs = management_inputs.clone();
+        let save_management_input_setter = set_management_inputs.clone();
+        let save_management_tx = settings_tx.clone();
+        let clear_management_account_id = account.id.clone();
+        let clear_management_inputs = management_inputs.clone();
+        let clear_management_input_setter = set_management_inputs.clone();
+        let clear_management_tx = settings_tx.clone();
+        let add_key_accounts = accounts.to_vec();
+        let add_key_setter = set_accounts.clone();
+        let add_key_tx = settings_tx.clone();
+        let remove_account = account.clone();
+        let remove_account_accounts = accounts.to_vec();
+        let remove_account_setter = set_accounts.clone();
+        let remove_account_tx = settings_tx.clone();
+        account_cards.push(
+            border(
+                vstack((
+                    hstack((
+                        text_block("Account name").font_size(12.0).bold(),
+                        Button::new("Remove account").on_click(move || {
+                            for key_id in &remove_account.api_key_ids {
+                                if let Err(error) = crate::openrouter::save_account_api_key(
+                                    &remove_account.id,
+                                    key_id,
+                                    None,
+                                ) {
+                                    notifications::show(
+                                        "OpenRouter account not removed",
+                                        &format!("{error:#}"),
+                                    );
+                                    return;
+                                }
+                            }
+                            if let Err(error) =
+                                crate::openrouter::save_management_key(&remove_account.id, None)
+                            {
+                                notifications::show(
+                                    "OpenRouter account not removed",
+                                    &format!("{error:#}"),
+                                );
+                                return;
+                            }
+                            let next = remove_account_accounts
+                                .iter()
+                                .filter(|account| account.id != remove_account.id)
+                                .cloned()
+                                .collect();
+                            persist_openrouter_accounts(
+                                next,
+                                remove_account_setter.clone(),
+                                remove_account_tx.clone(),
+                            );
+                        }),
+                    ))
+                    .spacing(8.0)
+                    .horizontal_alignment(HorizontalAlignment::Stretch),
+                    text_box(account_name)
+                        .placeholder_text("OpenRouter account name")
+                        .on_text_changed(move |value: String| {
+                            let mut next = account_name_accounts.clone();
+                            if let Some(account) = next.get_mut(account_index) {
+                                account.name = value;
+                            }
+                            persist_openrouter_accounts(
+                                next,
+                                account_name_setter.clone(),
+                                account_name_tx.clone(),
+                            );
+                        })
+                        .height(32.0),
+                    text_block(if management_saved {
+                        "Management key saved; it is used for the account credit balance."
+                    } else {
+                        "Add a management key to read the account credit balance."
+                    })
+                    .font_size(11.0)
+                    .opacity(0.72)
+                    .wrap(),
+                    PasswordBox::new()
+                        .value(management_input)
+                        .placeholder_text(if management_saved {
+                            "Enter a replacement management key"
+                        } else {
+                            "Paste a management key (optional)"
+                        })
+                        .on_password_changed({
+                            let account_id = account.id.clone();
+                            let inputs = management_inputs.clone();
+                            let setter = set_management_inputs.clone();
+                            move |value: String| {
+                                let mut next = inputs.clone();
+                                next.insert(account_id.clone(), value);
+                                setter.call(next);
+                            }
+                        })
+                        .height(32.0),
+                    hstack((
+                        Button::new("Save management key").on_click(move || {
+                            let value = save_management_input.trim().to_owned();
+                            if value.is_empty() {
+                                notifications::show(
+                                    "OpenRouter management key not saved",
+                                    "Paste a management key before saving it.",
+                                );
+                                return;
+                            }
+                            persist_openrouter_management_key(
+                                save_management_account_id.clone(),
+                                Some(value),
+                                save_management_inputs.clone(),
+                                save_management_input_setter.clone(),
+                                save_management_tx.clone(),
+                            );
+                        }),
+                        Button::new("Clear management key").on_click(move || {
+                            persist_openrouter_management_key(
+                                clear_management_account_id.clone(),
+                                None,
+                                clear_management_inputs.clone(),
+                                clear_management_input_setter.clone(),
+                                clear_management_tx.clone(),
+                            );
+                        }),
+                    ))
+                    .spacing(8.0),
+                    vstack(api_key_cards)
+                        .spacing(8.0)
+                        .with_layout_animation(
+                            LayoutAnimationConfig::linear(duration(CONTROL_NORMAL_ANIMATION))
+                                .animate_size(true),
+                        ),
+                    Button::new("Add API key").on_click(move || {
+                        let mut next = add_key_accounts.clone();
+                        if let Some(account) = next.get_mut(account_index) {
+                            account
+                                .api_key_ids
+                                .push(OpenRouterAccount::new_api_key_id());
+                        }
+                        persist_openrouter_accounts(
+                            next,
+                            add_key_setter.clone(),
+                            add_key_tx.clone(),
+                        );
+                    }),
+                ))
+                .spacing(8.0)
+                .horizontal_alignment(HorizontalAlignment::Stretch),
+            )
+            .padding(Thickness::uniform(10.0))
+            .background(ThemeRef::CardBackground)
+            .corner_radius(8.0)
+            .border_thickness(Thickness::uniform(1.0))
+            .border_brush(ThemeRef::CardStroke)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .into(),
+        );
+    }
+
+    let add_account_accounts = accounts.to_vec();
+    let add_account_setter = set_accounts;
+    let add_account_tx = settings_tx;
     border(
         vstack((
-            text_block("OpenRouter API key").font_size(12.0).bold(),
-            text_block(status).font_size(11.0).opacity(0.72).wrap(),
-            PasswordBox::new()
-                .value(key_input)
-                .placeholder_text(if key_saved {
-                    "Enter a replacement key"
-                } else {
-                    "Paste an OpenRouter API key"
-                })
-                .on_password_changed(set_key_input)
-                .height(32.0),
-            hstack((
-                Button::new("Save key").on_click(move || {
-                    let value = save_input.trim().to_owned();
-                    if value.is_empty() {
-                        notifications::show(
-                            "OpenRouter key not saved",
-                            "Paste an API key before saving it.",
-                        );
-                        return;
-                    }
-                    persist_openrouter_key(Some(value), save_setter.clone(), save_tx.clone());
-                }),
-                Button::new("Clear key").on_click(move || {
-                    persist_openrouter_key(None, clear_setter.clone(), clear_tx.clone());
-                }),
-            ))
-            .spacing(8.0),
+            text_block("OpenRouter accounts").font_size(12.0).bold(),
+            text_block(
+                "Each account can contain any number of API keys and one management key. API keys show individual usage; the management key provides the shared account balance.",
+            )
+            .font_size(11.0)
+            .opacity(0.72)
+            .wrap(),
+            vstack(account_cards)
+                .spacing(10.0)
+                .with_layout_animation(
+                    LayoutAnimationConfig::linear(duration(CONTROL_NORMAL_ANIMATION))
+                        .animate_size(true),
+                ),
+            Button::new("Add account").on_click(move || {
+                let mut next = add_account_accounts.clone();
+                next.push(OpenRouterAccount::new(format!(
+                    "Account {}",
+                    next.len() + 1
+                )));
+                persist_openrouter_accounts(next, add_account_setter.clone(), add_account_tx.clone());
+            }),
         ))
-        .spacing(6.0)
+        .spacing(8.0)
         .horizontal_alignment(HorizontalAlignment::Stretch),
     )
     .padding(Thickness::uniform(8.0))
     .background(ThemeRef::SubtleFill)
     .corner_radius(6.0)
     .horizontal_alignment(HorizontalAlignment::Stretch)
+    .with_layout_animation(
+        LayoutAnimationConfig::linear(duration(CONTROL_NORMAL_ANIMATION)).animate_size(true),
+    )
     .into()
 }
 
-fn persist_openrouter_key(
-    value: Option<String>,
-    input_setter: SetState<String>,
+fn persist_openrouter_accounts(
+    accounts: Vec<OpenRouterAccount>,
+    setter: SetState<Vec<OpenRouterAccount>>,
     settings_tx: Sender<Settings>,
 ) {
-    if let Err(error) = crate::openrouter::save_api_key(value.as_deref()) {
+    setter.call(accounts.clone());
+    persist_update(settings_tx, move |settings| {
+        settings.openrouter_accounts = accounts;
+        settings.openrouter_credentials_revision =
+            settings.openrouter_credentials_revision.wrapping_add(1);
+    });
+}
+
+fn persist_openrouter_api_key(
+    account_id: String,
+    key_id: String,
+    value: Option<String>,
+    input_id: String,
+    mut inputs: HashMap<String, String>,
+    input_setter: SetState<HashMap<String, String>>,
+    settings_tx: Sender<Settings>,
+) {
+    if let Err(error) =
+        crate::openrouter::save_account_api_key(&account_id, &key_id, value.as_deref())
+    {
         eprintln!("failed to save OpenRouter API key: {error:#}");
         notifications::show("OpenRouter key not saved", &format!("{error:#}"));
         return;
     }
-    input_setter.call(String::new());
+    inputs.remove(&input_id);
+    input_setter.call(inputs);
+    persist_update(settings_tx, |settings| {
+        settings.openrouter_credentials_revision =
+            settings.openrouter_credentials_revision.wrapping_add(1);
+    });
+}
+
+fn persist_openrouter_management_key(
+    account_id: String,
+    value: Option<String>,
+    mut inputs: HashMap<String, String>,
+    input_setter: SetState<HashMap<String, String>>,
+    settings_tx: Sender<Settings>,
+) {
+    if let Err(error) = crate::openrouter::save_management_key(&account_id, value.as_deref()) {
+        eprintln!("failed to save OpenRouter management key: {error:#}");
+        notifications::show("OpenRouter management key not saved", &format!("{error:#}"));
+        return;
+    }
+    inputs.remove(&account_id);
+    input_setter.call(inputs);
     persist_update(settings_tx, |settings| {
         settings.openrouter_credentials_revision =
             settings.openrouter_credentials_revision.wrapping_add(1);
@@ -955,9 +1288,9 @@ fn onboarding_render(
                 settings_toggle_card_with_description(
                     "OpenRouter",
                     Some(if detected[5] {
-                        "An OpenRouter API key is configured."
+                        "OpenRouter account credentials are configured."
                     } else {
-                        "Optional — configure an API key later in Settings > Providers."
+                        "Optional — configure accounts later in Settings > Providers."
                     }),
                     openrouter_enabled,
                     move |value| set_openrouter_enabled.call(value),
@@ -1478,7 +1811,12 @@ pub fn render(
         cx.use_state(settings.providers.is_enabled(ProviderKind::OpenRouter));
     let (opencode_zen_key_input, set_opencode_zen_key_input) = cx.use_state(String::new());
     let (opencode_go_key_input, set_opencode_go_key_input) = cx.use_state(String::new());
-    let (openrouter_key_input, set_openrouter_key_input) = cx.use_state(String::new());
+    let (openrouter_accounts, set_openrouter_accounts) =
+        cx.use_state(crate::openrouter::accounts_for_settings(&settings));
+    let (openrouter_key_inputs, set_openrouter_key_inputs) =
+        cx.use_state(HashMap::<String, String>::new());
+    let (openrouter_management_inputs, set_openrouter_management_inputs) =
+        cx.use_state(HashMap::<String, String>::new());
     let (codex_path, set_codex_path) = cx.use_state(
         settings
             .codex_path
@@ -1630,6 +1968,7 @@ pub fn render(
             opencode_zen_enabled: set_opencode_zen_enabled.clone(),
             opencode_go_enabled: set_opencode_go_enabled.clone(),
             openrouter_enabled: set_openrouter_enabled.clone(),
+            openrouter_accounts: set_openrouter_accounts.clone(),
             codex_path: set_codex_path.clone(),
             claude_path: set_claude_path.clone(),
             cursor_path: set_cursor_path.clone(),
@@ -1697,7 +2036,9 @@ pub fn render(
             &openrouter_install_status,
             &opencode_zen_key_input,
             &opencode_go_key_input,
-            &openrouter_key_input,
+            &openrouter_accounts,
+            &openrouter_key_inputs,
+            &openrouter_management_inputs,
             &popup_order,
             use_colored_provider_icons,
             replace_chatgpt_logo_with_codex,
@@ -1743,7 +2084,9 @@ pub fn render(
             set_openrouter_enabled,
             set_opencode_zen_key_input,
             set_opencode_go_key_input,
-            set_openrouter_key_input,
+            set_openrouter_accounts.clone(),
+            set_openrouter_key_inputs.clone(),
+            set_openrouter_management_inputs.clone(),
             set_codex_path,
             set_claude_path,
             set_cursor_path,
@@ -2011,7 +2354,9 @@ fn tab_content(
     openrouter_install_status: &ProviderInstallStatus,
     opencode_zen_key_input: &str,
     opencode_go_key_input: &str,
-    openrouter_key_input: &str,
+    openrouter_accounts: &[OpenRouterAccount],
+    openrouter_key_inputs: &HashMap<String, String>,
+    openrouter_management_inputs: &HashMap<String, String>,
     popup_order: &[PopupWidgetKind],
     use_colored_provider_icons: bool,
     replace_chatgpt_logo_with_codex: bool,
@@ -2057,7 +2402,9 @@ fn tab_content(
     set_openrouter_enabled: SetState<bool>,
     set_opencode_zen_key_input: SetState<String>,
     set_opencode_go_key_input: SetState<String>,
-    set_openrouter_key_input: SetState<String>,
+    set_openrouter_accounts: SetState<Vec<OpenRouterAccount>>,
+    set_openrouter_key_inputs: SetState<HashMap<String, String>>,
+    set_openrouter_management_inputs: SetState<HashMap<String, String>>,
     set_codex_path: SetState<String>,
     set_claude_path: SetState<String>,
     set_cursor_path: SetState<String>,
@@ -2696,15 +3043,19 @@ fn tab_content(
                     vstack((
                         settings_info_card(
                             "OpenRouter source",
-                            if crate::openrouter::key_is_configured() {
-                                "Protected API key"
+                            if crate::openrouter::is_installed_for_accounts(openrouter_accounts) {
+                                "Protected account credentials"
                             } else {
-                                "No API key configured"
+                                "No account credentials configured"
                             },
                         ),
-                        openrouter_credentials_card(
-                            openrouter_key_input,
-                            set_openrouter_key_input.clone(),
+                        openrouter_accounts_card(
+                            openrouter_accounts,
+                            set_openrouter_accounts.clone(),
+                            openrouter_key_inputs,
+                            set_openrouter_key_inputs.clone(),
+                            openrouter_management_inputs,
+                            set_openrouter_management_inputs.clone(),
                             settings_tx.clone(),
                         ),
                     ))
@@ -2989,6 +3340,7 @@ fn tab_content(
                 opencode_zen_enabled: set_opencode_zen_enabled,
                 opencode_go_enabled: set_opencode_go_enabled,
                 openrouter_enabled: set_openrouter_enabled,
+                openrouter_accounts: set_openrouter_accounts,
                 codex_path: set_codex_path,
                 claude_path: set_claude_path,
                 cursor_path: set_cursor_path,

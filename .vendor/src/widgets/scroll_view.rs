@@ -70,7 +70,9 @@ impl Widget for ScrollView {
         generated::scroll_view_bindings(self)
     }
     fn children(&self) -> Children<'_> {
-        Children::PositionalSingle(&self.child)
+        // Honor the child's key so provider-tab strips remount cleanly when
+        // membership changes (same rationale as ScrollViewer).
+        Children::Keyed(std::slice::from_ref(&*self.child))
     }
 }
 

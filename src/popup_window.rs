@@ -13,7 +13,10 @@ use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
 use windows_reactor::*;
 
 use crate::{
-    limits::{LimitWindow, PaceTip, ProviderLimits, RateLimits, SpendingSummary},
+    limits::{
+        LimitWindow, OpenRouterAccountSnapshot, PaceTip, ProviderLimits, RateLimits,
+        SpendingSummary,
+    },
     notifications,
     notifications::LimitNotificationTracker,
     popup,
@@ -1020,13 +1023,35 @@ fn provider_cards(
         .into(),
     ];
     if provider == ProviderKind::OpenRouter {
-        if let Some(spending) = limits.spending.as_ref() {
+        if !limits.openrouter_accounts.is_empty() {
+            for account in &limits.openrouter_accounts {
+                cards.push(
+                    openrouter_account_heading(account)
+                        .with_key(format!("{}-account-heading", account.id)),
+                );
+                for (index, api_key) in account.api_keys.iter().enumerate() {
+                    let label = api_key
+                        .label
+                        .as_deref()
+                        .filter(|label| !label.trim().is_empty())
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| format!("API key {}", index + 1));
+                    cards.push(
+                        spending_card_with_title(format!("API KEY · {label}"), &api_key.spending)
+                            .with_key(format!("{}-api-{}", account.id, api_key.id)),
+                    );
+                }
+                if let Some(balance) = account.balance_microusd {
+                    cards.push(balance_card(balance).with_key(format!("{}-balance", account.id)));
+                }
+            }
+        } else if let Some(spending) = limits.spending.as_ref() {
             cards.push(
                 spending_card(spending).with_key(format!("{}-spending", provider.display_name())),
             );
-            if spending.balance_microusd.is_some() {
+            if let Some(balance) = spending.balance_microusd {
                 cards.push(
-                    balance_card(spending).with_key(format!("{}-balance", provider.display_name())),
+                    balance_card(balance).with_key(format!("{}-balance", provider.display_name())),
                 );
             }
         }
@@ -1118,6 +1143,10 @@ fn provider_cards(
 }
 
 fn spending_card(spending: &SpendingSummary) -> Element {
+    spending_card_with_title("SPENDING", spending)
+}
+
+fn spending_card_with_title(title: impl Into<String>, spending: &SpendingSummary) -> Element {
     let used = format_usd(spending.used_microusd as f64 / 1_000_000.0);
     let amount = spending.limit_microusd.map_or_else(
         || used.clone(),
@@ -1138,7 +1167,7 @@ fn spending_card(spending: &SpendingSummary) -> Element {
     border(
         grid((
             vstack((
-                text_block("SPENDING").foreground(ThemeRef::TertiaryText),
+                text_block(title).foreground(ThemeRef::TertiaryText),
                 caption(detail).foreground(ThemeRef::TertiaryText),
             ))
             .spacing(2.0)
@@ -1167,11 +1196,21 @@ fn spending_card(spending: &SpendingSummary) -> Element {
     .into()
 }
 
-fn balance_card(spending: &SpendingSummary) -> Element {
-    let balance = spending
-        .balance_microusd
-        .map(|value| format_usd(value as f64 / 1_000_000.0))
-        .unwrap_or_else(|| "—".into());
+fn openrouter_account_heading(account: &OpenRouterAccountSnapshot) -> Element {
+    text_block(account.name.clone())
+        .font_weight(600)
+        .foreground(ThemeRef::SecondaryText)
+        .margin(Thickness {
+            left: 4.0,
+            top: 8.0,
+            right: 4.0,
+            bottom: 0.0,
+        })
+        .into()
+}
+
+fn balance_card(balance_microusd: u64) -> Element {
+    let balance = format_usd(balance_microusd as f64 / 1_000_000.0);
     border(
         grid((
             vstack((
@@ -1752,20 +1791,33 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 },
             ));
         }
-        hstack(provider_tabs)
-            .spacing(2.0)
-            .horizontal_alignment(HorizontalAlignment::Left)
-            .vertical_alignment(VerticalAlignment::Center)
-            // Provider marks are native swap-chain children. Recreate the whole
-            // selector when membership, order, tint mode, or theme changes;
-            // otherwise WinUI reconciliation can retain a prior tab's text/icon.
-            .with_key(format!(
-                "provider-tabs-{}-{}-{}",
-                provider_order_key(&enabled_provider_order),
-                ui.use_colored_provider_icons,
-                color_scheme as i32
-            ))
-            .into()
+        let tabs_key = format!(
+            "provider-tabs-{}-{}-{}",
+            provider_order_key(&enabled_provider_order),
+            ui.use_colored_provider_icons,
+            color_scheme as i32
+        );
+        // Horizontal ScrollView maps the normal mouse wheel to sideways
+        // scrolling (no Shift required) once the strip overflows the footer.
+        scroll_view(
+            hstack(provider_tabs)
+                .spacing(2.0)
+                .horizontal_alignment(HorizontalAlignment::Left)
+                .vertical_alignment(VerticalAlignment::Center)
+                // Provider marks are native swap-chain children. Recreate the
+                // whole selector when membership, order, tint mode, or theme
+                // changes; otherwise WinUI reconciliation can retain a prior
+                // tab's text/icon.
+                .with_key(tabs_key.clone()),
+        )
+        .content_orientation(ScrollViewContentOrientation::Horizontal)
+        .horizontal_scroll_bar_visibility(ScrollingScrollBarVisibility::Hidden)
+        .vertical_scroll_bar_visibility(ScrollingScrollBarVisibility::Hidden)
+        .vertical_alignment(VerticalAlignment::Center)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .height(ICON_BUTTON_SIZE)
+        .with_key(format!("provider-tabs-scroller-{tabs_key}"))
+        .into()
     } else {
         vstack((
             body_strong("Codex Minibar").foreground(ThemeRef::SecondaryText),
@@ -2472,6 +2524,7 @@ fn start_background_bridge(
                 (ProviderKind::Codex, settings.codex_path != ui.codex_path),
                 (ProviderKind::Claude, settings.claude_path != ui.claude_path),
                 (ProviderKind::Cursor, settings.cursor_path != ui.cursor_path),
+                (ProviderKind::OpenRouter, openrouter_credentials_changed),
             ]
             .into_iter()
             .filter_map(|(provider, changed)| changed.then_some(provider))

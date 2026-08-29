@@ -48,6 +48,24 @@ pub struct SpendingSummary {
     pub balance_microusd: Option<u64>,
 }
 
+/// Per-key OpenRouter usage nested under an account snapshot.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct OpenRouterApiKeySnapshot {
+    pub id: String,
+    pub label: Option<String>,
+    pub spending: SpendingSummary,
+}
+
+/// Independent OpenRouter account data. The account balance is shared by all
+/// API keys in the account and is fetched through its management key.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct OpenRouterAccountSnapshot {
+    pub id: String,
+    pub name: String,
+    pub api_keys: Vec<OpenRouterApiKeySnapshot>,
+    pub balance_microusd: Option<u64>,
+}
+
 /// Pace tip on a usage progress bar (even-burn marker position).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PaceTip {
@@ -169,6 +187,10 @@ pub struct RateLimits {
     /// budget. Existing providers leave this unset.
     #[serde(default)]
     pub spending: Option<SpendingSummary>,
+    /// OpenRouter account/key snapshots when more than one credential is
+    /// configured. Other providers leave this empty.
+    #[serde(default)]
+    pub openrouter_accounts: Vec<OpenRouterAccountSnapshot>,
     /// Token statistics computed from local Codex session logs.
     pub usage: UsageStatistics,
 }

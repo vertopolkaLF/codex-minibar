@@ -82,6 +82,20 @@ pub fn save(name: &str, value: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Checks whether a protected secret with the given logical-name prefix is
+/// present without decrypting every value in the file.
+pub fn contains_prefix(prefix: &str) -> bool {
+    let Ok(path) = path() else {
+        return false;
+    };
+    let Ok(raw) = fs::read_to_string(path) else {
+        return false;
+    };
+    serde_json::from_str::<SecretFile>(&raw)
+        .ok()
+        .is_some_and(|file| file.values.keys().any(|name| name.starts_with(prefix)))
+}
+
 fn path() -> Result<PathBuf> {
     ProjectDirs::from("dev", "Codex Minibar", "Codex Minibar")
         .map(|dirs| dirs.config_dir().join(FILE_NAME))

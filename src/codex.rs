@@ -323,6 +323,7 @@ pub fn parse_rate_limits(
         reset_credits: parse_reset_credits(response.pointer("/result/rateLimitResetCredits")),
         additional_limits: Default::default(),
         spending: None,
+        openrouter_accounts: Default::default(),
         usage: Default::default(),
     }
     .normalized(sampled_at))

@@ -42,6 +42,7 @@ pub use bindings::NavigationViewPaneDisplayMode;
 pub use bindings::Orientation;
 pub use bindings::PasswordRevealMode;
 pub use bindings::ScrollBarVisibility;
+pub use bindings::ScrollingContentOrientation;
 pub use bindings::ScrollingScrollBarVisibility;
 pub use bindings::Stretch;
 pub use bindings::Symbol;

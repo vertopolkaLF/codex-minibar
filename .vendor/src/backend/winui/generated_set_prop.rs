@@ -170,6 +170,9 @@ pub fn dispatch(handle: &Handle, prop: Prop, value: &PropValue) -> Result<bool> 
         (Prop::Header, PropValue::Unset, Handle::ToggleSwitch(h)) => {
             h.SetHeader(None)?;
         }
+        (Prop::ContentOrientation, PropValue::I32(v), Handle::ScrollView(h)) => {
+            h.SetContentOrientation(ScrollingContentOrientation(*v))?;
+        }
         (Prop::HorizontalScrollBarVisibility, PropValue::I32(v), Handle::ScrollView(h)) => {
             h.SetHorizontalScrollBarVisibility(ScrollingScrollBarVisibility(*v))?;
         }

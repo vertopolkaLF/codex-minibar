@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 27;
+pub const SETTINGS_VERSION: u32 = 28;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -196,6 +196,82 @@ impl ProviderSettings {
         }
         settings
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OpenRouterAccount {
+    /// Stable non-secret identity used to derive protected secret names.
+    pub id: String,
+    pub name: String,
+    /// Stable identities for the account's API keys. The key material itself
+    /// lives in the protected provider secret store.
+    pub api_key_ids: Vec<String>,
+}
+
+impl Default for OpenRouterAccount {
+    fn default() -> Self {
+        Self::new("OpenRouter account")
+    }
+}
+
+impl OpenRouterAccount {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            id: new_openrouter_id("account"),
+            name: name.into(),
+            api_key_ids: vec![new_openrouter_id("api")],
+        }
+    }
+
+    /// The compatibility account for the pre-multi-account single-key setup.
+    pub fn legacy() -> Self {
+        Self {
+            id: "legacy".into(),
+            name: "OpenRouter account".into(),
+            api_key_ids: vec!["legacy".into()],
+        }
+    }
+
+    pub fn new_api_key_id() -> String {
+        new_openrouter_id("api")
+    }
+
+    pub fn normalize(&mut self) -> bool {
+        let mut changed = false;
+        if self.id.trim().is_empty() {
+            self.id = new_openrouter_id("account");
+            changed = true;
+        }
+        if self.name.trim().is_empty() {
+            self.name = "OpenRouter account".into();
+            changed = true;
+        }
+        let mut ids = Vec::with_capacity(self.api_key_ids.len());
+        for id in std::mem::take(&mut self.api_key_ids) {
+            let id = id.trim().to_owned();
+            if id.is_empty() || ids.contains(&id) {
+                changed = true;
+                continue;
+            }
+            ids.push(id);
+        }
+        self.api_key_ids = ids;
+        changed
+    }
+}
+
+fn new_openrouter_id(prefix: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let sequence = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    format!("openrouter-{prefix}-{timestamp:x}-{sequence:x}")
 }
 
 impl ProviderKind {
@@ -788,9 +864,13 @@ pub struct Settings {
     #[serde(default)]
     pub opencode_go_credentials_revision: u64,
     /// Non-secret revision used to refresh an already-running OpenRouter
-    /// worker after its protected API key changes.
+    /// worker after its protected account credentials change.
     #[serde(default)]
     pub openrouter_credentials_revision: u64,
+    /// OpenRouter account metadata and API-key identities. Key material is
+    /// stored separately in protected Windows user storage.
+    #[serde(default)]
+    pub openrouter_accounts: Vec<OpenRouterAccount>,
     pub tray_widgets: Vec<TrayWidget>,
     pub notifications: NotificationSettings,
     pub history_retention_days: u16,
@@ -827,6 +907,7 @@ impl Default for Settings {
             opencode_zen_credentials_revision: 0,
             opencode_go_credentials_revision: 0,
             openrouter_credentials_revision: 0,
+            openrouter_accounts: Vec::new(),
             // An empty list intentionally means "show the ordinary app icon".
             tray_widgets: Vec::new(),
             notifications: NotificationSettings::default(),
@@ -974,6 +1055,15 @@ impl Settings {
             if !schedule_ids.insert(schedule.id.clone()) {
                 schedule.id = new_scheduled_activation_id();
                 schedule_ids.insert(schedule.id.clone());
+                changed = true;
+            }
+        }
+        let mut account_ids = std::collections::HashSet::new();
+        for account in &mut self.openrouter_accounts {
+            changed |= account.normalize();
+            if !account_ids.insert(account.id.clone()) {
+                account.id = new_openrouter_id("account");
+                account_ids.insert(account.id.clone());
                 changed = true;
             }
         }
@@ -1835,6 +1925,15 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.insert("version".into(), toml::Value::Integer(27));
                 version = 27;
             }
+            27 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("openrouter_accounts")
+                    .or_insert_with(|| toml::Value::Array(Vec::new()));
+                root.insert("version".into(), toml::Value::Integer(28));
+                version = 28;
+            }
             // Unknown future/gap versions: stamp current and keep decoding with
             // serde defaults rather than refusing to start.
             _ => {
@@ -2044,6 +2143,39 @@ tray_widgets = []
             ..Settings::default()
         };
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn migrates_v27_settings_to_openrouter_accounts() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(&path, "version = 27\n").unwrap();
+
+        let loaded = Settings::load_or_create(&path).unwrap();
+
+        assert_eq!(loaded.version, SETTINGS_VERSION);
+        assert!(loaded.openrouter_accounts.is_empty());
+        assert!(
+            fs::read_to_string(path)
+                .unwrap()
+                .contains("openrouter_accounts = []")
+        );
+    }
+
+    #[test]
+    fn round_trips_openrouter_account_metadata_and_key_ids() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        let account = OpenRouterAccount::new("Work account");
+        let settings = Settings {
+            openrouter_accounts: vec![account.clone()],
+            ..Settings::default()
+        };
+        settings.save(&path).unwrap();
+
+        let loaded = Settings::load_or_create(&path).unwrap();
+
+        assert_eq!(loaded.openrouter_accounts, vec![account]);
     }
 
     #[test]

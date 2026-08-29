@@ -642,6 +642,10 @@ pub fn scroll_view_bindings(w: &ScrollView) -> PropBindings {
             Prop::VerticalScrollBarVisibility,
             PropValue::I32(w.vertical_scroll_bar_visibility.0),
         ),
+        Binding::Prop(
+            Prop::ContentOrientation,
+            PropValue::I32(w.content_orientation as i32),
+        ),
     ]
 }
 pub fn scroll_viewer_bindings(w: &ScrollViewer) -> PropBindings {

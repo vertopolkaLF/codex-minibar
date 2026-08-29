@@ -139,6 +139,7 @@ pub enum Prop {
     CommandBarFlyoutCommands,
     CompactPaneLength,
     Content,
+    ContentOrientation,
     CornerRadius,
     DayVisible,
     DefaultLabelPosition,

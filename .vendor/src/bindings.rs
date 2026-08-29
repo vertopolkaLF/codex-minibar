@@ -12613,6 +12613,18 @@ impl IScrollView {
             .ok()
         }
     }
+    pub(crate) fn SetContentOrientation(
+        &self,
+        value: ScrollingContentOrientation,
+    ) -> windows_core::Result<()> {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetContentOrientation)(
+                windows_core::Interface::as_raw(self),
+                value,
+            )
+            .ok()
+        }
+    }
 }
 #[repr(C)]
 pub struct IScrollView_Vtbl {
@@ -12644,6 +12656,11 @@ pub struct IScrollView_Vtbl {
     pub SetVerticalScrollBarVisibility: unsafe extern "system" fn(
         *mut core::ffi::c_void,
         ScrollingScrollBarVisibility,
+    ) -> windows_core::HRESULT,
+    ContentOrientation: usize,
+    pub SetContentOrientation: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        ScrollingContentOrientation,
     ) -> windows_core::HRESULT,
 }
 windows_core::imp::define_interface!(
@@ -20899,6 +20916,23 @@ impl windows_core::TypeKind for ScrollingScrollBarVisibility {
 impl windows_core::RuntimeType for ScrollingScrollBarVisibility {
     const SIGNATURE: windows_core::imp::ConstBuffer = windows_core::imp::ConstBuffer::from_slice(
         b"enum(Microsoft.UI.Xaml.Controls.ScrollingScrollBarVisibility;i4)",
+    );
+}
+#[repr(transparent)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub struct ScrollingContentOrientation(pub i32);
+impl ScrollingContentOrientation {
+    pub const Vertical: Self = Self(0);
+    pub const Horizontal: Self = Self(1);
+    pub const None: Self = Self(2);
+    pub const Both: Self = Self(3);
+}
+impl windows_core::TypeKind for ScrollingContentOrientation {
+    type TypeKind = windows_core::CopyType;
+}
+impl windows_core::RuntimeType for ScrollingContentOrientation {
+    const SIGNATURE: windows_core::imp::ConstBuffer = windows_core::imp::ConstBuffer::from_slice(
+        b"enum(Microsoft.UI.Xaml.Controls.ScrollingContentOrientation;i4)",
     );
 }
 #[repr(transparent)]
