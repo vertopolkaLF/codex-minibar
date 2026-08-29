@@ -1430,8 +1430,6 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             }
         }
     };
-    let quit = move || std::process::exit(0);
-
     // A selector only earns its keep when it can actually switch between
     // providers. With zero or one enabled provider the familiar compact
     // footer remains, sparing us some very professional-looking empty UI.
@@ -1673,37 +1671,6 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let body = build_body(selected_view, false);
     let outgoing_body = pager.outgoing.map(|view| build_body(view, true));
 
-    let quit_or_update = if ui.update_version.is_some() {
-        update_accent_button("Update", || {
-            if let Err(error) = crate::updater::apply_pending_update() {
-                eprintln!("failed to apply update: {error:#}");
-                notifications::show("Update failed", &format!("{error:#}"));
-            }
-        })
-        .height(ICON_BUTTON_SIZE)
-        .min_height(ICON_BUTTON_SIZE)
-        .max_height(ICON_BUTTON_SIZE)
-        .padding(Thickness {
-            left: 12.0,
-            top: 0.0,
-            right: 12.0,
-            bottom: 0.0,
-        })
-        .vertical_alignment(VerticalAlignment::Center)
-        .with_key("footer-update")
-        .into()
-    } else {
-        icon_button(
-            "quit",
-            "fluent-power",
-            "fluent-power",
-            "Quit",
-            color_scheme,
-            &hovered_action,
-            set_hovered_action.clone(),
-            quit,
-        )
-    };
     let footer_background = match color_scheme {
         // CSS shorthand: #0002 = #00000022; #0001 = #00000011.
         ColorScheme::Dark => Color {
@@ -1872,44 +1839,72 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let footer = border(
         grid((
             footer_identity.grid_column(0),
-            hstack((
-                icon_button(
-                    "refresh",
-                    "fluent-refresh",
-                    "fluent-refresh",
-                    &refresh_tooltip,
-                    color_scheme,
-                    &hovered_action,
-                    set_hovered_action.clone(),
-                    refresh,
-                ),
-                icon_button(
-                    "settings",
-                    "fluent-settings",
-                    "fluent-settings",
-                    "Settings",
-                    color_scheme,
-                    &hovered_action,
-                    set_hovered_action.clone(),
-                    {
-                        let settings_tx = settings_tx.clone();
-                        let updates = Arc::clone(&state.updates);
-                        move || {
-                            if let Err(error) =
-                                crate::settings_window::open(settings_tx.clone(), updates.clone())
-                            {
-                                eprintln!("Could not open settings window: {error:?}");
+            hstack({
+                // Build only live actions — never pad with Element::Empty.
+                // Empty siblings collapse during reconcile and let swap-chain
+                // hosts keep a neighbor's painted icon in another slot.
+                let mut actions = vec![
+                    icon_button(
+                        "refresh",
+                        "fluent-refresh",
+                        "fluent-refresh",
+                        &refresh_tooltip,
+                        color_scheme,
+                        &hovered_action,
+                        set_hovered_action.clone(),
+                        refresh,
+                    ),
+                    icon_button(
+                        "settings",
+                        "fluent-settings",
+                        "fluent-settings",
+                        "Settings",
+                        color_scheme,
+                        &hovered_action,
+                        set_hovered_action.clone(),
+                        {
+                            let settings_tx = settings_tx.clone();
+                            let updates = Arc::clone(&state.updates);
+                            move || {
+                                if let Err(error) = crate::settings_window::open(
+                                    settings_tx.clone(),
+                                    updates.clone(),
+                                ) {
+                                    eprintln!("Could not open settings window: {error:?}");
+                                }
                             }
-                        }
-                    },
-                ),
-                quit_or_update,
-            ))
+                        },
+                    ),
+                ];
+                if ui.update_version.is_some() {
+                    actions.push(
+                        update_accent_button("Update", || {
+                            if let Err(error) = crate::updater::apply_pending_update() {
+                                eprintln!("failed to apply update: {error:#}");
+                                notifications::show("Update failed", &format!("{error:#}"));
+                            }
+                        })
+                        .height(ICON_BUTTON_SIZE)
+                        .min_height(ICON_BUTTON_SIZE)
+                        .max_height(ICON_BUTTON_SIZE)
+                        .padding(Thickness {
+                            left: 12.0,
+                            top: 0.0,
+                            right: 12.0,
+                            bottom: 0.0,
+                        })
+                        .vertical_alignment(VerticalAlignment::Center)
+                        .with_key("footer-update")
+                        .into(),
+                    );
+                }
+                actions
+            })
             .spacing(4.0)
             .horizontal_alignment(HorizontalAlignment::Right)
             .vertical_alignment(VerticalAlignment::Center)
-            // Quit ↔ Update swaps control kinds; key the whole strip so action
-            // swap-chain hosts never inherit a neighbor's painted icon.
+            // Update membership swaps control kinds; key the whole strip so
+            // action swap-chain hosts never inherit a neighbor's painted icon.
             .with_key(format!(
                 "footer-actions-{}-{}",
                 ui.update_version.is_some(),
@@ -2972,7 +2967,7 @@ const FOOTER_TAB_PADDING_LEFT: f64 = 14.0;
 const FOOTER_PADDING_RIGHT: f64 = 18.0;
 const FOOTER_COLUMN_SPACING: f64 = 8.0;
 const FOOTER_ACTION_SPACING: f64 = 4.0;
-const FOOTER_ACTION_COUNT: f64 = 3.0;
+const FOOTER_ACTION_COUNT: f64 = 2.0;
 
 fn provider_tab_strip_content_width(provider_count: usize) -> f64 {
     ALL_TAB_WIDTH + provider_count as f64 * (ICON_BUTTON_SIZE + TAB_STRIP_SPACING)
