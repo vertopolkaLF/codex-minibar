@@ -14,6 +14,7 @@ use crate::{
 };
 
 const API_URL: &str = "https://openrouter.ai/api/v1/key";
+const CREDITS_API_URL: &str = "https://openrouter.ai/api/v1/credits";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const SECRET_NAME: &str = "openrouter-api-key";
 
@@ -39,6 +40,7 @@ impl OpenRouterClient {
     fn read_key(&self) -> Result<RateLimits> {
         let api_key =
             secrets::load(SECRET_NAME)?.context("OpenRouter API key is not configured")?;
+        let sampled_at = Utc::now();
         let response = self
             .agent
             .get(API_URL)
@@ -49,7 +51,36 @@ impl OpenRouterClient {
         let body = response
             .into_string()
             .context("read OpenRouter API-key response")?;
-        parse_key_response(&body, Utc::now())
+        let mut limits = parse_key_response(&body, sampled_at)?;
+        // Account credits are available only to management keys. Keep the
+        // regular key-level usage useful when /credits returns 403, and also
+        // tolerate a transient failure of this optional second request.
+        if let Ok(Some(balance)) = self.read_account_balance(&api_key)
+            && let Some(spending) = limits.spending.as_mut()
+        {
+            spending.balance_microusd = Some(balance);
+        }
+        Ok(limits)
+    }
+
+    fn read_account_balance(&self, api_key: &str) -> Result<Option<u64>> {
+        let response = match self
+            .agent
+            .get(CREDITS_API_URL)
+            .set("Authorization", &format!("Bearer {api_key}"))
+            .set("Accept", "application/json")
+            .call()
+        {
+            Ok(response) => response,
+            // OpenRouter intentionally rejects ordinary API keys here. That
+            // is expected and must not hide the data already returned by /key.
+            Err(ureq::Error::Status(403, _)) => return Ok(None),
+            Err(error) => return Err(error).context("request OpenRouter account credits"),
+        };
+        let body = response
+            .into_string()
+            .context("read OpenRouter account credits response")?;
+        parse_credits_response(&body).map(Some)
     }
 }
 
@@ -107,6 +138,17 @@ struct KeyData {
     limit_reset: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct CreditsEnvelope {
+    data: CreditsData,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreditsData {
+    total_credits: f64,
+    total_usage: f64,
+}
+
 fn parse_key_response(raw: &str, sampled_at: DateTime<Utc>) -> Result<RateLimits> {
     let envelope: KeyEnvelope =
         serde_json::from_str(raw).context("parse OpenRouter API-key response")?;
@@ -154,9 +196,20 @@ fn parse_key_response(raw: &str, sampled_at: DateTime<Utc>) -> Result<RateLimits
             remaining_microusd: derived_remaining,
             resets_at: bounds.map(|(_, reset, _)| reset),
             reset_kind,
+            balance_microusd: None,
         }),
         ..RateLimits::default()
     })
+}
+
+fn parse_credits_response(raw: &str) -> Result<u64> {
+    let envelope: CreditsEnvelope =
+        serde_json::from_str(raw).context("parse OpenRouter account credits response")?;
+    let total_credits = money_value(Some(envelope.data.total_credits), "total_credits")?
+        .context("OpenRouter credits response is missing total_credits")?;
+    let total_usage = money_value(Some(envelope.data.total_usage), "total_usage")?
+        .context("OpenRouter credits response is missing total_usage")?;
+    Ok(total_credits.saturating_sub(total_usage))
 }
 
 fn money_value(value: Option<f64>, field: &str) -> Result<Option<u64>> {
@@ -261,5 +314,23 @@ mod tests {
         assert_eq!(limits.spending.unwrap().remaining_microusd, Some(7_000_000));
         assert!(parse_key_response(r#"{"data":{"usage":-1}}"#, Utc::now()).is_err());
         assert!(parse_key_response("{}", Utc::now()).is_err());
+    }
+
+    #[test]
+    fn parses_account_credit_balance_from_total_credits_and_usage() {
+        let balance =
+            parse_credits_response(r#"{"data":{"total_credits":100.5,"total_usage":25.75}}"#)
+                .unwrap();
+        assert_eq!(balance, 74_750_000);
+    }
+
+    #[test]
+    fn clamps_account_balance_when_usage_exceeds_credits() {
+        let balance =
+            parse_credits_response(r#"{"data":{"total_credits":1,"total_usage":2}}"#).unwrap();
+        assert_eq!(balance, 0);
+        assert!(
+            parse_credits_response(r#"{"data":{"total_credits":-1,"total_usage":0}}"#).is_err()
+        );
     }
 }

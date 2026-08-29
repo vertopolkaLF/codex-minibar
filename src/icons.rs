@@ -17,7 +17,7 @@ pub fn geom(name: &str) -> IconGeom {
             include_str!("../assets/icons/fluent-re-order-dots-vertical-16-regular.svg")
         }
 
-        // Provider marks are sourced from Iconify. They are rendered as
+        // Provider marks are local SVG assets. They are rendered as
         // monochrome paths so they remain legible in either app theme.
         "codex" => include_str!("../assets/icons/openai-iconify.svg"),
         "claude" => include_str!("../assets/icons/claude-iconify.svg"),

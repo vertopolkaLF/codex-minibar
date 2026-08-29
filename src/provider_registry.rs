@@ -170,7 +170,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         id: "openrouter",
         display_name: "OpenRouter",
         icon: "openrouter",
-        brand_rgb: (0, 196, 140),
+        brand_rgb: (200, 255, 0),
         supports_activation: false,
         include_in_total_spend: false,
         metrics: OPENROUTER_METRICS,

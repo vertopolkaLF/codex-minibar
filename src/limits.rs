@@ -42,6 +42,10 @@ pub struct SpendingSummary {
     pub remaining_microusd: Option<u64>,
     pub resets_at: Option<DateTime<Utc>>,
     pub reset_kind: Option<String>,
+    /// Account-level OpenRouter credit balance, independent from an API key's
+    /// optional spending limit.
+    #[serde(default)]
+    pub balance_microusd: Option<u64>,
 }
 
 /// Pace tip on a usage progress bar (even-burn marker position).

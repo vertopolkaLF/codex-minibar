@@ -2508,7 +2508,7 @@ fn tab_content(
                         ),
                         ProviderKind::OpenRouter => (
                             "OpenRouter",
-                            Some("Reads the configured OpenRouter API key's usage and spending limit."),
+                            Some("Reads API-key usage and spending limits; a management key also provides the account credit balance."),
                             openrouter_enabled,
                             set_openrouter_enabled.clone(),
                             settings_tx.clone(),

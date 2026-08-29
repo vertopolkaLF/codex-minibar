@@ -1024,6 +1024,11 @@ fn provider_cards(
             cards.push(
                 spending_card(spending).with_key(format!("{}-spending", provider.display_name())),
             );
+            if spending.balance_microusd.is_some() {
+                cards.push(
+                    balance_card(spending).with_key(format!("{}-balance", provider.display_name())),
+                );
+            }
         }
         return cards;
     }
@@ -1139,6 +1144,43 @@ fn spending_card(spending: &SpendingSummary) -> Element {
             .spacing(2.0)
             .vertical_alignment(VerticalAlignment::Center),
             text_block(amount)
+                .font_weight(600)
+                .foreground(ThemeRef::Accent)
+                .vertical_alignment(VerticalAlignment::Center)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .grid_column(1),
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Auto])
+        .rows([GridLength::Auto])
+        .horizontal_alignment(HorizontalAlignment::Stretch),
+    )
+    .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+    .padding(Thickness {
+        left: 16.0,
+        top: 12.0,
+        right: 16.0,
+        bottom: 12.0,
+    })
+    .background(ThemeRef::CardBackground)
+    .border_thickness(Thickness::uniform(1.0))
+    .border_brush(ThemeRef::CardStroke)
+    .into()
+}
+
+fn balance_card(spending: &SpendingSummary) -> Element {
+    let balance = spending
+        .balance_microusd
+        .map(|value| format_usd(value as f64 / 1_000_000.0))
+        .unwrap_or_else(|| "—".into());
+    border(
+        grid((
+            vstack((
+                text_block("BALANCE").foreground(ThemeRef::TertiaryText),
+                caption("OpenRouter account credits").foreground(ThemeRef::TertiaryText),
+            ))
+            .spacing(2.0)
+            .vertical_alignment(VerticalAlignment::Center),
+            text_block(balance)
                 .font_weight(600)
                 .foreground(ThemeRef::Accent)
                 .vertical_alignment(VerticalAlignment::Center)
@@ -4000,7 +4042,7 @@ fn combined_usage_color(provider: ProviderKind, color_scheme: ColorScheme) -> Co
             ColorScheme::Light => Color::rgb(75, 75, 75),
             ColorScheme::Dark => Color::rgb(205, 205, 205),
         },
-        ProviderKind::OpenRouter => Color::rgb(0, 196, 140),
+        ProviderKind::OpenRouter => Color::rgb(200, 255, 0),
     }
 }
 
