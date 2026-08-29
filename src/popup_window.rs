@@ -1030,30 +1030,31 @@ fn provider_cards(
                         .with_key(format!("{}-account-heading", account.id)),
                 );
                 for (index, api_key) in account.api_keys.iter().enumerate() {
-                    let label = api_key
+                    let title = api_key
                         .label
                         .as_deref()
-                        .filter(|label| !label.trim().is_empty())
+                        .map(str::trim)
+                        .filter(|label| !label.is_empty())
                         .map(str::to_owned)
-                        .unwrap_or_else(|| format!("API key {}", index + 1));
+                        .unwrap_or_else(|| format!("Key {}", index + 1));
                     cards.push(
-                        spending_card_with_title(format!("API KEY · {label}"), &api_key.spending)
-                            .with_key(format!("{}-api-{}", account.id, api_key.id)),
+                        spending_card_with_title(
+                            title,
+                            api_key.masked_key.as_deref(),
+                            &api_key.spending,
+                            api_key.has_live_usage,
+                            show_used_percentage,
+                            color_scheme,
+                        )
+                        .with_key(format!("{}-api-{}", account.id, api_key.id)),
                     );
-                }
-                if let Some(balance) = account.balance_microusd {
-                    cards.push(balance_card(balance).with_key(format!("{}-balance", account.id)));
                 }
             }
         } else if let Some(spending) = limits.spending.as_ref() {
             cards.push(
-                spending_card(spending).with_key(format!("{}-spending", provider.display_name())),
+                spending_card(spending, show_used_percentage, color_scheme)
+                    .with_key(format!("{}-spending", provider.display_name())),
             );
-            if let Some(balance) = spending.balance_microusd {
-                cards.push(
-                    balance_card(balance).with_key(format!("{}-balance", provider.display_name())),
-                );
-            }
         }
         return cards;
     }
@@ -1142,37 +1143,136 @@ fn provider_cards(
     cards
 }
 
-fn spending_card(spending: &SpendingSummary) -> Element {
-    spending_card_with_title("SPENDING", spending)
+fn spending_card(
+    spending: &SpendingSummary,
+    show_used_percentage: bool,
+    color_scheme: ColorScheme,
+) -> Element {
+    spending_card_with_title("SPENDING", None, spending, true, show_used_percentage, color_scheme)
 }
 
-fn spending_card_with_title(title: impl Into<String>, spending: &SpendingSummary) -> Element {
-    let used = format_usd(spending.used_microusd as f64 / 1_000_000.0);
-    let amount = spending.limit_microusd.map_or_else(
-        || used.clone(),
-        |limit| format!("{used} / {}", format_usd(limit as f64 / 1_000_000.0)),
-    );
-    let detail = match spending.remaining_microusd {
-        Some(remaining) => format!(
-            "{} remaining{}",
-            format_usd(remaining as f64 / 1_000_000.0),
-            spending
-                .resets_at
-                .map(|reset| format!(" · resets in {}", format_reset_in(Some(reset))))
-                .unwrap_or_default()
-        ),
-        None => "No spending limit".into(),
+fn spending_card_with_title(
+    title: impl Into<String>,
+    masked_key: Option<&str>,
+    spending: &SpendingSummary,
+    has_live_usage: bool,
+    show_used_percentage: bool,
+    color_scheme: ColorScheme,
+) -> Element {
+    let title = title.into().to_uppercase();
+    let mut right_side: Vec<Element> = Vec::new();
+    if has_live_usage {
+        let used = format_usd(spending.used_microusd as f64 / 1_000_000.0);
+        let amount = spending.limit_microusd.map_or_else(
+            || used.clone(),
+            |limit| format!("{used} / {}", format_usd(limit as f64 / 1_000_000.0)),
+        );
+        right_side.push(
+            text_block(amount)
+                .font_weight(600)
+                .foreground(ThemeRef::Accent)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .into(),
+        );
+    } else {
+        // Unknown usage — never show a bare limit that looks like spend.
+        let amount = spending.limit_microusd.map_or_else(
+            || "?.??".into(),
+            |limit| format!("?.?? / {}", format_usd(limit as f64 / 1_000_000.0)),
+        );
+        right_side.push(
+            text_block(amount)
+                .font_weight(600)
+                .foreground(ThemeRef::Accent)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .into(),
+        );
+    }
+    if let Some(reset) = spending.resets_at {
+        right_side.push(
+            hstack((
+                text_block("Resets in")
+                    .foreground(ThemeRef::TertiaryText)
+                    .vertical_alignment(VerticalAlignment::Center),
+                text_block(format_reset_in(Some(reset)))
+                    .vertical_alignment(VerticalAlignment::Center),
+            ))
+            .spacing(6.0)
+            .horizontal_alignment(HorizontalAlignment::Right)
+            .into(),
+        );
+    }
+
+    let mut title_lines: Vec<Element> = vec![caption(title)
+        .foreground(ThemeRef::SecondaryText)
+        .into()];
+    if let Some(masked) = masked_key.map(str::trim).filter(|value| !value.is_empty()) {
+        title_lines.push(
+            caption(masked.to_owned())
+                .foreground(ThemeRef::TertiaryText)
+                .into(),
+        );
+    }
+    let left = vstack(title_lines)
+        .spacing(2.0)
+        .vertical_alignment(VerticalAlignment::Center);
+
+    let header: Element = if right_side.is_empty() {
+        left.into()
+    } else {
+        grid((
+            left,
+            vstack(right_side)
+                .spacing(2.0)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .vertical_alignment(VerticalAlignment::Center)
+                .grid_column(1),
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Auto])
+        .rows([GridLength::Auto])
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .into()
     };
 
-    border(
-        grid((
-            vstack((
-                text_block(title).foreground(ThemeRef::TertiaryText),
-                caption(detail).foreground(ThemeRef::TertiaryText),
-            ))
-            .spacing(2.0)
-            .vertical_alignment(VerticalAlignment::Center),
-            text_block(amount)
+    let mut rows: Vec<Element> = vec![header];
+    if let Some(limit) = spending.limit_microusd.filter(|limit| *limit > 0) {
+        let used_percent = if has_live_usage {
+            ((spending.used_microusd.min(limit) as f64 / limit as f64) * 100.0)
+                .clamp(0.0, 100.0)
+        } else {
+            0.0
+        };
+        let progress = if show_used_percentage {
+            used_percent
+        } else {
+            100.0 - used_percent
+        };
+        rows.push(rounded_progress(
+            progress,
+            ThemeRef::Accent,
+            None,
+            color_scheme,
+        ));
+    }
+
+    border(vstack(rows).spacing(8.0))
+        .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+        .padding(Thickness::uniform(12.0))
+        .background(ThemeRef::CardBackground)
+        .border_thickness(Thickness::uniform(1.0))
+        .border_brush(ThemeRef::CardStroke)
+        .into()
+}
+
+fn openrouter_account_heading(account: &OpenRouterAccountSnapshot) -> Element {
+    let name = text_block(account.name.clone())
+        .font_weight(600)
+        .foreground(ThemeRef::SecondaryText)
+        .vertical_alignment(VerticalAlignment::Center);
+    let content: Element = match account.balance_microusd {
+        Some(balance) => grid((
+            name,
+            text_block(format_usd(balance as f64 / 1_000_000.0))
                 .font_weight(600)
                 .foreground(ThemeRef::Accent)
                 .vertical_alignment(VerticalAlignment::Center)
@@ -1181,25 +1281,11 @@ fn spending_card_with_title(title: impl Into<String>, spending: &SpendingSummary
         ))
         .columns([GridLength::Star(1.0), GridLength::Auto])
         .rows([GridLength::Auto])
-        .horizontal_alignment(HorizontalAlignment::Stretch),
-    )
-    .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
-    .padding(Thickness {
-        left: 16.0,
-        top: 12.0,
-        right: 16.0,
-        bottom: 12.0,
-    })
-    .background(ThemeRef::CardBackground)
-    .border_thickness(Thickness::uniform(1.0))
-    .border_brush(ThemeRef::CardStroke)
-    .into()
-}
-
-fn openrouter_account_heading(account: &OpenRouterAccountSnapshot) -> Element {
-    text_block(account.name.clone())
-        .font_weight(600)
-        .foreground(ThemeRef::SecondaryText)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .into(),
+        None => name.into(),
+    };
+    content
         .margin(Thickness {
             left: 4.0,
             top: 8.0,
@@ -1207,40 +1293,6 @@ fn openrouter_account_heading(account: &OpenRouterAccountSnapshot) -> Element {
             bottom: 0.0,
         })
         .into()
-}
-
-fn balance_card(balance_microusd: u64) -> Element {
-    let balance = format_usd(balance_microusd as f64 / 1_000_000.0);
-    border(
-        grid((
-            vstack((
-                text_block("BALANCE").foreground(ThemeRef::TertiaryText),
-                caption("OpenRouter account credits").foreground(ThemeRef::TertiaryText),
-            ))
-            .spacing(2.0)
-            .vertical_alignment(VerticalAlignment::Center),
-            text_block(balance)
-                .font_weight(600)
-                .foreground(ThemeRef::Accent)
-                .vertical_alignment(VerticalAlignment::Center)
-                .horizontal_alignment(HorizontalAlignment::Right)
-                .grid_column(1),
-        ))
-        .columns([GridLength::Star(1.0), GridLength::Auto])
-        .rows([GridLength::Auto])
-        .horizontal_alignment(HorizontalAlignment::Stretch),
-    )
-    .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
-    .padding(Thickness {
-        left: 16.0,
-        top: 12.0,
-        right: 16.0,
-        bottom: 12.0,
-    })
-    .background(ThemeRef::CardBackground)
-    .border_thickness(Thickness::uniform(1.0))
-    .border_brush(ThemeRef::CardStroke)
-    .into()
 }
 
 fn latest_sampled_at(limits: &ProviderLimits) -> chrono::DateTime<Utc> {

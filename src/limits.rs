@@ -53,7 +53,18 @@ pub struct SpendingSummary {
 pub struct OpenRouterApiKeySnapshot {
     pub id: String,
     pub label: Option<String>,
+    /// Collapsed key fingerprint for display, never the full secret.
+    #[serde(default)]
+    pub masked_key: Option<String>,
     pub spending: SpendingSummary,
+    /// False when the card is shown from cache/placeholder and live usage
+    /// has not been fetched yet (or the latest fetch failed).
+    #[serde(default = "default_true")]
+    pub has_live_usage: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Independent OpenRouter account data. The account balance is shared by all

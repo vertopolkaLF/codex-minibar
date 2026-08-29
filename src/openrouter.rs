@@ -1,6 +1,6 @@
 //! OpenRouter API-key quota provider.
 
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, TimeZone, Utc};
@@ -18,6 +18,7 @@ use crate::{
 };
 
 const API_URL: &str = "https://openrouter.ai/api/v1/key";
+const KEYS_API_URL: &str = "https://openrouter.ai/api/v1/keys";
 const CREDITS_API_URL: &str = "https://openrouter.ai/api/v1/credits";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const SECRET_NAME: &str = "openrouter-api-key";
@@ -28,6 +29,8 @@ const LEGACY_API_KEY_ID: &str = "legacy";
 pub struct OpenRouterClient {
     agent: ureq::Agent,
     accounts: Vec<AccountCredentials>,
+    /// Stable key metadata (name/limit/reset). Usage is never stored here.
+    key_cache: HashMap<String, CachedOpenRouterKey>,
 }
 
 pub struct OpenRouterActivator;
@@ -44,11 +47,20 @@ struct ApiKeyCredential {
     value: String,
 }
 
+#[derive(Clone, Debug, Default)]
+struct CachedOpenRouterKey {
+    label: Option<String>,
+    masked_key: Option<String>,
+    limit_microusd: Option<u64>,
+    reset_kind: Option<String>,
+}
+
 impl OpenRouterClient {
     pub fn new(settings: &Settings) -> Result<Self> {
         Ok(Self {
             agent: ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build(),
             accounts: load_credentials(settings)?,
+            key_cache: load_key_cache_from_store(),
         })
     }
 
@@ -84,6 +96,26 @@ impl OpenRouterClient {
             .into_string()
             .context("read OpenRouter account credits response")?;
         parse_credits_response(&body).map(Some)
+    }
+
+    /// Maps masked `label` values from `/key` to human-readable key names.
+    /// Requires a management key; ordinary inference keys get a quiet empty map.
+    fn read_key_names(&self, api_key: &str) -> Result<HashMap<String, String>> {
+        let response = match self
+            .agent
+            .get(KEYS_API_URL)
+            .set("Authorization", &format!("Bearer {api_key}"))
+            .set("Accept", "application/json")
+            .call()
+        {
+            Ok(response) => response,
+            Err(ureq::Error::Status(403, _)) => return Ok(HashMap::new()),
+            Err(error) => return Err(error).context("request OpenRouter API key directory"),
+        };
+        let body = response
+            .into_string()
+            .context("read OpenRouter API key directory response")?;
+        parse_keys_directory(&body)
     }
 }
 
@@ -146,32 +178,73 @@ impl LimitProvider for OpenRouterClient {
         let sampled_at = Utc::now();
         let mut accounts = Vec::new();
         for account in &self.accounts {
-            let mut api_keys = Vec::new();
-            for api_key in &account.api_keys {
-                match self.read_key(&api_key.value, sampled_at) {
-                    Ok(limits) => {
-                        if let Some(spending) = limits.spending {
-                            api_keys.push(OpenRouterApiKeySnapshot {
-                                id: api_key.id.clone(),
-                                label: limits.account_name,
-                                spending,
-                            });
-                        }
-                    }
-                    Err(error) => crate::logger::info(format!(
-                        "OpenRouter account {} API key {} failed: {error:#}",
-                        account.name, api_key.id
-                    )),
-                }
-            }
-
-            // A management key is preferred for account-level credits. Keep
-            // the first API key as a compatibility fallback for users whose
-            // existing key is itself a management key.
+            // A management key is preferred for account-level credits and the
+            // key directory. Keep the first API key as a compatibility
+            // fallback for users whose existing key is itself a management key.
             let management_key = account
                 .management_key
                 .as_deref()
                 .or_else(|| account.api_keys.first().map(|key| key.value.as_str()));
+            let key_names = management_key
+                .and_then(|key| self.read_key_names(key).ok())
+                .unwrap_or_default();
+
+            let mut api_keys = Vec::new();
+            for api_key in &account.api_keys {
+                let cache_id = key_cache_id(&account.id, &api_key.id);
+                let cached = self.key_cache.get(&cache_id).cloned().unwrap_or_default();
+                let live = match self.read_key(&api_key.value, sampled_at) {
+                    Ok(limits) => limits.spending.map(|spending| {
+                        (
+                            resolve_key_display_name(limits.account_name.as_deref(), &key_names),
+                            spending,
+                        )
+                    }),
+                    Err(error) => {
+                        crate::logger::info(format!(
+                            "OpenRouter account {} API key {} failed: {error:#}",
+                            account.name, api_key.id
+                        ));
+                        None
+                    }
+                };
+
+                let masked_key = collapse_api_key(&api_key.value)
+                    .or_else(|| cached.masked_key.clone());
+
+                let (label, spending, has_live_usage) = match live {
+                    Some((resolved_label, live_spending)) => {
+                        let label = resolved_label.or_else(|| cached.label.clone());
+                        let spending =
+                            merge_key_spending(Some(&live_spending), &cached, sampled_at, true);
+                        (label, spending, true)
+                    }
+                    None => (
+                        cached.label.clone(),
+                        merge_key_spending(None, &cached, sampled_at, false),
+                        false,
+                    ),
+                };
+
+                self.key_cache.insert(
+                    cache_id,
+                    CachedOpenRouterKey {
+                        label: label.clone(),
+                        masked_key: masked_key.clone(),
+                        limit_microusd: spending.limit_microusd,
+                        reset_kind: spending.reset_kind.clone(),
+                    },
+                );
+
+                api_keys.push(OpenRouterApiKeySnapshot {
+                    id: api_key.id.clone(),
+                    label,
+                    masked_key,
+                    spending,
+                    has_live_usage,
+                });
+            }
+
             let balance =
                 management_key.and_then(|key| self.read_account_balance(key).ok().flatten());
             if api_keys.is_empty() && balance.is_none() {
@@ -218,11 +291,26 @@ struct KeyEnvelope {
 
 #[derive(Debug, Deserialize)]
 struct KeyData {
+    /// Masked key fingerprint from `/key`, e.g. `sk-or-v1-abc...123`.
     label: Option<String>,
+    /// Human-readable key name when the endpoint provides it.
+    #[serde(default)]
+    name: Option<String>,
     usage: Option<f64>,
     limit: Option<f64>,
     limit_remaining: Option<f64>,
     limit_reset: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct KeysDirectoryEnvelope {
+    data: Vec<KeyDirectoryEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct KeyDirectoryEntry {
+    label: Option<String>,
+    name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -324,7 +412,9 @@ fn rate_limits_from_accounts(
 fn aggregate_spending(accounts: &[OpenRouterAccountSnapshot]) -> Option<SpendingSummary> {
     let spendings = accounts
         .iter()
-        .flat_map(|account| account.api_keys.iter().map(|key| &key.spending))
+        .flat_map(|account| account.api_keys.iter())
+        .filter(|key| key.has_live_usage)
+        .map(|key| &key.spending)
         .collect::<Vec<_>>();
     let used_microusd = spendings.iter().fold(0_u64, |total, spending| {
         total.saturating_add(spending.used_microusd)
@@ -399,13 +489,7 @@ fn parse_key_response(raw: &str, sampled_at: DateTime<Utc>) -> Result<RateLimits
         })
     });
     let derived_remaining = remaining.or_else(|| limit.map(|limit| limit.saturating_sub(usage)));
-    let account_name = envelope
-        .data
-        .label
-        .as_deref()
-        .map(str::trim)
-        .filter(|label| !label.is_empty())
-        .map(str::to_owned);
+    let account_name = key_identity_from_response(&envelope.data);
 
     Ok(RateLimits {
         primary: LimitWindow {
@@ -435,6 +519,144 @@ fn parse_credits_response(raw: &str) -> Result<u64> {
     let total_usage = money_value(Some(envelope.data.total_usage), "total_usage")?
         .context("OpenRouter credits response is missing total_usage")?;
     Ok(total_credits.saturating_sub(total_usage))
+}
+
+fn load_key_cache_from_store() -> HashMap<String, CachedOpenRouterKey> {
+    let Ok(Some(previous)) =
+        crate::store::with_store(|store| store.load_limits(crate::settings::ProviderKind::OpenRouter))
+    else {
+        return HashMap::new();
+    };
+    let mut cache = HashMap::new();
+    for account in previous.openrouter_accounts {
+        for key in account.api_keys {
+            cache.insert(
+                key_cache_id(&account.id, &key.id),
+                CachedOpenRouterKey {
+                    label: key.label,
+                    masked_key: key.masked_key,
+                    limit_microusd: key.spending.limit_microusd,
+                    reset_kind: key.spending.reset_kind,
+                },
+            );
+        }
+    }
+    cache
+}
+
+fn key_cache_id(account_id: &str, key_id: &str) -> String {
+    format!("{account_id}\0{key_id}")
+}
+
+/// Merge live `/key` spending with cached metadata. Usage is taken from the
+/// live response only — never from cache.
+fn merge_key_spending(
+    live: Option<&SpendingSummary>,
+    cached: &CachedOpenRouterKey,
+    sampled_at: DateTime<Utc>,
+    has_live_usage: bool,
+) -> SpendingSummary {
+    let used_microusd = if has_live_usage {
+        live.map(|spending| spending.used_microusd).unwrap_or(0)
+    } else {
+        0
+    };
+    let limit_microusd = live
+        .and_then(|spending| spending.limit_microusd)
+        .or(cached.limit_microusd);
+    let reset_kind = live
+        .and_then(|spending| spending.reset_kind.clone())
+        .or_else(|| cached.reset_kind.clone());
+    let bounds = reset_kind
+        .as_deref()
+        .and_then(|kind| period_bounds(sampled_at, kind));
+    let remaining_microusd = if has_live_usage {
+        live.and_then(|spending| spending.remaining_microusd)
+            .or_else(|| limit_microusd.map(|limit| limit.saturating_sub(used_microusd)))
+    } else {
+        None
+    };
+    SpendingSummary {
+        used_microusd,
+        limit_microusd,
+        remaining_microusd,
+        resets_at: bounds
+            .map(|(_, reset, _)| reset)
+            .or_else(|| live.and_then(|spending| spending.resets_at)),
+        reset_kind,
+        balance_microusd: None,
+    }
+}
+
+fn parse_keys_directory(raw: &str) -> Result<HashMap<String, String>> {
+    let envelope: KeysDirectoryEnvelope =
+        serde_json::from_str(raw).context("parse OpenRouter API key directory")?;
+    let mut names = HashMap::new();
+    for entry in envelope.data {
+        let Some(label) = cleaned_key_text(entry.label.as_deref()) else {
+            continue;
+        };
+        let Some(name) = cleaned_key_text(entry.name.as_deref()) else {
+            continue;
+        };
+        names.insert(label, name);
+    }
+    Ok(names)
+}
+
+fn key_identity_from_response(data: &KeyData) -> Option<String> {
+    cleaned_key_text(data.name.as_deref()).or_else(|| cleaned_key_text(data.label.as_deref()))
+}
+
+fn resolve_key_display_name(
+    identity: Option<&str>,
+    key_names: &HashMap<String, String>,
+) -> Option<String> {
+    let identity = cleaned_key_text(identity)?;
+    if let Some(name) = key_names.get(&identity) {
+        return Some(name.clone());
+    }
+    if is_masked_openrouter_key_label(&identity) {
+        return None;
+    }
+    Some(identity)
+}
+
+fn cleaned_key_text(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn is_masked_openrouter_key_label(label: &str) -> bool {
+    let trimmed = label.trim();
+    trimmed.starts_with("sk-or-") && trimmed.contains("...")
+}
+
+/// Collapses a secret into a short fingerprint. Never returns the full key.
+fn collapse_api_key(value: &str) -> Option<String> {
+    let key = value.trim();
+    if key.is_empty() {
+        return None;
+    }
+    const HEAD: usize = 10;
+    const TAIL: usize = 3;
+    if key.len() <= HEAD + TAIL + 3 {
+        // Too short to safely show ends — obscure everything after a tiny prefix.
+        let prefix: String = key.chars().take(4).collect();
+        return Some(format!("{prefix}..."));
+    }
+    let head: String = key.chars().take(HEAD).collect();
+    let tail: String = key
+        .chars()
+        .rev()
+        .take(TAIL)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    Some(format!("{head}...{tail}"))
 }
 
 fn money_value(value: Option<f64>, field: &str) -> Result<Option<u64>> {
@@ -542,6 +764,71 @@ mod tests {
     }
 
     #[test]
+    fn collapses_api_keys_without_exposing_the_secret() {
+        let collapsed =
+            collapse_api_key("sk-or-v1-a35b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1").unwrap();
+        assert!(collapsed.contains("..."));
+        assert!(!collapsed.contains("a35b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1"));
+        assert!(collapsed.starts_with("sk-or-v1-a"));
+        assert!(collapse_api_key("   ").is_none());
+    }
+
+    #[test]
+    fn merge_keeps_cached_metadata_but_never_cached_usage() {
+        let sampled_at = Utc.with_ymd_and_hms(2026, 8, 19, 12, 30, 0).unwrap();
+        let cached = CachedOpenRouterKey {
+            label: Some("Test Key".into()),
+            limit_microusd: Some(1_000_000),
+            reset_kind: Some("daily".into()),
+        };
+        let live = SpendingSummary {
+            used_microusd: 250_000,
+            limit_microusd: Some(1_000_000),
+            remaining_microusd: Some(750_000),
+            resets_at: None,
+            reset_kind: Some("daily".into()),
+            balance_microusd: None,
+        };
+        let merged = merge_key_spending(Some(&live), &cached, sampled_at, true);
+        assert_eq!(merged.used_microusd, 250_000);
+        assert_eq!(merged.limit_microusd, Some(1_000_000));
+        assert!(merged.resets_at.is_some());
+
+        let placeholder = merge_key_spending(None, &cached, sampled_at, false);
+        assert_eq!(placeholder.used_microusd, 0);
+        assert_eq!(placeholder.limit_microusd, Some(1_000_000));
+        assert!(placeholder.resets_at.is_some());
+    }
+
+    #[test]
+    fn prefers_key_name_over_masked_label() {
+        let limits = sample(
+            r#"{"data":{"name":"Leon Flame","label":"sk-or-v1-a35...26a","usage":0,"limit":1}}"#,
+        );
+        assert_eq!(limits.account_name.as_deref(), Some("Leon Flame"));
+    }
+
+    #[test]
+    fn resolves_display_names_from_management_directory() {
+        let names = parse_keys_directory(
+            r#"{"data":[{"label":"sk-or-v1-a35...26a","name":"Leon Flame"},{"label":"sk-or-v1-bbb...ccc","name":""}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_key_display_name(Some("sk-or-v1-a35...26a"), &names).as_deref(),
+            Some("Leon Flame")
+        );
+        assert_eq!(
+            resolve_key_display_name(Some("sk-or-v1-unknown...zzz"), &names),
+            None
+        );
+        assert_eq!(
+            resolve_key_display_name(Some("Build key"), &HashMap::new()).as_deref(),
+            Some("Build key")
+        );
+    }
+
+    #[test]
     fn parses_account_credit_balance_from_total_credits_and_usage() {
         let balance =
             parse_credits_response(r#"{"data":{"total_credits":100.5,"total_usage":25.75}}"#)
@@ -576,7 +863,9 @@ mod tests {
                     api_keys: vec![OpenRouterApiKeySnapshot {
                         id: "key-one".into(),
                         label: first.account_name,
+                        masked_key: Some("sk-or-v1-aaa...111".into()),
                         spending: first.spending.unwrap(),
+                        has_live_usage: true,
                     }],
                     balance_microusd: Some(50_000_000),
                 },
@@ -586,7 +875,9 @@ mod tests {
                     api_keys: vec![OpenRouterApiKeySnapshot {
                         id: "key-two".into(),
                         label: second.account_name,
+                        masked_key: Some("sk-or-v1-bbb...222".into()),
                         spending: second.spending.unwrap(),
+                        has_live_usage: true,
                     }],
                     balance_microusd: Some(75_000_000),
                 },
