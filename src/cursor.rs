@@ -292,6 +292,7 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
     let output_column = column(OUTPUT)?;
 
     let mut daily = BTreeMap::<NaiveDate, TokenUsage>::new();
+    let mut model_daily = BTreeMap::<(String, NaiveDate), TokenUsage>::new();
     for row in reader.records() {
         let Ok(row) = row else { continue };
         let Some(date) = row.get(date_column).and_then(cursor_export_date) else {
@@ -321,18 +322,39 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
         // Export rows are aggregates rather than individual requests; retain a
         // row count so the common usage card can still report activity.
         usage.requests = usage.requests.saturating_add(1);
-        usage.estimated_cost_microusd =
-            usage
-                .estimated_cost_microusd
-                .saturating_add(cursor_estimated_cost_microusd(
-                    model,
-                    cache_write,
-                    input,
-                    cache_read,
-                    output,
-                ));
+        let row_cost = cursor_estimated_cost_microusd(model, cache_write, input, cache_read, output);
+        usage.estimated_cost_microusd = usage.estimated_cost_microusd.saturating_add(row_cost);
         usage.priced_requests = usage.priced_requests.saturating_add(1);
+
+        let row_usage = TokenUsage {
+            input_tokens: input
+                .saturating_add(cache_write)
+                .saturating_add(cache_read),
+            cached_input_tokens: cache_read,
+            output_tokens: output,
+            requests: 1,
+            estimated_cost_microusd: row_cost,
+            priced_requests: 1,
+            ..Default::default()
+        };
+        let model_key = if model.trim().is_empty() {
+            "unknown".to_string()
+        } else {
+            model.trim().to_ascii_lowercase()
+        };
+        model_daily
+            .entry((model_key, date))
+            .or_default()
+            .add(&row_usage);
     }
+
+    let model_rows = model_daily
+        .into_iter()
+        .map(|((model, date), usage)| (model, date, usage))
+        .collect::<Vec<_>>();
+    store::with_store(|store| {
+        store.replace_usage_model_daily(ProviderKind::Cursor, &model_rows)
+    })?;
 
     let daily = daily
         .into_iter()

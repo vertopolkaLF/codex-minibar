@@ -13,10 +13,8 @@ use serde_json::Value;
 use crate::settings::ProviderKind;
 use crate::store;
 
-// Version 3 adds the per-session model and service tier needed to calculate
-// model-aware Codex API-value estimates. Old aggregates have no such context,
-// so they must be rebuilt from the original rollout logs once.
-pub(crate) const CODEX_CACHE_VERSION: u8 = 3;
+// Version 4 adds per-model daily aggregates for the Usage overview tab.
+pub(crate) const CODEX_CACHE_VERSION: u8 = 4;
 // Claude's cache format did not change. Keep it independent so a Codex
 // pricing migration cannot hide an otherwise healthy Claude usage card.
 pub(crate) const CLAUDE_CACHE_VERSION: u8 = 1;
@@ -35,6 +33,9 @@ pub struct TokenUsage {
     pub estimated_cost_microusd: u64,
     #[serde(default)]
     pub priced_requests: u64,
+    /// Estimated savings from cached prompt tokens versus uncached input rates.
+    #[serde(default)]
+    pub cache_savings_microusd: u64,
 }
 
 impl TokenUsage {
@@ -61,6 +62,9 @@ impl TokenUsage {
             .estimated_cost_microusd
             .saturating_add(other.estimated_cost_microusd);
         self.priced_requests = self.priced_requests.saturating_add(other.priced_requests);
+        self.cache_savings_microusd = self
+            .cache_savings_microusd
+            .saturating_add(other.cache_savings_microusd);
     }
 
     /// Aggregates externally sourced usage that follows the same token shape
@@ -121,20 +125,36 @@ pub(crate) struct CachedSessionFile {
     pub(crate) current_model: Option<String>,
     #[serde(default)]
     pub(crate) fast_service_tier: bool,
+    /// Per-model daily aggregates for the Usage overview breakdown.
+    #[serde(default)]
+    pub(crate) model_daily: BTreeMap<String, Vec<DailyTokenUsage>>,
 }
 
 impl CachedSessionFile {
-    fn add(&mut self, date: NaiveDate, usage: TokenUsage) {
+    fn add(&mut self, date: NaiveDate, usage: TokenUsage, model: Option<&str>) {
         if let Some(entry) = self.daily.iter_mut().find(|entry| entry.date == date) {
             entry.usage.add(&usage);
         } else {
-            self.daily.push(DailyTokenUsage { date, usage });
+            self.daily.push(DailyTokenUsage { date, usage: usage.clone() });
+        }
+        if let Some(model) = model.map(str::trim).filter(|name| !name.is_empty()) {
+            let model_key = model.to_ascii_lowercase();
+            let entries = self.model_daily.entry(model_key).or_default();
+            if let Some(entry) = entries.iter_mut().find(|entry| entry.date == date) {
+                entry.usage.add(&usage);
+            } else {
+                entries.push(DailyTokenUsage { date, usage });
+            }
         }
     }
 
     fn prune_before(&mut self, oldest: NaiveDate) {
         self.daily.retain(|entry| entry.date >= oldest);
         self.daily.sort_by_key(|entry| entry.date);
+        for entries in self.model_daily.values_mut() {
+            entries.retain(|entry| entry.date >= oldest);
+            entries.sort_by_key(|entry| entry.date);
+        }
     }
 }
 
@@ -219,6 +239,7 @@ fn scan_file_delta(path: &Path, cached: &mut CachedSessionFile) -> Result<()> {
         // Codex rewrote/truncated a session log. Its old aggregate is invalid.
         cached.offset = 0;
         cached.daily.clear();
+        cached.model_daily.clear();
     }
     if file_size == cached.offset {
         return Ok(());
@@ -249,7 +270,20 @@ fn scan_file_delta(path: &Path, cached: &mut CachedSessionFile) -> Result<()> {
         };
         update_codex_rollout_context(line, cached);
         if let Some((timestamp, usage)) = token_usage_from_line(line, cached) {
-            cached.add(timestamp.with_timezone(&Local).date_naive(), usage);
+            let model = serde_json::from_str::<Value>(line)
+                .ok()
+                .and_then(|event| {
+                    event
+                        .pointer("/payload/info/last_token_usage/model")
+                        .or_else(|| event.pointer("/payload/info/last_token_usage/model_name"))
+                        .and_then(Value::as_str)
+                        .or(cached.current_model.as_deref())
+                });
+            cached.add(
+                timestamp.with_timezone(&Local).date_naive(),
+                usage,
+                model,
+            );
         }
     }
     cached.offset = offset;
@@ -375,6 +409,11 @@ fn token_usage_from_line(
         output_tokens,
         cached.fast_service_tier,
     );
+    let cache_savings_microusd = codex_cache_savings_microusd(
+        model,
+        cached_input_tokens,
+        cached.fast_service_tier,
+    );
     Some((
         timestamp,
         TokenUsage {
@@ -384,7 +423,7 @@ fn token_usage_from_line(
             requests: 1,
             estimated_cost_microusd: estimated_cost_microusd.unwrap_or_default(),
             priced_requests: u64::from(estimated_cost_microusd.is_some()),
-            ..Default::default()
+            cache_savings_microusd,
         },
     ))
 }
@@ -493,6 +532,30 @@ fn codex_estimated_cost_microusd(
     Some((cost * 1_000_000.0).round().clamp(0.0, u64::MAX as f64) as u64)
 }
 
+fn codex_cache_savings_microusd(
+    model: Option<&str>,
+    cached_input: u64,
+    fast_service_tier: bool,
+) -> u64 {
+    if cached_input == 0 {
+        return 0;
+    }
+    let model = model.unwrap_or("gpt-5.3-codex").trim().to_ascii_lowercase();
+    let base = codex_price_model_name(&model);
+    let rates = match base {
+        "gpt-5" | "gpt-5-codex" | "gpt-5.1" | "gpt-5.1-codex" => (1.25, 0.125, 2.0),
+        "gpt-5.2" | "gpt-5.2-codex" | "gpt-5.3" | "gpt-5.3-codex" => (1.75, 0.175, 2.0),
+        "gpt-5.4" => (2.5, 0.25, 2.0),
+        "gpt-5.4-pro" => (30.0, 30.0, 2.0),
+        "gpt-5.5" => (5.0, 0.5, 2.5),
+        "gpt-5.5-pro" => (30.0, 30.0, 2.5),
+        _ => (1.75, 0.175, 2.0),
+    };
+    let multiplier = if fast_service_tier { rates.2 } else { 1.0 };
+    let savings = cached_input as f64 * (rates.0 - rates.1) * multiplier / 1_000_000.0;
+    (savings * 1_000_000.0).round().clamp(0.0, u64::MAX as f64) as u64
+}
+
 /// Dates in rollout names are model revisions, not new rates. Retain the
 /// meaningful `-codex` and `-pro` suffixes while stripping only a final date.
 fn codex_price_model_name(model: &str) -> &str {
@@ -516,6 +579,8 @@ pub(crate) struct CachedClaudeUsageEntry {
     pub(crate) is_sidechain: bool,
     pub(crate) has_speed: bool,
     pub(crate) usage: TokenUsage,
+    #[serde(default)]
+    pub(crate) model: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -561,7 +626,14 @@ pub fn refresh_claude_usage_statistics(history_days: u16) -> Result<UsageStatist
     let stats = statistics_from_claude_cache(&cache, history_days);
     store::with_store(|store| {
         store.save_claude_cache(&cache)?;
-        store.replace_usage_daily(ProviderKind::Claude, &stats.daily)
+        store.replace_usage_daily(ProviderKind::Claude, &stats.daily)?;
+        store.replace_usage_model_daily(
+            ProviderKind::Claude,
+            &aggregate_claude_model_daily(&cache)
+                .into_iter()
+                .map(|(date, model, usage)| (model, date, usage))
+                .collect::<Vec<_>>(),
+        )
     })?;
     Ok(stats)
 }
@@ -580,9 +652,27 @@ pub(crate) fn statistics_from_claude_cache(
     statistics_from_daily(&days, history_days)
 }
 
+pub(crate) fn aggregate_claude_model_daily(
+    cache: &ClaudeUsageCache,
+) -> Vec<(NaiveDate, String, TokenUsage)> {
+    let mut merged = BTreeMap::<(String, NaiveDate), TokenUsage>::new();
+    for entry in deduplicate_claude_entries(cache) {
+        let model = entry
+            .model
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        let date = entry.timestamp.with_timezone(&Local).date_naive();
+        merged.entry((model, date)).or_default().add(&entry.usage);
+    }
+    merged
+        .into_iter()
+        .map(|((model, date), usage)| (date, model, usage))
+        .collect()
+}
+
 /// Mirrors Claude Code/OpenUsage's duplicate preference: the original message
 /// beats a sidechain replay; otherwise retain the richer/larger record.
-fn deduplicate_claude_entries(cache: &ClaudeUsageCache) -> Vec<CachedClaudeUsageEntry> {
+pub(crate) fn deduplicate_claude_entries(cache: &ClaudeUsageCache) -> Vec<CachedClaudeUsageEntry> {
     let mut entries: Vec<CachedClaudeUsageEntry> = Vec::new();
     let mut exact = HashMap::<(String, Option<String>), usize>::new();
     let mut by_message = HashMap::<String, Vec<usize>>::new();
@@ -713,6 +803,7 @@ fn claude_usage_from_line(line: &[u8]) -> Option<CachedClaudeUsageEntry> {
                 cache_write_1h,
             )
         })?;
+    let cache_savings_microusd = claude_cache_savings_microusd(model, cache_read);
     let usage = TokenUsage {
         input_tokens,
         cached_input_tokens: cache_read.min(input_tokens),
@@ -720,6 +811,7 @@ fn claude_usage_from_line(line: &[u8]) -> Option<CachedClaudeUsageEntry> {
         requests: 1,
         estimated_cost_microusd: (cost * 1_000_000.0).round().clamp(0.0, u64::MAX as f64) as u64,
         priced_requests: 1,
+        cache_savings_microusd,
     };
     Some(CachedClaudeUsageEntry {
         timestamp,
@@ -734,6 +826,7 @@ fn claude_usage_from_line(line: &[u8]) -> Option<CachedClaudeUsageEntry> {
             .unwrap_or(false),
         has_speed: usage_json.get("speed").is_some(),
         usage,
+        model: model.map(str::to_owned),
     })
 }
 
@@ -767,6 +860,24 @@ fn claude_estimated_cost_usd(
             + cache_write_1h as f64 * input_rate * 2.0)
             / 1_000_000.0,
     )
+}
+
+fn claude_cache_savings_microusd(model: Option<&str>, cache_read: u64) -> u64 {
+    if cache_read == 0 {
+        return 0;
+    }
+    let model = model?.to_ascii_lowercase();
+    let input_rate = if model.contains("opus") {
+        15.0
+    } else if model.contains("sonnet") {
+        3.0
+    } else if model.contains("haiku") {
+        1.0
+    } else {
+        return 0;
+    };
+    let savings = cache_read as f64 * input_rate * 0.9 / 1_000_000.0;
+    (savings * 1_000_000.0).round().clamp(0.0, u64::MAX as f64) as u64
 }
 
 fn collect_claude_session_files() -> Vec<PathBuf> {
