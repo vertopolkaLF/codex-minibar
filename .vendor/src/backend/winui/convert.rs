@@ -31,7 +31,7 @@ impl windows_core::RuntimeName for XamlReader {
     const NAME: &'static str = "Microsoft.UI.Xaml.Markup.XamlReader";
 }
 
-fn svg_icon(path: &str, color: &str) -> Result<bindings::IconElement> {
+pub(super) fn svg_icon(path: &str, color: &str) -> Result<bindings::IconElement> {
     let xaml = format!(
         r#"<PathIcon xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Data="{path}" Foreground="{color}" />"#
     );

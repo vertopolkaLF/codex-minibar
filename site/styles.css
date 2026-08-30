@@ -212,11 +212,7 @@ ul {
   position: absolute;
   width: 0.9rem;
   height: 0.9rem;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.8;
+  fill: currentColor;
   transition: transform 320ms var(--ease), opacity 240ms ease;
 }
 
@@ -386,8 +382,8 @@ html.is-theme-transitioning .theme-toggle-icon {
   margin-right: 0.3em;
   vertical-align: -0.05em;
   background-color: currentColor;
-  -webkit-mask: url("assets/ph-arrow-up-right.svg") no-repeat center / contain;
-  mask: url("assets/ph-arrow-up-right.svg") no-repeat center / contain;
+  -webkit-mask: url("assets/ph-arrow-up-right-fill.svg") no-repeat center / contain;
+  mask: url("assets/ph-arrow-up-right-fill.svg") no-repeat center / contain;
 }
 
 .link:hover {

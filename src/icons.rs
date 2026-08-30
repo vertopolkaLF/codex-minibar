@@ -1,4 +1,4 @@
-//! Icon geometry from Iconify (Fluent for chrome actions, Phosphor for settings nav).
+//! Filled icon geometry from Iconify (Fluent for chrome actions, Phosphor for settings nav).
 
 use windows_reactor::*;
 
@@ -10,20 +10,21 @@ pub struct IconGeom {
 
 pub fn geom(name: &str) -> IconGeom {
     let svg = match name {
-        // Fluent glyphs preferred when a Phosphor alias meant the same action.
+        // Fluent filled glyphs are used for popup chrome and compact controls.
         "fluent-refresh" | "arrows-clockwise" | "popup-refresh" => {
-            include_str!("../assets/icons/fluent-arrow-sync-20-regular.svg")
+            include_str!("../assets/icons/fluent-arrow-sync-20-filled.svg")
         }
         "fluent-settings" | "sliders" | "popup-settings" => {
-            include_str!("../assets/icons/fluent-settings-20-regular.svg")
+            include_str!("../assets/icons/fluent-settings-20-filled.svg")
         }
         "fluent-power" | "power" | "popup-power" => {
-            include_str!("../assets/icons/fluent-power-20-regular.svg")
+            include_str!("../assets/icons/fluent-power-20-filled.svg")
         }
         "fluent-delete" => include_str!("../assets/icons/fluent-delete-20-regular.svg"),
         "fluent-drag" => {
-            include_str!("../assets/icons/fluent-re-order-dots-vertical-16-regular.svg")
+            include_str!("../assets/icons/fluent-re-order-dots-vertical-16-filled.svg")
         }
+        "fluent-folder" => include_str!("../assets/icons/fluent-folder-16-filled.svg"),
         "fluent-chart" => {
             include_str!("../assets/icons/fluent-data-histogram-24-filled.svg")
         }
@@ -38,23 +39,23 @@ pub fn geom(name: &str) -> IconGeom {
         "openrouter" => include_str!("../assets/icons/openrouter-iconify.svg"),
         // Reserved for the ChatGPT provider when it is added to ProviderKind.
         "chatgpt" => include_str!("../assets/icons/chatgpt-iconify.svg"),
-        "chat-centered-text" => include_str!("../assets/icons/ph-chat-centered-text.svg"),
-        "download-simple" => include_str!("../assets/icons/ph-download-simple.svg"),
-        "plugs-connected" => include_str!("../assets/icons/ph-plugs-connected.svg"),
-        "clock" => include_str!("../assets/icons/ph-clock.svg"),
-        "scroll" => include_str!("../assets/icons/ph-scroll.svg"),
+        "chat-centered-text" => include_str!("../assets/icons/ph-chat-centered-text-fill.svg"),
+        "download-simple" => include_str!("../assets/icons/ph-download-simple-fill.svg"),
+        "plugs-connected" => include_str!("../assets/icons/ph-plugs-connected-fill.svg"),
+        "clock" => include_str!("../assets/icons/ph-clock-fill.svg"),
+        "scroll" => include_str!("../assets/icons/ph-scroll-fill.svg"),
         "caret-down" => include_str!("../assets/icons/ph-caret-down.svg"),
         "caret-right" => include_str!("../assets/icons/ph-caret-right.svg"),
         "check-circle-fill" => include_str!("../assets/icons/ph-check-circle-fill.svg"),
-        "github-logo" => include_str!("../assets/icons/ph-github-logo.svg"),
-        "package" => include_str!("../assets/icons/ph-package.svg"),
-        "flag" => include_str!("../assets/icons/ph-flag.svg"),
-        "at" => include_str!("../assets/icons/ph-at.svg"),
-        "house" => include_str!("../assets/icons/ph-house.svg"),
-        "squares-four" => include_str!("../assets/icons/ph-squares-four.svg"),
-        "paint-brush" => include_str!("../assets/icons/ph-paint-brush.svg"),
-        "bell" => include_str!("../assets/icons/ph-bell.svg"),
-        "info" => include_str!("../assets/icons/ph-info.svg"),
+        "github-logo" => include_str!("../assets/icons/ph-github-logo-fill.svg"),
+        "package" => include_str!("../assets/icons/ph-package-fill.svg"),
+        "flag" => include_str!("../assets/icons/ph-flag-fill.svg"),
+        "at" => include_str!("../assets/icons/ph-at-fill.svg"),
+        "house" => include_str!("../assets/icons/ph-house-fill.svg"),
+        "squares-four" => include_str!("../assets/icons/ph-squares-four-fill.svg"),
+        "paint-brush" => include_str!("../assets/icons/ph-paint-brush-fill.svg"),
+        "bell" => include_str!("../assets/icons/ph-bell-fill.svg"),
+        "info" => include_str!("../assets/icons/ph-info-fill.svg"),
         _ => panic!("unknown icon: {name}"),
     };
     let canvas = viewbox_size(svg);
@@ -99,7 +100,7 @@ pub fn element(name: &'static str, size: f64, color: Color) -> Element {
                 (color.r, color.g, color.b),
             )
         {
-            eprintln!("Could not install Phosphor icon: {error:?}");
+            eprintln!("Could not install filled icon: {error:?}");
         }
     }));
     host.unmounted = Some(Callback::new(move |native: Option<_>| {
@@ -109,7 +110,7 @@ pub fn element(name: &'static str, size: f64, color: Color) -> Element {
     }));
     let icon: Element = host.into();
     icon.with_key(format!(
-        "ph-{name}-{:02X}{:02X}{:02X}",
+        "filled-{name}-{:02X}{:02X}{:02X}",
         color.r, color.g, color.b
     ))
 }
@@ -125,7 +126,7 @@ pub fn accent_element(name: &'static str, size: f64) -> Element {
             && let Err(error) =
                 crate::acrylic::install_accent_icon_into(native, icon.path, icon.canvas)
         {
-            eprintln!("Could not install accent Phosphor icon: {error:?}");
+            eprintln!("Could not install accent filled icon: {error:?}");
         }
     }));
     host.unmounted = Some(Callback::new(move |native: Option<_>| {
@@ -134,5 +135,5 @@ pub fn accent_element(name: &'static str, size: f64) -> Element {
         }
     }));
     let icon: Element = host.into();
-    icon.with_key(format!("ph-{name}-accent"))
+    icon.with_key(format!("filled-{name}-accent"))
 }

@@ -26,6 +26,7 @@ pub struct Button {
     pub is_enabled: bool,
     pub style: ButtonStyle,
     pub icon: Option<Symbol>,
+    pub icon_path: Option<(String, String)>,
     pub on_click: Option<Callback<()>>,
     pub flyout: Option<FlyoutDef>,
     pub menu_flyout_items: Option<Vec<MenuItemDef>>,
@@ -54,6 +55,15 @@ impl Widget for Button {
         ));
         if let Some(v) = self.icon {
             out.push(Binding::Prop(Prop::Icon, PropValue::I32(v.0)));
+        }
+        if let Some((path, color)) = &self.icon_path {
+            out.push(Binding::Prop(
+                Prop::IconPath,
+                PropValue::PathIcon {
+                    path: path.clone(),
+                    color: color.clone(),
+                },
+            ));
         }
         if let Some(v) = &self.menu_flyout_items {
             out.push(Binding::Prop(
@@ -121,6 +131,12 @@ impl Button {
 
     pub fn icon(mut self, sym: Symbol) -> Self {
         self.icon = Some(sym);
+        self
+    }
+
+    /// Use arbitrary vector geometry as the button icon.
+    pub fn icon_path(mut self, data: impl Into<String>, color: impl Into<String>) -> Self {
+        self.icon_path = Some((data.into(), color.into()));
         self
     }
 

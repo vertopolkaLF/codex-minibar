@@ -162,6 +162,7 @@ pub enum Prop {
     HorizontalScrollBarVisibility,
     HorizontalScrollMode,
     Icon,
+    IconPath,
     ImageSource,
     Initials,
     Interval,
@@ -277,6 +278,10 @@ pub enum PropValue {
     Thickness(Thickness),
     CornerRadii(CornerRadii),
     Color(Color),
+    PathIcon {
+        path: String,
+        color: String,
+    },
     Unset,
     GridLengths(Vec<GridLength>),
     SurfaceImageSource(SurfaceImageSource),

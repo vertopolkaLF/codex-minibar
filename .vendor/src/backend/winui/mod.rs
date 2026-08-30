@@ -1345,6 +1345,54 @@ impl Backend for WinUIBackend {
                     }
                     Ok(())
                 }
+                (Prop::IconPath, PropValue::PathIcon { path, color }, Handle::Button(b)) => {
+                    let icon_elem = svg_icon(path, color)?;
+                    let cc = b.cast::<bindings::IContentControl>()?;
+                    // Keep text content intact when a path icon is paired with a label,
+                    // matching the behavior of the built-in Symbol icon path above.
+                    if let Ok(existing) = cc.Content()
+                        && let Ok(panel) = existing.cast::<bindings::IPanel>()
+                    {
+                        let children = panel.Children()?;
+                        if children.Size()? >= 2 {
+                            children.SetAt(0, &icon_elem.cast::<bindings::UIElement>()?)?;
+                            return Ok(());
+                        }
+                    }
+                    let use_icon_only = if let Ok(existing) = cc.Content() {
+                        existing.cast::<bindings::IIconElement>().is_ok()
+                            || existing
+                                .cast::<bindings::ITextBlock>()
+                                .ok()
+                                .and_then(|tb| tb.Text().ok())
+                                .is_some_and(|text| text.is_empty())
+                    } else {
+                        true
+                    };
+                    if use_icon_only {
+                        cc.SetContent(&icon_elem)?;
+                    } else {
+                        let panel = bindings::StackPanel::new()?;
+                        panel.SetOrientation(Orientation::Horizontal)?;
+                        panel.SetSpacing(8.0)?;
+                        let children = panel.cast::<bindings::IPanel>()?.Children()?;
+                        children.Append(&icon_elem.cast::<bindings::UIElement>()?)?;
+                        if let Ok(existing) = cc.Content()
+                            && let Ok(ui) = existing.cast::<bindings::UIElement>()
+                        {
+                            children.Append(&ui)?;
+                        }
+                        cc.SetContent(&panel)?;
+                    }
+                    Ok(())
+                }
+                (Prop::IconPath, PropValue::Unset, Handle::Button(_)) => {
+                    // The regular Content binding is responsible for restoring
+                    // the button label (or an empty icon-only content block).
+                    // Do not clear it here: doing so would erase a label when
+                    // an icon path is removed during reconciliation.
+                    Ok(())
+                }
                 (Prop::Value, PropValue::Str(s), Handle::TextBox(t)) => {
                     if t.Text().ok().as_deref() == Some(s.as_str()) {
                         return Ok(());

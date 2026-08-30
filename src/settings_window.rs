@@ -2809,7 +2809,7 @@ fn provider_page_content(
                     .height(32.0)
                     .grid_column(0),
                 Button::new("")
-                    .icon(Symbol::Folder)
+                    .icon_path(crate::icons::data("fluent-folder"), "#E6E6E6")
                     .width(44.0)
                     .height(32.0)
                     .on_click(move || match choose_provider_folder() {
@@ -2841,7 +2841,7 @@ fn provider_page_content(
                     .height(32.0)
                     .grid_column(0),
                 Button::new("")
-                    .icon(Symbol::Folder)
+                    .icon_path(crate::icons::data("fluent-folder"), "#E6E6E6")
                     .width(44.0)
                     .height(32.0)
                     .on_click(move || match choose_provider_folder() {
@@ -2873,7 +2873,7 @@ fn provider_page_content(
                     .height(32.0)
                     .grid_column(0),
                 Button::new("")
-                    .icon(Symbol::Folder)
+                    .icon_path(crate::icons::data("fluent-folder"), "#E6E6E6")
                     .width(44.0)
                     .height(32.0)
                     .on_click(move || match choose_provider_folder() {
