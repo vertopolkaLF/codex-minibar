@@ -27,7 +27,7 @@ use crate::usage::{
 const SCHEMA_VERSION: i64 = 1;
 const CODEX_CACHE_VERSION: u8 = 5;
 const CLAUDE_CACHE_VERSION: u8 = 2;
-const CURSOR_USAGE_VERSION: u8 = 2;
+const CURSOR_USAGE_VERSION: u8 = 3;
 const CACHE_RETENTION_DAYS: i64 = 365;
 
 static SHARED: OnceLock<Arc<Mutex<ProviderStore>>> = OnceLock::new();

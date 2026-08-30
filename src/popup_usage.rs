@@ -325,26 +325,32 @@ fn usage_chart_card(
         set_hover,
     );
     let tooltip = hover
-        .and_then(|index| filled.get(index))
-        .map(|point| chart_tooltip(point, providers, metric, hourly));
+        .and_then(|index| filled.get(index).map(|point| (index, point)))
+        .map(|(index, point)| {
+            chart_tooltip(point, providers, metric, hourly)
+                .margin(Thickness {
+                    left: 48.0,
+                    top: 8.0,
+                    right: 8.0,
+                    bottom: 0.0,
+                })
+                .relative_align_left()
+                .relative_align_top()
+                .with_key(format!(
+                    "usage-tip-{}-{}-{}-{}",
+                    metric as i32,
+                    hourly,
+                    index,
+                    point.at.to_rfc3339()
+                ))
+        });
 
     vstack((
         body_strong(title),
         relative_panel({
-            let mut layers = vec![chart];
+            let mut layers = vec![chart.with_key("usage-chart-plot")];
             if let Some(tooltip) = tooltip {
-                layers.push(
-                    tooltip
-                        .margin(Thickness {
-                            left: 48.0,
-                            top: 8.0,
-                            right: 8.0,
-                            bottom: 0.0,
-                        })
-                        .relative_align_left()
-                        .relative_align_top()
-                        .into(),
-                );
+                layers.push(tooltip);
             }
             layers
         }),
@@ -519,10 +525,11 @@ fn usage_chart_hit_targets(
     set_hover: SetState<Option<usize>>,
 ) -> Vec<Element> {
     let step = plot_width / count.max(1) as f64;
-    let mut layers = Vec::with_capacity(count + 1);
+    let mut layers = Vec::with_capacity(count * 2);
     for index in 0..count {
         let set_hover_enter = set_hover.clone();
         let set_hover_exit = set_hover.clone();
+        let selected = hover == Some(index);
         layers.push(
             border(Element::Empty)
                 .width(step.max(4.0))
@@ -538,25 +545,26 @@ fn usage_chart_hit_targets(
                 .relative_align_top()
                 .on_pointer_entered(move |_| set_hover_enter.call(Some(index)))
                 .on_pointer_exited(move || set_hover_exit.call(None))
+                .with_key(format!("usage-hit-{index}"))
                 .into(),
         );
-        if hover == Some(index) {
-            layers.push(
-                border(Element::Empty)
-                    .width(1.0)
-                    .height(CHART_PLOT_HEIGHT)
-                    .background(ThemeRef::CardStroke)
-                    .margin(Thickness {
-                        left: step * index as f64 + step / 2.0,
-                        top: 0.0,
-                        right: 0.0,
-                        bottom: 0.0,
-                    })
-                    .relative_align_left()
-                    .relative_align_top()
-                    .into(),
-            );
-        }
+        layers.push(
+            border(Element::Empty)
+                .width(1.0)
+                .height(CHART_PLOT_HEIGHT)
+                .background(ThemeRef::CardStroke)
+                .opacity(if selected { 1.0 } else { 0.0 })
+                .margin(Thickness {
+                    left: step * index as f64 + step / 2.0,
+                    top: 0.0,
+                    right: 0.0,
+                    bottom: 0.0,
+                })
+                .relative_align_left()
+                .relative_align_top()
+                .with_key(format!("usage-hairline-{index}"))
+                .into(),
+        );
     }
     layers
 }
@@ -564,18 +572,20 @@ fn usage_chart_hit_targets(
 fn usage_y_axis(max_value: u64, metric: OverviewMetric) -> Element {
     let ticks = [max_value, max_value * 2 / 3, max_value / 3, 0];
     let plot_h = CHART_PLOT_HEIGHT - CHART_PAD_TOP - CHART_PAD_BOTTOM;
+    const LABEL_HEIGHT: f64 = 16.0;
     relative_panel(
         ticks
             .into_iter()
             .enumerate()
             .map(|(index, value)| {
                 let y = CHART_PAD_TOP + plot_h * index as f64 / 3.0;
+                let top = (y - LABEL_HEIGHT / 2.0).clamp(0.0, CHART_PLOT_HEIGHT - LABEL_HEIGHT);
                 caption(format_axis_value(value, metric))
                     .foreground(ThemeRef::TertiaryText)
                     .horizontal_alignment(HorizontalAlignment::Right)
                     .margin(Thickness {
                         left: 0.0,
-                        top: (y - 7.0).max(0.0),
+                        top,
                         right: 0.0,
                         bottom: 0.0,
                     })
@@ -878,72 +888,79 @@ fn chart_tooltip(
     metric: OverviewMetric,
     hourly: bool,
 ) -> Element {
-    let rows: Vec<Element> = providers
-        .iter()
-        .filter_map(|entry| {
-            let value = point.by_provider.get(&entry.provider).copied()?;
-            Some(
-                grid((
-                    crate::icons::element(
-                        provider_registry::descriptor(entry.provider).icon,
-                        14.0,
-                        provider_brand_color(entry.provider, ColorScheme::Dark, true),
-                    ),
-                    caption(provider_registry::descriptor(entry.provider).display_name)
-                        .grid_column(1),
-                    caption(match metric {
-                        OverviewMetric::Cost => format_spend(value),
-                        OverviewMetric::Tokens => format_token_count(value),
-                    })
+    let mut total_cents = 0_u64;
+    let mut total_tokens = 0_u64;
+    let mut rows: Vec<Element> = Vec::new();
+    for entry in providers {
+        let Some(value) = point.by_provider.get(&entry.provider).copied() else {
+            continue;
+        };
+        let amount = match metric {
+            OverviewMetric::Cost => {
+                let cents = spend_display_cents(value);
+                total_cents = total_cents.saturating_add(cents);
+                format_spend_cents(cents)
+            }
+            OverviewMetric::Tokens => {
+                total_tokens = total_tokens.saturating_add(value);
+                format_token_count(value)
+            }
+        };
+        rows.push(
+            grid((
+                crate::icons::element(
+                    provider_registry::descriptor(entry.provider).icon,
+                    14.0,
+                    provider_brand_color(entry.provider, ColorScheme::Dark, true),
+                ),
+                caption(provider_registry::descriptor(entry.provider).display_name)
+                    .grid_column(1),
+                caption(amount)
                     .horizontal_alignment(HorizontalAlignment::Right)
                     .grid_column(2),
-                ))
-                .columns([
-                    GridLength::Auto,
-                    GridLength::Star(1.0),
-                    GridLength::Auto,
-                ])
-                .into(),
-            )
-        })
-        .collect();
+            ))
+            .columns([
+                GridLength::Auto,
+                GridLength::Star(1.0),
+                GridLength::Auto,
+            ])
+            .with_key(format!("usage-tip-row-{}", entry.provider.id()))
+            .into(),
+        );
+    }
 
-    border(
-        vstack({
-            let mut items = vec![
-                body_strong(if hourly {
-                    format!(
-                        "{} · {}",
-                        point.date.format("%b %-d"),
-                        crate::usage_overview::format_hour_label(point.at)
-                    )
-                } else {
-                    point.date.format("%b %-d").to_string()
-                })
-                .into(),
-            ];
-            items.extend(rows);
-            items.push(
-                caption(format!(
-                    "Total {}",
-                    match metric {
-                        OverviewMetric::Cost => format_spend(point.total),
-                        OverviewMetric::Tokens => format_token_count(point.total),
-                    }
-                ))
-                .foreground(ThemeRef::SecondaryText)
-                .into(),
-            );
-            items
-        })
-        .spacing(4.0),
-    )
-    .padding(Thickness::uniform(8.0))
-    .corner_radius(6.0)
-    .background(ThemeRef::CardBackground)
-    .border_thickness(Thickness::uniform(1.0))
-    .border_brush(ThemeRef::CardStroke)
-    .into()
+    let mut items = vec![body_strong(if hourly {
+        format!(
+            "{} · {}",
+            point.date.format("%b %-d"),
+            crate::usage_overview::format_hour_label(point.at)
+        )
+    } else {
+        point.date.format("%b %-d").to_string()
+    })
+    .with_key("usage-tip-title")
+    .into()];
+    items.extend(rows);
+    items.push(
+        caption(format!(
+            "Total {}",
+            match metric {
+                OverviewMetric::Cost => format_spend_cents(total_cents),
+                OverviewMetric::Tokens => format_token_count(total_tokens),
+            }
+        ))
+        .foreground(ThemeRef::SecondaryText)
+        .with_key("usage-tip-total")
+        .into(),
+    );
+
+    border(vstack(items).spacing(4.0).with_key("usage-tip-rows"))
+        .padding(Thickness::uniform(8.0))
+        .corner_radius(6.0)
+        .background(ThemeRef::CardBackground)
+        .border_thickness(Thickness::uniform(1.0))
+        .border_brush(ThemeRef::CardStroke)
+        .into()
 }
 
 fn usage_totals_card(totals: &TokenUsage) -> Element {
@@ -1125,13 +1142,24 @@ fn provider_brand_color(
 }
 
 fn format_spend(microusd: u64) -> String {
-    let value = microusd as f64 / 1_000_000.0;
-    if value >= 1_000_000.0 {
-        format!("${:.1}M", value / 1_000_000.0)
-    } else if value >= 1_000.0 {
-        format!("${:.1}K", value / 1_000.0)
+    format_spend_dollars((microusd as f64 / 1_000_000.0).round() as u64)
+}
+
+fn spend_display_cents(microusd: u64) -> u64 {
+    (microusd as f64 / 10_000.0).round().clamp(0.0, u64::MAX as f64) as u64
+}
+
+fn format_spend_cents(cents: u64) -> String {
+    format_spend_dollars(((cents as f64) / 100.0).round() as u64)
+}
+
+fn format_spend_dollars(dollars: u64) -> String {
+    if dollars >= 1_000_000 {
+        format!("${}M", dollars / 1_000_000)
+    } else if dollars >= 1_000 {
+        format!("${}K", dollars / 1_000)
     } else {
-        format!("${value:.2}")
+        format!("${dollars}")
     }
 }
 

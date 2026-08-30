@@ -14,7 +14,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveDate, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveDate, NaiveDateTime, Utc};
 use rusqlite::{Connection, OpenFlags};
 use serde_json::{Value, json};
 
@@ -32,7 +32,7 @@ const CURSOR_CLIENT_ID: &str = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB";
 const ACCESS_TOKEN_KEY: &str = "cursorAuth/accessToken";
 const REFRESH_TOKEN_KEY: &str = "cursorAuth/refreshToken";
 const USAGE_EXPORT_PATH: &str = "/api/dashboard/export-usage-events-csv";
-const USAGE_CACHE_VERSION: u8 = 2;
+const USAGE_CACHE_VERSION: u8 = 3;
 const USAGE_CACHE_TTL: ChronoDuration = ChronoDuration::minutes(10);
 
 /// Detect the Cursor desktop application from its local installation or its
@@ -194,6 +194,11 @@ impl CursorClient {
             if Utc::now() - fetched_at >= USAGE_CACHE_TTL {
                 return Ok(None);
             }
+            let start = crate::usage::truncate_local_hour(Local::now() - ChronoDuration::hours(47));
+            let end = crate::usage::truncate_local_hour(Local::now());
+            if store.load_usage_hourly(ProviderKind::Cursor, start, end)?.is_empty() {
+                return Ok(None);
+            }
             store
                 .load_usage_daily(ProviderKind::Cursor, history_days)
                 .map(Some)
@@ -293,9 +298,10 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
 
     let mut daily = BTreeMap::<NaiveDate, TokenUsage>::new();
     let mut model_daily = BTreeMap::<(String, NaiveDate), TokenUsage>::new();
+    let mut hourly = BTreeMap::<DateTime<Local>, TokenUsage>::new();
     for row in reader.records() {
         let Ok(row) = row else { continue };
-        let Some(date) = row.get(date_column).and_then(cursor_export_date) else {
+        let Some((date, timestamp)) = row.get(date_column).and_then(cursor_export_timestamp) else {
             continue;
         };
         let model = row.get(model_column).unwrap_or_default();
@@ -346,14 +352,25 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
             .entry((model_key, date))
             .or_default()
             .add_public(&row_usage);
+        if let Some(timestamp) = timestamp {
+            hourly
+                .entry(crate::usage::truncate_local_hour(timestamp))
+                .or_default()
+                .add_public(&row_usage);
+        }
     }
 
     let model_rows = model_daily
         .into_iter()
         .map(|((model, date), usage)| (model, date, usage))
         .collect::<Vec<_>>();
+    let hourly_rows = hourly.into_iter().collect::<Vec<_>>();
     store::with_store(|store| {
-        store.replace_usage_model_daily(ProviderKind::Cursor, &model_rows)
+        store.replace_usage_model_daily(ProviderKind::Cursor, &model_rows)?;
+        if !hourly_rows.is_empty() {
+            store.replace_usage_hourly(ProviderKind::Cursor, &hourly_rows)?;
+        }
+        Ok(())
     })?;
 
     let daily = daily
@@ -401,11 +418,20 @@ fn cursor_estimated_cost_microusd(
     (cost * 1_000_000.0).round().clamp(0.0, u64::MAX as f64) as u64
 }
 
-fn cursor_export_date(value: &str) -> Option<NaiveDate> {
-    DateTime::parse_from_rfc3339(value)
-        .ok()
-        .map(|date| date.with_timezone(&Local).date_naive())
-        .or_else(|| NaiveDate::parse_from_str(value.get(..10)?, "%Y-%m-%d").ok())
+fn cursor_export_timestamp(value: &str) -> Option<(NaiveDate, Option<DateTime<Local>>)> {
+    let value = value.trim();
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(value) {
+        let local = parsed.with_timezone(&Local);
+        return Some((local.date_naive(), Some(local)));
+    }
+    for format in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S%.f"] {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(value, format) {
+            let local = naive.and_local_timezone(Local).single()?;
+            return Some((local.date_naive(), Some(local)));
+        }
+    }
+    let date = NaiveDate::parse_from_str(value.get(..10)?, "%Y-%m-%d").ok()?;
+    Some((date, None))
 }
 
 fn cursor_export_tokens(value: &str) -> Option<u64> {
@@ -573,6 +599,7 @@ fn number(value: Option<&Value>) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Timelike;
 
     #[test]
     fn maps_cursor_auto_and_api_percentages_and_cycle() {
@@ -610,6 +637,12 @@ mod tests {
         assert_eq!(statistics.today.cached_input_tokens, 30);
         assert_eq!(statistics.today.output_tokens, 40);
         assert_eq!(statistics.today.total_tokens(), 100);
+        assert_eq!(
+            cursor_export_timestamp(&format!("{date} 12:00:00"))
+                .and_then(|(_, timestamp)| timestamp)
+                .map(|timestamp| timestamp.hour()),
+            Some(12)
+        );
     }
 
     #[test]
