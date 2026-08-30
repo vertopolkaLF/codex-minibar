@@ -819,11 +819,10 @@ fn usage_chart_hit_targets(
     set_hover: SetState<Option<usize>>,
 ) -> Vec<Element> {
     let step = plot_width / count.max(1) as f64;
-    let mut layers = Vec::with_capacity(count * 2);
+    let mut layers = Vec::with_capacity(count + 1);
     for index in 0..count {
         let set_hover_enter = set_hover.clone();
         let set_hover_exit = set_hover.clone();
-        let selected = hover == Some(index);
         layers.push(
             border(Element::Empty)
                 .width(step.max(4.0))
@@ -842,12 +841,14 @@ fn usage_chart_hit_targets(
                 .with_key(format!("usage-hit-{index}"))
                 .into(),
         );
-        layers.push(
+    }
+    if let Some(index) = hover {
+        layers.insert(
+            0,
             border(Element::Empty)
                 .width(1.0)
                 .height(CHART_PLOT_HEIGHT)
-                .background(ThemeRef::CardStroke)
-                .opacity(if selected { 1.0 } else { 0.0 })
+                .background(ThemeRef::PrimaryText)
                 .margin(Thickness {
                     left: step * index as f64 + step / 2.0,
                     top: 0.0,
@@ -856,7 +857,7 @@ fn usage_chart_hit_targets(
                 })
                 .relative_align_left()
                 .relative_align_top()
-                .with_key(format!("usage-hairline-{index}"))
+                .with_key("usage-hover-rule")
                 .into(),
         );
     }
