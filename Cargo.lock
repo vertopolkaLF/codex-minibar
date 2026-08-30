@@ -193,7 +193,7 @@ dependencies = [
 
 [[package]]
 name = "codex-minibar"
-version = "0.3.11"
+version = "0.4.0"
 dependencies = [
  "aes-gcm",
  "anyhow",

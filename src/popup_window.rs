@@ -940,6 +940,91 @@ fn with_widget_drop_target(
         .into()
 }
 
+#[derive(Clone)]
+struct OpenRouterPopupActions {
+    settings_tx: Sender<Settings>,
+    hovered_action: Option<String>,
+    set_hovered_action: SetState<Option<String>>,
+    now: DateTime<Utc>,
+}
+
+fn remove_openrouter_api_key(account_id: String, key_id: String, settings_tx: Sender<Settings>) {
+    if let Err(error) = crate::openrouter::save_account_api_key(&account_id, &key_id, None) {
+        notifications::show("OpenRouter key not removed", &format!("{error:#}"));
+        return;
+    }
+    crate::settings_window::persist_update(settings_tx, move |settings| {
+        let mut accounts = crate::openrouter::accounts_for_settings(settings);
+        let Some(account) = accounts
+            .iter_mut()
+            .find(|account| account.id == account_id)
+        else {
+            return;
+        };
+        let before = account.api_key_ids.len();
+        account.api_key_ids.retain(|id| id != &key_id);
+        if account.api_key_ids.len() == before {
+            return;
+        }
+        settings.openrouter_accounts = accounts;
+        settings.openrouter_credentials_revision =
+            settings.openrouter_credentials_revision.wrapping_add(1);
+    });
+}
+
+fn openrouter_delete_button(
+    id: String,
+    color_scheme: ColorScheme,
+    hovered_action: &Option<String>,
+    set_hovered_action: SetState<Option<String>>,
+    on_click: impl IntoUnitCallback,
+) -> Element {
+    let hovered = hovered_action.as_deref() == Some(id.as_str());
+    let set_on_enter = set_hovered_action.clone();
+    let set_on_exit = set_hovered_action;
+    let button_id = id.clone();
+    let idle_color = popup_chrome_icon_color(color_scheme, false);
+    let hover_background: Element = border(Element::Empty)
+        .background(ThemeRef::SubtleFill)
+        .opacity(if hovered { 1.0 } else { 0.0 })
+        .corner_radius(4.0)
+        .relative_align_left()
+        .relative_align_right()
+        .relative_align_top()
+        .relative_align_bottom()
+        .into();
+    // Dual swap-chain hosts with opacity crossfade — never remount on hover.
+    let idle_icon: Element = crate::icons::element("fluent-delete", 14.0, idle_color)
+        .opacity(if hovered { 0.0 } else { 1.0 })
+        .relative_align_h_center()
+        .relative_align_v_center()
+        .into();
+    let accent_icon: Element = crate::icons::accent_element("fluent-delete", 14.0)
+        .opacity(if hovered { 1.0 } else { 0.0 })
+        .relative_align_h_center()
+        .relative_align_v_center()
+        .into();
+    relative_panel(vec![hover_background, idle_icon, accent_icon])
+        .tooltip("Remove key")
+        .width(24.0)
+        .height(24.0)
+        .min_width(24.0)
+        .min_height(24.0)
+        .max_width(24.0)
+        .max_height(24.0)
+        .background(Color::transparent())
+        .on_pointer_entered(move |_: PointerEventInfo| {
+            set_on_enter.call(Some(button_id.clone()));
+        })
+        .on_pointer_exited(move || set_on_exit.call(None))
+        .on_tapped(on_click)
+        .with_key(format!(
+            "{id}-delete-24-14-{:02X}{:02X}{:02X}",
+            idle_color.r, idle_color.g, idle_color.b
+        ))
+        .into()
+}
+
 fn provider_cards(
     provider: ProviderKind,
     is_first: bool,
@@ -951,6 +1036,7 @@ fn provider_cards(
     show_account_name: bool,
     color_scheme: ColorScheme,
     drag_handle: Option<Element>,
+    openrouter_actions: Option<OpenRouterPopupActions>,
 ) -> Vec<Element> {
     let (monthly_label, primary_label, secondary_label) = match provider {
         ProviderKind::Cursor => ("Auto + Composer", "Auto + Composer", "Auto + Composer"),
@@ -1045,6 +1131,12 @@ fn provider_cards(
                         .map(str::to_owned)
                         .unwrap_or_else(|| format!("Key {}", index + 1));
                     let masked = api_key.masked_key.as_deref().unwrap_or("");
+                    let now = openrouter_actions
+                        .as_ref()
+                        .map(|actions| actions.now)
+                        .unwrap_or_else(Utc::now);
+                    let expired = api_key.is_expired(now);
+                    let expired_at = expired.then_some(api_key.expires_at).flatten();
                     if !key_identity.is_empty() {
                         key_identity.push('\u{1f}');
                     }
@@ -1053,6 +1145,27 @@ fn provider_cards(
                     key_identity.push_str(&title);
                     key_identity.push('\u{1e}');
                     key_identity.push_str(masked);
+                    key_identity.push('\u{1e}');
+                    key_identity.push_str(if expired { "expired" } else { "live" });
+                    let on_delete = openrouter_actions.as_ref().map(|actions| {
+                        let account_id = account.id.clone();
+                        let key_id = api_key.id.clone();
+                        let settings_tx = actions.settings_tx.clone();
+                        move || {
+                            remove_openrouter_api_key(
+                                account_id.clone(),
+                                key_id.clone(),
+                                settings_tx.clone(),
+                            );
+                        }
+                    });
+                    let delete_chrome = openrouter_actions.as_ref().map(|actions| {
+                        (
+                            format!("openrouter-delete-{}-{}", account.id, api_key.id),
+                            actions.hovered_action.clone(),
+                            actions.set_hovered_action.clone(),
+                        )
+                    });
                     account_strip.push(
                         spending_card_with_title(
                             title.clone(),
@@ -1061,12 +1174,20 @@ fn provider_cards(
                             api_key.has_live_usage,
                             show_used_percentage,
                             color_scheme,
+                            expired,
+                            expired_at,
+                            on_delete,
+                            delete_chrome,
                         )
                         // Identity includes glyph-like content (title/mask) so a
                         // recycled native card cannot keep a neighbor's text.
                         .with_key(format!(
-                            "{}-api-{}-{}-{}",
-                            account.id, api_key.id, title, masked
+                            "{}-api-{}-{}-{}-{}",
+                            account.id,
+                            api_key.id,
+                            title,
+                            masked,
+                            if expired { "expired" } else { "live" }
                         )),
                     );
                 }
@@ -1178,7 +1299,18 @@ fn spending_card(
     show_used_percentage: bool,
     color_scheme: ColorScheme,
 ) -> Element {
-    spending_card_with_title("SPENDING", None, spending, true, show_used_percentage, color_scheme)
+    spending_card_with_title(
+        "SPENDING",
+        None,
+        spending,
+        true,
+        show_used_percentage,
+        color_scheme,
+        false,
+        None,
+        None::<fn()>,
+        None,
+    )
 }
 
 fn spending_card_with_title(
@@ -1188,49 +1320,96 @@ fn spending_card_with_title(
     has_live_usage: bool,
     show_used_percentage: bool,
     color_scheme: ColorScheme,
+    expired: bool,
+    expired_at: Option<DateTime<Utc>>,
+    on_delete: Option<impl IntoUnitCallback>,
+    delete_chrome: Option<(String, Option<String>, SetState<Option<String>>)>,
 ) -> Element {
     let title = title.into().to_uppercase();
     let mut right_side: Vec<Element> = Vec::new();
-    if has_live_usage {
-        let used = format_usd(spending.used_microusd as f64 / 1_000_000.0);
-        let amount = spending.limit_microusd.map_or_else(
-            || used.clone(),
-            |limit| format!("{used} / {}", format_usd(limit as f64 / 1_000_000.0)),
+    if expired {
+        let expired_label = expired_at.map_or_else(
+            || "expired".into(),
+            |at| format!("expired at {}", at.with_timezone(&Local).format("%H:%M")),
         );
+        let mut expired_row: Vec<Element> = vec![text_block(expired_label)
+            .foreground(ThemeRef::TertiaryText)
+            .vertical_alignment(VerticalAlignment::Center)
+            .into()];
+        if let (Some(on_delete), Some((button_id, hovered_action, set_hovered_action))) =
+            (on_delete, delete_chrome)
+        {
+            expired_row.push(openrouter_delete_button(
+                button_id,
+                color_scheme,
+                &hovered_action,
+                set_hovered_action,
+                on_delete,
+            ));
+        }
         right_side.push(
-            text_block(amount)
-                .font_weight(600)
-                .foreground(ThemeRef::Accent)
+            hstack(expired_row)
+                .spacing(8.0)
                 .horizontal_alignment(HorizontalAlignment::Right)
+                .vertical_alignment(VerticalAlignment::Center)
                 .into(),
         );
     } else {
-        // Unknown usage — never show a bare limit that looks like spend.
-        let amount = spending.limit_microusd.map_or_else(
-            || "?.??".into(),
-            |limit| format!("?.?? / {}", format_usd(limit as f64 / 1_000_000.0)),
-        );
-        right_side.push(
-            text_block(amount)
-                .font_weight(600)
-                .foreground(ThemeRef::Accent)
+        if has_live_usage {
+            let used = format_usd(spending.used_microusd as f64 / 1_000_000.0);
+            let amount = spending.limit_microusd.map_or_else(
+                || used.clone(),
+                |limit| format!("{used} / {}", format_usd(limit as f64 / 1_000_000.0)),
+            );
+            right_side.push(
+                hstack((
+                    text_block("Usage:")
+                        .foreground(ThemeRef::TertiaryText)
+                        .vertical_alignment(VerticalAlignment::Center),
+                    text_block(amount)
+                        .font_weight(600)
+                        .foreground(ThemeRef::Accent)
+                        .vertical_alignment(VerticalAlignment::Center),
+                ))
+                .spacing(6.0)
                 .horizontal_alignment(HorizontalAlignment::Right)
                 .into(),
-        );
-    }
-    if let Some(reset) = spending.resets_at {
-        right_side.push(
-            hstack((
-                text_block("Resets in")
-                    .foreground(ThemeRef::TertiaryText)
-                    .vertical_alignment(VerticalAlignment::Center),
-                text_block(format_reset_in(Some(reset)))
-                    .vertical_alignment(VerticalAlignment::Center),
-            ))
-            .spacing(6.0)
-            .horizontal_alignment(HorizontalAlignment::Right)
-            .into(),
-        );
+            );
+        } else {
+            // Unknown usage — never show a bare limit that looks like spend.
+            let amount = spending.limit_microusd.map_or_else(
+                || "?.??".into(),
+                |limit| format!("?.?? / {}", format_usd(limit as f64 / 1_000_000.0)),
+            );
+            right_side.push(
+                hstack((
+                    text_block("Usage:")
+                        .foreground(ThemeRef::TertiaryText)
+                        .vertical_alignment(VerticalAlignment::Center),
+                    text_block(amount)
+                        .font_weight(600)
+                        .foreground(ThemeRef::Accent)
+                        .vertical_alignment(VerticalAlignment::Center),
+                ))
+                .spacing(6.0)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .into(),
+            );
+        }
+        if let Some(reset) = spending.resets_at {
+            right_side.push(
+                hstack((
+                    text_block("Resets in")
+                        .foreground(ThemeRef::TertiaryText)
+                        .vertical_alignment(VerticalAlignment::Center),
+                    text_block(format_reset_in(Some(reset)))
+                        .vertical_alignment(VerticalAlignment::Center),
+                ))
+                .spacing(6.0)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .into(),
+            );
+        }
     }
 
     let mut title_lines: Vec<Element> = vec![caption(title)
@@ -1265,7 +1444,10 @@ fn spending_card_with_title(
     };
 
     let mut rows: Vec<Element> = vec![header];
-    if let Some(limit) = spending.limit_microusd.filter(|limit| *limit > 0) {
+    // Expired keys keep title/mask only — no spend bar that looks "full".
+    if !expired
+        && let Some(limit) = spending.limit_microusd.filter(|limit| *limit > 0)
+    {
         let used_percent = if has_live_usage {
             ((spending.used_microusd.min(limit) as f64 / limit as f64) * 100.0)
                 .clamp(0.0, 100.0)
@@ -1348,6 +1530,15 @@ fn openrouter_accounts_strip_key(limits: &RateLimits) -> String {
             if let Some(masked) = api_key.masked_key.as_deref() {
                 key.push('@');
                 key.push_str(masked);
+            }
+            if api_key.expires_at.is_some() || api_key.disabled {
+                key.push('#');
+                if let Some(expires_at) = api_key.expires_at {
+                    key.push_str(&expires_at.timestamp().to_string());
+                }
+                if api_key.disabled {
+                    key.push('!');
+                }
             }
         }
     }
@@ -1693,6 +1884,12 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                             ui.show_account_name,
                             color_scheme,
                             handle,
+                            (provider == ProviderKind::OpenRouter).then(|| OpenRouterPopupActions {
+                                settings_tx: settings_tx.clone(),
+                                hovered_action: hovered_action.clone(),
+                                set_hovered_action: set_hovered_action.clone(),
+                                now: Utc::now(),
+                            }),
                         ))
                         .spacing(6.0)
                         .with_key(format!(
@@ -1758,6 +1955,12 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                         ui.show_account_name,
                         color_scheme,
                         None,
+                        (provider == ProviderKind::OpenRouter).then(|| OpenRouterPopupActions {
+                            settings_tx: settings_tx.clone(),
+                            hovered_action: hovered_action.clone(),
+                            set_hovered_action: set_hovered_action.clone(),
+                            now: Utc::now(),
+                        }),
                     ))
                     .spacing(6.0)
                     .with_key(format!(
@@ -4738,6 +4941,7 @@ mod tests {
             true,
             false,
             ColorScheme::Dark,
+            None,
             None,
         );
         // Heading + 5h + weekly + Fable (no separate plan metadata row).

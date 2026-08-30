@@ -61,6 +61,18 @@ pub struct OpenRouterApiKeySnapshot {
     /// has not been fetched yet (or the latest fetch failed).
     #[serde(default = "default_true")]
     pub has_live_usage: bool,
+    /// Absolute expiry from OpenRouter (`expires_at`), when known.
+    #[serde(default)]
+    pub expires_at: Option<DateTime<Utc>>,
+    /// True when OpenRouter reports the key as disabled (including after expiry).
+    #[serde(default)]
+    pub disabled: bool,
+}
+
+impl OpenRouterApiKeySnapshot {
+    pub fn is_expired(&self, now: DateTime<Utc>) -> bool {
+        self.disabled || self.expires_at.is_some_and(|at| at <= now)
+    }
 }
 
 fn default_true() -> bool {

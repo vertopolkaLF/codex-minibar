@@ -53,6 +53,8 @@ struct CachedOpenRouterKey {
     masked_key: Option<String>,
     limit_microusd: Option<u64>,
     reset_kind: Option<String>,
+    expires_at: Option<DateTime<Utc>>,
+    disabled: bool,
 }
 
 impl OpenRouterClient {
@@ -64,7 +66,7 @@ impl OpenRouterClient {
         })
     }
 
-    fn read_key(&self, api_key: &str, sampled_at: DateTime<Utc>) -> Result<RateLimits> {
+    fn read_key(&self, api_key: &str, sampled_at: DateTime<Utc>) -> Result<ParsedOpenRouterKey> {
         let response = self
             .agent
             .get(API_URL)
@@ -98,12 +100,12 @@ impl OpenRouterClient {
         parse_credits_response(&body).map(Some)
     }
 
-    /// Maps masked `label` values from `/key` to human-readable key names.
+    /// Maps masked `label` values from `/key` to directory metadata.
     /// Requires a management key; ordinary inference keys get a quiet empty map.
-    fn read_key_names(&self, api_key: &str) -> Result<HashMap<String, String>> {
+    fn read_key_directory(&self, api_key: &str) -> Result<HashMap<String, DirectoryKeyInfo>> {
         let response = match self
             .agent
-            .get(KEYS_API_URL)
+            .get(&format!("{KEYS_API_URL}?include_disabled=true"))
             .set("Authorization", &format!("Bearer {api_key}"))
             .set("Accept", "application/json")
             .call()
@@ -182,10 +184,10 @@ impl LimitProvider for OpenRouterClient {
             // key directory. Never fall back to an ordinary API key here — that
             // can resolve names from a different OpenRouter org and make a key
             // look like it belongs under the wrong account heading.
-            let key_names = account
+            let key_directory = account
                 .management_key
                 .as_deref()
-                .and_then(|key| self.read_key_names(key).ok())
+                .and_then(|key| self.read_key_directory(key).ok())
                 .unwrap_or_default();
             // A management key is preferred for account-level credits. Keep the
             // first API key as a compatibility fallback for users whose existing
@@ -199,13 +201,15 @@ impl LimitProvider for OpenRouterClient {
             for api_key in &account.api_keys {
                 let cache_id = key_cache_id(&account.id, &api_key.id);
                 let cached = self.key_cache.get(&cache_id).cloned().unwrap_or_default();
+                let masked_key = collapse_api_key(&api_key.value)
+                    .or_else(|| cached.masked_key.clone());
+                // OpenRouter's own label mask (sk-or-v1-abc...xyz) often uses a
+                // different head/tail length than our local collapse — match the
+                // full secret against directory labels instead of exact strings.
+                let directory =
+                    find_directory_entry(&api_key.value, masked_key.as_deref(), &key_directory);
                 let live = match self.read_key(&api_key.value, sampled_at) {
-                    Ok(limits) => limits.spending.map(|spending| {
-                        (
-                            resolve_key_display_name(limits.account_name.as_deref(), &key_names),
-                            spending,
-                        )
-                    }),
+                    Ok(parsed) => Some(parsed),
                     Err(error) => {
                         crate::logger::info(format!(
                             "OpenRouter account {} API key {} failed: {error:#}",
@@ -215,30 +219,59 @@ impl LimitProvider for OpenRouterClient {
                     }
                 };
 
-                let masked_key = collapse_api_key(&api_key.value)
-                    .or_else(|| cached.masked_key.clone());
-
-                let (label, spending, has_live_usage) = match live {
-                    Some((resolved_label, live_spending)) => {
+                let (label, spending, has_live_usage, expires_at, disabled) = match live {
+                    Some(parsed) => {
                         // Prefer the directory name for this key's own mask when
                         // /key only returned a masked label. Never borrow another
                         // key's cached title — cache is already account+key keyed.
-                        let label = resolved_label
-                            .or_else(|| {
-                                resolve_key_display_name(masked_key.as_deref(), &key_names)
-                            })
-                            .or_else(|| cached.label.clone());
-                        let spending =
-                            merge_key_spending(Some(&live_spending), &cached, sampled_at, true);
-                        (label, spending, true)
+                        let label = resolve_key_display_name(
+                            parsed.account_name.as_deref(),
+                            &key_directory,
+                        )
+                        .or_else(|| {
+                            directory
+                                .as_ref()
+                                .and_then(|info| info.name.clone())
+                        })
+                        .or_else(|| {
+                            resolve_key_display_name(masked_key.as_deref(), &key_directory)
+                        })
+                        .or_else(|| cached.label.clone());
+                        let expires_at = parsed
+                            .expires_at
+                            .or_else(|| directory.as_ref().and_then(|info| info.expires_at))
+                            .or(cached.expires_at);
+                        let disabled = directory
+                            .as_ref()
+                            .map(|info| info.disabled)
+                            .unwrap_or(cached.disabled);
+                        let spending = merge_key_spending(
+                            Some(&parsed.spending),
+                            &cached,
+                            sampled_at,
+                            true,
+                        );
+                        (label, spending, true, expires_at, disabled)
                     }
-                    None => (
-                        cached.label.clone().or_else(|| {
-                            resolve_key_display_name(masked_key.as_deref(), &key_names)
-                        }),
-                        merge_key_spending(None, &cached, sampled_at, false),
-                        false,
-                    ),
+                    None => {
+                        let label = cached.label.clone().or_else(|| {
+                            directory
+                                .as_ref()
+                                .and_then(|info| info.name.clone())
+                        }).or_else(|| {
+                            resolve_key_display_name(masked_key.as_deref(), &key_directory)
+                        });
+                        let expires_at = directory
+                            .as_ref()
+                            .and_then(|info| info.expires_at)
+                            .or(cached.expires_at);
+                        let disabled = directory
+                            .as_ref()
+                            .map(|info| info.disabled)
+                            .unwrap_or(cached.disabled);
+                        let spending = merge_key_spending(None, &cached, sampled_at, false);
+                        (label, spending, false, expires_at, disabled)
+                    }
                 };
 
                 self.key_cache.insert(
@@ -248,6 +281,8 @@ impl LimitProvider for OpenRouterClient {
                         masked_key: masked_key.clone(),
                         limit_microusd: spending.limit_microusd,
                         reset_kind: spending.reset_kind.clone(),
+                        expires_at,
+                        disabled,
                     },
                 );
 
@@ -257,6 +292,8 @@ impl LimitProvider for OpenRouterClient {
                     masked_key,
                     spending,
                     has_live_usage,
+                    expires_at,
+                    disabled,
                 });
             }
 
@@ -299,6 +336,13 @@ impl Activator for OpenRouterActivator {
     }
 }
 
+#[derive(Debug)]
+struct ParsedOpenRouterKey {
+    account_name: Option<String>,
+    spending: SpendingSummary,
+    expires_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Deserialize)]
 struct KeyEnvelope {
     data: KeyData,
@@ -315,6 +359,9 @@ struct KeyData {
     limit: Option<f64>,
     limit_remaining: Option<f64>,
     limit_reset: Option<String>,
+    /// Absolute expiry timestamp, or null when the key never expires.
+    #[serde(default)]
+    expires_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -326,6 +373,17 @@ struct KeysDirectoryEnvelope {
 struct KeyDirectoryEntry {
     label: Option<String>,
     name: Option<String>,
+    #[serde(default)]
+    expires_at: Option<String>,
+    #[serde(default)]
+    disabled: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+struct DirectoryKeyInfo {
+    name: Option<String>,
+    expires_at: Option<DateTime<Utc>>,
+    disabled: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -479,7 +537,7 @@ where
         .flatten()
 }
 
-fn parse_key_response(raw: &str, sampled_at: DateTime<Utc>) -> Result<RateLimits> {
+fn parse_key_response(raw: &str, sampled_at: DateTime<Utc>) -> Result<ParsedOpenRouterKey> {
     let envelope: KeyEnvelope =
         serde_json::from_str(raw).context("parse OpenRouter API-key response")?;
     let usage = money_value(envelope.data.usage, "usage")?.unwrap_or(0);
@@ -495,34 +553,21 @@ fn parse_key_response(raw: &str, sampled_at: DateTime<Utc>) -> Result<RateLimits
     let bounds = reset_kind
         .as_deref()
         .and_then(|kind| period_bounds(sampled_at, kind));
-    let used_percent = limit.and_then(|limit| {
-        (limit > 0).then(|| {
-            let used = usage.min(limit);
-            ((used as f64 / limit as f64) * 100.0)
-                .round()
-                .clamp(0.0, 100.0) as u8
-        })
-    });
     let derived_remaining = remaining.or_else(|| limit.map(|limit| limit.saturating_sub(usage)));
     let account_name = key_identity_from_response(&envelope.data);
+    let expires_at = parse_optional_timestamp(envelope.data.expires_at.as_deref());
 
-    Ok(RateLimits {
-        primary: LimitWindow {
-            used_percent,
-            resets_at: bounds.map(|(_, reset, _)| reset),
-            duration_minutes: bounds.map(|(_, _, minutes)| minutes),
-        },
-        sampled_at,
+    Ok(ParsedOpenRouterKey {
         account_name,
-        spending: Some(SpendingSummary {
+        spending: SpendingSummary {
             used_microusd: usage,
             limit_microusd: limit,
             remaining_microusd: derived_remaining,
             resets_at: bounds.map(|(_, reset, _)| reset),
             reset_kind,
             balance_microusd: None,
-        }),
-        ..RateLimits::default()
+        },
+        expires_at,
     })
 }
 
@@ -552,6 +597,8 @@ fn load_key_cache_from_store() -> HashMap<String, CachedOpenRouterKey> {
                     masked_key: key.masked_key,
                     limit_microusd: key.spending.limit_microusd,
                     reset_kind: key.spending.reset_kind,
+                    expires_at: key.expires_at,
+                    disabled: key.disabled,
                 },
             );
         }
@@ -603,20 +650,65 @@ fn merge_key_spending(
     }
 }
 
-fn parse_keys_directory(raw: &str) -> Result<HashMap<String, String>> {
+fn parse_keys_directory(raw: &str) -> Result<HashMap<String, DirectoryKeyInfo>> {
     let envelope: KeysDirectoryEnvelope =
         serde_json::from_str(raw).context("parse OpenRouter API key directory")?;
-    let mut names = HashMap::new();
+    let mut keys = HashMap::new();
     for entry in envelope.data {
         let Some(label) = cleaned_key_text(entry.label.as_deref()) else {
             continue;
         };
-        let Some(name) = cleaned_key_text(entry.name.as_deref()) else {
-            continue;
-        };
-        names.insert(label, name);
+        keys.insert(
+            label,
+            DirectoryKeyInfo {
+                name: cleaned_key_text(entry.name.as_deref()),
+                expires_at: parse_optional_timestamp(entry.expires_at.as_deref()),
+                disabled: entry.disabled,
+            },
+        );
     }
-    Ok(names)
+    Ok(keys)
+}
+
+fn parse_optional_timestamp(raw: Option<&str>) -> Option<DateTime<Utc>> {
+    let raw = raw.map(str::trim).filter(|value| !value.is_empty())?;
+    DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
+}
+
+fn find_directory_entry(
+    secret: &str,
+    masked_key: Option<&str>,
+    key_directory: &HashMap<String, DirectoryKeyInfo>,
+) -> Option<DirectoryKeyInfo> {
+    if let Some(mask) = masked_key.map(str::trim).filter(|value| !value.is_empty())
+        && let Some(info) = key_directory.get(mask)
+    {
+        return Some(info.clone());
+    }
+    key_directory
+        .iter()
+        .find(|(label, _)| masked_label_matches_secret(label, secret))
+        .map(|(_, info)| info.clone())
+}
+
+/// OpenRouter masks keys as `sk-or-v1-<head>...<tail>` with variable lengths.
+/// Match against the full secret by head/tail so local collapse differences
+/// cannot hide directory metadata such as `expires_at` / `disabled`.
+fn masked_label_matches_secret(label: &str, secret: &str) -> bool {
+    let label = label.trim();
+    let secret = secret.trim();
+    if secret.is_empty() || !is_masked_openrouter_key_label(label) {
+        return false;
+    }
+    let Some((head, tail)) = label.split_once("...") else {
+        return false;
+    };
+    if head.is_empty() || tail.is_empty() {
+        return false;
+    }
+    secret.starts_with(head) && secret.ends_with(tail)
 }
 
 fn key_identity_from_response(data: &KeyData) -> Option<String> {
@@ -625,16 +717,46 @@ fn key_identity_from_response(data: &KeyData) -> Option<String> {
 
 fn resolve_key_display_name(
     identity: Option<&str>,
-    key_names: &HashMap<String, String>,
+    key_directory: &HashMap<String, DirectoryKeyInfo>,
 ) -> Option<String> {
     let identity = cleaned_key_text(identity)?;
-    if let Some(name) = key_names.get(&identity) {
-        return Some(name.clone());
+    if let Some(name) = key_directory
+        .get(&identity)
+        .and_then(|info| info.name.clone())
+    {
+        return Some(name);
+    }
+    if let Some(name) = key_directory.iter().find_map(|(label, info)| {
+        (label == &identity || masked_labels_compatible(label, &identity))
+            .then(|| info.name.clone())
+            .flatten()
+    }) {
+        return Some(name);
     }
     if is_masked_openrouter_key_label(&identity) {
         return None;
     }
     Some(identity)
+}
+
+/// Two masked labels refer to the same key when one head/tail is a prefix/suffix
+/// of the other (OpenRouter may show more or fewer visible characters than we do).
+fn masked_labels_compatible(left: &str, right: &str) -> bool {
+    let Some((left_head, left_tail)) = left.split_once("...") else {
+        return false;
+    };
+    let Some((right_head, right_tail)) = right.split_once("...") else {
+        return false;
+    };
+    if left_head.is_empty()
+        || left_tail.is_empty()
+        || right_head.is_empty()
+        || right_tail.is_empty()
+    {
+        return false;
+    }
+    (left_head.starts_with(right_head) || right_head.starts_with(left_head))
+        && (left_tail.ends_with(right_tail) || right_tail.ends_with(left_tail))
 }
 
 fn cleaned_key_text(value: Option<&str>) -> Option<String> {
@@ -725,7 +847,28 @@ mod tests {
     use super::*;
 
     fn sample(raw: &str) -> RateLimits {
-        parse_key_response(raw, Utc.with_ymd_and_hms(2026, 8, 19, 12, 30, 0).unwrap()).unwrap()
+        let sampled_at = Utc.with_ymd_and_hms(2026, 8, 19, 12, 30, 0).unwrap();
+        let parsed = parse_key_response(raw, sampled_at).unwrap();
+        let used_percent = parsed.spending.limit_microusd.and_then(|limit| {
+            (limit > 0).then(|| {
+                ((parsed.spending.used_microusd.min(limit) as f64 / limit as f64) * 100.0)
+                    .round()
+                    .clamp(0.0, 100.0) as u8
+            })
+        });
+        RateLimits {
+            primary: LimitWindow {
+                used_percent,
+                resets_at: parsed.spending.resets_at,
+                duration_minutes: parsed.spending.reset_kind.as_deref().and_then(|kind| {
+                    period_bounds(sampled_at, kind).map(|(_, _, minutes)| minutes)
+                }),
+            },
+            sampled_at,
+            account_name: parsed.account_name,
+            spending: Some(parsed.spending),
+            ..RateLimits::default()
+        }
     }
 
     #[test]
@@ -795,6 +938,7 @@ mod tests {
             label: Some("Test Key".into()),
             limit_microusd: Some(1_000_000),
             reset_kind: Some("daily".into()),
+            ..Default::default()
         };
         let live = SpendingSummary {
             used_microusd: 250_000,
@@ -844,6 +988,53 @@ mod tests {
     }
 
     #[test]
+    fn parses_expires_at_from_key_and_directory() {
+        let sampled_at = Utc.with_ymd_and_hms(2026, 8, 19, 12, 30, 0).unwrap();
+        let parsed = parse_key_response(
+            r#"{"data":{"usage":1,"limit":10,"expires_at":"2026-08-19T10:00:00Z"}}"#,
+            sampled_at,
+        )
+        .unwrap();
+        assert_eq!(
+            parsed.expires_at,
+            Some(Utc.with_ymd_and_hms(2026, 8, 19, 10, 0, 0).unwrap())
+        );
+
+        let directory = parse_keys_directory(
+            r#"{"data":[{"label":"sk-or-v1-a35...26a","name":"TEST","expires_at":"2026-08-18T15:30:00Z","disabled":true}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            directory["sk-or-v1-a35...26a"].expires_at,
+            Some(Utc.with_ymd_and_hms(2026, 8, 18, 15, 30, 0).unwrap())
+        );
+        assert!(directory["sk-or-v1-a35...26a"].disabled);
+    }
+
+    #[test]
+    fn matches_directory_labels_against_full_secrets_despite_mask_length() {
+        let secret = "sk-or-v1-c0123456789abcdef0123456789abcdef0123456789abcdef0123456789ef0";
+        let directory = parse_keys_directory(
+            r#"{"data":[{"label":"sk-or-v1-c012...ef0","name":"TEST","expires_at":"2026-01-01T00:00:00Z","disabled":true}]}"#,
+        )
+        .unwrap();
+        // Local collapse uses a shorter head than OpenRouter's label.
+        let local_mask = collapse_api_key(secret);
+        assert_eq!(local_mask.as_deref(), Some("sk-or-v1-c...ef0"));
+        assert!(directory.get("sk-or-v1-c...ef0").is_none());
+
+        let matched = find_directory_entry(secret, local_mask.as_deref(), &directory).unwrap();
+        assert_eq!(matched.name.as_deref(), Some("TEST"));
+        assert!(matched.disabled);
+        assert_eq!(
+            matched.expires_at,
+            Some(Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap())
+        );
+        assert!(masked_label_matches_secret("sk-or-v1-c012...ef0", secret));
+        assert!(!masked_label_matches_secret("sk-or-v1-d012...ef0", secret));
+    }
+
+    #[test]
     fn parses_account_credit_balance_from_total_credits_and_usage() {
         let balance =
             parse_credits_response(r#"{"data":{"total_credits":100.5,"total_usage":25.75}}"#)
@@ -881,6 +1072,8 @@ mod tests {
                         masked_key: Some("sk-or-v1-aaa...111".into()),
                         spending: first.spending.unwrap(),
                         has_live_usage: true,
+                        expires_at: None,
+                        disabled: false,
                     }],
                     balance_microusd: Some(50_000_000),
                 },
@@ -893,6 +1086,8 @@ mod tests {
                         masked_key: Some("sk-or-v1-bbb...222".into()),
                         spending: second.spending.unwrap(),
                         has_live_usage: true,
+                        expires_at: None,
+                        disabled: false,
                     }],
                     balance_microusd: Some(75_000_000),
                 },
@@ -930,6 +1125,8 @@ mod tests {
                         masked_key: Some("sk-or-v1-f12...662".into()),
                         spending: leon_key.spending.unwrap(),
                         has_live_usage: true,
+                        expires_at: None,
+                        disabled: false,
                     }],
                     balance_microusd: None,
                 },
@@ -942,6 +1139,8 @@ mod tests {
                         masked_key: Some("sk-or-v1-a12...1f8".into()),
                         spending: pixel_key.spending.unwrap(),
                         has_live_usage: true,
+                        expires_at: None,
+                        disabled: false,
                     }],
                     balance_microusd: Some(38_960_000),
                 },
