@@ -11,9 +11,17 @@ use windows_reactor::*;
 use crate::theme::{CONTROL_FASTER_ANIMATION, CONTROL_NORMAL_ANIMATION, duration};
 
 const CARD_RADIUS: f64 = 8.0;
-const CARD_PADDING_X: f64 = 16.0;
+/// Shared inset for settings cards and supporting panels.
+pub(crate) const SETTINGS_CARD_PADDING: f64 = 16.0;
+
+/// Create the standard settings-card inset without repeating raw dimensions.
+pub(crate) fn settings_card_padding() -> Thickness {
+    Thickness::uniform(SETTINGS_CARD_PADDING)
+}
+
+const CARD_PADDING_X: f64 = SETTINGS_CARD_PADDING;
 const CARD_ROW_HEIGHT: f64 = 60.0;
-const CARD_CONTENT_PADDING_Y: f64 = 14.0;
+const CARD_CONTENT_PADDING_Y: f64 = SETTINGS_CARD_PADDING;
 /// Keep wrapped labels clear of the status text and toggle switch.
 const CARD_TRAILING_RESERVE: f64 = 148.0;
 /// Space between the toggle and the expander chevron (Windows Settings ≈ 6px).
@@ -372,9 +380,9 @@ pub(crate) fn settings_toggle_expander(
             border(content.into())
                 .padding(Thickness {
                     left: CARD_PADDING_X,
-                    top: 8.0,
+                    top: CARD_CONTENT_PADDING_Y,
                     right: CARD_PADDING_X,
-                    bottom: 8.0,
+                    bottom: CARD_CONTENT_PADDING_Y,
                 })
                 .horizontal_alignment(HorizontalAlignment::Stretch),
         ))
@@ -695,12 +703,7 @@ pub(crate) fn settings_info_card(label: impl Into<String>, value: impl Into<Stri
         .rows([GridLength::Auto])
         .horizontal_alignment(HorizontalAlignment::Stretch),
     )
-    .padding(Thickness {
-        left: CARD_PADDING_X,
-        top: 10.0,
-        right: CARD_PADDING_X,
-        bottom: 10.0,
-    })
+    .padding(settings_card_padding())
     .background(ThemeRef::CardBackground)
     .corner_radius(CARD_RADIUS)
     .border_thickness(Thickness::uniform(1.0))
@@ -733,12 +736,7 @@ pub(crate) fn update_available_nav_card(
         .spacing(10.0)
         .horizontal_alignment(HorizontalAlignment::Stretch),
     )
-    .padding(Thickness {
-        left: 12.0,
-        top: 12.0,
-        right: 12.0,
-        bottom: 12.0,
-    })
+    .padding(settings_card_padding())
     .background(ThemeRef::CardBackground)
     .corner_radius(CARD_RADIUS)
     .border_thickness(Thickness::uniform(1.0))

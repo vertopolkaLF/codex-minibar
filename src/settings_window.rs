@@ -13,10 +13,11 @@ use crate::settings::{
     TrayWidget, TrayWidgetKind,
 };
 use crate::settings_controls::{
-    settings_action_card, settings_brick_row, settings_brick_table_header,
-    settings_content_expander, settings_content_expander_with_trailing, settings_control_card,
-    settings_info_card, settings_section_all_toggle, settings_slider_content, settings_toggle_card,
-    settings_toggle_card_with_description, settings_toggle_expander, update_available_nav_card,
+    SETTINGS_CARD_PADDING, settings_action_card, settings_brick_row, settings_brick_table_header,
+    settings_card_padding, settings_content_expander, settings_content_expander_with_trailing,
+    settings_control_card, settings_info_card, settings_section_all_toggle,
+    settings_slider_content, settings_toggle_card, settings_toggle_card_with_description,
+    settings_toggle_expander, update_available_nav_card,
 };
 use crate::theme::{CONTROL_FAST_ANIMATION, CONTROL_NORMAL_ANIMATION, duration};
 use crate::updater::{
@@ -466,7 +467,7 @@ fn provider_install_status_card(status: &ProviderInstallStatus) -> Element {
                 .font_size(12.0)
                 .opacity(0.72),
         )
-        .padding(Thickness::uniform(8.0))
+        .padding(settings_card_padding())
         .background(ThemeRef::SubtleFill)
         .corner_radius(6.0)
         .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -518,7 +519,7 @@ fn provider_install_status_card(status: &ProviderInstallStatus) -> Element {
         .spacing(8.0)
         .horizontal_alignment(HorizontalAlignment::Stretch),
     )
-    .padding(Thickness::uniform(8.0))
+    .padding(settings_card_padding())
     .background(ThemeRef::SubtleFill)
     .corner_radius(6.0)
     .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -587,7 +588,7 @@ fn opencode_credentials_card(
         .spacing(6.0)
         .horizontal_alignment(HorizontalAlignment::Stretch),
     )
-    .padding(Thickness::uniform(8.0))
+    .padding(settings_card_padding())
     .background(ThemeRef::SubtleFill)
     .corner_radius(6.0)
     .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -609,7 +610,7 @@ fn opencode_detection_card(provider: ProviderKind) -> Element {
         .spacing(2.0)
         .horizontal_alignment(HorizontalAlignment::Stretch),
     )
-    .padding(Thickness::uniform(8.0))
+    .padding(settings_card_padding())
     .background(ThemeRef::SubtleFill)
     .corner_radius(6.0)
     .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -753,7 +754,7 @@ fn openrouter_accounts_card(
                     .spacing(6.0)
                     .horizontal_alignment(HorizontalAlignment::Stretch),
                 )
-                .padding(Thickness::uniform(8.0))
+                .padding(settings_card_padding())
                 .background(ThemeRef::SubtleFill)
                 .corner_radius(6.0)
                 .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -934,7 +935,7 @@ fn openrouter_accounts_card(
                 .spacing(8.0)
                 .horizontal_alignment(HorizontalAlignment::Stretch),
             )
-            .padding(Thickness::uniform(10.0))
+            .padding(settings_card_padding())
             .background(ThemeRef::CardBackground)
             .corner_radius(8.0)
             .border_thickness(Thickness::uniform(1.0))
@@ -977,7 +978,7 @@ fn openrouter_accounts_card(
         .spacing(8.0)
         .horizontal_alignment(HorizontalAlignment::Stretch),
     )
-    .padding(Thickness::uniform(8.0))
+    .padding(settings_card_padding())
     .background(ThemeRef::SubtleFill)
     .corner_radius(6.0)
     .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -3978,10 +3979,10 @@ fn scheduled_activation_cards(
             text_block("Activate limit")
                 .font_size(14.0)
                 .margin(Thickness {
-                    left: 16.0,
-                    top: 14.0,
+                    left: SETTINGS_CARD_PADDING,
+                    top: SETTINGS_CARD_PADDING,
                     right: 82.0,
-                    bottom: 14.0,
+                    bottom: SETTINGS_CARD_PADDING,
                 })
                 .relative_align_left()
                 .relative_align_v_center()
@@ -4099,10 +4100,10 @@ fn scheduled_activation_cards(
         .horizontal_alignment(HorizontalAlignment::Stretch);
         let body = border(action_row)
             .padding(Thickness {
-                left: 16.0,
+                left: SETTINGS_CARD_PADDING,
                 top: 0.0,
-                right: 16.0,
-                bottom: 14.0,
+                right: SETTINGS_CARD_PADDING,
+                bottom: SETTINGS_CARD_PADDING,
             })
             .horizontal_alignment(HorizontalAlignment::Stretch);
         let card_content: Element = vstack((header, body))
@@ -4169,7 +4170,7 @@ fn log_view_card(log_content: &str) -> Element {
                 .font_size(12.0)
                 .wrap(),
             )
-            .padding(Thickness::uniform(12.0)),
+            .padding(settings_card_padding()),
         )
         .horizontal_scroll_bar_visibility(ScrollBarVisibility::Disabled)
         .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
@@ -4458,7 +4459,7 @@ fn about_section_with_header(header: impl Into<Element>, content: impl Into<Elem
             .spacing(14.0)
             .horizontal_alignment(HorizontalAlignment::Stretch),
     )
-    .padding(Thickness::uniform(18.0))
+    .padding(settings_card_padding())
     .background(ThemeRef::CardBackground)
     .corner_radius(14.0)
     .border_thickness(Thickness::uniform(1.0))
@@ -4539,10 +4540,10 @@ fn about_action_card(
         ))
         .spacing(5.0)
         .margin(Thickness {
-            left: 14.0,
-            top: 12.0,
-            right: 14.0,
-            bottom: 12.0,
+            left: SETTINGS_CARD_PADDING,
+            top: SETTINGS_CARD_PADDING,
+            right: SETTINGS_CARD_PADDING,
+            bottom: SETTINGS_CARD_PADDING,
         })
         .relative_align_left()
         .relative_align_top()
@@ -4865,7 +4866,7 @@ fn tray_settings_cards(
                 ))
                 .spacing(10.0),
             )
-            .padding(Thickness::uniform(10.0))
+            .padding(settings_card_padding())
             .background(ThemeRef::LayerFill)
             .corner_radius(6.0)
             .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -5621,12 +5622,7 @@ fn tray_indicator_summary_card(
         .column_spacing(12.0)
         .horizontal_alignment(HorizontalAlignment::Stretch),
     )
-    .padding(Thickness {
-        left: 12.0,
-        top: 12.0,
-        right: 12.0,
-        bottom: 12.0,
-    })
+    .padding(settings_card_padding())
     .background(ThemeRef::CardBackground)
     .corner_radius(8.0)
     .border_thickness(Thickness::uniform(1.0))
