@@ -66,20 +66,6 @@ impl OpenRouterClient {
         })
     }
 
-    fn read_key(&self, api_key: &str, sampled_at: DateTime<Utc>) -> Result<ParsedOpenRouterKey> {
-        let response = self
-            .agent
-            .get(API_URL)
-            .set("Authorization", &format!("Bearer {api_key}"))
-            .set("Accept", "application/json")
-            .call()
-            .context("request OpenRouter API-key usage")?;
-        let body = response
-            .into_string()
-            .context("read OpenRouter API-key response")?;
-        parse_key_response(&body, sampled_at)
-    }
-
     fn read_account_balance(&self, api_key: &str) -> Result<Option<u64>> {
         let response = match self
             .agent
@@ -119,6 +105,23 @@ impl OpenRouterClient {
             .context("read OpenRouter API key directory response")?;
         parse_keys_directory(&body)
     }
+}
+
+fn read_key_with_agent(
+    agent: &ureq::Agent,
+    api_key: &str,
+    sampled_at: DateTime<Utc>,
+) -> Result<ParsedOpenRouterKey> {
+    let response = agent
+        .get(API_URL)
+        .set("Authorization", &format!("Bearer {api_key}"))
+        .set("Accept", "application/json")
+        .call()
+        .context("request OpenRouter API-key usage")?;
+    let body = response
+        .into_string()
+        .context("read OpenRouter API-key response")?;
+    parse_key_response(&body, sampled_at)
 }
 
 pub fn is_installed() -> bool {
@@ -198,7 +201,26 @@ impl LimitProvider for OpenRouterClient {
                 .or_else(|| account.api_keys.first().map(|key| key.value.as_str()));
 
             let mut api_keys = Vec::new();
-            for api_key in &account.api_keys {
+            // Fetch every key concurrently. Sequential 15s timeouts made adding
+            // a third key blank the OpenRouter tab for a minute-plus.
+            let live_results: Vec<Result<ParsedOpenRouterKey>> = std::thread::scope(|scope| {
+                account
+                    .api_keys
+                    .iter()
+                    .map(|api_key| {
+                        let agent = self.agent.clone();
+                        let value = api_key.value.clone();
+                        scope.spawn(move || read_key_with_agent(&agent, &value, sampled_at))
+                    })
+                    .map(|handle| {
+                        handle
+                            .join()
+                            .unwrap_or_else(|_| bail!("OpenRouter API-key worker panicked"))
+                    })
+                    .collect()
+            });
+
+            for (api_key, live) in account.api_keys.iter().zip(live_results) {
                 let cache_id = key_cache_id(&account.id, &api_key.id);
                 let cached = self.key_cache.get(&cache_id).cloned().unwrap_or_default();
                 let masked_key = collapse_api_key(&api_key.value)
@@ -208,7 +230,7 @@ impl LimitProvider for OpenRouterClient {
                 // full secret against directory labels instead of exact strings.
                 let directory =
                     find_directory_entry(&api_key.value, masked_key.as_deref(), &key_directory);
-                let live = match self.read_key(&api_key.value, sampled_at) {
+                let live = match live {
                     Ok(parsed) => Some(parsed),
                     Err(error) => {
                         crate::logger::info(format!(
@@ -228,11 +250,7 @@ impl LimitProvider for OpenRouterClient {
                             parsed.account_name.as_deref(),
                             &key_directory,
                         )
-                        .or_else(|| {
-                            directory
-                                .as_ref()
-                                .and_then(|info| info.name.clone())
-                        })
+                        .or_else(|| directory.as_ref().and_then(|info| info.name.clone()))
                         .or_else(|| {
                             resolve_key_display_name(masked_key.as_deref(), &key_directory)
                         })
@@ -254,13 +272,13 @@ impl LimitProvider for OpenRouterClient {
                         (label, spending, true, expires_at, disabled)
                     }
                     None => {
-                        let label = cached.label.clone().or_else(|| {
-                            directory
-                                .as_ref()
-                                .and_then(|info| info.name.clone())
-                        }).or_else(|| {
-                            resolve_key_display_name(masked_key.as_deref(), &key_directory)
-                        });
+                        let label = cached
+                            .label
+                            .clone()
+                            .or_else(|| directory.as_ref().and_then(|info| info.name.clone()))
+                            .or_else(|| {
+                                resolve_key_display_name(masked_key.as_deref(), &key_directory)
+                            });
                         let expires_at = directory
                             .as_ref()
                             .and_then(|info| info.expires_at)

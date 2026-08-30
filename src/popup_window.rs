@@ -2852,9 +2852,9 @@ fn start_background_bridge(
             ui.opencode_go_credentials_revision = settings.opencode_go_credentials_revision;
             ui.openrouter_enabled = settings.providers.is_enabled(ProviderKind::OpenRouter);
             ui.openrouter_credentials_revision = settings.openrouter_credentials_revision;
-            if openrouter_credentials_changed && let Ok(mut limits) = state.limits.lock() {
-                *limits.get_mut(ProviderKind::OpenRouter) = RateLimits::default();
-            }
+            // Keep the previous OpenRouter snapshot visible while the worker
+            // restarts. Wiping to Default made the tab go blank for the full
+            // sequential /key poll (15s timeout × each key) after adding a key.
             ui.popup_order = settings.popup_order.clone();
             ui.use_colored_provider_icons = settings.use_colored_provider_icons;
             ui.replace_chatgpt_logo_with_codex = settings.replace_chatgpt_logo_with_codex;
