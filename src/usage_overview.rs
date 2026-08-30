@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{Duration, Local, NaiveDate};
+use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
 
 use crate::{
     limits::ProviderLimits,
@@ -66,8 +66,9 @@ pub struct ProviderOverview {
     pub share_tokens: f64,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct DailySeriesPoint {
+    pub at: DateTime<Local>,
     pub date: NaiveDate,
     pub by_provider: BTreeMap<ProviderKind, u64>,
     pub total: u64,
@@ -86,6 +87,7 @@ pub struct BreakdownRow {
 pub struct OverviewSnapshot {
     pub start_date: NaiveDate,
     pub end_date: NaiveDate,
+    pub hourly: bool,
     pub total_sessions: u64,
     pub totals: TokenUsage,
     pub providers: Vec<ProviderOverview>,
@@ -100,13 +102,26 @@ pub fn build_overview_snapshot(
     metric: OverviewMetric,
     range: OverviewRange,
 ) -> OverviewSnapshot {
-    let end_date = Local::now().date_naive();
-    let start_date = end_date - Duration::days(i64::from(range.days().saturating_sub(1)));
-    let load_days = range.days().min(OVERVIEW_MAX_DAYS);
+    let now = Local::now();
+    let hourly = range == OverviewRange::Past24h;
+    let end_hour = crate::usage::truncate_local_hour(now);
+    let start_hour = end_hour - Duration::hours(23);
+    let end_date = now.date_naive();
+    let start_date = if hourly {
+        start_hour.date_naive()
+    } else {
+        end_date - Duration::days(i64::from(range.days().saturating_sub(1)))
+    };
+    let load_days = if hourly {
+        2
+    } else {
+        range.days().min(OVERVIEW_MAX_DAYS)
+    };
 
     let mut snapshot = OverviewSnapshot {
         start_date,
         end_date,
+        hourly,
         ..Default::default()
     };
 
@@ -126,6 +141,7 @@ pub fn build_overview_snapshot(
 
     let store_data = store::with_store(|store| {
         let mut provider_daily = BTreeMap::new();
+        let mut provider_hourly = BTreeMap::new();
         let mut provider_sessions = BTreeMap::new();
         let mut model_rows = BTreeMap::<(ProviderKind, String), TokenUsage>::new();
         for provider in &spend_providers {
@@ -133,6 +149,14 @@ pub fn build_overview_snapshot(
                 .load_usage_daily(*provider, load_days)
                 .unwrap_or_default();
             provider_daily.insert(*provider, statistics.daily);
+            if hourly {
+                provider_hourly.insert(
+                    *provider,
+                    store
+                        .load_usage_hourly(*provider, start_hour, end_hour)
+                        .unwrap_or_default(),
+                );
+            }
             provider_sessions.insert(
                 *provider,
                 store
@@ -149,11 +173,27 @@ pub fn build_overview_snapshot(
                     .add(&usage);
             }
         }
-        Ok((provider_daily, provider_sessions, model_rows))
+        Ok((provider_daily, provider_hourly, provider_sessions, model_rows))
     })
     .unwrap_or_default();
 
-    let (provider_daily, provider_sessions, model_rows) = store_data;
+    let (provider_daily, mut provider_hourly, provider_sessions, model_rows) = store_data;
+    if hourly
+        && spend_providers.contains(&ProviderKind::Codex)
+        && provider_hourly
+            .get(&ProviderKind::Codex)
+            .is_none_or(|hours| hours.is_empty())
+    {
+        if let Ok(rows) =
+            crate::usage::collect_codex_hourly_since(start_hour.with_timezone(&Utc) - Duration::hours(1))
+        {
+            let mapped = rows.iter().cloned().collect::<BTreeMap<_, _>>();
+            let _ = store::with_store(|store| {
+                store.replace_usage_hourly(ProviderKind::Codex, &rows)
+            });
+            provider_hourly.insert(ProviderKind::Codex, mapped);
+        }
+    }
 
     let mut daily_by_date: BTreeMap<NaiveDate, BTreeMap<ProviderKind, TokenUsage>> =
         BTreeMap::new();
@@ -174,7 +214,23 @@ pub fn build_overview_snapshot(
     let mut providers = Vec::new();
     for provider in &spend_providers {
         let mut usage = TokenUsage::default();
-        if let Some(days) = provider_daily.get(provider) {
+        if hourly {
+            if let Some(hours) = provider_hourly.get(provider) {
+                for hour_usage in hours.values() {
+                    usage.add(hour_usage);
+                }
+            }
+            // Cursor (and anyone else without timestamps) still has daily rows.
+            if usage.requests == 0 {
+                if let Some(days) = provider_daily.get(provider) {
+                    for entry in days {
+                        if entry.date >= start_date && entry.date <= end_date {
+                            usage.add(&entry.usage);
+                        }
+                    }
+                }
+            }
+        } else if let Some(days) = provider_daily.get(provider) {
             for entry in days {
                 if entry.date >= start_date && entry.date <= end_date {
                     usage.add(&entry.usage);
@@ -218,49 +274,104 @@ pub fn build_overview_snapshot(
         OverviewMetric::Tokens => snapshot.totals.total_tokens().max(1),
     };
 
-    snapshot.day_rows = daily_by_date
-        .iter()
-        .map(|(date, providers)| {
-            let cost = providers.values().fold(0_u64, |total, usage| {
-                total.saturating_add(usage.estimated_cost_microusd)
-            });
-            let tokens = providers.values().fold(0_u64, |total, usage| {
-                total.saturating_add(usage.total_tokens())
-            });
-            let metric_value = match metric {
-                OverviewMetric::Cost => cost,
-                OverviewMetric::Tokens => tokens,
-            };
-            BreakdownRow {
-                label: date.format("%b %-d").to_string(),
-                provider: None,
-                cost_microusd: cost,
-                tokens,
-                share: metric_value as f64 / total_metric as f64 * 100.0,
-            }
-        })
-        .collect();
-
-    snapshot.daily_series = daily_by_date
-        .into_iter()
-        .map(|(date, by_provider)| {
-            let mut values = BTreeMap::new();
-            let mut total = 0_u64;
-            for (provider, usage) in by_provider {
-                let value = match metric {
-                    OverviewMetric::Cost => usage.estimated_cost_microusd,
-                    OverviewMetric::Tokens => usage.total_tokens(),
+    if hourly {
+        snapshot.day_rows = (0..24)
+            .map(|offset| {
+                let at = start_hour + Duration::hours(offset);
+                let mut cost = 0_u64;
+                let mut tokens = 0_u64;
+                for hours in provider_hourly.values() {
+                    if let Some(usage) = hours.get(&at) {
+                        cost = cost.saturating_add(usage.estimated_cost_microusd);
+                        tokens = tokens.saturating_add(usage.total_tokens());
+                    }
+                }
+                let metric_value = match metric {
+                    OverviewMetric::Cost => cost,
+                    OverviewMetric::Tokens => tokens,
                 };
-                values.insert(provider, value);
-                total = total.saturating_add(value);
-            }
-            DailySeriesPoint {
-                date,
-                by_provider: values,
-                total,
-            }
-        })
-        .collect();
+                BreakdownRow {
+                    label: format_hour_label(at),
+                    provider: None,
+                    cost_microusd: cost,
+                    tokens,
+                    share: metric_value as f64 / total_metric as f64 * 100.0,
+                }
+            })
+            .filter(|row| row.tokens > 0 || row.cost_microusd > 0)
+            .collect();
+
+        snapshot.daily_series = (0..24)
+            .map(|offset| {
+                let at = start_hour + Duration::hours(offset);
+                let mut values = BTreeMap::new();
+                let mut total = 0_u64;
+                for (provider, hours) in &provider_hourly {
+                    let usage = hours.get(&at);
+                    let value = match (metric, usage) {
+                        (OverviewMetric::Cost, Some(usage)) => usage.estimated_cost_microusd,
+                        (OverviewMetric::Tokens, Some(usage)) => usage.total_tokens(),
+                        _ => 0,
+                    };
+                    if value > 0 {
+                        values.insert(*provider, value);
+                        total = total.saturating_add(value);
+                    }
+                }
+                DailySeriesPoint {
+                    at,
+                    date: at.date_naive(),
+                    by_provider: values,
+                    total,
+                }
+            })
+            .collect();
+    } else {
+        snapshot.day_rows = daily_by_date
+            .iter()
+            .map(|(date, providers)| {
+                let cost = providers.values().fold(0_u64, |total, usage| {
+                    total.saturating_add(usage.estimated_cost_microusd)
+                });
+                let tokens = providers.values().fold(0_u64, |total, usage| {
+                    total.saturating_add(usage.total_tokens())
+                });
+                let metric_value = match metric {
+                    OverviewMetric::Cost => cost,
+                    OverviewMetric::Tokens => tokens,
+                };
+                BreakdownRow {
+                    label: date.format("%b %-d").to_string(),
+                    provider: None,
+                    cost_microusd: cost,
+                    tokens,
+                    share: metric_value as f64 / total_metric as f64 * 100.0,
+                }
+            })
+            .collect();
+
+        snapshot.daily_series = daily_by_date
+            .into_iter()
+            .map(|(date, by_provider)| {
+                let mut values = BTreeMap::new();
+                let mut total = 0_u64;
+                for (provider, usage) in by_provider {
+                    let value = match metric {
+                        OverviewMetric::Cost => usage.estimated_cost_microusd,
+                        OverviewMetric::Tokens => usage.total_tokens(),
+                    };
+                    values.insert(provider, value);
+                    total = total.saturating_add(value);
+                }
+                DailySeriesPoint {
+                    at: start_of_local_day(date),
+                    date,
+                    by_provider: values,
+                    total,
+                }
+            })
+            .collect();
+    }
 
     snapshot.model_rows = model_rows
         .into_iter()
@@ -291,6 +402,22 @@ pub fn build_overview_snapshot(
     }
 
     snapshot
+}
+
+pub fn format_hour_label(at: DateTime<Local>) -> String {
+    let hour = at.hour();
+    let suffix = if hour < 12 { "AM" } else { "PM" };
+    let hour12 = match hour % 12 {
+        0 => 12,
+        value => value,
+    };
+    format!("{hour12} {suffix}")
+}
+
+fn start_of_local_day(date: NaiveDate) -> DateTime<Local> {
+    date.and_hms_opt(0, 0, 0)
+        .and_then(|naive| Local.from_local_datetime(&naive).single())
+        .unwrap_or_else(Local::now)
 }
 
 fn slice_provider_usage(days: &[DailyTokenUsage], start: NaiveDate, end: NaiveDate) -> TokenUsage {

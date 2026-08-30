@@ -1,5 +1,8 @@
 //! Usage overview page for the popup Usage tab.
 
+use std::collections::BTreeMap;
+
+use chrono::{DateTime, Duration, Local, NaiveDate};
 use windows_reactor::*;
 
 use crate::{
@@ -45,11 +48,25 @@ pub fn overview_page(
         .into();
     }
 
-    let date_label = format!(
-        "Usage / {} to {}",
-        snapshot.start_date.format("%b %-d"),
-        snapshot.end_date.format("%b %-d")
-    );
+    let date_label = if snapshot.hourly {
+        let start = snapshot
+            .daily_series
+            .first()
+            .map(|point| crate::usage_overview::format_hour_label(point.at))
+            .unwrap_or_else(|| snapshot.start_date.format("%b %-d").to_string());
+        let end = snapshot
+            .daily_series
+            .last()
+            .map(|point| crate::usage_overview::format_hour_label(point.at))
+            .unwrap_or_else(|| snapshot.end_date.format("%b %-d").to_string());
+        format!("Usage / {start} to {end}")
+    } else {
+        format!(
+            "Usage / {} to {}",
+            snapshot.start_date.format("%b %-d"),
+            snapshot.end_date.format("%b %-d")
+        )
+    };
 
     border(
         vstack((
@@ -64,6 +81,9 @@ pub fn overview_page(
             usage_hero(snapshot, metric, color_scheme, use_colored_provider_icons),
             usage_chart_card(
                 &snapshot.daily_series,
+                snapshot.start_date,
+                snapshot.end_date,
+                snapshot.hourly,
                 &snapshot.providers,
                 metric,
                 chart_hover,
@@ -275,20 +295,38 @@ fn provider_row(
 
 fn usage_chart_card(
     series: &[DailySeriesPoint],
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    hourly: bool,
     providers: &[ProviderOverview],
     metric: OverviewMetric,
     hover: Option<usize>,
     color_scheme: ColorScheme,
     set_hover: SetState<Option<usize>>,
 ) -> Element {
-    let title = match metric {
-        OverviewMetric::Cost => "Daily cost",
-        OverviewMetric::Tokens => "Daily processed tokens",
+    let title = match (hourly, metric) {
+        (true, OverviewMetric::Cost) => "Hourly cost",
+        (true, OverviewMetric::Tokens) => "Hourly processed tokens",
+        (false, OverviewMetric::Cost) => "Cost",
+        (false, OverviewMetric::Tokens) => "Tokens",
     };
-    let chart = usage_line_chart(series, providers, metric, hover, color_scheme, set_hover);
+    let filled = if hourly {
+        fill_hourly_series(series)
+    } else {
+        fill_daily_series(series, start_date, end_date)
+    };
+    let chart = usage_area_chart(
+        &filled,
+        providers,
+        metric,
+        hourly,
+        hover,
+        color_scheme,
+        set_hover,
+    );
     let tooltip = hover
-        .and_then(|index| series.get(index))
-        .map(|point| chart_tooltip(point, providers, metric));
+        .and_then(|index| filled.get(index))
+        .map(|point| chart_tooltip(point, providers, metric, hourly));
 
     vstack((
         body_strong(title),
@@ -298,7 +336,7 @@ fn usage_chart_card(
                 layers.push(
                     tooltip
                         .margin(Thickness {
-                            left: 8.0,
+                            left: 48.0,
                             top: 8.0,
                             right: 8.0,
                             bottom: 0.0,
@@ -311,89 +349,184 @@ fn usage_chart_card(
             layers
         }),
     ))
-    .spacing(8.0)
+    .spacing(6.0)
     .into()
 }
 
-fn usage_line_chart(
+const CHART_PLOT_HEIGHT: f64 = 132.0;
+const CHART_Y_AXIS_WIDTH: f64 = 40.0;
+const CHART_Y_GAP: f64 = 6.0;
+const CHART_PAD_X: f64 = 4.0;
+const CHART_PAD_TOP: f64 = 6.0;
+const CHART_PAD_BOTTOM: f64 = 3.0;
+
+fn usage_area_chart(
     series: &[DailySeriesPoint],
     providers: &[ProviderOverview],
-    _metric: OverviewMetric,
+    metric: OverviewMetric,
+    hourly: bool,
     hover: Option<usize>,
     color_scheme: ColorScheme,
     set_hover: SetState<Option<usize>>,
 ) -> Element {
-    const CHART_HEIGHT: f64 = 132.0;
-    let chart_width = f64::from(popup::POPUP_WIDTH) - 2.0 - 24.0 - 2.0 - 24.0;
+    let plot_width = f64::from(popup::POPUP_WIDTH)
+        - 2.0
+        - 24.0
+        - CHART_Y_AXIS_WIDTH
+        - CHART_Y_GAP;
     if series.is_empty() {
         return border(
             caption("No activity in this range")
                 .foreground(ThemeRef::TertiaryText)
                 .horizontal_alignment(HorizontalAlignment::Center),
         )
-        .height(CHART_HEIGHT)
+        .height(CHART_PLOT_HEIGHT)
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .into();
     }
 
-    let max_value = series
-        .iter()
-        .map(|point| point.total)
-        .max()
-        .unwrap_or(1)
-        .max(1);
-    let step = chart_width / series.len().max(1) as f64;
-    let bar_width = (step / providers.len().max(1) as f64 - 1.0).clamp(1.5, 6.0);
+    let raw_max = series.iter().map(|point| point.total).max().unwrap_or(0);
+    let max_value = nice_ceiling(raw_max);
+    let xaml = usage_area_chart_xaml(series, providers, max_value, plot_width, color_scheme);
+    let plot = usage_area_chart_host(
+        &xaml,
+        series,
+        providers,
+        metric,
+        color_scheme,
+        plot_width,
+    );
+    let hits = usage_chart_hit_targets(series.len(), plot_width, hover, set_hover);
+    let y_axis = usage_y_axis(max_value, metric);
+    let x_axis = usage_x_axis(series, hourly);
 
-    let mut layers: Vec<Element> = Vec::new();
-    for (provider_index, entry) in providers.iter().enumerate() {
-        let bars: Vec<Element> = series
-            .iter()
-            .enumerate()
-            .map(|(index, point)| {
-                let value = point
-                    .by_provider
-                    .get(&entry.provider)
-                    .copied()
-                    .unwrap_or(0);
-                let height = if max_value == 0 {
-                    2.0
-                } else {
-                    (CHART_HEIGHT * value as f64 / max_value as f64).max(2.0)
-                };
-                border(Element::Empty)
-                    .width(bar_width)
-                    .height(height)
-                    .corner_radius(1.0)
-                    .background(provider_brand_color(
-                        entry.provider,
-                        color_scheme,
-                        true,
-                    ))
-                    .opacity(if value == 0 { 0.15 } else { 0.95 })
-                    .margin(Thickness {
-                        left: step * index as f64
-                            + provider_index as f64 * (bar_width + 1.0)
-                            + (step - bar_width * providers.len() as f64) / 2.0,
-                        top: CHART_HEIGHT - height,
-                        right: 0.0,
-                        bottom: 0.0,
-                    })
-                    .relative_align_left()
-                    .relative_align_top()
-                    .into()
-            })
-            .collect();
-        layers.extend(bars);
+    grid((
+        y_axis,
+        relative_panel({
+            let mut layers = vec![plot];
+            layers.extend(hits);
+            layers
+        })
+        .grid_column(1),
+        x_axis.grid_column(1).grid_row(1),
+    ))
+    .columns([GridLength::Pixel(CHART_Y_AXIS_WIDTH), GridLength::Star(1.0)])
+    .rows([GridLength::Pixel(CHART_PLOT_HEIGHT), GridLength::Auto])
+    .column_spacing(CHART_Y_GAP)
+    .row_spacing(4.0)
+    .into()
+}
+
+fn usage_area_chart_host(
+    xaml: &str,
+    series: &[DailySeriesPoint],
+    providers: &[ProviderOverview],
+    metric: OverviewMetric,
+    color_scheme: ColorScheme,
+    plot_width: f64,
+) -> Element {
+    thread_local! {
+        static CHART_MOUNTS: std::cell::RefCell<
+            std::collections::HashMap<String, windows_core::IInspectable>,
+        > = std::cell::RefCell::new(std::collections::HashMap::new());
+        static CHART_SERIES: std::cell::RefCell<std::collections::HashMap<String, u64>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
     }
 
-    for (index, _) in series.iter().enumerate() {
+    let host_key = format!(
+        "usage-area-{}-{}-{}-{}",
+        metric as i32,
+        color_scheme as i32,
+        series.len(),
+        providers
+            .iter()
+            .fold(0_u64, |hash, entry| hash
+                .wrapping_mul(31)
+                .wrapping_add(entry.provider as u64)),
+    );
+    let fingerprint = series.iter().fold(0_u64, |hash, point| {
+        let provider_hash = point.by_provider.iter().fold(0_u64, |inner, (kind, value)| {
+            inner
+                .wrapping_mul(31)
+                .wrapping_add(*kind as u64)
+                .wrapping_add(*value)
+        });
+        hash.wrapping_mul(31)
+            .wrapping_add(point.total)
+            .wrapping_add(provider_hash)
+    });
+
+    let series_changed = CHART_SERIES.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        match cache.get(&host_key) {
+            Some(previous) if *previous == fingerprint => false,
+            _ => {
+                cache.insert(host_key.clone(), fingerprint);
+                true
+            }
+        }
+    });
+    if series_changed {
+        CHART_MOUNTS.with(|mounts| {
+            if let Some(native) = mounts.borrow().get(&host_key).cloned()
+                && let Err(error) = crate::acrylic::install_usage_chart_into(native, xaml)
+            {
+                eprintln!("Could not update usage area chart: {error:?}");
+            }
+        });
+    }
+
+    let xaml_for_mount = xaml.to_string();
+    let key_for_mount = host_key.clone();
+    let key_for_unmount = host_key.clone();
+    let mut host = swap_chain_panel()
+        .width(plot_width)
+        .height(CHART_PLOT_HEIGHT);
+    host.mounted = Some(Callback::new(
+        move |native: Option<windows_core::IInspectable>| {
+            if let Some(native) = native {
+                if let Err(error) =
+                    crate::acrylic::install_usage_chart_into(native.clone(), &xaml_for_mount)
+                {
+                    eprintln!("Could not install usage area chart: {error:?}");
+                }
+                CHART_MOUNTS.with(|mounts| {
+                    mounts.borrow_mut().insert(key_for_mount.clone(), native);
+                });
+            }
+        },
+    ));
+    host.unmounted = Some(Callback::new(
+        move |native: Option<windows_core::IInspectable>| {
+            if let Some(native) = native {
+                let _ = crate::acrylic::clear_children(native);
+            }
+            CHART_MOUNTS.with(|mounts| {
+                mounts.borrow_mut().remove(&key_for_unmount);
+            });
+            CHART_SERIES.with(|cache| {
+                cache.borrow_mut().remove(&key_for_unmount);
+            });
+        },
+    ));
+    host.with_key(host_key).into()
+}
+
+fn usage_chart_hit_targets(
+    count: usize,
+    plot_width: f64,
+    hover: Option<usize>,
+    set_hover: SetState<Option<usize>>,
+) -> Vec<Element> {
+    let step = plot_width / count.max(1) as f64;
+    let mut layers = Vec::with_capacity(count + 1);
+    for index in 0..count {
         let set_hover_enter = set_hover.clone();
         let set_hover_exit = set_hover.clone();
         layers.push(
             border(Element::Empty)
                 .width(step.max(4.0))
-                .height(CHART_HEIGHT)
+                .height(CHART_PLOT_HEIGHT)
                 .background(Color::transparent())
                 .margin(Thickness {
                     left: step * index as f64,
@@ -411,7 +544,7 @@ fn usage_line_chart(
             layers.push(
                 border(Element::Empty)
                     .width(1.0)
-                    .height(CHART_HEIGHT)
+                    .height(CHART_PLOT_HEIGHT)
                     .background(ThemeRef::CardStroke)
                     .margin(Thickness {
                         left: step * index as f64 + step / 2.0,
@@ -420,21 +553,330 @@ fn usage_line_chart(
                         bottom: 0.0,
                     })
                     .relative_align_left()
+                    .relative_align_top()
                     .into(),
             );
         }
     }
+    layers
+}
 
-    border(relative_panel(layers))
-        .height(CHART_HEIGHT)
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .into()
+fn usage_y_axis(max_value: u64, metric: OverviewMetric) -> Element {
+    let ticks = [max_value, max_value * 2 / 3, max_value / 3, 0];
+    let plot_h = CHART_PLOT_HEIGHT - CHART_PAD_TOP - CHART_PAD_BOTTOM;
+    relative_panel(
+        ticks
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                let y = CHART_PAD_TOP + plot_h * index as f64 / 3.0;
+                caption(format_axis_value(value, metric))
+                    .foreground(ThemeRef::TertiaryText)
+                    .horizontal_alignment(HorizontalAlignment::Right)
+                    .margin(Thickness {
+                        left: 0.0,
+                        top: (y - 7.0).max(0.0),
+                        right: 0.0,
+                        bottom: 0.0,
+                    })
+                    .relative_align_left()
+                    .relative_align_top()
+                    .into()
+            })
+            .collect::<Vec<Element>>(),
+    )
+    .width(CHART_Y_AXIS_WIDTH)
+    .height(CHART_PLOT_HEIGHT)
+    .into()
+}
+
+fn usage_x_axis(series: &[DailySeriesPoint], hourly: bool) -> Element {
+    let label = |point: &DailySeriesPoint| {
+        if hourly {
+            crate::usage_overview::format_hour_label(point.at)
+        } else {
+            format_axis_date(point.date)
+        }
+    };
+    let first = series.first().map(label);
+    let last = series.last().map(label);
+    let mid = series.get(series.len() / 2).map(label);
+    grid((
+        caption(first.unwrap_or_default()).foreground(ThemeRef::TertiaryText),
+        caption(mid.unwrap_or_default())
+            .foreground(ThemeRef::TertiaryText)
+            .horizontal_alignment(HorizontalAlignment::Center)
+            .grid_column(1),
+        caption(last.unwrap_or_default())
+            .foreground(ThemeRef::TertiaryText)
+            .horizontal_alignment(HorizontalAlignment::Right)
+            .grid_column(2),
+    ))
+    .columns([
+        GridLength::Star(1.0),
+        GridLength::Star(1.0),
+        GridLength::Star(1.0),
+    ])
+    .into()
+}
+
+fn usage_area_chart_xaml(
+    series: &[DailySeriesPoint],
+    providers: &[ProviderOverview],
+    max_value: u64,
+    width: f64,
+    color_scheme: ColorScheme,
+) -> String {
+    let height = CHART_PLOT_HEIGHT;
+    let plot_h = (height - CHART_PAD_TOP - CHART_PAD_BOTTOM).max(1.0);
+    let baseline = height - CHART_PAD_BOTTOM;
+    let grid = match color_scheme {
+        ColorScheme::Dark => "#33A89BB8",
+        ColorScheme::Light => "#24111111",
+    };
+
+    let mut body = String::new();
+    for tick in 0..4 {
+        let y = CHART_PAD_TOP + plot_h * tick as f64 / 3.0;
+        body.push_str(&format!(
+            r#"<Line X1="0" Y1="{y:.2}" X2="{width:.2}" Y2="{y:.2}" Stroke="{grid}" StrokeThickness="1" />"#
+        ));
+    }
+
+    let xs = series_x_positions(series.len(), width);
+    let mut fills = String::new();
+    let mut strokes = String::new();
+    for entry in providers {
+        let color = series_color(entry.provider, color_scheme);
+        let ys: Vec<f64> = series
+            .iter()
+            .map(|point| {
+                let value = point
+                    .by_provider
+                    .get(&entry.provider)
+                    .copied()
+                    .unwrap_or(0);
+                let ratio = if max_value == 0 {
+                    0.0
+                } else {
+                    value as f64 / max_value as f64
+                };
+                baseline - ratio * plot_h
+            })
+            .collect();
+        if ys.iter().all(|y| (*y - baseline).abs() < 0.01) {
+            continue;
+        }
+        let stroke = monotone_stroke_path(&xs, &ys);
+        let fill = format!(
+            "{stroke} L {last_x:.2},{baseline:.2} L {first_x:.2},{baseline:.2} Z",
+            last_x = xs[xs.len() - 1],
+            first_x = xs[0],
+        );
+        fills.push_str(&format!(
+            r#"<Path Fill="{}" Data="{fill}" />"#,
+            xaml_rgba(color, 0x33),
+        ));
+        strokes.push_str(&format!(
+            r#"<Path Stroke="{}" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Data="{stroke}" />"#,
+            xaml_rgb(color),
+        ));
+    }
+
+    body.push_str(&fills);
+    body.push_str(&strokes);
+    body.push_str(&format!(
+        r#"<Line X1="0" Y1="{baseline:.2}" X2="{width:.2}" Y2="{baseline:.2}" Stroke="{{ThemeResource AccentFillColorDefaultBrush}}" StrokeThickness="1.25" />"#
+    ));
+
+    format!(
+        r#"<Canvas xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Width="{width:.0}" Height="{height:.0}" Background="Transparent">{body}</Canvas>"#
+    )
+}
+
+fn series_x_positions(count: usize, width: f64) -> Vec<f64> {
+    let count = count.max(1);
+    let plot_w = (width - CHART_PAD_X * 2.0).max(1.0);
+    if count == 1 {
+        return vec![CHART_PAD_X, width - CHART_PAD_X];
+    }
+    (0..count)
+        .map(|index| CHART_PAD_X + plot_w * index as f64 / (count - 1) as f64)
+        .collect()
+}
+
+fn monotone_stroke_path(xs: &[f64], ys: &[f64]) -> String {
+    if xs.is_empty() || ys.is_empty() {
+        return String::new();
+    }
+    if xs.len() == 1 {
+        return format!("M {x:.2},{y:.2} L {x:.2},{y:.2}", x = xs[0], y = ys[0]);
+    }
+    // A single daily sample is stretched across the plot so the area still reads.
+    let ys = if xs.len() == 2 && ys.len() == 1 {
+        vec![ys[0], ys[0]]
+    } else {
+        ys.to_vec()
+    };
+    let tangents = monotone_tangents(xs, &ys);
+    let mut path = format!("M {:.2},{:.2}", xs[0], ys[0]);
+    for index in 0..xs.len() - 1 {
+        let dx = xs[index + 1] - xs[index];
+        path.push_str(&format!(
+            " C {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}",
+            xs[index] + dx / 3.0,
+            ys[index] + tangents[index] * dx / 3.0,
+            xs[index + 1] - dx / 3.0,
+            ys[index + 1] - tangents[index + 1] * dx / 3.0,
+            xs[index + 1],
+            ys[index + 1],
+        ));
+    }
+    path
+}
+
+fn monotone_tangents(xs: &[f64], ys: &[f64]) -> Vec<f64> {
+    let n = ys.len();
+    let mut tangents = vec![0.0; n];
+    if n < 2 {
+        return tangents;
+    }
+    let mut slopes = vec![0.0; n - 1];
+    for index in 0..n - 1 {
+        let dx = (xs[index + 1] - xs[index]).max(f64::EPSILON);
+        slopes[index] = (ys[index + 1] - ys[index]) / dx;
+    }
+    tangents[0] = slopes[0];
+    tangents[n - 1] = slopes[n - 2];
+    for index in 1..n - 1 {
+        if slopes[index - 1] * slopes[index] <= 0.0 {
+            tangents[index] = 0.0;
+        } else {
+            tangents[index] = (slopes[index - 1] + slopes[index]) / 2.0;
+        }
+    }
+    for index in 0..n - 1 {
+        if slopes[index].abs() < f64::EPSILON {
+            tangents[index] = 0.0;
+            tangents[index + 1] = 0.0;
+            continue;
+        }
+        let alpha = tangents[index] / slopes[index];
+        let beta = tangents[index + 1] / slopes[index];
+        let sum = alpha * alpha + beta * beta;
+        if sum > 9.0 {
+            let scale = 3.0 / sum.sqrt();
+            tangents[index] = scale * alpha * slopes[index];
+            tangents[index + 1] = scale * beta * slopes[index];
+        }
+    }
+    tangents
+}
+
+fn fill_hourly_series(series: &[DailySeriesPoint]) -> Vec<DailySeriesPoint> {
+    if series.len() >= 24 {
+        return series.to_vec();
+    }
+    if series.is_empty() {
+        return Vec::new();
+    }
+    series.to_vec()
+}
+
+fn fill_daily_series(
+    series: &[DailySeriesPoint],
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+) -> Vec<DailySeriesPoint> {
+    if series.is_empty() || start_date > end_date {
+        return Vec::new();
+    }
+    let mut by_date = BTreeMap::new();
+    for point in series {
+        by_date.insert(point.date, point.clone());
+    }
+    let mut filled = Vec::new();
+    let mut day = start_date;
+    while day <= end_date {
+        filled.push(by_date.remove(&day).unwrap_or(DailySeriesPoint {
+            at: start_of_local_day(day),
+            date: day,
+            by_provider: BTreeMap::new(),
+            total: 0,
+        }));
+        day += Duration::days(1);
+    }
+    filled
+}
+
+fn start_of_local_day(date: NaiveDate) -> DateTime<Local> {
+    use chrono::TimeZone;
+    date.and_hms_opt(0, 0, 0)
+        .and_then(|naive| Local.from_local_datetime(&naive).single())
+        .unwrap_or_else(Local::now)
+}
+
+fn series_color(provider: ProviderKind, color_scheme: ColorScheme) -> Color {
+    match provider {
+        ProviderKind::Cursor => match color_scheme {
+            ColorScheme::Dark => Color::rgb(236, 236, 236),
+            ColorScheme::Light => Color::rgb(28, 28, 28),
+        },
+        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => match color_scheme {
+            ColorScheme::Dark => Color::rgb(210, 210, 210),
+            ColorScheme::Light => Color::rgb(72, 72, 72),
+        },
+        _ => {
+            let (red, green, blue) = provider_registry::descriptor(provider).brand_rgb;
+            Color::rgb(red, green, blue)
+        }
+    }
+}
+
+fn nice_ceiling(value: u64) -> u64 {
+    if value <= 1 {
+        return 1;
+    }
+    let magnitude = 10f64.powf((value as f64).log10().floor());
+    let normalized = value as f64 / magnitude;
+    let nice = if normalized <= 1.0 {
+        1.0
+    } else if normalized <= 2.0 {
+        2.0
+    } else if normalized <= 2.5 {
+        2.5
+    } else if normalized <= 5.0 {
+        5.0
+    } else {
+        10.0
+    };
+    (nice * magnitude).round().max(1.0) as u64
+}
+
+fn format_axis_value(value: u64, metric: OverviewMetric) -> String {
+    match metric {
+        OverviewMetric::Cost => format_spend(value),
+        OverviewMetric::Tokens => format_token_count(value),
+    }
+}
+
+fn format_axis_date(date: NaiveDate) -> String {
+    date.format("%b %-d").to_string()
+}
+
+fn xaml_rgb(color: Color) -> String {
+    format!("#{:02X}{:02X}{:02X}", color.r, color.g, color.b)
+}
+
+fn xaml_rgba(color: Color, alpha: u8) -> String {
+    format!("#{:02X}{:02X}{:02X}{:02X}", alpha, color.r, color.g, color.b)
 }
 
 fn chart_tooltip(
     point: &DailySeriesPoint,
     providers: &[ProviderOverview],
     metric: OverviewMetric,
+    hourly: bool,
 ) -> Element {
     let rows: Vec<Element> = providers
         .iter()
@@ -469,7 +911,16 @@ fn chart_tooltip(
     border(
         vstack({
             let mut items = vec![
-                body_strong(point.date.format("%b %-d").to_string()).into(),
+                body_strong(if hourly {
+                    format!(
+                        "{} · {}",
+                        point.date.format("%b %-d"),
+                        crate::usage_overview::format_hour_label(point.at)
+                    )
+                } else {
+                    point.date.format("%b %-d").to_string()
+                })
+                .into(),
             ];
             items.extend(rows);
             items.push(

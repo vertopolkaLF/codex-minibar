@@ -11,7 +11,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
-use chrono::{DateTime, Local, NaiveDate, Utc};
+use chrono::{DateTime, Local, NaiveDate, Timelike, Utc};
 use directories::ProjectDirs;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -172,6 +172,18 @@ impl ProviderStore {
                 cache_savings_microusd INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (provider, date, model)
             );
+            CREATE TABLE IF NOT EXISTS usage_hourly (
+                provider TEXT NOT NULL,
+                hour TEXT NOT NULL,
+                input_tokens INTEGER NOT NULL,
+                cached_input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                requests INTEGER NOT NULL,
+                estimated_cost_microusd INTEGER NOT NULL,
+                priced_requests INTEGER NOT NULL,
+                cache_savings_microusd INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (provider, hour)
+            );
             ",
         )?;
         Ok(())
@@ -263,6 +275,123 @@ impl ProviderStore {
             daily.push(row?);
         }
         Ok(statistics_from_daily(&daily, history_days))
+    }
+
+    /// Hourly usage in `[start, end]`, local hours. Claude prefers `usage_events`
+    /// timestamps; Codex/OpenCode read the hourly table filled on refresh.
+    pub fn load_usage_hourly(
+        &self,
+        provider: ProviderKind,
+        start: DateTime<Local>,
+        end: DateTime<Local>,
+    ) -> Result<BTreeMap<DateTime<Local>, TokenUsage>> {
+        let from_events = self.load_event_hourly(provider, start, end)?;
+        if !from_events.is_empty() {
+            return Ok(from_events);
+        }
+        let mut statement = self.conn.prepare(
+            "SELECT hour, input_tokens, cached_input_tokens, output_tokens,
+                    requests, estimated_cost_microusd, priced_requests, cache_savings_microusd
+             FROM usage_hourly
+             WHERE provider = ?1 AND hour >= ?2 AND hour <= ?3
+             ORDER BY hour ASC",
+        )?;
+        let start_key = start.to_rfc3339();
+        let end_key = end.to_rfc3339();
+        let rows = statement.query_map(params![provider.id(), start_key, end_key], |row| {
+            let hour = parse_datetime(&row.get::<_, String>(0)?).with_timezone(&Local);
+            Ok((truncate_local_hour(hour), token_usage_from_row(row, 1)?))
+        })?;
+        let mut hourly = BTreeMap::<DateTime<Local>, TokenUsage>::new();
+        for row in rows {
+            let (hour, usage) = row?;
+            hourly.entry(hour).or_default().add(&usage);
+        }
+        Ok(hourly)
+    }
+
+    fn load_event_hourly(
+        &self,
+        provider: ProviderKind,
+        start: DateTime<Local>,
+        end: DateTime<Local>,
+    ) -> Result<BTreeMap<DateTime<Local>, TokenUsage>> {
+        let mut statement = self.conn.prepare(
+            "SELECT ts, input_tokens, cached_input_tokens, output_tokens,
+                    requests, estimated_cost_microusd, priced_requests, cache_savings_microusd
+             FROM usage_events
+             WHERE provider = ?1 AND ts >= ?2 AND ts <= ?3",
+        )?;
+        let rows = statement.query_map(
+            params![
+                provider.id(),
+                start.with_timezone(&Utc).to_rfc3339(),
+                end.with_timezone(&Utc).to_rfc3339()
+            ],
+            |row| {
+                Ok((
+                    parse_datetime(&row.get::<_, String>(0)?),
+                    token_usage_from_row(row, 1)?,
+                ))
+            },
+        )?;
+        let mut hourly = BTreeMap::<DateTime<Local>, TokenUsage>::new();
+        for row in rows {
+            let (timestamp, usage) = row?;
+            let local = timestamp.with_timezone(&Local);
+            if local < start || local > end {
+                continue;
+            }
+            hourly
+                .entry(truncate_local_hour(local))
+                .or_default()
+                .add(&usage);
+        }
+        Ok(hourly)
+    }
+
+    pub fn replace_usage_hourly(
+        &self,
+        provider: ProviderKind,
+        hours: &[(DateTime<Local>, TokenUsage)],
+    ) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        let cutoff = (Local::now() - chrono::Duration::days(8)).to_rfc3339();
+        tx.execute(
+            "DELETE FROM usage_hourly WHERE provider = ?1 AND hour < ?2",
+            params![provider.id(), cutoff],
+        )?;
+        {
+            let mut insert = tx.prepare(
+                "INSERT INTO usage_hourly(
+                    provider, hour, input_tokens, cached_input_tokens, output_tokens,
+                    requests, estimated_cost_microusd, priced_requests, cache_savings_microusd
+                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT(provider, hour) DO UPDATE SET
+                    input_tokens=excluded.input_tokens,
+                    cached_input_tokens=excluded.cached_input_tokens,
+                    output_tokens=excluded.output_tokens,
+                    requests=excluded.requests,
+                    estimated_cost_microusd=excluded.estimated_cost_microusd,
+                    priced_requests=excluded.priced_requests,
+                    cache_savings_microusd=excluded.cache_savings_microusd",
+            )?;
+            for (hour, usage) in hours {
+                insert.execute(params![
+                    provider.id(),
+                    hour.to_rfc3339(),
+                    usage.input_tokens as i64,
+                    usage.cached_input_tokens as i64,
+                    usage.output_tokens as i64,
+                    usage.requests as i64,
+                    usage.estimated_cost_microusd as i64,
+                    usage.priced_requests as i64,
+                    usage.cache_savings_microusd as i64,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn replace_usage_daily(
@@ -1078,6 +1207,14 @@ fn parse_datetime(raw: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(raw)
         .map(|dt| dt.with_timezone(&Utc))
         .unwrap_or_else(|_| Utc::now())
+}
+
+fn truncate_local_hour(timestamp: DateTime<Local>) -> DateTime<Local> {
+    timestamp
+        .with_minute(0)
+        .and_then(|value| value.with_second(0))
+        .and_then(|value| value.with_nanosecond(0))
+        .unwrap_or(timestamp)
 }
 
 fn config_dir() -> Result<PathBuf> {

@@ -3,10 +3,11 @@ use std::{
     fs::{self, File},
     io::{BufRead, BufReader, Seek, SeekFrom},
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
+use chrono::{DateTime, Duration, Local, NaiveDate, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -188,7 +189,57 @@ pub fn refresh_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
     }
     cache.version = CODEX_CACHE_VERSION;
     store::with_store(|store| store.save_codex_cache(&cache))?;
+    if let Ok(hourly) = collect_codex_hourly_since(Utc::now() - Duration::hours(48)) {
+        let _ = store::with_store(|store| store.replace_usage_hourly(ProviderKind::Codex, &hourly));
+    }
     Ok(statistics_from_cache(&cache, history_days))
+}
+
+/// Walks recently touched session logs and buckets token events by local hour.
+/// Daily aggregates stay incremental; this pass exists so Past 24h can use
+/// the timestamps that were previously thrown away after daily rollup.
+pub(crate) fn collect_codex_hourly_since(
+    since: DateTime<Utc>,
+) -> Result<Vec<(DateTime<Local>, TokenUsage)>> {
+    let files = collect_codex_session_files(&codex_home())?;
+    let modified_floor = SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(48 * 60 * 60))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    let mut hourly = BTreeMap::<DateTime<Local>, TokenUsage>::new();
+    for (path, _) in files {
+        let modified = fs::metadata(&path).and_then(|meta| meta.modified()).ok();
+        if modified.is_some_and(|time| time < modified_floor) {
+            continue;
+        }
+        let file = File::open(&path).with_context(|| format!("open {}", path.display()))?;
+        let reader = BufReader::new(file);
+        let mut context = CachedSessionFile::default();
+        for line in reader.lines() {
+            let Ok(line) = line else {
+                continue;
+            };
+            update_codex_rollout_context(&line, &mut context);
+            let Some((timestamp, usage)) = token_usage_from_line(&line, &context) else {
+                continue;
+            };
+            if timestamp < since {
+                continue;
+            }
+            hourly
+                .entry(truncate_local_hour(timestamp.with_timezone(&Local)))
+                .or_default()
+                .add(&usage);
+        }
+    }
+    Ok(hourly.into_iter().collect())
+}
+
+pub(crate) fn truncate_local_hour(timestamp: DateTime<Local>) -> DateTime<Local> {
+    timestamp
+        .with_minute(0)
+        .and_then(|value| value.with_second(0))
+        .and_then(|value| value.with_nanosecond(0))
+        .unwrap_or(timestamp)
 }
 
 fn statistics_from_cache(cache: &UsageCache, history_days: u16) -> UsageStatistics {
