@@ -1370,9 +1370,18 @@ fn usage_breakdown_card(
     use_colored_provider_icons: bool,
     set_breakdown: SetState<BreakdownMode>,
 ) -> Element {
-    let rows = match breakdown {
-        BreakdownMode::Model => &snapshot.model_rows,
-        BreakdownMode::Day => &snapshot.day_rows,
+    let table = match breakdown {
+        BreakdownMode::Model => model_breakdown_table(
+            &snapshot.model_rows,
+            color_scheme,
+            use_colored_provider_icons,
+        ),
+        BreakdownMode::Day => day_breakdown_table(
+            snapshot,
+            metric,
+            color_scheme,
+            use_colored_provider_icons,
+        ),
     };
     usage_card(
         vstack((
@@ -1397,31 +1406,221 @@ fn usage_breakdown_card(
                 .grid_column(1),
             ))
             .columns([GridLength::Star(1.0), GridLength::Auto]),
-            vstack((
-                breakdown_header(),
-                vstack(
-                    rows.iter()
-                        .map(|row| {
-                            breakdown_row(row, metric, color_scheme, use_colored_provider_icons)
-                        })
-                        .collect::<Vec<_>>(),
-                )
-                .spacing(6.0)
-                .with_key(format!(
-                    "usage-breakdown-list-{}-{}-{}-{}",
-                    breakdown as i32,
-                    color_scheme as i32,
-                    use_colored_provider_icons,
-                    rows.iter()
-                        .map(breakdown_row_id)
-                        .collect::<Vec<_>>()
-                        .join("+")
-                )),
-            ))
-            .spacing(6.0),
+            table,
         ))
         .spacing(14.0),
     )
+}
+
+fn model_breakdown_table(
+    rows: &[BreakdownRow],
+    color_scheme: ColorScheme,
+    use_colored_provider_icons: bool,
+) -> Element {
+    vstack((
+        breakdown_header(),
+        vstack(
+            rows.iter()
+                .map(|row| {
+                    breakdown_row(row, color_scheme, use_colored_provider_icons)
+                })
+                .collect::<Vec<_>>(),
+        )
+        .spacing(6.0)
+        .with_key(format!(
+            "usage-breakdown-list-model-{}-{}-{}",
+            color_scheme as i32,
+            use_colored_provider_icons,
+            rows.iter()
+                .map(breakdown_row_id)
+                .collect::<Vec<_>>()
+                .join("+")
+        )),
+    ))
+    .spacing(6.0)
+    .into()
+}
+
+fn day_breakdown_table(
+    snapshot: &OverviewSnapshot,
+    metric: OverviewMetric,
+    color_scheme: ColorScheme,
+    use_colored_provider_icons: bool,
+) -> Element {
+    let providers: Vec<ProviderKind> = snapshot
+        .providers
+        .iter()
+        .map(|entry| entry.provider)
+        .collect();
+    let provider_col = match providers.len() {
+        0 | 1 => 64.0,
+        2 => 58.0,
+        3 => 48.0,
+        _ => 40.0,
+    };
+    let mut columns = vec![GridLength::Star(1.0)];
+    columns.extend(vec![GridLength::Pixel(provider_col); providers.len()]);
+    columns.push(GridLength::Pixel(56.0));
+
+    let set_key = providers
+        .iter()
+        .map(|provider| provider.id())
+        .collect::<Vec<_>>()
+        .join("+");
+    let mut items = vec![day_breakdown_header(
+        snapshot.hourly,
+        metric,
+        &providers,
+        columns.clone(),
+        color_scheme,
+        use_colored_provider_icons,
+    )];
+    for row in &snapshot.day_rows {
+        items.push(breakdown_rule());
+        items.push(day_breakdown_row(row, metric, &providers, columns.clone()));
+    }
+
+    vstack(items)
+        .spacing(0.0)
+        .with_key(format!(
+            "usage-breakdown-list-day-{}-{}-{}-{}-{}",
+            metric as i32,
+            color_scheme as i32,
+            use_colored_provider_icons,
+            set_key,
+            snapshot
+                .day_rows
+                .iter()
+                .map(|row| row.label.as_str())
+                .collect::<Vec<_>>()
+                .join("+")
+        ))
+        .into()
+}
+
+fn day_breakdown_header(
+    hourly: bool,
+    metric: OverviewMetric,
+    providers: &[ProviderKind],
+    columns: Vec<GridLength>,
+    color_scheme: ColorScheme,
+    use_colored_provider_icons: bool,
+) -> Element {
+    let mut cells: Vec<Element> = vec![caption(if hourly { "Hour" } else { "Day" })
+        .foreground(ThemeRef::TertiaryText)
+        .into()];
+    for (index, provider) in providers.iter().enumerate() {
+        let icon_name = provider_registry::descriptor(*provider).icon;
+        let color = provider_brand_color(*provider, color_scheme, use_colored_provider_icons);
+        cells.push(
+            crate::icons::element(icon_name, 14.0, color)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .vertical_alignment(VerticalAlignment::Center)
+                .grid_column((index + 1) as i32)
+                .with_key(format!(
+                    "usage-day-hd-icon-{}-{}-{:02X}{:02X}{:02X}",
+                    provider.id(),
+                    icon_name,
+                    color.r,
+                    color.g,
+                    color.b
+                )),
+        );
+    }
+    cells.push(
+        caption(match metric {
+            OverviewMetric::Cost => "Cost",
+            OverviewMetric::Tokens => "Tokens",
+        })
+        .foreground(ThemeRef::TertiaryText)
+        .horizontal_alignment(HorizontalAlignment::Right)
+        .grid_column(providers.len() as i32 + 1)
+        .into(),
+    );
+    border(
+        grid(cells)
+            .columns(columns)
+            .rows([GridLength::Auto]),
+    )
+    .padding(Thickness {
+        left: 0.0,
+        top: 2.0,
+        right: 0.0,
+        bottom: 2.0,
+    })
+    .into()
+}
+
+fn day_breakdown_row(
+    row: &BreakdownRow,
+    metric: OverviewMetric,
+    providers: &[ProviderKind],
+    columns: Vec<GridLength>,
+) -> Element {
+    let mut date_cells = vec![caption(&row.label).into()];
+    if let Some(weekday) = &row.weekday {
+        let weekend = matches!(weekday.as_str(), "Sat" | "Sun");
+        date_cells.push(
+            caption(weekday)
+                .foreground(if weekend {
+                    ThemeRef::Accent
+                } else {
+                    ThemeRef::TertiaryText
+                })
+                .into(),
+        );
+    }
+    let mut cells: Vec<Element> = vec![hstack(date_cells).spacing(4.0).into()];
+    for (index, provider) in providers.iter().enumerate() {
+        let value = row.by_provider.get(provider);
+        let cell = match metric {
+            OverviewMetric::Cost => format_day_cost(
+                value
+                    .map(|usage| usage.estimated_cost_microusd)
+                    .unwrap_or(0),
+            ),
+            OverviewMetric::Tokens => format_token_count(
+                value.map(TokenUsage::total_tokens).unwrap_or(0),
+            ),
+        };
+        cells.push(
+            caption(cell)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .grid_column((index + 1) as i32)
+                .into(),
+        );
+    }
+    let total = match metric {
+        OverviewMetric::Cost => format_day_cost(row.cost_microusd),
+        OverviewMetric::Tokens => format_token_count(row.tokens),
+    };
+    cells.push(
+        caption(total)
+            .horizontal_alignment(HorizontalAlignment::Right)
+            .grid_column(providers.len() as i32 + 1)
+            .into(),
+    );
+    border(
+        grid(cells)
+            .columns(columns)
+            .rows([GridLength::Auto]),
+    )
+    .padding(Thickness {
+        left: 0.0,
+        top: 2.0,
+        right: 0.0,
+        bottom: 2.0,
+    })
+    .with_key(format!("usage-day-row-{}", row.label))
+    .into()
+}
+
+fn breakdown_rule() -> Element {
+    border(Element::Empty)
+        .height(1.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .background(ThemeRef::DividerStroke)
+        .into()
 }
 
 fn breakdown_header() -> Element {
@@ -1459,7 +1658,6 @@ fn breakdown_row_id(row: &BreakdownRow) -> String {
 
 fn breakdown_row(
     row: &BreakdownRow,
-    _metric: OverviewMetric,
     color_scheme: ColorScheme,
     use_colored_provider_icons: bool,
 ) -> Element {
@@ -1540,6 +1738,17 @@ fn provider_brand_color(
 
 fn format_spend(microusd: u64) -> String {
     format_spend_dollars((microusd as f64 / 1_000_000.0).round() as u64)
+}
+
+fn format_day_cost(microusd: u64) -> String {
+    let cents = spend_display_cents(microusd);
+    if cents == 0 {
+        return "$0".into();
+    }
+    if cents >= 100_000 {
+        return format_spend(microusd);
+    }
+    format!("${}.{:02}", cents / 100, cents % 100)
 }
 
 fn format_spend_full(microusd: u64) -> String {

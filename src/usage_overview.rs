@@ -82,6 +82,7 @@ pub struct BreakdownRow {
     pub cost_microusd: u64,
     pub tokens: u64,
     pub share: f64,
+    pub by_provider: BTreeMap<ProviderKind, TokenUsage>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -310,14 +311,17 @@ pub fn build_overview_snapshot(
 
     if hourly {
         snapshot.day_rows = (0..24)
+            .rev()
             .map(|offset| {
                 let at = start_hour + Duration::hours(offset);
                 let mut cost = 0_u64;
                 let mut tokens = 0_u64;
-                for hours in provider_hourly.values() {
+                let mut by_provider = BTreeMap::new();
+                for (provider, hours) in &provider_hourly {
                     if let Some(usage) = hours.get(&at) {
                         cost = cost.saturating_add(usage.estimated_cost_microusd);
                         tokens = tokens.saturating_add(usage.total_tokens());
+                        by_provider.insert(*provider, usage.clone());
                     }
                 }
                 let metric_value = match metric {
@@ -331,6 +335,7 @@ pub fn build_overview_snapshot(
                     cost_microusd: cost,
                     tokens,
                     share: metric_value as f64 / total_metric as f64 * 100.0,
+                    by_provider,
                 }
             })
             .filter(|row| row.tokens > 0 || row.cost_microusd > 0)
@@ -364,6 +369,7 @@ pub fn build_overview_snapshot(
     } else {
         snapshot.day_rows = daily_by_date
             .iter()
+            .rev()
             .map(|(date, providers)| {
                 let cost = providers.values().fold(0_u64, |total, usage| {
                     total.saturating_add(usage.estimated_cost_microusd)
@@ -382,6 +388,7 @@ pub fn build_overview_snapshot(
                     cost_microusd: cost,
                     tokens,
                     share: metric_value as f64 / total_metric as f64 * 100.0,
+                    by_provider: providers.clone(),
                 }
             })
             .collect();
@@ -421,6 +428,7 @@ pub fn build_overview_snapshot(
                 OverviewMetric::Cost => usage.estimated_cost_microusd as f64 / total_metric as f64 * 100.0,
                 OverviewMetric::Tokens => usage.total_tokens() as f64 / total_metric as f64 * 100.0,
             },
+            by_provider: BTreeMap::new(),
         })
         .collect();
     snapshot.model_rows.sort_by(|left, right| match metric {
