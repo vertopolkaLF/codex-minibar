@@ -50,6 +50,16 @@ fn format_activation_at(at: DateTime<Utc>) -> String {
     )
 }
 
+fn format_expired_at(at: DateTime<Utc>) -> String {
+    let local = at.with_timezone(&Local);
+    let time = TimeFormat::current().format_hm(local);
+    if local.date_naive() == Local::now().date_naive() {
+        format!("expired at {time}")
+    } else {
+        format!("expired at {time} {}", local.format("%d.%m"))
+    }
+}
+
 /// Start of the current 5h window: resets_at minus duration.
 fn window_started_at(window: &LimitWindow) -> Option<DateTime<Utc>> {
     match (window.resets_at, window.duration_minutes) {
@@ -1443,12 +1453,7 @@ fn spending_card_with_title(
     if expired {
         let expired_label = expires_at.map_or_else(
             || "expired".into(),
-            |at| {
-                format!(
-                    "expired at {}",
-                    TimeFormat::current().format_hm(at.with_timezone(&Local))
-                )
-            },
+            format_expired_at,
         );
         let mut expired_row: Vec<Element> = vec![text_block(expired_label)
             .foreground(ThemeRef::TertiaryText)
@@ -5028,6 +5033,8 @@ fn format_last_updated(sampled_at: DateTime<Utc>, _clock_tick: u64) -> String {
 mod tests {
     use std::collections::HashSet;
 
+    use chrono::TimeZone;
+
     use super::*;
     use crate::settings::{PopupSurface, PopupVisibility};
 
@@ -5081,6 +5088,30 @@ mod tests {
         assert_eq!(
             format_last_activation(&RateLimits::default(), None),
             "Never"
+        );
+    }
+
+    #[test]
+    fn expired_at_includes_date_only_when_not_today() {
+        let today = Local::now().date_naive();
+        let today_at = Local
+            .from_local_datetime(&today.and_hms_opt(7, 8, 0).unwrap())
+            .single()
+            .unwrap();
+        let yesterday_at = today_at - ChronoDuration::days(1);
+        let time_format = TimeFormat::current();
+
+        assert_eq!(
+            format_expired_at(today_at.with_timezone(&Utc)),
+            format!("expired at {}", time_format.format_hm(today_at))
+        );
+        assert_eq!(
+            format_expired_at(yesterday_at.with_timezone(&Utc)),
+            format!(
+                "expired at {} {}",
+                time_format.format_hm(yesterday_at),
+                yesterday_at.format("%d.%m")
+            )
         );
     }
 
