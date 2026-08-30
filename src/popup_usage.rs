@@ -1,5 +1,6 @@
 //! Usage overview page for the popup Usage tab.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Duration, Local, NaiveDate};
@@ -62,7 +63,31 @@ pub fn overview_page(
         )
     };
 
-    vstack((
+    let filled = if snapshot.hourly {
+        fill_hourly_series(&snapshot.daily_series)
+    } else {
+        fill_daily_series(
+            &snapshot.daily_series,
+            snapshot.start_date,
+            snapshot.end_date,
+        )
+    };
+    let tooltip = chart_hover.and_then(|index| {
+        filled.get(index).map(|point| {
+            usage_page_tooltip(
+                point,
+                index,
+                filled.len(),
+                &snapshot.providers,
+                metric,
+                snapshot.hourly,
+                color_scheme,
+                snapshot.providers.len(),
+            )
+        })
+    });
+    let clear_hover = set_chart_hover.clone();
+    let page = vstack((
         usage_header(
             &range_label,
             metric,
@@ -70,12 +95,17 @@ pub fn overview_page(
             set_metric,
             set_range,
             &set_chart_hover,
-        ),
-        usage_hero(snapshot, metric, color_scheme, use_colored_provider_icons),
+        )
+        .on_pointer_entered({
+            let clear_hover = clear_hover.clone();
+            move |_| dismiss_chart_hover(&clear_hover)
+        }),
+        usage_hero(snapshot, metric, color_scheme, use_colored_provider_icons).on_pointer_entered({
+            let clear_hover = clear_hover.clone();
+            move |_| dismiss_chart_hover(&clear_hover)
+        }),
         usage_chart_card(
-            &snapshot.daily_series,
-            snapshot.start_date,
-            snapshot.end_date,
+            &filled,
             snapshot.hourly,
             &snapshot.providers,
             metric,
@@ -83,7 +113,10 @@ pub fn overview_page(
             color_scheme,
             set_chart_hover,
         ),
-        usage_totals_card(&snapshot.totals),
+        usage_totals_card(&snapshot.totals).on_pointer_entered({
+            let clear_hover = clear_hover.clone();
+            move |_| dismiss_chart_hover(&clear_hover)
+        }),
         usage_breakdown_card(
             snapshot,
             breakdown,
@@ -91,10 +124,22 @@ pub fn overview_page(
             color_scheme,
             use_colored_provider_icons,
             set_breakdown,
-        ),
+        )
+        .on_pointer_entered(move |_| dismiss_chart_hover(&clear_hover)),
     ))
     .spacing(10.0)
     .horizontal_alignment(HorizontalAlignment::Stretch)
+    .relative_align_left()
+    .relative_align_right()
+    .relative_align_top();
+
+    relative_panel({
+        let mut layers = vec![page.into()];
+        if let Some(tooltip) = tooltip {
+            layers.push(tooltip);
+        }
+        layers
+    })
     // Stable identity: metric/range/breakdown must not remount this tree.
     // Segmented thumbs keep their native hosts so Translation can slide.
     // Chart/icons remount themselves via their own keys when content changes.
@@ -128,7 +173,7 @@ fn usage_header(
                         let set_metric = set_metric.clone();
                         let clear_hover = clear_hover.clone();
                         move || {
-                            clear_hover.call(None);
+                            dismiss_chart_hover(&clear_hover);
                             set_metric.call(OverviewMetric::Cost);
                         }
                     }),
@@ -136,7 +181,7 @@ fn usage_header(
                         let set_metric = set_metric.clone();
                         let clear_hover = clear_hover.clone();
                         move || {
-                            clear_hover.call(None);
+                            dismiss_chart_hover(&clear_hover);
                             set_metric.call(OverviewMetric::Tokens);
                         }
                     }),
@@ -175,7 +220,7 @@ fn period_switcher(
                     let set_range = set_range.clone();
                     let clear_hover = clear_hover.clone();
                     move || {
-                        clear_hover.call(None);
+                        dismiss_chart_hover(&clear_hover);
                         set_range.call(item);
                     }
                 })
@@ -569,8 +614,6 @@ fn provider_row(
 
 fn usage_chart_card(
     series: &[DailySeriesPoint],
-    start_date: NaiveDate,
-    end_date: NaiveDate,
     hourly: bool,
     providers: &[ProviderOverview],
     metric: OverviewMetric,
@@ -584,67 +627,19 @@ fn usage_chart_card(
         (false, OverviewMetric::Cost) => "Cost",
         (false, OverviewMetric::Tokens) => "Tokens",
     };
-    let filled = if hourly {
-        fill_hourly_series(series)
-    } else {
-        fill_daily_series(series, start_date, end_date)
-    };
     let chart = usage_area_chart(
-        &filled,
+        series,
         providers,
         metric,
         hourly,
         hover,
         color_scheme,
         set_hover,
+        providers.len(),
     );
-    let tooltip = hover
-        .and_then(|index| filled.get(index).map(|point| (index, point)))
-        .map(|(index, point)| {
-            let plot_width = f64::from(popup::POPUP_WIDTH)
-                - 2.0
-                - 32.0
-                - 2.0
-                - USAGE_CARD_PAD * 2.0
-                - CHART_Y_AXIS_WIDTH
-                - CHART_Y_GAP;
-            let panel_width = plot_width + CHART_Y_AXIS_WIDTH + CHART_Y_GAP;
-            let (tip, tip_width) = chart_tooltip(point, providers, metric, hourly, color_scheme);
-            let count = filled.len().max(1) as f64;
-            let step = plot_width / count;
-            let cursor_x = CHART_Y_AXIS_WIDTH + CHART_Y_GAP + step * index as f64 + step / 2.0;
-            let left = tooltip_offset_x(cursor_x, tip_width, panel_width);
-            tip.margin(Thickness {
-                left,
-                top: 8.0,
-                right: 0.0,
-                bottom: 0.0,
-            })
-            .horizontal_alignment(HorizontalAlignment::Left)
-            .vertical_alignment(VerticalAlignment::Top)
-            .relative_align_left()
-            .relative_align_top()
-            .with_key(format!(
-                "usage-tip-{}-{}-{}-{}",
-                metric as i32,
-                hourly,
-                index,
-                point.at.to_rfc3339()
-            ))
-        });
 
     usage_card(
-        vstack((
-            body_strong(title),
-            relative_panel({
-                let mut layers = vec![chart.with_key("usage-chart-plot")];
-                if let Some(tooltip) = tooltip {
-                    layers.push(tooltip);
-                }
-                layers
-            }),
-        ))
-        .spacing(6.0),
+        vstack((body_strong(title), chart.with_key("usage-chart-plot"))).spacing(6.0),
     )
 }
 
@@ -663,6 +658,7 @@ fn usage_area_chart(
     hover: Option<usize>,
     color_scheme: ColorScheme,
     set_hover: SetState<Option<usize>>,
+    provider_count: usize,
 ) -> Element {
     // Popup stroke + body 16px + card stroke/pad, then the Y axis.
     let plot_width = f64::from(popup::POPUP_WIDTH)
@@ -695,7 +691,15 @@ fn usage_area_chart(
     let max_value = chart_scale_max(raw_max);
     let xaml = usage_area_chart_xaml(series, providers, max_value, plot_width, color_scheme);
     let plot = usage_area_chart_host(&xaml, series, providers, metric, color_scheme, plot_width);
-    let hits = usage_chart_hit_targets(series.len(), plot_width, hover, set_hover);
+    let count = series.len();
+    let step = plot_width / count.max(1) as f64;
+    let hits = usage_chart_hit_target(
+        count,
+        plot_width,
+        provider_count,
+        hover,
+        set_hover,
+    );
     let y_axis = usage_y_axis(max_value, metric);
     let x_axis = usage_x_axis(series, hourly);
 
@@ -703,7 +707,10 @@ fn usage_area_chart(
         y_axis,
         relative_panel({
             let mut layers = vec![plot];
-            layers.extend(hits);
+            if let Some(index) = hover {
+                layers.push(chart_hover_rule(step, index));
+            }
+            layers.push(hits);
             layers
         })
         .grid_column(1),
@@ -812,56 +819,94 @@ fn usage_area_chart_host(
     host.with_key(host_key).into()
 }
 
-fn usage_chart_hit_targets(
+fn usage_chart_hit_target(
     count: usize,
     plot_width: f64,
+    provider_count: usize,
     hover: Option<usize>,
     set_hover: SetState<Option<usize>>,
-) -> Vec<Element> {
+) -> Element {
     let step = plot_width / count.max(1) as f64;
-    let mut layers = Vec::with_capacity(count + 1);
-    for index in 0..count {
-        let set_hover_enter = set_hover.clone();
-        let set_hover_exit = set_hover.clone();
-        layers.push(
-            border(Element::Empty)
-                .width(step.max(4.0))
-                .height(CHART_PLOT_HEIGHT)
-                .background(Color::transparent())
-                .margin(Thickness {
-                    left: step * index as f64,
-                    top: 0.0,
-                    right: 0.0,
-                    bottom: 0.0,
-                })
-                .relative_align_left()
-                .relative_align_top()
-                .on_pointer_entered(move |_| set_hover_enter.call(Some(index)))
-                .on_pointer_exited(move || set_hover_exit.call(None))
-                .with_key(format!("usage-hit-{index}"))
-                .into(),
-        );
+    let plot_left = 1.0 + USAGE_CARD_PAD + CHART_Y_AXIS_WIDTH + CHART_Y_GAP;
+    let plot_top = usage_chart_plot_top(provider_count);
+    let set_hover_move = set_hover.clone();
+    border(Element::Empty)
+        .width(plot_width.max(4.0))
+        .height(CHART_PLOT_HEIGHT)
+        .background(Color::transparent())
+        .relative_align_left()
+        .relative_align_top()
+        .on_pointer_entered({
+            let set_hover = set_hover.clone();
+            move |info: PointerEventInfo| {
+                apply_chart_pointer(
+                    info.x,
+                    info.y,
+                    step,
+                    count,
+                    plot_left,
+                    plot_top,
+                    hover,
+                    &set_hover,
+                );
+            }
+        })
+        .on_pointer_moved(move |info: PointerEventInfo| {
+            apply_chart_pointer(
+                info.x,
+                info.y,
+                step,
+                count,
+                plot_left,
+                plot_top,
+                hover,
+                &set_hover_move,
+            );
+        })
+        .on_pointer_exited({
+            let set_hover = set_hover.clone();
+            move || dismiss_chart_hover(&set_hover)
+        })
+        .with_key("usage-hit-plot")
+        .into()
+}
+
+fn apply_chart_pointer(
+    plot_x: f64,
+    plot_y: f64,
+    step: f64,
+    count: usize,
+    plot_left: f64,
+    plot_top: f64,
+    hover: Option<usize>,
+    set_hover: &SetState<Option<usize>>,
+) {
+    if count == 0 {
+        return;
     }
-    if let Some(index) = hover {
-        layers.insert(
-            0,
-            border(Element::Empty)
-                .width(1.0)
-                .height(CHART_PLOT_HEIGHT)
-                .background(ThemeRef::PrimaryText)
-                .margin(Thickness {
-                    left: step * index as f64 + step / 2.0,
-                    top: 0.0,
-                    right: 0.0,
-                    bottom: 0.0,
-                })
-                .relative_align_left()
-                .relative_align_top()
-                .with_key("usage-hover-rule")
-                .into(),
-        );
+    let index = (plot_x / step).floor().clamp(0.0, (count - 1) as f64) as usize;
+    remember_chart_cursor(plot_left + plot_x, plot_top + plot_y);
+    if hover != Some(index) {
+        set_hover.call(Some(index));
     }
-    layers
+    apply_chart_tooltip_offset();
+}
+
+fn chart_hover_rule(step: f64, index: usize) -> Element {
+    border(Element::Empty)
+        .width(1.0)
+        .height(CHART_PLOT_HEIGHT)
+        .background(ThemeRef::PrimaryText)
+        .margin(Thickness {
+            left: step * index as f64 + step / 2.0,
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
+        })
+        .relative_align_left()
+        .relative_align_top()
+        .with_key("usage-hover-rule")
+        .into()
 }
 
 fn usage_y_axis(max_value: u64, metric: OverviewMetric) -> Element {
@@ -1185,6 +1230,132 @@ fn tooltip_offset_x(cursor_x: f64, tip_width: f64, area_width: f64) -> f64 {
     raw.clamp(min_x, max_x)
 }
 
+fn tooltip_offset_y(cursor_y: f64, tip_height: f64, area_height: f64) -> f64 {
+    let min_y = TOOLTIP_EDGE_INSET;
+    let max_y = (area_height - TOOLTIP_EDGE_INSET - tip_height).max(min_y);
+    let prefer_below = cursor_y + TOOLTIP_CURSOR_GAP + tip_height <= area_height - TOOLTIP_EDGE_INSET;
+    let raw = if prefer_below {
+        cursor_y + TOOLTIP_CURSOR_GAP
+    } else {
+        cursor_y - TOOLTIP_CURSOR_GAP - tip_height
+    };
+    raw.clamp(min_y, max_y)
+}
+
+struct ChartTooltipTrack {
+    host: Option<windows_core::IInspectable>,
+    cursor: Option<(f64, f64)>,
+    tip_width: f64,
+    tip_height: f64,
+}
+
+thread_local! {
+    static CHART_TOOLTIP_TRACK: RefCell<ChartTooltipTrack> = RefCell::new(ChartTooltipTrack {
+        host: None,
+        cursor: None,
+        tip_width: 0.0,
+        tip_height: 0.0,
+    });
+}
+
+fn remember_chart_cursor(x: f64, y: f64) {
+    CHART_TOOLTIP_TRACK.with(|track| {
+        track.borrow_mut().cursor = Some((x, y));
+    });
+}
+
+fn dismiss_chart_hover(set_hover: &SetState<Option<usize>>) {
+    CHART_TOOLTIP_TRACK.with(|track| {
+        let mut track = track.borrow_mut();
+        track.cursor = None;
+        track.host = None;
+    });
+    set_hover.call(None);
+}
+
+fn apply_chart_tooltip_offset() {
+    CHART_TOOLTIP_TRACK.with(|track| {
+        let track = track.borrow();
+        let Some(host) = track.host.clone() else {
+            return;
+        };
+        let Some((cursor_x, cursor_y)) = track.cursor else {
+            return;
+        };
+        let page_width = usage_page_width();
+        let visible = (popup::body_viewport_height_dip() - 32.0).max(80.0);
+        let left = tooltip_offset_x(cursor_x, track.tip_width, page_width);
+        let top = tooltip_offset_y(cursor_y, track.tip_height, visible);
+        let _ = windows_reactor::set_translation_xy(host, left as f32, top as f32);
+    });
+}
+
+fn usage_page_width() -> f64 {
+    f64::from(popup::POPUP_WIDTH) - 2.0 - 32.0
+}
+
+fn usage_header_height() -> f64 {
+    32.0 + 8.0 + 32.0
+}
+
+fn usage_hero_height(provider_count: usize) -> f64 {
+    let rows = provider_count.div_ceil(2).max(1) as f64;
+    let row_h = 57.0;
+    USAGE_CARD_PAD * 2.0
+        + 2.0
+        + 28.0
+        + 8.0
+        + 10.0
+        + 16.0
+        + rows * row_h
+        + (rows - 1.0).max(0.0) * 16.0
+}
+
+fn usage_chart_plot_top(provider_count: usize) -> f64 {
+    usage_header_height()
+        + 10.0
+        + usage_hero_height(provider_count)
+        + 10.0
+        + 1.0
+        + USAGE_CARD_PAD
+        + 20.0
+        + 6.0
+}
+
+fn usage_page_tooltip(
+    point: &DailySeriesPoint,
+    _index: usize,
+    _series_len: usize,
+    providers: &[ProviderOverview],
+    metric: OverviewMetric,
+    hourly: bool,
+    color_scheme: ColorScheme,
+    _provider_count: usize,
+) -> Element {
+    let (tip, tip_width, tip_height) = chart_tooltip(point, providers, metric, hourly, color_scheme);
+    CHART_TOOLTIP_TRACK.with(|track| {
+        let mut track = track.borrow_mut();
+        track.tip_width = tip_width;
+        track.tip_height = tip_height;
+    });
+    let mut host = vstack((tip,));
+    host.mounted = Some(Callback::new(|native: Option<windows_core::IInspectable>| {
+        if let Some(host) = native.clone() {
+            let _ = windows_reactor::set_hit_test_visible(host, false);
+        }
+        CHART_TOOLTIP_TRACK.with(|track| {
+            track.borrow_mut().host = native;
+        });
+        apply_chart_tooltip_offset();
+    }));
+    host.horizontal_alignment(HorizontalAlignment::Left)
+        .vertical_alignment(VerticalAlignment::Top)
+        .relative_align_left()
+        .relative_align_top()
+        .with_key("usage-tip-host")
+        .into()
+}
+
 fn tooltip_metric_row(label: impl Into<Element>, amount: impl Into<String>) -> Element {
     grid((
         label.into().vertical_alignment(VerticalAlignment::Center),
@@ -1208,7 +1379,7 @@ fn chart_tooltip(
     metric: OverviewMetric,
     hourly: bool,
     color_scheme: ColorScheme,
-) -> (Element, f64) {
+) -> (Element, f64, f64) {
     let title = if hourly {
         format!(
             "{} · {}",
@@ -1288,6 +1459,7 @@ fn chart_tooltip(
         tooltip_metric_row(caption("Total").foreground(ThemeRef::SecondaryText), total)
             .with_key("usage-tip-total"),
     );
+    let row_count = rows.len();
 
     let tip = border(
         vstack((
@@ -1312,7 +1484,12 @@ fn chart_tooltip(
     .border_brush(ThemeRef::CardStroke)
     .horizontal_alignment(HorizontalAlignment::Left)
     .into();
-    (tip, tip_width)
+    let tip_height = TOOLTIP_PAD_Y * 2.0
+        + 20.0
+        + 10.0
+        + row_count as f64 * 20.0
+        + (row_count.saturating_sub(1) as f64) * 6.0;
+    (tip, tip_width, tip_height)
 }
 
 fn usage_totals_card(totals: &TokenUsage) -> Element {

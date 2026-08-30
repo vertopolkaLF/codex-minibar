@@ -105,6 +105,19 @@ pub fn animate_translation_x(
         .StartAnimation("Offset.X", &animation.cast::<CompositionAnimation>()?)
 }
 
+/// Snap `UIElement.Translation` in both axes. Hit-testing follows the visual,
+/// unlike compositor `Offset`.
+pub fn set_translation_xy(native: windows_core::IInspectable, x: f32, y: f32) -> Result<()> {
+    let ui = native.cast::<UIElement>()?;
+    ui.SetTranslation(windows_numerics::Vector3 { x, y, z: 0.0 })
+}
+
+/// Pointer events pass through when `visible` is false.
+pub fn set_hit_test_visible(native: windows_core::IInspectable, visible: bool) -> Result<()> {
+    let ui = native.cast::<UIElement>()?;
+    ui.SetIsHitTestVisible(visible)
+}
+
 /// Snap compositor `Offset.X` without touching XAML layout.
 pub fn set_offset_x(native: windows_core::IInspectable, x: f32) -> Result<()> {
     let ui = native.cast::<UIElement>()?;

@@ -207,6 +207,13 @@ pub fn max_client_height_dip() -> i32 {
     MAX_CLIENT_HEIGHT_DIP.load(Ordering::SeqCst)
 }
 
+/// Visible body height in DIP (popup client minus footer and chrome).
+pub fn body_viewport_height_dip() -> f64 {
+    let applied = APPLIED_CLIENT_HEIGHT_DIP.load(Ordering::SeqCst);
+    let target = CLIENT_HEIGHT_DIP.load(Ordering::SeqCst);
+    f64::from((applied.max(target) - FOOTER_HEIGHT - CHROME_HEIGHT).max(80))
+}
+
 /// The same DPI used by `ReactorHost::resize_client`; mixing it with the
 /// monitor DPI makes a nominal 80% window visibly much shorter on scaled
 /// displays.

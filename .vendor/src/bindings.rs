@@ -16212,6 +16212,16 @@ impl IUIElement {
             .ok()
         }
     }
+    /// `UIElement.IsHitTestVisible`. Slot is stubbed as `usize`.
+    pub(crate) fn SetIsHitTestVisible(&self, value: bool) -> windows_core::Result<()> {
+        unsafe {
+            type Set =
+                unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_core::HRESULT;
+            let set: Set =
+                core::mem::transmute(windows_core::Interface::vtable(self).SetIsHitTestVisible);
+            set(windows_core::Interface::as_raw(self), value).ok()
+        }
+    }
     /// `UIElement.Translation` — post-layout visual offset. Vtable slot is
     /// stubbed as `usize` in the trimmed bindings.
     pub(crate) fn SetTranslation(
