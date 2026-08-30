@@ -614,12 +614,12 @@ impl PopupSurfaceVisibility {
     }
 }
 
-/// Independent All-tab vs provider-tab visibility for popup cards.
+/// Independent Home-tab vs provider-tab visibility for popup cards.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PopupVisibility {
     pub bricks: BTreeMap<String, PopupSurfaceVisibility>,
-    /// Provider id → show that provider's block on the All tab.
+    /// Provider id → show that provider's block on the Home tab.
     /// Missing keys default to true so older settings keep current cards.
     pub provider_all_tab: BTreeMap<String, bool>,
 }
@@ -680,7 +680,7 @@ impl PopupVisibility {
             .unwrap_or(true);
         if show_provider_tabs {
             match surface {
-                PopupSurface::AllTab => section_all && visibility.all_tab,
+                PopupSurface::HomeTab => section_all && visibility.all_tab,
                 PopupSurface::ProviderTab => visibility.provider_tab,
             }
         } else {
@@ -791,11 +791,11 @@ impl PopupVisibility {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PopupSurface {
-    AllTab,
+    HomeTab,
     ProviderTab,
 }
 
-/// Ordered slots on the popup All tab, including Total Spend.
+/// Ordered slots on the popup Home tab, including Total Spend.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PopupWidgetKind {
@@ -935,7 +935,7 @@ impl TotalSpendPresentation {
     }
 }
 
-/// Time range for the Total Spend card on the popup All tab.
+/// Time range for the Total Spend card on the popup Home tab.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TotalSpendPeriod {
@@ -1215,7 +1215,7 @@ pub struct Settings {
     /// 12-hour or 24-hour clocks. Missing values follow the Windows locale.
     pub time_format: TimeFormat,
     pub providers: ProviderSettings,
-    /// Display order for All-tab widgets (Total Spend + providers) and footer tabs.
+    /// Display order for Home-tab widgets (Total Spend + providers) and footer tabs.
     pub popup_order: Vec<PopupWidgetKind>,
     pub use_colored_provider_icons: bool,
     pub replace_chatgpt_logo_with_codex: bool,
@@ -1226,13 +1226,13 @@ pub struct Settings {
     pub start_at_login: bool,
     pub show_used_percentage: bool,
     pub show_usage_pace: bool,
-    /// Per-card visibility for popup All and provider tabs.
+    /// Per-card visibility for popup Home and provider tabs.
     pub popup_visibility: PopupVisibility,
-    /// Shows the compact provider spend breakdown on the popup's All tab.
+    /// Shows the compact provider spend breakdown on the popup's Home tab.
     pub show_total_spend_on_all_tab: bool,
     /// Chooses between the donut and progress-bar spend layouts.
     pub total_spend_presentation: TotalSpendPresentation,
-    /// Last selected Total Spend time range on the All tab.
+    /// Last selected Total Spend time range on the Home tab.
     pub total_spend_period: TotalSpendPeriod,
     pub show_account_name: bool,
     /// Optional explicit Codex CLI launcher. When unset, discovery continues
@@ -1520,7 +1520,7 @@ impl Settings {
         Ok(())
     }
 
-    /// Ensures `popup_order` lists every known All-tab widget exactly once.
+    /// Ensures `popup_order` lists every known Home-tab widget exactly once.
     pub fn normalize_popup_order(&mut self) -> bool {
         let mut next = Vec::with_capacity(PopupWidgetKind::ALL.len());
         for widget in &self.popup_order {
@@ -1567,7 +1567,7 @@ impl Settings {
             .collect()
     }
 
-    /// Visible All-tab widgets for the current enable flags.
+    /// Visible Home-tab widgets for the current enable flags.
     pub fn ordered_visible_popup_widgets(&self, show_total_spend: bool) -> Vec<PopupWidgetKind> {
         self.popup_order
             .iter()
@@ -1581,7 +1581,7 @@ impl Settings {
             .collect()
     }
 
-    /// Moves a visible All-tab widget onto another visible widget's slot.
+    /// Moves a visible Home-tab widget onto another visible widget's slot.
     pub fn move_popup_widget(
         &mut self,
         active: PopupWidgetKind,
@@ -2103,7 +2103,7 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 version = 13;
             }
             13 => {
-                // The All tab previously had no usage summary at all, so
+                // The Home tab previously had no usage summary at all, so
                 // preserve the new feature's default when existing settings
                 // files are upgraded.
                 document
@@ -2443,7 +2443,7 @@ mod tests {
         ));
         assert!(!value.popup_visibility.is_visible(
             "codex.usage",
-            PopupSurface::AllTab,
+            PopupSurface::HomeTab,
             true
         ));
         assert!(value.popup_visibility.provider_shown_on_all(ProviderKind::Codex));
@@ -2486,7 +2486,7 @@ show_usage_stats = false
         assert_eq!(loaded.version, SETTINGS_VERSION);
         assert!(!loaded.popup_visibility.is_visible(
             "codex.resets",
-            PopupSurface::AllTab,
+            PopupSurface::HomeTab,
             true
         ));
         assert!(!loaded.popup_visibility.is_visible(
@@ -2499,16 +2499,16 @@ show_usage_stats = false
     #[test]
     fn provider_all_tab_hides_the_whole_section_without_touching_bricks() {
         let mut visibility = PopupVisibility::build_defaults();
-        assert!(visibility.is_visible("codex.session", PopupSurface::AllTab, true));
+        assert!(visibility.is_visible("codex.session", PopupSurface::HomeTab, true));
         assert!(visibility.provider_visible_on_all(ProviderKind::Codex));
 
         visibility.set_provider_all_tab(ProviderKind::Codex, false);
         assert!(!visibility.provider_shown_on_all(ProviderKind::Codex));
         assert!(!visibility.provider_visible_on_all(ProviderKind::Codex));
-        assert!(!visibility.is_visible("codex.session", PopupSurface::AllTab, true));
+        assert!(!visibility.is_visible("codex.session", PopupSurface::HomeTab, true));
         assert!(visibility.is_visible("codex.session", PopupSurface::ProviderTab, true));
         assert!(visibility.visibility_for("codex.session").all_tab);
-        assert!(!visibility.is_visible("codex.session", PopupSurface::AllTab, false));
+        assert!(!visibility.is_visible("codex.session", PopupSurface::HomeTab, false));
     }
 
     #[test]
@@ -2537,7 +2537,7 @@ show_usage_stats = false
         assert!(settings.absorb_discovered_popup_bricks(&limits));
         assert!(settings.popup_visibility.is_visible(
             &brick_id,
-            PopupSurface::AllTab,
+            PopupSurface::HomeTab,
             true
         ));
         assert!(!settings.absorb_discovered_popup_bricks(&limits));
@@ -2600,7 +2600,7 @@ tray_widgets = []
         assert!(migrated.show_usage_pace);
         assert!(migrated.popup_visibility.is_visible(
             "codex.resets",
-            PopupSurface::AllTab,
+            PopupSurface::HomeTab,
             true
         ));
         assert!(migrated.popup_visibility.is_visible(

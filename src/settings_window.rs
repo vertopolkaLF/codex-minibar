@@ -6421,10 +6421,10 @@ fn popup_settings_cards(
     let apply_show_total_spend = settings_tx.clone();
     let apply_total_spend_presentation = settings_tx.clone();
     let mut rows = vec![
-        settings_section_heading("All tab").with_key("popup-all-tab-heading"),
+        settings_section_heading("Home tab").with_key("popup-home-tab-heading"),
         settings_toggle_card_with_description(
             "Show total spend",
-            Some("Shows the provider spend breakdown when All is selected."),
+            Some("Shows the provider spend breakdown when Home is selected."),
             show_total_spend_on_all_tab,
             move |value| {
                 persist_bool(
@@ -6443,7 +6443,7 @@ fn popup_settings_cards(
         .with_key("popup-show-total-spend"),
         settings_control_card(
             "Total spend layout",
-            Some("Choose how provider totals are arranged in the All tab."),
+            Some("Choose how provider totals are arranged in the Home tab."),
             ComboBox::new(["Donut", "Progress bar"])
                 .selected_index(total_spend_presentation.index())
                 .on_selection_changed({

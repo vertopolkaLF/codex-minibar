@@ -386,14 +386,14 @@ impl UiState {
     }
 }
 
-/// The popup either shows the combined feed or one enabled provider.
+/// The popup either shows the Home feed or one enabled provider.
 ///
 /// This intentionally stays ephemeral: it is a view choice for the currently
 /// open popup, not an application preference that should survive a restart.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum PopupView {
     #[default]
-    All,
+    Home,
     Usage,
     Codex,
     Claude,
@@ -417,7 +417,7 @@ impl PopupView {
 
     const fn provider(self) -> Option<ProviderKind> {
         match self {
-            Self::All | Self::Usage => None,
+            Self::Home | Self::Usage => None,
             Self::Codex => Some(ProviderKind::Codex),
             Self::Claude => Some(ProviderKind::Claude),
             Self::Cursor => Some(ProviderKind::Cursor),
@@ -429,7 +429,7 @@ impl PopupView {
 
     fn order(self, provider_order: &[ProviderKind]) -> i32 {
         match self {
-            Self::All => 0,
+            Self::Home => 0,
             Self::Usage => 1,
             other => {
                 let provider = other.provider().expect("provider view");
@@ -451,7 +451,7 @@ fn enabled_popup_views(
     opencode_go: bool,
     openrouter: bool,
 ) -> Vec<PopupView> {
-    let mut views = vec![PopupView::All, PopupView::Usage];
+    let mut views = vec![PopupView::Home, PopupView::Usage];
     for widget in popup_order {
         let Some(provider) = widget.as_provider() else {
             continue;
@@ -600,7 +600,7 @@ struct PagerState {
 impl Default for PagerState {
     fn default() -> Self {
         Self {
-            current: PopupView::All,
+            current: PopupView::Home,
             outgoing: None,
             pending: None,
             direction: PagerDirection::Forward,
@@ -1653,7 +1653,7 @@ fn openrouter_accounts_strip_key(limits: &RateLimits) -> String {
 fn popup_body_height_key(limits: &ProviderLimits, view: PopupView) -> String {
     let mut key = String::new();
     let providers: Vec<ProviderKind> = match view {
-        PopupView::All => crate::provider_registry::PROVIDERS
+        PopupView::Home => crate::provider_registry::PROVIDERS
             .iter()
             .map(|descriptor| descriptor.kind)
             .collect(),
@@ -1812,7 +1812,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             move || {
                 pager_dispatch.call(PagerAction::SetProviderOrder(order.clone()));
                 let available = match pager.current {
-                    PopupView::All | PopupView::Usage => true,
+                    PopupView::Home | PopupView::Usage => true,
                     PopupView::Codex => ui.codex_enabled,
                     PopupView::Claude => ui.claude_enabled,
                     PopupView::Cursor => ui.cursor_enabled,
@@ -1821,7 +1821,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     PopupView::OpenRouter => ui.openrouter_enabled,
                 };
                 if !available {
-                    pager_dispatch.call(PagerAction::Select(PopupView::All));
+                    pager_dispatch.call(PagerAction::Select(PopupView::Home));
                 }
             }
         },
@@ -1919,14 +1919,14 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         ui.opencode_go_enabled,
         ui.openrouter_enabled,
     );
-    let can_reorder_widgets = selected_view == PopupView::All && all_tab_widgets.len() > 1;
+    let can_reorder_widgets = selected_view == PopupView::Home && all_tab_widgets.len() > 1;
     let build_body = |view: PopupView, retain_disabled_detail: bool| {
-        let surface = if view == PopupView::All {
-            PopupSurface::AllTab
+        let surface = if view == PopupView::Home {
+            PopupSurface::HomeTab
         } else {
             PopupSurface::ProviderTab
         };
-        let show_total_spend = show_total_spend && view == PopupView::All;
+        let show_total_spend = show_total_spend && view == PopupView::Home;
 
         let mut body: Vec<Element> = Vec::new();
         let mut has_preceding_section = false;
@@ -1942,7 +1942,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             has_preceding_section = true;
         }
 
-        if view == PopupView::All {
+        if view == PopupView::Home {
             let widgets = visible_popup_widgets(
                 &ui.popup_order,
                 show_total_spend,
@@ -2020,7 +2020,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                             ui.show_used_percentage,
                             ui.show_usage_pace,
                             &ui.popup_visibility,
-                            PopupSurface::AllTab,
+                            PopupSurface::HomeTab,
                             show_provider_tabs,
                             ui.show_account_name,
                             color_scheme,
@@ -2216,11 +2216,11 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             }
         });
         let mut provider_tabs = vec![popup_tab_button(
-            "provider-tab-all",
+            "provider-tab-home",
+            Some("fluent-home"),
             None,
-            Some("All"),
-            "All providers",
-            selected_view == PopupView::All,
+            "Home",
+            selected_view == PopupView::Home,
             ui.use_colored_provider_icons,
             color_scheme,
             &hovered_action,
@@ -2228,7 +2228,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             on_tab_wheel.clone(),
             {
                 let pager_dispatch = pager_dispatch.clone();
-                move || pager_dispatch.call(PagerAction::Select(PopupView::All))
+                move || pager_dispatch.call(PagerAction::Select(PopupView::Home))
             },
         )];
         provider_tabs.push(popup_tab_button(
@@ -2304,7 +2304,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         }
         }
         let tabs_key = format!(
-            "provider-tabs-usage-{}-{}-{}-{}",
+            "provider-tabs-home-usage-{}-{}-{}-{}",
             provider_order_key(&enabled_provider_order),
             show_provider_icon_tabs,
             ui.use_colored_provider_icons,
@@ -3510,7 +3510,8 @@ const FOOTER_ACTION_SPACING: f64 = 4.0;
 const FOOTER_ACTION_COUNT: f64 = 2.0;
 
 fn provider_tab_strip_content_width(provider_count: usize) -> f64 {
-    ALL_TAB_WIDTH
+    // Home + Usage + enabled provider tabs.
+    ICON_BUTTON_SIZE
         + ICON_BUTTON_SIZE
         + TAB_STRIP_SPACING
         + provider_count as f64 * (ICON_BUTTON_SIZE + TAB_STRIP_SPACING)
@@ -3525,7 +3526,7 @@ fn provider_tab_strip_viewport_width() -> f64 {
             + FOOTER_ACTION_SPACING * (FOOTER_ACTION_COUNT - 1.0))
 }
 
-/// Compact footer selector item for choosing the combined or provider view.
+/// Compact footer selector item for choosing the Home, Usage, or provider view.
 fn popup_tab_button(
     id: &'static str,
     icon_name: Option<&'static str>,
@@ -3551,7 +3552,7 @@ fn popup_tab_button(
         Some("cursor") => combined_usage_color(ProviderKind::Cursor, color_scheme),
         Some("opencode") => combined_usage_color(ProviderKind::OpenCodeZen, color_scheme),
         Some("openrouter") => combined_usage_color(ProviderKind::OpenRouter, color_scheme),
-        Some("fluent-chart") => popup_chrome_icon_color(color_scheme, false),
+        Some("fluent-chart") | Some("fluent-home") => popup_chrome_icon_color(color_scheme, false),
         _ => idle_icon_color,
     };
     let tab_width = if label.is_some() {
@@ -3708,7 +3709,7 @@ fn chrome_icon_button(
     let hover_background: Element = border(Element::Empty)
         .background(ThemeRef::SubtleFill)
         .opacity(if hovered { 1.0 } else { 0.0 })
-        .corner_radius(4.0)
+        .corner_radius(6.0)
         .relative_align_left()
         .relative_align_right()
         .relative_align_top()
@@ -5109,7 +5110,7 @@ mod tests {
             false,
             true,
             &visibility,
-            PopupSurface::AllTab,
+            PopupSurface::HomeTab,
             true,
             false,
             ColorScheme::Dark,
@@ -5139,13 +5140,13 @@ mod tests {
         let visibility = visibility_with("codex.usage", false, true);
         assert!(visibility.is_visible(
             "codex.usage",
-            PopupSurface::AllTab,
+            PopupSurface::HomeTab,
             false
         ));
     }
 
     #[test]
-    fn popup_section_all_off_drops_provider_from_all_tab() {
+    fn popup_section_all_off_drops_provider_from_home_tab() {
         let mut visibility = all_visible();
         visibility.set_provider_all_tab(ProviderKind::Codex, false);
         let widgets = visible_popup_widgets(
@@ -5338,7 +5339,7 @@ mod tests {
     #[test]
     fn pager_queues_only_the_latest_destination() {
         let state = reduce_pager(PagerState::default(), PagerAction::Select(PopupView::Codex));
-        assert_eq!(state.outgoing, Some(PopupView::All));
+        assert_eq!(state.outgoing, Some(PopupView::Home));
         assert_eq!(state.current, PopupView::Codex);
         assert_eq!(state.direction, PagerDirection::Forward);
 
@@ -5360,9 +5361,9 @@ mod tests {
             current: PopupView::Cursor,
             ..PagerState::default()
         };
-        let state = reduce_pager(state, PagerAction::Select(PopupView::All));
+        let state = reduce_pager(state, PagerAction::Select(PopupView::Home));
         assert_eq!(state.outgoing, Some(PopupView::Cursor));
-        assert_eq!(state.current, PopupView::All);
+        assert_eq!(state.current, PopupView::Home);
         assert_eq!(state.direction, PagerDirection::Backward);
         assert!(state.direction.outgoing_offset() > 0.0);
         assert!(state.direction.incoming_offset() < 0.0);
@@ -5389,7 +5390,7 @@ mod tests {
             );
             let providers = provider_order_from_popup(&default_order);
 
-            assert_eq!(views.first(), Some(&PopupView::All));
+            assert_eq!(views.first(), Some(&PopupView::Home));
             assert_eq!(views.get(1), Some(&PopupView::Usage));
             assert_eq!(views.contains(&PopupView::Codex), codex);
             assert_eq!(views.contains(&PopupView::Claude), claude);
@@ -5426,7 +5427,7 @@ mod tests {
         assert_eq!(
             views,
             vec![
-                PopupView::All,
+                PopupView::Home,
                 PopupView::Cursor,
                 PopupView::Claude,
                 PopupView::Codex,

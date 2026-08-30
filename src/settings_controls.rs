@@ -800,16 +800,29 @@ pub(crate) fn settings_action_card(
 /// both; the 32px chrome is the template's check glyph host.
 /// https://github.com/microsoft/microsoft-ui-xaml/issues/2671
 const POPUP_BRICK_CHECK_COL_PX: f64 = 32.0;
+/// Shared Home/Tab column width — wide enough for the "Home" header.
+const POPUP_BRICK_LABEL_COL_PX: f64 = 44.0;
 /// `NormalRectangle` in the default CheckBox template is 20×20, left-aligned
-/// in the 32px host. Header labels center over that glyph, not the chrome.
+/// in the 32px host. Headers and checkboxes are optically centered on that glyph.
 const POPUP_BRICK_GLYPH_PX: f64 = 20.0;
 
 fn popup_brick_columns() -> [GridLength; 3] {
     [
         GridLength::Star(1.0),
-        GridLength::Pixel(POPUP_BRICK_CHECK_COL_PX),
-        GridLength::Pixel(POPUP_BRICK_CHECK_COL_PX),
+        GridLength::Pixel(POPUP_BRICK_LABEL_COL_PX),
+        GridLength::Pixel(POPUP_BRICK_LABEL_COL_PX),
     ]
+}
+
+/// Left inset so the 20px check glyph sits in the horizontal center of the column.
+fn popup_brick_glyph_center_margin() -> Thickness {
+    let inset = (POPUP_BRICK_LABEL_COL_PX - POPUP_BRICK_GLYPH_PX) / 2.0;
+    Thickness {
+        left: inset,
+        top: 0.0,
+        right: 0.0,
+        bottom: 0.0,
+    }
 }
 
 fn popup_brick_header_label(label: &str, column: i32) -> Element {
@@ -821,22 +834,18 @@ fn popup_brick_header_label(label: &str, column: i32) -> Element {
             .grid_column(0)
             .into();
     }
-    let caption: Element = text_block(label)
+    text_block(label)
         .font_size(12.0)
         .opacity(0.72)
-        .relative_align_h_center()
-        .relative_align_v_center()
-        .into();
-    relative_panel(vec![caption])
-        .width(POPUP_BRICK_GLYPH_PX)
-        .horizontal_alignment(HorizontalAlignment::Left)
+        .horizontal_alignment(HorizontalAlignment::Center)
         .vertical_alignment(VerticalAlignment::Center)
         .grid_column(column)
         .into()
 }
 
 /// Icon-only CheckBox: kill the style MinWidth=120 and Content padding
-/// so only the 32×32 glyph host remains.
+/// so only the 32×32 glyph host remains. Margin optically centers the
+/// 20px check mark inside the wider Home/Tab column.
 fn settings_icon_checkbox(
     checked: bool,
     enabled: bool,
@@ -849,16 +858,17 @@ fn settings_icon_checkbox(
         .max_width(POPUP_BRICK_CHECK_COL_PX)
         .width(POPUP_BRICK_CHECK_COL_PX)
         .padding(Thickness::uniform(0.0))
+        .margin(popup_brick_glyph_center_margin())
         .horizontal_alignment(HorizontalAlignment::Left)
         .vertical_alignment(VerticalAlignment::Center)
 }
 
-/// Shared Card / All / Tab header. All/Tab are centered over the 20px
-/// check glyph that sits on the leading edge of each 32px column.
+/// Shared Card / Home / Tab header. Home/Tab labels sit centered in their
+/// columns, matching the optically centered check glyphs below.
 pub(crate) fn settings_brick_table_header(row_key: &str) -> Element {
     grid(vec![
         popup_brick_header_label("Card", 0),
-        popup_brick_header_label("All", 1),
+        popup_brick_header_label("Home", 1),
         popup_brick_header_label("Tab", 2),
     ])
     .columns(popup_brick_columns())
@@ -868,21 +878,21 @@ pub(crate) fn settings_brick_table_header(row_key: &str) -> Element {
     .into()
 }
 
-/// Trailing All-tab master checkbox. Content is the label so WinUI
+/// Trailing Home-tab master checkbox. Content is the label so WinUI
 /// applies the template's optical padding instead of a sibling TextBlock.
 pub(crate) fn settings_section_all_toggle(
     checked: bool,
     on_checked: impl IntoCallback<bool>,
 ) -> Element {
     CheckBox::new(checked)
-        .content("All")
+        .content("Home")
         .on_checked(on_checked)
         .min_width(0.0)
         .vertical_alignment(VerticalAlignment::Center)
         .into()
 }
 
-/// Card name on the left; All and Tab are icon-only native checkboxes.
+/// Card name on the left; Home and Tab are icon-only native checkboxes.
 pub(crate) fn settings_brick_row(
     label: impl Into<String>,
     all_tab: bool,
@@ -900,7 +910,7 @@ pub(crate) fn settings_brick_row(
             .grid_column(0)
             .into(),
         settings_icon_checkbox(all_tab, all_enabled, on_all_tab_changed)
-            .tooltip("Show on All tab")
+            .tooltip("Show on Home tab")
             .grid_column(1)
             .into(),
         settings_icon_checkbox(provider_tab, true, on_provider_tab_changed)
