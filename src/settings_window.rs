@@ -8,8 +8,9 @@ use crate::notifications;
 use crate::settings::TraySource;
 use crate::settings::{
     AccentColor, AppTheme, LimitRefreshInterval, LimitValue, OpenRouterAccount, PopupVisibility,
-    PopupWidgetKind, ProviderKind, ScheduledActivation, Settings, TotalSpendPresentation,
-    TrayColorMode, TrayFixedColor, TrayIndicator, TrayPresentation, TrayWidget, TrayWidgetKind,
+    PopupWidgetKind, ProviderKind, ScheduledActivation, Settings, TimeFormat,
+    TotalSpendPresentation, TrayColorMode, TrayFixedColor, TrayIndicator, TrayPresentation,
+    TrayWidget, TrayWidgetKind,
 };
 use crate::settings_controls::{
     settings_action_card, settings_brick_row, settings_brick_table_header,
@@ -75,6 +76,7 @@ struct TrayPreviewCacheEntry {
     widget: TrayWidget,
     accent: [u8; 3],
     uses_light_theme: bool,
+    time_format: TimeFormat,
     minute_bucket: u64,
     pixels: Arc<Vec<u8>>,
 }
@@ -140,6 +142,7 @@ struct SettingsWindowState {
     theme: SetState<AppTheme>,
     accent_color: SetState<AccentColor>,
     animations_enabled: SetState<bool>,
+    time_format: SetState<TimeFormat>,
     codex_enabled: SetState<bool>,
     claude_enabled: SetState<bool>,
     cursor_enabled: SetState<bool>,
@@ -181,6 +184,7 @@ impl SettingsWindowState {
         self.theme.call(settings.theme);
         self.accent_color.call(settings.accent_color);
         self.animations_enabled.call(settings.animations_enabled);
+        self.time_format.call(settings.time_format);
         self.codex_enabled
             .call(settings.providers.is_enabled(ProviderKind::Codex));
         self.claude_enabled
@@ -1891,9 +1895,11 @@ pub fn render(
     let (theme, set_theme) = cx.use_state(settings.theme);
     let (accent_color, set_accent_color) = cx.use_state(settings.accent_color);
     let (animations_enabled, set_animations_enabled) = cx.use_state(settings.animations_enabled);
-    cx.use_effect((theme, accent_color, animations_enabled), move || {
+    let (time_format, set_time_format) = cx.use_state(settings.time_format);
+    cx.use_effect((theme, accent_color, animations_enabled, time_format), move || {
         crate::theme::set_animations_enabled(animations_enabled);
         crate::theme::apply_appearance(theme, accent_color);
+        time_format.apply();
     });
     let (claude_enabled, set_claude_enabled) =
         cx.use_state(settings.providers.is_enabled(ProviderKind::Claude));
@@ -2162,6 +2168,7 @@ pub fn render(
             theme: set_theme.clone(),
             accent_color: set_accent_color.clone(),
             animations_enabled: set_animations_enabled.clone(),
+            time_format: set_time_format.clone(),
             codex_enabled: set_codex_enabled.clone(),
             claude_enabled: set_claude_enabled.clone(),
             cursor_enabled: set_cursor_enabled.clone(),
@@ -2205,6 +2212,7 @@ pub fn render(
             theme,
             accent_color,
             animations_enabled,
+            time_format,
             codex_enabled,
             claude_enabled,
             cursor_enabled,
@@ -2264,6 +2272,7 @@ pub fn render(
             set_theme,
             set_accent_color,
             set_animations_enabled,
+            set_time_format,
             set_claude_enabled,
             set_cursor_enabled,
             set_opencode_zen_enabled,
@@ -2976,6 +2985,7 @@ fn tab_content(
     theme: AppTheme,
     accent_color: AccentColor,
     animations_enabled: bool,
+    time_format: TimeFormat,
     codex_enabled: bool,
     claude_enabled: bool,
     cursor_enabled: bool,
@@ -3035,6 +3045,7 @@ fn tab_content(
     set_theme: SetState<AppTheme>,
     set_accent_color: SetState<AccentColor>,
     set_animations_enabled: SetState<bool>,
+    set_time_format: SetState<TimeFormat>,
     set_claude_enabled: SetState<bool>,
     set_cursor_enabled: SetState<bool>,
     set_opencode_zen_enabled: SetState<bool>,
@@ -3091,6 +3102,7 @@ fn tab_content(
     let apply_theme = settings_tx.clone();
     let apply_accent_color = settings_tx.clone();
     let apply_animations_enabled = settings_tx.clone();
+    let apply_time_format = settings_tx.clone();
     let apply_use_colored_provider_icons = settings_tx.clone();
     let apply_replace_chatgpt_logo_with_codex = settings_tx.clone();
     let apply_automatic_activation = settings_tx.clone();
@@ -3228,6 +3240,24 @@ fn tab_content(
                     set_hovered_card_id.clone(),
                 )
                 .with_key("appearance-accent"),
+                settings_control_card(
+                    "Time format",
+                    Some("12-hour or 24-hour clocks in the popup and tray."),
+                    ComboBox::new(["12-hour", "24-hour"])
+                        .selected_index(time_format.index())
+                        .on_selection_changed(move |choice| {
+                            let value = TimeFormat::from_index(choice);
+                            set_time_format.call(value);
+                            value.apply();
+                            persist_update(apply_time_format.clone(), move |settings| {
+                                settings.time_format = value;
+                            });
+                        }),
+                    "appearance-time-format",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("appearance-time-format"),
                 settings_section_heading("Motion").with_key("appearance-motion-heading"),
                 settings_toggle_card_with_description(
                     "Animation effects",
@@ -3611,6 +3641,7 @@ fn tab_content(
                 theme: set_theme,
                 accent_color: set_accent_color,
                 animations_enabled: set_animations_enabled,
+                time_format: set_time_format,
                 codex_enabled: set_codex_enabled,
                 claude_enabled: set_claude_enabled,
                 cursor_enabled: set_cursor_enabled,
@@ -4616,6 +4647,7 @@ fn tray_widget_preview(widget: &TrayWidget) -> Element {
     let preview_id = widget.id.clone();
     let accent = crate::theme::current_accent_rgb();
     let uses_light_theme = crate::tray::system_uses_light_theme();
+    let time_format = TimeFormat::current();
     let minute_bucket = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs() / 60);
@@ -4625,6 +4657,7 @@ fn tray_widget_preview(widget: &TrayWidget) -> Element {
             && entry.widget == *widget
             && entry.accent == accent
             && entry.uses_light_theme == uses_light_theme
+            && entry.time_format == time_format
             && entry.minute_bucket == minute_bucket
         {
             return (Arc::clone(&entry.pixels), false);
@@ -4641,6 +4674,7 @@ fn tray_widget_preview(widget: &TrayWidget) -> Element {
                 widget: widget.clone(),
                 accent,
                 uses_light_theme,
+                time_format,
                 minute_bucket,
                 pixels: Arc::clone(&pixels),
             },

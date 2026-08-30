@@ -462,13 +462,7 @@ fn weekday_short(date: NaiveDate) -> &'static str {
 }
 
 pub fn format_hour_label(at: DateTime<Local>) -> String {
-    let hour = at.hour();
-    let suffix = if hour < 12 { "AM" } else { "PM" };
-    let hour12 = match hour % 12 {
-        0 => 12,
-        value => value,
-    };
-    format!("{hour12} {suffix}")
+    crate::settings::TimeFormat::current().format_hour_label(at)
 }
 
 fn start_of_local_day(date: NaiveDate) -> DateTime<Local> {

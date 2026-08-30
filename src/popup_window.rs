@@ -26,8 +26,8 @@ use crate::{
     },
     settings::{
         AccentColor, AppTheme, NotificationSettings, PopupSurface, PopupVisibility,
-        PopupWidgetKind, ProviderKind, Settings, TotalSpendPeriod, TotalSpendPresentation,
-        TrayWidget,
+        PopupWidgetKind, ProviderKind, Settings, TimeFormat, TotalSpendPeriod,
+        TotalSpendPresentation, TrayWidget,
     },
     settings_controls::update_accent_button,
     tray::{TrayManager, TrayMenuAction},
@@ -42,9 +42,12 @@ use crate::{
 static KEEP_ON_MONITOR_QUEUED: AtomicBool = AtomicBool::new(false);
 
 fn format_activation_at(at: DateTime<Utc>) -> String {
-    at.with_timezone(&Local)
-        .format("%H:%M:%S %d.%m.%Y")
-        .to_string()
+    let local = at.with_timezone(&Local);
+    format!(
+        "{} {}",
+        TimeFormat::current().format_hms(local),
+        local.format("%d.%m.%Y")
+    )
 }
 
 /// Start of the current 5h window: resets_at minus duration.
@@ -248,6 +251,7 @@ struct UiState {
     theme: AppTheme,
     accent_color: AccentColor,
     animations_enabled: bool,
+    time_format: TimeFormat,
     last_activation: String,
     error: Option<String>,
     /// Changes for every successful worker sample.  Rate-limit data lives only
@@ -329,6 +333,7 @@ impl Default for UiState {
             theme: AppTheme::Auto,
             accent_color: AccentColor::Windows,
             animations_enabled: true,
+            time_format: TimeFormat::from_windows(),
             last_activation: "Never".into(),
             error: None,
             limits_revision: 0,
@@ -1389,7 +1394,12 @@ fn spending_card_with_title(
     if expired {
         let expired_label = expires_at.map_or_else(
             || "expired".into(),
-            |at| format!("expired at {}", at.with_timezone(&Local).format("%H:%M")),
+            |at| {
+                format!(
+                    "expired at {}",
+                    TimeFormat::current().format_hm(at.with_timezone(&Local))
+                )
+            },
         );
         let mut expired_row: Vec<Element> = vec![text_block(expired_label)
             .foreground(ThemeRef::TertiaryText)
@@ -1692,6 +1702,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         theme: state.settings.theme,
         accent_color: state.settings.accent_color,
         animations_enabled: state.settings.animations_enabled,
+        time_format: state.settings.time_format,
         error: state.startup_error.clone(),
         last_activation: format_last_activation(&RateLimits::default(), state.last_activation_at),
         show_used_percentage: state.settings.show_used_percentage,
@@ -1729,10 +1740,11 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         ..UiState::default()
     });
     cx.use_effect(
-        (ui.theme, ui.accent_color, ui.animations_enabled),
+        (ui.theme, ui.accent_color, ui.animations_enabled, ui.time_format),
         move || {
             crate::theme::set_animations_enabled(ui.animations_enabled);
             crate::theme::apply_appearance(ui.theme, ui.accent_color);
+            ui.time_format.apply();
         },
     );
     // Rendering observes the same snapshot that the tray consumes; UiState
@@ -3020,6 +3032,7 @@ fn start_background_bridge(
             ui.theme = settings.theme;
             ui.accent_color = settings.accent_color;
             ui.animations_enabled = settings.animations_enabled;
+            ui.time_format = settings.time_format;
             ui.show_used_percentage = settings.show_used_percentage;
             ui.show_usage_pace = settings.show_usage_pace;
             ui.popup_visibility = settings.popup_visibility.clone();
@@ -4021,10 +4034,12 @@ fn reset_credits_card(limits: &RateLimits) -> Element {
         .unwrap_or_else(|| "No expiration date".into());
     let expiration_date = expiration
         .map(|expires_at| {
-            expires_at
-                .with_timezone(&Local)
-                .format("%b %-d, %H:%M")
-                .to_string()
+            let local = expires_at.with_timezone(&Local);
+            format!(
+                "{}, {}",
+                local.format("%b %-d"),
+                TimeFormat::current().format_hm(local)
+            )
         })
         .unwrap_or_else(|| "Available to use".into());
 

@@ -11,7 +11,8 @@ use crate::{
     limits::{LimitWindow, ProviderLimits, RateLimits},
     provider_registry,
     settings::{
-        LimitValue, ProviderKind, TrayColorMode, TrayPresentation, TrayWidget, TrayWidgetKind,
+        LimitValue, ProviderKind, TimeFormat, TrayColorMode, TrayPresentation, TrayWidget,
+        TrayWidgetKind,
     },
 };
 
@@ -115,10 +116,8 @@ fn format_remaining(window: &LimitWindow) -> String {
 fn format_reset(reset: Option<DateTime<Utc>>) -> String {
     reset
         .map(|value| {
-            value
-                .with_timezone(&Local)
-                .format("%H:%M %d.%m")
-                .to_string()
+            let local = value.with_timezone(&Local);
+            format!("{} {}", TimeFormat::current().format_hm(local), local.format("%d.%m"))
         })
         .unwrap_or_else(|| "?".into())
 }
@@ -143,7 +142,7 @@ fn stacked_reset_label(reset: Option<DateTime<Utc>>, countdown: bool) -> String 
         );
     }
     reset
-        .map(|value| value.with_timezone(&Local).format("%H\n%M").to_string())
+        .map(|value| TimeFormat::current().format_stacked_hm(value.with_timezone(&Local)))
         .unwrap_or_else(|| "?\n?".into())
 }
 

@@ -2,13 +2,18 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU8, Ordering},
 };
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, Local, Timelike};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 29;
+pub const SETTINGS_VERSION: u32 = 30;
+
+/// 255 until `TimeFormat::apply` runs so first paint can still follow Windows.
+static TIME_FORMAT: AtomicU8 = AtomicU8::new(u8::MAX);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -90,6 +95,181 @@ impl AccentColor {
             Self::Teal => Some((0x00, 0x83, 0x8C)),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TimeFormat {
+    #[serde(rename = "hour_12", alias = "hour12")]
+    Hour12,
+    #[serde(rename = "hour_24", alias = "hour24")]
+    Hour24,
+}
+
+impl Default for TimeFormat {
+    fn default() -> Self {
+        Self::from_windows()
+    }
+}
+
+impl TimeFormat {
+    pub const fn index(self) -> i32 {
+        match self {
+            Self::Hour12 => 0,
+            Self::Hour24 => 1,
+        }
+    }
+
+    pub const fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Hour24,
+            _ => Self::Hour12,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Hour12 => "hour_12",
+            Self::Hour24 => "hour_24",
+        }
+    }
+
+    pub fn apply(self) {
+        TIME_FORMAT.store(
+            match self {
+                Self::Hour12 => 0,
+                Self::Hour24 => 1,
+            },
+            Ordering::Relaxed,
+        );
+    }
+
+    pub fn current() -> Self {
+        match TIME_FORMAT.load(Ordering::Relaxed) {
+            0 => Self::Hour12,
+            1 => Self::Hour24,
+            _ => Self::from_windows(),
+        }
+    }
+
+    pub fn from_windows() -> Self {
+        #[cfg(windows)]
+        {
+            if let Some(format) = windows_time_format() {
+                return format;
+            }
+        }
+        Self::Hour24
+    }
+
+    pub fn format_hm(self, at: DateTime<Local>) -> String {
+        match self {
+            Self::Hour24 => format!("{:02}:{:02}", at.hour(), at.minute()),
+            Self::Hour12 => format!(
+                "{}:{:02} {}",
+                hour12(at.hour()),
+                at.minute(),
+                meridiem(at.hour())
+            ),
+        }
+    }
+
+    pub fn format_hms(self, at: DateTime<Local>) -> String {
+        match self {
+            Self::Hour24 => format!("{:02}:{:02}:{:02}", at.hour(), at.minute(), at.second()),
+            Self::Hour12 => format!(
+                "{}:{:02}:{:02} {}",
+                hour12(at.hour()),
+                at.minute(),
+                at.second(),
+                meridiem(at.hour())
+            ),
+        }
+    }
+
+    pub fn format_hour_label(self, at: DateTime<Local>) -> String {
+        match self {
+            Self::Hour24 => format!("{:02}:00", at.hour()),
+            Self::Hour12 => format!("{} {}", hour12(at.hour()), meridiem(at.hour())),
+        }
+    }
+
+    pub fn format_stacked_hm(self, at: DateTime<Local>) -> String {
+        match self {
+            Self::Hour24 => format!("{:02}\n{:02}", at.hour(), at.minute()),
+            Self::Hour12 => format!("{}\n{:02}", hour12(at.hour()), at.minute()),
+        }
+    }
+}
+
+fn hour12(hour: u32) -> u32 {
+    match hour % 12 {
+        0 => 12,
+        value => value,
+    }
+}
+
+fn meridiem(hour: u32) -> &'static str {
+    if hour < 12 { "AM" } else { "PM" }
+}
+
+#[cfg(windows)]
+fn windows_time_format() -> Option<TimeFormat> {
+    match read_international_value("iTime").as_deref() {
+        Some("0") => return Some(TimeFormat::Hour12),
+        Some("1") => return Some(TimeFormat::Hour24),
+        _ => {}
+    }
+    let pattern = read_international_value("sTimeFormat")
+        .or_else(|| read_international_value("sShortTime"))?;
+    if pattern.contains('t') {
+        Some(TimeFormat::Hour12)
+    } else if pattern.contains('H') {
+        Some(TimeFormat::Hour24)
+    } else {
+        None
+    }
+}
+
+#[cfg(windows)]
+fn read_international_value(name: &str) -> Option<String> {
+    use windows_sys::Win32::{
+        Foundation::ERROR_SUCCESS,
+        System::Registry::{
+            HKEY, HKEY_CURRENT_USER, KEY_READ, RRF_RT_REG_SZ, RegCloseKey, RegGetValueW,
+            RegOpenKeyExW,
+        },
+    };
+
+    let subkey: Vec<u16> = "Control Panel\\International"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let value_name: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut key: HKEY = std::ptr::null_mut();
+    let status =
+        unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, subkey.as_ptr(), 0, KEY_READ, &mut key) };
+    if status != ERROR_SUCCESS {
+        return None;
+    }
+    let mut data = [0u16; 64];
+    let mut data_size = (std::mem::size_of_val(&data)) as u32;
+    let result = unsafe {
+        RegGetValueW(
+            key,
+            std::ptr::null(),
+            value_name.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            data.as_mut_ptr().cast(),
+            &mut data_size,
+        )
+    };
+    unsafe { RegCloseKey(key) };
+    if result != ERROR_SUCCESS {
+        return None;
+    }
+    let units = (data_size as usize / 2).saturating_sub(1).min(data.len());
+    Some(String::from_utf16_lossy(&data[..units]).trim().to_string())
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1032,6 +1212,8 @@ pub struct Settings {
     /// App-level accessibility override. The Windows animation preference is
     /// still honored when this remains enabled.
     pub animations_enabled: bool,
+    /// 12-hour or 24-hour clocks. Missing values follow the Windows locale.
+    pub time_format: TimeFormat,
     pub providers: ProviderSettings,
     /// Display order for All-tab widgets (Total Spend + providers) and footer tabs.
     pub popup_order: Vec<PopupWidgetKind>,
@@ -1091,6 +1273,7 @@ impl Default for Settings {
             theme: AppTheme::Auto,
             accent_color: AccentColor::Windows,
             animations_enabled: true,
+            time_format: TimeFormat::from_windows(),
             providers: ProviderSettings::default(),
             popup_order: PopupWidgetKind::default_order(),
             use_colored_provider_icons: false,
@@ -1184,7 +1367,19 @@ impl Settings {
         match document.clone().try_into::<Self>() {
             Ok(settings) => Ok((settings, dirty)),
             Err(error) => {
-                // Drop only the section that failed rather than wiping everything.
+                // A bad newly-introduced scalar must not take providers, tray
+                // widgets, or schedules down with it.
+                let stripped_time_format = document
+                    .as_table_mut()
+                    .is_some_and(|root| root.remove("time_format").is_some());
+                if stripped_time_format
+                    && let Ok(settings) = document.clone().try_into::<Self>()
+                {
+                    eprintln!(
+                        "settings time_format was invalid ({error}); using the Windows clock"
+                    );
+                    return Ok((settings, true));
+                }
                 if let Some(root) = document.as_table_mut() {
                     root.insert("tray_widgets".into(), toml::Value::Array(Vec::new()));
                     root.insert(
@@ -1476,6 +1671,7 @@ impl Settings {
     /// Applies settings whose effect lives outside the render tree.
     pub fn apply_runtime_effects(&self) -> Result<()> {
         crate::theme::set_animations_enabled(self.animations_enabled);
+        self.time_format.apply();
         apply_startup_registration(self.start_at_login)
     }
 
@@ -2190,6 +2386,19 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.insert("version".into(), toml::Value::Integer(29));
                 version = 29;
             }
+            29 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                if !root.contains_key("time_format") {
+                    root.insert(
+                        "time_format".into(),
+                        toml::Value::String(TimeFormat::from_windows().as_str().into()),
+                    );
+                }
+                root.insert("version".into(), toml::Value::Integer(30));
+                version = 30;
+            }
             // Unknown future/gap versions: stamp current and keep decoding with
             // serde defaults rather than refusing to start.
             _ => {
@@ -2219,6 +2428,7 @@ mod tests {
         assert_eq!(value.theme, AppTheme::Auto);
         assert_eq!(value.accent_color, AccentColor::Windows);
         assert!(value.animations_enabled);
+        assert_eq!(value.time_format, TimeFormat::from_windows());
         assert!(!value.use_colored_provider_icons);
         assert!(!value.replace_chatgpt_logo_with_codex);
         assert!(!value.automatic_activation);
@@ -2421,6 +2631,71 @@ tray_widgets = []
         let migrated = Settings::load_or_create(&path).unwrap();
         assert_eq!(migrated.version, SETTINGS_VERSION);
         assert_eq!(migrated.history_retention_days, 30);
+    }
+
+    #[test]
+    fn time_format_uses_stable_dropdown_indices() {
+        assert_eq!(TimeFormat::Hour12.index(), 0);
+        assert_eq!(TimeFormat::Hour24.index(), 1);
+        assert_eq!(TimeFormat::from_index(1), TimeFormat::Hour24);
+        assert_eq!(TimeFormat::from_index(0), TimeFormat::Hour12);
+    }
+
+    #[test]
+    fn time_format_toml_names_round_trip() {
+        for (raw, expected) in [
+            ("hour_12", TimeFormat::Hour12),
+            ("hour12", TimeFormat::Hour12),
+            ("hour_24", TimeFormat::Hour24),
+            ("hour24", TimeFormat::Hour24),
+        ] {
+            let parsed: TimeFormat = toml::Value::String(raw.into()).try_into().unwrap();
+            assert_eq!(parsed, expected);
+        }
+        assert_eq!(
+            toml::to_string(&TimeFormat::Hour24).unwrap().trim(),
+            "\"hour_24\""
+        );
+    }
+
+    #[test]
+    fn time_format_clocks_match_12_and_24_hour() {
+        use chrono::TimeZone;
+        let at = chrono::NaiveDate::from_ymd_opt(2026, 8, 30)
+            .and_then(|date| date.and_hms_opt(15, 4, 7))
+            .and_then(|naive| Local.from_local_datetime(&naive).single())
+            .expect("stable local afternoon");
+        assert_eq!(TimeFormat::Hour24.format_hm(at), "15:04");
+        assert_eq!(TimeFormat::Hour12.format_hm(at), "3:04 PM");
+        assert_eq!(TimeFormat::Hour24.format_hms(at), "15:04:07");
+        assert_eq!(TimeFormat::Hour12.format_hms(at), "3:04:07 PM");
+        assert_eq!(TimeFormat::Hour24.format_hour_label(at), "15:00");
+        assert_eq!(TimeFormat::Hour12.format_hour_label(at), "3 PM");
+        assert_eq!(TimeFormat::Hour24.format_stacked_hm(at), "15\n04");
+        assert_eq!(TimeFormat::Hour12.format_stacked_hm(at), "3\n04");
+    }
+
+    #[test]
+    fn migrates_missing_time_format_from_windows() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(
+            &path,
+            r#"
+version = 29
+[providers]
+enabled = ["codex", "claude"]
+"#,
+        )
+        .unwrap();
+
+        let migrated = Settings::load_or_create(&path).unwrap();
+        assert_eq!(migrated.time_format, TimeFormat::from_windows());
+        assert!(migrated.providers.is_enabled(ProviderKind::Codex));
+        assert!(migrated.providers.is_enabled(ProviderKind::Claude));
+        let raw = fs::read_to_string(path).unwrap();
+        assert!(raw.contains("time_format"));
+        assert!(raw.contains(migrated.time_format.as_str()));
     }
 
     #[test]
