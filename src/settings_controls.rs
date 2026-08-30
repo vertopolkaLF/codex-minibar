@@ -248,14 +248,14 @@ fn animate_expand_progress_between(from: f64, to: f64, set_progress: AsyncSetSta
 /// Shared expandable settings-card shell used by notification and Customize
 /// cards. The trailing control is deliberately injected so switches and
 /// checkboxes keep exactly the same card chrome and hit-test geometry.
-fn settings_expander_card(
-    label: impl Into<String>,
-    description: Option<&str>,
-    trailing: impl Into<Element>,
+fn settings_expander_card_with_header(
+    header: impl Into<Element>,
+    trailing: Option<Element>,
     expanded: bool,
     expand_progress: f64,
     expanded_body_height: Option<f64>,
     toggle_expand: impl Fn() + Clone + 'static,
+    header_is_tappable: bool,
     card_id: impl Into<String>,
     hovered_id: &Option<String>,
     set_hovered_id: SetState<Option<String>>,
@@ -266,16 +266,19 @@ fn settings_expander_card(
     let (on_enter, on_exit) = card_hover_handlers(card_id, set_hovered_id);
     let progress = expand_progress.clamp(0.0, 1.0);
 
-    let trailing = border(trailing.into())
-        .background(Color::transparent())
-        .margin(Thickness {
-            left: 0.0,
-            top: 0.0,
-            right: CARD_PADDING_X + CHEVRON_SIZE + TOGGLE_CHEVRON_GAP,
-            bottom: 0.0,
-        })
-        .relative_align_right()
-        .relative_align_v_center();
+    let trailing_reserve = if trailing.is_some() { 80.0 } else { 0.0 };
+    let trailing = trailing.map(|trailing| {
+        border(trailing)
+            .background(Color::transparent())
+            .margin(Thickness {
+                left: 0.0,
+                top: 0.0,
+                right: CARD_PADDING_X + CHEVRON_SIZE + TOGGLE_CHEVRON_GAP,
+                bottom: 0.0,
+            })
+            .relative_align_right()
+            .relative_align_v_center()
+    });
     let chevron = border(
         crate::icons::element("caret-down", 16.0, Color::rgb(138, 138, 138))
             .horizontal_alignment(HorizontalAlignment::Center)
@@ -298,17 +301,27 @@ fn settings_expander_card(
         move || toggle_expand()
     });
 
-    let label_content: Element = match description {
-        Some(description) => vstack((
-            text_block(label).font_size(14.0).wrap(),
-            text_block(description).font_size(12.0).opacity(0.72).wrap(),
-        ))
-        .spacing(2.0)
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .into(),
-        None => text_block(label).wrap().into(),
+    let header_content = header
+        .into()
+        .margin(Thickness {
+            left: CARD_PADDING_X,
+            top: CARD_CONTENT_PADDING_Y,
+            right: CARD_PADDING_X + CHEVRON_SIZE + TOGGLE_CHEVRON_GAP + trailing_reserve,
+            bottom: CARD_CONTENT_PADDING_Y,
+        })
+        .relative_align_left()
+        .relative_align_v_center();
+    let header_content: Element = if header_is_tappable {
+        header_content
+            .on_tapped({
+                let toggle_expand = toggle_expand.clone();
+                move || toggle_expand()
+            })
+            .into()
+    } else {
+        header_content.into()
     };
-    let header_children: Vec<Element> = vec![
+    let mut header_children: Vec<Element> = vec![
         // Transparent fill so empty header space is hit-testable (null bg is not).
         border(Element::Empty)
             .background(Color::transparent())
@@ -321,23 +334,12 @@ fn settings_expander_card(
                 move || toggle_expand()
             })
             .into(),
-        label_content
-            .margin(Thickness {
-                left: CARD_PADDING_X,
-                top: CARD_CONTENT_PADDING_Y,
-                right: CARD_TRAILING_RESERVE,
-                bottom: CARD_CONTENT_PADDING_Y,
-            })
-            .relative_align_left()
-            .relative_align_v_center()
-            .on_tapped({
-                let toggle_expand = toggle_expand.clone();
-                move || toggle_expand()
-            })
-            .into(),
-        trailing.into(),
-        chevron.into(),
+        header_content,
     ];
+    if let Some(trailing) = trailing {
+        header_children.push(trailing.into());
+    }
+    header_children.push(chevron.into());
     let header = relative_panel(header_children)
     .min_height(CARD_ROW_HEIGHT)
     .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -403,6 +405,47 @@ fn settings_expander_card(
     .into()
 }
 
+fn settings_expander_label(label: impl Into<String>, description: Option<&str>) -> Element {
+    match description {
+        Some(description) => vstack((
+            text_block(label).font_size(14.0).wrap(),
+            text_block(description).font_size(12.0).opacity(0.72).wrap(),
+        ))
+        .spacing(2.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .into(),
+        None => text_block(label).wrap().into(),
+    }
+}
+
+fn settings_expander_card(
+    label: impl Into<String>,
+    description: Option<&str>,
+    trailing: impl Into<Element>,
+    expanded: bool,
+    expand_progress: f64,
+    expanded_body_height: Option<f64>,
+    toggle_expand: impl Fn() + Clone + 'static,
+    card_id: impl Into<String>,
+    hovered_id: &Option<String>,
+    set_hovered_id: SetState<Option<String>>,
+    content: impl Into<Element>,
+) -> Element {
+    settings_expander_card_with_header(
+        settings_expander_label(label, description),
+        Some(trailing.into()),
+        expanded,
+        expand_progress,
+        expanded_body_height,
+        toggle_expand,
+        true,
+        card_id,
+        hovered_id,
+        set_hovered_id,
+        content,
+    )
+}
+
 #[derive(Clone, PartialEq)]
 struct CheckboxExpanderProps {
     label: String,
@@ -460,6 +503,68 @@ impl Component<CheckboxExpanderProps> for CheckboxExpander {
             &props.hovered_id,
             props.set_hovered_id.clone(),
             props.content.clone(),
+        )
+    }
+}
+
+#[derive(Clone, PartialEq)]
+struct ContentExpanderProps {
+    header: Element,
+    expanded: bool,
+    on_expanding: Callback<bool>,
+    card_id: String,
+    hovered_id: Option<String>,
+    set_hovered_id: SetState<Option<String>>,
+    content: Element,
+}
+
+struct ContentExpander;
+
+impl Component<ContentExpanderProps> for ContentExpander {
+    fn render(&self, props: &ContentExpanderProps, cx: &mut RenderCx) -> Element {
+        let (progress, set_progress) =
+            cx.use_async_state(if props.expanded { 1.0_f64 } else { 0.0_f64 });
+        let content_ref = cx.use_ref(props.content.clone());
+        if props.content != Element::Empty {
+            content_ref.set(props.content.clone());
+        }
+        let previous_expanded = cx.use_ref(props.expanded);
+        if previous_expanded.get_cloned() != props.expanded {
+            previous_expanded.set(props.expanded);
+            animate_expand_progress_between(
+                progress,
+                if props.expanded { 1.0 } else { 0.0 },
+                set_progress.clone(),
+            );
+        }
+
+        let next_expanded = !props.expanded;
+        let toggle_expand = {
+            let on_expanding = props.on_expanding.clone();
+            let set_progress = set_progress.clone();
+            let from = progress;
+            move || {
+                on_expanding.invoke(next_expanded);
+                animate_expand_progress_between(
+                    from,
+                    if next_expanded { 1.0 } else { 0.0 },
+                    set_progress.clone(),
+                );
+            }
+        };
+
+        settings_expander_card_with_header(
+            props.header.clone(),
+            None,
+            props.expanded,
+            progress,
+            None,
+            toggle_expand,
+            false,
+            props.card_id.clone(),
+            &props.hovered_id,
+            props.set_hovered_id.clone(),
+            content_ref.get_cloned(),
         )
     }
 }
@@ -570,13 +675,28 @@ pub(crate) fn settings_content_expander(
     header: impl Into<Element>,
     expanded: bool,
     on_expanding: impl IntoCallback<bool>,
+    card_id: impl Into<String>,
+    hovered_id: &Option<String>,
+    set_hovered_id: SetState<Option<String>>,
     content: impl Into<Element>,
 ) -> Element {
-    settings_content_expander_with_trailing(header, None, expanded, on_expanding, content)
+    component(
+        ContentExpander,
+        ContentExpanderProps {
+            header: header.into(),
+            expanded,
+            on_expanding: on_expanding.into_callback(),
+            card_id: card_id.into(),
+            hovered_id: hovered_id.clone(),
+            set_hovered_id,
+            content: content.into(),
+        },
+    )
 }
 
 /// Same chrome as [`settings_content_expander`], plus a trailing header control
 /// that sits above the expand tap target so it does not toggle the card.
+#[allow(dead_code)]
 pub(crate) fn settings_content_expander_with_trailing(
     header: impl Into<Element>,
     trailing: Option<Element>,

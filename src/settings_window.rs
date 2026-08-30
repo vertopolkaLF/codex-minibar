@@ -3487,6 +3487,8 @@ fn tab_content(
                     set_editing_tray_indicator,
                     set_indicator_modal_visible,
                     set_removed_tray_widget,
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
                     settings_tx.clone(),
                 ),
             )
@@ -4836,6 +4838,8 @@ fn tray_settings_cards(
     set_editing_indicator: AsyncSetState<Option<(String, usize)>>,
     set_indicator_modal_visible: AsyncSetState<bool>,
     set_removed_widget: SetState<Option<(usize, TrayWidget)>>,
+    hovered_card_id: &Option<String>,
+    set_hovered_card_id: SetState<Option<String>>,
     settings_tx: Sender<Settings>,
 ) -> Vec<Element> {
     let _ = editing_indicator;
@@ -5211,10 +5215,11 @@ fn tray_settings_cards(
             move |expanded: bool| {
                 expand_setter.call(expanded.then(|| expand_id.clone()));
             },
+            format!("tray-widget-{widget_id}"),
+            hovered_card_id,
+            set_hovered_card_id.clone(),
             content,
         )
-        .with_translation_transition(duration(CONTROL_FAST_ANIMATION))
-        .with_opacity_transition(duration(CONTROL_FAST_ANIMATION))
         .with_key(format!("tray-widget-{widget_id}"));
         rows.push(row);
     }
