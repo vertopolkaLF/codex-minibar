@@ -514,6 +514,10 @@ fn provider_row(
         OverviewMetric::Cost => entry.share_cost,
         OverviewMetric::Tokens => entry.share_tokens,
     };
+    let other = match metric {
+        OverviewMetric::Cost => format_token_count(entry.usage.total_tokens()),
+        OverviewMetric::Tokens => format_spend(entry.usage.estimated_cost_microusd),
+    };
     let detail = format!(
         "{:.1}% of {} · {}",
         share,
@@ -521,7 +525,7 @@ fn provider_row(
             OverviewMetric::Cost => "cost",
             OverviewMetric::Tokens => "tokens",
         },
-        format_token_count(entry.usage.total_tokens())
+        other
     );
 
     vstack((
