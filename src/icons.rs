@@ -24,6 +24,9 @@ pub fn geom(name: &str) -> IconGeom {
         "fluent-drag" => {
             include_str!("../assets/icons/fluent-re-order-dots-vertical-16-regular.svg")
         }
+        "fluent-chart" => {
+            include_str!("../assets/icons/fluent-data-bar-vertical-20-regular.svg")
+        }
 
         // Provider marks are local SVG assets. They are rendered as
         // monochrome paths so they remain legible in either app theme.

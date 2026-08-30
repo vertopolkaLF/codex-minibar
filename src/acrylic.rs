@@ -113,6 +113,12 @@ pub fn install_spend_donut_into(mount: windows_core::IInspectable, xaml: &str) -
     install_into_inner(mount, xaml)
 }
 
+/// Host overlapping usage-area geometry. Same mount-only paint rule as icons:
+/// the caller must remount or reinstall when the path data changes.
+pub fn install_usage_chart_into(mount: windows_core::IInspectable, xaml: &str) -> Result<()> {
+    install_into_inner(mount, xaml)
+}
+
 /// Host the exact 32x32 RGBA output used by the native tray icon renderer.
 /// Adjacent same-color pixels are emitted as horizontal runs, keeping the XAML
 /// tree compact while preserving nearest-neighbour pixel edges in the preview.

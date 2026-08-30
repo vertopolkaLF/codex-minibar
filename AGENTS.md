@@ -36,6 +36,10 @@ When touching popup footer tabs/buttons or `icons::element` / `acrylic::install_
 
 https://github.com/steipete/CodexBar - similar app for macos. You can use it as a reference for the features and implementations.
 
+https://github.com/pingdotgg/t3code - T3 Code. Use it as a reference for the Usage tab, session-log scanning, and hourly/daily aggregation. Their scanner lives in `apps/server/src/usage/` (`UsageService`, `usageTranscripts`, `usageTranscriptReader`) and reads provider CLI transcripts (not T3's own orchestration), same approach as `ccusage`.
+
+https://github.com/janekbaraniewski/openusage - OpenUsage. Local-first usage/quota dashboard; use it for Claude/Codex transcript conventions (dedupe, session logs, provider detection).
+
 When you need icons, download them from iocnify. Icon pack - Phosphor Icons for settings window, Fluent UI Icons for the popup icons
 
 All layout shifts have to be animated, respect the user's preference for animations.

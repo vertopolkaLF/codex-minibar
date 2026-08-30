@@ -32,6 +32,9 @@ use crate::{
     settings_controls::update_accent_button,
     tray::{TrayManager, TrayMenuAction},
     updater::{UpdateController, UpdatePhase},
+    usage_overview::{
+        BreakdownMode, OverviewMetric, OverviewRange, build_overview_snapshot,
+    },
     worker::{WorkerCommand, WorkerEvent},
 };
 
@@ -386,6 +389,7 @@ impl UiState {
 enum PopupView {
     #[default]
     All,
+    Usage,
     Codex,
     Claude,
     Cursor,
@@ -408,7 +412,7 @@ impl PopupView {
 
     const fn provider(self) -> Option<ProviderKind> {
         match self {
-            Self::All => None,
+            Self::All | Self::Usage => None,
             Self::Codex => Some(ProviderKind::Codex),
             Self::Claude => Some(ProviderKind::Claude),
             Self::Cursor => Some(ProviderKind::Cursor),
@@ -421,9 +425,10 @@ impl PopupView {
     fn order(self, provider_order: &[ProviderKind]) -> i32 {
         match self {
             Self::All => 0,
+            Self::Usage => 1,
             other => {
                 let provider = other.provider().expect("provider view");
-                1 + provider_order
+                2 + provider_order
                     .iter()
                     .position(|item| *item == provider)
                     .unwrap_or(0) as i32
@@ -441,7 +446,7 @@ fn enabled_popup_views(
     opencode_go: bool,
     openrouter: bool,
 ) -> Vec<PopupView> {
-    let mut views = vec![PopupView::All];
+    let mut views = vec![PopupView::All, PopupView::Usage];
     for widget in popup_order {
         let Some(provider) = widget.as_provider() else {
             continue;
@@ -1739,6 +1744,10 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let (hovered_action, set_hovered_action) = cx.use_state(Option::<String>::None);
     let (tab_scroll_x, set_tab_scroll_x) = cx.use_state(0.0_f64);
     let (widget_drag, set_widget_drag) = cx.use_state(None::<WidgetDragState>);
+    let (overview_metric, set_overview_metric) = cx.use_state(OverviewMetric::default());
+    let (overview_range, set_overview_range) = cx.use_state(OverviewRange::default());
+    let (overview_breakdown, set_overview_breakdown) = cx.use_state(BreakdownMode::default());
+    let (overview_chart_hover, set_overview_chart_hover) = cx.use_state(None::<usize>);
     let (pager, pager_dispatch) = cx.use_reducer_fn(reduce_pager, PagerState::default());
     let (hovered_combined_usage_period, set_hovered_combined_usage_period) =
         cx.use_state(None::<TotalSpendPeriod>);
@@ -1791,7 +1800,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             move || {
                 pager_dispatch.call(PagerAction::SetProviderOrder(order.clone()));
                 let available = match pager.current {
-                    PopupView::All => true,
+                    PopupView::All | PopupView::Usage => true,
                     PopupView::Codex => ui.codex_enabled,
                     PopupView::Claude => ui.claude_enabled,
                     PopupView::Cursor => ui.cursor_enabled,
@@ -1874,8 +1883,10 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         ui.opencode_go_enabled,
         ui.openrouter_enabled,
     );
-    let enabled_provider_count = enabled_views.len().saturating_sub(1);
-    let show_provider_tabs = enabled_provider_count > 1;
+    let enabled_provider_count = enabled_provider_order.len();
+    let show_provider_icon_tabs = enabled_provider_count > 1;
+    let show_provider_tabs = show_provider_icon_tabs;
+    let show_footer_tabs = true;
     let selected_view = pager.current;
     let show_total_spend = ui.show_total_spend_on_all_tab
         && total_spend_provider_count(
@@ -1887,7 +1898,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         ) > 1;
     let all_tab_widgets = visible_popup_widgets(
         &ui.popup_order,
-        show_total_spend && show_provider_tabs,
+        show_total_spend && show_provider_icon_tabs,
         &ui.popup_visibility,
         ui.codex_enabled,
         ui.claude_enabled,
@@ -2039,6 +2050,38 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 body.push(section);
                 has_preceding_section = true;
             }
+        } else if view == PopupView::Usage {
+            let enabled_spend: Vec<ProviderKind> = enabled_provider_order
+                .iter()
+                .copied()
+                .filter(|provider| {
+                    crate::provider_registry::PROVIDERS
+                        .iter()
+                        .any(|descriptor| {
+                            descriptor.kind == *provider && descriptor.include_in_total_spend
+                        })
+                })
+                .collect();
+            let snapshot = build_overview_snapshot(
+                &limits,
+                &enabled_spend,
+                overview_metric,
+                overview_range,
+            );
+            body.push(crate::popup_usage::overview_page(
+                &snapshot,
+                overview_metric,
+                overview_range,
+                overview_breakdown,
+                overview_chart_hover,
+                color_scheme,
+                ui.use_colored_provider_icons,
+                set_overview_metric.clone(),
+                set_overview_range.clone(),
+                set_overview_breakdown.clone(),
+                set_overview_chart_hover.clone(),
+            ));
+            has_preceding_section = true;
         } else {
             let providers_for_view: Vec<ProviderKind> = view
                 .provider()
@@ -2129,12 +2172,16 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         },
     };
 
-    let footer_identity: Element = if show_provider_tabs {
+    let footer_identity: Element = if show_footer_tabs {
         // Build only live tabs — never pad with Element::Empty. Empty siblings
         // collapse during reconcile and let swap-chain hosts keep a prior
         // provider's pixels in another tab's slot.
-        let tab_content_width =
-            provider_tab_strip_content_width(enabled_provider_order.len());
+        let provider_tab_count = if show_provider_icon_tabs {
+            enabled_provider_order.len()
+        } else {
+            0
+        };
+        let tab_content_width = provider_tab_strip_content_width(provider_tab_count);
         let tab_viewport_width = provider_tab_strip_viewport_width();
         let tab_max_offset = (tab_content_width - tab_viewport_width).max(0.0);
         let tab_scroll_x = tab_scroll_x.clamp(0.0, tab_max_offset);
@@ -2172,7 +2219,24 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 move || pager_dispatch.call(PagerAction::Select(PopupView::All))
             },
         )];
-        for provider in &enabled_provider_order {
+        provider_tabs.push(popup_tab_button(
+            "provider-tab-usage",
+            Some("fluent-chart"),
+            None,
+            "Usage",
+            selected_view == PopupView::Usage,
+            ui.use_colored_provider_icons,
+            color_scheme,
+            &hovered_action,
+            set_hovered_action.clone(),
+            on_tab_wheel.clone(),
+            {
+                let pager_dispatch = pager_dispatch.clone();
+                move || pager_dispatch.call(PagerAction::Select(PopupView::Usage))
+            },
+        ));
+        if show_provider_icon_tabs {
+            for provider in &enabled_provider_order {
             let (tab_id, icon_name, tip, view) = match provider {
                 ProviderKind::Codex => (
                     "provider-tab-codex",
@@ -2226,9 +2290,11 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 },
             ));
         }
+        }
         let tabs_key = format!(
-            "provider-tabs-{}-{}-{}",
+            "provider-tabs-usage-{}-{}-{}-{}",
             provider_order_key(&enabled_provider_order),
+            show_provider_icon_tabs,
             ui.use_colored_provider_icons,
             color_scheme as i32
         );
@@ -2268,7 +2334,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         .horizontal_alignment(HorizontalAlignment::Left)
         .into()
     };
-    let refresh_tooltip = if show_provider_tabs {
+    let refresh_tooltip = if show_footer_tabs {
         let last_updated = format_last_updated(latest_sampled_at(&limits), clock_tick);
         let relative_time = last_updated
             .strip_prefix("Updated ")
@@ -2361,7 +2427,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         .horizontal_alignment(HorizontalAlignment::Stretch),
     )
     .padding(Thickness {
-        left: if show_provider_tabs { 14.0 } else { 24.0 },
+        left: if show_footer_tabs { 14.0 } else { 24.0 },
         top: 10.0,
         right: 18.0,
         // Extra bottom padding so content clears the rounded window corners.
@@ -3431,7 +3497,10 @@ const FOOTER_ACTION_SPACING: f64 = 4.0;
 const FOOTER_ACTION_COUNT: f64 = 2.0;
 
 fn provider_tab_strip_content_width(provider_count: usize) -> f64 {
-    ALL_TAB_WIDTH + provider_count as f64 * (ICON_BUTTON_SIZE + TAB_STRIP_SPACING)
+    ALL_TAB_WIDTH
+        + ICON_BUTTON_SIZE
+        + TAB_STRIP_SPACING
+        + provider_count as f64 * (ICON_BUTTON_SIZE + TAB_STRIP_SPACING)
 }
 
 fn provider_tab_strip_viewport_width() -> f64 {
@@ -3469,6 +3538,7 @@ fn popup_tab_button(
         Some("cursor") => combined_usage_color(ProviderKind::Cursor, color_scheme),
         Some("opencode") => combined_usage_color(ProviderKind::OpenCodeZen, color_scheme),
         Some("openrouter") => combined_usage_color(ProviderKind::OpenRouter, color_scheme),
+        Some("fluent-chart") => popup_chrome_icon_color(color_scheme, false),
         _ => idle_icon_color,
     };
     let tab_width = if label.is_some() {
@@ -5305,6 +5375,7 @@ mod tests {
             let providers = provider_order_from_popup(&default_order);
 
             assert_eq!(views.first(), Some(&PopupView::All));
+            assert_eq!(views.get(1), Some(&PopupView::Usage));
             assert_eq!(views.contains(&PopupView::Codex), codex);
             assert_eq!(views.contains(&PopupView::Claude), claude);
             assert_eq!(views.contains(&PopupView::Cursor), cursor);
@@ -5318,7 +5389,7 @@ mod tests {
             );
             assert_eq!(
                 views.len(),
-                1 + usize::from(codex)
+                2 + usize::from(codex)
                     + usize::from(claude)
                     + usize::from(cursor)
                     + usize::from(opencode_zen)

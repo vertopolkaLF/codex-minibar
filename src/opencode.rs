@@ -199,6 +199,8 @@ impl OpenCodeClient {
         })?;
 
         let mut daily = BTreeMap::<NaiveDate, TokenUsage>::new();
+        let mut hourly = BTreeMap::<DateTime<Local>, TokenUsage>::new();
+        let hourly_since = Utc::now() - chrono::Duration::hours(48);
         for row in rows {
             let (timestamp_ms, cost, input, cache_read, output, reasoning) = row?;
             if !cost.is_finite() || cost < 0.0 {
@@ -217,12 +219,25 @@ impl OpenCodeClient {
                 requests: 1,
                 estimated_cost_microusd: usd_to_microusd(cost),
                 priced_requests: 1,
+                ..Default::default()
             };
             daily
                 .entry(timestamp.with_timezone(&Local).date_naive())
                 .or_default()
                 .add_public(&usage);
+            if timestamp >= hourly_since {
+                hourly
+                    .entry(crate::usage::truncate_local_hour(
+                        timestamp.with_timezone(&Local),
+                    ))
+                    .or_default()
+                    .add_public(&usage);
+            }
         }
+        let hourly_rows = hourly.into_iter().collect::<Vec<_>>();
+        let _ = store::with_store(|store| {
+            store.replace_usage_hourly(self.catalog.provider(), &hourly_rows)
+        });
         let days = daily
             .into_iter()
             .map(|(date, usage)| DailyTokenUsage { date, usage })

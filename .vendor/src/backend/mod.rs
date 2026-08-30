@@ -252,6 +252,7 @@ pub enum Prop {
     TextWrappingWrap,
     Time,
     Title,
+    TranslationX,
     Value,
     VerticalAlignment,
     VerticalScrollBarVisibility,

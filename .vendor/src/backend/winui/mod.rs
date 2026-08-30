@@ -614,6 +614,7 @@ fn apply_implicit_transitions(
     // No transitions, or every slot empty: clear the implicit-animation collection.
     let Some(t) = transitions.filter(|t| !t.is_empty()) else {
         obj2.SetImplicitAnimations(None)?;
+        diag::dropped(ui.SetTranslationTransition(None));
         return Ok(());
     };
     let compositor = visual
@@ -664,11 +665,36 @@ fn apply_implicit_transitions(
         insert("Scale", v.duration, false)?;
     }
     if let Some(v) = t.translation {
-        // KNOWN LIMITATION: `Offset` collides with XAML layout; the
-        // correct target is the synthetic `Translation` channel.
-        insert("Offset", v.duration, false)?;
+        // WinUI implicit slide is `UIElement.Translation` +
+        // `TranslationTransition` (Vector3Transition). Composition `Offset`
+        // is owned by XAML layout and teleports instead of sliding.
+        if let Err(e) = apply_xaml_translation_transition(ui, v.duration) {
+            diag::warn(format_args!("TranslationTransition: {e:?}"));
+            insert("Translation", v.duration, false)?;
+        }
+    } else {
+        diag::dropped(ui.SetTranslationTransition(None));
     }
     obj2.SetImplicitAnimations(&collection)?;
+    Ok(())
+}
+
+/// Official WinUI Gallery implicit-translation path:
+/// `<Vector3Transition Duration="…" />` on `UIElement.TranslationTransition`.
+fn apply_xaml_translation_transition(
+    ui: &bindings::UIElement,
+    duration: std::time::Duration,
+) -> Result<()> {
+    if duration.is_zero() {
+        ui.SetTranslationTransition(None)?;
+        return Ok(());
+    }
+    let xaml = format!(
+        "<Vector3Transition xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' Duration='0:0:{:.3}'/>",
+        duration.as_secs_f64()
+    );
+    let obj = bindings::XamlReader::Load(&xaml)?;
+    ui.SetTranslationTransition(&obj)?;
     Ok(())
 }
 
@@ -906,6 +932,22 @@ fn try_universal_prop(handle: &Handle, prop: Prop, value: &PropValue) -> Result<
             visual
                 .cast::<bindings::IVisual>()?
                 .SetRotationAngleInDegrees(0.0)?;
+            Ok(true)
+        }
+        (Prop::TranslationX, PropValue::F64(v)) => {
+            handle.as_ui_element().SetTranslation(windows_numerics::Vector3 {
+                x: *v as f32,
+                y: 0.0,
+                z: 0.0,
+            })?;
+            Ok(true)
+        }
+        (Prop::TranslationX, PropValue::Unset) => {
+            handle.as_ui_element().SetTranslation(windows_numerics::Vector3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            })?;
             Ok(true)
         }
         (Prop::AllowDrop, PropValue::Bool(v)) => {

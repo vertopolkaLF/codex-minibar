@@ -105,6 +105,35 @@ pub fn animate_translation_x(
         .StartAnimation("Offset.X", &animation.cast::<CompositionAnimation>()?)
 }
 
+/// Snap compositor `Offset.X` without touching XAML layout.
+pub fn set_offset_x(native: windows_core::IInspectable, x: f32) -> Result<()> {
+    let ui = native.cast::<UIElement>()?;
+    let visual = ElementCompositionPreview::GetElementVisual(&ui)?;
+    let iv = visual.cast::<IVisual>()?;
+    let current = iv.Offset()?;
+    iv.SetOffset(windows_numerics::Vector3 {
+        x,
+        y: current.y,
+        z: current.z,
+    })
+}
+
+/// Slide `Offset.X` from `from_x` to `to_x`. Same channel as popup page
+/// transitions — do not use Margin or `UIElement.Translation` here.
+pub fn animate_offset_x(
+    native: windows_core::IInspectable,
+    from_x: f32,
+    to_x: f32,
+    duration: Duration,
+    easing: Easing,
+) -> Result<()> {
+    set_offset_x(native.clone(), from_x)?;
+    if duration.is_zero() || (from_x - to_x).abs() < 0.5 {
+        return set_offset_x(native, to_x);
+    }
+    animate_translation_x(native, 0.0, to_x - from_x, duration, easing)
+}
+
 fn composition_easing(
     compositor: &ICompositor,
     easing: Easing,

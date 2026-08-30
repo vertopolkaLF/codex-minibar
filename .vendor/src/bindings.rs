@@ -16212,6 +16212,42 @@ impl IUIElement {
             .ok()
         }
     }
+    /// `UIElement.Translation` — post-layout visual offset. Vtable slot is
+    /// stubbed as `usize` in the trimmed bindings.
+    pub(crate) fn SetTranslation(
+        &self,
+        value: windows_numerics::Vector3,
+    ) -> windows_core::Result<()> {
+        unsafe {
+            type Set = unsafe extern "system" fn(
+                *mut core::ffi::c_void,
+                windows_numerics::Vector3,
+            ) -> windows_core::HRESULT;
+            let set: Set =
+                core::mem::transmute(windows_core::Interface::vtable(self).SetTranslation);
+            set(windows_core::Interface::as_raw(self), value).ok()
+        }
+    }
+    /// `UIElement.TranslationTransition`. Slot is stubbed as `usize`.
+    pub(crate) fn SetTranslationTransition<P0>(&self, value: P0) -> windows_core::Result<()>
+    where
+        P0: windows_core::Param<windows_core::IInspectable>,
+    {
+        unsafe {
+            type Set = unsafe extern "system" fn(
+                *mut core::ffi::c_void,
+                *mut core::ffi::c_void,
+            ) -> windows_core::HRESULT;
+            let set: Set = core::mem::transmute(
+                windows_core::Interface::vtable(self).SetTranslationTransition,
+            );
+            set(
+                windows_core::Interface::as_raw(self),
+                value.param().abi(),
+            )
+            .ok()
+        }
+    }
     pub(crate) fn KeyboardAccelerators(
         &self,
     ) -> windows_core::Result<windows_collections::IVector<KeyboardAccelerator>> {
@@ -17050,6 +17086,19 @@ impl IVisual {
                 &mut result__,
             )
             .map(|| result__)
+        }
+    }
+    pub(crate) fn SetOffset(
+        &self,
+        value: windows_numerics::Vector3,
+    ) -> windows_core::Result<()> {
+        unsafe {
+            type Set = unsafe extern "system" fn(
+                *mut core::ffi::c_void,
+                windows_numerics::Vector3,
+            ) -> windows_core::HRESULT;
+            let set: Set = core::mem::transmute(windows_core::Interface::vtable(self).SetOffset);
+            set(windows_core::Interface::as_raw(self), value).ok()
         }
     }
     pub(crate) fn SetCenterPoint(
