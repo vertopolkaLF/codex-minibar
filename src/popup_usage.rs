@@ -206,49 +206,80 @@ fn segmented_tab(
     }
 }
 
+fn segmented_tab_width(label: &str) -> f64 {
+    (label.chars().count() as f64 * 8.0 + 22.0).max(48.0)
+}
+
 fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: bool) -> Element {
     let count = tabs.len().max(1);
-    let selected = tabs.iter().position(|tab| tab.selected);
+    let selected = tabs.iter().position(|tab| tab.selected).unwrap_or(0);
+    let anim = crate::theme::duration(crate::theme::CONTROL_FAST_ANIMATION);
+    let cell_width = if stretch {
+        (f64::from(popup::POPUP_WIDTH) - 2.0 - 32.0 - 6.0) / count as f64
+    } else {
+        tabs.iter()
+            .map(|tab| segmented_tab_width(&tab.label))
+            .fold(0.0, f64::max)
+    };
     let columns = vec![
         if stretch {
             GridLength::Star(1.0)
         } else {
-            GridLength::Auto
+            GridLength::Pixel(cell_width)
         };
         count
     ];
+    let thumb = border(Element::Empty)
+        .width(cell_width)
+        .corner_radius(6.0)
+        .background(ThemeRef::Accent)
+        .margin(Thickness {
+            left: selected as f64 * cell_width,
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
+        })
+        .relative_align_left()
+        .relative_align_top()
+        .relative_align_bottom()
+        .with_translation_transition(anim)
+        .with_key(format!("{key}-thumb"));
     let cells = tabs
         .into_iter()
         .enumerate()
         .map(|(index, tab)| {
             let hide_divider = index == 0
-                || selected == Some(index)
-                || selected == Some(index.saturating_sub(1));
-            let label = caption(tab.label.clone())
-                .horizontal_alignment(HorizontalAlignment::Center)
-                .vertical_alignment(VerticalAlignment::Center)
-                .foreground(if tab.selected {
-                    ThemeRef::custom("TextOnAccentFillColorPrimaryBrush")
-                } else {
-                    ThemeRef::PrimaryText
-                });
-            let pill = border(label)
+                || selected == index
+                || selected == index.saturating_sub(1);
+            let idle = caption(tab.label.clone())
+                .font_weight(600)
+                .foreground(ThemeRef::PrimaryText)
+                .opacity(if index == selected { 0.0 } else { 1.0 })
+                .with_opacity_transition(anim)
+                .relative_align_h_center()
+                .relative_align_v_center()
+                .with_key(format!("{key}-idle-{}", tab.label));
+            let active = caption(tab.label.clone())
+                .font_weight(600)
+                .foreground(ThemeRef::custom("TextOnAccentFillColorPrimaryBrush"))
+                .opacity(if index == selected { 1.0 } else { 0.0 })
+                .with_opacity_transition(anim)
+                .relative_align_h_center()
+                .relative_align_v_center()
+                .with_key(format!("{key}-on-{}", tab.label));
+            let label_layers: Vec<Element> = vec![idle.into(), active.into()];
+            let label = border(relative_panel(label_layers))
                 .padding(Thickness {
                     left: 10.0,
                     top: 5.0,
                     right: 10.0,
                     bottom: 5.0,
                 })
-                .corner_radius(6.0)
-                .background(if tab.selected {
-                    BrushBinding::Theme(ThemeRef::Accent)
-                } else {
-                    BrushBinding::Direct(Color::transparent())
-                })
+                .background(Color::transparent())
                 .horizontal_alignment(HorizontalAlignment::Stretch)
                 .on_tapped(tab.on_click);
             let cell: Element = if index == 0 {
-                pill.into()
+                label.into()
             } else {
                 grid((
                     border(Element::Empty)
@@ -256,6 +287,7 @@ fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: bool) -> Eleme
                         .vertical_alignment(VerticalAlignment::Stretch)
                         .background(ThemeRef::DividerStroke)
                         .opacity(if hide_divider { 0.0 } else { 1.0 })
+                        .with_opacity_transition(anim)
                         .margin(Thickness {
                             left: 0.0,
                             top: 6.0,
@@ -263,7 +295,7 @@ fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: bool) -> Eleme
                             bottom: 6.0,
                         })
                         .with_key(format!("{key}-rule-{index}")),
-                    pill.grid_column(1),
+                    label.grid_column(1),
                 ))
                 .columns([GridLength::Pixel(1.0), GridLength::Star(1.0)])
                 .into()
@@ -273,24 +305,33 @@ fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: bool) -> Eleme
                 .with_key(format!("{key}-tab-{}", tab.label))
         })
         .collect::<Vec<_>>();
+    let labels = grid(cells)
+        .columns(columns)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .relative_align_left()
+        .relative_align_right()
+        .relative_align_top()
+        .relative_align_bottom()
+        .with_key(format!("{key}-labels"));
+    let layers: Vec<Element> = vec![thumb.into(), labels.into()];
+    let track = relative_panel(layers).horizontal_alignment(HorizontalAlignment::Stretch);
+    let track = if stretch {
+        track
+    } else {
+        track.width(cell_width * count as f64)
+    };
 
-    border(grid(cells).columns(columns).horizontal_alignment(
-        if stretch {
+    border(track)
+        .padding(Thickness::uniform(3.0))
+        .corner_radius(8.0)
+        .background(ThemeRef::ControlFill)
+        .horizontal_alignment(if stretch {
             HorizontalAlignment::Stretch
         } else {
             HorizontalAlignment::Left
-        },
-    ))
-    .padding(Thickness::uniform(3.0))
-    .corner_radius(8.0)
-    .background(ThemeRef::ControlFill)
-    .horizontal_alignment(if stretch {
-        HorizontalAlignment::Stretch
-    } else {
-        HorizontalAlignment::Left
-    })
-    .with_key(format!("{key}-{count}"))
-    .into()
+        })
+        .with_key(format!("{key}-{count}"))
+        .into()
 }
 
 fn usage_card(content: impl Into<Element>) -> Element {
