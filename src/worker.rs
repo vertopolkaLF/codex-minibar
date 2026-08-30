@@ -51,8 +51,16 @@ pub enum WorkerCommand {
     Shutdown,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RequestKind {
+    Limits,
+    Usage,
+}
+
 #[derive(Clone, Debug)]
 pub enum WorkerEvent {
+    RequestStarted(RequestKind),
+    RequestFinished(RequestKind),
     LimitsUpdated(RateLimits),
     UsageUpdated(UsageStatistics),
     ActivationStarted,
@@ -61,6 +69,8 @@ pub enum WorkerEvent {
     PollFailed(String),
     Stopped,
     /// A provider-scoped event emitted by the multi-provider coordinator.
+    ProviderRequestStarted(crate::settings::ProviderKind, RequestKind),
+    ProviderRequestFinished(crate::settings::ProviderKind, RequestKind),
     ProviderLimitsUpdated(crate::settings::ProviderKind, RateLimits),
     ProviderUsageUpdated(crate::settings::ProviderKind, UsageStatistics),
     ProviderActivationStarted(crate::settings::ProviderKind),
@@ -294,6 +304,7 @@ fn run_limit_task(
         if next_poll <= Instant::now() {
             // Schedule from the end of each request. A manual refresh replaces
             // the previous deadline instead of leaving a stale timer behind.
+            let _ = events.send(WorkerEvent::RequestStarted(RequestKind::Limits));
             match tick(
                 &mut provider,
                 &mut activator,
@@ -312,9 +323,11 @@ fn run_limit_task(
                             limits_ready.store(true, Ordering::Release);
                         }
                     }
+                    let _ = events.send(WorkerEvent::RequestFinished(RequestKind::Limits));
                 }
                 Err(error) => {
                     let _ = events.send(WorkerEvent::PollFailed(error.to_string()));
+                    let _ = events.send(WorkerEvent::RequestFinished(RequestKind::Limits));
                 }
             }
             next_poll = Instant::now() + poll_interval;
@@ -387,9 +400,11 @@ fn run_usage_task(
     let mut next_refresh = Instant::now();
     loop {
         if next_refresh <= Instant::now() {
+            let _ = events.send(WorkerEvent::RequestStarted(RequestKind::Usage));
             if let Ok(usage) = provider.refresh_usage_statistics(history_retention_days) {
                 let _ = events.send(WorkerEvent::UsageUpdated(usage));
             }
+            let _ = events.send(WorkerEvent::RequestFinished(RequestKind::Usage));
             next_refresh = Instant::now() + USAGE_STATS_INTERVAL;
             continue;
         }

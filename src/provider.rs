@@ -126,6 +126,12 @@ pub fn start_provider_worker(
     thread::spawn(move || {
         while let Ok(event) = source_events.recv() {
             let mapped = match event {
+                WorkerEvent::RequestStarted(kind) => {
+                    Some(WorkerEvent::ProviderRequestStarted(provider, kind))
+                }
+                WorkerEvent::RequestFinished(kind) => {
+                    Some(WorkerEvent::ProviderRequestFinished(provider, kind))
+                }
                 WorkerEvent::LimitsUpdated(limits) => {
                     Some(WorkerEvent::ProviderLimitsUpdated(provider, limits))
                 }

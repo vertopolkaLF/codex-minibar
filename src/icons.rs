@@ -1,4 +1,4 @@
-//! Filled icon geometry from Iconify (Fluent for chrome actions, Phosphor for settings nav).
+//! Icon geometry from Iconify (Fluent for chrome actions, Phosphor for settings nav).
 
 use windows_reactor::*;
 
@@ -10,9 +10,9 @@ pub struct IconGeom {
 
 pub fn geom(name: &str) -> IconGeom {
     let svg = match name {
-        // Fluent filled glyphs are used for popup chrome and compact controls.
+        // Fluent glyphs are used for popup chrome and compact controls.
         "fluent-refresh" | "arrows-clockwise" | "popup-refresh" => {
-            include_str!("../assets/icons/fluent-arrow-sync-20-filled.svg")
+            include_str!("../assets/icons/fluent-arrow-sync-24-filled.svg")
         }
         "fluent-settings" | "sliders" | "popup-settings" => {
             include_str!("../assets/icons/fluent-settings-20-filled.svg")

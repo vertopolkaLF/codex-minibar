@@ -6,7 +6,7 @@ use std::{
         mpsc::{Receiver, Sender},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
@@ -35,7 +35,7 @@ use crate::{
     usage_overview::{
         BreakdownMode, OverviewMetric, OverviewRange, build_overview_snapshot,
     },
-    worker::{WorkerCommand, WorkerEvent},
+    worker::{RequestKind, WorkerCommand, WorkerEvent},
 };
 
 #[cfg(windows)]
@@ -258,7 +258,9 @@ struct UiState {
     /// in `AppState`, but this revision makes that external snapshot observable
     /// to the reactive render loop even when all other view metadata is equal.
     limits_revision: u64,
-    /// A refresh has been requested and is waiting for the worker's next sample.
+    /// Provider limit/usage requests currently in flight. The refresh icon
+    /// stays active until every operation started by the workers has finished.
+    active_requests: Vec<(ProviderKind, RequestKind)>,
     refreshing: bool,
     show_used_percentage: bool,
     show_usage_pace: bool,
@@ -337,6 +339,7 @@ impl Default for UiState {
             last_activation: "Never".into(),
             error: None,
             limits_revision: 0,
+            active_requests: Vec::new(),
             refreshing: false,
             show_used_percentage: false,
             show_usage_pace: true,
@@ -375,6 +378,22 @@ impl UiState {
             crate::logger::info(format!("Popup error: {error}"));
         }
         self.error = Some(error);
+    }
+
+    fn request_started(&mut self, provider: ProviderKind, kind: RequestKind) {
+        self.active_requests.push((provider, kind));
+        self.refreshing = true;
+    }
+
+    fn request_finished(&mut self, provider: ProviderKind, kind: RequestKind) {
+        if let Some(index) = self
+            .active_requests
+            .iter()
+            .position(|active| *active == (provider, kind))
+        {
+            self.active_requests.remove(index);
+        }
+        self.refreshing = !self.active_requests.is_empty();
     }
 }
 
@@ -565,6 +584,36 @@ enum PagerDirection {
 }
 
 const PAGER_ANIMATION_DURATION: Duration = Duration::from_millis(250);
+const REFRESH_SPIN_DURATION: Duration = Duration::from_millis(650);
+const REFRESH_PAUSE_DURATION: Duration = Duration::from_millis(280);
+
+fn refresh_spin_ease(progress: f64) -> f64 {
+    let progress = progress.clamp(0.0, 1.0);
+    if progress < 0.5 {
+        4.0 * progress * progress * progress
+    } else {
+        1.0 - (-2.0 * progress + 2.0).powi(3) / 2.0
+    }
+}
+
+/// Advance the two-arrow refresh icon by 180 degrees, then hold it still.
+/// Keeping the angle continuous makes the next half-turn start without a
+/// discontinuity, while the eased progress avoids a robotic constant speed.
+fn refresh_rotation_at(elapsed: Duration) -> f64 {
+    let cycle = REFRESH_SPIN_DURATION + REFRESH_PAUSE_DURATION;
+    let cycle_seconds = cycle.as_secs_f64();
+    let elapsed_seconds = elapsed.as_secs_f64();
+    let cycle_index = (elapsed_seconds / cycle_seconds).floor();
+    let phase = elapsed_seconds - cycle_index * cycle_seconds;
+    let base_angle = cycle_index * 180.0;
+
+    if phase >= REFRESH_SPIN_DURATION.as_secs_f64() {
+        base_angle + 180.0
+    } else {
+        let progress = phase / REFRESH_SPIN_DURATION.as_secs_f64();
+        base_angle + 180.0 * refresh_spin_ease(progress)
+    }
+}
 
 impl PagerDirection {
     fn between(from: PopupView, to: PopupView, provider_order: &[ProviderKind]) -> Self {
@@ -1769,6 +1818,27 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     // tree once per second for the lifetime of the process.
     let (clock_tick, set_clock_tick) = cx.use_async_state(0_u64);
     let page_animations_enabled = ui.animations_enabled && popup::system_animations_enabled();
+    let (refresh_rotation, set_refresh_rotation) = cx.use_async_state(0.0_f64);
+
+    cx.use_effect_with_cleanup((ui.refreshing, page_animations_enabled), {
+        let set_refresh_rotation = set_refresh_rotation.clone();
+        move || {
+            if !ui.refreshing || !page_animations_enabled {
+                set_refresh_rotation.call(0.0);
+                return None;
+            }
+
+            set_refresh_rotation.call(0.0);
+            let started_at = Instant::now();
+            let timer = DispatcherTimer::new(Duration::from_millis(16), move || {
+                if popup::is_visible() {
+                    set_refresh_rotation.call(refresh_rotation_at(started_at.elapsed()));
+                }
+            })
+            .ok();
+            Some(move || drop(timer))
+        }
+    });
 
     cx.use_effect_with_cleanup(
         (
@@ -2346,7 +2416,9 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         .horizontal_alignment(HorizontalAlignment::Left)
         .into()
     };
-    let refresh_tooltip = if show_footer_tabs {
+    let refresh_tooltip = if ui.refreshing {
+        "Refreshing limits and usage…".into()
+    } else if show_footer_tabs {
         let last_updated = format_last_updated(latest_sampled_at(&limits), clock_tick);
         let relative_time = last_updated
             .strip_prefix("Updated ")
@@ -2369,6 +2441,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                         "fluent-refresh",
                         "fluent-refresh",
                         &refresh_tooltip,
+                        ui.refreshing,
+                        refresh_rotation,
                         color_scheme,
                         &hovered_action,
                         set_hovered_action.clone(),
@@ -2379,6 +2453,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                         "fluent-settings",
                         "fluent-settings",
                         "Settings",
+                        false,
+                        0.0,
                         color_scheme,
                         &hovered_action,
                         set_hovered_action.clone(),
@@ -3243,6 +3319,14 @@ fn start_background_bridge(
                 std::process::exit(0);
             }
             match events.recv_timeout(Duration::from_millis(16)) {
+                Ok(WorkerEvent::ProviderRequestStarted(provider, kind)) => {
+                    ui.request_started(provider, kind);
+                    publish_popup_ui(&set_ui, &ui);
+                }
+                Ok(WorkerEvent::ProviderRequestFinished(provider, kind)) => {
+                    ui.request_finished(provider, kind);
+                    publish_popup_ui(&set_ui, &ui);
+                }
                 Ok(WorkerEvent::ProviderLimitsUpdated(provider, limits)) => {
                     if (provider == ProviderKind::Codex && !ui.codex_enabled)
                         || (provider == ProviderKind::Claude && !ui.claude_enabled)
@@ -3300,7 +3384,6 @@ fn start_background_bridge(
                             format_last_activation(limits.get(provider), fallback_attempt);
                     }
                     ui.observe_limits_update();
-                    ui.refreshing = false;
                     publish_popup_ui(&set_ui, &ui);
                 }
                 Ok(WorkerEvent::ProviderUsageUpdated(provider, usage)) => {
@@ -3361,12 +3444,13 @@ fn start_background_bridge(
                         provider.display_name()
                     ));
                     ui.set_popup_error(format!("{}: {error}", provider.display_name()));
-                    ui.refreshing = false;
                     publish_popup_ui(&set_ui, &ui);
                 }
                 // All live provider workers are forwarded as scoped events.
                 Ok(
-                    WorkerEvent::LimitsUpdated(_)
+                    WorkerEvent::RequestStarted(_)
+                    | WorkerEvent::RequestFinished(_)
+                    | WorkerEvent::LimitsUpdated(_)
                     | WorkerEvent::UsageUpdated(_)
                     | WorkerEvent::ActivationStarted
                     | WorkerEvent::ActivationSucceeded
@@ -3665,12 +3749,16 @@ fn popup_tab_button(
         .into()
 }
 
-/// Icon-only action using a neutral Phosphor SVG that adopts the accent on hover.
+/// Icon-only chrome action. Refresh uses two rounded circular arrows and
+/// rotates the same icon while provider requests are in flight; the remaining
+/// actions use neutral swap-chain SVGs that adopt the accent on hover.
 fn icon_button(
     id: &'static str,
     normal_icon: &'static str,
     hover_icon: &'static str,
     tip: &str,
+    is_refreshing: bool,
+    rotation: f64,
     color_scheme: ColorScheme,
     hovered_action: &Option<String>,
     set_hovered_action: SetState<Option<String>>,
@@ -3683,6 +3771,8 @@ fn icon_button(
         tip,
         ICON_BUTTON_SIZE,
         18.0,
+        is_refreshing,
+        rotation,
         color_scheme,
         hovered_action,
         set_hovered_action,
@@ -3697,6 +3787,8 @@ fn chrome_icon_button(
     tip: &str,
     size: f64,
     glyph_size: f64,
+    is_refreshing: bool,
+    rotation: f64,
     color_scheme: ColorScheme,
     hovered_action: &Option<String>,
     set_hovered_action: SetState<Option<String>>,
@@ -3706,6 +3798,7 @@ fn chrome_icon_button(
     let set_on_enter = set_hovered_action.clone();
     let set_on_exit = set_hovered_action;
     let idle_color = popup_chrome_icon_color(color_scheme, false);
+    let rotation = if is_refreshing { rotation } else { 0.0 };
     let hover_background: Element = border(Element::Empty)
         .background(ThemeRef::SubtleFill)
         .opacity(if hovered { 1.0 } else { 0.0 })
@@ -3717,14 +3810,23 @@ fn chrome_icon_button(
         .into();
     // Keep both swap-chain hosts mounted and crossfade opacity on hover.
     // Remounting the icon host on every hover recycles native panels and can
-    // leave a neighbor's painted glyph in this slot.
+    // leave a neighbor's painted glyph in this slot. Rotation is a transform
+    // on the existing host, so it does not repaint or recycle the glyph.
     let idle_icon: Element = crate::icons::element(normal_icon, glyph_size, idle_color)
-        .opacity(if hovered { 0.0 } else { 1.0 })
+        .rotation(rotation)
+        .opacity(if hovered || is_refreshing { 0.0 } else { 1.0 })
+        .with_opacity_transition(crate::theme::duration(
+            crate::theme::CONTROL_FAST_ANIMATION,
+        ))
         .relative_align_h_center()
         .relative_align_v_center()
         .into();
     let accent_icon: Element = crate::icons::accent_element(hover_icon, glyph_size)
-        .opacity(if hovered { 1.0 } else { 0.0 })
+        .rotation(rotation)
+        .opacity(if hovered || is_refreshing { 1.0 } else { 0.0 })
+        .with_opacity_transition(crate::theme::duration(
+            crate::theme::CONTROL_FAST_ANIMATION,
+        ))
         .relative_align_h_center()
         .relative_align_v_center()
         .into();
@@ -5334,6 +5436,21 @@ mod tests {
         assert_eq!(ui.limits_revision, 2);
         assert_eq!(ui.last_activation, initial.last_activation);
         assert_eq!(ui.error, initial.error);
+    }
+
+    #[test]
+    fn refresh_indicator_waits_for_both_limit_and_usage_requests() {
+        let mut ui = UiState::default();
+
+        ui.request_started(ProviderKind::Codex, RequestKind::Limits);
+        ui.request_started(ProviderKind::Codex, RequestKind::Usage);
+        assert!(ui.refreshing);
+
+        ui.request_finished(ProviderKind::Codex, RequestKind::Limits);
+        assert!(ui.refreshing);
+
+        ui.request_finished(ProviderKind::Codex, RequestKind::Usage);
+        assert!(!ui.refreshing);
     }
 
     #[test]
