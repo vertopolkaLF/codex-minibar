@@ -345,7 +345,7 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
         model_daily
             .entry((model_key, date))
             .or_default()
-            .add(&row_usage);
+            .add_public(&row_usage);
     }
 
     let model_rows = model_daily

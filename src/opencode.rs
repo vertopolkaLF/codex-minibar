@@ -217,6 +217,7 @@ impl OpenCodeClient {
                 requests: 1,
                 estimated_cost_microusd: usd_to_microusd(cost),
                 priced_requests: 1,
+                ..Default::default()
             };
             daily
                 .entry(timestamp.with_timezone(&Local).date_naive())

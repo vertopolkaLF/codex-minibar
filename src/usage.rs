@@ -51,7 +51,7 @@ impl TokenUsage {
             .then(|| self.estimated_cost_microusd as f64 / 1_000_000.0)
     }
 
-    fn add(&mut self, other: &Self) {
+    pub(crate) fn add(&mut self, other: &Self) {
         self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
         self.cached_input_tokens = self
             .cached_input_tokens
@@ -277,12 +277,13 @@ fn scan_file_delta(path: &Path, cached: &mut CachedSessionFile) -> Result<()> {
                         .pointer("/payload/info/last_token_usage/model")
                         .or_else(|| event.pointer("/payload/info/last_token_usage/model_name"))
                         .and_then(Value::as_str)
-                        .or(cached.current_model.as_deref())
-                });
+                        .map(str::to_owned)
+                })
+                .or_else(|| cached.current_model.clone());
             cached.add(
                 timestamp.with_timezone(&Local).date_naive(),
                 usage,
-                model,
+                model.as_deref(),
             );
         }
     }
@@ -866,7 +867,10 @@ fn claude_cache_savings_microusd(model: Option<&str>, cache_read: u64) -> u64 {
     if cache_read == 0 {
         return 0;
     }
-    let model = model?.to_ascii_lowercase();
+    let Some(model) = model else {
+        return 0;
+    };
+    let model = model.to_ascii_lowercase();
     let input_rate = if model.contains("opus") {
         15.0
     } else if model.contains("sonnet") {

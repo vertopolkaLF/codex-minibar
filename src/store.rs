@@ -396,6 +396,7 @@ impl ProviderStore {
                         daily: Vec::new(),
                         current_model: meta.current_model,
                         fast_service_tier: meta.fast_service_tier,
+                        model_daily: BTreeMap::new(),
                     },
                 );
             }
@@ -1132,6 +1133,7 @@ mod tests {
                     }],
                     current_model: Some("gpt-5".into()),
                     fast_service_tier: false,
+                    ..Default::default()
                 },
             )]),
         }

@@ -188,6 +188,8 @@ pub fn build_overview_snapshot(
                 0
             }
         });
+        snapshot.totals.add(&usage);
+        snapshot.total_sessions = snapshot.total_sessions.saturating_add(sessions);
         providers.push(ProviderOverview {
             provider: *provider,
             sessions,
@@ -195,8 +197,6 @@ pub fn build_overview_snapshot(
             share_cost: 0.0,
             share_tokens: 0.0,
         });
-        snapshot.totals.add(&usage);
-        snapshot.total_sessions = snapshot.total_sessions.saturating_add(sessions);
     }
 
     let total_cost = snapshot.totals.estimated_cost_microusd.max(1);

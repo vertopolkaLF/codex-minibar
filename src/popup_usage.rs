@@ -1,7 +1,5 @@
 //! Usage overview page for the popup Usage tab.
 
-use std::collections::BTreeMap;
-
 use windows_reactor::*;
 
 use crate::{
@@ -167,27 +165,29 @@ fn wrap_chips(chips: Vec<Element>) -> Element {
 }
 
 fn filter_chip(label: &str, selected: bool, on_click: impl IntoUnitCallback) -> Element {
-    border(
-        caption(label).foreground(if selected {
-            ThemeRef::Accent
-        } else {
-            ThemeRef::SecondaryText
-        }),
-    )
-    .padding(Thickness {
-        left: 8.0,
-        top: 4.0,
-        right: 8.0,
-        bottom: 4.0,
-    })
-    .corner_radius(12.0)
-    .background(if selected {
-        ThemeRef::SubtleFill
+    let label = caption(label).foreground(if selected {
+        ThemeRef::Accent
     } else {
-        Color::transparent()
-    })
-    .border_thickness(Thickness::uniform(if selected { 1.0 } else { 0.0 }))
-    .border_brush(ThemeRef::Accent)
+        ThemeRef::SecondaryText
+    });
+    let chip = border(label)
+        .padding(Thickness {
+            left: 10.0,
+            top: 4.0,
+            right: 10.0,
+            bottom: 4.0,
+        })
+        .corner_radius(12.0);
+    if selected {
+        chip
+            .background(ThemeRef::SubtleFill)
+            .border_thickness(Thickness::uniform(1.0))
+            .border_brush(ThemeRef::Accent)
+    } else {
+        chip
+            .background(Color::transparent())
+            .border_thickness(Thickness::uniform(0.0))
+    }
     .on_tapped(on_click)
     .into()
 }
@@ -318,7 +318,7 @@ fn usage_chart_card(
 fn usage_line_chart(
     series: &[DailySeriesPoint],
     providers: &[ProviderOverview],
-    metric: OverviewMetric,
+    _metric: OverviewMetric,
     hover: Option<usize>,
     color_scheme: ColorScheme,
     set_hover: SetState<Option<usize>>,
@@ -503,21 +503,35 @@ fn usage_totals_card(totals: &TokenUsage) -> Element {
     vstack((
         body_strong("Totals"),
         grid((
-            total_metric("Processed tokens", format_token_count(processed)),
+            total_metric("Processed tokens", format_token_count(processed))
+                .grid_column(0)
+                .grid_row(0),
             total_metric(
                 "Cached input",
                 format_token_count(totals.cached_input_tokens),
             )
-            .grid_column(1),
-            total_metric("Uncached input", format_token_count(uncached)),
-            total_metric("Output", format_token_count(totals.output_tokens)).grid_column(1),
+            .grid_column(1)
+            .grid_row(0),
+            total_metric("Uncached input", format_token_count(uncached))
+                .grid_column(0)
+                .grid_row(1),
+            total_metric("Output", format_token_count(totals.output_tokens))
+                .grid_column(1)
+                .grid_row(1),
             total_metric(
                 "Cache savings",
                 format_spend(totals.cache_savings_microusd),
             )
+            .grid_column(0)
+            .grid_row(2)
             .grid_column_span(2),
         ))
         .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
+        .rows([
+            GridLength::Auto,
+            GridLength::Auto,
+            GridLength::Auto,
+        ])
         .row_spacing(8.0)
         .column_spacing(8.0),
     ))
@@ -603,7 +617,7 @@ fn breakdown_header() -> Element {
 
 fn breakdown_row(
     row: &BreakdownRow,
-    metric: OverviewMetric,
+    _metric: OverviewMetric,
     color_scheme: ColorScheme,
     use_colored_provider_icons: bool,
 ) -> Element {
