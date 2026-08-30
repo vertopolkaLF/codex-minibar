@@ -13,7 +13,8 @@ use crate::settings::{
     TrayWidget, TrayWidgetKind,
 };
 use crate::settings_controls::{
-    SETTINGS_CARD_PADDING, settings_action_card, settings_brick_row, settings_brick_table_header,
+    SETTINGS_CARD_PADDING, settings_action_card, settings_brick_body_height, settings_brick_row,
+    settings_brick_table_header,
     settings_card_padding, settings_checkbox_expander, settings_content_expander,
     settings_control_card, settings_info_card, settings_slider_content, settings_toggle_card,
     settings_toggle_card_with_description, settings_toggle_expander, update_available_nav_card,
@@ -6539,6 +6540,7 @@ fn popup_settings_cards(
         let section_snapshot = popup_visibility.clone();
         let set_section = set_popup_visibility.clone();
         let section_tx = settings_tx.clone();
+        let expanded_body_height = Some(settings_brick_body_height(brick_rows.len()));
         rows.push(
             settings_checkbox_expander(
                 descriptor.display_name,
@@ -6560,6 +6562,7 @@ fn popup_settings_cards(
                         expand_setter.call(None);
                     }
                 },
+                expanded_body_height,
                 format!("popup-provider-{}", provider.id()),
                 hovered_card_id,
                 set_hovered_card_id.clone(),

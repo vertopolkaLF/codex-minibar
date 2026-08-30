@@ -11,8 +11,7 @@ use windows_reactor::*;
 use crate::theme::{CONTROL_FASTER_ANIMATION, CONTROL_NORMAL_ANIMATION, duration};
 
 const CARD_RADIUS: f64 = 8.0;
-/// Upper bound used to animate cards whose body height is content-driven.
-/// The actual body remains intrinsic at progress 1.0.
+/// Fallback bound for expandable bodies without a known intrinsic height.
 const EXPANDABLE_BODY_MAX_HEIGHT: f64 = 512.0;
 /// Shared inset for settings cards and supporting panels.
 pub(crate) const SETTINGS_CARD_PADDING: f64 = 16.0;
@@ -411,6 +410,7 @@ struct CheckboxExpanderProps {
     on_checked: Callback<bool>,
     expanded: bool,
     on_expanding: Callback<bool>,
+    expanded_body_height: Option<f64>,
     card_id: String,
     hovered_id: Option<String>,
     set_hovered_id: SetState<Option<String>>,
@@ -454,7 +454,7 @@ impl Component<CheckboxExpanderProps> for CheckboxExpander {
             settings_section_all_toggle(props.checked, props.on_checked.clone()),
             props.expanded,
             progress,
-            None,
+            props.expanded_body_height,
             toggle_expand,
             props.card_id.clone(),
             &props.hovered_id,
@@ -539,6 +539,7 @@ pub(crate) fn settings_checkbox_expander(
     on_checked: impl IntoCallback<bool>,
     expanded: bool,
     on_expanding: impl IntoCallback<bool>,
+    expanded_body_height: Option<f64>,
     card_id: impl Into<String>,
     hovered_id: &Option<String>,
     set_hovered_id: SetState<Option<String>>,
@@ -552,6 +553,7 @@ pub(crate) fn settings_checkbox_expander(
             on_checked: on_checked.into_callback(),
             expanded,
             on_expanding: on_expanding.into_callback(),
+            expanded_body_height,
             card_id: card_id.into(),
             hovered_id: hovered_id.clone(),
             set_hovered_id,
@@ -926,6 +928,7 @@ pub(crate) fn settings_action_card(
 /// both; the 32px chrome is the template's check glyph host.
 /// https://github.com/microsoft/microsoft-ui-xaml/issues/2671
 const POPUP_BRICK_CHECK_COL_PX: f64 = 32.0;
+const POPUP_BRICK_ROW_HEIGHT: f64 = 32.0;
 /// Shared Home/Tab column width — wide enough for the "Home" header.
 const POPUP_BRICK_LABEL_COL_PX: f64 = 44.0;
 /// `NormalRectangle` in the default CheckBox template is 20×20, left-aligned
@@ -987,6 +990,13 @@ fn settings_icon_checkbox(
         .margin(popup_brick_glyph_center_margin())
         .horizontal_alignment(HorizontalAlignment::Left)
         .vertical_alignment(VerticalAlignment::Center)
+}
+
+/// Estimated body height for the checkbox visibility table, including its
+/// divider and vertical card padding. This lets the shared card shell animate
+/// content-driven provider bodies with the same height progress as notices.
+pub(crate) fn settings_brick_body_height(row_count: usize) -> f64 {
+    1.0 + row_count as f64 * POPUP_BRICK_ROW_HEIGHT + CARD_CONTENT_PADDING_Y * 2.0
 }
 
 /// Shared Card / Home / Tab header. Home/Tab labels sit centered in their
