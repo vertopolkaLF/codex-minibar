@@ -1634,7 +1634,7 @@ impl Tab {
             Self::General => "general",
             Self::Appearance => "appearance",
             Self::Providers => "providers",
-            Self::Popup => "popup",
+            Self::Popup => "customize",
             Self::Schedule => "schedule",
             Self::Tray => "tray",
             Self::Notifications => "notifications",
@@ -1649,7 +1649,7 @@ impl Tab {
             "appearance" => Self::Appearance,
             "tray" => Self::Tray,
             "providers" => Self::Providers,
-            "popup" => Self::Popup,
+            "popup" | "customize" => Self::Popup,
             "schedule" => Self::Schedule,
             "notifications" => Self::Notifications,
             "advanced" => Self::Advanced,
@@ -1714,8 +1714,8 @@ pub fn render(
             NavViewItem::new("Providers")
                 .tag("providers")
                 .icon_path(crate::icons::data("plugs-connected"), nav_icon_color),
-            NavViewItem::new("Popup")
-                .tag("popup")
+            NavViewItem::new("Customize")
+                .tag("customize")
                 .icon_path(crate::icons::data("squares-four"), nav_icon_color),
             NavViewItem::new("Schedule")
                 .tag("schedule")
@@ -2565,66 +2565,6 @@ fn tab_content(
                     set_hovered_card_id.clone(),
                 )
                 .with_key("general-limit-refresh-interval"),
-                settings_section_heading("Customization").with_key("general-customization-heading"),
-                settings_toggle_card_with_description(
-                    "Replace \"amount left\" with \"amount used\"",
-                    Some("Shows consumed usage instead of the remaining amount."),
-                    show_used_percentage,
-                    move |value| {
-                        persist_bool(
-                            set_show_used_percentage.clone(),
-                            apply_show_used_percentage.clone(),
-                            value,
-                            |settings, value| {
-                                settings.show_used_percentage = value;
-                            },
-                        );
-                    },
-                    "general-show-used",
-                    hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("general-show-used"),
-                settings_toggle_card_with_description(
-                    "Show usage pace",
-                    Some(
-                        "Shows the expected-use marker and whether consumption is ahead of or behind schedule.",
-                    ),
-                    show_usage_pace,
-                    move |value| {
-                        persist_bool(
-                            set_show_usage_pace.clone(),
-                            apply_show_usage_pace.clone(),
-                            value,
-                            |settings, value| {
-                                settings.show_usage_pace = value;
-                            },
-                        );
-                    },
-                    "general-show-usage-pace",
-                    hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("general-show-usage-pace"),
-                settings_toggle_card_with_description(
-                    "Show account name",
-                    Some("Shows your Codex name or Claude organization beside the provider heading."),
-                    show_account_name,
-                    move |value| {
-                        persist_bool(
-                            set_show_account_name.clone(),
-                            apply_show_account_name.clone(),
-                            value,
-                            |settings, value| {
-                                settings.show_account_name = value;
-                            },
-                        );
-                    },
-                    "general-show-account-name",
-                    hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("general-show-account-name"),
             ],
         ),
         Tab::Appearance => (
@@ -3003,52 +2943,6 @@ fn tab_content(
                 };
                 rows.push(card.with_key(format!("providers-{}", provider.id())));
             }
-            rows.push(
-                settings_section_heading("Customization")
-                    .with_key("providers-customization-heading"),
-            );
-            rows.push(
-                settings_toggle_card(
-                    "Use colored provider icons",
-                    use_colored_provider_icons,
-                    move |value| {
-                        persist_bool(
-                            set_use_colored_provider_icons.clone(),
-                            apply_use_colored_provider_icons.clone(),
-                            value,
-                            |settings, value| {
-                                settings.use_colored_provider_icons = value;
-                            },
-                        );
-                    },
-                    "providers-colored-icons",
-                    hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("providers-colored-icons"),
-            );
-            if codex_enabled {
-                rows.push(
-                    settings_toggle_card(
-                        "Replace ChatGPT logo with Codex",
-                        replace_chatgpt_logo_with_codex,
-                        move |value| {
-                            persist_bool(
-                                set_replace_chatgpt_logo_with_codex.clone(),
-                                apply_replace_chatgpt_logo_with_codex.clone(),
-                                value,
-                                |settings, value| {
-                                    settings.replace_chatgpt_logo_with_codex = value;
-                                },
-                            );
-                        },
-                        "providers-codex-logo",
-                        hovered_card_id,
-                        set_hovered_card_id.clone(),
-                    )
-                    .with_key("providers-codex-logo"),
-                );
-            }
             ("Providers", rows)
         }
         Tab::Popup => {
@@ -3065,25 +2959,152 @@ fn tab_content(
                 opencode_go_enabled,
                 openrouter_enabled,
             );
-            (
-                "Popup",
-                popup_settings_cards(
-                    popup_visibility,
-                    discovered_popup_bricks,
-                    popup_order,
-                    &enabled,
-                    show_total_spend_on_all_tab,
-                    total_spend_presentation,
-                    expanded_popup_provider,
-                    set_expanded_popup_provider,
-                    set_popup_visibility,
-                    set_show_total_spend_on_all_tab,
-                    set_total_spend_presentation,
+            let mut rows = vec![
+                settings_section_heading("Tabs").with_key("customize-tabs-heading"),
+                settings_toggle_card(
+                    "Use colored provider icons",
+                    use_colored_provider_icons,
+                    {
+                        let set_use_colored_provider_icons =
+                            set_use_colored_provider_icons.clone();
+                        let apply_use_colored_provider_icons =
+                            apply_use_colored_provider_icons.clone();
+                        move |value| {
+                            persist_bool(
+                                set_use_colored_provider_icons.clone(),
+                                apply_use_colored_provider_icons.clone(),
+                                value,
+                                |settings, value| {
+                                    settings.use_colored_provider_icons = value;
+                                },
+                            );
+                        }
+                    },
+                    "customize-colored-icons",
                     hovered_card_id,
                     set_hovered_card_id.clone(),
-                    settings_tx.clone(),
-                ),
-            )
+                )
+                .with_key("customize-colored-icons"),
+            ];
+            if codex_enabled {
+                rows.push(
+                    settings_toggle_card(
+                        "Replace ChatGPT logo with Codex",
+                        replace_chatgpt_logo_with_codex,
+                        {
+                            let set_replace_chatgpt_logo_with_codex =
+                                set_replace_chatgpt_logo_with_codex.clone();
+                            let apply_replace_chatgpt_logo_with_codex =
+                                apply_replace_chatgpt_logo_with_codex.clone();
+                            move |value| {
+                                persist_bool(
+                                    set_replace_chatgpt_logo_with_codex.clone(),
+                                    apply_replace_chatgpt_logo_with_codex.clone(),
+                                    value,
+                                    |settings, value| {
+                                        settings.replace_chatgpt_logo_with_codex = value;
+                                    },
+                                );
+                            }
+                        },
+                        "customize-codex-logo",
+                        hovered_card_id,
+                        set_hovered_card_id.clone(),
+                    )
+                    .with_key("customize-codex-logo"),
+                );
+            }
+            rows.extend([
+                settings_section_heading("Cards").with_key("customize-cards-heading"),
+                settings_toggle_card_with_description(
+                    "Replace \"amount left\" with \"amount used\"",
+                    Some("Shows consumed usage instead of the remaining amount."),
+                    show_used_percentage,
+                    {
+                        let set_show_used_percentage = set_show_used_percentage.clone();
+                        let apply_show_used_percentage = apply_show_used_percentage.clone();
+                        move |value| {
+                            persist_bool(
+                                set_show_used_percentage.clone(),
+                                apply_show_used_percentage.clone(),
+                                value,
+                                |settings, value| {
+                                    settings.show_used_percentage = value;
+                                },
+                            );
+                        }
+                    },
+                    "customize-show-used",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("customize-show-used"),
+                settings_toggle_card_with_description(
+                    "Show usage pace",
+                    Some(
+                        "Shows the expected-use marker and whether consumption is ahead of or behind schedule.",
+                    ),
+                    show_usage_pace,
+                    {
+                        let set_show_usage_pace = set_show_usage_pace.clone();
+                        let apply_show_usage_pace = apply_show_usage_pace.clone();
+                        move |value| {
+                            persist_bool(
+                                set_show_usage_pace.clone(),
+                                apply_show_usage_pace.clone(),
+                                value,
+                                |settings, value| {
+                                    settings.show_usage_pace = value;
+                                },
+                            );
+                        }
+                    },
+                    "customize-show-usage-pace",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("customize-show-usage-pace"),
+                settings_toggle_card_with_description(
+                    "Show account name",
+                    Some("Shows your Codex name or Claude organization beside the provider heading."),
+                    show_account_name,
+                    {
+                        let set_show_account_name = set_show_account_name.clone();
+                        let apply_show_account_name = apply_show_account_name.clone();
+                        move |value| {
+                            persist_bool(
+                                set_show_account_name.clone(),
+                                apply_show_account_name.clone(),
+                                value,
+                                |settings, value| {
+                                    settings.show_account_name = value;
+                                },
+                            );
+                        }
+                    },
+                    "customize-show-account-name",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("customize-show-account-name"),
+            ]);
+            rows.extend(popup_settings_cards(
+                popup_visibility,
+                discovered_popup_bricks,
+                popup_order,
+                &enabled,
+                show_total_spend_on_all_tab,
+                total_spend_presentation,
+                expanded_popup_provider,
+                set_expanded_popup_provider,
+                set_popup_visibility,
+                set_show_total_spend_on_all_tab,
+                set_total_spend_presentation,
+                hovered_card_id,
+                set_hovered_card_id.clone(),
+                settings_tx.clone(),
+            ));
+            ("Customize", rows)
         }
         Tab::Schedule => (
             "Schedule",

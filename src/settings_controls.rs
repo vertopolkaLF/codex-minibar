@@ -800,6 +800,9 @@ pub(crate) fn settings_action_card(
 /// both; the 32px chrome is the template's check glyph host.
 /// https://github.com/microsoft/microsoft-ui-xaml/issues/2671
 const POPUP_BRICK_CHECK_COL_PX: f64 = 32.0;
+/// `NormalRectangle` in the default CheckBox template is 20×20, left-aligned
+/// in the 32px host. Header labels center over that glyph, not the chrome.
+const POPUP_BRICK_GLYPH_PX: f64 = 20.0;
 
 fn popup_brick_columns() -> [GridLength; 3] {
     [
@@ -810,9 +813,23 @@ fn popup_brick_columns() -> [GridLength; 3] {
 }
 
 fn popup_brick_header_label(label: &str, column: i32) -> Element {
-    text_block(label)
+    if column == 0 {
+        return text_block(label)
+            .font_size(12.0)
+            .opacity(0.72)
+            .vertical_alignment(VerticalAlignment::Center)
+            .grid_column(0)
+            .into();
+    }
+    let caption: Element = text_block(label)
         .font_size(12.0)
         .opacity(0.72)
+        .relative_align_h_center()
+        .relative_align_v_center()
+        .into();
+    relative_panel(vec![caption])
+        .width(POPUP_BRICK_GLYPH_PX)
+        .horizontal_alignment(HorizontalAlignment::Left)
         .vertical_alignment(VerticalAlignment::Center)
         .grid_column(column)
         .into()
@@ -836,8 +853,8 @@ fn settings_icon_checkbox(
         .vertical_alignment(VerticalAlignment::Center)
 }
 
-/// Shared Card / All / Tab header. All/Tab sit on the leading edge of
-/// the same 32px columns as the native check glyphs.
+/// Shared Card / All / Tab header. All/Tab are centered over the 20px
+/// check glyph that sits on the leading edge of each 32px column.
 pub(crate) fn settings_brick_table_header(row_key: &str) -> Element {
     grid(vec![
         popup_brick_header_label("Card", 0),
