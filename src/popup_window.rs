@@ -20,9 +20,14 @@ use crate::{
     notifications,
     notifications::LimitNotificationTracker,
     popup,
+    provider_registry::{
+        LimitSectionKind, additional_limit_brick_id, credits_brick_id, limit_section_brick_id,
+        resets_brick_id, spending_brick_id, usage_brick_id,
+    },
     settings::{
-        AccentColor, AppTheme, NotificationSettings, PopupWidgetKind, ProviderKind, Settings,
-        TotalSpendPeriod, TotalSpendPresentation, TrayWidget,
+        AccentColor, AppTheme, NotificationSettings, PopupSurface, PopupVisibility,
+        PopupWidgetKind, ProviderKind, Settings, TotalSpendPeriod, TotalSpendPresentation,
+        TrayWidget,
     },
     settings_controls::update_accent_button,
     tray::{TrayManager, TrayMenuAction},
@@ -250,8 +255,7 @@ struct UiState {
     refreshing: bool,
     show_used_percentage: bool,
     show_usage_pace: bool,
-    show_banked_resets: bool,
-    show_usage_stats: bool,
+    popup_visibility: PopupVisibility,
     show_total_spend_on_all_tab: bool,
     total_spend_presentation: TotalSpendPresentation,
     total_spend_period: TotalSpendPeriod,
@@ -328,8 +332,7 @@ impl Default for UiState {
             refreshing: false,
             show_used_percentage: false,
             show_usage_pace: true,
-            show_banked_resets: true,
-            show_usage_stats: true,
+            popup_visibility: PopupVisibility::build_defaults(),
             show_total_spend_on_all_tab: true,
             total_spend_presentation: TotalSpendPresentation::default(),
             total_spend_period: TotalSpendPeriod::default(),
@@ -517,6 +520,7 @@ fn total_spend_provider_count(
 fn visible_popup_widgets(
     popup_order: &[PopupWidgetKind],
     show_total_spend: bool,
+    popup_visibility: &PopupVisibility,
     codex: bool,
     claude: bool,
     cursor: bool,
@@ -538,7 +542,7 @@ fn visible_popup_widgets(
                     opencode_zen,
                     opencode_go,
                     openrouter,
-                )
+                ) && popup_visibility.provider_visible_on_all(provider)
             }),
         })
         .collect()
@@ -678,12 +682,7 @@ impl PopupSection {
     }
 }
 
-fn popup_sections(
-    limits: &RateLimits,
-    show_banked_resets: bool,
-    show_usage_stats: bool,
-    has_error: bool,
-) -> Vec<PopupSection> {
+fn popup_sections(limits: &RateLimits, has_error: bool) -> Vec<PopupSection> {
     let mut sections = Vec::with_capacity(6);
     if has_error {
         sections.push(PopupSection::Error);
@@ -700,16 +699,43 @@ fn popup_sections(
             sections.push(PopupSection::Weekly);
         }
     }
-    if show_banked_resets && limits.available_reset_count() > 0 {
+    if limits.available_reset_count() > 0 {
         sections.push(PopupSection::BankedResets);
     }
-    if show_usage_stats && limits.usage.has_data() {
+    if limits.usage.has_data() {
         sections.push(PopupSection::UsageStatistics);
     }
     if credits_display_value(limits).is_some() {
         sections.push(PopupSection::Credits);
     }
     sections
+}
+
+fn limit_section_kind(section: PopupSection) -> Option<LimitSectionKind> {
+    match section {
+        PopupSection::FiveHour => Some(LimitSectionKind::FiveHour),
+        PopupSection::Weekly => Some(LimitSectionKind::Weekly),
+        PopupSection::Monthly => Some(LimitSectionKind::Monthly),
+        _ => None,
+    }
+}
+
+fn section_brick_id(provider: ProviderKind, section: PopupSection) -> Option<String> {
+    match section {
+        PopupSection::BankedResets => Some(resets_brick_id(provider)),
+        PopupSection::UsageStatistics => Some(usage_brick_id(provider)),
+        PopupSection::Credits => Some(credits_brick_id(provider)),
+        PopupSection::Error => None,
+        limit_section => limit_section_kind(limit_section)
+            .and_then(|kind| limit_section_brick_id(provider, kind)),
+    }
+}
+
+fn popup_visibility_key(visibility: &PopupVisibility) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    visibility.hash(&mut hasher);
+    hasher.finish()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -946,8 +972,9 @@ fn provider_cards(
     limits: &RateLimits,
     show_used_percentage: bool,
     show_usage_pace: bool,
-    show_banked_resets: bool,
-    show_usage_stats: bool,
+    popup_visibility: &PopupVisibility,
+    surface: PopupSurface,
+    show_provider_tabs: bool,
     show_account_name: bool,
     color_scheme: ColorScheme,
     drag_handle: Option<Element>,
@@ -1023,84 +1050,98 @@ fn provider_cards(
         .into(),
     ];
     if provider == ProviderKind::OpenRouter {
-        if !limits.openrouter_accounts.is_empty() {
-            // Nest each account as its own keyed strip. A flat list of headings
-            // + key cards lets WinUI recycle siblings across account boundaries
-            // when membership flickers (keys loading/failing), so TEST2 can
-            // visually land under Pixelscan. Nested strips keep heading+keys
-            // glued together; remount the strip when its key set changes.
-            for account in &limits.openrouter_accounts {
-                let mut account_strip: Vec<Element> = Vec::new();
-                account_strip.push(
-                    openrouter_account_heading(account)
-                        .with_key(format!("{}-account-heading", account.id)),
-                );
-                let mut key_identity = String::new();
-                for (index, api_key) in account.api_keys.iter().enumerate() {
-                    let title = api_key
-                        .label
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|label| !label.is_empty())
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| format!("Key {}", index + 1));
-                    let masked = api_key.masked_key.as_deref().unwrap_or("");
-                    if !key_identity.is_empty() {
-                        key_identity.push('\u{1f}');
-                    }
-                    key_identity.push_str(&api_key.id);
-                    key_identity.push('\u{1e}');
-                    key_identity.push_str(&title);
-                    key_identity.push('\u{1e}');
-                    key_identity.push_str(masked);
+        let spending_visible = popup_visibility.is_visible(
+            &spending_brick_id(provider),
+            surface,
+            show_provider_tabs,
+        );
+        if spending_visible {
+            if !limits.openrouter_accounts.is_empty() {
+                // Nest each account as its own keyed strip. A flat list of headings
+                // + key cards lets WinUI recycle siblings across account boundaries
+                // when membership flickers (keys loading/failing), so TEST2 can
+                // visually land under Pixelscan. Nested strips keep heading+keys
+                // glued together; remount the strip when its key set changes.
+                for account in &limits.openrouter_accounts {
+                    let mut account_strip: Vec<Element> = Vec::new();
                     account_strip.push(
-                        spending_card_with_title(
-                            title.clone(),
-                            api_key.masked_key.as_deref(),
-                            &api_key.spending,
-                            api_key.has_live_usage,
-                            show_used_percentage,
-                            color_scheme,
-                        )
-                        // Identity includes glyph-like content (title/mask) so a
-                        // recycled native card cannot keep a neighbor's text.
-                        .with_key(format!(
-                            "{}-api-{}-{}-{}",
-                            account.id, api_key.id, title, masked
-                        )),
+                        openrouter_account_heading(account)
+                            .with_key(format!("{}-account-heading", account.id)),
+                    );
+                    let mut key_identity = String::new();
+                    for (index, api_key) in account.api_keys.iter().enumerate() {
+                        let title = api_key
+                            .label
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|label| !label.is_empty())
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| format!("Key {}", index + 1));
+                        let masked = api_key.masked_key.as_deref().unwrap_or("");
+                        if !key_identity.is_empty() {
+                            key_identity.push('\u{1f}');
+                        }
+                        key_identity.push_str(&api_key.id);
+                        key_identity.push('\u{1e}');
+                        key_identity.push_str(&title);
+                        key_identity.push('\u{1e}');
+                        key_identity.push_str(masked);
+                        account_strip.push(
+                            spending_card_with_title(
+                                title.clone(),
+                                api_key.masked_key.as_deref(),
+                                &api_key.spending,
+                                api_key.has_live_usage,
+                                show_used_percentage,
+                                color_scheme,
+                            )
+                            // Identity includes glyph-like content (title/mask) so a
+                            // recycled native card cannot keep a neighbor's text.
+                            .with_key(format!(
+                                "{}-api-{}-{}-{}",
+                                account.id, api_key.id, title, masked
+                            )),
+                        );
+                    }
+                    cards.push(
+                        vstack(account_strip)
+                            .spacing(6.0)
+                            .with_key(format!(
+                                "openrouter-account-strip-{}-{}",
+                                account.id, key_identity
+                            ))
+                            .into(),
                     );
                 }
+            } else if let Some(spending) = limits.spending.as_ref() {
                 cards.push(
-                    vstack(account_strip)
-                        .spacing(6.0)
-                        .with_key(format!(
-                            "openrouter-account-strip-{}-{}",
-                            account.id, key_identity
-                        ))
-                        .into(),
+                    spending_card(spending, show_used_percentage, color_scheme)
+                        .with_key(format!("{}-spending", provider.display_name())),
                 );
             }
-        } else if let Some(spending) = limits.spending.as_ref() {
-            cards.push(
-                spending_card(spending, show_used_percentage, color_scheme)
-                    .with_key(format!("{}-spending", provider.display_name())),
-            );
         }
         return cards;
     }
     // Cursor usage is fetched from a remote CSV export rather than scanned
     // from a local session log. Keep its card visible while that export is
     // still empty or delayed, so the feature does not look like it vanished.
+    let usage_brick = usage_brick_id(provider);
+    let show_usage_stats = popup_visibility.is_visible(&usage_brick, surface, show_provider_tabs);
     let has_usage_statistics =
         show_usage_stats && (limits.usage.has_data() || provider == ProviderKind::Cursor);
     cards.extend(
-        popup_sections(limits, show_banked_resets, show_usage_stats, false)
+        popup_sections(limits, false)
             .into_iter()
             .filter(|section| {
                 matches!(
                     section,
                     PopupSection::Monthly | PopupSection::FiveHour | PopupSection::Weekly
                 )
+            })
+            .filter(|section| {
+                section_brick_id(provider, *section).is_some_and(|brick_id| {
+                    popup_visibility.is_visible(&brick_id, surface, show_provider_tabs)
+                })
             })
             .filter_map(|section| {
                 let element: Element = match section {
@@ -1138,24 +1179,32 @@ fn provider_cards(
     );
     // Claude can return extra windows such as Fable or Opus. They belong with
     // the ordinary limit cards, before banked resets, statistics, or credits.
-    let additional_limits = limits.additional_limits.iter().map(|limit| {
-        limit_card(
-            &limit.title,
-            &limit.window,
-            show_used_percentage,
-            show_usage_pace,
-            false,
-            color_scheme,
+    let additional_limits = limits.additional_limits.iter().filter_map(|limit| {
+        let brick_id = additional_limit_brick_id(provider, &limit.id);
+        if !popup_visibility.is_visible(&brick_id, surface, show_provider_tabs) {
+            return None;
+        }
+        Some(
+            limit_card(
+                &limit.title,
+                &limit.window,
+                show_used_percentage,
+                show_usage_pace,
+                false,
+                color_scheme,
+            )
+            .with_key(format!(
+                "{}-additional-{}",
+                provider.display_name(),
+                limit.id
+            )),
         )
-        .with_key(format!(
-            "{}-additional-{}",
-            provider.display_name(),
-            limit.id
-        ))
     });
     cards.extend(additional_limits);
     // Local statistics remain after every rate-limit window.
-    if show_banked_resets && limits.available_reset_count() > 0 {
+    if popup_visibility.is_visible(&resets_brick_id(provider), surface, show_provider_tabs)
+        && limits.available_reset_count() > 0
+    {
         cards.push(
             reset_credits_card(limits)
                 .with_key(format!("{}-banked-resets", provider.display_name())),
@@ -1167,7 +1216,9 @@ fn provider_cards(
                 .with_key(format!("{}-usage-statistics", provider.display_name())),
         );
     }
-    if credits_display_value(limits).is_some() {
+    if popup_visibility.is_visible(&credits_brick_id(provider), surface, show_provider_tabs)
+        && credits_display_value(limits).is_some()
+    {
         cards.push(credits_card(limits).with_key(format!("{}-credits", provider.display_name())));
     }
     cards
@@ -1383,8 +1434,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         last_activation: format_last_activation(&RateLimits::default(), state.last_activation_at),
         show_used_percentage: state.settings.show_used_percentage,
         show_usage_pace: state.settings.show_usage_pace,
-        show_banked_resets: state.settings.show_banked_resets,
-        show_usage_stats: state.settings.show_usage_stats,
+        popup_visibility: state.settings.popup_visibility.clone(),
         show_total_spend_on_all_tab: state.settings.show_total_spend_on_all_tab,
         total_spend_presentation: state.settings.total_spend_presentation,
         total_spend_period: state.settings.total_spend_period,
@@ -1581,6 +1631,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let all_tab_widgets = visible_popup_widgets(
         &ui.popup_order,
         show_total_spend && show_provider_tabs,
+        &ui.popup_visibility,
         ui.codex_enabled,
         ui.claude_enabled,
         ui.cursor_enabled,
@@ -1590,8 +1641,11 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     );
     let can_reorder_widgets = selected_view == PopupView::All && all_tab_widgets.len() > 1;
     let build_body = |view: PopupView, retain_disabled_detail: bool| {
-        let show_usage_stats =
-            ui.show_usage_stats && (!show_provider_tabs || view != PopupView::All);
+        let surface = if view == PopupView::All {
+            PopupSurface::AllTab
+        } else {
+            PopupSurface::ProviderTab
+        };
         let show_total_spend = show_total_spend && view == PopupView::All;
 
         let mut body: Vec<Element> = Vec::new();
@@ -1612,6 +1666,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             let widgets = visible_popup_widgets(
                 &ui.popup_order,
                 show_total_spend,
+                &ui.popup_visibility,
                 ui.codex_enabled,
                 ui.claude_enabled,
                 ui.cursor_enabled,
@@ -1670,10 +1725,6 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     provider_widget => {
                         let provider = provider_widget.as_provider().expect("provider widget");
                         let limits_for_provider = limits.get(provider);
-                        let show_banked = match provider {
-                            ProviderKind::Cursor | ProviderKind::OpenRouter => false,
-                            _ => ui.show_banked_resets,
-                        };
                         let handle = can_reorder_widgets.then(|| {
                             drag_handle(
                                 provider_widget,
@@ -1688,8 +1739,9 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                             limits_for_provider,
                             ui.show_used_percentage,
                             ui.show_usage_pace,
-                            show_banked,
-                            show_usage_stats,
+                            &ui.popup_visibility,
+                            PopupSurface::AllTab,
+                            show_provider_tabs,
                             ui.show_account_name,
                             color_scheme,
                             handle,
@@ -1742,10 +1794,6 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 .collect();
             for provider in providers_for_view {
                 let limits_for_provider = limits.get(provider);
-                let show_banked = match provider {
-                    ProviderKind::Cursor | ProviderKind::OpenRouter => false,
-                    _ => ui.show_banked_resets,
-                };
                 body.push(
                     vstack(provider_cards(
                         provider,
@@ -1753,8 +1801,9 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                         limits_for_provider,
                         ui.show_used_percentage,
                         ui.show_usage_pace,
-                        show_banked,
-                        show_usage_stats,
+                        &ui.popup_visibility,
+                        surface,
+                        show_provider_tabs,
                         ui.show_account_name,
                         color_scheme,
                         None,
@@ -2076,10 +2125,9 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         // Key only error presence, not the message text: PollFailed can emit a
         // new string every minute and would otherwise remount the whole page.
         let body_layout_key = format!(
-            "popup-page-{role}-{}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
+            "popup-page-{role}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
             ui.error.is_some(),
-            ui.show_banked_resets,
-            ui.show_usage_stats,
+            popup_visibility_key(&ui.popup_visibility),
             ui.show_total_spend_on_all_tab,
             ui.total_spend_presentation,
             ui.total_spend_period.key(),
@@ -2552,8 +2600,7 @@ fn start_background_bridge(
             last_activation: format_last_activation(&RateLimits::default(), fallback_attempt),
             show_used_percentage: state.settings.show_used_percentage,
             show_usage_pace: state.settings.show_usage_pace,
-            show_banked_resets: state.settings.show_banked_resets,
-            show_usage_stats: state.settings.show_usage_stats,
+            popup_visibility: state.settings.popup_visibility.clone(),
             show_total_spend_on_all_tab: state.settings.show_total_spend_on_all_tab,
             total_spend_presentation: state.settings.total_spend_presentation,
             total_spend_period: state.settings.total_spend_period,
@@ -2634,8 +2681,7 @@ fn start_background_bridge(
             ui.animations_enabled = settings.animations_enabled;
             ui.show_used_percentage = settings.show_used_percentage;
             ui.show_usage_pace = settings.show_usage_pace;
-            ui.show_banked_resets = settings.show_banked_resets;
-            ui.show_usage_stats = settings.show_usage_stats;
+            ui.popup_visibility = settings.popup_visibility.clone();
             ui.show_total_spend_on_all_tab = settings.show_total_spend_on_all_tab;
             ui.total_spend_presentation = settings.total_spend_presentation;
             ui.total_spend_period = settings.total_spend_period;
@@ -4504,6 +4550,7 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
+    use crate::settings::{PopupSurface, PopupVisibility};
 
     fn plan_limits(plan_type: &str) -> RateLimits {
         RateLimits {
@@ -4520,7 +4567,15 @@ mod tests {
         }
     }
 
-    fn assert_unique_section_keys(sections: &[PopupSection]) {
+    fn all_visible() -> PopupVisibility {
+        PopupVisibility::build_defaults()
+    }
+
+    fn visibility_with(brick_id: &str, all_tab: bool, provider_tab: bool) -> PopupVisibility {
+        let mut visibility = PopupVisibility::build_defaults();
+        visibility.set_brick(brick_id, all_tab, provider_tab);
+        visibility
+    }
         let keys: HashSet<_> = sections.iter().map(|section| section.key()).collect();
         assert_eq!(
             keys.len(),
@@ -4628,19 +4683,88 @@ mod tests {
 
     #[test]
     fn usage_statistics_section_respects_its_live_toggle() {
-        let mut limits = plan_limits("plus");
-        limits.usage.history.requests = 1;
+        let mut limits = RateLimits {
+            usage: crate::usage::UsageStatistics {
+                history: crate::usage::TokenUsage {
+                    requests: 1,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
 
         assert!(
-            popup_sections(&limits, true, true, false).contains(&PopupSection::UsageStatistics)
+            popup_sections(&limits, false).contains(&PopupSection::UsageStatistics)
         );
-        assert!(
-            !popup_sections(&limits, true, false, false).contains(&PopupSection::UsageStatistics)
+        let mut hidden_usage = all_visible();
+        hidden_usage.set_brick("opencode.usage", false, false);
+        let cards = provider_cards(
+            ProviderKind::OpenCodeZen,
+            true,
+            &limits,
+            false,
+            true,
+            &hidden_usage,
+            PopupSurface::ProviderTab,
+            true,
+            false,
+            ColorScheme::Dark,
+            None,
         );
+        assert_eq!(cards.len(), 1);
     }
 
     #[test]
-    fn banked_reset_count_and_expiration_are_formatted() {
+    fn popup_visibility_hides_codex_resets_on_all_but_shows_on_provider_tab() {
+        let mut limits = plan_limits("plus");
+        limits.reset_credits = Some(crate::limits::RateLimitResetCreditsSummary {
+            available_count: 1,
+            ..Default::default()
+        });
+        let visibility = visibility_with("codex.resets", false, true);
+        let all_cards = provider_cards(
+            ProviderKind::Codex,
+            true,
+            &limits,
+            false,
+            true,
+            &visibility,
+            PopupSurface::AllTab,
+            true,
+            false,
+            ColorScheme::Dark,
+            None,
+        );
+        let tab_cards = provider_cards(
+            ProviderKind::Codex,
+            true,
+            &limits,
+            false,
+            true,
+            &visibility,
+            PopupSurface::ProviderTab,
+            true,
+            false,
+            ColorScheme::Dark,
+            None,
+        );
+        assert_eq!(all_cards.len(), 1);
+        assert_eq!(tab_cards.len(), 3);
+    }
+
+    #[test]
+    fn popup_visibility_union_applies_when_provider_tabs_are_hidden() {
+        let visibility = visibility_with("codex.usage", false, true);
+        assert!(visibility.is_visible(
+            "codex.usage",
+            PopupSurface::AllTab,
+            false
+        ));
+    }
+
+    #[test]
+    fn assert_unique_section_keys(sections: &[PopupSection]) {
         assert_eq!(
             format_reset_in(Some(
                 Utc::now() + ChronoDuration::days(2) + ChronoDuration::minutes(1),
@@ -4651,11 +4775,11 @@ mod tests {
 
     #[test]
     fn free_to_plus_replaces_monthly_with_session_and_weekly_sections() {
-        let free = popup_sections(&plan_limits("free"), true, true, false);
+        let free = popup_sections(&plan_limits("free"), false);
         assert_eq!(free, vec![PopupSection::Monthly]);
         assert_unique_section_keys(&free);
 
-        let plus = popup_sections(&plan_limits("plus"), true, true, false);
+        let plus = popup_sections(&plan_limits("plus"), false);
         assert_eq!(plus, vec![PopupSection::FiveHour, PopupSection::Weekly,]);
         assert_unique_section_keys(&plus);
     }
@@ -4665,7 +4789,7 @@ mod tests {
         let mut limits = plan_limits("plus");
         limits.primary = LimitWindow::default();
 
-        let sections = popup_sections(&limits, true, true, false);
+        let sections = popup_sections(&limits, false);
         assert_eq!(sections, vec![PopupSection::Weekly]);
         assert_unique_section_keys(&sections);
     }
@@ -4686,7 +4810,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            popup_sections(&limits, true, true, false),
+            popup_sections(&limits, false),
             vec![PopupSection::UsageStatistics]
         );
     }
@@ -4703,11 +4827,11 @@ mod tests {
         limits.credits.has_credits = true;
         limits.credits.balance = Some("undefined".into());
         assert_eq!(credits_display_value(&limits), None);
-        assert!(!popup_sections(&limits, true, true, false).contains(&PopupSection::Credits));
+        assert!(!popup_sections(&limits, false).contains(&PopupSection::Credits));
 
         limits.credits.balance = Some("$12.50".into());
         assert_eq!(credits_display_value(&limits).as_deref(), Some("$12.50"));
-        assert!(popup_sections(&limits, true, true, false).contains(&PopupSection::Credits));
+        assert!(popup_sections(&limits, false).contains(&PopupSection::Credits));
 
         limits.credits = Default::default();
         limits.credits.unlimited = true;
@@ -4734,7 +4858,8 @@ mod tests {
             &limits,
             false,
             true,
-            true,
+            &all_visible(),
+            PopupSurface::ProviderTab,
             true,
             false,
             ColorScheme::Dark,
@@ -4752,7 +4877,7 @@ mod tests {
             ..Default::default()
         });
 
-        let sections = popup_sections(&limits, true, true, true);
+        let sections = popup_sections(&limits, true);
         assert_eq!(
             sections,
             vec![
@@ -4766,15 +4891,14 @@ mod tests {
     }
 
     #[test]
-    fn banked_resets_section_respects_its_live_toggle() {
+    fn banked_resets_section_is_available_when_data_exists() {
         let mut limits = plan_limits("plus");
         limits.reset_credits = Some(crate::limits::RateLimitResetCreditsSummary {
             available_count: 1,
             ..Default::default()
         });
 
-        assert!(popup_sections(&limits, true, true, false).contains(&PopupSection::BankedResets));
-        assert!(!popup_sections(&limits, false, true, false).contains(&PopupSection::BankedResets));
+        assert!(popup_sections(&limits, false).contains(&PopupSection::BankedResets));
     }
 
     #[test]

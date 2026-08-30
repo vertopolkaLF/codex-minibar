@@ -767,3 +767,61 @@ pub(crate) fn settings_action_card(
         .on_pointer_exited(on_exit)
         .into()
 }
+
+/// Popup card visibility row with independent All-tab and provider-tab checkboxes.
+pub(crate) fn settings_brick_row(
+    label: impl Into<String>,
+    all_tab: bool,
+    provider_tab: bool,
+    on_all_tab_changed: impl IntoCallback<bool>,
+    on_provider_tab_changed: impl IntoCallback<bool>,
+    row_key: &str,
+) -> Element {
+    let label = label.into();
+    let on_all_tab_changed = on_all_tab_changed.into_callback();
+    let on_provider_tab_changed = on_provider_tab_changed.into_callback();
+    grid(vec![
+        text_block(label)
+            .font_size(14.0)
+            .vertical_alignment(VerticalAlignment::Center)
+            .grid_column(0)
+            .into(),
+        text_block("All")
+            .font_size(12.0)
+            .opacity(0.72)
+            .horizontal_alignment(HorizontalAlignment::Center)
+            .grid_column(1)
+            .into(),
+        CheckBox::new(all_tab)
+            .on_checked(on_all_tab_changed)
+            .grid_column(2)
+            .into(),
+        text_block("Tab")
+            .font_size(12.0)
+            .opacity(0.72)
+            .horizontal_alignment(HorizontalAlignment::Center)
+            .grid_column(3)
+            .into(),
+        CheckBox::new(provider_tab)
+            .on_checked(on_provider_tab_changed)
+            .grid_column(4)
+            .into(),
+    ])
+    .columns([
+        GridLength::Star(1.0),
+        GridLength::Pixel(36.0),
+        GridLength::Pixel(36.0),
+        GridLength::Pixel(36.0),
+        GridLength::Pixel(36.0),
+    ])
+    .rows([GridLength::Auto])
+    .padding(Thickness {
+        left: 16.0,
+        top: 6.0,
+        right: 16.0,
+        bottom: 6.0,
+    })
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .with_key(format!("popup-brick-row-{row_key}"))
+    .into()
+}

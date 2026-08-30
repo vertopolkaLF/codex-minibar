@@ -203,6 +203,123 @@ pub fn dynamic_metric_id(provider: ProviderKind, source_id: &str) -> String {
     format!("{}.additional.{source_id}", descriptor(provider).id)
 }
 
+pub fn resets_brick_id(provider: ProviderKind) -> String {
+    format!("{}.resets", descriptor(provider).id)
+}
+
+pub fn credits_brick_id(provider: ProviderKind) -> String {
+    format!("{}.credits", descriptor(provider).id)
+}
+
+pub fn usage_brick_id(provider: ProviderKind) -> String {
+    format!("{}.usage", descriptor(provider).id)
+}
+
+pub fn spending_brick_id(provider: ProviderKind) -> String {
+    format!("{}.spending", descriptor(provider).id)
+}
+
+/// Whether this provider can expose banked reset credits in the popup.
+pub fn supports_banked_resets(provider: ProviderKind) -> bool {
+    !matches!(provider, ProviderKind::Cursor | ProviderKind::OpenRouter)
+}
+
+/// Whether this provider can expose a credits card in the popup.
+pub fn supports_credits(provider: ProviderKind) -> bool {
+    !matches!(provider, ProviderKind::OpenRouter)
+}
+
+/// Whether this provider can expose local usage statistics in the popup.
+pub fn supports_usage_stats(provider: ProviderKind) -> bool {
+    true
+}
+
+/// Whether this provider exposes OpenRouter-style spending strips.
+pub fn supports_spending_strips(provider: ProviderKind) -> bool {
+    provider == ProviderKind::OpenRouter
+}
+
+/// Stable popup brick ids declared for a provider before runtime discovery.
+pub fn catalog_brick_ids(provider: ProviderKind) -> Vec<String> {
+    let mut ids = descriptor(provider)
+        .metrics
+        .iter()
+        .map(|metric| metric.id.to_string())
+        .collect::<Vec<_>>();
+    if supports_banked_resets(provider) {
+        ids.push(resets_brick_id(provider));
+    }
+    if supports_credits(provider) {
+        ids.push(credits_brick_id(provider));
+    }
+    if supports_usage_stats(provider) {
+        ids.push(usage_brick_id(provider));
+    }
+    if supports_spending_strips(provider) {
+        ids.push(spending_brick_id(provider));
+    }
+    ids
+}
+
+/// Human label for a popup brick id shown in Settings.
+pub fn brick_label(provider: ProviderKind, brick_id: &str) -> String {
+    if let Some(metric) = metric(provider, brick_id) {
+        return metric.label.into();
+    }
+    let provider_id = descriptor(provider).id;
+    if brick_id == resets_brick_id(provider) {
+        return "Banked resets".into();
+    }
+    if brick_id == credits_brick_id(provider) {
+        return "Credits".into();
+    }
+    if brick_id == usage_brick_id(provider) {
+        return "Usage stats".into();
+    }
+    if brick_id == spending_brick_id(provider) {
+        return "Spending".into();
+    }
+    if let Some(source_id) = brick_id.strip_prefix(&format!("{provider_id}.additional.")) {
+        return source_id.replace('-', " ");
+    }
+    brick_id.rsplit('.').next().unwrap_or(brick_id).replace('-', " ")
+}
+
+/// Resolve a popup limit card to its configured brick id.
+pub fn limit_section_brick_id(provider: ProviderKind, section: LimitSectionKind) -> Option<String> {
+    match section {
+        LimitSectionKind::FiveHour => descriptor(provider)
+            .metrics
+            .iter()
+            .find(|metric| matches!(metric.source, MetricSource::Primary))
+            .map(|metric| metric.id.to_string()),
+        LimitSectionKind::Weekly | LimitSectionKind::Monthly => descriptor(provider)
+            .metrics
+            .iter()
+            .find(|metric| matches!(metric.source, MetricSource::Secondary))
+            .map(|metric| metric.id.to_string()),
+    }
+}
+
+/// Resolve an additional limit card to its popup brick id.
+pub fn additional_limit_brick_id(provider: ProviderKind, source_id: &str) -> String {
+    descriptor(provider)
+        .metrics
+        .iter()
+        .find(|metric| {
+            matches!(metric.source, MetricSource::Additional(id) if id == source_id)
+        })
+        .map(|metric| metric.id.to_string())
+        .unwrap_or_else(|| dynamic_metric_id(provider, source_id))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LimitSectionKind {
+    FiveHour,
+    Weekly,
+    Monthly,
+}
+
 pub fn metric_label(provider: ProviderKind, limits: &RateLimits, id: &str) -> String {
     if let Some(metric) = metric(provider, id) {
         return metric.label.into();

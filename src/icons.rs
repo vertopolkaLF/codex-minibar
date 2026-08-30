@@ -43,6 +43,7 @@ pub fn geom(name: &str) -> IconGeom {
         "flag" => include_str!("../assets/icons/ph-flag.svg"),
         "at" => include_str!("../assets/icons/ph-at.svg"),
         "house" => include_str!("../assets/icons/ph-house.svg"),
+        "squares-four" => include_str!("../assets/icons/ph-squares-four.svg"),
         "paint-brush" => include_str!("../assets/icons/ph-paint-brush.svg"),
         "bell" => include_str!("../assets/icons/ph-bell.svg"),
         "info" => include_str!("../assets/icons/ph-info.svg"),
