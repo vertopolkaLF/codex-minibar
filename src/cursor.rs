@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveDate, Utc};
 use rusqlite::{Connection, OpenFlags};
@@ -97,11 +97,24 @@ impl CursorClient {
         // valid desktop sessions. The dashboard's REST summary carries the
         // same Auto/API counters for current plans, so either source is
         // sufficient; only fail when both are unusable.
-        let usage = self.connect_post(
-            "/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
-            &token,
-        );
-        let summary = self.usage_summary(&token);
+        // Run both requests concurrently — they share a token and are independent.
+        let (usage, summary) = std::thread::scope(|scope| {
+            let usage = scope.spawn(|| {
+                self.connect_post(
+                    "/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
+                    &token,
+                )
+            });
+            let summary = scope.spawn(|| self.usage_summary(&token));
+            (
+                usage
+                    .join()
+                    .unwrap_or_else(|_| Err(anyhow!("Cursor usage worker panicked"))),
+                summary
+                    .join()
+                    .unwrap_or_else(|_| Err(anyhow!("Cursor summary worker panicked"))),
+            )
+        });
         match (usage, summary) {
             (Ok(usage), Ok(summary)) => map_usage(Some(&usage), Some(&summary)),
             (Ok(usage), Err(_)) => map_usage(Some(&usage), None),
