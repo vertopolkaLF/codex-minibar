@@ -218,6 +218,11 @@ pub fn refresh_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
     let oldest = Local::now().date_naive() - Duration::days(CACHE_RETENTION_DAYS - 1);
     for (path, key) in files {
         let cached = cache.files.entry(key).or_default();
+        // Older caches kept daily totals but dropped per-model rows on load.
+        // Rescanning from zero rebuilds the breakdown without double-counting.
+        if cached.model_daily.is_empty() && !cached.daily.is_empty() {
+            cached.reset_scan_state();
+        }
         scan_file_delta(&path, cached)?;
         cached.prune_before(oldest);
     }

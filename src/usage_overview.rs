@@ -177,7 +177,33 @@ pub fn build_overview_snapshot(
     })
     .unwrap_or_default();
 
-    let (provider_daily, mut provider_hourly, provider_sessions, model_rows) = store_data;
+    let (provider_daily, mut provider_hourly, provider_sessions, mut model_rows) = store_data;
+    let codex_has_usage = provider_daily.get(&ProviderKind::Codex).is_some_and(|days| {
+        days.iter().any(|entry| {
+            entry.date >= start_date
+                && entry.date <= end_date
+                && (entry.usage.requests > 0 || entry.usage.total_tokens() > 0)
+        })
+    });
+    let codex_missing_models = !model_rows
+        .keys()
+        .any(|(provider, _)| *provider == ProviderKind::Codex);
+    if spend_providers.contains(&ProviderKind::Codex) && codex_has_usage && codex_missing_models {
+        // Incremental Codex saves used to wipe usage_model_daily. Rebuild
+        // from session logs instead of asking the user to delete the store.
+        if crate::usage::refresh_usage_statistics(load_days).is_ok() {
+            if let Ok(rows) = store::with_store(|store| {
+                store.load_model_breakdown(ProviderKind::Codex, start_date, end_date)
+            }) {
+                for (model, usage) in rows {
+                    model_rows
+                        .entry((ProviderKind::Codex, model))
+                        .or_default()
+                        .add(&usage);
+                }
+            }
+        }
+    }
     if hourly
         && spend_providers.contains(&ProviderKind::Codex)
         && provider_hourly
@@ -237,13 +263,15 @@ pub fn build_overview_snapshot(
                 }
             }
         }
-        let sessions = provider_sessions.get(provider).copied().unwrap_or_else(|| {
-            if usage.requests > 0 {
-                usage.requests
-            } else {
-                0
-            }
-        });
+        let tracked = provider_sessions.get(provider).copied().unwrap_or(0);
+        // Codex/Claude have real session files or event paths. Cursor (and
+        // anyone else with only a daily rollup) never writes those tables —
+        // its CSV rows already live in `requests`. A stored 0 is not "unknown".
+        let sessions = if tracked > 0 {
+            tracked
+        } else {
+            usage.requests
+        };
         snapshot.totals.add(&usage);
         snapshot.total_sessions = snapshot.total_sessions.saturating_add(sessions);
         providers.push(ProviderOverview {

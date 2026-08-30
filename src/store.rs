@@ -184,6 +184,20 @@ impl ProviderStore {
                 cache_savings_microusd INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (provider, hour)
             );
+            CREATE TABLE IF NOT EXISTS usage_file_model_daily (
+                provider TEXT NOT NULL,
+                path TEXT NOT NULL,
+                date TEXT NOT NULL,
+                model TEXT NOT NULL,
+                input_tokens INTEGER NOT NULL,
+                cached_input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                requests INTEGER NOT NULL,
+                estimated_cost_microusd INTEGER NOT NULL,
+                priced_requests INTEGER NOT NULL,
+                cache_savings_microusd INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (provider, path, date, model)
+            );
             ",
         )?;
         Ok(())
@@ -557,8 +571,34 @@ impl ProviderStore {
                 file.daily.push(DailyTokenUsage { date, usage });
             }
         }
+        {
+            let mut statement = self.conn.prepare(
+                "SELECT path, date, model, input_tokens, cached_input_tokens, output_tokens,
+                        requests, estimated_cost_microusd, priced_requests, cache_savings_microusd
+                 FROM usage_file_model_daily WHERE provider = ?1",
+            )?;
+            let rows = statement.query_map(params![ProviderKind::Codex.id()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    parse_date(&row.get::<_, String>(1)?),
+                    row.get::<_, String>(2)?,
+                    token_usage_from_row(row, 3)?,
+                ))
+            })?;
+            for row in rows {
+                let (path, date, model, usage) = row?;
+                let file = files.entry(path).or_default();
+                file.model_daily
+                    .entry(model)
+                    .or_default()
+                    .push(DailyTokenUsage { date, usage });
+            }
+        }
         for file in files.values_mut() {
             file.daily.sort_by_key(|entry| entry.date);
+            for days in file.model_daily.values_mut() {
+                days.sort_by_key(|entry| entry.date);
+            }
         }
         Ok(UsageCache {
             version,
@@ -571,6 +611,7 @@ impl ProviderStore {
         let tx = self.conn.unchecked_transaction()?;
         let mut retained_files = BTreeSet::new();
         let mut retained_days = BTreeSet::new();
+        let mut retained_models = BTreeSet::new();
         {
             let mut scan = tx.prepare(
                 "INSERT INTO scan_files(provider, path, offset, meta_json)
@@ -586,6 +627,27 @@ impl ProviderStore {
                     requests, estimated_cost_microusd, priced_requests, cache_savings_microusd
                  ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT(provider, path, date) DO UPDATE SET
+                    input_tokens=excluded.input_tokens,
+                    cached_input_tokens=excluded.cached_input_tokens,
+                    output_tokens=excluded.output_tokens,
+                    requests=excluded.requests,
+                    estimated_cost_microusd=excluded.estimated_cost_microusd,
+                    priced_requests=excluded.priced_requests,
+                    cache_savings_microusd=excluded.cache_savings_microusd
+                 WHERE input_tokens IS NOT excluded.input_tokens
+                    OR cached_input_tokens IS NOT excluded.cached_input_tokens
+                    OR output_tokens IS NOT excluded.output_tokens
+                    OR requests IS NOT excluded.requests
+                    OR estimated_cost_microusd IS NOT excluded.estimated_cost_microusd
+                    OR priced_requests IS NOT excluded.priced_requests
+                    OR cache_savings_microusd IS NOT excluded.cache_savings_microusd",
+            )?;
+            let mut models = tx.prepare(
+                "INSERT INTO usage_file_model_daily(
+                    provider, path, date, model, input_tokens, cached_input_tokens, output_tokens,
+                    requests, estimated_cost_microusd, priced_requests, cache_savings_microusd
+                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                 ON CONFLICT(provider, path, date, model) DO UPDATE SET
                     input_tokens=excluded.input_tokens,
                     cached_input_tokens=excluded.cached_input_tokens,
                     output_tokens=excluded.output_tokens,
@@ -633,9 +695,31 @@ impl ProviderStore {
                         entry.usage.cache_savings_microusd as i64,
                     ])?;
                 }
+                for (model, days) in &file.model_daily {
+                    for entry in days {
+                        retained_models.insert((
+                            path.clone(),
+                            entry.date.to_string(),
+                            model.clone(),
+                        ));
+                        models.execute(params![
+                            ProviderKind::Codex.id(),
+                            path,
+                            entry.date.to_string(),
+                            model,
+                            entry.usage.input_tokens as i64,
+                            entry.usage.cached_input_tokens as i64,
+                            entry.usage.output_tokens as i64,
+                            entry.usage.requests as i64,
+                            entry.usage.estimated_cost_microusd as i64,
+                            entry.usage.priced_requests as i64,
+                            entry.usage.cache_savings_microusd as i64,
+                        ])?;
+                    }
+                }
             }
         }
-        delete_stale_file_rows(&tx, &retained_files, &retained_days)?;
+        delete_stale_file_rows(&tx, &retained_files, &retained_days, &retained_models)?;
         tx.commit()?;
 
         let flags = json!({
@@ -1092,6 +1176,7 @@ fn delete_stale_file_rows(
     tx: &rusqlite::Transaction<'_>,
     retained_files: &BTreeSet<String>,
     retained_days: &BTreeSet<(String, String)>,
+    retained_models: &BTreeSet<(String, String, String)>,
 ) -> Result<()> {
     let provider = ProviderKind::Codex.id();
     let existing_files = {
@@ -1121,6 +1206,29 @@ fn delete_stale_file_rows(
             tx.execute(
                 "DELETE FROM usage_file_daily WHERE provider = ?1 AND path = ?2 AND date = ?3",
                 params![provider, path, date],
+            )?;
+        }
+    }
+
+    let existing_models = {
+        let mut statement = tx.prepare(
+            "SELECT path, date, model FROM usage_file_model_daily WHERE provider = ?1",
+        )?;
+        let rows = statement.query_map(params![provider], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (path, date, model) in existing_models {
+        if !retained_models.contains(&(path.clone(), date.clone(), model.clone())) {
+            tx.execute(
+                "DELETE FROM usage_file_model_daily
+                 WHERE provider = ?1 AND path = ?2 AND date = ?3 AND model = ?4",
+                params![provider, path, date, model],
             )?;
         }
     }
@@ -1318,6 +1426,20 @@ mod tests {
                     }],
                     current_model: Some("gpt-5".into()),
                     fast_service_tier: false,
+                    model_daily: BTreeMap::from([(
+                        "gpt-5".into(),
+                        vec![DailyTokenUsage {
+                            date: Local::now().date_naive(),
+                            usage: TokenUsage {
+                                input_tokens: 10,
+                                output_tokens: 5,
+                                requests: 1,
+                                priced_requests: 1,
+                                estimated_cost_microusd: 100,
+                                ..Default::default()
+                            },
+                        }],
+                    )]),
                     ..Default::default()
                 },
             )]),
@@ -1378,6 +1500,12 @@ mod tests {
         assert_eq!(file.offset, 42);
         assert_eq!(file.daily[0].usage.total_tokens(), 15);
         assert_eq!(
+            file.model_daily
+                .get("gpt-5")
+                .map(|days| days[0].usage.total_tokens()),
+            Some(15)
+        );
+        assert_eq!(
             store
                 .load_usage_daily(ProviderKind::Codex, 30)
                 .unwrap()
@@ -1424,5 +1552,27 @@ mod tests {
                 .unwrap(),
             1
         );
+    }
+
+    #[test]
+    fn round_trips_codex_model_daily_into_breakdown() {
+        let dir = tempdir().unwrap();
+        let store = test_store(&dir.path().join("test.sqlite"));
+        store.save_codex_cache(&sample_codex_cache()).unwrap();
+        let loaded = store.load_codex_cache().unwrap();
+        let file = loaded.files.get("sessions/sample.jsonl").unwrap();
+        assert_eq!(
+            file.model_daily
+                .get("gpt-5")
+                .map(|days| days[0].usage.total_tokens()),
+            Some(15)
+        );
+        let today = Local::now().date_naive();
+        let models = store
+            .load_model_breakdown(ProviderKind::Codex, today, today)
+            .unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].0, "gpt-5");
+        assert_eq!(models[0].1.total_tokens(), 15);
     }
 }
