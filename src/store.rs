@@ -11,7 +11,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
-use chrono::{DateTime, Local, NaiveDate, Timelike, Utc};
+use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
 use directories::ProjectDirs;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -25,8 +25,8 @@ use crate::usage::{
 };
 
 const SCHEMA_VERSION: i64 = 1;
-const CODEX_CACHE_VERSION: u8 = 4;
-const CLAUDE_CACHE_VERSION: u8 = 1;
+const CODEX_CACHE_VERSION: u8 = 5;
+const CLAUDE_CACHE_VERSION: u8 = 2;
 const CURSOR_USAGE_VERSION: u8 = 2;
 const CACHE_RETENTION_DAYS: i64 = 365;
 
@@ -494,7 +494,7 @@ impl ProviderStore {
 
     pub(crate) fn load_codex_cache(&self) -> Result<UsageCache> {
         let flags = self.provider_flags(ProviderKind::Codex)?;
-        let pricing_rebuild_needed = flags
+        let mut pricing_rebuild_needed = flags
             .get("pricing_rebuild_needed")
             .and_then(|value| value.as_bool())
             .unwrap_or(false);
@@ -502,6 +502,9 @@ impl ProviderStore {
             .get("cache_version")
             .and_then(|value| value.as_u64())
             .unwrap_or(u64::from(CODEX_CACHE_VERSION)) as u8;
+        if version != CODEX_CACHE_VERSION {
+            pricing_rebuild_needed = true;
+        }
 
         let mut files = BTreeMap::new();
         {
@@ -526,6 +529,11 @@ impl ProviderStore {
                         current_model: meta.current_model,
                         fast_service_tier: meta.fast_service_tier,
                         model_daily: BTreeMap::new(),
+                        last_usage_signature: meta.last_usage_signature,
+                        saw_session_meta: meta.saw_session_meta,
+                        suppressing_fork_copies: meta.suppressing_fork_copies,
+                        fork_copy_anchor_ms: meta.fork_copy_anchor_ms,
+                        session_id: meta.session_id,
                     },
                 );
             }
@@ -598,6 +606,11 @@ impl ProviderStore {
                 let meta = serde_json::to_string(&CodexFileMeta {
                     current_model: file.current_model.clone(),
                     fast_service_tier: file.fast_service_tier,
+                    last_usage_signature: file.last_usage_signature.clone(),
+                    saw_session_meta: file.saw_session_meta,
+                    suppressing_fork_copies: file.suppressing_fork_copies,
+                    fork_copy_anchor_ms: file.fork_copy_anchor_ms,
+                    session_id: file.session_id.clone(),
                 })?;
                 scan.execute(params![
                     ProviderKind::Codex.id(),
@@ -850,13 +863,32 @@ impl ProviderStore {
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<u64> {
-        let count: i64 = self.conn.query_row(
+        let from_files: i64 = self.conn.query_row(
             "SELECT COUNT(DISTINCT path) FROM usage_file_daily
              WHERE provider = ?1 AND date >= ?2 AND date <= ?3",
             params![provider.id(), start.to_string(), end.to_string()],
             |row| row.get(0),
         )?;
-        Ok(count.max(0) as u64)
+        if from_files > 0 {
+            return Ok(from_files as u64);
+        }
+
+        // Claude (and any other event-scanned provider) never writes
+        // usage_file_daily — only usage_events + rolled-up usage_daily.
+        // Counting files there always returned 0 while spend was real.
+        let start_ts = start_of_local_day(start)
+            .with_timezone(&Utc)
+            .to_rfc3339();
+        let end_ts = start_of_local_day(end + Duration::days(1))
+            .with_timezone(&Utc)
+            .to_rfc3339();
+        let from_events: i64 = self.conn.query_row(
+            "SELECT COUNT(DISTINCT path) FROM usage_events
+             WHERE provider = ?1 AND ts >= ?2 AND ts < ?3",
+            params![provider.id(), start_ts, end_ts],
+            |row| row.get(0),
+        )?;
+        Ok(from_events.max(0) as u64)
     }
 
     pub fn load_model_breakdown(
@@ -1139,6 +1171,16 @@ struct CodexFileMeta {
     current_model: Option<String>,
     #[serde(default)]
     fast_service_tier: bool,
+    #[serde(default)]
+    last_usage_signature: Option<String>,
+    #[serde(default)]
+    saw_session_meta: bool,
+    #[serde(default)]
+    suppressing_fork_copies: bool,
+    #[serde(default)]
+    fork_copy_anchor_ms: i64,
+    #[serde(default)]
+    session_id: String,
 }
 
 fn aggregate_codex_daily(cache: &UsageCache, history_days: u16) -> Vec<DailyTokenUsage> {
@@ -1197,6 +1239,12 @@ fn aggregate_claude_model_daily(cache: &ClaudeUsageCache) -> Vec<(String, NaiveD
         .into_iter()
         .map(|((model, date), usage)| (model, date, usage))
         .collect()
+}
+
+fn start_of_local_day(date: NaiveDate) -> DateTime<Local> {
+    date.and_hms_opt(0, 0, 0)
+        .and_then(|naive| Local.from_local_datetime(&naive).single())
+        .unwrap_or_else(Local::now)
 }
 
 fn parse_date(raw: &str) -> NaiveDate {
@@ -1335,6 +1383,45 @@ mod tests {
                 .unwrap()
                 .history
                 .requests,
+            1
+        );
+    }
+
+    #[test]
+    fn counts_claude_sessions_from_events_not_file_daily() {
+        let dir = tempdir().unwrap();
+        let store = test_store(&dir.path().join("test.sqlite"));
+        let cache = ClaudeUsageCache {
+            version: CLAUDE_CACHE_VERSION,
+            files: BTreeMap::from([(
+                "/home/.claude/projects/a/session.jsonl".into(),
+                CachedClaudeSessionFile {
+                    offset: 10,
+                    entries: vec![CachedClaudeUsageEntry {
+                        timestamp: Utc::now(),
+                        message_id: Some("m1".into()),
+                        request_id: Some("r1".into()),
+                        is_sidechain: false,
+                        has_speed: true,
+                        usage: TokenUsage {
+                            input_tokens: 10,
+                            output_tokens: 2,
+                            requests: 1,
+                            priced_requests: 1,
+                            estimated_cost_microusd: 100,
+                            ..Default::default()
+                        },
+                        model: Some("claude-sonnet-4-20250514".into()),
+                    }],
+                },
+            )]),
+        };
+        store.save_claude_cache(&cache).unwrap();
+        let today = Local::now().date_naive();
+        assert_eq!(
+            store
+                .count_session_paths(ProviderKind::Claude, today, today)
+                .unwrap(),
             1
         );
     }

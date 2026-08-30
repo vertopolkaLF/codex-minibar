@@ -14,11 +14,12 @@ use serde_json::Value;
 use crate::settings::ProviderKind;
 use crate::store;
 
-// Version 4 adds per-model daily aggregates for the Usage overview tab.
-pub(crate) const CODEX_CACHE_VERSION: u8 = 4;
-// Claude's cache format did not change. Keep it independent so a Codex
-// pricing migration cannot hide an otherwise healthy Claude usage card.
-pub(crate) const CLAUDE_CACHE_VERSION: u8 = 1;
+// Version 5 matches T3/ccusage Codex transcript rules: first session_meta
+// wins, fork/subagent copied history is dropped, and unchanged token_count
+// re-emits are ignored. Older daily totals must be rebuilt from the logs.
+pub(crate) const CODEX_CACHE_VERSION: u8 = 5;
+// Version 2 only accepts Claude `assistant` usage lines, matching T3.
+pub(crate) const CLAUDE_CACHE_VERSION: u8 = 2;
 const CACHE_RETENTION_DAYS: i64 = 365;
 
 /// Locally recorded Codex token usage. This is deliberately derived only from
@@ -129,14 +130,42 @@ pub(crate) struct CachedSessionFile {
     /// Per-model daily aggregates for the Usage overview breakdown.
     #[serde(default)]
     pub(crate) model_daily: BTreeMap<String, Vec<DailyTokenUsage>>,
+    /// JSON of the last counted `last_token_usage`. Codex re-emits an unchanged
+    /// token_count on some stream boundaries; identical consecutive payloads
+    /// must not be summed (T3 / ccusage).
+    #[serde(default)]
+    pub(crate) last_usage_signature: Option<String>,
+    #[serde(default)]
+    pub(crate) saw_session_meta: bool,
+    #[serde(default)]
+    pub(crate) suppressing_fork_copies: bool,
+    #[serde(default)]
+    pub(crate) fork_copy_anchor_ms: i64,
+    #[serde(default)]
+    pub(crate) session_id: String,
 }
 
 impl CachedSessionFile {
-    fn add(&mut self, date: NaiveDate, usage: TokenUsage, model: Option<&str>) {
+    fn reset_scan_state(&mut self) {
+        self.offset = 0;
+        self.daily.clear();
+        self.model_daily.clear();
+        self.last_usage_signature = None;
+        self.saw_session_meta = false;
+        self.suppressing_fork_copies = false;
+        self.fork_copy_anchor_ms = 0;
+        self.session_id.clear();
+    }
+
+    fn add(&mut self, timestamp: DateTime<Utc>, usage: TokenUsage, model: Option<&str>) {
+        let date = timestamp.with_timezone(&Local).date_naive();
         if let Some(entry) = self.daily.iter_mut().find(|entry| entry.date == date) {
             entry.usage.add(&usage);
         } else {
-            self.daily.push(DailyTokenUsage { date, usage: usage.clone() });
+            self.daily.push(DailyTokenUsage {
+                date,
+                usage: usage.clone(),
+            });
         }
         if let Some(model) = model.map(str::trim).filter(|name| !name.is_empty()) {
             let model_key = model.to_ascii_lowercase();
@@ -176,6 +205,11 @@ pub fn refresh_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
         // now so re-reading the log cannot double-count it.
         cache.files.clear();
         cache.pricing_rebuild_needed = false;
+    }
+    if cache.version != CODEX_CACHE_VERSION {
+        cache.files.clear();
+        cache.pricing_rebuild_needed = false;
+        cache.version = CODEX_CACHE_VERSION;
     }
     let files = collect_codex_session_files(&codex_root)?;
     let known_paths: BTreeSet<String> = files.iter().map(|(_, key)| key.clone()).collect();
@@ -218,8 +252,7 @@ pub(crate) fn collect_codex_hourly_since(
             let Ok(line) = line else {
                 continue;
             };
-            update_codex_rollout_context(&line, &mut context);
-            let Some((timestamp, usage)) = token_usage_from_line(&line, &context) else {
+            let Some((timestamp, usage, _)) = ingest_codex_line(&line, &mut context) else {
                 continue;
             };
             if timestamp < since {
@@ -288,9 +321,7 @@ fn scan_file_delta(path: &Path, cached: &mut CachedSessionFile) -> Result<()> {
         .len();
     if file_size < cached.offset {
         // Codex rewrote/truncated a session log. Its old aggregate is invalid.
-        cached.offset = 0;
-        cached.daily.clear();
-        cached.model_daily.clear();
+        cached.reset_scan_state();
     }
     if file_size == cached.offset {
         return Ok(());
@@ -319,23 +350,8 @@ fn scan_file_delta(path: &Path, cached: &mut CachedSessionFile) -> Result<()> {
         let Ok(line) = std::str::from_utf8(&bytes) else {
             continue;
         };
-        update_codex_rollout_context(line, cached);
-        if let Some((timestamp, usage)) = token_usage_from_line(line, cached) {
-            let model = serde_json::from_str::<Value>(line)
-                .ok()
-                .and_then(|event| {
-                    event
-                        .pointer("/payload/info/last_token_usage/model")
-                        .or_else(|| event.pointer("/payload/info/last_token_usage/model_name"))
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                })
-                .or_else(|| cached.current_model.clone());
-            cached.add(
-                timestamp.with_timezone(&Local).date_naive(),
-                usage,
-                model.as_deref(),
-            );
+        if let Some((timestamp, usage, model)) = ingest_codex_line(line, cached) {
+            cached.add(timestamp, usage, model.as_deref());
         }
     }
     cached.offset = offset;
@@ -402,22 +418,79 @@ fn codex_home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".codex"))
 }
 
-fn update_codex_rollout_context(line: &str, cached: &mut CachedSessionFile) {
-    let Ok(event) = serde_json::from_str::<Value>(line) else {
-        return;
-    };
-    let Some(payload) = event.get("payload") else {
-        return;
-    };
-    if event.get("type").and_then(Value::as_str) == Some("turn_context") {
+/// Cheap substring gate before `JSON.parse`, matching T3's `mightCarryUsage`.
+fn might_carry_codex_line(line: &str) -> bool {
+    line.contains("\"token_count\"")
+        || line.contains("\"turn_context\"")
+        || line.contains("\"session_meta\"")
+        || line.contains("\"thread_settings_applied\"")
+}
+
+/// Copied parent history in a forked/subagent rollout is written in one burst
+/// (0-40ms gaps). The child's first real turn lands seconds later. One second
+/// is the T3 / ccusage split.
+const FORK_COPY_MAX_GAP_MS: i64 = 1000;
+
+fn is_forked_session_meta(payload: &Value) -> bool {
+    if payload.get("forked_from_id").and_then(Value::as_str).is_some() {
+        return true;
+    }
+    payload
+        .pointer("/source/subagent/thread_spawn/parent_thread_id")
+        .and_then(Value::as_str)
+        .is_some()
+}
+
+fn parse_line_timestamp_ms(event: &Value) -> Option<i64> {
+    DateTime::parse_from_rfc3339(event.get("timestamp")?.as_str()?)
+        .ok()
+        .map(|timestamp| timestamp.timestamp_millis())
+}
+
+/// Feeds one Codex rollout line into scan state. Returns a usage event when
+/// the line is a real `token_count` that T3/ccusage would keep.
+fn ingest_codex_line(
+    line: &str,
+    cached: &mut CachedSessionFile,
+) -> Option<(DateTime<Utc>, TokenUsage, Option<String>)> {
+    if !might_carry_codex_line(line) {
+        return None;
+    }
+    let event: Value = serde_json::from_str(line).ok()?;
+    let payload = event.get("payload")?;
+    let event_type = event.get("type").and_then(Value::as_str);
+
+    if event_type == Some("session_meta") {
+        if cached.saw_session_meta {
+            return None;
+        }
+        cached.saw_session_meta = true;
+        let id = payload
+            .get("id")
+            .or_else(|| payload.get("session_id"))
+            .and_then(Value::as_str);
+        if let Some(id) = id {
+            cached.session_id = id.to_owned();
+        }
+        if let Some(timestamp_ms) = parse_line_timestamp_ms(&event)
+            && is_forked_session_meta(payload)
+        {
+            cached.suppressing_fork_copies = true;
+            cached.fork_copy_anchor_ms = timestamp_ms;
+        }
+        return None;
+    }
+
+    if event_type == Some("turn_context") {
         if let Some(model) = payload.get("model").and_then(Value::as_str).map(str::trim)
             && !model.is_empty()
         {
             cached.current_model = Some(model.to_owned());
         }
-        return;
+        return None;
     }
-    if event.get("type").and_then(Value::as_str) == Some("event_msg")
+
+    if event_type == Some("event_msg")
         && payload.get("type").and_then(Value::as_str) == Some("thread_settings_applied")
     {
         let tier = payload
@@ -428,44 +501,62 @@ fn update_codex_rollout_context(line: &str, cached: &mut CachedSessionFile) {
         if let Some(tier) = tier {
             cached.fast_service_tier = matches!(tier, "fast" | "priority");
         }
-    }
-}
-
-fn token_usage_from_line(
-    line: &str,
-    cached: &CachedSessionFile,
-) -> Option<(DateTime<Utc>, TokenUsage)> {
-    let event: Value = serde_json::from_str(line).ok()?;
-    if event.get("type")?.as_str()? != "event_msg"
-        || event.pointer("/payload/type")?.as_str()? != "token_count"
-    {
         return None;
     }
+
+    if payload.get("type").and_then(Value::as_str) != Some("token_count") {
+        return None;
+    }
+
     let timestamp = DateTime::parse_from_rfc3339(event.get("timestamp")?.as_str()?)
         .ok()?
         .with_timezone(&Utc);
     let usage = event.pointer("/payload/info/last_token_usage")?;
-    let token = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
-    let input_tokens = token("input_tokens");
-    let cached_input_tokens = token("cached_input_tokens").max(token("cache_read_input_tokens"));
-    let output_tokens = token("output_tokens");
     let model = usage
         .get("model")
         .or_else(|| usage.get("model_name"))
         .and_then(Value::as_str)
-        .or(cached.current_model.as_deref());
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .or_else(|| cached.current_model.clone());
+    // T3 skips token_count before a model is known so a later re-emit after
+    // turn_context is not discarded as a duplicate of an unpriced event.
+    if model.as_deref().is_none_or(str::is_empty) {
+        return None;
+    }
+
+    let signature = usage.to_string();
+    if cached.last_usage_signature.as_deref() == Some(signature.as_str()) {
+        return None;
+    }
+    cached.last_usage_signature = Some(signature);
+
+    let timestamp_ms = timestamp.timestamp_millis();
+    if cached.suppressing_fork_copies {
+        if timestamp_ms - cached.fork_copy_anchor_ms < FORK_COPY_MAX_GAP_MS {
+            cached.fork_copy_anchor_ms = timestamp_ms;
+            return None;
+        }
+        cached.suppressing_fork_copies = false;
+    }
+
+    let token = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
+    let input_tokens = token("input_tokens");
+    let cached_input_tokens = token("cached_input_tokens").max(token("cache_read_input_tokens"));
+    let output_tokens = token("output_tokens");
+    if input_tokens == 0 && cached_input_tokens == 0 && output_tokens == 0 {
+        return None;
+    }
     let estimated_cost_microusd = codex_estimated_cost_microusd(
-        model,
+        model.as_deref(),
         input_tokens,
         cached_input_tokens,
         output_tokens,
         cached.fast_service_tier,
     );
-    let cache_savings_microusd = codex_cache_savings_microusd(
-        model,
-        cached_input_tokens,
-        cached.fast_service_tier,
-    );
+    let cache_savings_microusd =
+        codex_cache_savings_microusd(model.as_deref(), cached_input_tokens, cached.fast_service_tier);
     Some((
         timestamp,
         TokenUsage {
@@ -477,6 +568,7 @@ fn token_usage_from_line(
             priced_requests: u64::from(estimated_cost_microusd.is_some()),
             cache_savings_microusd,
         },
+        model,
     ))
 }
 
@@ -744,6 +836,11 @@ pub(crate) fn deduplicate_claude_entries(cache: &ClaudeUsageCache) -> Vec<Cached
             })
         });
         if let Some(index) = collision {
+            // Exact message+request repeats: T3 keeps the first. Sidechain
+            // collisions across request ids still prefer the original message.
+            if exact.contains_key(&key) {
+                continue;
+            }
             if claude_entry_should_replace(entry, &entries[index]) {
                 let previous = &entries[index];
                 if let Some(previous_id) = &previous.message_id {
@@ -806,6 +903,9 @@ fn scan_claude_file_delta(path: &Path, cached: &mut CachedClaudeSessionFile) -> 
             break;
         }
         offset = offset.saturating_add(read as u64);
+        if !std::str::from_utf8(&bytes).is_ok_and(|line| line.contains("\"usage\"")) {
+            continue;
+        }
         if let Some(entry) = claude_usage_from_line(&bytes) {
             cached.entries.push(entry);
         }
@@ -816,6 +916,9 @@ fn scan_claude_file_delta(path: &Path, cached: &mut CachedClaudeSessionFile) -> 
 
 fn claude_usage_from_line(line: &[u8]) -> Option<CachedClaudeUsageEntry> {
     let event: Value = serde_json::from_slice(line).ok()?;
+    if event.get("type").and_then(Value::as_str) != Some("assistant") {
+        return None;
+    }
     let timestamp = DateTime::parse_from_rfc3339(event.get("timestamp")?.as_str()?)
         .ok()?
         .with_timezone(&Utc);
@@ -840,14 +943,18 @@ fn claude_usage_from_line(line: &[u8]) -> Option<CachedClaudeUsageEntry> {
         .and_then(|value| value.get("ephemeral_1h_input_tokens"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let model = message.get("model").and_then(Value::as_str);
+    let model = message
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())?;
     let cost = event
         .get("costUSD")
         .and_then(Value::as_f64)
         .filter(|cost| cost.is_finite() && *cost >= 0.0)
         .or_else(|| {
             claude_estimated_cost_usd(
-                model,
+                Some(model),
                 input_tokens,
                 cache_read,
                 output_tokens,
@@ -855,7 +962,7 @@ fn claude_usage_from_line(line: &[u8]) -> Option<CachedClaudeUsageEntry> {
                 cache_write_1h,
             )
         })?;
-    let cache_savings_microusd = claude_cache_savings_microusd(model, cache_read);
+    let cache_savings_microusd = claude_cache_savings_microusd(Some(model), cache_read);
     let usage = TokenUsage {
         input_tokens,
         cached_input_tokens: cache_read.min(input_tokens),
@@ -878,7 +985,7 @@ fn claude_usage_from_line(line: &[u8]) -> Option<CachedClaudeUsageEntry> {
             .unwrap_or(false),
         has_speed: usage_json.get("speed").is_some(),
         usage,
-        model: model.map(str::to_owned),
+        model: Some(model.to_owned()),
     })
 }
 
@@ -983,14 +1090,11 @@ mod tests {
     #[test]
     fn reads_per_request_token_usage() {
         let line = r#"{"timestamp":"2026-07-14T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":12,"cached_input_tokens":7,"output_tokens":4}}}}"#;
-        let (_, usage) = token_usage_from_line(
-            line,
-            &CachedSessionFile {
-                current_model: Some("gpt-5.4".into()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        let mut cached = CachedSessionFile {
+            current_model: Some("gpt-5.4".into()),
+            ..Default::default()
+        };
+        let (_, usage, _) = ingest_codex_line(line, &mut cached).unwrap();
         assert_eq!(usage.total_tokens(), 16);
         assert_eq!(usage.requests, 1);
         assert_eq!(usage.priced_requests, 1);
@@ -1020,9 +1124,9 @@ mod tests {
     #[test]
     fn ignores_non_usage_events() {
         assert!(
-            token_usage_from_line(
+            ingest_codex_line(
                 r#"{"type":"event_msg","payload":{"type":"task_started"}}"#,
-                &CachedSessionFile::default(),
+                &mut CachedSessionFile::default(),
             )
             .is_none()
         );
@@ -1030,12 +1134,68 @@ mod tests {
 
     #[test]
     fn reads_claude_usage_and_uses_its_recorded_cost() {
-        let line = r#"{"timestamp":"2026-07-14T10:00:00Z","requestId":"request-1","message":{"id":"message-1","model":"claude-sonnet-4-20250514","usage":{"input_tokens":100,"cache_read_input_tokens":40,"output_tokens":25,"speed":"standard"}},"costUSD":0.0125}"#;
+        let line = r#"{"type":"assistant","timestamp":"2026-07-14T10:00:00Z","requestId":"request-1","message":{"id":"message-1","model":"claude-sonnet-4-20250514","usage":{"input_tokens":100,"cache_read_input_tokens":40,"output_tokens":25,"speed":"standard"}},"costUSD":0.0125}"#;
         let entry = claude_usage_from_line(line.as_bytes()).unwrap();
         assert_eq!(entry.usage.total_tokens(), 125);
         assert_eq!(entry.usage.cached_input_tokens, 40);
         assert_eq!(entry.usage.estimated_api_value_usd(), Some(0.0125));
         assert!(entry.has_speed);
+    }
+
+    #[test]
+    fn ignores_claude_events_that_are_not_assistant_or_have_no_model() {
+        assert!(claude_usage_from_line(
+            br#"{"type":"result","timestamp":"2026-07-14T10:00:00Z","message":{"id":"message-1","model":"claude-sonnet-4-20250514","usage":{"input_tokens":100,"output_tokens":25}},"costUSD":0.01}"#
+        )
+        .is_none());
+        assert!(claude_usage_from_line(
+            br#"{"type":"assistant","timestamp":"2026-07-14T10:00:00Z","message":{"id":"message-1","usage":{"input_tokens":100,"output_tokens":25}},"costUSD":0.01}"#
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn claude_exact_message_request_keeps_the_first() {
+        let first = CachedClaudeUsageEntry {
+            timestamp: Utc::now(),
+            message_id: Some("message-1".into()),
+            request_id: Some("request-1".into()),
+            is_sidechain: false,
+            has_speed: false,
+            usage: TokenUsage {
+                input_tokens: 10,
+                output_tokens: 2,
+                requests: 1,
+                estimated_cost_microusd: 100,
+                priced_requests: 1,
+                ..Default::default()
+            },
+            model: Some("claude-sonnet-4-20250514".into()),
+        };
+        let repeat = CachedClaudeUsageEntry {
+            usage: TokenUsage {
+                input_tokens: 999,
+                output_tokens: 999,
+                requests: 1,
+                estimated_cost_microusd: 9_999,
+                priced_requests: 1,
+                ..Default::default()
+            },
+            ..first.clone()
+        };
+        let cache = ClaudeUsageCache {
+            version: CLAUDE_CACHE_VERSION,
+            files: BTreeMap::from([(
+                "a.jsonl".into(),
+                CachedClaudeSessionFile {
+                    offset: 0,
+                    entries: vec![first.clone(), repeat],
+                },
+            )]),
+        };
+        let kept = deduplicate_claude_entries(&cache);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].usage.input_tokens, 10);
     }
 
     #[test]
@@ -1054,6 +1214,7 @@ mod tests {
                 priced_requests: 1,
                 ..Default::default()
             },
+            model: Some("claude-sonnet-4-20250514".into()),
         };
         let replay = CachedClaudeUsageEntry {
             request_id: Some("request-sidechain".into()),
@@ -1098,17 +1259,88 @@ mod tests {
     fn incremental_scan_counts_only_new_complete_lines() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("session.jsonl");
+        let context = r#"{"type":"turn_context","payload":{"model":"gpt-5.4"}}"#;
         let first = r#"{"timestamp":"2026-07-14T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10}}}}"#;
         let second = r#"{"timestamp":"2026-07-14T11:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"output_tokens":5}}}}"#;
-        fs::write(&path, format!("{first}\n{second}")).unwrap();
+        fs::write(&path, format!("{context}\n{first}\n{second}")).unwrap();
 
         let mut cached = CachedSessionFile::default();
         scan_file_delta(&path, &mut cached).unwrap();
         assert_eq!(cached.daily[0].usage.total_tokens(), 10);
 
-        fs::write(&path, format!("{first}\n{second}\n")).unwrap();
+        fs::write(&path, format!("{context}\n{first}\n{second}\n")).unwrap();
         scan_file_delta(&path, &mut cached).unwrap();
         assert_eq!(cached.daily[0].usage.total_tokens(), 15);
         assert_eq!(cached.daily[0].usage.requests, 2);
+    }
+
+    fn token_count(input: u64, output: u64, timestamp: &str) -> String {
+        format!(
+            r#"{{"timestamp":"{timestamp}","type":"event_msg","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":{input},"output_tokens":{output}}}}}}}}}"#
+        )
+    }
+
+    fn session_meta(id: &str, timestamp: &str, forked_from: Option<&str>) -> String {
+        let fork = match forked_from {
+            Some(parent) => format!(r#","forked_from_id":"{parent}""#),
+            None => String::new(),
+        };
+        format!(
+            r#"{{"type":"session_meta","timestamp":"{timestamp}","payload":{{"type":"session_meta","id":"{id}"{fork}}}}}"#
+        )
+    }
+
+    #[test]
+    fn skips_token_count_before_model_is_known() {
+        let mut cached = CachedSessionFile::default();
+        assert!(ingest_codex_line(&token_count(10, 1, "2026-08-01T05:00:00.000Z"), &mut cached).is_none());
+    }
+
+    #[test]
+    fn skips_unchanged_consecutive_token_counts() {
+        let mut cached = CachedSessionFile {
+            current_model: Some("gpt-5.4".into()),
+            ..Default::default()
+        };
+        assert!(ingest_codex_line(&token_count(10, 1, "2026-08-01T05:00:00.000Z"), &mut cached).is_some());
+        assert!(ingest_codex_line(&token_count(10, 1, "2026-08-01T05:00:00.100Z"), &mut cached).is_none());
+    }
+
+    #[test]
+    fn forked_rollout_drops_copied_burst_and_keeps_first_real_event() {
+        let mut cached = CachedSessionFile::default();
+        ingest_codex_line(
+            &session_meta("child", "2026-08-01T05:00:00.000Z", Some("parent")),
+            &mut cached,
+        );
+        ingest_codex_line(
+            r#"{"type":"turn_context","payload":{"model":"gpt-5.4"}}"#,
+            &mut cached,
+        );
+        assert!(ingest_codex_line(
+            &token_count(100, 10, "2026-08-01T05:00:00.001Z"),
+            &mut cached,
+        )
+        .is_none());
+        let real = ingest_codex_line(
+            &token_count(300, 30, "2026-08-01T05:00:06.000Z"),
+            &mut cached,
+        );
+        assert_eq!(real.unwrap().1.output_tokens, 30);
+        assert_eq!(cached.session_id, "child");
+    }
+
+    #[test]
+    fn later_session_meta_does_not_steal_child_id() {
+        let mut cached = CachedSessionFile::default();
+        ingest_codex_line(
+            &session_meta("child", "2026-08-01T05:00:00.000Z", None),
+            &mut cached,
+        );
+        ingest_codex_line(
+            &session_meta("parent", "2026-08-01T05:00:00.000Z", None),
+            &mut cached,
+        );
+        assert_eq!(cached.session_id, "child");
     }
 }
