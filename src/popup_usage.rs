@@ -1256,6 +1256,16 @@ thread_local! {
         tip_width: 0.0,
         tip_height: 0.0,
     });
+    static CHART_TOOLTIP_MOUNTED: Callback<Option<windows_core::IInspectable>> =
+        Callback::new(|native: Option<windows_core::IInspectable>| {
+            if let Some(host) = native.clone() {
+                let _ = windows_reactor::set_hit_test_visible(host, false);
+            }
+            CHART_TOOLTIP_TRACK.with(|track| {
+                track.borrow_mut().host = native;
+            });
+            apply_chart_tooltip_offset();
+        });
 }
 
 fn remember_chart_cursor(x: f64, y: f64) {
@@ -1339,15 +1349,7 @@ fn usage_page_tooltip(
         track.tip_height = tip_height;
     });
     let mut host = vstack((tip,));
-    host.mounted = Some(Callback::new(|native: Option<windows_core::IInspectable>| {
-        if let Some(host) = native.clone() {
-            let _ = windows_reactor::set_hit_test_visible(host, false);
-        }
-        CHART_TOOLTIP_TRACK.with(|track| {
-            track.borrow_mut().host = native;
-        });
-        apply_chart_tooltip_offset();
-    }));
+    host.mounted = Some(CHART_TOOLTIP_MOUNTED.with(Callback::clone));
     host.horizontal_alignment(HorizontalAlignment::Left)
         .vertical_alignment(VerticalAlignment::Top)
         .relative_align_left()
@@ -1393,27 +1395,36 @@ fn chart_tooltip(
     let mut total_tokens = 0_u64;
     let mut name_width = 5.0 * TOOLTIP_CHAR_CAPTION;
     let mut amount_width = 0.0_f64;
+    let mut visible_count = 0_usize;
     let mut rows: Vec<Element> = Vec::new();
     for entry in providers {
-        let Some(value) = point.by_provider.get(&entry.provider).copied() else {
-            continue;
-        };
+        let value = point
+            .by_provider
+            .get(&entry.provider)
+            .copied()
+            .unwrap_or(0);
         let amount = match metric {
             OverviewMetric::Cost => {
-                let cents = spend_display_cents(value);
-                total_cents = total_cents.saturating_add(cents);
-                format_spend_cents(cents)
+                total_cents = total_cents.saturating_add(spend_display_cents(value));
+                format_spend_tenths(value)
             }
             OverviewMetric::Tokens => {
                 total_tokens = total_tokens.saturating_add(value);
                 format_token_count(value)
             }
         };
+        let hidden = match metric {
+            OverviewMetric::Cost => spend_display_tenths(value) == 0,
+            OverviewMetric::Tokens => value == 0,
+        };
         let descriptor = provider_registry::descriptor(entry.provider);
         let color = provider_brand_color(entry.provider, color_scheme, true);
-        name_width =
-            name_width.max(descriptor.display_name.chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
-        amount_width = amount_width.max(amount.chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
+        if !hidden {
+            visible_count += 1;
+            name_width = name_width
+                .max(descriptor.display_name.chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
+            amount_width = amount_width.max(amount.chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
+        }
         let label = hstack((
             crate::icons::element(descriptor.icon, TOOLTIP_ICON, color)
                 .vertical_alignment(VerticalAlignment::Center)
@@ -1429,15 +1440,31 @@ fn chart_tooltip(
                 .foreground(ThemeRef::SecondaryText)
                 .vertical_alignment(VerticalAlignment::Center),
         ))
-        .spacing(TOOLTIP_ROW_GAP);
-        rows.push(
+        .spacing(TOOLTIP_ROW_GAP)
+        .with_key(format!("usage-tip-label-{}", entry.provider.id()));
+        // Keep every provider host mounted; collapse $0 rows so icons
+        // do not remount when a day has no spend.
+        let mut slot = border(
             tooltip_metric_row(label, amount)
                 .with_key(format!("usage-tip-row-{}", entry.provider.id())),
-        );
+        )
+        .opacity(if hidden { 0.0 } else { 1.0 })
+        .with_key(format!("usage-tip-slot-{}", entry.provider.id()));
+        if hidden {
+            slot = slot.height(0.0);
+        } else {
+            slot = slot.padding(Thickness {
+                left: 0.0,
+                top: 0.0,
+                right: 0.0,
+                bottom: 6.0,
+            });
+        }
+        rows.push(slot.into());
     }
 
     let total = match metric {
-        OverviewMetric::Cost => format_spend_cents(total_cents),
+        OverviewMetric::Cost => format_spend_tenths_from_cents(total_cents),
         OverviewMetric::Tokens => format_token_count(total_tokens),
     };
     amount_width = amount_width.max(total.chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
@@ -1452,6 +1479,12 @@ fn chart_tooltip(
             .height(1.0)
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .background(ThemeRef::DividerStroke)
+            .margin(Thickness {
+                left: 0.0,
+                top: 0.0,
+                right: 0.0,
+                bottom: 6.0,
+            })
             .with_key("usage-tip-rule")
             .into(),
     );
@@ -1459,18 +1492,27 @@ fn chart_tooltip(
         tooltip_metric_row(caption("Total").foreground(ThemeRef::SecondaryText), total)
             .with_key("usage-tip-total"),
     );
-    let row_count = rows.len();
+    let row_count = visible_count + 2;
+    let set_key = providers
+        .iter()
+        .map(|entry| entry.provider.id())
+        .collect::<Vec<_>>()
+        .join("+");
 
     let tip = border(
         vstack((
             body_strong(title).with_key("usage-tip-title"),
             vstack(rows)
-                .spacing(6.0)
+                .spacing(0.0)
                 .width(body_width)
                 .horizontal_alignment(HorizontalAlignment::Stretch)
-                .with_key("usage-tip-rows"),
+                .with_key(format!(
+                    "usage-tip-rows-{}-{}",
+                    set_key, color_scheme as i32
+                )),
         ))
-        .spacing(10.0),
+        .spacing(10.0)
+        .with_key("usage-tip-body"),
     )
     .padding(Thickness {
         left: TOOLTIP_PAD_X,
@@ -1951,8 +1993,28 @@ fn spend_display_cents(microusd: u64) -> u64 {
         .clamp(0.0, u64::MAX as f64) as u64
 }
 
-fn format_spend_cents(cents: u64) -> String {
-    format_spend_dollars(((cents as f64) / 100.0).round() as u64)
+fn spend_display_tenths(microusd: u64) -> u64 {
+    (microusd as f64 / 100_000.0)
+        .round()
+        .clamp(0.0, u64::MAX as f64) as u64
+}
+
+fn format_spend_tenths(microusd: u64) -> String {
+    format_spend_tenths_value(spend_display_tenths(microusd), microusd)
+}
+
+fn format_spend_tenths_from_cents(cents: u64) -> String {
+    format_spend_tenths_value(
+        ((cents as f64) / 10.0).round().clamp(0.0, u64::MAX as f64) as u64,
+        cents.saturating_mul(10_000),
+    )
+}
+
+fn format_spend_tenths_value(tenths: u64, microusd: u64) -> String {
+    if tenths >= 10_000 {
+        return format_spend(microusd);
+    }
+    format!("${:.1}", tenths as f64 / 10.0)
 }
 
 fn format_spend_dollars(dollars: u64) -> String {
