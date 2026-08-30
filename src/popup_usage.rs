@@ -6,8 +6,7 @@ use chrono::{DateTime, Duration, Local, NaiveDate};
 use windows_reactor::*;
 
 use crate::{
-    popup,
-    provider_registry,
+    popup, provider_registry,
     settings::ProviderKind,
     usage::TokenUsage,
     usage_overview::{
@@ -115,13 +114,13 @@ fn usage_header(
     vstack((
         grid((
             hstack((
-                body_strong("Usage").vertical_alignment(VerticalAlignment::Bottom),
+                body_strong("Usage").vertical_alignment(VerticalAlignment::Center),
                 body(range_label)
                     .foreground(ThemeRef::TertiaryText)
-                    .vertical_alignment(VerticalAlignment::Bottom),
+                    .vertical_alignment(VerticalAlignment::Center),
             ))
             .spacing(8.0)
-            .vertical_alignment(VerticalAlignment::Center),
+            .vertical_alignment(VerticalAlignment::Top),
             segmented_control(
                 "usage-metric",
                 vec![
@@ -145,7 +144,7 @@ fn usage_header(
                 false,
             )
             .horizontal_alignment(HorizontalAlignment::Right)
-            .vertical_alignment(VerticalAlignment::Center)
+            .vertical_alignment(VerticalAlignment::Top)
             .grid_column(1),
         ))
         .columns([GridLength::Star(1.0), GridLength::Auto]),
@@ -234,9 +233,8 @@ fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: bool) -> Eleme
         .into_iter()
         .enumerate()
         .map(|(index, tab)| {
-            let hide_divider = index == 0
-                || selected == index
-                || selected == index.saturating_sub(1);
+            let hide_divider =
+                index == 0 || selected == index || selected == index.saturating_sub(1);
             let pill = border(Element::Empty)
                 .corner_radius(6.0)
                 .background(ThemeRef::Accent)
@@ -351,28 +349,40 @@ fn usage_hero(
         OverviewMetric::Cost => format_spend_full(snapshot.totals.estimated_cost_microusd),
         OverviewMetric::Tokens => format_token_count(snapshot.totals.total_tokens()),
     };
-    let subtitle = match metric {
-        OverviewMetric::Cost => format!("{} sessions · API estimate", snapshot.total_sessions),
-        OverviewMetric::Tokens => format!("{} sessions", snapshot.total_sessions),
-    };
+    let mut meta: Vec<Element> = vec![
+        body(format!("{} sessions", snapshot.total_sessions))
+            .foreground(ThemeRef::SecondaryText)
+            .horizontal_alignment(HorizontalAlignment::Right)
+            .into(),
+    ];
+    if metric == OverviewMetric::Cost {
+        meta.push(
+            caption("API estimate")
+                .foreground(ThemeRef::TertiaryText)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .into(),
+        );
+    }
 
     usage_card(
         vstack((
             vstack((
-                vstack((
-                    text_block(headline).font_size(28.0).font_weight(600),
-                    caption(subtitle).foreground(ThemeRef::TertiaryText),
+                grid((
+                    text_block(headline)
+                        .font_size(28.0)
+                        .font_weight(600)
+                        .vertical_alignment(VerticalAlignment::Center),
+                    vstack(meta)
+                        .spacing(2.0)
+                        .horizontal_alignment(HorizontalAlignment::Right)
+                        .vertical_alignment(VerticalAlignment::Center)
+                        .grid_column(1),
                 ))
-                .spacing(4.0),
+                .columns([GridLength::Star(1.0), GridLength::Auto]),
                 usage_share_bar(snapshot, metric, color_scheme),
             ))
             .spacing(8.0),
-            provider_grid(
-                snapshot,
-                metric,
-                color_scheme,
-                use_colored_provider_icons,
-            ),
+            provider_grid(snapshot, metric, color_scheme, use_colored_provider_icons),
         ))
         .spacing(16.0),
     )
@@ -429,11 +439,7 @@ fn usage_share_bar(
         .rows([GridLength::Pixel(10.0)])
         .height(10.0)
         .horizontal_alignment(HorizontalAlignment::Stretch)
-        .with_key(format!(
-            "usage-hero-bar-{}-{}",
-            metric as i32,
-            set_key
-        ))
+        .with_key(format!("usage-hero-bar-{}-{}", metric as i32, set_key))
         .into()
 }
 
@@ -486,8 +492,7 @@ fn provider_grid(
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .with_key(format!(
             "usage-hero-providers-{}-{}",
-            set_key,
-            color_scheme as i32
+            set_key, color_scheme as i32
         ))
         .into()
 }
@@ -539,8 +544,14 @@ fn provider_row(
         .column_spacing(8.0)
         .rows([GridLength::Auto]),
         vstack((
-            caption(format!("{} sessions · {}", entry.sessions, value))
-                .foreground(ThemeRef::SecondaryText),
+            hstack((
+                caption(value)
+                    .font_weight(600)
+                    .foreground(ThemeRef::PrimaryText),
+                caption(format!("· {} sessions", entry.sessions))
+                    .foreground(ThemeRef::SecondaryText),
+            ))
+            .spacing(4.0),
             caption(detail).foreground(ThemeRef::TertiaryText),
         ))
         .spacing(1.0),
@@ -655,22 +666,15 @@ fn usage_area_chart(
     let raw_max = series
         .iter()
         .flat_map(|point| {
-            providers.iter().filter_map(|entry| {
-                point.by_provider.get(&entry.provider).copied()
-            })
+            providers
+                .iter()
+                .filter_map(|entry| point.by_provider.get(&entry.provider).copied())
         })
         .max()
         .unwrap_or(0);
     let max_value = chart_scale_max(raw_max);
     let xaml = usage_area_chart_xaml(series, providers, max_value, plot_width, color_scheme);
-    let plot = usage_area_chart_host(
-        &xaml,
-        series,
-        providers,
-        metric,
-        color_scheme,
-        plot_width,
-    );
+    let plot = usage_area_chart_host(&xaml, series, providers, metric, color_scheme, plot_width);
     let hits = usage_chart_hit_targets(series.len(), plot_width, hover, set_hover);
     let y_axis = usage_y_axis(max_value, metric);
     let x_axis = usage_x_axis(series, hourly);
@@ -713,19 +717,20 @@ fn usage_area_chart_host(
         metric as i32,
         color_scheme as i32,
         series.len(),
-        providers
-            .iter()
-            .fold(0_u64, |hash, entry| hash
-                .wrapping_mul(31)
-                .wrapping_add(entry.provider as u64)),
+        providers.iter().fold(0_u64, |hash, entry| hash
+            .wrapping_mul(31)
+            .wrapping_add(entry.provider as u64)),
     );
     let fingerprint = series.iter().fold(0_u64, |hash, point| {
-        let provider_hash = point.by_provider.iter().fold(0_u64, |inner, (kind, value)| {
-            inner
-                .wrapping_mul(31)
-                .wrapping_add(*kind as u64)
-                .wrapping_add(*value)
-        });
+        let provider_hash = point
+            .by_provider
+            .iter()
+            .fold(0_u64, |inner, (kind, value)| {
+                inner
+                    .wrapping_mul(31)
+                    .wrapping_add(*kind as u64)
+                    .wrapping_add(*value)
+            });
         hash.wrapping_mul(31)
             .wrapping_add(point.total)
             .wrapping_add(provider_hash)
@@ -930,11 +935,7 @@ fn usage_area_chart_xaml(
         let ys: Vec<f64> = series
             .iter()
             .map(|point| {
-                let value = point
-                    .by_provider
-                    .get(&entry.provider)
-                    .copied()
-                    .unwrap_or(0);
+                let value = point.by_provider.get(&entry.provider).copied().unwrap_or(0);
                 let ratio = if max_value == 0 {
                     0.0
                 } else {
@@ -1135,7 +1136,10 @@ fn xaml_rgb(color: Color) -> String {
 }
 
 fn xaml_rgba(color: Color, alpha: u8) -> String {
-    format!("#{:02X}{:02X}{:02X}{:02X}", alpha, color.r, color.g, color.b)
+    format!(
+        "#{:02X}{:02X}{:02X}{:02X}",
+        alpha, color.r, color.g, color.b
+    )
 }
 
 fn chart_tooltip(
@@ -1169,33 +1173,30 @@ fn chart_tooltip(
                     14.0,
                     provider_brand_color(entry.provider, ColorScheme::Dark, true),
                 ),
-                caption(provider_registry::descriptor(entry.provider).display_name)
-                    .grid_column(1),
+                caption(provider_registry::descriptor(entry.provider).display_name).grid_column(1),
                 caption(amount)
                     .horizontal_alignment(HorizontalAlignment::Right)
                     .grid_column(2),
             ))
-            .columns([
-                GridLength::Auto,
-                GridLength::Star(1.0),
-                GridLength::Auto,
-            ])
+            .columns([GridLength::Auto, GridLength::Star(1.0), GridLength::Auto])
             .with_key(format!("usage-tip-row-{}", entry.provider.id()))
             .into(),
         );
     }
 
-    let mut items = vec![body_strong(if hourly {
-        format!(
-            "{} · {}",
-            point.date.format("%b %-d"),
-            crate::usage_overview::format_hour_label(point.at)
-        )
-    } else {
-        point.date.format("%b %-d").to_string()
-    })
-    .with_key("usage-tip-title")
-    .into()];
+    let mut items = vec![
+        body_strong(if hourly {
+            format!(
+                "{} · {}",
+                point.date.format("%b %-d"),
+                crate::usage_overview::format_hour_label(point.at)
+            )
+        } else {
+            point.date.format("%b %-d").to_string()
+        })
+        .with_key("usage-tip-title")
+        .into(),
+    ];
     items.extend(rows);
     items.push(
         caption(format!(
@@ -1243,20 +1244,13 @@ fn usage_totals_card(totals: &TokenUsage) -> Element {
                 total_metric("Output", format_token_count(totals.output_tokens))
                     .grid_column(1)
                     .grid_row(1),
-                total_metric(
-                    "Cache savings",
-                    format_spend(totals.cache_savings_microusd),
-                )
-                .grid_column(0)
-                .grid_row(2)
-                .grid_column_span(2),
+                total_metric("Cache savings", format_spend(totals.cache_savings_microusd))
+                    .grid_column(0)
+                    .grid_row(2)
+                    .grid_column_span(2),
             ))
             .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
-            .rows([
-                GridLength::Auto,
-                GridLength::Auto,
-                GridLength::Auto,
-            ])
+            .rows([GridLength::Auto, GridLength::Auto, GridLength::Auto])
             .row_spacing(8.0)
             .column_spacing(8.0),
         ))
@@ -1429,11 +1423,7 @@ fn format_spend(microusd: u64) -> String {
 
 fn format_spend_full(microusd: u64) -> String {
     let cents = spend_display_cents(microusd);
-    format!(
-        "${}.{:02}",
-        format_thousands(cents / 100),
-        cents % 100
-    )
+    format!("${}.{:02}", format_thousands(cents / 100), cents % 100)
 }
 
 fn format_thousands(value: u64) -> String {
@@ -1449,7 +1439,9 @@ fn format_thousands(value: u64) -> String {
 }
 
 fn spend_display_cents(microusd: u64) -> u64 {
-    (microusd as f64 / 10_000.0).round().clamp(0.0, u64::MAX as f64) as u64
+    (microusd as f64 / 10_000.0)
+        .round()
+        .clamp(0.0, u64::MAX as f64) as u64
 }
 
 fn format_spend_cents(cents: u64) -> String {
@@ -1458,9 +1450,9 @@ fn format_spend_cents(cents: u64) -> String {
 
 fn format_spend_dollars(dollars: u64) -> String {
     if dollars >= 1_000_000 {
-        format!("${}M", dollars / 1_000_000)
+        format!("${:.1}M", dollars as f64 / 1_000_000.0)
     } else if dollars >= 1_000 {
-        format!("${}K", dollars / 1_000)
+        format!("${:.1}K", dollars as f64 / 1_000.0)
     } else {
         format!("${dollars}")
     }
