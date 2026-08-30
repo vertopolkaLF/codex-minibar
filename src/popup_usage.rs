@@ -16,6 +16,8 @@ use crate::{
     },
 };
 
+const USAGE_CARD_PAD: f64 = 12.0;
+
 pub fn overview_page(
     snapshot: &OverviewSnapshot,
     metric: OverviewMetric,
@@ -30,25 +32,18 @@ pub fn overview_page(
     set_chart_hover: SetState<Option<usize>>,
 ) -> Element {
     if snapshot.providers.is_empty() {
-        return border(
-            vstack((
-                body_strong("Usage"),
-                caption("Enable a spend provider in Settings to see local API usage.")
-                    .foreground(ThemeRef::TertiaryText)
-                    .wrap(),
-            ))
-            .spacing(8.0),
-        )
-        .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
-        .padding(Thickness::uniform(16.0))
-        .background(ThemeRef::CardBackground)
-        .border_thickness(Thickness::uniform(1.0))
-        .border_brush(ThemeRef::CardStroke)
+        return vstack((
+            body_strong("Usage"),
+            caption("Enable a spend provider in Settings to see local API usage.")
+                .foreground(ThemeRef::TertiaryText)
+                .wrap(),
+        ))
+        .spacing(8.0)
         .with_key("usage-empty")
         .into();
     }
 
-    let date_label = if snapshot.hourly {
+    let range_label = if snapshot.hourly {
         let start = snapshot
             .daily_series
             .first()
@@ -59,54 +54,48 @@ pub fn overview_page(
             .last()
             .map(|point| crate::usage_overview::format_hour_label(point.at))
             .unwrap_or_else(|| snapshot.end_date.format("%b %-d").to_string());
-        format!("Usage / {start} to {end}")
+        format!("{start} to {end}")
     } else {
         format!(
-            "Usage / {} to {}",
+            "{} to {}",
             snapshot.start_date.format("%b %-d"),
             snapshot.end_date.format("%b %-d")
         )
     };
 
-    border(
-        vstack((
-            usage_header(
-                &date_label,
-                metric,
-                range,
-                set_metric,
-                set_range,
-                &set_chart_hover,
-            ),
-            usage_hero(snapshot, metric, color_scheme, use_colored_provider_icons),
-            usage_chart_card(
-                &snapshot.daily_series,
-                snapshot.start_date,
-                snapshot.end_date,
-                snapshot.hourly,
-                &snapshot.providers,
-                metric,
-                chart_hover,
-                color_scheme,
-                set_chart_hover,
-            ),
-            usage_totals_card(&snapshot.totals),
-            usage_breakdown_card(
-                snapshot,
-                breakdown,
-                metric,
-                color_scheme,
-                use_colored_provider_icons,
-                set_breakdown,
-            ),
-        ))
-        .spacing(10.0),
-    )
-    .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
-    .padding(Thickness::uniform(12.0))
-    .background(ThemeRef::CardBackground)
-    .border_thickness(Thickness::uniform(1.0))
-    .border_brush(ThemeRef::CardStroke)
+    vstack((
+        usage_header(
+            &range_label,
+            metric,
+            range,
+            set_metric,
+            set_range,
+            &set_chart_hover,
+        ),
+        usage_hero(snapshot, metric, color_scheme, use_colored_provider_icons),
+        usage_chart_card(
+            &snapshot.daily_series,
+            snapshot.start_date,
+            snapshot.end_date,
+            snapshot.hourly,
+            &snapshot.providers,
+            metric,
+            chart_hover,
+            color_scheme,
+            set_chart_hover,
+        ),
+        usage_totals_card(&snapshot.totals),
+        usage_breakdown_card(
+            snapshot,
+            breakdown,
+            metric,
+            color_scheme,
+            use_colored_provider_icons,
+            set_breakdown,
+        ),
+    ))
+    .spacing(10.0)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
     .with_key(format!(
         "usage-page-{}-{}-{}-{}",
         metric as i32,
@@ -118,7 +107,7 @@ pub fn overview_page(
 }
 
 fn usage_header(
-    title: &str,
+    range_label: &str,
     metric: OverviewMetric,
     range: OverviewRange,
     set_metric: SetState<OverviewMetric>,
@@ -127,44 +116,65 @@ fn usage_header(
 ) -> Element {
     let clear_hover = set_chart_hover.clone();
     vstack((
-        caption(title).foreground(ThemeRef::SecondaryText),
-        hstack((
-            filter_chip(
-                "Cost",
-                metric == OverviewMetric::Cost,
-                {
-                    let set_metric = set_metric.clone();
-                    let clear_hover = clear_hover.clone();
-                    move || {
-                        clear_hover.call(None);
-                        set_metric.call(OverviewMetric::Cost);
-                    }
-                },
-            ),
-            filter_chip(
-                "Tokens",
-                metric == OverviewMetric::Tokens,
-                {
-                    let set_metric = set_metric.clone();
-                    let clear_hover = clear_hover.clone();
-                    move || {
-                        clear_hover.call(None);
-                        set_metric.call(OverviewMetric::Tokens);
-                    }
-                },
-            ),
+        grid((
+            hstack((
+                body_strong("Usage").vertical_alignment(VerticalAlignment::Bottom),
+                body(range_label)
+                    .foreground(ThemeRef::TertiaryText)
+                    .vertical_alignment(VerticalAlignment::Bottom),
+            ))
+            .spacing(8.0)
+            .vertical_alignment(VerticalAlignment::Center),
+            segmented_control(
+                "usage-metric",
+                vec![
+                    segmented_tab("Cost", metric == OverviewMetric::Cost, {
+                        let set_metric = set_metric.clone();
+                        let clear_hover = clear_hover.clone();
+                        move || {
+                            clear_hover.call(None);
+                            set_metric.call(OverviewMetric::Cost);
+                        }
+                    }),
+                    segmented_tab("Tokens", metric == OverviewMetric::Tokens, {
+                        let set_metric = set_metric.clone();
+                        let clear_hover = clear_hover.clone();
+                        move || {
+                            clear_hover.call(None);
+                            set_metric.call(OverviewMetric::Tokens);
+                        }
+                    }),
+                ],
+                false,
+            )
+            .horizontal_alignment(HorizontalAlignment::Right)
+            .vertical_alignment(VerticalAlignment::Center)
+            .grid_column(1),
         ))
-        .spacing(4.0),
-        wrap_chips(
-            [
-                OverviewRange::Past24h,
-                OverviewRange::SevenDays,
-                OverviewRange::ThirtyDays,
-                OverviewRange::NinetyDays,
-            ]
+        .columns([GridLength::Star(1.0), GridLength::Auto]),
+        period_switcher(range, set_range, clear_hover),
+    ))
+    .spacing(8.0)
+    .into()
+}
+
+fn period_switcher(
+    range: OverviewRange,
+    set_range: SetState<OverviewRange>,
+    clear_hover: SetState<Option<usize>>,
+) -> Element {
+    let periods = [
+        OverviewRange::Past24h,
+        OverviewRange::SevenDays,
+        OverviewRange::ThirtyDays,
+        OverviewRange::NinetyDays,
+    ];
+    segmented_control(
+        "usage-range",
+        periods
             .into_iter()
             .map(|item| {
-                filter_chip(item.label(), range == item, {
+                segmented_tab(item.label(), range == item, {
                     let set_range = set_range.clone();
                     let clear_hover = clear_hover.clone();
                     move || {
@@ -174,42 +184,124 @@ fn usage_header(
                 })
             })
             .collect(),
-        ),
-    ))
-    .spacing(8.0)
-    .into()
+        true,
+    )
 }
 
-fn wrap_chips(chips: Vec<Element>) -> Element {
-    hstack(chips).spacing(4.0).into()
+struct SegmentedTab {
+    label: String,
+    selected: bool,
+    on_click: Callback<()>,
 }
 
-fn filter_chip(label: &str, selected: bool, on_click: impl IntoUnitCallback) -> Element {
-    let label = caption(label).foreground(if selected {
-        ThemeRef::Accent
-    } else {
-        ThemeRef::SecondaryText
-    });
-    let chip = border(label)
-        .padding(Thickness {
-            left: 10.0,
-            top: 4.0,
-            right: 10.0,
-            bottom: 4.0,
-        })
-        .corner_radius(12.0);
-    if selected {
-        chip
-            .background(ThemeRef::SubtleFill)
-            .border_thickness(Thickness::uniform(1.0))
-            .border_brush(ThemeRef::Accent)
-    } else {
-        chip
-            .background(Color::transparent())
-            .border_thickness(Thickness::uniform(0.0))
+fn segmented_tab(
+    label: impl Into<String>,
+    selected: bool,
+    on_click: impl IntoUnitCallback,
+) -> SegmentedTab {
+    SegmentedTab {
+        label: label.into(),
+        selected,
+        on_click: on_click.into_unit_callback(),
     }
-    .on_tapped(on_click)
+}
+
+fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: bool) -> Element {
+    let count = tabs.len().max(1);
+    let selected = tabs.iter().position(|tab| tab.selected);
+    let columns = vec![
+        if stretch {
+            GridLength::Star(1.0)
+        } else {
+            GridLength::Auto
+        };
+        count
+    ];
+    let cells = tabs
+        .into_iter()
+        .enumerate()
+        .map(|(index, tab)| {
+            let hide_divider = index == 0
+                || selected == Some(index)
+                || selected == Some(index.saturating_sub(1));
+            let label = caption(tab.label.clone())
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center)
+                .foreground(if tab.selected {
+                    ThemeRef::custom("TextOnAccentFillColorPrimaryBrush")
+                } else {
+                    ThemeRef::PrimaryText
+                });
+            let pill = border(label)
+                .padding(Thickness {
+                    left: 10.0,
+                    top: 5.0,
+                    right: 10.0,
+                    bottom: 5.0,
+                })
+                .corner_radius(6.0)
+                .background(if tab.selected {
+                    BrushBinding::Theme(ThemeRef::Accent)
+                } else {
+                    BrushBinding::Direct(Color::transparent())
+                })
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .on_tapped(tab.on_click);
+            let cell: Element = if index == 0 {
+                pill.into()
+            } else {
+                grid((
+                    border(Element::Empty)
+                        .width(1.0)
+                        .vertical_alignment(VerticalAlignment::Stretch)
+                        .background(ThemeRef::DividerStroke)
+                        .opacity(if hide_divider { 0.0 } else { 1.0 })
+                        .margin(Thickness {
+                            left: 0.0,
+                            top: 6.0,
+                            right: 0.0,
+                            bottom: 6.0,
+                        })
+                        .with_key(format!("{key}-rule-{index}")),
+                    pill.grid_column(1),
+                ))
+                .columns([GridLength::Pixel(1.0), GridLength::Star(1.0)])
+                .into()
+            };
+            cell.horizontal_alignment(HorizontalAlignment::Stretch)
+                .grid_column(index as i32)
+                .with_key(format!("{key}-tab-{}", tab.label))
+        })
+        .collect::<Vec<_>>();
+
+    border(grid(cells).columns(columns).horizontal_alignment(
+        if stretch {
+            HorizontalAlignment::Stretch
+        } else {
+            HorizontalAlignment::Left
+        },
+    ))
+    .padding(Thickness::uniform(3.0))
+    .corner_radius(8.0)
+    .background(ThemeRef::ControlFill)
+    .horizontal_alignment(if stretch {
+        HorizontalAlignment::Stretch
+    } else {
+        HorizontalAlignment::Left
+    })
+    .with_key(format!("{key}-{count}"))
     .into()
+}
+
+fn usage_card(content: impl Into<Element>) -> Element {
+    border(content.into())
+        .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+        .padding(Thickness::uniform(USAGE_CARD_PAD))
+        .background(ThemeRef::CardBackground)
+        .border_thickness(Thickness::uniform(1.0))
+        .border_brush(ThemeRef::CardStroke)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .into()
 }
 
 fn usage_hero(
@@ -219,7 +311,7 @@ fn usage_hero(
     use_colored_provider_icons: bool,
 ) -> Element {
     let headline = match metric {
-        OverviewMetric::Cost => format_spend(snapshot.totals.estimated_cost_microusd),
+        OverviewMetric::Cost => format_spend_full(snapshot.totals.estimated_cost_microusd),
         OverviewMetric::Tokens => format_token_count(snapshot.totals.total_tokens()),
     };
     let subtitle = format!(
@@ -227,20 +319,61 @@ fn usage_hero(
         snapshot.total_sessions
     );
 
-    vstack((
-        text_block(headline).font_size(28.0).font_weight(600),
-        caption(subtitle).foreground(ThemeRef::TertiaryText),
-        vstack(
-            snapshot
-                .providers
-                .iter()
-                .map(|entry| provider_row(entry, metric, color_scheme, use_colored_provider_icons))
-                .collect::<Vec<_>>(),
-        )
+    usage_card(
+        vstack((
+            vstack((
+                text_block(headline).font_size(28.0).font_weight(600),
+                caption(subtitle).foreground(ThemeRef::TertiaryText),
+            ))
+            .spacing(0.0),
+            provider_grid(
+                snapshot,
+                metric,
+                color_scheme,
+                use_colored_provider_icons,
+            ),
+        ))
         .spacing(8.0),
-    ))
-    .spacing(8.0)
-    .into()
+    )
+}
+
+fn provider_grid(
+    snapshot: &OverviewSnapshot,
+    metric: OverviewMetric,
+    color_scheme: ColorScheme,
+    use_colored_provider_icons: bool,
+) -> Element {
+    const COLUMNS: usize = 2;
+    let row_count = snapshot.providers.len().div_ceil(COLUMNS).max(1);
+    let set_key = snapshot
+        .providers
+        .iter()
+        .map(|entry| entry.provider.id())
+        .collect::<Vec<_>>()
+        .join("+");
+    let cells = snapshot
+        .providers
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            provider_row(entry, metric, color_scheme, use_colored_provider_icons)
+                .grid_row((index / COLUMNS) as i32)
+                .grid_column((index % COLUMNS) as i32)
+        })
+        .collect::<Vec<_>>();
+
+    grid(cells)
+        .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
+        .rows(vec![GridLength::Auto; row_count])
+        .row_spacing(8.0)
+        .column_spacing(8.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .with_key(format!(
+            "usage-hero-providers-{}-{}",
+            set_key,
+            color_scheme as i32
+        ))
+        .into()
 }
 
 fn provider_row(
@@ -272,7 +405,15 @@ fn provider_row(
 
     grid((
         crate::icons::element(icon_name, 16.0, color)
-            .vertical_alignment(VerticalAlignment::Center),
+            .vertical_alignment(VerticalAlignment::Center)
+            .with_key(format!(
+                "usage-hero-icon-{}-{}-{:02X}{:02X}{:02X}",
+                entry.provider.id(),
+                icon_name,
+                color.r,
+                color.g,
+                color.b
+            )),
         vstack((
             body_strong(descriptor.display_name),
             caption(format!("{} sessions · {}", entry.sessions, value))
@@ -290,6 +431,7 @@ fn provider_row(
     ))
     .columns([GridLength::Auto, GridLength::Star(1.0)])
     .rows([GridLength::Auto])
+    .with_key(format!("usage-hero-provider-{}", entry.provider.id()))
     .into()
 }
 
@@ -345,18 +487,19 @@ fn usage_chart_card(
                 ))
         });
 
-    vstack((
-        body_strong(title),
-        relative_panel({
-            let mut layers = vec![chart.with_key("usage-chart-plot")];
-            if let Some(tooltip) = tooltip {
-                layers.push(tooltip);
-            }
-            layers
-        }),
-    ))
-    .spacing(6.0)
-    .into()
+    usage_card(
+        vstack((
+            body_strong(title),
+            relative_panel({
+                let mut layers = vec![chart.with_key("usage-chart-plot")];
+                if let Some(tooltip) = tooltip {
+                    layers.push(tooltip);
+                }
+                layers
+            }),
+        ))
+        .spacing(6.0),
+    )
 }
 
 const CHART_PLOT_HEIGHT: f64 = 132.0;
@@ -375,9 +518,12 @@ fn usage_area_chart(
     color_scheme: ColorScheme,
     set_hover: SetState<Option<usize>>,
 ) -> Element {
+    // Popup stroke + body 16px + card stroke/pad, then the Y axis.
     let plot_width = f64::from(popup::POPUP_WIDTH)
         - 2.0
-        - 24.0
+        - 32.0
+        - 2.0
+        - USAGE_CARD_PAD * 2.0
         - CHART_Y_AXIS_WIDTH
         - CHART_Y_GAP;
     if series.is_empty() {
@@ -968,43 +1114,44 @@ fn usage_totals_card(totals: &TokenUsage) -> Element {
     let uncached = totals
         .input_tokens
         .saturating_sub(totals.cached_input_tokens);
-    vstack((
-        body_strong("Totals"),
-        grid((
-            total_metric("Processed tokens", format_token_count(processed))
-                .grid_column(0)
-                .grid_row(0),
-            total_metric(
-                "Cached input",
-                format_token_count(totals.cached_input_tokens),
-            )
-            .grid_column(1)
-            .grid_row(0),
-            total_metric("Uncached input", format_token_count(uncached))
-                .grid_column(0)
-                .grid_row(1),
-            total_metric("Output", format_token_count(totals.output_tokens))
+    usage_card(
+        vstack((
+            body_strong("Totals"),
+            grid((
+                total_metric("Processed tokens", format_token_count(processed))
+                    .grid_column(0)
+                    .grid_row(0),
+                total_metric(
+                    "Cached input",
+                    format_token_count(totals.cached_input_tokens),
+                )
                 .grid_column(1)
-                .grid_row(1),
-            total_metric(
-                "Cache savings",
-                format_spend(totals.cache_savings_microusd),
-            )
-            .grid_column(0)
-            .grid_row(2)
-            .grid_column_span(2),
+                .grid_row(0),
+                total_metric("Uncached input", format_token_count(uncached))
+                    .grid_column(0)
+                    .grid_row(1),
+                total_metric("Output", format_token_count(totals.output_tokens))
+                    .grid_column(1)
+                    .grid_row(1),
+                total_metric(
+                    "Cache savings",
+                    format_spend(totals.cache_savings_microusd),
+                )
+                .grid_column(0)
+                .grid_row(2)
+                .grid_column_span(2),
+            ))
+            .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
+            .rows([
+                GridLength::Auto,
+                GridLength::Auto,
+                GridLength::Auto,
+            ])
+            .row_spacing(8.0)
+            .column_spacing(8.0),
         ))
-        .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
-        .rows([
-            GridLength::Auto,
-            GridLength::Auto,
-            GridLength::Auto,
-        ])
-        .row_spacing(8.0)
-        .column_spacing(8.0),
-    ))
-    .spacing(8.0)
-    .into()
+        .spacing(8.0),
+    )
 }
 
 fn total_metric(label: &str, value: String) -> Element {
@@ -1028,34 +1175,44 @@ fn usage_breakdown_card(
         BreakdownMode::Model => &snapshot.model_rows,
         BreakdownMode::Day => &snapshot.day_rows,
     };
-    vstack((
-        grid((
-            body_strong("Breakdown"),
-            hstack((
-                filter_chip("Model", breakdown == BreakdownMode::Model, {
-                    let set_breakdown = set_breakdown.clone();
-                    move || set_breakdown.call(BreakdownMode::Model)
-                }),
-                filter_chip("Day", breakdown == BreakdownMode::Day, {
-                    let set_breakdown = set_breakdown.clone();
-                    move || set_breakdown.call(BreakdownMode::Day)
-                }),
+    usage_card(
+        vstack((
+            grid((
+                body_strong("Breakdown").vertical_alignment(VerticalAlignment::Center),
+                segmented_control(
+                    "usage-breakdown",
+                    vec![
+                        segmented_tab("Model", breakdown == BreakdownMode::Model, {
+                            let set_breakdown = set_breakdown.clone();
+                            move || set_breakdown.call(BreakdownMode::Model)
+                        }),
+                        segmented_tab("Day", breakdown == BreakdownMode::Day, {
+                            let set_breakdown = set_breakdown.clone();
+                            move || set_breakdown.call(BreakdownMode::Day)
+                        }),
+                    ],
+                    false,
+                )
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .vertical_alignment(VerticalAlignment::Center)
+                .grid_column(1),
             ))
-            .horizontal_alignment(HorizontalAlignment::Right)
-            .grid_column(1),
+            .columns([GridLength::Star(1.0), GridLength::Auto]),
+            vstack((
+                breakdown_header(),
+                vstack(
+                    rows.iter()
+                        .map(|row| {
+                            breakdown_row(row, metric, color_scheme, use_colored_provider_icons)
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .spacing(6.0),
+            ))
+            .spacing(6.0),
         ))
-        .columns([GridLength::Star(1.0), GridLength::Auto]),
-        breakdown_header(),
-        vstack(
-            rows.iter()
-                .take(12)
-                .map(|row| breakdown_row(row, metric, color_scheme, use_colored_provider_icons))
-                .collect::<Vec<_>>(),
-        )
-        .spacing(6.0),
-    ))
-    .spacing(8.0)
-    .into()
+        .spacing(14.0),
+    )
 }
 
 fn breakdown_header() -> Element {
@@ -1089,23 +1246,38 @@ fn breakdown_row(
     color_scheme: ColorScheme,
     use_colored_provider_icons: bool,
 ) -> Element {
-    let leading: Element = if let Some(provider) = row.provider {
-        crate::icons::element(
-            provider_registry::descriptor(provider).icon,
-            14.0,
-            provider_brand_color(provider, color_scheme, use_colored_provider_icons),
-        )
-        .into()
-    } else {
-        Element::Empty
-    };
+    let mut title = Vec::new();
+    if let Some(provider) = row.provider {
+        title.push(
+            crate::icons::element(
+                provider_registry::descriptor(provider).icon,
+                14.0,
+                provider_brand_color(provider, color_scheme, use_colored_provider_icons),
+            )
+            .into(),
+        );
+    }
+    title.push(
+        caption(&row.label)
+            .margin(Thickness {
+                left: if row.provider.is_some() { 6.0 } else { 0.0 },
+                top: 0.0,
+                right: 0.0,
+                bottom: 0.0,
+            })
+            .into(),
+    );
+    if let Some(weekday) = &row.weekday {
+        title.push(
+            caption(weekday)
+                .foreground(ThemeRef::TertiaryText)
+                .vertical_alignment(VerticalAlignment::Bottom)
+                .into(),
+        );
+    }
     grid((
-        hstack((leading, caption(&row.label).margin(Thickness {
-            left: 6.0,
-            top: 0.0,
-            right: 0.0,
-            bottom: 0.0,
-        })))
+        hstack(title)
+            .spacing(4.0)
             .vertical_alignment(VerticalAlignment::Center),
         caption(format_spend(row.cost_microusd))
             .horizontal_alignment(HorizontalAlignment::Right)
@@ -1143,6 +1315,27 @@ fn provider_brand_color(
 
 fn format_spend(microusd: u64) -> String {
     format_spend_dollars((microusd as f64 / 1_000_000.0).round() as u64)
+}
+
+fn format_spend_full(microusd: u64) -> String {
+    let cents = spend_display_cents(microusd);
+    format!(
+        "${}.{:02}",
+        format_thousands(cents / 100),
+        cents % 100
+    )
+}
+
+fn format_thousands(value: u64) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::new();
+    for (index, ch) in digits.chars().rev().enumerate() {
+        if index > 0 && index % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(ch);
+    }
+    grouped.chars().rev().collect()
 }
 
 fn spend_display_cents(microusd: u64) -> u64 {

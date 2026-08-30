@@ -343,11 +343,7 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
             priced_requests: 1,
             ..Default::default()
         };
-        let model_key = if model.trim().is_empty() {
-            "unknown".to_string()
-        } else {
-            model.trim().to_ascii_lowercase()
-        };
+        let model_key = normalize_cursor_model_name(model);
         model_daily
             .entry((model_key, date))
             .or_default()
@@ -379,6 +375,47 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
         .collect::<Vec<_>>();
     Ok(statistics_from_daily(&daily, history_days))
 }
+
+/// Collapse Cursor catalog flavors onto one family id.
+///
+/// Wire slugs keep a `cursor-` prefix plus throwaway reasoning / effort / `-fast`
+/// suffixes (`cursor-grok-4.6-high-fast`, `4.6-medium`). Those are the same
+/// model for usage rollup, so they become `grok-4.6`.
+pub(crate) fn normalize_cursor_model_name(model: &str) -> String {
+    let mut name = model.trim().to_ascii_lowercase();
+    if name.is_empty() {
+        return "unknown".into();
+    }
+    if let Some(rest) = name.strip_prefix("cursor-") {
+        name = rest.to_string();
+    }
+    loop {
+        let Some(stripped) = name
+            .strip_suffix("-fast")
+            .or_else(|| name.strip_suffix("-thinking"))
+            .or_else(|| name.strip_suffix("-reasoning"))
+            .or_else(|| name.strip_suffix("-throwaway"))
+            .or_else(|| name.strip_suffix("-xhigh"))
+            .or_else(|| name.strip_suffix("-high"))
+            .or_else(|| name.strip_suffix("-medium"))
+            .or_else(|| name.strip_suffix("-low"))
+            .or_else(|| name.strip_suffix("-none"))
+        else {
+            break;
+        };
+        if stripped.is_empty() {
+            break;
+        }
+        name = stripped.to_string();
+    }
+    name = name.trim_end_matches('-').to_string();
+    if name.is_empty() {
+        "unknown".into()
+    } else {
+        name
+    }
+}
+
 fn cursor_estimated_cost_microusd(
     model: &str,
     cache_write: u64,
@@ -668,5 +705,25 @@ mod tests {
     fn cursor_activation_can_never_report_success() {
         let error = CursorActivator.activate().unwrap_err();
         assert!(error.to_string().contains("does not support"));
+    }
+
+    #[test]
+    fn normalizes_cursor_effort_and_fast_flavors_onto_one_family() {
+        assert_eq!(
+            normalize_cursor_model_name("cursor-grok-4.6-high-fast"),
+            "grok-4.6"
+        );
+        assert_eq!(
+            normalize_cursor_model_name("cursor-grok-4.6-medium"),
+            "grok-4.6"
+        );
+        assert_eq!(normalize_cursor_model_name("4.6-high"), "4.6");
+        assert_eq!(normalize_cursor_model_name("4.6-medium-fast"), "4.6");
+        assert_eq!(
+            normalize_cursor_model_name("claude-opus-4-8-thinking-"),
+            "claude-opus-4-8"
+        );
+        assert_eq!(normalize_cursor_model_name("auto"), "auto");
+        assert_eq!(normalize_cursor_model_name("  "), "unknown");
     }
 }

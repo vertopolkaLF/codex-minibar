@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike, Utc, Weekday};
 
 use crate::{
     limits::ProviderLimits,
@@ -77,6 +77,7 @@ pub struct DailySeriesPoint {
 #[derive(Clone, Debug, Default)]
 pub struct BreakdownRow {
     pub label: String,
+    pub weekday: Option<String>,
     pub provider: Option<ProviderKind>,
     pub cost_microusd: u64,
     pub tokens: u64,
@@ -167,6 +168,11 @@ pub fn build_overview_snapshot(
                 .load_model_breakdown(*provider, start_date, end_date)
                 .unwrap_or_default()
             {
+                let model = if *provider == ProviderKind::Cursor {
+                    crate::cursor::normalize_cursor_model_name(&model)
+                } else {
+                    model
+                };
                 model_rows
                     .entry((*provider, model))
                     .or_default()
@@ -320,6 +326,7 @@ pub fn build_overview_snapshot(
                 };
                 BreakdownRow {
                     label: format_hour_label(at),
+                    weekday: None,
                     provider: None,
                     cost_microusd: cost,
                     tokens,
@@ -370,6 +377,7 @@ pub fn build_overview_snapshot(
                 };
                 BreakdownRow {
                     label: date.format("%b %-d").to_string(),
+                    weekday: Some(weekday_short(*date).to_owned()),
                     provider: None,
                     cost_microusd: cost,
                     tokens,
@@ -405,6 +413,7 @@ pub fn build_overview_snapshot(
         .into_iter()
         .map(|((provider, model), usage)| BreakdownRow {
             label: model,
+            weekday: None,
             provider: Some(provider),
             cost_microusd: usage.estimated_cost_microusd,
             tokens: usage.total_tokens(),
@@ -430,6 +439,18 @@ pub fn build_overview_snapshot(
     }
 
     snapshot
+}
+
+fn weekday_short(date: NaiveDate) -> &'static str {
+    match date.weekday() {
+        Weekday::Mon => "Mon",
+        Weekday::Tue => "Tue",
+        Weekday::Wed => "Wed",
+        Weekday::Thu => "Thu",
+        Weekday::Fri => "Fri",
+        Weekday::Sat => "Sat",
+        Weekday::Sun => "Sun",
+    }
 }
 
 pub fn format_hour_label(at: DateTime<Local>) -> String {
