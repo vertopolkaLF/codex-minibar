@@ -351,18 +351,22 @@ fn usage_hero(
         OverviewMetric::Cost => format_spend_full(snapshot.totals.estimated_cost_microusd),
         OverviewMetric::Tokens => format_token_count(snapshot.totals.total_tokens()),
     };
-    let subtitle = format!(
-        "{} sessions · API estimate",
-        snapshot.total_sessions
-    );
+    let subtitle = match metric {
+        OverviewMetric::Cost => format!("{} sessions · API estimate", snapshot.total_sessions),
+        OverviewMetric::Tokens => format!("{} sessions", snapshot.total_sessions),
+    };
 
     usage_card(
         vstack((
             vstack((
-                text_block(headline).font_size(28.0).font_weight(600),
-                caption(subtitle).foreground(ThemeRef::TertiaryText),
+                vstack((
+                    text_block(headline).font_size(28.0).font_weight(600),
+                    caption(subtitle).foreground(ThemeRef::TertiaryText),
+                ))
+                .spacing(4.0),
+                usage_share_bar(snapshot, metric, color_scheme),
             ))
-            .spacing(0.0),
+            .spacing(8.0),
             provider_grid(
                 snapshot,
                 metric,
@@ -370,8 +374,83 @@ fn usage_hero(
                 use_colored_provider_icons,
             ),
         ))
-        .spacing(8.0),
+        .spacing(16.0),
     )
+}
+
+fn usage_share_bar(
+    snapshot: &OverviewSnapshot,
+    metric: OverviewMetric,
+    color_scheme: ColorScheme,
+) -> Element {
+    let mut entries: Vec<(ProviderKind, u64)> = snapshot
+        .providers
+        .iter()
+        .map(|entry| {
+            let weight = match metric {
+                OverviewMetric::Cost => entry.usage.estimated_cost_microusd,
+                OverviewMetric::Tokens => entry.usage.total_tokens(),
+            };
+            (entry.provider, weight)
+        })
+        .collect();
+    entries.sort_by(|(_, left), (_, right)| right.cmp(left));
+    let total = entries
+        .iter()
+        .fold(0_u64, |sum, (_, weight)| sum.saturating_add(*weight));
+    let mut columns = Vec::with_capacity(entries.len().saturating_mul(2).saturating_sub(1));
+    for (index, (_, weight)) in entries.iter().enumerate() {
+        if index > 0 {
+            columns.push(GridLength::Pixel(4.0));
+        }
+        let star = if total == 0 { 1 } else { *weight.max(&1) };
+        columns.push(GridLength::Star(star as f64));
+    }
+    let set_key = entries
+        .iter()
+        .map(|(provider, _)| provider.id())
+        .collect::<Vec<_>>()
+        .join("+");
+    let segments: Vec<Element> = entries
+        .iter()
+        .enumerate()
+        .map(|(index, (provider, _))| {
+            border(Element::Empty)
+                .background(usage_share_color(*provider, color_scheme))
+                .height(10.0)
+                .corner_radius(4.0)
+                .grid_column((index * 2) as i32)
+                .into()
+        })
+        .collect();
+
+    grid(segments)
+        .columns(columns)
+        .rows([GridLength::Pixel(10.0)])
+        .height(10.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .with_key(format!(
+            "usage-hero-bar-{}-{}",
+            metric as i32,
+            set_key
+        ))
+        .into()
+}
+
+fn usage_share_color(provider: ProviderKind, color_scheme: ColorScheme) -> Color {
+    match provider {
+        ProviderKind::Codex => Color::rgb(128, 159, 255),
+        ProviderKind::Claude => Color::rgb(217, 119, 87),
+        ProviderKind::Cursor => match color_scheme {
+            ColorScheme::Light => Color::rgb(18, 18, 18),
+            ColorScheme::Dark => Color::rgb(230, 230, 230),
+        },
+        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => match color_scheme {
+            ColorScheme::Light => Color::rgb(75, 75, 75),
+            ColorScheme::Dark => Color::rgb(205, 205, 205),
+        },
+        ProviderKind::OpenRouter => Color::rgb(200, 255, 0),
+    }
 }
 
 fn provider_grid(
@@ -402,7 +481,7 @@ fn provider_grid(
     grid(cells)
         .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
         .rows(vec![GridLength::Auto; row_count])
-        .row_spacing(8.0)
+        .row_spacing(16.0)
         .column_spacing(8.0)
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .with_key(format!(
@@ -440,34 +519,33 @@ fn provider_row(
         format_token_count(entry.usage.total_tokens())
     );
 
-    grid((
-        crate::icons::element(icon_name, 16.0, color)
-            .vertical_alignment(VerticalAlignment::Center)
-            .with_key(format!(
-                "usage-hero-icon-{}-{}-{:02X}{:02X}{:02X}",
-                entry.provider.id(),
-                icon_name,
-                color.r,
-                color.g,
-                color.b
-            )),
+    vstack((
+        grid((
+            crate::icons::element(icon_name, 16.0, color)
+                .vertical_alignment(VerticalAlignment::Center)
+                .with_key(format!(
+                    "usage-hero-icon-{}-{}-{:02X}{:02X}{:02X}",
+                    entry.provider.id(),
+                    icon_name,
+                    color.r,
+                    color.g,
+                    color.b
+                )),
+            body_strong(descriptor.display_name)
+                .vertical_alignment(VerticalAlignment::Center)
+                .grid_column(1),
+        ))
+        .columns([GridLength::Auto, GridLength::Star(1.0)])
+        .column_spacing(8.0)
+        .rows([GridLength::Auto]),
         vstack((
-            body_strong(descriptor.display_name),
             caption(format!("{} sessions · {}", entry.sessions, value))
                 .foreground(ThemeRef::SecondaryText),
             caption(detail).foreground(ThemeRef::TertiaryText),
         ))
-        .spacing(1.0)
-        .margin(Thickness {
-            left: 8.0,
-            top: 0.0,
-            right: 0.0,
-            bottom: 0.0,
-        })
-        .grid_column(1),
+        .spacing(1.0),
     ))
-    .columns([GridLength::Auto, GridLength::Star(1.0)])
-    .rows([GridLength::Auto])
+    .spacing(4.0)
     .with_key(format!("usage-hero-provider-{}", entry.provider.id()))
     .into()
 }
@@ -574,8 +652,16 @@ fn usage_area_chart(
         .into();
     }
 
-    let raw_max = series.iter().map(|point| point.total).max().unwrap_or(0);
-    let max_value = nice_ceiling(raw_max);
+    let raw_max = series
+        .iter()
+        .flat_map(|point| {
+            providers.iter().filter_map(|entry| {
+                point.by_provider.get(&entry.provider).copied()
+            })
+        })
+        .max()
+        .unwrap_or(0);
+    let max_value = chart_scale_max(raw_max);
     let xaml = usage_area_chart_xaml(series, providers, max_value, plot_width, color_scheme);
     let plot = usage_area_chart_host(
         &xaml,
@@ -1026,24 +1112,11 @@ fn series_color(provider: ProviderKind, color_scheme: ColorScheme) -> Color {
     }
 }
 
-fn nice_ceiling(value: u64) -> u64 {
-    if value <= 1 {
+fn chart_scale_max(raw_max: u64) -> u64 {
+    if raw_max == 0 {
         return 1;
     }
-    let magnitude = 10f64.powf((value as f64).log10().floor());
-    let normalized = value as f64 / magnitude;
-    let nice = if normalized <= 1.0 {
-        1.0
-    } else if normalized <= 2.0 {
-        2.0
-    } else if normalized <= 2.5 {
-        2.5
-    } else if normalized <= 5.0 {
-        5.0
-    } else {
-        10.0
-    };
-    (nice * magnitude).round().max(1.0) as u64
+    (raw_max as f64 * 1.10).ceil().max(1.0) as u64
 }
 
 fn format_axis_value(value: u64, metric: OverviewMetric) -> String {
