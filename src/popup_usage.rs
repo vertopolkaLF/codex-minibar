@@ -203,6 +203,8 @@ fn segmented_tab(
     }
 }
 
+const SEGMENTED_TRACK_PAD: f64 = 4.0;
+
 fn segmented_tab_width(label: &str) -> f64 {
     (label.chars().count() as f64 * 8.0 + 22.0).max(48.0)
 }
@@ -212,7 +214,7 @@ fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: bool) -> Eleme
     let selected = tabs.iter().position(|tab| tab.selected).unwrap_or(0);
     let anim = crate::theme::duration(crate::theme::CONTROL_FAST_ANIMATION);
     let cell_width = if stretch {
-        (f64::from(popup::POPUP_WIDTH) - 2.0 - 32.0 - 6.0) / count as f64
+        (f64::from(popup::POPUP_WIDTH) - 2.0 - 32.0 - SEGMENTED_TRACK_PAD * 2.0) / count as f64
     } else {
         tabs.iter()
             .map(|tab| segmented_tab_width(&tab.label))
@@ -316,7 +318,7 @@ fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: bool) -> Eleme
     };
 
     border(track)
-        .padding(Thickness::uniform(3.0))
+        .padding(Thickness::uniform(SEGMENTED_TRACK_PAD))
         .corner_radius(8.0)
         .background(ThemeRef::ControlFill)
         .horizontal_alignment(if stretch {
@@ -610,8 +612,7 @@ fn usage_chart_card(
             let (tip, tip_width) = chart_tooltip(point, providers, metric, hourly, color_scheme);
             let count = filled.len().max(1) as f64;
             let step = plot_width / count;
-            let cursor_x =
-                CHART_Y_AXIS_WIDTH + CHART_Y_GAP + step * index as f64 + step / 2.0;
+            let cursor_x = CHART_Y_AXIS_WIDTH + CHART_Y_GAP + step * index as f64 + step / 2.0;
             let left = tooltip_offset_x(cursor_x, tip_width, panel_width);
             tip.margin(Thickness {
                 left,
@@ -1238,9 +1239,8 @@ fn chart_tooltip(
         };
         let descriptor = provider_registry::descriptor(entry.provider);
         let color = provider_brand_color(entry.provider, color_scheme, true);
-        name_width = name_width.max(
-            descriptor.display_name.chars().count() as f64 * TOOLTIP_CHAR_CAPTION,
-        );
+        name_width =
+            name_width.max(descriptor.display_name.chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
         amount_width = amount_width.max(amount.chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
         let label = hstack((
             crate::icons::element(descriptor.icon, TOOLTIP_ICON, color)
@@ -1269,14 +1269,10 @@ fn chart_tooltip(
         OverviewMetric::Tokens => format_token_count(total_tokens),
     };
     amount_width = amount_width.max(total.chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
-    let inner_width = TOOLTIP_ICON
-        + TOOLTIP_ROW_GAP
-        + name_width
-        + TOOLTIP_VALUE_GAP
-        + amount_width;
-    let tip_width = (title.chars().count() as f64 * TOOLTIP_CHAR_TITLE)
-        .max(inner_width)
-        + TOOLTIP_PAD_X * 2.0;
+    let inner_width =
+        TOOLTIP_ICON + TOOLTIP_ROW_GAP + name_width + TOOLTIP_VALUE_GAP + amount_width;
+    let tip_width =
+        (title.chars().count() as f64 * TOOLTIP_CHAR_TITLE).max(inner_width) + TOOLTIP_PAD_X * 2.0;
     let body_width = tip_width - TOOLTIP_PAD_X * 2.0;
 
     rows.push(
@@ -1288,11 +1284,8 @@ fn chart_tooltip(
             .into(),
     );
     rows.push(
-        tooltip_metric_row(
-            caption("Total").foreground(ThemeRef::SecondaryText),
-            total,
-        )
-        .with_key("usage-tip-total"),
+        tooltip_metric_row(caption("Total").foreground(ThemeRef::SecondaryText), total)
+            .with_key("usage-tip-total"),
     );
 
     let tip = border(
