@@ -1136,7 +1136,6 @@ fn provider_cards(
                         .map(|actions| actions.now)
                         .unwrap_or_else(Utc::now);
                     let expired = api_key.is_expired(now);
-                    let expired_at = expired.then_some(api_key.expires_at).flatten();
                     if !key_identity.is_empty() {
                         key_identity.push('\u{1f}');
                     }
@@ -1175,7 +1174,7 @@ fn provider_cards(
                             show_used_percentage,
                             color_scheme,
                             expired,
-                            expired_at,
+                            api_key.expires_at,
                             on_delete,
                             delete_chrome,
                         )
@@ -1321,14 +1320,17 @@ fn spending_card_with_title(
     show_used_percentage: bool,
     color_scheme: ColorScheme,
     expired: bool,
-    expired_at: Option<DateTime<Utc>>,
+    expires_at: Option<DateTime<Utc>>,
     on_delete: Option<impl IntoUnitCallback>,
     delete_chrome: Option<(String, Option<String>, SetState<Option<String>>)>,
 ) -> Element {
     let title = title.into().to_uppercase();
     let mut right_side: Vec<Element> = Vec::new();
+    // When both reset and expiry countdowns share one row, hide the masked key
+    // so the card does not overflow horizontally.
+    let mut show_masked_key = true;
     if expired {
-        let expired_label = expired_at.map_or_else(
+        let expired_label = expires_at.map_or_else(
             || "expired".into(),
             |at| format!("expired at {}", at.with_timezone(&Local).format("%H:%M")),
         );
@@ -1396,18 +1398,50 @@ fn spending_card_with_title(
                 .into(),
             );
         }
-        if let Some(reset) = spending.resets_at {
-            right_side.push(
-                hstack((
+        let reset_at = spending.resets_at;
+        let expires_soon = expires_at.filter(|at| *at > Utc::now());
+        show_masked_key = !(reset_at.is_some() && expires_soon.is_some());
+        if reset_at.is_some() || expires_soon.is_some() {
+            let mut meta: Vec<Element> = Vec::new();
+            if let Some(reset) = reset_at {
+                meta.push(
                     text_block("Resets in")
                         .foreground(ThemeRef::TertiaryText)
-                        .vertical_alignment(VerticalAlignment::Center),
+                        .vertical_alignment(VerticalAlignment::Center)
+                        .into(),
+                );
+                meta.push(
                     text_block(format_reset_in(Some(reset)))
-                        .vertical_alignment(VerticalAlignment::Center),
-                ))
-                .spacing(6.0)
-                .horizontal_alignment(HorizontalAlignment::Right)
-                .into(),
+                        .vertical_alignment(VerticalAlignment::Center)
+                        .into(),
+                );
+            }
+            if let Some(expires) = expires_soon {
+                if reset_at.is_some() {
+                    meta.push(
+                        text_block("•")
+                            .foreground(ThemeRef::TertiaryText)
+                            .vertical_alignment(VerticalAlignment::Center)
+                            .into(),
+                    );
+                }
+                meta.push(
+                    text_block("Expires in")
+                        .foreground(ThemeRef::TertiaryText)
+                        .vertical_alignment(VerticalAlignment::Center)
+                        .into(),
+                );
+                meta.push(
+                    text_block(format_reset_in(Some(expires)))
+                        .vertical_alignment(VerticalAlignment::Center)
+                        .into(),
+                );
+            }
+            right_side.push(
+                hstack(meta)
+                    .spacing(6.0)
+                    .horizontal_alignment(HorizontalAlignment::Right)
+                    .into(),
             );
         }
     }
@@ -1415,7 +1449,9 @@ fn spending_card_with_title(
     let mut title_lines: Vec<Element> = vec![caption(title)
         .foreground(ThemeRef::SecondaryText)
         .into()];
-    if let Some(masked) = masked_key.map(str::trim).filter(|value| !value.is_empty()) {
+    if show_masked_key
+        && let Some(masked) = masked_key.map(str::trim).filter(|value| !value.is_empty())
+    {
         title_lines.push(
             caption(masked.to_owned())
                 .foreground(ThemeRef::TertiaryText)
