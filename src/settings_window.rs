@@ -14,10 +14,9 @@ use crate::settings::{
 };
 use crate::settings_controls::{
     SETTINGS_CARD_PADDING, settings_action_card, settings_brick_row, settings_brick_table_header,
-    settings_card_padding, settings_content_expander, settings_content_expander_with_trailing,
-    settings_control_card, settings_info_card, settings_section_all_toggle,
-    settings_slider_content, settings_toggle_card, settings_toggle_card_with_description,
-    settings_toggle_expander, update_available_nav_card,
+    settings_card_padding, settings_checkbox_expander, settings_content_expander,
+    settings_control_card, settings_info_card, settings_slider_content, settings_toggle_card,
+    settings_toggle_card_with_description, settings_toggle_expander, update_available_nav_card,
 };
 use crate::theme::{CONTROL_FAST_ANIMATION, CONTROL_NORMAL_ANIMATION, duration};
 use crate::updater::{
@@ -6541,9 +6540,10 @@ fn popup_settings_cards(
         let set_section = set_popup_visibility.clone();
         let section_tx = settings_tx.clone();
         rows.push(
-            settings_content_expander_with_trailing(
-                text_block(descriptor.display_name).font_size(14.0),
-                Some(settings_section_all_toggle(section_all, move |show_on_all| {
+            settings_checkbox_expander(
+                descriptor.display_name,
+                section_all,
+                move |show_on_all| {
                     persist_popup_provider_all(
                         &section_snapshot,
                         set_section.clone(),
@@ -6551,7 +6551,7 @@ fn popup_settings_cards(
                         provider,
                         show_on_all,
                     );
-                })),
+                },
                 is_expanded,
                 move |expanded| {
                     if expanded {
@@ -6560,6 +6560,9 @@ fn popup_settings_cards(
                         expand_setter.call(None);
                     }
                 },
+                format!("popup-provider-{}", provider.id()),
+                hovered_card_id,
+                set_hovered_card_id.clone(),
                 vstack(brick_rows).spacing(0.0),
             )
             .with_key(format!("popup-provider-{}", provider.id())),

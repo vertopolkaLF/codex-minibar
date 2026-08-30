@@ -35,15 +35,16 @@ pub(crate) fn card_is_hovered(hovered_id: &Option<String>, id: &str) -> bool {
 }
 
 fn card_hover_handlers(
-    card_id: &'static str,
+    card_id: impl Into<String>,
     set_hovered_id: SetState<Option<String>>,
 ) -> (
     impl Fn(PointerEventInfo) + Clone + 'static,
     impl Fn() + Clone + 'static,
 ) {
+    let card_id = card_id.into();
     let enter = {
         let set_hovered_id = set_hovered_id.clone();
-        move |_: PointerEventInfo| set_hovered_id.call(Some(card_id.to_string()))
+        move |_: PointerEventInfo| set_hovered_id.call(Some(card_id.clone()))
     };
     let exit = move || set_hovered_id.call(None);
     (enter, exit)
@@ -236,81 +237,47 @@ pub(crate) fn animate_expand_progress(
     });
 }
 
-/// Settings-style expanding option card: toggle in the header, nested content
-/// below. Toggle never hides or disables `content`. Tapping anywhere on the
-/// header row (except the toggle itself) expands/collapses with animation.
-pub(crate) fn settings_toggle_expander(
+/// Shared expandable settings-card shell used by notification and Customize
+/// cards. The trailing control is deliberately injected so switches and
+/// checkboxes keep exactly the same card chrome and hit-test geometry.
+fn settings_expander_card(
     label: impl Into<String>,
     description: Option<&str>,
-    enabled: bool,
-    on_toggled: impl IntoCallback<bool>,
+    trailing: impl Into<Element>,
     expanded: bool,
     expand_progress: f64,
     expanded_body_height: Option<f64>,
-    set_expanded: SetState<bool>,
-    set_expand_progress: AsyncSetState<f64>,
-    card_id: &'static str,
+    toggle_expand: impl Fn() + Clone + 'static,
+    card_id: impl Into<String>,
     hovered_id: &Option<String>,
     set_hovered_id: SetState<Option<String>>,
     content: impl Into<Element>,
 ) -> Element {
-    let hovered = card_is_hovered(hovered_id, card_id);
+    let card_id = card_id.into();
+    let hovered = card_is_hovered(hovered_id, &card_id);
     let (on_enter, on_exit) = card_hover_handlers(card_id, set_hovered_id);
-
-    let toggle_expand = {
-        let set_expanded = set_expanded.clone();
-        let set_expand_progress = set_expand_progress.clone();
-        move || animate_expand_progress(expanded, set_expanded.clone(), set_expand_progress.clone())
-    };
-
     let progress = expand_progress.clamp(0.0, 1.0);
 
-    // Trailing controls share one v-centered stack so the chevron cannot drift
-    // relative to the toggle (RelativePanel + composition rotation used to).
-    let trailing = hstack((
-        text_block(if enabled { "On" } else { "Off" })
-            .vertical_alignment(VerticalAlignment::Center)
-            .margin(Thickness {
-                left: 0.0,
-                top: 0.0,
-                right: 12.0,
-                bottom: 0.0,
-            })
-            .on_tapped({
-                let toggle_expand = toggle_expand.clone();
-                move || toggle_expand()
-            }),
-        ToggleSwitch::new(enabled)
-            .on_content("")
-            .off_content("")
-            .on_toggled(on_toggled)
-            .min_width(0.0)
-            .max_width(50.0)
-            .width(50.0)
-            .vertical_alignment(VerticalAlignment::Center)
-            .margin(Thickness {
-                left: 0.0,
-                top: 0.0,
-                right: TOGGLE_CHEVRON_GAP,
-                bottom: 0.0,
-            }),
-        // Fixed hit-box; rotation pivots on this SVG.
-        border(
-            crate::icons::element("caret-down", 16.0, Color::rgb(138, 138, 138))
-                .horizontal_alignment(HorizontalAlignment::Center)
-                .vertical_alignment(VerticalAlignment::Center),
-        )
-        .width(CHEVRON_SIZE)
-        .height(CHEVRON_SIZE)
+    let trailing = border(trailing.into())
         .background(Color::transparent())
-        .rotation(progress * 180.0)
-        .vertical_alignment(VerticalAlignment::Center)
-        .on_tapped({
-            let toggle_expand = toggle_expand.clone();
-            move || toggle_expand()
-        }),
-    ))
-    .spacing(0.0)
+        .margin(Thickness {
+            left: 0.0,
+            top: 0.0,
+            right: CARD_PADDING_X + CHEVRON_SIZE + TOGGLE_CHEVRON_GAP,
+            bottom: 0.0,
+        })
+        .relative_align_right()
+        .relative_align_v_center();
+    let chevron = border(
+        crate::icons::element("caret-down", 16.0, Color::rgb(138, 138, 138))
+            .horizontal_alignment(HorizontalAlignment::Center)
+            .vertical_alignment(VerticalAlignment::Center),
+    )
+    .width(CHEVRON_SIZE)
+    .height(CHEVRON_SIZE)
+    .background(Color::transparent())
+    .rotation(progress * 180.0)
+    .with_rotation_transition(duration(CONTROL_NORMAL_ANIMATION))
     .margin(Thickness {
         left: 0.0,
         top: 0.0,
@@ -318,7 +285,11 @@ pub(crate) fn settings_toggle_expander(
         bottom: 0.0,
     })
     .relative_align_right()
-    .relative_align_v_center();
+    .relative_align_v_center()
+    .on_tapped({
+        let toggle_expand = toggle_expand.clone();
+        move || toggle_expand()
+    });
 
     let label_content: Element = match description {
         Some(description) => vstack((
@@ -347,7 +318,7 @@ pub(crate) fn settings_toggle_expander(
             .margin(Thickness {
                 left: CARD_PADDING_X,
                 top: CARD_CONTENT_PADDING_Y,
-                right: 148.0,
+                right: CARD_TRAILING_RESERVE,
                 bottom: CARD_CONTENT_PADDING_Y,
             })
             .relative_align_left()
@@ -358,12 +329,12 @@ pub(crate) fn settings_toggle_expander(
             })
             .into(),
         trailing.into(),
+        chevron.into(),
     ];
-
     let header = relative_panel(header_children)
-        .min_height(CARD_ROW_HEIGHT)
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .background(Color::transparent());
+    .min_height(CARD_ROW_HEIGHT)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .background(Color::transparent());
 
     let body_content = border(
         vstack((
@@ -406,30 +377,125 @@ pub(crate) fn settings_toggle_expander(
         None => Element::Empty,
     };
 
-    let shell_children: Vec<Element> = {
-        let (base, hover) = card_background_layers(hovered);
-        // Convert relative-panel layers into a bordered stack overlay by
-        // placing fills behind the column content via a RelativePanel shell.
-        vec![
-            base,
-            hover,
-            vstack((header, body))
-                .spacing(0.0)
-                .horizontal_alignment(HorizontalAlignment::Stretch)
-                .relative_align_left()
-                .relative_align_right()
-                .relative_align_top()
-                .relative_align_bottom()
-                .into(),
-        ]
+    let (base, hover) = card_background_layers(hovered);
+    relative_panel(vec![
+        base,
+        hover,
+        vstack((header, body))
+            .spacing(0.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .relative_align_left()
+            .relative_align_right()
+            .relative_align_top()
+            .relative_align_bottom()
+            .into(),
+    ])
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .background(Color::transparent())
+    .on_pointer_entered(on_enter)
+    .on_pointer_exited(on_exit)
+    .into()
+}
+
+/// Settings-style expanding option card: toggle in the header, nested content
+/// below. Toggle never hides or disables `content`. Tapping anywhere on the
+/// header row (except the switch itself) flips the expansion state.
+pub(crate) fn settings_toggle_expander(
+    label: impl Into<String>,
+    description: Option<&str>,
+    enabled: bool,
+    on_toggled: impl IntoCallback<bool>,
+    expanded: bool,
+    expand_progress: f64,
+    expanded_body_height: Option<f64>,
+    set_expanded: SetState<bool>,
+    set_expand_progress: AsyncSetState<f64>,
+    card_id: &'static str,
+    hovered_id: &Option<String>,
+    set_hovered_id: SetState<Option<String>>,
+    content: impl Into<Element>,
+) -> Element {
+    let toggle_expand = {
+        let set_expanded = set_expanded.clone();
+        let set_expand_progress = set_expand_progress.clone();
+        move || animate_expand_progress(expanded, set_expanded.clone(), set_expand_progress.clone())
+    };
+    let trailing = hstack((
+        text_block(if enabled { "On" } else { "Off" })
+            .vertical_alignment(VerticalAlignment::Center)
+            .margin(Thickness {
+                left: 0.0,
+                top: 0.0,
+                right: 12.0,
+                bottom: 0.0,
+            })
+            .on_tapped({
+                let toggle_expand = toggle_expand.clone();
+                move || toggle_expand()
+            }),
+        ToggleSwitch::new(enabled)
+            .on_content("")
+            .off_content("")
+            .on_toggled(on_toggled)
+            .min_width(0.0)
+            .max_width(50.0)
+            .width(50.0)
+            .vertical_alignment(VerticalAlignment::Center)
+            .margin(Thickness {
+                left: 0.0,
+                top: 0.0,
+                right: TOGGLE_CHEVRON_GAP,
+                bottom: 0.0,
+            }),
+    ));
+
+    settings_expander_card(
+        label,
+        description,
+        trailing,
+        expanded,
+        expand_progress,
+        expanded_body_height,
+        toggle_expand,
+        card_id,
+        hovered_id,
+        set_hovered_id,
+        content,
+    )
+}
+
+/// Checkbox variant of the notification expander card. Customize uses it for
+/// provider visibility so those rows share the notification card's chrome.
+pub(crate) fn settings_checkbox_expander(
+    label: impl Into<String>,
+    checked: bool,
+    on_checked: impl IntoCallback<bool>,
+    expanded: bool,
+    on_expanding: impl IntoCallback<bool>,
+    card_id: impl Into<String>,
+    hovered_id: &Option<String>,
+    set_hovered_id: SetState<Option<String>>,
+    content: impl Into<Element>,
+) -> Element {
+    let on_expanding = on_expanding.into_callback();
+    let toggle_expand = {
+        let on_expanding = on_expanding.clone();
+        move || on_expanding.invoke(!expanded)
     };
 
-    relative_panel(shell_children)
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .background(Color::transparent())
-        .on_pointer_entered(on_enter)
-        .on_pointer_exited(on_exit)
-        .into()
+    settings_expander_card(
+        label,
+        None,
+        settings_section_all_toggle(checked, on_checked),
+        expanded,
+        if expanded { 1.0 } else { 0.0 },
+        None,
+        toggle_expand,
+        card_id,
+        hovered_id,
+        set_hovered_id,
+        content,
+    )
 }
 
 /// Settings-style expandable card with arbitrary header content (no toggle).
