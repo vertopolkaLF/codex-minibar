@@ -11,6 +11,9 @@ use windows_reactor::*;
 use crate::theme::{CONTROL_FASTER_ANIMATION, CONTROL_NORMAL_ANIMATION, duration};
 
 const CARD_RADIUS: f64 = 8.0;
+/// Upper bound used to animate cards whose body height is content-driven.
+/// The actual body remains intrinsic at progress 1.0.
+const EXPANDABLE_BODY_MAX_HEIGHT: f64 = 512.0;
 /// Shared inset for settings cards and supporting panels.
 pub(crate) const SETTINGS_CARD_PADDING: f64 = 16.0;
 
@@ -208,8 +211,14 @@ pub(crate) fn animate_expand_progress(
 ) {
     let next = !expanded;
     set_expanded.call(next);
-    let to = if next { 1.0 } else { 0.0 };
-    let from = if next { 0.0 } else { 1.0 };
+    animate_expand_progress_between(
+        if expanded { 1.0 } else { 0.0 },
+        if next { 1.0 } else { 0.0 },
+        set_progress,
+    );
+}
+
+fn animate_expand_progress_between(from: f64, to: f64, set_progress: AsyncSetState<f64>) {
     let anim_id = EXPAND_ANIM_GEN.fetch_add(1, Ordering::Relaxed) + 1;
     let duration = duration(CONTROL_NORMAL_ANIMATION);
     if duration.is_zero() {
@@ -277,7 +286,6 @@ fn settings_expander_card(
     .height(CHEVRON_SIZE)
     .background(Color::transparent())
     .rotation(progress * 180.0)
-    .with_rotation_transition(duration(CONTROL_NORMAL_ANIMATION))
     .margin(Thickness {
         left: 0.0,
         top: 0.0,
@@ -370,9 +378,8 @@ fn settings_expander_card(
                 .max_height(body_height)
                 .into()
         }
-        None if expanded => body_content
-            .with_opacity_transition(duration(CONTROL_NORMAL_ANIMATION))
-            .with_translation_transition(duration(CONTROL_NORMAL_ANIMATION))
+        None if expanded || progress > 0.0 => body_content
+            .max_height(EXPANDABLE_BODY_MAX_HEIGHT * progress)
             .into(),
         None => Element::Empty,
     };
@@ -395,6 +402,66 @@ fn settings_expander_card(
     .on_pointer_entered(on_enter)
     .on_pointer_exited(on_exit)
     .into()
+}
+
+#[derive(Clone, PartialEq)]
+struct CheckboxExpanderProps {
+    label: String,
+    checked: bool,
+    on_checked: Callback<bool>,
+    expanded: bool,
+    on_expanding: Callback<bool>,
+    card_id: String,
+    hovered_id: Option<String>,
+    set_hovered_id: SetState<Option<String>>,
+    content: Element,
+}
+
+struct CheckboxExpander;
+
+impl Component<CheckboxExpanderProps> for CheckboxExpander {
+    fn render(&self, props: &CheckboxExpanderProps, cx: &mut RenderCx) -> Element {
+        let (progress, set_progress) =
+            cx.use_async_state(if props.expanded { 1.0_f64 } else { 0.0_f64 });
+        let previous_expanded = cx.use_ref(props.expanded);
+        if previous_expanded.get_cloned() != props.expanded {
+            previous_expanded.set(props.expanded);
+            animate_expand_progress_between(
+                progress,
+                if props.expanded { 1.0 } else { 0.0 },
+                set_progress.clone(),
+            );
+        }
+
+        let next_expanded = !props.expanded;
+        let toggle_expand = {
+            let on_expanding = props.on_expanding.clone();
+            let set_progress = set_progress.clone();
+            let from = progress;
+            move || {
+                on_expanding.invoke(next_expanded);
+                animate_expand_progress_between(
+                    from,
+                    if next_expanded { 1.0 } else { 0.0 },
+                    set_progress.clone(),
+                );
+            }
+        };
+
+        settings_expander_card(
+            props.label.clone(),
+            None,
+            settings_section_all_toggle(props.checked, props.on_checked.clone()),
+            props.expanded,
+            progress,
+            None,
+            toggle_expand,
+            props.card_id.clone(),
+            &props.hovered_id,
+            props.set_hovered_id.clone(),
+            props.content.clone(),
+        )
+    }
 }
 
 /// Settings-style expanding option card: toggle in the header, nested content
@@ -477,24 +544,19 @@ pub(crate) fn settings_checkbox_expander(
     set_hovered_id: SetState<Option<String>>,
     content: impl Into<Element>,
 ) -> Element {
-    let on_expanding = on_expanding.into_callback();
-    let toggle_expand = {
-        let on_expanding = on_expanding.clone();
-        move || on_expanding.invoke(!expanded)
-    };
-
-    settings_expander_card(
-        label,
-        None,
-        settings_section_all_toggle(checked, on_checked),
-        expanded,
-        if expanded { 1.0 } else { 0.0 },
-        None,
-        toggle_expand,
-        card_id,
-        hovered_id,
-        set_hovered_id,
-        content,
+    component(
+        CheckboxExpander,
+        CheckboxExpanderProps {
+            label: label.into(),
+            checked,
+            on_checked: on_checked.into_callback(),
+            expanded,
+            on_expanding: on_expanding.into_callback(),
+            card_id: card_id.into(),
+            hovered_id: hovered_id.clone(),
+            set_hovered_id,
+            content: content.into(),
+        },
     )
 }
 
