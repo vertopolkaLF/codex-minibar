@@ -439,6 +439,9 @@ impl PopupSurfaceVisibility {
 #[serde(default)]
 pub struct PopupVisibility {
     pub bricks: BTreeMap<String, PopupSurfaceVisibility>,
+    /// Provider id → show that provider's block on the All tab.
+    /// Missing keys default to true so older settings keep current cards.
+    pub provider_all_tab: BTreeMap<String, bool>,
 }
 
 impl PopupVisibility {
@@ -454,10 +457,28 @@ impl PopupVisibility {
         let mut bricks = BTreeMap::new();
         for provider in ProviderKind::ALL {
             for brick_id in crate::provider_registry::catalog_brick_ids(provider) {
-                bricks.insert(brick_id, Self::default_brick_visibility(&brick_id));
+                bricks.insert(
+                    brick_id.clone(),
+                    Self::default_brick_visibility(&brick_id),
+                );
             }
         }
-        Self { bricks }
+        Self {
+            bricks,
+            provider_all_tab: BTreeMap::new(),
+        }
+    }
+
+    pub fn provider_shown_on_all(&self, provider: ProviderKind) -> bool {
+        self.provider_all_tab
+            .get(provider.id())
+            .copied()
+            .unwrap_or(true)
+    }
+
+    pub fn set_provider_all_tab(&mut self, provider: ProviderKind, show_on_all: bool) {
+        self.provider_all_tab
+            .insert(provider.id().to_string(), show_on_all);
     }
 
     pub fn visibility_for(&self, brick_id: &str) -> PopupSurfaceVisibility {
@@ -474,17 +495,42 @@ impl PopupVisibility {
         show_provider_tabs: bool,
     ) -> bool {
         let visibility = self.visibility_for(brick_id);
+        let section_all = crate::provider_registry::provider_for_brick_id(brick_id)
+            .map(|provider| self.provider_shown_on_all(provider))
+            .unwrap_or(true);
         if show_provider_tabs {
             match surface {
-                PopupSurface::AllTab => visibility.all_tab,
+                PopupSurface::AllTab => section_all && visibility.all_tab,
                 PopupSurface::ProviderTab => visibility.provider_tab,
             }
         } else {
-            visibility.all_tab || visibility.provider_tab
+            section_all && (visibility.all_tab || visibility.provider_tab)
         }
     }
 
+    pub fn absorb_discovered_bricks(
+        &mut self,
+        limits: &crate::limits::ProviderLimits,
+    ) -> bool {
+        let mut changed = false;
+        for (provider, snapshot) in limits.iter() {
+            for (brick_id, _) in
+                crate::provider_registry::discovered_additional_brick_labels(provider, snapshot)
+            {
+                if self.bricks.contains_key(&brick_id) {
+                    continue;
+                }
+                self.set_brick(brick_id, true, true);
+                changed = true;
+            }
+        }
+        changed
+    }
+
     pub fn provider_visible_on_all(&self, provider: ProviderKind) -> bool {
+        if !self.provider_shown_on_all(provider) {
+            return false;
+        }
         let prefix = format!("{}.", crate::provider_registry::descriptor(provider).id);
         crate::provider_registry::catalog_brick_ids(provider)
             .iter()
@@ -545,6 +591,18 @@ impl PopupVisibility {
             .collect();
         for id in stale {
             self.bricks.remove(&id);
+            changed = true;
+        }
+        let known_providers: std::collections::HashSet<&str> =
+            ProviderKind::ALL.iter().map(|provider| provider.id()).collect();
+        let stale_providers: Vec<String> = self
+            .provider_all_tab
+            .keys()
+            .filter(|id| !known_providers.contains(id.as_str()))
+            .cloned()
+            .collect();
+        for id in stale_providers {
+            self.provider_all_tab.remove(&id);
             changed = true;
         }
         changed
@@ -1289,6 +1347,13 @@ impl Settings {
 
     pub fn normalize_popup_visibility(&mut self) -> bool {
         self.popup_visibility.normalize()
+    }
+
+    pub fn absorb_discovered_popup_bricks(
+        &mut self,
+        limits: &crate::limits::ProviderLimits,
+    ) -> bool {
+        self.popup_visibility.absorb_discovered_bricks(limits)
     }
 
     /// Provider subsequence of [`Self::popup_order`].
@@ -2171,6 +2236,7 @@ mod tests {
             PopupSurface::AllTab,
             true
         ));
+        assert!(value.popup_visibility.provider_shown_on_all(ProviderKind::Codex));
         assert!(value.show_total_spend_on_all_tab);
         assert_eq!(
             value.total_spend_presentation,
@@ -2218,6 +2284,53 @@ show_usage_stats = false
             PopupSurface::ProviderTab,
             true
         ));
+    }
+
+    #[test]
+    fn provider_all_tab_hides_the_whole_section_without_touching_bricks() {
+        let mut visibility = PopupVisibility::build_defaults();
+        assert!(visibility.is_visible("codex.session", PopupSurface::AllTab, true));
+        assert!(visibility.provider_visible_on_all(ProviderKind::Codex));
+
+        visibility.set_provider_all_tab(ProviderKind::Codex, false);
+        assert!(!visibility.provider_shown_on_all(ProviderKind::Codex));
+        assert!(!visibility.provider_visible_on_all(ProviderKind::Codex));
+        assert!(!visibility.is_visible("codex.session", PopupSurface::AllTab, true));
+        assert!(visibility.is_visible("codex.session", PopupSurface::ProviderTab, true));
+        assert!(visibility.visibility_for("codex.session").all_tab);
+        assert!(!visibility.is_visible("codex.session", PopupSurface::AllTab, false));
+    }
+
+    #[test]
+    fn absorbs_runtime_additional_limits_into_popup_visibility() {
+        let mut settings = Settings::default();
+        let brick_id = crate::provider_registry::additional_limit_brick_id(
+            ProviderKind::Claude,
+            "seven_day_runtime_lane",
+        );
+        assert!(!settings.popup_visibility.bricks.contains_key(&brick_id));
+
+        let limits = crate::limits::ProviderLimits::from_entries([(
+            ProviderKind::Claude,
+            crate::limits::RateLimits {
+                additional_limits: vec![crate::limits::AdditionalLimit {
+                    id: "seven_day_runtime_lane".into(),
+                    title: "Runtime Lane".into(),
+                    window: crate::limits::LimitWindow {
+                        used_percent: Some(1),
+                        ..Default::default()
+                    },
+                }],
+                ..Default::default()
+            },
+        )]);
+        assert!(settings.absorb_discovered_popup_bricks(&limits));
+        assert!(settings.popup_visibility.is_visible(
+            &brick_id,
+            PopupSurface::AllTab,
+            true
+        ));
+        assert!(!settings.absorb_discovered_popup_bricks(&limits));
     }
 
     #[test]

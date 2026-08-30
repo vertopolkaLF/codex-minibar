@@ -199,6 +199,13 @@ pub fn provider_for_metric(id: &str) -> Option<ProviderKind> {
         .map(|provider| provider.kind)
 }
 
+/// Maps any popup brick id — catalog, extras, or discovered — onto its provider.
+pub fn provider_for_brick_id(brick_id: &str) -> Option<ProviderKind> {
+    ProviderKind::ALL.into_iter().find(|provider| {
+        brick_id.starts_with(&format!("{}.", descriptor(*provider).id))
+    })
+}
+
 pub fn dynamic_metric_id(provider: ProviderKind, source_id: &str) -> String {
     format!("{}.additional.{source_id}", descriptor(provider).id)
 }
@@ -230,7 +237,7 @@ pub fn supports_credits(provider: ProviderKind) -> bool {
 }
 
 /// Whether this provider can expose local usage statistics in the popup.
-pub fn supports_usage_stats(provider: ProviderKind) -> bool {
+pub fn supports_usage_stats(_provider: ProviderKind) -> bool {
     true
 }
 
@@ -280,9 +287,63 @@ pub fn brick_label(provider: ProviderKind, brick_id: &str) -> String {
         return "Spending".into();
     }
     if let Some(source_id) = brick_id.strip_prefix(&format!("{provider_id}.additional.")) {
-        return source_id.replace('-', " ");
+        return source_id.replace('-', " ").replace('_', " ");
     }
     brick_id.rsplit('.').next().unwrap_or(brick_id).replace('-', " ")
+}
+
+/// Catalog bricks plus runtime-discovered additional windows for Settings.
+pub fn settings_brick_ids(
+    provider: ProviderKind,
+    extra_ids: impl IntoIterator<Item = impl AsRef<str>>,
+) -> Vec<String> {
+    let mut ids = catalog_brick_ids(provider);
+    let prefix = format!("{}.additional.", descriptor(provider).id);
+    for extra in extra_ids {
+        let extra = extra.as_ref();
+        if extra.starts_with(&prefix) && !ids.iter().any(|id| id == extra) {
+            ids.push(extra.to_string());
+        }
+    }
+    ids
+}
+
+/// Prefer the live provider title for a discovered additional window.
+pub fn settings_brick_label(
+    provider: ProviderKind,
+    brick_id: &str,
+    discovered_labels: &std::collections::BTreeMap<String, String>,
+) -> String {
+    if let Some(label) = discovered_labels.get(brick_id) {
+        let label = label.trim();
+        if !label.is_empty() {
+            return label.to_string();
+        }
+    }
+    brick_label(provider, brick_id)
+}
+
+/// Labels for additional windows that are not already in the static catalog.
+pub fn discovered_additional_brick_labels(
+    provider: ProviderKind,
+    limits: &RateLimits,
+) -> Vec<(String, String)> {
+    let catalog = catalog_brick_ids(provider);
+    limits
+        .additional_limits
+        .iter()
+        .filter_map(|limit| {
+            let id = additional_limit_brick_id(provider, &limit.id);
+            if catalog.iter().any(|known| known == &id) {
+                return None;
+            }
+            let title = limit.title.trim();
+            if title.is_empty() {
+                return None;
+            }
+            Some((id, title.to_string()))
+        })
+        .collect()
 }
 
 /// Resolve a popup limit card to its configured brick id.
@@ -410,6 +471,22 @@ mod tests {
     }
 
     #[test]
+    fn brick_ids_map_to_the_longest_provider_prefix() {
+        assert_eq!(
+            provider_for_brick_id("opencode.usage"),
+            Some(ProviderKind::OpenCodeZen)
+        );
+        assert_eq!(
+            provider_for_brick_id("opencode-go.session"),
+            Some(ProviderKind::OpenCodeGo)
+        );
+        assert_eq!(
+            provider_for_brick_id("codex.additional.runtime_lane"),
+            Some(ProviderKind::Codex)
+        );
+    }
+
+    #[test]
     fn metric_ids_are_unique_and_namespaced() {
         let mut ids = std::collections::HashSet::new();
         for provider in PROVIDERS {
@@ -449,6 +526,46 @@ mod tests {
             metric_window(ProviderKind::OpenCodeGo, &limits, "opencode-go.monthly")
                 .and_then(|window| window.used_percent),
             Some(4)
+        );
+    }
+
+    #[test]
+    fn settings_bricks_include_live_additional_windows_without_catalog_duplicates() {
+        let extra_id = additional_limit_brick_id(ProviderKind::Claude, "seven_day_runtime_lane");
+        let ids = settings_brick_ids(
+            ProviderKind::Claude,
+            [extra_id.as_str(), "claude.session"],
+        );
+        assert!(ids.contains(&"claude.session".into()));
+        assert!(ids.contains(&extra_id));
+        assert_eq!(
+            ids.iter().filter(|id| *id == &extra_id).count(),
+            1
+        );
+
+        let mut labels = std::collections::BTreeMap::new();
+        labels.insert(extra_id.clone(), "Runtime Lane".into());
+        assert_eq!(
+            settings_brick_label(ProviderKind::Claude, &extra_id, &labels),
+            "Runtime Lane"
+        );
+        assert_eq!(
+            discovered_additional_brick_labels(
+                ProviderKind::OpenCodeGo,
+                &RateLimits {
+                    additional_limits: vec![crate::limits::AdditionalLimit {
+                        id: "monthly".into(),
+                        title: "Monthly".into(),
+                        window: LimitWindow {
+                            used_percent: Some(4),
+                            ..Default::default()
+                        },
+                    }],
+                    ..Default::default()
+                }
+            )
+            .len(),
+            0
         );
     }
 }

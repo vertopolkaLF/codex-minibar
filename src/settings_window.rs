@@ -12,8 +12,9 @@ use crate::settings::{
     TrayColorMode, TrayFixedColor, TrayIndicator, TrayPresentation, TrayWidget, TrayWidgetKind,
 };
 use crate::settings_controls::{
-    settings_action_card, settings_brick_row, settings_content_expander, settings_control_card,
-    settings_info_card, settings_slider_content, settings_toggle_card,
+    settings_action_card, settings_brick_row, settings_brick_table_header,
+    settings_content_expander, settings_content_expander_with_trailing, settings_control_card,
+    settings_info_card, settings_section_all_toggle, settings_slider_content, settings_toggle_card,
     settings_toggle_card_with_description, settings_toggle_expander, update_available_nav_card,
 };
 use crate::theme::{CONTROL_FAST_ANIMATION, CONTROL_NORMAL_ANIMATION, duration};
@@ -23,11 +24,12 @@ use crate::updater::{
 use anyhow::Context;
 use std::{
     cell::RefCell,
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     path::PathBuf,
     rc::Rc,
     sync::{
         Arc,
+        Mutex,
         atomic::{AtomicU64, Ordering},
         mpsc::Sender,
     },
@@ -57,6 +59,8 @@ const INDICATOR_MODAL_SCRIM: Color = Color {
 };
 const INDICATOR_MODAL_WIDTH: f64 = 520.0;
 const INDICATOR_MODAL_RADIUS: f64 = 12.0;
+
+static DISCOVERED_POPUP_BRICKS: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
 
 thread_local! {
     static HOST: RefCell<Option<Rc<ReactorHost>>> = const { RefCell::new(None) };
@@ -88,6 +92,49 @@ pub fn sync_open_window(settings: Settings, ui_dispatcher: UiMarshaller) {
     });
 }
 
+fn cached_discovered_popup_bricks() -> BTreeMap<String, String> {
+    DISCOVERED_POPUP_BRICKS
+        .lock()
+        .map(|labels| labels.clone())
+        .unwrap_or_default()
+}
+
+fn discovered_popup_brick_labels(
+    limits: &crate::limits::ProviderLimits,
+) -> BTreeMap<String, String> {
+    let mut labels = BTreeMap::new();
+    for (provider, snapshot) in limits.iter() {
+        for (brick_id, title) in
+            crate::provider_registry::discovered_additional_brick_labels(provider, snapshot)
+        {
+            labels.insert(brick_id, title);
+        }
+    }
+    labels
+}
+
+/// Publishes API-discovered additional windows so Settings can list them
+/// immediately, using the provider-supplied titles rather than a hardcoded catalog.
+pub fn publish_discovered_popup_bricks(
+    limits: &crate::limits::ProviderLimits,
+    ui_dispatcher: UiMarshaller,
+) {
+    let labels = discovered_popup_brick_labels(limits);
+    if let Ok(mut slot) = DISCOVERED_POPUP_BRICKS.lock() {
+        *slot = labels.clone();
+    }
+    if !is_open() {
+        return;
+    }
+    ui_dispatcher.dispatch(move || {
+        LIVE_SETTINGS_STATE.with(|state| {
+            if let Some(state) = state.borrow().as_ref() {
+                state.discovered_popup_bricks.call(labels);
+            }
+        });
+    });
+}
+
 #[derive(Clone)]
 struct SettingsWindowState {
     theme: SetState<AppTheme>,
@@ -113,6 +160,7 @@ struct SettingsWindowState {
     show_used_percentage: SetState<bool>,
     show_usage_pace: SetState<bool>,
     popup_visibility: SetState<PopupVisibility>,
+    discovered_popup_bricks: SetState<BTreeMap<String, String>>,
     show_total_spend_on_all_tab: SetState<bool>,
     total_spend_presentation: SetState<TotalSpendPresentation>,
     show_account_name: SetState<bool>,
@@ -1911,6 +1959,8 @@ pub fn render(
     let (indicator_modal_visible, set_indicator_modal_visible) = cx.use_async_state(false);
     let (removed_tray_widget, set_removed_tray_widget) = cx.use_state(None::<(usize, TrayWidget)>);
     let (expanded_popup_provider, set_expanded_popup_provider) = cx.use_state(None::<String>);
+    let (discovered_popup_bricks, set_discovered_popup_bricks) =
+        cx.use_state(cached_discovered_popup_bricks());
     let (check_for_updates, set_check_for_updates) = cx.use_state(settings.check_for_updates);
     let (notify_on_update, set_notify_on_update) =
         cx.use_state(settings.notifications.update_available);
@@ -1940,6 +1990,7 @@ pub fn render(
             show_used_percentage: set_show_used_percentage.clone(),
             show_usage_pace: set_show_usage_pace.clone(),
             popup_visibility: set_popup_visibility.clone(),
+            discovered_popup_bricks: set_discovered_popup_bricks.clone(),
             show_total_spend_on_all_tab: set_show_total_spend_on_all_tab.clone(),
             total_spend_presentation: set_total_spend_presentation.clone(),
             show_account_name: set_show_account_name.clone(),
@@ -2006,6 +2057,7 @@ pub fn render(
             show_used_percentage,
             show_usage_pace,
             &popup_visibility,
+            &discovered_popup_bricks,
             show_total_spend_on_all_tab,
             total_spend_presentation,
             show_account_name,
@@ -2069,6 +2121,7 @@ pub fn render(
             set_show_used_percentage,
             set_show_usage_pace,
             set_popup_visibility,
+            set_discovered_popup_bricks,
             set_show_total_spend_on_all_tab,
             set_total_spend_presentation,
             set_show_account_name,
@@ -2324,6 +2377,7 @@ fn tab_content(
     show_used_percentage: bool,
     show_usage_pace: bool,
     popup_visibility: &PopupVisibility,
+    discovered_popup_bricks: &BTreeMap<String, String>,
     show_total_spend_on_all_tab: bool,
     total_spend_presentation: TotalSpendPresentation,
     show_account_name: bool,
@@ -2387,6 +2441,7 @@ fn tab_content(
     set_show_used_percentage: SetState<bool>,
     set_show_usage_pace: SetState<bool>,
     set_popup_visibility: SetState<PopupVisibility>,
+    set_discovered_popup_bricks: SetState<BTreeMap<String, String>>,
     set_show_total_spend_on_all_tab: SetState<bool>,
     set_total_spend_presentation: SetState<TotalSpendPresentation>,
     set_show_account_name: SetState<bool>,
@@ -2432,8 +2487,6 @@ fn tab_content(
     let apply_start_at_login = settings_tx.clone();
     let apply_show_used_percentage = settings_tx.clone();
     let apply_show_usage_pace = settings_tx.clone();
-    let apply_show_total_spend_on_all_tab = settings_tx.clone();
-    let apply_total_spend_presentation = settings_tx.clone();
     let apply_show_account_name = settings_tx.clone();
     let apply_activation_success = settings_tx.clone();
     let apply_activation_failure = settings_tx.clone();
@@ -2998,36 +3051,40 @@ fn tab_content(
             }
             ("Providers", rows)
         }
-        Tab::Popup => (
-            "Popup",
-            popup_settings_cards(
-                popup_visibility,
-                popup_order,
-                enabled_providers(
-                    &popup_order
-                        .iter()
-                        .filter_map(|widget| widget.as_provider())
-                        .copied()
-                        .collect::<Vec<_>>(),
-                    codex_enabled,
-                    claude_enabled,
-                    cursor_enabled,
-                    opencode_zen_enabled,
-                    opencode_go_enabled,
-                    openrouter_enabled,
+        Tab::Popup => {
+            let providers: Vec<ProviderKind> = popup_order
+                .iter()
+                .filter_map(|widget| widget.as_provider())
+                .collect();
+            let enabled = enabled_providers(
+                &providers,
+                codex_enabled,
+                claude_enabled,
+                cursor_enabled,
+                opencode_zen_enabled,
+                opencode_go_enabled,
+                openrouter_enabled,
+            );
+            (
+                "Popup",
+                popup_settings_cards(
+                    popup_visibility,
+                    discovered_popup_bricks,
+                    popup_order,
+                    &enabled,
+                    show_total_spend_on_all_tab,
+                    total_spend_presentation,
+                    expanded_popup_provider,
+                    set_expanded_popup_provider,
+                    set_popup_visibility,
+                    set_show_total_spend_on_all_tab,
+                    set_total_spend_presentation,
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                    settings_tx.clone(),
                 ),
-                show_total_spend_on_all_tab,
-                total_spend_presentation,
-                expanded_popup_provider,
-                set_expanded_popup_provider,
-                set_popup_visibility,
-                set_show_total_spend_on_all_tab,
-                set_total_spend_presentation,
-                hovered_card_id,
-                set_hovered_card_id.clone(),
-                settings_tx.clone(),
-            ),
-        ),
+            )
+        }
         Tab::Schedule => (
             "Schedule",
             scheduled_activation_cards(
@@ -3247,6 +3304,7 @@ fn tab_content(
                 show_used_percentage: set_show_used_percentage,
                 show_usage_pace: set_show_usage_pace,
                 popup_visibility: set_popup_visibility,
+                discovered_popup_bricks: set_discovered_popup_bricks,
                 show_total_spend_on_all_tab: set_show_total_spend_on_all_tab,
                 total_spend_presentation: set_total_spend_presentation,
                 show_account_name: set_show_account_name,
@@ -5966,8 +6024,26 @@ fn persist_popup_brick(
     });
 }
 
+fn persist_popup_provider_all(
+    current: &PopupVisibility,
+    set_popup_visibility: SetState<PopupVisibility>,
+    settings_tx: Sender<Settings>,
+    provider: ProviderKind,
+    show_on_all: bool,
+) {
+    let mut next = current.clone();
+    next.set_provider_all_tab(provider, show_on_all);
+    set_popup_visibility.call(next);
+    persist_update(settings_tx, move |settings| {
+        settings
+            .popup_visibility
+            .set_provider_all_tab(provider, show_on_all);
+    });
+}
+
 fn popup_settings_cards(
     popup_visibility: &PopupVisibility,
+    discovered_popup_bricks: &BTreeMap<String, String>,
     popup_order: &[PopupWidgetKind],
     enabled_providers: &[ProviderKind],
     show_total_spend_on_all_tab: bool,
@@ -5989,18 +6065,15 @@ fn popup_settings_cards(
             "Show total spend",
             Some("Shows the provider spend breakdown when All is selected."),
             show_total_spend_on_all_tab,
-            {
-                let settings_tx = apply_show_total_spend.clone();
-                move |value| {
-                    persist_bool(
-                        set_show_total_spend_on_all_tab.clone(),
-                        settings_tx,
-                        value,
-                        |settings, value| {
-                            settings.show_total_spend_on_all_tab = value;
-                        },
-                    );
-                }
+            move |value| {
+                persist_bool(
+                    set_show_total_spend_on_all_tab.clone(),
+                    apply_show_total_spend.clone(),
+                    value,
+                    |settings, value| {
+                        settings.show_total_spend_on_all_tab = value;
+                    },
+                );
             },
             "popup-show-total-spend",
             hovered_card_id,
@@ -6013,11 +6086,11 @@ fn popup_settings_cards(
             ComboBox::new(["Donut", "Progress bar"])
                 .selected_index(total_spend_presentation.index())
                 .on_selection_changed({
-                    let settings_tx = apply_total_spend_presentation.clone();
+                    let apply_total_spend_presentation = apply_total_spend_presentation.clone();
                     move |choice| {
                         let value = TotalSpendPresentation::from_index(choice);
                         set_total_spend_presentation.call(value);
-                        persist_update(settings_tx, move |settings| {
+                        persist_update(apply_total_spend_presentation.clone(), move |settings| {
                             settings.total_spend_presentation = value;
                         });
                     }
@@ -6036,55 +6109,40 @@ fn popup_settings_cards(
         .filter(|provider| enabled_providers.contains(provider))
         .collect();
 
+    if ordered_enabled.is_empty() {
+        rows.push(
+            settings_info_card(
+                "Popup cards",
+                "Enable a provider to configure its popup cards.",
+            )
+            .with_key("popup-empty"),
+        );
+    }
+
     for provider in ordered_enabled {
         let descriptor = crate::provider_registry::descriptor(provider);
         let provider_id = provider.id().to_string();
         let is_expanded = expanded_popup_provider.as_deref() == Some(provider_id.as_str());
         let expand_id = provider_id.clone();
         let expand_setter = set_expanded_popup_provider.clone();
-        let mut brick_rows = vec![grid(vec![
-            text_block("Card")
-                .font_size(12.0)
-                .opacity(0.72)
-                .grid_column(0)
-                .into(),
-            text_block("All")
-                .font_size(12.0)
-                .opacity(0.72)
-                .horizontal_alignment(HorizontalAlignment::Center)
-                .grid_column(1)
-                .into(),
-            Element::Empty.grid_column(2).into(),
-            text_block("Tab")
-                .font_size(12.0)
-                .opacity(0.72)
-                .horizontal_alignment(HorizontalAlignment::Center)
-                .grid_column(3)
-                .into(),
-            Element::Empty.grid_column(4).into(),
-        ])
-        .columns([
-            GridLength::Star(1.0),
-            GridLength::Pixel(36.0),
-            GridLength::Pixel(36.0),
-            GridLength::Pixel(36.0),
-            GridLength::Pixel(36.0),
-        ])
-        .rows([GridLength::Auto])
-        .padding(Thickness {
-            left: 16.0,
-            top: 10.0,
-            right: 16.0,
-            bottom: 4.0,
-        })
-        .with_key(format!("popup-brick-header-{}", provider.id()))
-        .into()];
+        let section_all = popup_visibility.provider_shown_on_all(provider);
+        let mut brick_rows = vec![settings_brick_table_header(provider.id())];
 
-        for brick_id in crate::provider_registry::catalog_brick_ids(provider) {
+        let extra_ids = popup_visibility
+            .bricks
+            .keys()
+            .chain(discovered_popup_bricks.keys())
+            .cloned()
+            .collect::<Vec<_>>();
+        for brick_id in crate::provider_registry::settings_brick_ids(provider, &extra_ids) {
             let snapshot_all = popup_visibility.clone();
             let snapshot_tab = popup_visibility.clone();
             let visibility = snapshot_all.visibility_for(&brick_id);
-            let label = crate::provider_registry::brick_label(provider, &brick_id);
+            let label = crate::provider_registry::settings_brick_label(
+                provider,
+                &brick_id,
+                discovered_popup_bricks,
+            );
             let brick_id_for_all = brick_id.clone();
             let brick_id_for_tab = brick_id.clone();
             let set_visibility_all = set_popup_visibility.clone();
@@ -6095,13 +6153,14 @@ fn popup_settings_cards(
                 label,
                 visibility.all_tab,
                 visibility.provider_tab,
+                section_all,
                 move |all_tab| {
                     let provider_tab = snapshot_all.visibility_for(&brick_id_for_all).provider_tab;
                     persist_popup_brick(
                         &snapshot_all,
-                        set_visibility_all,
-                        settings_tx_all,
-                        brick_id_for_all,
+                        set_visibility_all.clone(),
+                        settings_tx_all.clone(),
+                        brick_id_for_all.clone(),
                         all_tab,
                         provider_tab,
                     );
@@ -6110,9 +6169,9 @@ fn popup_settings_cards(
                     let all_tab = snapshot_tab.visibility_for(&brick_id_for_tab).all_tab;
                     persist_popup_brick(
                         &snapshot_tab,
-                        set_visibility_tab,
-                        settings_tx_tab,
-                        brick_id_for_tab,
+                        set_visibility_tab.clone(),
+                        settings_tx_tab.clone(),
+                        brick_id_for_tab.clone(),
                         all_tab,
                         provider_tab,
                     );
@@ -6121,9 +6180,21 @@ fn popup_settings_cards(
             ));
         }
 
+        let section_snapshot = popup_visibility.clone();
+        let set_section = set_popup_visibility.clone();
+        let section_tx = settings_tx.clone();
         rows.push(
-            settings_content_expander(
+            settings_content_expander_with_trailing(
                 text_block(descriptor.display_name).font_size(14.0),
+                Some(settings_section_all_toggle(section_all, move |show_on_all| {
+                    persist_popup_provider_all(
+                        &section_snapshot,
+                        set_section.clone(),
+                        section_tx.clone(),
+                        provider,
+                        show_on_all,
+                    );
+                })),
                 is_expanded,
                 move |expanded| {
                     if expanded {
@@ -6135,16 +6206,6 @@ fn popup_settings_cards(
                 vstack(brick_rows).spacing(0.0),
             )
             .with_key(format!("popup-provider-{}", provider.id())),
-        );
-    }
-
-    if ordered_enabled.is_empty() {
-        rows.push(
-            settings_info_card(
-                "Popup cards",
-                "Enable a provider to configure its popup cards.",
-            )
-            .with_key("popup-empty"),
         );
     }
 

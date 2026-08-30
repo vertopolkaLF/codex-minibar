@@ -2125,7 +2125,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         // Key only error presence, not the message text: PollFailed can emit a
         // new string every minute and would otherwise remount the whole page.
         let body_layout_key = format!(
-            "popup-page-{role}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
+            "popup-page-{role}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
             ui.error.is_some(),
             popup_visibility_key(&ui.popup_visibility),
             ui.show_total_spend_on_all_tab,
@@ -2911,6 +2911,22 @@ fn start_background_bridge(
                     // from that exact snapshot.
                     state.replace_limits(provider, limits);
                     let limits = state.current_limits();
+                    crate::settings_window::publish_discovered_popup_bricks(
+                        &limits,
+                        ui_dispatcher.clone(),
+                    );
+                    if ui
+                        .popup_visibility
+                        .absorb_discovered_bricks(&limits)
+                    {
+                        let limits_for_settings = limits.clone();
+                        crate::settings_window::persist_update(
+                            settings_tx.clone(),
+                            move |settings| {
+                                settings.absorb_discovered_popup_bricks(&limits_for_settings);
+                            },
+                        );
+                    }
                     limit_notifications.entry(provider).or_default().observe(
                         limits.get(provider),
                         &notification_settings,
@@ -4576,6 +4592,8 @@ mod tests {
         visibility.set_brick(brick_id, all_tab, provider_tab);
         visibility
     }
+
+    fn assert_unique_section_keys(sections: &[PopupSection]) {
         let keys: HashSet<_> = sections.iter().map(|section| section.key()).collect();
         assert_eq!(
             keys.len(),
@@ -4761,6 +4779,39 @@ mod tests {
             PopupSurface::AllTab,
             false
         ));
+    }
+
+    #[test]
+    fn popup_section_all_off_drops_provider_from_all_tab() {
+        let mut visibility = all_visible();
+        visibility.set_provider_all_tab(ProviderKind::Codex, false);
+        let widgets = visible_popup_widgets(
+            &PopupWidgetKind::default_order(),
+            false,
+            &visibility,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
+        assert!(!widgets.contains(&PopupWidgetKind::Codex));
+        let limits = plan_limits("plus");
+        let tab_cards = provider_cards(
+            ProviderKind::Codex,
+            true,
+            &limits,
+            false,
+            true,
+            &visibility,
+            PopupSurface::ProviderTab,
+            true,
+            false,
+            ColorScheme::Dark,
+            None,
+        );
+        assert!(!tab_cards.is_empty());
     }
 
     #[test]
