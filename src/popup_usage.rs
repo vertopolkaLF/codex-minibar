@@ -96,13 +96,10 @@ pub fn overview_page(
     ))
     .spacing(10.0)
     .horizontal_alignment(HorizontalAlignment::Stretch)
-    .with_key(format!(
-        "usage-page-{}-{}-{}-{}",
-        metric as i32,
-        range as i32,
-        breakdown as i32,
-        color_scheme as i32
-    ))
+    // Stable identity: metric/range/breakdown must not remount this tree.
+    // Segmented thumbs keep their native hosts so Translation can slide.
+    // Chart/icons remount themselves via their own keys when content changes.
+    .with_key("usage-page")
     .into()
 }
 
@@ -155,6 +152,7 @@ fn usage_header(
         period_switcher(range, set_range, clear_hover),
     ))
     .spacing(8.0)
+    .with_key("usage-header")
     .into()
 }
 
@@ -229,21 +227,9 @@ fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: bool) -> Eleme
         };
         count
     ];
-    let thumb = border(Element::Empty)
-        .width(cell_width)
-        .corner_radius(6.0)
-        .background(ThemeRef::Accent)
-        .margin(Thickness {
-            left: selected as f64 * cell_width,
-            top: 0.0,
-            right: 0.0,
-            bottom: 0.0,
-        })
-        .relative_align_left()
-        .relative_align_top()
-        .relative_align_bottom()
-        .with_translation_transition(anim)
-        .with_key(format!("{key}-thumb"));
+    // One pill per cell, faded with Opacity — the same channel that already
+    // animates the labels. A single overlay thumb (Margin / Translation /
+    // Offset) either teleports or gets laid out into limbo.
     let cells = tabs
         .into_iter()
         .enumerate()
@@ -251,6 +237,16 @@ fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: bool) -> Eleme
             let hide_divider = index == 0
                 || selected == index
                 || selected == index.saturating_sub(1);
+            let pill = border(Element::Empty)
+                .corner_radius(6.0)
+                .background(ThemeRef::Accent)
+                .opacity(if index == selected { 1.0 } else { 0.0 })
+                .with_opacity_transition(anim)
+                .relative_align_left()
+                .relative_align_right()
+                .relative_align_top()
+                .relative_align_bottom()
+                .with_key(format!("{key}-pill-{}", tab.label));
             let idle = caption(tab.label.clone())
                 .font_weight(600)
                 .foreground(ThemeRef::PrimaryText)
@@ -267,8 +263,8 @@ fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: bool) -> Eleme
                 .relative_align_h_center()
                 .relative_align_v_center()
                 .with_key(format!("{key}-on-{}", tab.label));
-            let label_layers: Vec<Element> = vec![idle.into(), active.into()];
-            let label = border(relative_panel(label_layers))
+            let text_layers: Vec<Element> = vec![idle.into(), active.into()];
+            let texts = border(relative_panel(text_layers))
                 .padding(Thickness {
                     left: 10.0,
                     top: 5.0,
@@ -276,7 +272,14 @@ fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: bool) -> Eleme
                     bottom: 5.0,
                 })
                 .background(Color::transparent())
+                .relative_align_left()
+                .relative_align_right()
+                .relative_align_top()
+                .relative_align_bottom();
+            let cell_layers: Vec<Element> = vec![pill.into(), texts.into()];
+            let label = relative_panel(cell_layers)
                 .horizontal_alignment(HorizontalAlignment::Stretch)
+                .vertical_alignment(VerticalAlignment::Stretch)
                 .on_tapped(tab.on_click);
             let cell: Element = if index == 0 {
                 label.into()
@@ -305,16 +308,9 @@ fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: bool) -> Eleme
                 .with_key(format!("{key}-tab-{}", tab.label))
         })
         .collect::<Vec<_>>();
-    let labels = grid(cells)
+    let track = grid(cells)
         .columns(columns)
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .relative_align_left()
-        .relative_align_right()
-        .relative_align_top()
-        .relative_align_bottom()
-        .with_key(format!("{key}-labels"));
-    let layers: Vec<Element> = vec![thumb.into(), labels.into()];
-    let track = relative_panel(layers).horizontal_alignment(HorizontalAlignment::Stretch);
+        .horizontal_alignment(HorizontalAlignment::Stretch);
     let track = if stretch {
         track
     } else {

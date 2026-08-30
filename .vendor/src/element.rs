@@ -671,6 +671,7 @@ pub trait ElementExt: Sized {
 
     simple_setter!(opacity, opacity, f64);
     simple_setter!(rotation, rotation, f64);
+    simple_setter!(translation_x, translation_x, f64);
     simple_setter!(font_family, font_family, String, into);
     simple_setter!(font_size, font_size, f64);
     simple_setter!(
