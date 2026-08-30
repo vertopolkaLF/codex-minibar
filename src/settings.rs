@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
 };
@@ -7,7 +8,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 28;
+pub const SETTINGS_VERSION: u32 = 29;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -407,6 +408,211 @@ fn new_scheduled_activation_id() -> String {
         .unwrap_or_default();
     let sequence = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     format!("schedule-{timestamp:x}-{sequence:x}")
+}
+
+/// Per-surface visibility for one popup card/brick.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PopupSurfaceVisibility {
+    pub all_tab: bool,
+    pub provider_tab: bool,
+}
+
+impl PopupSurfaceVisibility {
+    pub const fn both(on: bool) -> Self {
+        Self {
+            all_tab: on,
+            provider_tab: on,
+        }
+    }
+
+    pub const fn split(all_tab: bool, provider_tab: bool) -> Self {
+        Self {
+            all_tab,
+            provider_tab,
+        }
+    }
+}
+
+/// Independent All-tab vs provider-tab visibility for popup cards.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PopupVisibility {
+    pub bricks: BTreeMap<String, PopupSurfaceVisibility>,
+    /// Provider id → show that provider's block on the All tab.
+    /// Missing keys default to true so older settings keep current cards.
+    pub provider_all_tab: BTreeMap<String, bool>,
+}
+
+impl PopupVisibility {
+    pub fn default_brick_visibility(brick_id: &str) -> PopupSurfaceVisibility {
+        if brick_id.ends_with(".usage") {
+            PopupSurfaceVisibility::split(false, true)
+        } else {
+            PopupSurfaceVisibility::both(true)
+        }
+    }
+
+    pub fn build_defaults() -> Self {
+        let mut bricks = BTreeMap::new();
+        for provider in ProviderKind::ALL {
+            for brick_id in crate::provider_registry::catalog_brick_ids(provider) {
+                bricks.insert(
+                    brick_id.clone(),
+                    Self::default_brick_visibility(&brick_id),
+                );
+            }
+        }
+        Self {
+            bricks,
+            provider_all_tab: BTreeMap::new(),
+        }
+    }
+
+    pub fn provider_shown_on_all(&self, provider: ProviderKind) -> bool {
+        self.provider_all_tab
+            .get(provider.id())
+            .copied()
+            .unwrap_or(true)
+    }
+
+    pub fn set_provider_all_tab(&mut self, provider: ProviderKind, show_on_all: bool) {
+        self.provider_all_tab
+            .insert(provider.id().to_string(), show_on_all);
+    }
+
+    pub fn visibility_for(&self, brick_id: &str) -> PopupSurfaceVisibility {
+        self.bricks
+            .get(brick_id)
+            .copied()
+            .unwrap_or_else(|| Self::default_brick_visibility(brick_id))
+    }
+
+    pub fn is_visible(
+        &self,
+        brick_id: &str,
+        surface: PopupSurface,
+        show_provider_tabs: bool,
+    ) -> bool {
+        let visibility = self.visibility_for(brick_id);
+        let section_all = crate::provider_registry::provider_for_brick_id(brick_id)
+            .map(|provider| self.provider_shown_on_all(provider))
+            .unwrap_or(true);
+        if show_provider_tabs {
+            match surface {
+                PopupSurface::AllTab => section_all && visibility.all_tab,
+                PopupSurface::ProviderTab => visibility.provider_tab,
+            }
+        } else {
+            section_all && (visibility.all_tab || visibility.provider_tab)
+        }
+    }
+
+    pub fn absorb_discovered_bricks(
+        &mut self,
+        limits: &crate::limits::ProviderLimits,
+    ) -> bool {
+        let mut changed = false;
+        for (provider, snapshot) in limits.iter() {
+            for (brick_id, _) in
+                crate::provider_registry::discovered_additional_brick_labels(provider, snapshot)
+            {
+                if self.bricks.contains_key(&brick_id) {
+                    continue;
+                }
+                self.set_brick(brick_id, true, true);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    pub fn provider_visible_on_all(&self, provider: ProviderKind) -> bool {
+        if !self.provider_shown_on_all(provider) {
+            return false;
+        }
+        let prefix = format!("{}.", crate::provider_registry::descriptor(provider).id);
+        crate::provider_registry::catalog_brick_ids(provider)
+            .iter()
+            .chain(
+                self.bricks
+                    .keys()
+                    .filter(|id| id.starts_with(&prefix)),
+            )
+            .any(|brick_id| self.visibility_for(brick_id).all_tab)
+    }
+
+    pub fn set_brick(
+        &mut self,
+        brick_id: impl Into<String>,
+        all_tab: bool,
+        provider_tab: bool,
+    ) {
+        self.bricks.insert(
+            brick_id.into(),
+            PopupSurfaceVisibility {
+                all_tab,
+                provider_tab,
+            },
+        );
+    }
+
+    /// Ensures every known brick exists and drops stale ids.
+    pub fn normalize(&mut self) -> bool {
+        let mut changed = false;
+        for provider in ProviderKind::ALL {
+            for brick_id in crate::provider_registry::catalog_brick_ids(provider) {
+                if !self.bricks.contains_key(&brick_id) {
+                    self.bricks.insert(
+                        brick_id.clone(),
+                        Self::default_brick_visibility(&brick_id),
+                    );
+                    changed = true;
+                }
+            }
+        }
+        let known: std::collections::HashSet<String> = ProviderKind::ALL
+            .into_iter()
+            .flat_map(crate::provider_registry::catalog_brick_ids)
+            .collect();
+        let stale: Vec<String> = self
+            .bricks
+            .keys()
+            .filter(|id| {
+                !known.contains(id.as_str())
+                    && !ProviderKind::ALL.iter().any(|provider| {
+                        id.starts_with(&format!(
+                            "{}.",
+                            crate::provider_registry::descriptor(*provider).id
+                        ))
+                    })
+            })
+            .cloned()
+            .collect();
+        for id in stale {
+            self.bricks.remove(&id);
+            changed = true;
+        }
+        let known_providers: std::collections::HashSet<&str> =
+            ProviderKind::ALL.iter().map(|provider| provider.id()).collect();
+        let stale_providers: Vec<String> = self
+            .provider_all_tab
+            .keys()
+            .filter(|id| !known_providers.contains(id.as_str()))
+            .cloned()
+            .collect();
+        for id in stale_providers {
+            self.provider_all_tab.remove(&id);
+            changed = true;
+        }
+        changed
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PopupSurface {
+    AllTab,
+    ProviderTab,
 }
 
 /// Ordered slots on the popup All tab, including Total Spend.
@@ -838,8 +1044,8 @@ pub struct Settings {
     pub start_at_login: bool,
     pub show_used_percentage: bool,
     pub show_usage_pace: bool,
-    pub show_banked_resets: bool,
-    pub show_usage_stats: bool,
+    /// Per-card visibility for popup All and provider tabs.
+    pub popup_visibility: PopupVisibility,
     /// Shows the compact provider spend breakdown on the popup's All tab.
     pub show_total_spend_on_all_tab: bool,
     /// Chooses between the donut and progress-bar spend layouts.
@@ -895,8 +1101,7 @@ impl Default for Settings {
             start_at_login: true,
             show_used_percentage: false,
             show_usage_pace: true,
-            show_banked_resets: true,
-            show_usage_stats: true,
+            popup_visibility: PopupVisibility::build_defaults(),
             show_total_spend_on_all_tab: true,
             total_spend_presentation: TotalSpendPresentation::default(),
             total_spend_period: TotalSpendPeriod::default(),
@@ -954,7 +1159,8 @@ impl Settings {
         let repaired = settings.repair_inplace();
         let tray_widgets_normalized = settings.normalize_tray_widgets();
         let popup_order_normalized = settings.normalize_popup_order();
-        if dirty || repaired || tray_widgets_normalized || popup_order_normalized {
+        let popup_visibility_normalized = settings.normalize_popup_visibility();
+        if dirty || repaired || tray_widgets_normalized || popup_order_normalized || popup_visibility_normalized {
             settings.save(path)?;
         }
         Ok(settings)
@@ -1137,6 +1343,17 @@ impl Settings {
         }
         self.popup_order = next;
         true
+    }
+
+    pub fn normalize_popup_visibility(&mut self) -> bool {
+        self.popup_visibility.normalize()
+    }
+
+    pub fn absorb_discovered_popup_bricks(
+        &mut self,
+        limits: &crate::limits::ProviderLimits,
+    ) -> bool {
+        self.popup_visibility.absorb_discovered_bricks(limits)
     }
 
     /// Provider subsequence of [`Self::popup_order`].
@@ -1934,6 +2151,45 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.insert("version".into(), toml::Value::Integer(28));
                 version = 28;
             }
+            28 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                let show_banked_resets = root
+                    .get("show_banked_resets")
+                    .and_then(toml::Value::as_bool)
+                    .unwrap_or(true);
+                let show_usage_stats = root
+                    .get("show_usage_stats")
+                    .and_then(toml::Value::as_bool)
+                    .unwrap_or(true);
+                let mut bricks = toml::map::Map::new();
+                for provider in ProviderKind::ALL {
+                    for brick_id in crate::provider_registry::catalog_brick_ids(provider) {
+                        let (all_tab, provider_tab) = if brick_id.ends_with(".usage") {
+                            (false, show_usage_stats)
+                        } else if brick_id.ends_with(".resets") {
+                            (show_banked_resets, show_banked_resets)
+                        } else {
+                            (true, true)
+                        };
+                        let mut entry = toml::map::Map::new();
+                        entry.insert("all_tab".into(), toml::Value::Boolean(all_tab));
+                        entry.insert("provider_tab".into(), toml::Value::Boolean(provider_tab));
+                        bricks.insert(brick_id, toml::Value::Table(entry));
+                    }
+                }
+                let mut popup_visibility = toml::map::Map::new();
+                popup_visibility.insert("bricks".into(), toml::Value::Table(bricks));
+                root.insert(
+                    "popup_visibility".into(),
+                    toml::Value::Table(popup_visibility),
+                );
+                root.remove("show_banked_resets");
+                root.remove("show_usage_stats");
+                root.insert("version".into(), toml::Value::Integer(29));
+                version = 29;
+            }
             // Unknown future/gap versions: stamp current and keep decoding with
             // serde defaults rather than refusing to start.
             _ => {
@@ -1970,8 +2226,17 @@ mod tests {
         assert!(value.start_at_login);
         assert!(!value.show_used_percentage);
         assert!(value.show_usage_pace);
-        assert!(value.show_banked_resets);
-        assert!(value.show_usage_stats);
+        assert!(value.popup_visibility.is_visible(
+            "codex.usage",
+            PopupSurface::ProviderTab,
+            true
+        ));
+        assert!(!value.popup_visibility.is_visible(
+            "codex.usage",
+            PopupSurface::AllTab,
+            true
+        ));
+        assert!(value.popup_visibility.provider_shown_on_all(ProviderKind::Codex));
         assert!(value.show_total_spend_on_all_tab);
         assert_eq!(
             value.total_spend_presentation,
@@ -1991,6 +2256,81 @@ mod tests {
         assert!(!value.notifications.weekly_low_usage_enabled);
         assert_eq!(value.notifications.weekly_low_usage_threshold_percent, 20);
         assert!(value.notifications.update_available);
+    }
+
+    #[test]
+    fn migrates_v28_popup_visibility_from_legacy_toggles() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(
+            &path,
+            r#"
+version = 28
+show_banked_resets = false
+show_usage_stats = false
+"#,
+        )
+        .unwrap();
+
+        let loaded = Settings::load_or_create(&path).unwrap();
+        assert_eq!(loaded.version, SETTINGS_VERSION);
+        assert!(!loaded.popup_visibility.is_visible(
+            "codex.resets",
+            PopupSurface::AllTab,
+            true
+        ));
+        assert!(!loaded.popup_visibility.is_visible(
+            "codex.usage",
+            PopupSurface::ProviderTab,
+            true
+        ));
+    }
+
+    #[test]
+    fn provider_all_tab_hides_the_whole_section_without_touching_bricks() {
+        let mut visibility = PopupVisibility::build_defaults();
+        assert!(visibility.is_visible("codex.session", PopupSurface::AllTab, true));
+        assert!(visibility.provider_visible_on_all(ProviderKind::Codex));
+
+        visibility.set_provider_all_tab(ProviderKind::Codex, false);
+        assert!(!visibility.provider_shown_on_all(ProviderKind::Codex));
+        assert!(!visibility.provider_visible_on_all(ProviderKind::Codex));
+        assert!(!visibility.is_visible("codex.session", PopupSurface::AllTab, true));
+        assert!(visibility.is_visible("codex.session", PopupSurface::ProviderTab, true));
+        assert!(visibility.visibility_for("codex.session").all_tab);
+        assert!(!visibility.is_visible("codex.session", PopupSurface::AllTab, false));
+    }
+
+    #[test]
+    fn absorbs_runtime_additional_limits_into_popup_visibility() {
+        let mut settings = Settings::default();
+        let brick_id = crate::provider_registry::additional_limit_brick_id(
+            ProviderKind::Claude,
+            "seven_day_runtime_lane",
+        );
+        assert!(!settings.popup_visibility.bricks.contains_key(&brick_id));
+
+        let limits = crate::limits::ProviderLimits::from_entries([(
+            ProviderKind::Claude,
+            crate::limits::RateLimits {
+                additional_limits: vec![crate::limits::AdditionalLimit {
+                    id: "seven_day_runtime_lane".into(),
+                    title: "Runtime Lane".into(),
+                    window: crate::limits::LimitWindow {
+                        used_percent: Some(1),
+                        ..Default::default()
+                    },
+                }],
+                ..Default::default()
+            },
+        )]);
+        assert!(settings.absorb_discovered_popup_bricks(&limits));
+        assert!(settings.popup_visibility.is_visible(
+            &brick_id,
+            PopupSurface::AllTab,
+            true
+        ));
+        assert!(!settings.absorb_discovered_popup_bricks(&limits));
     }
 
     #[test]
@@ -2048,8 +2388,16 @@ tray_widgets = []
         assert!(!migrated.automatic_activation);
         assert!(migrated.start_at_login);
         assert!(migrated.show_usage_pace);
-        assert!(migrated.show_banked_resets);
-        assert!(migrated.show_usage_stats);
+        assert!(migrated.popup_visibility.is_visible(
+            "codex.resets",
+            PopupSurface::AllTab,
+            true
+        ));
+        assert!(migrated.popup_visibility.is_visible(
+            "codex.usage",
+            PopupSurface::ProviderTab,
+            true
+        ));
         assert!(migrated.show_total_spend_on_all_tab);
         assert_eq!(
             migrated.total_spend_presentation,

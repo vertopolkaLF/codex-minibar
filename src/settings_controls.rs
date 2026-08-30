@@ -434,11 +434,24 @@ pub(crate) fn settings_content_expander(
     on_expanding: impl IntoCallback<bool>,
     content: impl Into<Element>,
 ) -> Element {
+    settings_content_expander_with_trailing(header, None, expanded, on_expanding, content)
+}
+
+/// Same chrome as [`settings_content_expander`], plus a trailing header control
+/// that sits above the expand tap target so it does not toggle the card.
+pub(crate) fn settings_content_expander_with_trailing(
+    header: impl Into<Element>,
+    trailing: Option<Element>,
+    expanded: bool,
+    on_expanding: impl IntoCallback<bool>,
+    content: impl Into<Element>,
+) -> Element {
     let on_expanding = on_expanding.into_callback();
     let toggle_expand = {
         let on_expanding = on_expanding.clone();
         move || on_expanding.invoke(!expanded)
     };
+    let trailing_reserve = if trailing.is_some() { 80.0 } else { 0.0 };
 
     let chevron = border(
         crate::icons::element("caret-down", 16.0, Color::rgb(138, 138, 138))
@@ -463,7 +476,7 @@ pub(crate) fn settings_content_expander(
         move || toggle_expand()
     });
 
-    let header_children: Vec<Element> = vec![
+    let mut header_children: Vec<Element> = vec![
         border(Element::Empty)
             .background(Color::transparent())
             .relative_align_left()
@@ -480,15 +493,30 @@ pub(crate) fn settings_content_expander(
             .margin(Thickness {
                 left: CARD_PADDING_X,
                 top: CARD_CONTENT_PADDING_Y,
-                right: CARD_PADDING_X + CHEVRON_SIZE + TOGGLE_CHEVRON_GAP,
+                right: CARD_PADDING_X + CHEVRON_SIZE + TOGGLE_CHEVRON_GAP + trailing_reserve,
                 bottom: CARD_CONTENT_PADDING_Y,
             })
             .relative_align_left()
             .relative_align_right()
             .relative_align_v_center()
             .into(),
-        chevron.into(),
     ];
+    if let Some(trailing) = trailing {
+        header_children.push(
+            border(trailing)
+                .background(Color::transparent())
+                .margin(Thickness {
+                    left: 0.0,
+                    top: 0.0,
+                    right: CARD_PADDING_X + CHEVRON_SIZE + TOGGLE_CHEVRON_GAP,
+                    bottom: 0.0,
+                })
+                .relative_align_right()
+                .relative_align_v_center()
+                .into(),
+        );
+    }
+    header_children.push(chevron.into());
 
     let header_row = relative_panel(header_children)
         // Never crop a wrapped description: the 60px row is a minimum, not
@@ -766,4 +794,123 @@ pub(crate) fn settings_action_card(
         .on_pointer_entered(on_enter)
         .on_pointer_exited(on_exit)
         .into()
+}
+
+/// Default CheckBox style is 32×120 for touch. Icon-only boxes override
+/// both; the 32px chrome is the template's check glyph host.
+/// https://github.com/microsoft/microsoft-ui-xaml/issues/2671
+const POPUP_BRICK_CHECK_COL_PX: f64 = 32.0;
+/// `NormalRectangle` in the default CheckBox template is 20×20, left-aligned
+/// in the 32px host. Header labels center over that glyph, not the chrome.
+const POPUP_BRICK_GLYPH_PX: f64 = 20.0;
+
+fn popup_brick_columns() -> [GridLength; 3] {
+    [
+        GridLength::Star(1.0),
+        GridLength::Pixel(POPUP_BRICK_CHECK_COL_PX),
+        GridLength::Pixel(POPUP_BRICK_CHECK_COL_PX),
+    ]
+}
+
+fn popup_brick_header_label(label: &str, column: i32) -> Element {
+    if column == 0 {
+        return text_block(label)
+            .font_size(12.0)
+            .opacity(0.72)
+            .vertical_alignment(VerticalAlignment::Center)
+            .grid_column(0)
+            .into();
+    }
+    let caption: Element = text_block(label)
+        .font_size(12.0)
+        .opacity(0.72)
+        .relative_align_h_center()
+        .relative_align_v_center()
+        .into();
+    relative_panel(vec![caption])
+        .width(POPUP_BRICK_GLYPH_PX)
+        .horizontal_alignment(HorizontalAlignment::Left)
+        .vertical_alignment(VerticalAlignment::Center)
+        .grid_column(column)
+        .into()
+}
+
+/// Icon-only CheckBox: kill the style MinWidth=120 and Content padding
+/// so only the 32×32 glyph host remains.
+fn settings_icon_checkbox(
+    checked: bool,
+    enabled: bool,
+    on_checked: impl IntoCallback<bool>,
+) -> CheckBox {
+    CheckBox::new(checked)
+        .enabled(enabled)
+        .on_checked(on_checked)
+        .min_width(0.0)
+        .max_width(POPUP_BRICK_CHECK_COL_PX)
+        .width(POPUP_BRICK_CHECK_COL_PX)
+        .padding(Thickness::uniform(0.0))
+        .horizontal_alignment(HorizontalAlignment::Left)
+        .vertical_alignment(VerticalAlignment::Center)
+}
+
+/// Shared Card / All / Tab header. All/Tab are centered over the 20px
+/// check glyph that sits on the leading edge of each 32px column.
+pub(crate) fn settings_brick_table_header(row_key: &str) -> Element {
+    grid(vec![
+        popup_brick_header_label("Card", 0),
+        popup_brick_header_label("All", 1),
+        popup_brick_header_label("Tab", 2),
+    ])
+    .columns(popup_brick_columns())
+    .rows([GridLength::Auto])
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .with_key(format!("popup-brick-header-{row_key}"))
+    .into()
+}
+
+/// Trailing All-tab master checkbox. Content is the label so WinUI
+/// applies the template's optical padding instead of a sibling TextBlock.
+pub(crate) fn settings_section_all_toggle(
+    checked: bool,
+    on_checked: impl IntoCallback<bool>,
+) -> Element {
+    CheckBox::new(checked)
+        .content("All")
+        .on_checked(on_checked)
+        .min_width(0.0)
+        .vertical_alignment(VerticalAlignment::Center)
+        .into()
+}
+
+/// Card name on the left; All and Tab are icon-only native checkboxes.
+pub(crate) fn settings_brick_row(
+    label: impl Into<String>,
+    all_tab: bool,
+    provider_tab: bool,
+    all_enabled: bool,
+    on_all_tab_changed: impl IntoCallback<bool>,
+    on_provider_tab_changed: impl IntoCallback<bool>,
+    row_key: &str,
+) -> Element {
+    let label = label.into();
+    grid(vec![
+        text_block(label)
+            .font_size(14.0)
+            .vertical_alignment(VerticalAlignment::Center)
+            .grid_column(0)
+            .into(),
+        settings_icon_checkbox(all_tab, all_enabled, on_all_tab_changed)
+            .tooltip("Show on All tab")
+            .grid_column(1)
+            .into(),
+        settings_icon_checkbox(provider_tab, true, on_provider_tab_changed)
+            .tooltip("Show on provider tab")
+            .grid_column(2)
+            .into(),
+    ])
+    .columns(popup_brick_columns())
+    .rows([GridLength::Auto])
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .with_key(format!("popup-brick-row-{row_key}"))
+    .into()
 }
