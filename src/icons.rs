@@ -1,4 +1,4 @@
-//! Phosphor Regular geometry from Iconify, rendered with caller-selected color.
+//! Icon geometry from Iconify (Fluent for chrome actions, Phosphor for settings nav).
 
 use windows_reactor::*;
 
@@ -10,10 +10,17 @@ pub struct IconGeom {
 
 pub fn geom(name: &str) -> IconGeom {
     let svg = match name {
-        "fluent-refresh" => include_str!("../assets/icons/fluent-arrow-sync-20-regular.svg"),
-        "fluent-settings" => include_str!("../assets/icons/fluent-settings-20-regular.svg"),
-        "fluent-power" => include_str!("../assets/icons/fluent-power-20-regular.svg"),
-        "fluent-delete" => include_str!("../assets/icons/fluent-delete-16-regular.svg"),
+        // Fluent glyphs preferred when a Phosphor alias meant the same action.
+        "fluent-refresh" | "arrows-clockwise" | "popup-refresh" => {
+            include_str!("../assets/icons/fluent-arrow-sync-20-regular.svg")
+        }
+        "fluent-settings" | "sliders" | "popup-settings" => {
+            include_str!("../assets/icons/fluent-settings-20-regular.svg")
+        }
+        "fluent-power" | "power" | "popup-power" => {
+            include_str!("../assets/icons/fluent-power-20-regular.svg")
+        }
+        "fluent-delete" => include_str!("../assets/icons/fluent-delete-20-regular.svg"),
         "fluent-drag" => {
             include_str!("../assets/icons/fluent-re-order-dots-vertical-16-regular.svg")
         }
@@ -32,11 +39,6 @@ pub fn geom(name: &str) -> IconGeom {
         "plugs-connected" => include_str!("../assets/icons/ph-plugs-connected.svg"),
         "clock" => include_str!("../assets/icons/ph-clock.svg"),
         "scroll" => include_str!("../assets/icons/ph-scroll.svg"),
-        "arrows-clockwise" | "popup-refresh" => {
-            include_str!("../assets/icons/ph-arrows-clockwise.svg")
-        }
-        "sliders" | "popup-settings" => include_str!("../assets/icons/ph-sliders.svg"),
-        "power" | "popup-power" => include_str!("../assets/icons/ph-power.svg"),
         "caret-down" => include_str!("../assets/icons/ph-caret-down.svg"),
         "caret-right" => include_str!("../assets/icons/ph-caret-right.svg"),
         "check-circle-fill" => include_str!("../assets/icons/ph-check-circle-fill.svg"),
@@ -49,7 +51,7 @@ pub fn geom(name: &str) -> IconGeom {
         "paint-brush" => include_str!("../assets/icons/ph-paint-brush.svg"),
         "bell" => include_str!("../assets/icons/ph-bell.svg"),
         "info" => include_str!("../assets/icons/ph-info.svg"),
-        _ => panic!("unknown Phosphor icon: {name}"),
+        _ => panic!("unknown icon: {name}"),
     };
     let canvas = viewbox_size(svg);
     let start = svg.find(" d=\"").expect("Iconify SVG path") + 4;

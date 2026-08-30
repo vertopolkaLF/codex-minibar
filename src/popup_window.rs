@@ -1019,25 +1019,26 @@ fn openrouter_delete_button(
         .relative_align_top()
         .relative_align_bottom()
         .into();
-    // Dual swap-chain hosts with opacity crossfade — never remount on hover.
-    let idle_icon: Element = crate::icons::element("fluent-delete", 14.0, idle_color)
+    // Same hit target and glyph size as popup footer chrome. The old 24/14
+    // slot crushed the Fluent delete path into unreadable slivers.
+    let idle_icon: Element = crate::icons::element("fluent-delete", 18.0, idle_color)
         .opacity(if hovered { 0.0 } else { 1.0 })
         .relative_align_h_center()
         .relative_align_v_center()
         .into();
-    let accent_icon: Element = crate::icons::accent_element("fluent-delete", 14.0)
+    let accent_icon: Element = crate::icons::accent_element("fluent-delete", 18.0)
         .opacity(if hovered { 1.0 } else { 0.0 })
         .relative_align_h_center()
         .relative_align_v_center()
         .into();
     relative_panel(vec![hover_background, idle_icon, accent_icon])
         .tooltip("Remove key")
-        .width(24.0)
-        .height(24.0)
-        .min_width(24.0)
-        .min_height(24.0)
-        .max_width(24.0)
-        .max_height(24.0)
+        .width(ICON_BUTTON_SIZE)
+        .height(ICON_BUTTON_SIZE)
+        .min_width(ICON_BUTTON_SIZE)
+        .min_height(ICON_BUTTON_SIZE)
+        .max_width(ICON_BUTTON_SIZE)
+        .max_height(ICON_BUTTON_SIZE)
         .background(Color::transparent())
         .on_pointer_entered(move |_: PointerEventInfo| {
             set_on_enter.call(Some(button_id.clone()));
@@ -1045,8 +1046,8 @@ fn openrouter_delete_button(
         .on_pointer_exited(move || set_on_exit.call(None))
         .on_tapped(on_click)
         .with_key(format!(
-            "{id}-delete-24-14-{:02X}{:02X}{:02X}",
-            idle_color.r, idle_color.g, idle_color.b
+            "{id}-delete-{}-18-{:02X}{:02X}{:02X}",
+            ICON_BUTTON_SIZE, idle_color.r, idle_color.g, idle_color.b
         ))
         .into()
 }
@@ -1627,6 +1628,35 @@ fn openrouter_accounts_strip_key(limits: &RateLimits) -> String {
                     key.push('!');
                 }
             }
+        }
+    }
+    key
+}
+
+/// Membership + expired chrome that change popup body height. Usage dollars
+/// stay out so a poll cannot remount swap-chain hosts every minute.
+fn popup_body_height_key(limits: &ProviderLimits, view: PopupView) -> String {
+    let mut key = String::new();
+    let providers: Vec<ProviderKind> = match view {
+        PopupView::All => crate::provider_registry::PROVIDERS
+            .iter()
+            .map(|descriptor| descriptor.kind)
+            .collect(),
+        other => other.provider().into_iter().collect(),
+    };
+    for provider in providers {
+        let snapshot = limits.get(provider);
+        if !key.is_empty() {
+            key.push('|');
+        }
+        key.push_str(provider.id());
+        key.push(':');
+        if provider == ProviderKind::OpenRouter {
+            key.push_str(&openrouter_accounts_strip_key(snapshot));
+        } else {
+            key.push(if snapshot.five_hour_disabled() { '0' } else { '1' });
+            key.push(if snapshot.spending.is_some() { 's' } else { '-' });
+            key.push(if snapshot.usage.has_data() { 'u' } else { '-' });
         }
     }
     key
@@ -2363,8 +2393,13 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         //
         // Key only error presence, not the message text: PollFailed can emit a
         // new string every minute and would otherwise remount the whole page.
+        //
+        // Structural OpenRouter membership belongs here: adding/removing keys
+        // or flipping expired chrome changes DesiredSize without a viewport
+        // SizeChanged. Remounting the page is what tab switches already do so
+        // the queued on_resize measure can shrink the HWND.
         let body_layout_key = format!(
-            "popup-page-{role}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
+            "popup-page-{role}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
             ui.error.is_some(),
             popup_visibility_key(&ui.popup_visibility),
             ui.show_total_spend_on_all_tab,
@@ -2376,6 +2411,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             ui.cursor_enabled,
             ui.openrouter_enabled,
             popup_order_key(&ui.popup_order),
+            popup_body_height_key(&limits, view),
             color_scheme as i32,
             view,
         );
@@ -2614,7 +2650,7 @@ fn settings_window(cx: &mut RenderCx, settings: Arc<Settings>) -> Element {
             .icon_path(crate::icons::data("bell"), "#E6E6E6"),
         NavViewItem::new("Advanced")
             .tag(SettingsTab::Advanced.tag())
-            .icon_path(crate::icons::data("sliders"), "#E6E6E6"),
+            .icon_path(crate::icons::data("fluent-settings"), "#E6E6E6"),
     ];
     // NavigationView owns the sidebar only. Its generated content presenter
     // is opaque in the current WinUI template, so rendering the page inside it

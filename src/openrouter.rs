@@ -67,21 +67,46 @@ impl OpenRouterClient {
     }
 }
 
+/// Outcome of `GET /api/v1/key`. Expired keys are rejected with 401 and are
+/// also omitted from the management `/keys` directory, so this path is the
+/// authoritative expired signal when a local secret is still configured.
+#[derive(Debug)]
+enum KeyReadOutcome {
+    Live(ParsedOpenRouterKey),
+    Expired,
+}
+
 fn read_key_with_agent(
     agent: &ureq::Agent,
     api_key: &str,
     sampled_at: DateTime<Utc>,
-) -> Result<ParsedOpenRouterKey> {
-    let response = agent
+) -> Result<KeyReadOutcome> {
+    match agent
         .get(API_URL)
         .set("Authorization", &format!("Bearer {api_key}"))
         .set("Accept", "application/json")
         .call()
-        .context("request OpenRouter API-key usage")?;
-    let body = response
-        .into_string()
-        .context("read OpenRouter API-key response")?;
-    parse_key_response(&body, sampled_at)
+    {
+        Ok(response) => {
+            let body = response
+                .into_string()
+                .context("read OpenRouter API-key response")?;
+            Ok(KeyReadOutcome::Live(parse_key_response(&body, sampled_at)?))
+        }
+        Err(ureq::Error::Status(status, response)) => {
+            let body = response.into_string().unwrap_or_default();
+            if status == 401 && body_indicates_expired_api_key(&body) {
+                return Ok(KeyReadOutcome::Expired);
+            }
+            bail!("request OpenRouter API-key usage: {API_URL}: status code {status}");
+        }
+        Err(error) => Err(error).context("request OpenRouter API-key usage"),
+    }
+}
+
+fn body_indicates_expired_api_key(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    lower.contains("api key expired")
 }
 
 fn read_account_balance_with_agent(agent: &ureq::Agent, api_key: &str) -> Result<Option<u64>> {
@@ -172,7 +197,7 @@ fn fetch_openrouter_account(
         let key_directory = directory
             .map(|handle| handle.join().unwrap_or_default())
             .unwrap_or_default();
-        let live_results: Vec<Result<ParsedOpenRouterKey>> = keys
+        let live_results: Vec<Result<KeyReadOutcome>> = keys
             .into_iter()
             .map(|handle| {
                 handle.join().unwrap_or_else(|_| bail!("OpenRouter API-key worker panicked"))
@@ -193,14 +218,21 @@ fn fetch_openrouter_account(
         // different head/tail length than our local collapse — match the
         // full secret against directory labels instead of exact strings.
         let directory = find_directory_entry(&api_key.value, masked_key.as_deref(), &key_directory);
-        let live = match live {
-            Ok(parsed) => Some(parsed),
+        let (live, marked_expired) = match live {
+            Ok(KeyReadOutcome::Live(parsed)) => (Some(parsed), false),
+            Ok(KeyReadOutcome::Expired) => {
+                crate::logger::info(format!(
+                    "OpenRouter account {} API key {} is expired",
+                    account.name, api_key.id
+                ));
+                (None, true)
+            }
             Err(error) => {
                 crate::logger::info(format!(
                     "OpenRouter account {} API key {} failed: {error:#}",
                     account.name, api_key.id
                 ));
-                None
+                (None, false)
             }
         };
 
@@ -235,10 +267,13 @@ fn fetch_openrouter_account(
                     .as_ref()
                     .and_then(|info| info.expires_at)
                     .or(cached.expires_at);
-                let disabled = directory
-                    .as_ref()
-                    .map(|info| info.disabled)
-                    .unwrap_or(cached.disabled);
+                // Expired keys disappear from `/keys`, so directory metadata is
+                // often missing — trust the `/key` 401 body in that case.
+                let disabled = marked_expired
+                    || directory
+                        .as_ref()
+                        .map(|info| info.disabled)
+                        .unwrap_or(cached.disabled);
                 let spending = merge_key_spending(None, &cached, sampled_at, false);
                 (label, spending, false, expires_at, disabled)
             }
@@ -1052,6 +1087,17 @@ mod tests {
             resolve_key_display_name(Some("Build key"), &HashMap::new()).as_deref(),
             Some("Build key")
         );
+    }
+
+    #[test]
+    fn detects_expired_api_key_error_body() {
+        assert!(body_indicates_expired_api_key(
+            r#"{"error":{"message":"API key expired.","code":401,"metadata":{"headers":{"WWW-Authenticate":"Bearer error=\"invalid_token\", error_description=\"API key expired\""}}}}"#
+        ));
+        assert!(!body_indicates_expired_api_key(
+            r#"{"error":{"message":"User not found.","code":401}}"#
+        ));
+        assert!(!body_indicates_expired_api_key(""));
     }
 
     #[test]

@@ -1748,7 +1748,7 @@ fn root_nav_items(nav_icon_color: &str) -> [NavViewItem; 10] {
             .icon_path(crate::icons::data("paint-brush"), nav_icon_color),
         NavViewItem::new("Advanced")
             .tag("advanced")
-            .icon_path(crate::icons::data("sliders"), nav_icon_color),
+            .icon_path(crate::icons::data("fluent-settings"), nav_icon_color),
         NavViewItem::new("Log")
             .tag("log")
             .icon_path(crate::icons::data("scroll"), nav_icon_color),
