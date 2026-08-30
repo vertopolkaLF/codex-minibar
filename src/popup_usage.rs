@@ -1405,7 +1405,17 @@ fn usage_breakdown_card(
                         })
                         .collect::<Vec<_>>(),
                 )
-                .spacing(6.0),
+                .spacing(6.0)
+                .with_key(format!(
+                    "usage-breakdown-list-{}-{}-{}-{}",
+                    breakdown as i32,
+                    color_scheme as i32,
+                    use_colored_provider_icons,
+                    rows.iter()
+                        .map(breakdown_row_id)
+                        .collect::<Vec<_>>()
+                        .join("+")
+                )),
             ))
             .spacing(6.0),
         ))
@@ -1438,21 +1448,36 @@ fn breakdown_header() -> Element {
     .into()
 }
 
+fn breakdown_row_id(row: &BreakdownRow) -> String {
+    format!(
+        "{}:{}",
+        row.provider.map(ProviderKind::id).unwrap_or("-"),
+        row.label
+    )
+}
+
 fn breakdown_row(
     row: &BreakdownRow,
     _metric: OverviewMetric,
     color_scheme: ColorScheme,
     use_colored_provider_icons: bool,
 ) -> Element {
+    let row_id = breakdown_row_id(row);
     let mut title = Vec::new();
     if let Some(provider) = row.provider {
+        let icon_name = provider_registry::descriptor(provider).icon;
+        let color = provider_brand_color(provider, color_scheme, use_colored_provider_icons);
         title.push(
-            crate::icons::element(
-                provider_registry::descriptor(provider).icon,
-                14.0,
-                provider_brand_color(provider, color_scheme, use_colored_provider_icons),
-            )
-            .into(),
+            crate::icons::element(icon_name, 14.0, color)
+                .with_key(format!(
+                    "usage-bd-icon-{}-{}-{:02X}{:02X}{:02X}",
+                    row_id,
+                    icon_name,
+                    color.r,
+                    color.g,
+                    color.b
+                ))
+                .into(),
         );
     }
     title.push(
@@ -1493,6 +1518,7 @@ fn breakdown_row(
         GridLength::Pixel(44.0),
         GridLength::Pixel(56.0),
     ])
+    .with_key(format!("usage-bd-row-{row_id}"))
     .into()
 }
 
