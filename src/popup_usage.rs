@@ -595,22 +595,37 @@ fn usage_chart_card(
     let tooltip = hover
         .and_then(|index| filled.get(index).map(|point| (index, point)))
         .map(|(index, point)| {
-            chart_tooltip(point, providers, metric, hourly)
-                .margin(Thickness {
-                    left: 48.0,
-                    top: 8.0,
-                    right: 8.0,
-                    bottom: 0.0,
-                })
-                .relative_align_left()
-                .relative_align_top()
-                .with_key(format!(
-                    "usage-tip-{}-{}-{}-{}",
-                    metric as i32,
-                    hourly,
-                    index,
-                    point.at.to_rfc3339()
-                ))
+            let plot_width = f64::from(popup::POPUP_WIDTH)
+                - 2.0
+                - 32.0
+                - 2.0
+                - USAGE_CARD_PAD * 2.0
+                - CHART_Y_AXIS_WIDTH
+                - CHART_Y_GAP;
+            let panel_width = plot_width + CHART_Y_AXIS_WIDTH + CHART_Y_GAP;
+            let (tip, tip_width) = chart_tooltip(point, providers, metric, hourly, color_scheme);
+            let count = filled.len().max(1) as f64;
+            let step = plot_width / count;
+            let cursor_x =
+                CHART_Y_AXIS_WIDTH + CHART_Y_GAP + step * index as f64 + step / 2.0;
+            let left = tooltip_offset_x(cursor_x, tip_width, panel_width);
+            tip.margin(Thickness {
+                left,
+                top: 8.0,
+                right: 0.0,
+                bottom: 0.0,
+            })
+            .horizontal_alignment(HorizontalAlignment::Left)
+            .vertical_alignment(VerticalAlignment::Top)
+            .relative_align_left()
+            .relative_align_top()
+            .with_key(format!(
+                "usage-tip-{}-{}-{}-{}",
+                metric as i32,
+                hourly,
+                index,
+                point.at.to_rfc3339()
+            ))
         });
 
     usage_card(
@@ -1142,14 +1157,65 @@ fn xaml_rgba(color: Color, alpha: u8) -> String {
     )
 }
 
+const TOOLTIP_PAD_X: f64 = 14.0;
+const TOOLTIP_PAD_Y: f64 = 8.0;
+const TOOLTIP_CURSOR_GAP: f64 = 10.0;
+const TOOLTIP_EDGE_INSET: f64 = 4.0;
+const TOOLTIP_ROW_GAP: f64 = 8.0;
+const TOOLTIP_VALUE_GAP: f64 = 24.0;
+const TOOLTIP_ICON: f64 = 14.0;
+const TOOLTIP_CHAR_CAPTION: f64 = 6.5;
+const TOOLTIP_CHAR_TITLE: f64 = 8.0;
+
+fn tooltip_offset_x(cursor_x: f64, tip_width: f64, area_width: f64) -> f64 {
+    let min_x = TOOLTIP_EDGE_INSET;
+    let max_x = (area_width - TOOLTIP_EDGE_INSET - tip_width).max(min_x);
+    let prefer_right = cursor_x + TOOLTIP_CURSOR_GAP + tip_width <= area_width - TOOLTIP_EDGE_INSET;
+    let raw = if prefer_right {
+        cursor_x + TOOLTIP_CURSOR_GAP
+    } else {
+        cursor_x - TOOLTIP_CURSOR_GAP - tip_width
+    };
+    raw.clamp(min_x, max_x)
+}
+
+fn tooltip_metric_row(label: impl Into<Element>, amount: impl Into<String>) -> Element {
+    grid((
+        label.into().vertical_alignment(VerticalAlignment::Center),
+        caption(amount.into())
+            .font_weight(600)
+            .foreground(ThemeRef::Accent)
+            .horizontal_alignment(HorizontalAlignment::Right)
+            .vertical_alignment(VerticalAlignment::Center)
+            .grid_column(1),
+    ))
+    .columns([GridLength::Star(1.0), GridLength::Auto])
+    .column_spacing(TOOLTIP_VALUE_GAP)
+    .rows([GridLength::Auto])
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .into()
+}
+
 fn chart_tooltip(
     point: &DailySeriesPoint,
     providers: &[ProviderOverview],
     metric: OverviewMetric,
     hourly: bool,
-) -> Element {
+    color_scheme: ColorScheme,
+) -> (Element, f64) {
+    let title = if hourly {
+        format!(
+            "{} · {}",
+            point.date.format("%b %-d"),
+            crate::usage_overview::format_hour_label(point.at)
+        )
+    } else {
+        point.date.format("%b %-d").to_string()
+    };
     let mut total_cents = 0_u64;
     let mut total_tokens = 0_u64;
+    let mut name_width = 5.0 * TOOLTIP_CHAR_CAPTION;
+    let mut amount_width = 0.0_f64;
     let mut rows: Vec<Element> = Vec::new();
     for entry in providers {
         let Some(value) = point.by_provider.get(&entry.provider).copied() else {
@@ -1166,58 +1232,89 @@ fn chart_tooltip(
                 format_token_count(value)
             }
         };
+        let descriptor = provider_registry::descriptor(entry.provider);
+        let color = provider_brand_color(entry.provider, color_scheme, true);
+        name_width = name_width.max(
+            descriptor.display_name.chars().count() as f64 * TOOLTIP_CHAR_CAPTION,
+        );
+        amount_width = amount_width.max(amount.chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
+        let label = hstack((
+            crate::icons::element(descriptor.icon, TOOLTIP_ICON, color)
+                .vertical_alignment(VerticalAlignment::Center)
+                .with_key(format!(
+                    "usage-tip-icon-{}-{}-{:02X}{:02X}{:02X}",
+                    entry.provider.id(),
+                    descriptor.icon,
+                    color.r,
+                    color.g,
+                    color.b
+                )),
+            caption(descriptor.display_name)
+                .foreground(ThemeRef::SecondaryText)
+                .vertical_alignment(VerticalAlignment::Center),
+        ))
+        .spacing(TOOLTIP_ROW_GAP);
         rows.push(
-            grid((
-                crate::icons::element(
-                    provider_registry::descriptor(entry.provider).icon,
-                    14.0,
-                    provider_brand_color(entry.provider, ColorScheme::Dark, true),
-                ),
-                caption(provider_registry::descriptor(entry.provider).display_name).grid_column(1),
-                caption(amount)
-                    .horizontal_alignment(HorizontalAlignment::Right)
-                    .grid_column(2),
-            ))
-            .columns([GridLength::Auto, GridLength::Star(1.0), GridLength::Auto])
-            .with_key(format!("usage-tip-row-{}", entry.provider.id()))
-            .into(),
+            tooltip_metric_row(label, amount)
+                .with_key(format!("usage-tip-row-{}", entry.provider.id())),
         );
     }
 
-    let mut items = vec![
-        body_strong(if hourly {
-            format!(
-                "{} · {}",
-                point.date.format("%b %-d"),
-                crate::usage_overview::format_hour_label(point.at)
-            )
-        } else {
-            point.date.format("%b %-d").to_string()
-        })
-        .with_key("usage-tip-title")
-        .into(),
-    ];
-    items.extend(rows);
-    items.push(
-        caption(format!(
-            "Total {}",
-            match metric {
-                OverviewMetric::Cost => format_spend_cents(total_cents),
-                OverviewMetric::Tokens => format_token_count(total_tokens),
-            }
-        ))
-        .foreground(ThemeRef::SecondaryText)
-        .with_key("usage-tip-total")
-        .into(),
+    let total = match metric {
+        OverviewMetric::Cost => format_spend_cents(total_cents),
+        OverviewMetric::Tokens => format_token_count(total_tokens),
+    };
+    amount_width = amount_width.max(total.chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
+    let inner_width = TOOLTIP_ICON
+        + TOOLTIP_ROW_GAP
+        + name_width
+        + TOOLTIP_VALUE_GAP
+        + amount_width;
+    let tip_width = (title.chars().count() as f64 * TOOLTIP_CHAR_TITLE)
+        .max(inner_width)
+        + TOOLTIP_PAD_X * 2.0;
+    let body_width = tip_width - TOOLTIP_PAD_X * 2.0;
+
+    rows.push(
+        border(Element::Empty)
+            .height(1.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .background(ThemeRef::DividerStroke)
+            .with_key("usage-tip-rule")
+            .into(),
+    );
+    rows.push(
+        tooltip_metric_row(
+            caption("Total").foreground(ThemeRef::SecondaryText),
+            total,
+        )
+        .with_key("usage-tip-total"),
     );
 
-    border(vstack(items).spacing(4.0).with_key("usage-tip-rows"))
-        .padding(Thickness::uniform(8.0))
-        .corner_radius(6.0)
-        .background(ThemeRef::CardBackground)
-        .border_thickness(Thickness::uniform(1.0))
-        .border_brush(ThemeRef::CardStroke)
-        .into()
+    let tip = border(
+        vstack((
+            body_strong(title).with_key("usage-tip-title"),
+            vstack(rows)
+                .spacing(6.0)
+                .width(body_width)
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .with_key("usage-tip-rows"),
+        ))
+        .spacing(10.0),
+    )
+    .padding(Thickness {
+        left: TOOLTIP_PAD_X,
+        top: TOOLTIP_PAD_Y,
+        right: TOOLTIP_PAD_X,
+        bottom: TOOLTIP_PAD_Y,
+    })
+    .corner_radius(6.0)
+    .background(ThemeRef::SolidBackground)
+    .border_thickness(Thickness::uniform(1.0))
+    .border_brush(ThemeRef::CardStroke)
+    .horizontal_alignment(HorizontalAlignment::Left)
+    .into();
+    (tip, tip_width)
 }
 
 fn usage_totals_card(totals: &TokenUsage) -> Element {
