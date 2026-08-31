@@ -7,8 +7,6 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::hash_map::DefaultHasher,
-    hash::{Hash, Hasher},
     rc::Rc,
     sync::{
         Arc,
@@ -17,21 +15,27 @@ use std::{
     time::Duration,
 };
 
+use chrono::{DateTime, Utc};
 use windows_reactor::*;
 
 use crate::{
-    limits::ProviderLimits,
+    limits::{LimitWindow, ProviderLimits, RateLimits},
     popup_window::AppState,
-    settings::{Settings, TrayWidget, TrayWidgetKind},
+    settings::{
+        ProviderKind, Settings, TaskbarWidgetSection, TaskbarWidgetSectionKind,
+        TaskbarWidgetTemplate,
+    },
 };
 
 pub const WINDOW_TITLE: &str = "Codex Minibar Taskbar Widget";
 
 const WIDGET_HEIGHT_DIP: f64 = 40.0;
-const PREVIEW_SIZE_DIP: f64 = 32.0;
-const CONTENT_PADDING_DIP: f64 = 4.0;
-const CONTENT_GAP_DIP: f64 = 2.0;
+const CONTENT_PADDING_DIP: f64 = 6.0;
+const CONTENT_GAP_DIP: f64 = 8.0;
+const ICON_SIZE_DIP: f64 = 14.0;
+const BAR_WIDTH_DIP: f64 = 44.0;
 const LAYOUT_REFRESH: Duration = Duration::from_millis(1500);
+const DATA_REFRESH: Duration = Duration::from_millis(250);
 
 thread_local! {
     static HOST: RefCell<Option<Rc<ReactorHost>>> = const { RefCell::new(None) };
@@ -39,28 +43,47 @@ thread_local! {
 }
 static HWND_BITS: AtomicIsize = AtomicIsize::new(0);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TaskbarSectionStyle {
+    Chip,
+    Bar,
+    Clock,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TaskbarSectionView {
+    pub id: String,
+    pub icon: &'static str,
+    pub brand_rgb: (u8, u8, u8),
+    pub title: String,
+    pub value: String,
+    pub progress: Option<f64>,
+    pub style: TaskbarSectionStyle,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TaskbarWidgetSnapshot {
     pub enabled: bool,
-    widgets: Vec<TrayWidget>,
-    limits: ProviderLimits,
-    accent: [u8; 3],
-    system_uses_light_theme: bool,
+    pub template: TaskbarWidgetTemplate,
+    pub sections: Vec<TaskbarWidgetSection>,
+    pub show_used_percentage: bool,
+    pub use_colored_provider_icons: bool,
+    pub limits: ProviderLimits,
+    pub system_uses_light_theme: bool,
+    pub clock_minute: i64,
 }
 
 impl TaskbarWidgetSnapshot {
     pub fn from_settings(settings: &Settings, limits: ProviderLimits) -> Self {
         Self {
             enabled: settings.taskbar_widget_enabled,
-            widgets: visible_taskbar_widgets(settings),
+            template: settings.taskbar_widget_template,
+            sections: settings.resolved_taskbar_sections(),
+            show_used_percentage: settings.show_used_percentage,
+            use_colored_provider_icons: settings.use_colored_provider_icons,
             limits,
-            accent: settings
-                .accent_color
-                .rgb()
-                .map_or_else(crate::theme::current_accent_rgb, |(red, green, blue)| {
-                    [red, green, blue]
-                }),
             system_uses_light_theme: crate::tray::system_uses_light_theme(),
+            clock_minute: Utc::now().timestamp() / 60,
         }
     }
 
@@ -76,25 +99,232 @@ impl TaskbarWidgetSnapshot {
         self.system_uses_light_theme = next;
         true
     }
+
+    pub fn rendered_sections(&self, now: DateTime<Utc>) -> Vec<TaskbarSectionView> {
+        render_sections(
+            self.template,
+            &self.sections,
+            &self.limits,
+            self.show_used_percentage,
+            now,
+        )
+    }
 }
 
-fn visible_taskbar_widgets(settings: &Settings) -> Vec<TrayWidget> {
-    let configured = settings
-        .tray_widgets
+pub fn render_sections(
+    template: TaskbarWidgetTemplate,
+    sections: &[TaskbarWidgetSection],
+    limits: &ProviderLimits,
+    show_used: bool,
+    now: DateTime<Utc>,
+) -> Vec<TaskbarSectionView> {
+    sections
         .iter()
-        .filter(|widget| widget.is_visible_for(&settings.providers))
-        .cloned()
-        .collect::<Vec<_>>();
-    if !configured.is_empty() {
-        return configured;
-    }
+        .filter_map(|section| render_section(template, section, limits, show_used, now))
+        .collect()
+}
 
-    settings
-        .ordered_enabled_providers()
-        .into_iter()
-        .map(TrayWidget::for_provider)
-        .find(|widget| widget.kind == TrayWidgetKind::Limits)
-        .map_or_else(|| vec![TrayWidget::app_icon()], |widget| vec![widget])
+pub fn sample_preview_sections(template: TaskbarWidgetTemplate) -> Vec<TaskbarSectionView> {
+    let now = Utc::now();
+    let mut limits = ProviderLimits::default();
+    *limits.get_mut(ProviderKind::Codex) = RateLimits {
+        primary: LimitWindow {
+            used_percent: Some(28),
+            resets_at: Some(now + chrono::Duration::hours(2) + chrono::Duration::minutes(14)),
+            duration_minutes: Some(300),
+        },
+        secondary: LimitWindow {
+            used_percent: Some(41),
+            resets_at: Some(now + chrono::Duration::days(4)),
+            duration_minutes: Some(10_080),
+        },
+        ..RateLimits::default()
+    };
+    *limits.get_mut(ProviderKind::Claude) = RateLimits {
+        primary: LimitWindow {
+            used_percent: Some(55),
+            resets_at: Some(now + chrono::Duration::hours(1) + chrono::Duration::minutes(6)),
+            duration_minutes: Some(300),
+        },
+        ..RateLimits::default()
+    };
+    let sections = template.default_sections(&[ProviderKind::Codex, ProviderKind::Claude]);
+    render_sections(template, &sections, &limits, false, now)
+}
+
+fn render_section(
+    template: TaskbarWidgetTemplate,
+    section: &TaskbarWidgetSection,
+    limits: &ProviderLimits,
+    show_used: bool,
+    now: DateTime<Utc>,
+) -> Option<TaskbarSectionView> {
+    let icon_provider = section.provider().unwrap_or(ProviderKind::Codex);
+    let descriptor = crate::provider_registry::descriptor(icon_provider);
+    let style = section_style(template, section.kind);
+    let (title, value, progress) = match section.kind {
+        TaskbarWidgetSectionKind::Session => {
+            quota_view(limits.get(icon_provider), true, show_used)?
+        }
+        TaskbarWidgetSectionKind::Weekly => {
+            quota_view(limits.get(icon_provider), false, show_used)?
+        }
+        TaskbarWidgetSectionKind::Reset => {
+            let reset = limits.get(icon_provider).primary.resets_at;
+            ("Reset".into(), format_reset_in(reset, now), None)
+        }
+        TaskbarWidgetSectionKind::Credits => (
+            "Credits".into(),
+            credits_value(limits.get(icon_provider)).unwrap_or_else(|| "—".into()),
+            None,
+        ),
+        TaskbarWidgetSectionKind::TodaySpend => {
+            let spend = if section.provider().is_some() {
+                limits.get(icon_provider).usage.today.estimated_cost_microusd
+            } else {
+                ProviderKind::ALL
+                    .into_iter()
+                    .map(|provider| limits.get(provider).usage.today.estimated_cost_microusd)
+                    .sum()
+            };
+            ("Spend".into(), format_spend(spend), None)
+        }
+        TaskbarWidgetSectionKind::TodayTokens => {
+            let tokens = if section.provider().is_some() {
+                limits.get(icon_provider).usage.today.total_tokens()
+            } else {
+                ProviderKind::ALL
+                    .into_iter()
+                    .map(|provider| limits.get(provider).usage.today.total_tokens())
+                    .sum()
+            };
+            ("Tokens".into(), format_tokens(tokens), None)
+        }
+    };
+
+    Some(TaskbarSectionView {
+        id: section.id.clone(),
+        icon: descriptor.icon,
+        brand_rgb: descriptor.brand_rgb,
+        title,
+        value,
+        progress,
+        style,
+    })
+}
+
+fn quota_view(
+    limits: &RateLimits,
+    session: bool,
+    show_used: bool,
+) -> Option<(String, String, Option<f64>)> {
+    let window = if session {
+        &limits.primary
+    } else {
+        &limits.secondary
+    };
+    let title = if session { "5h" } else { "Wk" };
+    let percent = if show_used {
+        window.used_percent
+    } else {
+        window.remaining_percent()
+    };
+    let value = percent
+        .map(|value| format!("{value}%"))
+        .unwrap_or_else(|| "—".into());
+    Some((title.into(), value, percent.map(f64::from)))
+}
+
+fn section_style(
+    template: TaskbarWidgetTemplate,
+    kind: TaskbarWidgetSectionKind,
+) -> TaskbarSectionStyle {
+    match (template, kind) {
+        (_, TaskbarWidgetSectionKind::Reset) => TaskbarSectionStyle::Clock,
+        (TaskbarWidgetTemplate::Progress, TaskbarWidgetSectionKind::Session | TaskbarWidgetSectionKind::Weekly)
+        | (
+            TaskbarWidgetTemplate::Overview,
+            TaskbarWidgetSectionKind::Session | TaskbarWidgetSectionKind::Weekly,
+        ) => TaskbarSectionStyle::Bar,
+        _ => TaskbarSectionStyle::Chip,
+    }
+}
+
+fn format_reset_in(reset: Option<DateTime<Utc>>, now: DateTime<Utc>) -> String {
+    let Some(reset) = reset else {
+        return "—".into();
+    };
+    let remaining_minutes = (reset - now).num_minutes().max(0);
+    let days = remaining_minutes / 1_440;
+    let hours = (remaining_minutes % 1_440) / 60;
+    let minutes = remaining_minutes % 60;
+    if days > 0 {
+        if hours > 0 {
+            format!("{days}d {hours}h")
+        } else {
+            format!("{days}d")
+        }
+    } else if hours > 0 {
+        if minutes > 0 {
+            format!("{hours}h {minutes}m")
+        } else {
+            format!("{hours}h")
+        }
+    } else {
+        format!("{minutes}m")
+    }
+}
+
+fn format_spend(microusd: u64) -> String {
+    let value = microusd as f64 / 1_000_000.0;
+    if value >= 1_000.0 {
+        format!("${:.1}K", value / 1_000.0)
+    } else if microusd == 0 {
+        "$0".into()
+    } else {
+        format!("${value:.2}")
+    }
+}
+
+fn format_tokens(tokens: u64) -> String {
+    match tokens {
+        0..=999 => tokens.to_string(),
+        1_000..=999_999 => format!("{:.1}K", tokens as f64 / 1_000.0),
+        _ => format!("{:.1}M", tokens as f64 / 1_000_000.0),
+    }
+}
+
+fn credits_value(limits: &RateLimits) -> Option<String> {
+    if limits.credits.unlimited {
+        return Some("Unlimited".into());
+    }
+    if !limits.credits.has_credits {
+        return None;
+    }
+    let balance = limits.credits.balance.as_deref()?.trim();
+    if balance.is_empty() {
+        None
+    } else {
+        Some(balance.into())
+    }
+}
+
+fn section_width(section: &TaskbarSectionView) -> f64 {
+    let value_width = (section.value.len() as f64 * 7.2).clamp(22.0, 72.0);
+    match section.style {
+        TaskbarSectionStyle::Chip => ICON_SIZE_DIP + 6.0 + value_width,
+        TaskbarSectionStyle::Bar => ICON_SIZE_DIP + 8.0 + BAR_WIDTH_DIP + 6.0 + value_width,
+        TaskbarSectionStyle::Clock => ICON_SIZE_DIP + 6.0 + value_width + 4.0,
+    }
+}
+
+pub fn content_width_for(sections: &[TaskbarSectionView]) -> f64 {
+    if sections.is_empty() {
+        return 84.0;
+    }
+    let body: f64 = sections.iter().map(section_width).sum();
+    let gaps = CONTENT_GAP_DIP * (sections.len().saturating_sub(1) as f64);
+    CONTENT_PADDING_DIP * 2.0 + body + gaps
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -152,9 +382,9 @@ pub fn ensure_host(state: Arc<AppState>) -> windows_core::Result<()> {
 }
 
 pub fn view(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
-    let initial = state.current_taskbar_widget_snapshot();
+    let initial = live_snapshot(&state);
     let (snapshot, set_snapshot) = cx.use_async_state(initial);
-    let initial_width = content_width(snapshot.widgets.len());
+    let initial_width = content_width_for(&snapshot.rendered_sections(Utc::now()));
     let (placement, set_placement) = cx.use_async_state(Placement::bootstrap(initial_width));
     let (hovered, set_hovered) = cx.use_state(false);
 
@@ -165,26 +395,21 @@ pub fn view(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             let seen = Rc::new(Cell::new(
                 state.taskbar_widget_revision.load(Ordering::Acquire),
             ));
-            let timer = DispatcherTimer::new(Duration::from_millis(50), move || {
+            let timer = DispatcherTimer::new(DATA_REFRESH, move || {
                 let revision = state.taskbar_widget_revision.load(Ordering::Acquire);
-                if revision != seen.get() {
-                    seen.set(revision);
-                    set_snapshot.call(state.current_taskbar_widget_snapshot());
-                }
+                seen.set(revision);
+                set_snapshot.call(live_snapshot(&state));
             })
             .ok();
             Some(move || drop(timer))
         }
     });
 
-    // A vertical legacy taskbar cannot fit a horizontal strip. Keep the first
-    // configured metric visible there; horizontal taskbars show the full set.
-    let visible_count = if placement.vertical {
-        snapshot.widgets.len().min(1)
-    } else {
-        snapshot.widgets.len()
-    };
-    let widget_width = content_width(visible_count);
+    let mut visible_sections = snapshot.rendered_sections(Utc::now());
+    if placement.vertical {
+        visible_sections.truncate(1);
+    }
+    let widget_width = content_width_for(&visible_sections);
 
     cx.use_effect_with_cleanup((snapshot.enabled, widget_width.to_bits()), {
         let set_placement = set_placement.clone();
@@ -203,51 +428,29 @@ pub fn view(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         }
     });
 
-    let previews = snapshot
-        .widgets
-        .iter()
-        .take(visible_count)
-        .enumerate()
-        .map(|(index, widget)| {
-            tray_pixels_element(
-                crate::tray::render_widget_with_accent(widget, &snapshot.limits, snapshot.accent),
-                format!("{}-{index}", widget.id),
-            )
-        })
-        .collect::<Vec<_>>();
-    let strip_identity = snapshot
-        .widgets
-        .iter()
-        .take(visible_count)
-        .map(|widget| widget.id.as_str())
-        .collect::<Vec<_>>()
-        .join("-");
-    let strip = hstack(previews)
-        .spacing(CONTENT_GAP_DIP)
-        .padding(Thickness::uniform(CONTENT_PADDING_DIP))
-        .width(widget_width)
-        .height(WIDGET_HEIGHT_DIP)
-        .horizontal_alignment(HorizontalAlignment::Left)
-        .vertical_alignment(VerticalAlignment::Top);
-
+    let strip = widget_strip(
+        &visible_sections,
+        snapshot.use_colored_provider_icons,
+        snapshot.system_uses_light_theme,
+        widget_width,
+        WIDGET_HEIGHT_DIP,
+    );
     let idle = border(Element::Empty)
         .background(ThemeRef::ControlFillSecondary)
-        .corner_radius(6.0)
+        .corner_radius(8.0)
         .border_thickness(Thickness::uniform(1.0))
         .border_brush(ThemeRef::ControlStroke)
         .width(widget_width)
         .height(WIDGET_HEIGHT_DIP);
     let hover = border(Element::Empty)
         .background(ThemeRef::SubtleFill)
-        .corner_radius(6.0)
+        .corner_radius(8.0)
         .width(widget_width)
         .height(WIDGET_HEIGHT_DIP)
         .opacity(if hovered { 1.0 } else { 0.0 })
         .with_opacity_transition(crate::theme::duration(
             crate::theme::CONTROL_FASTER_ANIMATION,
         ));
-    // SwapChainPanel can consume pointer input. Keep one transparent ordinary
-    // XAML layer above every preview so the whole clipped surface is clickable.
     let set_hovered_on_enter = set_hovered.clone();
     let hit_target = border(Element::Empty)
         .background(Color::transparent())
@@ -259,7 +462,12 @@ pub fn view(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         .on_tapped(crate::popup::show_near_cursor);
 
     let surface_layers: Vec<Element> =
-        vec![idle.into(), hover.into(), strip.into(), hit_target.into()];
+        vec![idle.into(), hover.into(), strip, hit_target.into()];
+    let strip_identity = visible_sections
+        .iter()
+        .map(|section| section.id.as_str())
+        .collect::<Vec<_>>()
+        .join("-");
     let surface: Element = relative_panel(surface_layers)
         .width(widget_width)
         .height(WIDGET_HEIGHT_DIP)
@@ -278,33 +486,131 @@ pub fn view(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         .into()
 }
 
-fn content_width(widget_count: usize) -> f64 {
-    let count = widget_count.max(1) as f64;
-    CONTENT_PADDING_DIP * 2.0 + PREVIEW_SIZE_DIP * count + CONTENT_GAP_DIP * (count - 1.0)
+fn live_snapshot(state: &AppState) -> TaskbarWidgetSnapshot {
+    let mut snapshot = state.current_taskbar_widget_snapshot();
+    snapshot.replace_limits(state.current_limits());
+    snapshot.refresh_system_theme();
+    snapshot.clock_minute = Utc::now().timestamp() / 60;
+    snapshot
 }
 
-fn tray_pixels_element(pixels: Vec<u8>, slot_identity: String) -> Element {
-    let mut hasher = DefaultHasher::new();
-    pixels.hash(&mut hasher);
-    let identity = hasher.finish();
-    let mounted_pixels = pixels;
-    let mut host = swap_chain_panel()
-        .width(PREVIEW_SIZE_DIP)
-        .height(PREVIEW_SIZE_DIP);
-    host.mounted = Some(Callback::new(move |native: Option<_>| {
-        if let Some(native) = native
-            && let Err(error) = crate::acrylic::install_tray_pixels_into(native, &mounted_pixels)
-        {
-            eprintln!("Could not install taskbar metric preview: {error:?}");
+pub fn widget_strip(
+    sections: &[TaskbarSectionView],
+    use_colored_icons: bool,
+    light_theme: bool,
+    width: f64,
+    height: f64,
+) -> Element {
+    let children = if sections.is_empty() {
+        vec![text_block("Minibar")
+            .font_size(12.0)
+            .semibold()
+            .vertical_alignment(VerticalAlignment::Center)
+            .into()]
+    } else {
+        sections
+            .iter()
+            .map(|section| {
+                section_element(section, use_colored_icons, light_theme)
+                    .with_key(format!("taskbar-section-{}", section.id))
+            })
+            .collect()
+    };
+    hstack(children)
+        .spacing(CONTENT_GAP_DIP)
+        .padding(Thickness::uniform(CONTENT_PADDING_DIP))
+        .width(width)
+        .height(height)
+        .horizontal_alignment(HorizontalAlignment::Left)
+        .vertical_alignment(VerticalAlignment::Center)
+        .into()
+}
+
+pub fn preview_strip(template: TaskbarWidgetTemplate) -> Element {
+    let sections = sample_preview_sections(template);
+    let width = content_width_for(&sections).max(168.0);
+    let surface = widget_strip(&sections, true, false, width, 36.0);
+    border(surface)
+        .background(ThemeRef::ControlFillSecondary)
+        .corner_radius(8.0)
+        .border_thickness(Thickness::uniform(1.0))
+        .border_brush(ThemeRef::ControlStroke)
+        .width(width)
+        .height(36.0)
+        .horizontal_alignment(HorizontalAlignment::Left)
+        .into()
+}
+
+fn section_element(
+    section: &TaskbarSectionView,
+    use_colored_icons: bool,
+    light_theme: bool,
+) -> Element {
+    let icon_color = if use_colored_icons {
+        Color::rgb(section.brand_rgb.0, section.brand_rgb.1, section.brand_rgb.2)
+    } else if light_theme {
+        Color::rgb(16, 16, 16)
+    } else {
+        Color::rgb(245, 245, 245)
+    };
+    let icon = crate::icons::element(section.icon, ICON_SIZE_DIP, icon_color)
+        .vertical_alignment(VerticalAlignment::Center);
+    let value = text_block(section.value.clone())
+        .font_size(12.0)
+        .semibold()
+        .vertical_alignment(VerticalAlignment::Center);
+    match section.style {
+        TaskbarSectionStyle::Chip => hstack((icon, value))
+            .spacing(6.0)
+            .vertical_alignment(VerticalAlignment::Center)
+            .into(),
+        TaskbarSectionStyle::Bar => {
+            let bar = compact_bar(section.progress.unwrap_or(0.0));
+            hstack((icon, bar, value))
+                .spacing(6.0)
+                .vertical_alignment(VerticalAlignment::Center)
+                .into()
         }
-    }));
-    host.unmounted = Some(Callback::new(move |native: Option<_>| {
-        if let Some(native) = native {
-            let _ = crate::acrylic::clear_children(native);
+        TaskbarSectionStyle::Clock => {
+            let caption = text_block(section.title.clone())
+                .font_size(9.0)
+                .opacity(0.68)
+                .vertical_alignment(VerticalAlignment::Center);
+            hstack((icon, vstack((caption, value)).spacing(0.0)))
+                .spacing(6.0)
+                .vertical_alignment(VerticalAlignment::Center)
+                .into()
         }
-    }));
-    let element: Element = host.into();
-    element.with_key(format!("taskbar-preview-{slot_identity}-{identity:016x}"))
+    }
+}
+
+fn compact_bar(progress: f64) -> Element {
+    let fill = (BAR_WIDTH_DIP * (progress / 100.0).clamp(0.0, 1.0)).max(if progress > 0.0 {
+        3.0
+    } else {
+        0.0
+    });
+    let track: Element = border(Element::Empty)
+        .background(ThemeRef::ControlFillSecondary)
+        .corner_radius(2.0)
+        .width(BAR_WIDTH_DIP)
+        .height(4.0)
+        .relative_align_left()
+        .relative_align_v_center()
+        .into();
+    let fill_bar: Element = border(Element::Empty)
+        .background(ThemeRef::Accent)
+        .corner_radius(2.0)
+        .width(fill)
+        .height(4.0)
+        .relative_align_left()
+        .relative_align_v_center()
+        .into();
+    relative_panel(vec![track, fill_bar])
+    .width(BAR_WIDTH_DIP)
+    .height(6.0)
+    .vertical_alignment(VerticalAlignment::Center)
+    .into()
 }
 
 fn primary_axis_origin(container: i32, anchor: Option<i32>, extent: i32) -> i32 {
@@ -372,8 +678,6 @@ mod platform {
             configure(hwnd, taskbar);
         }
         if activate_host_once(hwnd, taskbar) {
-            // Window::Activate can restore top-level presenter styles. Reassert
-            // the Explorer child identity once, not on every layout pulse.
             configure(hwnd, taskbar);
         }
 
@@ -481,7 +785,7 @@ mod platform {
             }
         });
 
-        let radius = dip_to_px(6.0).max(1) * 2;
+        let radius = dip_to_px(8.0).max(1) * 2;
         let region = unsafe {
             CreateRoundRectRgn(
                 left_px,
@@ -530,8 +834,6 @@ mod platform {
             if activated.get() {
                 return false;
             }
-            // Keep the first activation clipped away so WinUI cannot flash a
-            // normal top-level surface before Explorer owns it.
             hide_pixels(hwnd);
             configure(hwnd, taskbar);
             let activated_now = HOST.with(|slot| {
@@ -649,31 +951,28 @@ mod tests {
     use crate::settings::{ProviderKind, ProviderSettings};
 
     #[test]
-    fn taskbar_falls_back_to_first_enabled_provider_with_metrics() {
+    fn compact_template_uses_session_chips_for_enabled_providers() {
         let settings = Settings {
             providers: ProviderSettings::from_enabled([ProviderKind::Claude]),
             ..Settings::default()
         };
-        let widgets = visible_taskbar_widgets(&settings);
-        assert_eq!(widgets.len(), 1);
-        assert_eq!(widgets[0].kind, TrayWidgetKind::Limits);
-        assert!(
-            widgets[0]
-                .indicators
-                .iter()
-                .all(|indicator| indicator.provider() == Some(ProviderKind::Claude))
-        );
+        let snapshot = TaskbarWidgetSnapshot::from_settings(&settings, ProviderLimits::default());
+        assert_eq!(snapshot.sections.len(), 1);
+        assert_eq!(snapshot.sections[0].kind, TaskbarWidgetSectionKind::Session);
+        assert_eq!(snapshot.sections[0].provider(), Some(ProviderKind::Claude));
     }
 
     #[test]
-    fn taskbar_mirrors_explicit_visible_tray_widgets() {
-        let explicit = TrayWidget::for_provider(ProviderKind::Codex);
+    fn rendered_session_reads_live_limits() {
         let settings = Settings {
             providers: ProviderSettings::from_enabled([ProviderKind::Codex]),
-            tray_widgets: vec![explicit.clone()],
             ..Settings::default()
         };
-        assert_eq!(visible_taskbar_widgets(&settings), vec![explicit]);
+        let mut limits = ProviderLimits::default();
+        limits.get_mut(ProviderKind::Codex).primary.used_percent = Some(37);
+        let snapshot = TaskbarWidgetSnapshot::from_settings(&settings, limits);
+        let rendered = snapshot.rendered_sections(Utc::now());
+        assert_eq!(rendered[0].value, "63%");
     }
 
     #[test]

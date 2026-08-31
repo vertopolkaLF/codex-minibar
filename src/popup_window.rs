@@ -3486,8 +3486,9 @@ fn start_background_bridge(
                         usage.history.total_tokens()
                     ));
                     state.replace_usage(provider, usage);
-                    // Usage stats affect only the popup, but they share the
-                    // reactive snapshot revision with quota updates.
+                    let limits = state.current_limits();
+                    taskbar_snapshot.replace_limits(limits);
+                    state.publish_taskbar_widget_snapshot(taskbar_snapshot.clone());
                     ui.observe_limits_update();
                     publish_popup_ui(&set_ui, &ui);
                 }
