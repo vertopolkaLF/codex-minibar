@@ -1218,6 +1218,9 @@ pub struct Settings {
     /// Display order for Home-tab widgets (Total Spend + providers) and footer tabs.
     pub popup_order: Vec<PopupWidgetKind>,
     pub use_colored_provider_icons: bool,
+    /// Fluent Color glyphs in the Settings sidebar. When false, monochrome
+    /// Phosphor paths follow the resolved theme foreground instead.
+    pub use_colored_sidebar_icons: bool,
     pub replace_chatgpt_logo_with_codex: bool,
     pub automatic_activation: bool,
     /// Weekly activations, each bound to exactly one provider.
@@ -1277,6 +1280,7 @@ impl Default for Settings {
             providers: ProviderSettings::default(),
             popup_order: PopupWidgetKind::default_order(),
             use_colored_provider_icons: false,
+            use_colored_sidebar_icons: true,
             replace_chatgpt_logo_with_codex: false,
             automatic_activation: false,
             scheduled_activations: Vec::new(),
@@ -2430,6 +2434,7 @@ mod tests {
         assert!(value.animations_enabled);
         assert_eq!(value.time_format, TimeFormat::from_windows());
         assert!(!value.use_colored_provider_icons);
+        assert!(value.use_colored_sidebar_icons);
         assert!(!value.replace_chatgpt_logo_with_codex);
         assert!(!value.automatic_activation);
         assert_eq!(value.limit_refresh_interval, LimitRefreshInterval::Minute1);

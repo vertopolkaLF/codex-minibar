@@ -156,6 +156,7 @@ struct SettingsWindowState {
     cursor_path: SetState<String>,
     popup_order: SetState<Vec<PopupWidgetKind>>,
     use_colored_provider_icons: SetState<bool>,
+    use_colored_sidebar_icons: SetState<bool>,
     replace_chatgpt_logo_with_codex: SetState<bool>,
     automatic_activation: SetState<bool>,
     scheduled_activations: SetState<Vec<ScheduledActivation>>,
@@ -221,6 +222,8 @@ impl SettingsWindowState {
         self.popup_order.call(settings.popup_order.clone());
         self.use_colored_provider_icons
             .call(settings.use_colored_provider_icons);
+        self.use_colored_sidebar_icons
+            .call(settings.use_colored_sidebar_icons);
         self.replace_chatgpt_logo_with_codex
             .call(settings.replace_chatgpt_logo_with_codex);
         self.automatic_activation
@@ -1727,39 +1730,31 @@ fn fade_to_rendered_page(
     });
 }
 
-fn root_nav_items(nav_icon_color: &str) -> [NavViewItem; 10] {
+fn root_nav_items(nav_icon_color: &str, use_colored: bool) -> [NavViewItem; 10] {
+    let item = |label: &str, tag: &str| {
+        let mut nav = NavViewItem::new(label).tag(tag);
+        if use_colored {
+            nav = nav.icon_image_uri(crate::icons::fluent_color_uri(tag));
+        } else {
+            nav = nav.icon_path(
+                crate::icons::data(crate::icons::sidebar_mono_icon(tag)),
+                nav_icon_color,
+            );
+        }
+        nav
+    };
     [
-        NavViewItem::new("General")
-            .tag("general")
-            .icon_image_uri(crate::icons::fluent_color_uri("general")),
-        NavViewItem::new("Providers")
-            .tag("providers")
-            .icon_image_uri(crate::icons::fluent_color_uri("providers"))
+        item("General", "general"),
+        item("Providers", "providers")
             .trailing_icon_path(crate::icons::data("caret-right"), nav_icon_color),
-        NavViewItem::new("Customize")
-            .tag("customize")
-            .icon_image_uri(crate::icons::fluent_color_uri("customize")),
-        NavViewItem::new("Schedule")
-            .tag("schedule")
-            .icon_image_uri(crate::icons::fluent_color_uri("schedule")),
-        NavViewItem::new("Tray")
-            .tag("tray")
-            .icon_image_uri(crate::icons::fluent_color_uri("tray")),
-        NavViewItem::new("Notifications")
-            .tag("notifications")
-            .icon_image_uri(crate::icons::fluent_color_uri("notifications")),
-        NavViewItem::new("Appearance")
-            .tag("appearance")
-            .icon_image_uri(crate::icons::fluent_color_uri("appearance")),
-        NavViewItem::new("Advanced")
-            .tag("advanced")
-            .icon_image_uri(crate::icons::fluent_color_uri("advanced")),
-        NavViewItem::new("Log")
-            .tag("log")
-            .icon_image_uri(crate::icons::fluent_color_uri("log")),
-        NavViewItem::new("About & Updates")
-            .tag("about")
-            .icon_image_uri(crate::icons::fluent_color_uri("about")),
+        item("Customize", "customize"),
+        item("Schedule", "schedule"),
+        item("Tray", "tray"),
+        item("Notifications", "notifications"),
+        item("Appearance", "appearance"),
+        item("Advanced", "advanced"),
+        item("Log", "log"),
+        item("About & Updates", "about"),
     ]
 }
 
@@ -1939,6 +1934,8 @@ pub fn render(
             .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
     );
     let (popup_order, set_popup_order) = cx.use_state(settings.popup_order.clone());
+    let (use_colored_sidebar_icons, set_use_colored_sidebar_icons) =
+        cx.use_state(settings.use_colored_sidebar_icons);
 
     let nav_icon_color = match color_scheme {
         ColorScheme::Dark => "#E6E6E6",
@@ -1949,11 +1946,18 @@ pub fn render(
         SettingsNavMode::Providers => selected_provider.id().to_string(),
     };
     let nav_menu_items: Vec<NavViewItem> = match nav_mode {
-        SettingsNavMode::Root => root_nav_items(nav_icon_color).into(),
+        SettingsNavMode::Root => root_nav_items(nav_icon_color, use_colored_sidebar_icons).into(),
         SettingsNavMode::Providers => providers_nav_items(&popup_order, nav_icon_color),
     };
     let nav_key = match nav_mode {
-        SettingsNavMode::Root => "settings-nav-root".to_string(),
+        SettingsNavMode::Root => format!(
+            "settings-nav-root-{}-{nav_icon_color}",
+            if use_colored_sidebar_icons {
+                "color"
+            } else {
+                "mono"
+            }
+        ),
         SettingsNavMode::Providers => format!("settings-nav-providers-{nav_icon_color}"),
     };
     let mut navigation = NavigationView::new(nav_menu_items, Element::Empty)
@@ -2182,6 +2186,7 @@ pub fn render(
             cursor_path: set_cursor_path.clone(),
             popup_order: set_popup_order.clone(),
             use_colored_provider_icons: set_use_colored_provider_icons.clone(),
+            use_colored_sidebar_icons: set_use_colored_sidebar_icons.clone(),
             replace_chatgpt_logo_with_codex: set_replace_chatgpt_logo_with_codex.clone(),
             automatic_activation: set_automatic_activation.clone(),
             scheduled_activations: set_scheduled_activations.clone(),
@@ -2236,6 +2241,7 @@ pub fn render(
             &openrouter_management_inputs,
             &popup_order,
             use_colored_provider_icons,
+            use_colored_sidebar_icons,
             replace_chatgpt_logo_with_codex,
             automatic_activation,
             &scheduled_activations,
@@ -2289,6 +2295,7 @@ pub fn render(
             set_cursor_path,
             set_popup_order,
             set_use_colored_provider_icons,
+            set_use_colored_sidebar_icons,
             set_replace_chatgpt_logo_with_codex,
             set_automatic_activation,
             set_scheduled_activations.clone(),
@@ -3009,6 +3016,7 @@ fn tab_content(
     openrouter_management_inputs: &HashMap<String, String>,
     popup_order: &[PopupWidgetKind],
     use_colored_provider_icons: bool,
+    use_colored_sidebar_icons: bool,
     replace_chatgpt_logo_with_codex: bool,
     automatic_activation: bool,
     scheduled_activations: &[ScheduledActivation],
@@ -3062,6 +3070,7 @@ fn tab_content(
     set_cursor_path: SetState<String>,
     set_popup_order: SetState<Vec<PopupWidgetKind>>,
     set_use_colored_provider_icons: SetState<bool>,
+    set_use_colored_sidebar_icons: SetState<bool>,
     set_replace_chatgpt_logo_with_codex: SetState<bool>,
     set_automatic_activation: SetState<bool>,
     set_scheduled_activations: SetState<Vec<ScheduledActivation>>,
@@ -3105,6 +3114,7 @@ fn tab_content(
     let apply_animations_enabled = settings_tx.clone();
     let apply_time_format = settings_tx.clone();
     let apply_use_colored_provider_icons = settings_tx.clone();
+    let apply_use_colored_sidebar_icons = settings_tx.clone();
     let apply_replace_chatgpt_logo_with_codex = settings_tx.clone();
     let apply_automatic_activation = settings_tx.clone();
     let apply_limit_refresh_interval = settings_tx.clone();
@@ -3241,6 +3251,31 @@ fn tab_content(
                     set_hovered_card_id.clone(),
                 )
                 .with_key("appearance-accent"),
+                settings_toggle_card_with_description(
+                    "Colored sidebar icons",
+                    Some("Use Fluent Color glyphs in the Settings sidebar. Turn off for monochrome theme icons."),
+                    use_colored_sidebar_icons,
+                    {
+                        let set_use_colored_sidebar_icons =
+                            set_use_colored_sidebar_icons.clone();
+                        let apply_use_colored_sidebar_icons =
+                            apply_use_colored_sidebar_icons.clone();
+                        move |value| {
+                            persist_bool(
+                                set_use_colored_sidebar_icons.clone(),
+                                apply_use_colored_sidebar_icons.clone(),
+                                value,
+                                |settings, value| {
+                                    settings.use_colored_sidebar_icons = value;
+                                },
+                            );
+                        }
+                    },
+                    "appearance-colored-sidebar-icons",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("appearance-colored-sidebar-icons"),
                 settings_control_card(
                     "Time format",
                     Some("12-hour or 24-hour clocks in the popup and tray."),
@@ -3657,6 +3692,7 @@ fn tab_content(
                 cursor_path: set_cursor_path,
                 popup_order: set_popup_order,
                 use_colored_provider_icons: set_use_colored_provider_icons,
+                use_colored_sidebar_icons: set_use_colored_sidebar_icons,
                 replace_chatgpt_logo_with_codex: set_replace_chatgpt_logo_with_codex,
                 automatic_activation: set_automatic_activation,
                 scheduled_activations: set_scheduled_activations.clone(),

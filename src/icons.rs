@@ -72,6 +72,24 @@ pub fn data(name: &str) -> &'static str {
     geom(name).path
 }
 
+/// Monochrome Phosphor/Fluent path used when Settings sidebar color icons
+/// are turned off. Keys match [`fluent_color_uri`].
+pub fn sidebar_mono_icon(name: &str) -> &'static str {
+    match name {
+        "general" => "house",
+        "providers" => "plugs-connected",
+        "customize" => "squares-four",
+        "schedule" => "clock",
+        "tray" => "chat-centered-text",
+        "notifications" => "bell",
+        "appearance" => "paint-brush",
+        "advanced" => "sliders",
+        "log" => "scroll",
+        "about" => "info",
+        _ => panic!("unknown Settings sidebar icon: {name}"),
+    }
+}
+
 /// Resolve a bundled Fluent UI System Color icon as a file URI.
 ///
 /// The portable package keeps `assets` beside the executable, while local

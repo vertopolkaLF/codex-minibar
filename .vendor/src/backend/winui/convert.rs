@@ -53,8 +53,9 @@ pub(super) fn svg_icon(path: &str, color: &str) -> Result<bindings::IconElement>
 
 pub(super) fn image_icon(uri: &str) -> Result<bindings::IconElement> {
     let uri = xml_escape_attr(uri);
+    // Match the enlarged IconBox height used for colored NavigationViewItem glyphs.
     let xaml = format!(
-        r#"<ImageIcon xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Source="{uri}" />"#
+        r#"<ImageIcon xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Width="20" Height="20" Source="{uri}" />"#
     );
     let factory: IXamlReaderStatics = {
         static SHARED: windows_core::imp::FactoryCache<XamlReader, IXamlReaderStatics> =
@@ -70,6 +71,24 @@ pub(super) fn image_icon(uri: &str) -> Result<bindings::IconElement> {
         )
         .and_then(|| windows_core::Type::from_abi(result))
     }
+}
+
+fn enlarge_nav_item_icon_box(
+    nv_item: &bindings::NavigationViewItem,
+    size: f64,
+) -> Result<()> {
+    let rd = nv_item
+        .cast::<bindings::IFrameworkElement>()?
+        .Resources()?;
+    let imap = rd.cast::<windows_collections::IMap<
+        windows_core::IInspectable,
+        windows_core::IInspectable,
+    >>()?;
+    let key =
+        windows_reference::IReference::from("NavigationViewItemOnLeftIconBoxHeight");
+    let val = windows_reference::IReference::from(size);
+    imap.Insert(&key, &val)?;
+    Ok(())
 }
 
 pub(super) fn to_xaml_gridlength(v: GridLength) -> Result<bindings::GridLength> {
@@ -176,6 +195,10 @@ pub(super) fn build_nav_view_item(item: &NavViewItem) -> Result<windows_core::II
     if let Some(uri) = &item.icon_image_uri {
         let icon_elem = image_icon(uri)?;
         nv_item.SetIcon(&icon_elem)?;
+        // NavigationViewItemPresenter wraps Icon in a Viewbox whose height is
+        // NavigationViewItemOnLeftIconBoxHeight (16 by default). Pin a larger
+        // box for Fluent Color ImageIcons so Width/Height on the glyph stick.
+        enlarge_nav_item_icon_box(&nv_item, 20.0)?;
     } else if let Some((path, color)) = &item.icon_path {
         let icon_elem = svg_icon(path, color)?;
         nv_item.SetIcon(&icon_elem)?;
