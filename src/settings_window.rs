@@ -9,7 +9,8 @@ use crate::settings::TraySource;
 use crate::settings::{
     AccentColor, AppTheme, LimitRefreshInterval, LimitValue, OpenRouterAccount, PopupVisibility,
     PopupWidgetKind, ProviderKind, ScheduledActivation, Settings, TimeFormat,
-    TaskbarWidgetSection, TaskbarWidgetSectionKind, TaskbarWidgetTemplate, TotalSpendPresentation,
+    TaskbarSectionPresentation, TaskbarWidgetSection, TaskbarWidgetSectionKind,
+    TotalSpendPresentation,
     TrayColorMode, TrayFixedColor, TrayIndicator, TrayPresentation, TrayWidget, TrayWidgetKind,
 };
 use crate::settings_controls::{
@@ -177,7 +178,6 @@ struct SettingsWindowState {
     weekly_low_usage_enabled: SetState<bool>,
     weekly_low_usage_threshold: SetState<u8>,
     taskbar_widget_enabled: SetState<bool>,
-    taskbar_widget_template: SetState<TaskbarWidgetTemplate>,
     taskbar_widget_sections: SetState<Vec<TaskbarWidgetSection>>,
     tray_widgets: SetState<Vec<TrayWidget>>,
     check_for_updates: SetState<bool>,
@@ -262,8 +262,6 @@ impl SettingsWindowState {
             .call(settings.notifications.weekly_low_usage_threshold_percent);
         self.taskbar_widget_enabled
             .call(settings.taskbar_widget_enabled);
-        self.taskbar_widget_template
-            .call(settings.taskbar_widget_template);
         self.taskbar_widget_sections
             .call(settings.taskbar_widget_sections.clone());
         self.tray_widgets.call(settings.tray_widgets.clone());
@@ -2170,10 +2168,11 @@ pub fn render(
     let (hovered_card_id, set_hovered_card_id) = cx.use_state(None::<String>);
     let (taskbar_widget_enabled, set_taskbar_widget_enabled) =
         cx.use_state(settings.taskbar_widget_enabled);
-    let (taskbar_widget_template, set_taskbar_widget_template) =
-        cx.use_state(settings.taskbar_widget_template);
     let (taskbar_widget_sections, set_taskbar_widget_sections) =
         cx.use_state(settings.taskbar_widget_sections.clone());
+    let (expanded_taskbar_section, set_expanded_taskbar_section) = cx.use_state(None::<String>);
+    let (removed_taskbar_section, set_removed_taskbar_section) =
+        cx.use_state(None::<(usize, TaskbarWidgetSection)>);
     let (tray_widgets, set_tray_widgets) = cx.use_state(settings.tray_widgets.clone());
     let (expanded_tray_widget, set_expanded_tray_widget) = cx.use_state(None::<String>);
     let (editing_tray_indicator, set_editing_tray_indicator) =
@@ -2226,7 +2225,6 @@ pub fn render(
             weekly_low_usage_enabled: set_weekly_low_usage_enabled.clone(),
             weekly_low_usage_threshold: set_weekly_low_usage_threshold.clone(),
             taskbar_widget_enabled: set_taskbar_widget_enabled.clone(),
-            taskbar_widget_template: set_taskbar_widget_template.clone(),
             taskbar_widget_sections: set_taskbar_widget_sections.clone(),
             tray_widgets: set_tray_widgets.clone(),
             check_for_updates: set_check_for_updates.clone(),
@@ -2237,8 +2235,9 @@ pub fn render(
     let settings_page_body = match rendered_page {
         RenderedPage::Root(Tab::Widget) => widget_page_content(
             taskbar_widget_enabled,
-            taskbar_widget_template,
             &taskbar_widget_sections,
+            &expanded_taskbar_section,
+            &removed_taskbar_section,
             &popup_order,
             [
                 codex_enabled,
@@ -2250,8 +2249,9 @@ pub fn render(
             ],
             &hovered_card_id,
             set_taskbar_widget_enabled,
-            set_taskbar_widget_template,
             set_taskbar_widget_sections,
+            set_expanded_taskbar_section,
+            set_removed_taskbar_section,
             set_hovered_card_id.clone(),
             settings_tx.clone(),
         ),
@@ -2363,7 +2363,6 @@ pub fn render(
             set_weekly_low_usage_expanded,
             set_weekly_low_usage_expand_progress,
             set_taskbar_widget_enabled,
-            set_taskbar_widget_template,
             set_taskbar_widget_sections,
             set_tray_widgets.clone(),
             set_expanded_tray_widget,
@@ -3142,7 +3141,6 @@ fn tab_content(
     set_weekly_low_usage_expanded: SetState<bool>,
     set_weekly_low_usage_expand_progress: AsyncSetState<f64>,
     set_taskbar_widget_enabled: SetState<bool>,
-    set_taskbar_widget_template: SetState<TaskbarWidgetTemplate>,
     set_taskbar_widget_sections: SetState<Vec<TaskbarWidgetSection>>,
     set_tray_widgets: SetState<Vec<TrayWidget>>,
     set_expanded_tray_widget: SetState<Option<String>>,
@@ -3782,7 +3780,6 @@ fn tab_content(
                 weekly_low_usage_enabled: set_weekly_low_usage_enabled,
                 weekly_low_usage_threshold: set_weekly_low_usage_threshold,
                 taskbar_widget_enabled: set_taskbar_widget_enabled,
-                taskbar_widget_template: set_taskbar_widget_template,
                 taskbar_widget_sections: set_taskbar_widget_sections,
                 tray_widgets: set_tray_widgets,
                 check_for_updates: set_check_for_updates,
@@ -3970,14 +3967,16 @@ fn tab_content(
 
 fn widget_page_content(
     enabled: bool,
-    template: TaskbarWidgetTemplate,
     sections: &[TaskbarWidgetSection],
+    expanded_section: &Option<String>,
+    removed_section: &Option<(usize, TaskbarWidgetSection)>,
     popup_order: &[PopupWidgetKind],
     provider_enabled: [bool; 6],
     hovered_card_id: &Option<String>,
     set_enabled: SetState<bool>,
-    set_template: SetState<TaskbarWidgetTemplate>,
     set_sections: SetState<Vec<TaskbarWidgetSection>>,
+    set_expanded_section: SetState<Option<String>>,
+    set_removed_section: SetState<Option<(usize, TaskbarWidgetSection)>>,
     set_hovered_card_id: SetState<Option<String>>,
     settings_tx: Sender<Settings>,
 ) -> Element {
@@ -4004,77 +4003,24 @@ fn widget_page_content(
             set_hovered_card_id.clone(),
         )
         .with_key("widget-enabled"),
-        settings_section_heading("Templates").with_key("widget-templates-heading"),
-        widget_template_gallery(
-            template,
-            hovered_card_id,
-            set_template.clone(),
-            set_sections.clone(),
-            set_hovered_card_id.clone(),
-            settings_tx.clone(),
-        )
-        .with_key("widget-template-gallery"),
         settings_section_heading("Sections").with_key("widget-sections-heading"),
     ];
-    if sections.is_empty() {
-        rows.push(
-            settings_info_card(
-                "Using template defaults",
-                "Add a section to pin an explicit layout.",
-            )
-            .with_key("widget-sections-empty"),
-        );
-    }
     rows.extend(widget_section_cards(
         sections,
         &enabled_providers,
+        expanded_section,
+        removed_section,
         hovered_card_id,
         set_sections.clone(),
+        set_expanded_section.clone(),
+        set_removed_section.clone(),
         set_hovered_card_id.clone(),
         settings_tx.clone(),
     ));
-
-    let add_providers = enabled_providers.clone();
-    let existing = sections.to_vec();
-    let heading: Element = if add_providers.is_empty() {
-        text_block("Widgets")
-            .font_size(28.0)
-            .bold()
-            .grid_row(0)
-            .into()
-    } else {
-        grid((
-            text_block("Widgets")
-                .font_size(28.0)
-                .bold()
-                .grid_column(0)
-                .vertical_alignment(VerticalAlignment::Center),
-            Button::new("Add section")
-                .accent()
-                .on_click({
-                    let set_sections = set_sections.clone();
-                    let settings_tx = settings_tx.clone();
-                    move || {
-                        let mut next = existing.clone();
-                        if next.is_empty() {
-                            next = template.default_sections(&add_providers);
-                        }
-                        next.push(TaskbarWidgetSection::for_provider(
-                            TaskbarWidgetSectionKind::Session,
-                            add_providers[0],
-                        ));
-                        persist_taskbar_sections(set_sections.clone(), settings_tx.clone(), next);
-                    }
-                })
-                .grid_column(1)
-                .vertical_alignment(VerticalAlignment::Center),
-        ))
-        .columns([GridLength::Star(1.0), GridLength::Auto])
-        .rows([GridLength::Auto])
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .grid_row(0)
-        .into()
-    };
+    let heading = text_block("Widgets")
+        .font_size(28.0)
+        .bold()
+        .grid_row(0);
     let cards = vstack(rows)
         .spacing(12.0)
         .grid_row(1)
@@ -4107,130 +4053,236 @@ fn widget_enabled_providers(
         .collect()
 }
 
-fn widget_template_gallery(
-    selected: TaskbarWidgetTemplate,
-    hovered_card_id: &Option<String>,
-    set_template: SetState<TaskbarWidgetTemplate>,
-    set_sections: SetState<Vec<TaskbarWidgetSection>>,
-    set_hovered_card_id: SetState<Option<String>>,
-    settings_tx: Sender<Settings>,
-) -> Element {
-    let cards: Vec<Element> = TaskbarWidgetTemplate::ALL
-        .into_iter()
-        .enumerate()
-        .map(|(index, template)| {
-            widget_template_card(
-                template,
-                selected == template,
-                hovered_card_id,
-                set_template.clone(),
-                set_sections.clone(),
-                set_hovered_card_id.clone(),
-                settings_tx.clone(),
-            )
-            .grid_column(index as i32 % 2)
-            .grid_row(index as i32 / 2)
-        })
-        .collect();
-    grid(cards)
-        .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
-        .rows([GridLength::Auto, GridLength::Auto])
-        .column_spacing(8.0)
-        .row_spacing(8.0)
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .into()
-}
-
-fn widget_template_card(
-    template: TaskbarWidgetTemplate,
-    selected: bool,
-    hovered_card_id: &Option<String>,
-    set_template: SetState<TaskbarWidgetTemplate>,
-    set_sections: SetState<Vec<TaskbarWidgetSection>>,
-    set_hovered_card_id: SetState<Option<String>>,
-    settings_tx: Sender<Settings>,
-) -> Element {
-    let card_id = format!("widget-template-{}", template.label().to_ascii_lowercase());
-    let hovered = hovered_card_id.as_deref() == Some(card_id.as_str());
-    let enter_id = card_id.clone();
-    let set_hovered_enter = set_hovered_card_id.clone();
-    let body = vstack((
-        text_block(template.label()).font_size(16.0).semibold(),
-        text_block(template.description())
-            .font_size(12.0)
-            .opacity(0.72)
-            .wrap(),
-        crate::taskbar_widget::preview_strip(template),
-    ))
-    .spacing(8.0)
-    .padding(settings_card_padding())
-    .horizontal_alignment(HorizontalAlignment::Stretch);
-    border(body)
-        .background(if hovered {
-            ThemeRef::SubtleFill
-        } else {
-            ThemeRef::CardBackground
-        })
-        .corner_radius(10.0)
-        .border_thickness(Thickness::uniform(if selected { 2.0 } else { 1.0 }))
-        .border_brush(if selected {
-            ThemeRef::Accent
-        } else {
-            ThemeRef::CardStroke
-        })
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .on_pointer_entered(move |_: PointerEventInfo| set_hovered_enter.call(Some(enter_id.clone())))
-        .on_pointer_exited(move || set_hovered_card_id.call(None))
-        .on_tapped(move || {
-            persist_taskbar_template(
-                set_template.clone(),
-                set_sections.clone(),
-                settings_tx.clone(),
-                template,
-            );
-        })
-        .with_key(card_id)
-        .into()
+fn widget_section_summary(section: &TaskbarWidgetSection) -> String {
+    let provider = section
+        .provider()
+        .map(|provider| provider.display_name().to_string())
+        .unwrap_or_else(|| "All providers".into());
+    format!(
+        "{provider} · {} · {}",
+        section.kind.label(),
+        section.presentation.label()
+    )
 }
 
 fn widget_section_cards(
     sections: &[TaskbarWidgetSection],
     enabled_providers: &[ProviderKind],
+    expanded_section: &Option<String>,
+    removed_section: &Option<(usize, TaskbarWidgetSection)>,
     hovered_card_id: &Option<String>,
     set_sections: SetState<Vec<TaskbarWidgetSection>>,
+    set_expanded_section: SetState<Option<String>>,
+    set_removed_section: SetState<Option<(usize, TaskbarWidgetSection)>>,
     set_hovered_card_id: SetState<Option<String>>,
     settings_tx: Sender<Settings>,
 ) -> Vec<Element> {
-    sections
-        .iter()
-        .enumerate()
-        .map(|(index, section)| {
-            widget_section_card(
+    let mut rows = Vec::new();
+    if let Some((removed_index, removed)) = removed_section.clone() {
+        let sections_for_undo = sections.to_vec();
+        let undo_setter = set_sections.clone();
+        let clear_removed = set_removed_section.clone();
+        let undo_tx = settings_tx.clone();
+        rows.push(
+            border(
+                hstack((
+                    text_block("Section removed")
+                        .font_size(13.0)
+                        .vertical_alignment(VerticalAlignment::Center),
+                    Button::new("Undo").on_click(move || {
+                        let mut next = sections_for_undo.clone();
+                        next.insert(removed_index.min(next.len()), removed.clone());
+                        persist_taskbar_sections(undo_setter.clone(), undo_tx.clone(), next);
+                        clear_removed.call(None);
+                    }),
+                ))
+                .spacing(10.0),
+            )
+            .padding(settings_card_padding())
+            .background(ThemeRef::LayerFill)
+            .corner_radius(6.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .with_key("widget-section-undo")
+            .into(),
+        );
+    }
+    if sections.is_empty() {
+        rows.push(
+            settings_info_card(
+                "Taskbar sections",
+                "Enabled providers show session remaining until you add a section.",
+            )
+            .with_key("widget-sections-empty"),
+        );
+    }
+
+    for (index, section) in sections.iter().cloned().enumerate() {
+        let section_id = section.id.clone();
+        let is_expanded = expanded_section.as_deref() == Some(section_id.as_str());
+        let expand_id = section_id.clone();
+        let expand_setter = set_expanded_section.clone();
+        let sections_for_up = sections.to_vec();
+        let up_setter = set_sections.clone();
+        let up_tx = settings_tx.clone();
+        let sections_for_down = sections.to_vec();
+        let down_setter = set_sections.clone();
+        let down_tx = settings_tx.clone();
+
+        let reorder_buttons = vstack((
+            Button::new(CHEVRON_UP_GLYPH)
+                .subtle()
+                .font_family(TRAY_REORDER_ICON_FONT)
+                .font_size(TRAY_REORDER_ICON_SIZE)
+                .width(TRAY_REORDER_BUTTON_SIZE)
+                .height(TRAY_REORDER_BUTTON_SIZE)
+                .min_width(TRAY_REORDER_BUTTON_SIZE)
+                .min_height(TRAY_REORDER_BUTTON_SIZE)
+                .max_width(TRAY_REORDER_BUTTON_SIZE)
+                .max_height(TRAY_REORDER_BUTTON_SIZE)
+                .padding(Thickness::uniform(0.0))
+                .enabled(index > 0)
+                .tooltip("Move section up")
+                .on_click(move || {
+                    if index == 0 {
+                        return;
+                    }
+                    let mut next = sections_for_up.clone();
+                    next.swap(index, index - 1);
+                    persist_taskbar_sections(up_setter.clone(), up_tx.clone(), next);
+                }),
+            Button::new(CHEVRON_DOWN_GLYPH)
+                .subtle()
+                .font_family(TRAY_REORDER_ICON_FONT)
+                .font_size(TRAY_REORDER_ICON_SIZE)
+                .width(TRAY_REORDER_BUTTON_SIZE)
+                .height(TRAY_REORDER_BUTTON_SIZE)
+                .min_width(TRAY_REORDER_BUTTON_SIZE)
+                .min_height(TRAY_REORDER_BUTTON_SIZE)
+                .max_width(TRAY_REORDER_BUTTON_SIZE)
+                .max_height(TRAY_REORDER_BUTTON_SIZE)
+                .padding(Thickness::uniform(0.0))
+                .enabled(index + 1 < sections.len())
+                .tooltip("Move section down")
+                .on_click(move || {
+                    if index + 1 >= sections_for_down.len() {
+                        return;
+                    }
+                    let mut next = sections_for_down.clone();
+                    next.swap(index, index + 1);
+                    persist_taskbar_sections(down_setter.clone(), down_tx.clone(), next);
+                }),
+        ))
+        .spacing(0.0)
+        .horizontal_alignment(HorizontalAlignment::Center)
+        .vertical_alignment(VerticalAlignment::Center);
+
+        let header = grid((
+            reorder_buttons
+                .grid_column(0)
+                .vertical_alignment(VerticalAlignment::Center),
+            crate::taskbar_widget::preview_section(&section)
+                .grid_column(1)
+                .vertical_alignment(VerticalAlignment::Center),
+            vstack((
+                text_block(format!("Section {}", index + 1))
+                    .font_size(14.0)
+                    .semibold(),
+                text_block(widget_section_summary(&section))
+                    .font_size(12.0)
+                    .foreground(ThemeRef::SecondaryText),
+            ))
+            .spacing(2.0)
+            .vertical_alignment(VerticalAlignment::Center)
+            .on_tapped({
+                let expand_setter = set_expanded_section.clone();
+                let expand_id = section_id.clone();
+                move || {
+                    expand_setter.call(if is_expanded {
+                        None
+                    } else {
+                        Some(expand_id.clone())
+                    });
+                }
+            })
+            .grid_column(2),
+        ))
+        .columns([
+            GridLength::Pixel(TRAY_REORDER_BUTTON_SIZE),
+            GridLength::Pixel(72.0),
+            GridLength::Star(1.0),
+        ])
+        .column_spacing(8.0)
+        .rows([GridLength::Auto])
+        .horizontal_alignment(HorizontalAlignment::Stretch);
+
+        let content: Element = if !is_expanded {
+            Element::Empty
+        } else {
+            widget_section_editor(
                 index,
-                section,
+                &section,
                 sections,
                 enabled_providers,
-                hovered_card_id,
                 set_sections.clone(),
-                set_hovered_card_id.clone(),
+                set_expanded_section.clone(),
+                set_removed_section.clone(),
                 settings_tx.clone(),
             )
-        })
-        .collect()
+        };
+
+        rows.push(
+            settings_content_expander(
+                header,
+                is_expanded,
+                move |expanded: bool| {
+                    expand_setter.call(expanded.then(|| expand_id.clone()));
+                },
+                format!("widget-section-{section_id}"),
+                hovered_card_id,
+                set_hovered_card_id.clone(),
+                content,
+            )
+            .with_key(format!("widget-section-{section_id}")),
+        );
+    }
+
+    let first_enabled = enabled_providers
+        .first()
+        .copied()
+        .unwrap_or(ProviderKind::Codex);
+    let sections_for_add = sections.to_vec();
+    let add_setter = set_sections;
+    let expand_added = set_expanded_section;
+    rows.push(
+        Button::new("Add section")
+            .accent()
+            .enabled(!enabled_providers.is_empty())
+            .on_click(move || {
+                let mut next = sections_for_add.clone();
+                let section =
+                    TaskbarWidgetSection::for_provider(TaskbarWidgetSectionKind::Session, first_enabled);
+                let id = section.id.clone();
+                next.push(section);
+                persist_taskbar_sections(add_setter.clone(), settings_tx.clone(), next);
+                expand_added.call(Some(id));
+            })
+            .horizontal_alignment(HorizontalAlignment::Left)
+            .with_key("widget-add-section")
+            .into(),
+    );
+    rows
 }
 
-fn widget_section_card(
+fn widget_section_editor(
     index: usize,
     section: &TaskbarWidgetSection,
     sections: &[TaskbarWidgetSection],
     enabled_providers: &[ProviderKind],
-    hovered_card_id: &Option<String>,
     set_sections: SetState<Vec<TaskbarWidgetSection>>,
-    set_hovered_card_id: SetState<Option<String>>,
+    set_expanded_section: SetState<Option<String>>,
+    set_removed_section: SetState<Option<(usize, TaskbarWidgetSection)>>,
     settings_tx: Sender<Settings>,
 ) -> Element {
-    let card_id = format!("widget-section-{}", section.id);
-    let hovered = hovered_card_id.as_deref() == Some(card_id.as_str());
     let allow_all = section.kind.allows_all_providers();
     let mut provider_choices = Vec::new();
     if allow_all {
@@ -4251,7 +4303,26 @@ fn widget_section_card(
             .map(|position| (position + offset) as i32)
             .unwrap_or(0)
     };
+
+    let appearance = ComboBox::new(TaskbarSectionPresentation::ALL.map(|item| item.label()))
+        .header("Appearance")
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .selected_index(section.presentation.index())
+        .on_selection_changed({
+            let set_sections = set_sections.clone();
+            let settings_tx = settings_tx.clone();
+            let current = sections.to_vec();
+            move |choice: i32| {
+                let mut next = current.clone();
+                if let Some(item) = next.get_mut(index) {
+                    item.presentation = TaskbarSectionPresentation::from_index(choice);
+                }
+                persist_taskbar_sections(set_sections.clone(), settings_tx.clone(), next);
+            }
+        });
     let kind_box = ComboBox::new(TaskbarWidgetSectionKind::ALL.map(|kind| kind.label()))
+        .header("Metric")
+        .horizontal_alignment(HorizontalAlignment::Stretch)
         .selected_index(section.kind.index())
         .on_selection_changed({
             let set_sections = set_sections.clone();
@@ -4262,6 +4333,11 @@ fn widget_section_card(
                 let mut next = current.clone();
                 if let Some(item) = next.get_mut(index) {
                     item.kind = TaskbarWidgetSectionKind::from_index(choice);
+                    if item.kind == TaskbarWidgetSectionKind::Reset
+                        && item.presentation == TaskbarSectionPresentation::Number
+                    {
+                        item.presentation = TaskbarSectionPresentation::Clock;
+                    }
                     if !item.kind.allows_all_providers() && item.provider().is_none() {
                         item.provider_id = fallback.map(|provider| provider.id().into());
                     }
@@ -4270,6 +4346,8 @@ fn widget_section_card(
             }
         });
     let provider_box = ComboBox::new(provider_choices)
+        .header("Provider")
+        .horizontal_alignment(HorizontalAlignment::Stretch)
         .selected_index(selected_provider)
         .on_selection_changed({
             let set_sections = set_sections.clone();
@@ -4295,78 +4373,44 @@ fn widget_section_card(
                 persist_taskbar_sections(set_sections.clone(), settings_tx.clone(), next);
             }
         });
-    let remove = Button::new("Remove").on_click({
-        let set_sections = set_sections.clone();
-        let settings_tx = settings_tx.clone();
-        let current = sections.to_vec();
-        move || {
-            let mut next = current.clone();
-            if index < next.len() {
-                next.remove(index);
-            }
-            persist_taskbar_sections(set_sections.clone(), settings_tx.clone(), next);
-        }
-    });
-    let enter_id = card_id.clone();
-    let set_hovered_enter = set_hovered_card_id.clone();
-    let controls = grid((
-        kind_box.grid_column(0),
-        provider_box.grid_column(1),
-        remove.grid_column(2),
-    ))
-    .columns([
-        GridLength::Star(1.0),
-        GridLength::Star(1.0),
-        GridLength::Auto,
-    ])
-    .rows([GridLength::Auto])
-    .column_spacing(8.0)
-    .horizontal_alignment(HorizontalAlignment::Stretch);
-    border(
-        vstack((
-            text_block(format!(
-                "{} · {}",
-                section.kind.label(),
-                section
-                    .provider()
-                    .map(|provider| provider.display_name().to_string())
-                    .unwrap_or_else(|| "All providers".into())
-            ))
-            .font_size(14.0)
-            .semibold(),
-            controls,
-        ))
-        .spacing(10.0)
-        .padding(settings_card_padding()),
-    )
-    .background(if hovered {
-        ThemeRef::SubtleFill
-    } else {
-        ThemeRef::CardBackground
-    })
-    .corner_radius(8.0)
-    .border_thickness(Thickness::uniform(1.0))
-    .border_brush(ThemeRef::CardStroke)
-    .horizontal_alignment(HorizontalAlignment::Stretch)
-    .on_pointer_entered(move |_: PointerEventInfo| set_hovered_enter.call(Some(enter_id.clone())))
-    .on_pointer_exited(move || set_hovered_card_id.call(None))
-    .with_key(card_id)
-    .into()
-}
 
-fn persist_taskbar_template(
-    set_template: SetState<TaskbarWidgetTemplate>,
-    set_sections: SetState<Vec<TaskbarWidgetSection>>,
-    settings_tx: Sender<Settings>,
-    template: TaskbarWidgetTemplate,
-) {
-    set_template.call(template);
-    persist_update(settings_tx, move |settings| {
-        settings.taskbar_widget_template = template;
-        settings.taskbar_widget_sections =
-            template.default_sections(&settings.ordered_enabled_providers());
-        set_sections.call(settings.taskbar_widget_sections.clone());
-    });
+    let sections_for_duplicate = sections.to_vec();
+    let duplicate_setter = set_sections.clone();
+    let duplicate_tx = settings_tx.clone();
+    let expand_duplicate = set_expanded_section;
+    let sections_for_remove = sections.to_vec();
+    let remove_setter = set_sections;
+    let removed_setter = set_removed_section;
+    let remove_tx = settings_tx;
+
+    let appearance: Element = appearance.into();
+    let kind_box: Element = kind_box.into();
+    let provider_box: Element = provider_box.into();
+    vstack((
+        appearance,
+        kind_box,
+        provider_box,
+        hstack((
+            Button::new("Duplicate").on_click(move || {
+                let mut next = sections_for_duplicate.clone();
+                let copy = next[index].duplicate_with_new_id();
+                let id = copy.id.clone();
+                next.insert(index + 1, copy);
+                persist_taskbar_sections(duplicate_setter.clone(), duplicate_tx.clone(), next);
+                expand_duplicate.call(Some(id));
+            }),
+            Button::new("Remove").on_click(move || {
+                let mut next = sections_for_remove.clone();
+                let removed = next.remove(index);
+                removed_setter.call(Some((index, removed)));
+                persist_taskbar_sections(remove_setter.clone(), remove_tx.clone(), next);
+            }),
+        ))
+        .spacing(8.0)
+        .horizontal_alignment(HorizontalAlignment::Left),
+    ))
+    .spacing(10.0)
+    .into()
 }
 
 fn persist_taskbar_sections(

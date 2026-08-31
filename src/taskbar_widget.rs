@@ -22,8 +22,8 @@ use crate::{
     limits::{LimitWindow, ProviderLimits, RateLimits},
     popup_window::AppState,
     settings::{
-        ProviderKind, Settings, TaskbarWidgetSection, TaskbarWidgetSectionKind,
-        TaskbarWidgetTemplate,
+        ProviderKind, Settings, TaskbarSectionPresentation, TaskbarWidgetSection,
+        TaskbarWidgetSectionKind,
     },
 };
 
@@ -64,7 +64,6 @@ pub struct TaskbarSectionView {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TaskbarWidgetSnapshot {
     pub enabled: bool,
-    pub template: TaskbarWidgetTemplate,
     pub sections: Vec<TaskbarWidgetSection>,
     pub show_used_percentage: bool,
     pub use_colored_provider_icons: bool,
@@ -77,7 +76,6 @@ impl TaskbarWidgetSnapshot {
     pub fn from_settings(settings: &Settings, limits: ProviderLimits) -> Self {
         Self {
             enabled: settings.taskbar_widget_enabled,
-            template: settings.taskbar_widget_template,
             sections: settings.resolved_taskbar_sections(),
             show_used_percentage: settings.show_used_percentage,
             use_colored_provider_icons: settings.use_colored_provider_icons,
@@ -101,18 +99,11 @@ impl TaskbarWidgetSnapshot {
     }
 
     pub fn rendered_sections(&self, now: DateTime<Utc>) -> Vec<TaskbarSectionView> {
-        render_sections(
-            self.template,
-            &self.sections,
-            &self.limits,
-            self.show_used_percentage,
-            now,
-        )
+        render_sections(&self.sections, &self.limits, self.show_used_percentage, now)
     }
 }
 
 pub fn render_sections(
-    template: TaskbarWidgetTemplate,
     sections: &[TaskbarWidgetSection],
     limits: &ProviderLimits,
     show_used: bool,
@@ -120,12 +111,11 @@ pub fn render_sections(
 ) -> Vec<TaskbarSectionView> {
     sections
         .iter()
-        .filter_map(|section| render_section(template, section, limits, show_used, now))
+        .filter_map(|section| render_section(section, limits, show_used, now))
         .collect()
 }
 
-pub fn sample_preview_sections(template: TaskbarWidgetTemplate) -> Vec<TaskbarSectionView> {
-    let now = Utc::now();
+fn sample_limits(now: DateTime<Utc>) -> ProviderLimits {
     let mut limits = ProviderLimits::default();
     *limits.get_mut(ProviderKind::Codex) = RateLimits {
         primary: LimitWindow {
@@ -148,12 +138,10 @@ pub fn sample_preview_sections(template: TaskbarWidgetTemplate) -> Vec<TaskbarSe
         },
         ..RateLimits::default()
     };
-    let sections = template.default_sections(&[ProviderKind::Codex, ProviderKind::Claude]);
-    render_sections(template, &sections, &limits, false, now)
+    limits
 }
 
 fn render_section(
-    template: TaskbarWidgetTemplate,
     section: &TaskbarWidgetSection,
     limits: &ProviderLimits,
     show_used: bool,
@@ -161,7 +149,7 @@ fn render_section(
 ) -> Option<TaskbarSectionView> {
     let icon_provider = section.provider().unwrap_or(ProviderKind::Codex);
     let descriptor = crate::provider_registry::descriptor(icon_provider);
-    let style = section_style(template, section.kind);
+    let style = section_style(section.presentation);
     let (title, value, progress) = match section.kind {
         TaskbarWidgetSectionKind::Session => {
             quota_view(limits.get(icon_provider), true, show_used)?
@@ -170,8 +158,12 @@ fn render_section(
             quota_view(limits.get(icon_provider), false, show_used)?
         }
         TaskbarWidgetSectionKind::Reset => {
-            let reset = limits.get(icon_provider).primary.resets_at;
-            ("Reset".into(), format_reset_in(reset, now), None)
+            let window = &limits.get(icon_provider).primary;
+            (
+                "Reset".into(),
+                format_reset_in(window.resets_at, now),
+                reset_progress(window, now),
+            )
         }
         TaskbarWidgetSectionKind::Credits => (
             "Credits".into(),
@@ -187,7 +179,11 @@ fn render_section(
                     .map(|provider| limits.get(provider).usage.today.estimated_cost_microusd)
                     .sum()
             };
-            ("Spend".into(), format_spend(spend), None)
+            (
+                "Spend".into(),
+                format_spend(spend),
+                spend_progress(limits, section.provider(), spend),
+            )
         }
         TaskbarWidgetSectionKind::TodayTokens => {
             let tokens = if section.provider().is_some() {
@@ -235,19 +231,38 @@ fn quota_view(
     Some((title.into(), value, percent.map(f64::from)))
 }
 
-fn section_style(
-    template: TaskbarWidgetTemplate,
-    kind: TaskbarWidgetSectionKind,
-) -> TaskbarSectionStyle {
-    match (template, kind) {
-        (_, TaskbarWidgetSectionKind::Reset) => TaskbarSectionStyle::Clock,
-        (TaskbarWidgetTemplate::Progress, TaskbarWidgetSectionKind::Session | TaskbarWidgetSectionKind::Weekly)
-        | (
-            TaskbarWidgetTemplate::Overview,
-            TaskbarWidgetSectionKind::Session | TaskbarWidgetSectionKind::Weekly,
-        ) => TaskbarSectionStyle::Bar,
-        _ => TaskbarSectionStyle::Chip,
+fn section_style(presentation: TaskbarSectionPresentation) -> TaskbarSectionStyle {
+    match presentation {
+        TaskbarSectionPresentation::Number => TaskbarSectionStyle::Chip,
+        TaskbarSectionPresentation::ProgressBar => TaskbarSectionStyle::Bar,
+        TaskbarSectionPresentation::Clock => TaskbarSectionStyle::Clock,
     }
+}
+
+fn reset_progress(window: &LimitWindow, now: DateTime<Utc>) -> Option<f64> {
+    let reset = window.resets_at?;
+    let duration_minutes = window.duration_minutes.filter(|minutes| *minutes > 0)?;
+    let remaining = (reset - now).num_seconds().max(0) as f64;
+    let total = f64::from(duration_minutes) * 60.0;
+    Some(((remaining / total) * 100.0).clamp(0.0, 100.0))
+}
+
+fn spend_progress(
+    limits: &ProviderLimits,
+    provider: Option<ProviderKind>,
+    used_microusd: u64,
+) -> Option<f64> {
+    let limit = match provider {
+        Some(provider) => limits.get(provider).spending.as_ref()?.limit_microusd?,
+        None => ProviderKind::ALL
+            .into_iter()
+            .filter_map(|provider| limits.get(provider).spending.as_ref()?.limit_microusd)
+            .sum::<u64>(),
+    };
+    if limit == 0 {
+        return None;
+    }
+    Some(((used_microusd as f64 / limit as f64) * 100.0).clamp(0.0, 100.0))
 }
 
 fn format_reset_in(reset: Option<DateTime<Utc>>, now: DateTime<Utc>) -> String {
@@ -526,19 +541,20 @@ pub fn widget_strip(
         .into()
 }
 
-pub fn preview_strip(template: TaskbarWidgetTemplate) -> Element {
-    let sections = sample_preview_sections(template);
-    let width = content_width_for(&sections).max(168.0);
-    let surface = widget_strip(&sections, true, false, width, 36.0);
-    border(surface)
-        .background(ThemeRef::ControlFillSecondary)
-        .corner_radius(8.0)
-        .border_thickness(Thickness::uniform(1.0))
-        .border_brush(ThemeRef::ControlStroke)
-        .width(width)
-        .height(36.0)
-        .horizontal_alignment(HorizontalAlignment::Left)
-        .into()
+pub fn preview_section(section: &TaskbarWidgetSection) -> Element {
+    let now = Utc::now();
+    let view = render_section(section, &sample_limits(now), false, now).unwrap_or_else(|| {
+        TaskbarSectionView {
+            id: section.id.clone(),
+            icon: "codex",
+            brand_rgb: (128, 159, 255),
+            title: section.kind.label().into(),
+            value: "—".into(),
+            progress: None,
+            style: section_style(section.presentation),
+        }
+    });
+    section_element(&view, true, false)
 }
 
 fn section_element(
@@ -973,6 +989,20 @@ mod tests {
         let snapshot = TaskbarWidgetSnapshot::from_settings(&settings, limits);
         let rendered = snapshot.rendered_sections(Utc::now());
         assert_eq!(rendered[0].value, "63%");
+    }
+
+    #[test]
+    fn progress_bar_presentation_is_available_without_a_template() {
+        let mut section = TaskbarWidgetSection::for_provider(
+            TaskbarWidgetSectionKind::Session,
+            ProviderKind::Codex,
+        );
+        section.presentation = TaskbarSectionPresentation::ProgressBar;
+        let mut limits = ProviderLimits::default();
+        limits.get_mut(ProviderKind::Codex).primary.used_percent = Some(40);
+        let rendered = render_section(&section, &limits, false, Utc::now()).unwrap();
+        assert_eq!(rendered.style, TaskbarSectionStyle::Bar);
+        assert_eq!(rendered.progress, Some(60.0));
     }
 
     #[test]

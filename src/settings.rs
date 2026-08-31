@@ -1175,108 +1175,48 @@ fn new_taskbar_section_id() -> String {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum TaskbarWidgetTemplate {
+pub enum TaskbarSectionPresentation {
     #[default]
-    Compact,
-    Progress,
-    Countdown,
-    Overview,
+    Number,
+    ProgressBar,
+    Clock,
 }
 
-impl TaskbarWidgetTemplate {
-    pub const ALL: [Self; 4] = [Self::Compact, Self::Progress, Self::Countdown, Self::Overview];
+impl TaskbarSectionPresentation {
+    pub const ALL: [Self; 3] = [Self::Number, Self::ProgressBar, Self::Clock];
 
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Compact => "Compact",
-            Self::Progress => "Progress",
-            Self::Countdown => "Countdown",
-            Self::Overview => "Overview",
-        }
-    }
-
-    pub const fn description(self) -> &'static str {
-        match self {
-            Self::Compact => "Provider chips with live percentages.",
-            Self::Progress => "Thin quota bars beside each remaining value.",
-            Self::Countdown => "Session remaining plus the next reset clock.",
-            Self::Overview => "Session, weekly, and reset in one strip.",
+            Self::Number => "Numbers",
+            Self::ProgressBar => "Progress bars",
+            Self::Clock => "Clock",
         }
     }
 
     pub const fn index(self) -> i32 {
         match self {
-            Self::Compact => 0,
-            Self::Progress => 1,
-            Self::Countdown => 2,
-            Self::Overview => 3,
+            Self::Number => 0,
+            Self::ProgressBar => 1,
+            Self::Clock => 2,
         }
     }
 
     pub const fn from_index(index: i32) -> Self {
         match index {
-            1 => Self::Progress,
-            2 => Self::Countdown,
-            3 => Self::Overview,
-            _ => Self::Compact,
+            1 => Self::ProgressBar,
+            2 => Self::Clock,
+            _ => Self::Number,
         }
     }
+}
 
-    pub fn default_sections(self, providers: &[ProviderKind]) -> Vec<TaskbarWidgetSection> {
-        if providers.is_empty() {
-            return Vec::new();
-        }
-        let mut sections = Vec::new();
-        match self {
-            Self::Compact | Self::Progress => {
-                for provider in providers {
-                    sections.push(TaskbarWidgetSection::for_provider(
-                        TaskbarWidgetSectionKind::Session,
-                        *provider,
-                    ));
-                }
-            }
-            Self::Countdown => {
-                let first = providers[0];
-                sections.push(TaskbarWidgetSection::for_provider(
-                    TaskbarWidgetSectionKind::Session,
-                    first,
-                ));
-                sections.push(TaskbarWidgetSection::for_provider(
-                    TaskbarWidgetSectionKind::Reset,
-                    first,
-                ));
-                for provider in providers.iter().skip(1) {
-                    sections.push(TaskbarWidgetSection::for_provider(
-                        TaskbarWidgetSectionKind::Session,
-                        *provider,
-                    ));
-                }
-            }
-            Self::Overview => {
-                let first = providers[0];
-                sections.push(TaskbarWidgetSection::for_provider(
-                    TaskbarWidgetSectionKind::Session,
-                    first,
-                ));
-                sections.push(TaskbarWidgetSection::for_provider(
-                    TaskbarWidgetSectionKind::Weekly,
-                    first,
-                ));
-                sections.push(TaskbarWidgetSection::for_provider(
-                    TaskbarWidgetSectionKind::Reset,
-                    first,
-                ));
-                for provider in providers.iter().skip(1) {
-                    sections.push(TaskbarWidgetSection::for_provider(
-                        TaskbarWidgetSectionKind::Session,
-                        *provider,
-                    ));
-                }
-            }
-        }
-        sections
-    }
+pub fn default_taskbar_sections(providers: &[ProviderKind]) -> Vec<TaskbarWidgetSection> {
+    providers
+        .iter()
+        .map(|provider| {
+            TaskbarWidgetSection::for_provider(TaskbarWidgetSectionKind::Session, *provider)
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1337,6 +1277,13 @@ impl TaskbarWidgetSectionKind {
             _ => Self::Session,
         }
     }
+
+    pub const fn default_presentation(self) -> TaskbarSectionPresentation {
+        match self {
+            Self::Reset => TaskbarSectionPresentation::Clock,
+            _ => TaskbarSectionPresentation::Number,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1347,6 +1294,8 @@ pub struct TaskbarWidgetSection {
     pub kind: TaskbarWidgetSectionKind,
     #[serde(default)]
     pub provider_id: Option<String>,
+    #[serde(default)]
+    pub presentation: TaskbarSectionPresentation,
 }
 
 impl TaskbarWidgetSection {
@@ -1355,6 +1304,7 @@ impl TaskbarWidgetSection {
             id: new_taskbar_section_id(),
             kind,
             provider_id: Some(provider.id().into()),
+            presentation: kind.default_presentation(),
         }
     }
 
@@ -1363,7 +1313,14 @@ impl TaskbarWidgetSection {
             id: new_taskbar_section_id(),
             kind,
             provider_id: None,
+            presentation: kind.default_presentation(),
         }
+    }
+
+    pub fn duplicate_with_new_id(&self) -> Self {
+        let mut copy = self.clone();
+        copy.id = new_taskbar_section_id();
+        copy
     }
 
     pub fn provider(&self) -> Option<ProviderKind> {
@@ -1504,8 +1461,6 @@ pub struct Settings {
     /// Live WinUI strip embedded into the primary Windows taskbar.
     pub taskbar_widget_enabled: bool,
     #[serde(default)]
-    pub taskbar_widget_template: TaskbarWidgetTemplate,
-    #[serde(default)]
     pub taskbar_widget_sections: Vec<TaskbarWidgetSection>,
     pub tray_widgets: Vec<TrayWidget>,
     pub notifications: NotificationSettings,
@@ -1547,7 +1502,6 @@ impl Default for Settings {
             openrouter_accounts: Vec::new(),
             // Taskbar embedding is opt-in because it occupies taskbar space.
             taskbar_widget_enabled: false,
-            taskbar_widget_template: TaskbarWidgetTemplate::default(),
             taskbar_widget_sections: Vec::new(),
             // An empty list intentionally means "show the ordinary app icon".
             tray_widgets: Vec::new(),
@@ -1942,7 +1896,7 @@ impl Settings {
         changed
     }
 
-    /// Configured taskbar sections, or the selected template's defaults.
+    /// Configured taskbar sections, or one session chip per enabled provider.
     pub fn resolved_taskbar_sections(&self) -> Vec<TaskbarWidgetSection> {
         let configured = self
             .taskbar_widget_sections
@@ -1953,8 +1907,7 @@ impl Settings {
         if !configured.is_empty() {
             return configured;
         }
-        self.taskbar_widget_template
-            .default_sections(&self.ordered_enabled_providers())
+        default_taskbar_sections(&self.ordered_enabled_providers())
             .into_iter()
             .filter(|section| section.is_visible_for(&self.providers))
             .collect()
@@ -2704,8 +2657,7 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 let root = document
                     .as_table_mut()
                     .context("settings root must be a TOML table")?;
-                root.entry("taskbar_widget_template")
-                    .or_insert_with(|| toml::Value::String("compact".into()));
+                root.remove("taskbar_widget_template");
                 root.entry("taskbar_widget_sections")
                     .or_insert_with(|| toml::Value::Array(Vec::new()));
                 root.insert("version".into(), toml::Value::Integer(32));
@@ -2768,7 +2720,6 @@ mod tests {
         assert_eq!(value.total_spend_period, TotalSpendPeriod::ThirtyDays);
         assert_eq!(value.history_retention_days, 30);
         assert!(!value.taskbar_widget_enabled);
-        assert_eq!(value.taskbar_widget_template, TaskbarWidgetTemplate::Compact);
         assert!(value.taskbar_widget_sections.is_empty());
         assert!(value.tray_widgets.is_empty());
         assert_eq!(value.popup_order, PopupWidgetKind::default_order());
