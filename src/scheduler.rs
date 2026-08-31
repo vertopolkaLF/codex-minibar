@@ -14,6 +14,16 @@ pub const AUTO_ACTIVATION_SCHEDULE_GUARD: Duration = Duration::hours(6);
 /// are API timestamp jitter, including a value rounding across a minute.
 const NEW_WINDOW_MINIMUM_ADVANCE: Duration = Duration::minutes(5);
 
+/// Codex reset probes must be close enough to describe one continuous API
+/// observation series rather than unrelated polls hours apart.
+const UNACTIVATED_PROBE_MAX_GAP: Duration = Duration::minutes(5);
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct UnactivatedResetObservation {
+    sampled_at: DateTime<Utc>,
+    resets_at: DateTime<Utc>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActivationState {
     /// Last observed primary `resets_at`, normalized to a whole minute.
@@ -30,6 +40,14 @@ pub struct ActivationState {
     /// active 5h window after one attempt.
     #[serde(default)]
     pub attempted_without_active_window: bool,
+    /// Up to two preceding Codex reset samples used to distinguish a fixed,
+    /// active deadline from the moving `request time + 5h` placeholder.
+    #[serde(default)]
+    unactivated_reset_observations: Vec<UnactivatedResetObservation>,
+    /// A reset observed unchanged in two neighboring Codex responses. While
+    /// this stays fixed, the 5-hour window is known to be active.
+    #[serde(default)]
+    stable_unactivated_candidate_reset: Option<DateTime<Utc>>,
     /// The exact weekly occurrence already fired for each schedule rule.
     #[serde(default)]
     pub fired_scheduled_occurrences: std::collections::HashMap<String, DateTime<Utc>>,
@@ -126,26 +144,63 @@ pub enum Decision {
 impl ActivationState {
     /// Activate only when the primary reset timestamp changed since the last
     /// observation. Seconds and fractional-second jitter are ignored; the
-    /// first normal sample only establishes a baseline. Codex's synthetic
-    /// unactivated 5h sample is an exception and activates immediately.
+    /// first normal sample only establishes a baseline. A Codex response that
+    /// resembles its synthetic 5h placeholder is confirmed separately across
+    /// two or three neighboring samples.
     pub fn decide(&self, primary: &LimitWindow) -> Decision {
-        self.decide_with_unactivated(primary, false)
+        self.decide_with_unactivated(primary, false, Utc::now())
     }
 
-    /// Variant of [`Self::decide`] for a provider that explicitly identified
-    /// Codex's synthetic, unactivated 5h response.
-    pub fn decide_with_unactivated(&self, primary: &LimitWindow, is_unactivated: bool) -> Decision {
+    /// Variant of [`Self::decide`] for a provider that identified a possible
+    /// Codex synthetic 5h response. Two identical reset timestamps confirm an
+    /// active window; activation requires three timestamps that each move
+    /// forward inside one five-minute observation series.
+    pub fn decide_with_unactivated(
+        &self,
+        primary: &LimitWindow,
+        is_unactivated_candidate: bool,
+        sampled_at: DateTime<Utc>,
+    ) -> Decision {
         // An empty primary window means the provider does not currently expose
         // a session limit. It is not evidence of an available-but-idle window.
         if primary.is_empty() {
             return Decision::Skip;
         }
-        if is_unactivated {
-            return if self.attempted_without_active_window {
-                Decision::Skip
-            } else {
-                Decision::ActivateNow
+        if is_unactivated_candidate {
+            if self.attempted_without_active_window {
+                return Decision::Skip;
+            }
+            let Some(resets_at) = primary.resets_at else {
+                return Decision::Skip;
             };
+            if self.stable_unactivated_candidate_reset == Some(resets_at) {
+                return Decision::Skip;
+            }
+            // A freshly reset real session also looks like `sampled_at + 5h`
+            // during its first minutes. Preserve the normal reset-transition
+            // behavior: a full-window jump from a previously established
+            // deadline activates immediately. A synthetic probe already in
+            // progress is excluded because its moving timestamps are not an
+            // established active-window baseline.
+            if self.unactivated_reset_observations.is_empty()
+                && self.last_seen_resets_at.is_some_and(|previous| {
+                    is_new_window(normalize_reset(previous), normalize_reset(resets_at))
+                })
+            {
+                return Decision::ActivateNow;
+            }
+            let observations = &self.unactivated_reset_observations;
+            if observations.len() == 2 {
+                let current = UnactivatedResetObservation {
+                    sampled_at,
+                    resets_at,
+                };
+                if unactivated_reset_series_is_moving(&observations[0], &observations[1], &current)
+                {
+                    return Decision::ActivateNow;
+                }
+            }
+            return Decision::Skip;
         }
         let Some(resets_at) = primary.resets_at else {
             return if self.attempted_without_active_window {
@@ -172,18 +227,69 @@ impl ActivationState {
     /// Remember the latest primary reset time so the next poll can detect a
     /// real new window rather than endpoint timestamp jitter.
     pub fn observe(&mut self, primary: &LimitWindow) {
-        self.observe_with_unactivated(primary, false);
+        self.observe_with_unactivated(primary, false, Utc::now());
     }
 
-    /// Variant of [`Self::observe`] that preserves the Codex unactivated
-    /// marker until a non-synthetic response confirms the session started.
-    pub fn observe_with_unactivated(&mut self, primary: &LimitWindow, is_unactivated: bool) {
+    /// Variant of [`Self::observe`] that tracks neighboring Codex reset samples
+    /// until the deadline is either stable twice or moving three times.
+    pub fn observe_with_unactivated(
+        &mut self,
+        primary: &LimitWindow,
+        is_unactivated_candidate: bool,
+        sampled_at: DateTime<Utc>,
+    ) {
+        if !is_unactivated_candidate {
+            self.unactivated_reset_observations.clear();
+            self.stable_unactivated_candidate_reset = None;
+        }
         if let Some(resets_at) = primary.resets_at {
             self.last_seen_resets_at = Some(normalize_reset(resets_at));
-            if !is_unactivated {
+            if is_unactivated_candidate {
+                if self.stable_unactivated_candidate_reset == Some(resets_at) {
+                    self.unactivated_reset_observations.clear();
+                    self.attempted_without_active_window = false;
+                    return;
+                }
+
+                if self
+                    .unactivated_reset_observations
+                    .last()
+                    .is_some_and(|previous| previous.resets_at == resets_at)
+                {
+                    self.stable_unactivated_candidate_reset = Some(resets_at);
+                    self.unactivated_reset_observations.clear();
+                    self.attempted_without_active_window = false;
+                    return;
+                }
+
+                self.stable_unactivated_candidate_reset = None;
+                let current = UnactivatedResetObservation {
+                    sampled_at,
+                    resets_at,
+                };
+                if self
+                    .unactivated_reset_observations
+                    .last()
+                    .is_some_and(|previous| !unactivated_reset_moved(previous, &current))
+                {
+                    self.unactivated_reset_observations.clear();
+                }
+                self.unactivated_reset_observations.push(current);
+                if self.unactivated_reset_observations.len() > 2 {
+                    self.unactivated_reset_observations.remove(0);
+                }
+            } else {
                 self.attempted_without_active_window = false;
             }
         }
+    }
+
+    /// The worker uses a short follow-up poll while a Codex reset series still
+    /// needs a second or third neighboring sample.
+    pub fn awaits_unactivated_confirmation(&self) -> bool {
+        !self.attempted_without_active_window
+            && self.stable_unactivated_candidate_reset.is_none()
+            && !self.unactivated_reset_observations.is_empty()
     }
 
     pub fn record_attempt(&mut self, now: DateTime<Utc>) {
@@ -224,6 +330,29 @@ fn is_new_window(previous: DateTime<Utc>, current: DateTime<Utc>) -> bool {
     current - previous >= NEW_WINDOW_MINIMUM_ADVANCE
 }
 
+fn unactivated_reset_moved(
+    previous: &UnactivatedResetObservation,
+    current: &UnactivatedResetObservation,
+) -> bool {
+    let sample_gap = current.sampled_at - previous.sampled_at;
+    let reset_shift = current.resets_at - previous.resets_at;
+    sample_gap > Duration::zero()
+        && sample_gap <= UNACTIVATED_PROBE_MAX_GAP
+        && reset_shift > Duration::zero()
+        && reset_shift <= UNACTIVATED_PROBE_MAX_GAP
+}
+
+fn unactivated_reset_series_is_moving(
+    first: &UnactivatedResetObservation,
+    second: &UnactivatedResetObservation,
+    third: &UnactivatedResetObservation,
+) -> bool {
+    unactivated_reset_moved(first, second)
+        && unactivated_reset_moved(second, third)
+        && third.sampled_at - first.sampled_at <= UNACTIVATED_PROBE_MAX_GAP
+        && third.resets_at - first.resets_at <= UNACTIVATED_PROBE_MAX_GAP
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,18 +384,109 @@ mod tests {
     }
 
     #[test]
-    fn activates_on_codex_unactivated_five_hour_placeholder() {
+    fn first_codex_candidate_only_starts_confirmation() {
         let sampled_at = at(15, 0);
         let primary = LimitWindow {
             used_percent: Some(0),
             resets_at: Some(sampled_at + Duration::hours(5)),
             duration_minutes: Some(300),
         };
-        let state = ActivationState::default();
+        let mut state = ActivationState::default();
 
         assert_eq!(
-            state.decide_with_unactivated(&primary, true),
+            state.decide_with_unactivated(&primary, true, sampled_at),
+            Decision::Skip
+        );
+        state.observe_with_unactivated(&primary, true, sampled_at);
+        assert!(state.awaits_unactivated_confirmation());
+    }
+
+    #[test]
+    fn two_equal_codex_resets_confirm_active_window() {
+        let first_sample = at(15, 0);
+        let second_sample = first_sample + Duration::seconds(30);
+        let fixed_reset = first_sample + Duration::hours(5);
+        let primary = window_at(fixed_reset);
+        let mut state = ActivationState::default();
+
+        state.observe_with_unactivated(&primary, true, first_sample);
+        assert_eq!(
+            state.decide_with_unactivated(&primary, true, second_sample),
+            Decision::Skip
+        );
+        state.observe_with_unactivated(&primary, true, second_sample);
+
+        assert!(!state.awaits_unactivated_confirmation());
+        assert_eq!(state.stable_unactivated_candidate_reset, Some(fixed_reset));
+    }
+
+    #[test]
+    fn three_moving_codex_resets_trigger_activation() {
+        let first_sample = at(15, 0);
+        let second_sample = first_sample + Duration::seconds(30);
+        let third_sample = second_sample + Duration::seconds(30);
+        let mut state = ActivationState::default();
+
+        state.observe_with_unactivated(
+            &window_at(first_sample + Duration::hours(5)),
+            true,
+            first_sample,
+        );
+        state.observe_with_unactivated(
+            &window_at(second_sample + Duration::hours(5)),
+            true,
+            second_sample,
+        );
+
+        assert_eq!(
+            state.decide_with_unactivated(
+                &window_at(third_sample + Duration::hours(5)),
+                true,
+                third_sample,
+            ),
             Decision::ActivateNow
+        );
+    }
+
+    #[test]
+    fn fresh_reset_codex_candidate_still_triggers_activation() {
+        let previous_reset = at(15, 0);
+        let sampled_at = previous_reset + Duration::minutes(1);
+        let fresh_reset = sampled_at + Duration::hours(5);
+        let mut state = ActivationState::default();
+        state.observe(&window_at(previous_reset));
+
+        assert_eq!(
+            state.decide_with_unactivated(&window_at(fresh_reset), true, sampled_at),
+            Decision::ActivateNow
+        );
+    }
+
+    #[test]
+    fn codex_reset_series_longer_than_five_minutes_does_not_activate() {
+        let first_sample = at(15, 0);
+        let second_sample = first_sample + Duration::minutes(3);
+        let third_sample = second_sample + Duration::minutes(3);
+        let mut state = ActivationState::default();
+
+        state.observe_with_unactivated(
+            &window_at(first_sample + Duration::hours(5)),
+            true,
+            first_sample,
+        );
+        state.observe_with_unactivated(
+            &window_at(second_sample + Duration::hours(5)),
+            true,
+            second_sample,
+        );
+
+        assert_eq!(
+            state.decide_with_unactivated(
+                &window_at(third_sample + Duration::hours(5)),
+                true,
+                third_sample,
+            ),
+            Decision::Skip
         );
     }
 
@@ -281,7 +501,7 @@ mod tests {
         let state = ActivationState::default();
 
         assert_eq!(
-            state.decide_with_unactivated(&primary, false),
+            state.decide_with_unactivated(&primary, false, sampled_at),
             Decision::Skip
         );
     }
@@ -365,6 +585,22 @@ mod tests {
         state.record_attempt(at(10, 0));
         state.save(&path).unwrap();
         assert_eq!(ActivationState::load_or_default(&path).unwrap(), state);
+    }
+
+    #[test]
+    fn codex_confirmation_series_survives_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("activation.toml");
+        let sampled_at = at(15, 0);
+        let primary = window_at(sampled_at + Duration::hours(5));
+        let mut state = ActivationState::default();
+        state.observe_with_unactivated(&primary, true, sampled_at);
+
+        state.save(&path).unwrap();
+        let restored = ActivationState::load_or_default(&path).unwrap();
+
+        assert_eq!(restored, state);
+        assert!(restored.awaits_unactivated_confirmation());
     }
 
     fn schedule_at_local(when: DateTime<Local>) -> ScheduledActivation {

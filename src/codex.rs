@@ -304,6 +304,9 @@ pub fn parse_rate_limits(
         .pointer("/result/rateLimits")
         .context("missing result.rateLimits")?;
     let primary = parse_window(limits.get("primary"));
+    // This only marks a single-response candidate. The scheduler compares two
+    // or three neighboring responses before deciding whether the reset is
+    // fixed (active) or follows each request by five hours (not activated).
     let primary_window_is_unactivated = primary.looks_like_unactivated_five_hour(sampled_at);
     Ok(RateLimits {
         primary,

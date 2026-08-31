@@ -20,6 +20,19 @@ use crate::{
 };
 
 pub const USAGE_STATS_INTERVAL: Duration = Duration::from_secs(10 * 60);
+const UNACTIVATED_CONFIRMATION_INTERVAL: Duration = Duration::from_secs(30);
+
+fn effective_limit_poll_interval(
+    configured: Duration,
+    automatic_activation: bool,
+    state: &ActivationState,
+) -> Duration {
+    if automatic_activation && state.awaits_unactivated_confirmation() {
+        configured.min(UNACTIVATED_CONFIRMATION_INTERVAL)
+    } else {
+        configured
+    }
+}
 
 pub trait LimitProvider: Send + 'static {
     fn read_limits(&mut self) -> Result<RateLimits>;
@@ -330,14 +343,19 @@ fn run_limit_task(
                     let _ = events.send(WorkerEvent::RequestFinished(RequestKind::Limits));
                 }
             }
-            next_poll = Instant::now() + poll_interval;
+            next_poll = Instant::now()
+                + effective_limit_poll_interval(poll_interval, automatic_activation, &state);
             continue;
         }
 
         match commands.recv_timeout(next_poll.saturating_duration_since(Instant::now())) {
             Ok(WorkerCommand::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
             Ok(WorkerCommand::SetAutomaticActivation(enabled)) => {
+                let changed = automatic_activation != enabled;
                 automatic_activation = enabled;
+                if changed && enabled {
+                    next_poll = Instant::now();
+                }
             }
             Ok(WorkerCommand::SetScheduledActivations(schedules)) => {
                 if scheduled_activations == schedules {
@@ -349,7 +367,8 @@ fn run_limit_task(
             Ok(WorkerCommand::SetLimitRefreshInterval(interval)) => {
                 poll_interval = interval;
                 // Apply the setting immediately without an extra request.
-                next_poll = Instant::now() + poll_interval;
+                next_poll = Instant::now()
+                    + effective_limit_poll_interval(poll_interval, automatic_activation, &state);
             }
             Ok(WorkerCommand::Refresh) | Err(RecvTimeoutError::Timeout) => {
                 next_poll = Instant::now();
@@ -456,8 +475,11 @@ fn tick(
             now,
             scheduler::AUTO_ACTIVATION_SCHEDULE_GUARD,
         )
-        && state.decide_with_unactivated(&limits.primary, limits.primary_window_is_unactivated)
-            == Decision::ActivateNow;
+        && state.decide_with_unactivated(
+            &limits.primary,
+            limits.primary_window_is_unactivated,
+            limits.sampled_at,
+        ) == Decision::ActivateNow;
     if scheduled_due.is_some() || automatic_due {
         state.record_attempt(Utc::now());
         events.push(WorkerEvent::ActivationStarted);
@@ -469,6 +491,7 @@ fn tick(
                 state.observe_with_unactivated(
                     &limits.primary,
                     limits.primary_window_is_unactivated,
+                    limits.sampled_at,
                 );
                 if let Some((rule, occurrence)) = scheduled_due {
                     state.record_scheduled_activation(&rule.id, occurrence);
@@ -478,7 +501,11 @@ fn tick(
             Err(error) => events.push(WorkerEvent::ActivationFailed(error.to_string())),
         }
     } else {
-        state.observe_with_unactivated(&limits.primary, limits.primary_window_is_unactivated);
+        state.observe_with_unactivated(
+            &limits.primary,
+            limits.primary_window_is_unactivated,
+            limits.sampled_at,
+        );
     }
 
     events.insert(0, WorkerEvent::LimitsUpdated(limits));
@@ -560,6 +587,28 @@ mod tests {
     }
 
     #[test]
+    fn codex_confirmation_temporarily_uses_fast_limit_polling() {
+        let sampled_at = Utc.with_ymd_and_hms(2026, 7, 10, 15, 0, 0).unwrap();
+        let primary = LimitWindow {
+            used_percent: Some(0),
+            resets_at: Some(sampled_at + ChronoDuration::hours(5)),
+            duration_minutes: Some(300),
+        };
+        let mut state = ActivationState::default();
+        state.observe_with_unactivated(&primary, true, sampled_at);
+        let configured = Duration::from_secs(15 * 60);
+
+        assert_eq!(
+            effective_limit_poll_interval(configured, true, &state),
+            UNACTIVATED_CONFIRMATION_INTERVAL
+        );
+        assert_eq!(
+            effective_limit_poll_interval(configured, false, &state),
+            configured
+        );
+    }
+
+    #[test]
     fn tick_baselines_then_activates_only_when_reset_changes() {
         let mut provider = ScriptedProvider::new(vec![
             limits_at(15, 0),
@@ -587,8 +636,7 @@ mod tests {
 
     #[test]
     fn tick_activates_codex_unactivated_window_once() {
-        let sampled_at = Utc.with_ymd_and_hms(2026, 7, 10, 15, 0, 0).unwrap();
-        let unactivated = RateLimits {
+        let unactivated_at = |sampled_at: chrono::DateTime<Utc>| RateLimits {
             primary: LimitWindow {
                 used_percent: Some(0),
                 resets_at: Some(sampled_at + ChronoDuration::hours(5)),
@@ -603,14 +651,68 @@ mod tests {
             primary_window_is_unactivated: true,
             ..RateLimits::default()
         };
-        let mut provider = ScriptedProvider::new(vec![unactivated.clone(), unactivated]);
+        let first_sample = Utc.with_ymd_and_hms(2026, 7, 10, 15, 0, 0).unwrap();
+        let second_sample = first_sample + ChronoDuration::seconds(30);
+        let third_sample = second_sample + ChronoDuration::seconds(30);
+        let active_reset = third_sample + ChronoDuration::hours(5);
+        let active = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(0),
+                resets_at: Some(active_reset),
+                duration_minutes: Some(300),
+            },
+            sampled_at: third_sample + ChronoDuration::seconds(30),
+            primary_window_is_unactivated: true,
+            ..RateLimits::default()
+        };
+        let mut provider = ScriptedProvider::new(vec![
+            unactivated_at(first_sample),
+            unactivated_at(second_sample),
+            unactivated_at(third_sample),
+            active.clone(),
+            active,
+        ]);
         let mut activator = CountingActivator(0);
         let mut state = ActivationState::default();
 
         tick(&mut provider, &mut activator, &mut state, true, &[]).unwrap();
+        assert_eq!(activator.0, 0);
+        tick(&mut provider, &mut activator, &mut state, true, &[]).unwrap();
+        assert_eq!(activator.0, 0);
+        tick(&mut provider, &mut activator, &mut state, true, &[]).unwrap();
         assert_eq!(activator.0, 1);
         tick(&mut provider, &mut activator, &mut state, true, &[]).unwrap();
         assert_eq!(activator.0, 1);
+        assert!(!state.attempted_without_active_window);
+    }
+
+    #[test]
+    fn tick_still_activates_codex_after_a_fresh_reset() {
+        let previous_reset = Utc.with_ymd_and_hms(2026, 7, 10, 15, 0, 0).unwrap();
+        let sampled_at = previous_reset + ChronoDuration::minutes(1);
+        let fresh = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(0),
+                resets_at: Some(sampled_at + ChronoDuration::hours(5)),
+                duration_minutes: Some(300),
+            },
+            sampled_at,
+            primary_window_is_unactivated: true,
+            ..RateLimits::default()
+        };
+        let mut provider = ScriptedProvider::new(vec![fresh.clone(), fresh]);
+        let mut activator = CountingActivator(0);
+        let mut state = ActivationState::default();
+        state.last_seen_resets_at = Some(previous_reset);
+
+        let events = tick(&mut provider, &mut activator, &mut state, true, &[]).unwrap();
+
+        assert_eq!(activator.0, 1);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, WorkerEvent::ActivationSucceeded))
+        );
     }
 
     #[test]
@@ -712,10 +814,8 @@ mod tests {
 
     #[test]
     fn activation_failure_becomes_an_event() {
-        let mut state = ActivationState {
-            last_seen_resets_at: limits_at(15, 0).primary.resets_at,
-            ..ActivationState::default()
-        };
+        let mut state = ActivationState::default();
+        state.last_seen_resets_at = limits_at(15, 0).primary.resets_at;
         let events = tick(
             &mut ScriptedProvider::new(vec![limits_at(15, 5)]),
             &mut FailingActivator,

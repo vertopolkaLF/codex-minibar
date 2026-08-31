@@ -194,8 +194,9 @@ pub struct RateLimits {
     pub primary: LimitWindow,
     pub secondary: LimitWindow,
     pub sampled_at: DateTime<Utc>,
-    /// Provider-derived marker for Codex's synthetic, not-yet-started 5h
-    /// response. Other providers leave this false.
+    /// Provider-derived marker for a possible Codex synthetic 5h response.
+    /// The scheduler confirms it across neighboring reset timestamps; other
+    /// providers leave this false.
     #[serde(default)]
     pub primary_window_is_unactivated: bool,
     /// Human-readable account identity supplied by the provider, when available.
