@@ -18,7 +18,6 @@ pub(super) enum PopupView {
 }
 
 impl PopupView {
-    #[cfg(test)]
     pub(super) const fn from_provider(provider: ProviderKind) -> Self {
         match provider {
             ProviderKind::Codex => Self::Codex,

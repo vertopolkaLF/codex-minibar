@@ -17,7 +17,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         accent_color: state.settings.accent_color,
         animations_enabled: state.settings.animations_enabled,
         time_format: state.settings.time_format,
-        error: state.startup_error.clone(),
+        provider_errors: state.startup_provider_errors.iter().cloned().collect(),
         last_activation: format_last_activation(&RateLimits::default(), state.last_activation_at),
         show_used_percentage: state.settings.show_used_percentage,
         show_usage_pace: state.settings.show_usage_pace,
@@ -272,6 +272,18 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     .into(),
             );
         }
+        if let Some(provider) = view.provider()
+            && let Some(error) = ui.provider_error(provider)
+        {
+            body.push(
+                InfoBar::new(format!("{} error", provider.display_name()))
+                    .message(error)
+                    .error()
+                    .is_closable(false)
+                    .with_key(format!("popup-provider-error-{}", provider.id()))
+                    .into(),
+            );
+        }
 
         if view == PopupView::Home {
             let widgets = visible_popup_widgets(
@@ -336,6 +348,17 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     provider_widget => {
                         let provider = provider_widget.as_provider().expect("provider widget");
                         let limits_for_provider = limits.get(provider);
+                        let provider_error = ui.provider_error(provider).map(|error| {
+                            let pager_dispatch = pager_dispatch.clone();
+                            (
+                                error,
+                                Callback::new(move |()| {
+                                    pager_dispatch.call(PagerAction::Select(
+                                        PopupView::from_provider(provider),
+                                    ));
+                                }),
+                            )
+                        });
                         let handle = can_reorder_widgets.then(|| {
                             drag_handle(
                                 provider_widget,
@@ -364,6 +387,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                                     now: Utc::now(),
                                 }
                             }),
+                            provider_error,
                         ))
                         .spacing(6.0)
                         .with_key(format!(
@@ -440,6 +464,16 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 .collect();
             for provider in providers_for_view {
                 let limits_for_provider = limits.get(provider);
+                let provider_error = ui.provider_error(provider).map(|error| {
+                    let pager_dispatch = pager_dispatch.clone();
+                    (
+                        error,
+                        Callback::new(move |()| {
+                            pager_dispatch
+                                .call(PagerAction::Select(PopupView::from_provider(provider)));
+                        }),
+                    )
+                });
                 body.push(
                     vstack(provider_cards(
                         provider,
@@ -459,6 +493,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                             set_hovered_action: set_hovered_action.clone(),
                             now: Utc::now(),
                         }),
+                        provider_error,
                     ))
                     .spacing(6.0)
                     .with_key(format!(
@@ -549,6 +584,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             None,
             "Home",
             selected_view == PopupView::Home,
+            false,
             ui.use_colored_provider_icons,
             color_scheme,
             &hovered_action,
@@ -565,6 +601,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             None,
             "Usage",
             selected_view == PopupView::Usage,
+            false,
             ui.use_colored_provider_icons,
             color_scheme,
             &hovered_action,
@@ -619,6 +656,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     None,
                     tip,
                     selected_view == view,
+                    ui.has_provider_error(*provider),
                     ui.use_colored_provider_icons,
                     color_scheme,
                     &hovered_action,
@@ -801,16 +839,18 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         // so also recreates its unmanaged SwapChainPanel/XAML children and
         // steadily grows the WinUI compositor's retained allocation.
         //
-        // Key only error presence, not the message text: PollFailed can emit a
-        // new string every minute and would otherwise remount the whole page.
+        // Key only error presence, not the message text: a poll can emit a new
+        // string every minute and would otherwise remount the whole page.
         //
         // Structural OpenRouter membership belongs here: adding/removing keys
         // or flipping expired chrome changes DesiredSize without a viewport
         // SizeChanged. Remounting the page is what tab switches already do so
         // the queued on_resize measure can shrink the HWND.
         let body_layout_key = format!(
-            "popup-page-{role}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
+            "popup-page-{role}-{}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
             ui.error.is_some(),
+            view.provider()
+                .is_some_and(|provider| ui.has_provider_error(provider)),
             popup_visibility_key(&ui.popup_visibility),
             ui.show_total_spend_on_all_tab,
             ui.total_spend_presentation,

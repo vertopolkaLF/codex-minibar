@@ -44,7 +44,7 @@ pub(super) fn start_background_bridge(
             theme: state.settings.theme,
             accent_color: state.settings.accent_color,
             animations_enabled: state.settings.animations_enabled,
-            error: state.startup_error.clone(),
+            provider_errors: state.startup_provider_errors.iter().cloned().collect(),
             last_activation: format_last_activation(&RateLimits::default(), fallback_attempt),
             show_used_percentage: state.settings.show_used_percentage,
             show_usage_pace: state.settings.show_usage_pace,
@@ -176,8 +176,13 @@ pub(super) fn start_background_bridge(
             ui.cursor_path = settings.cursor_path.clone();
             if providers_changed || !restart.is_empty() {
                 let provider_errors = state.sync_provider_workers(&settings, &restart);
-                if !provider_errors.is_empty() {
-                    ui.set_popup_error(provider_errors.join("\n"));
+                for (provider, error) in provider_errors {
+                    ui.set_provider_error(provider, error);
+                }
+            }
+            for provider in ProviderKind::ALL {
+                if !settings.providers.is_enabled(provider) {
+                    ui.clear_provider_error(provider);
                 }
             }
             // Repaint the existing native icons in place. Recreating them makes
@@ -367,6 +372,7 @@ pub(super) fn start_background_bridge(
                     // Publish once, then let both native tray and WinUI render
                     // from that exact snapshot.
                     state.replace_limits(provider, limits);
+                    ui.clear_provider_error(provider);
                     let limits = state.current_limits();
                     crate::settings_window::publish_discovered_popup_bricks(
                         &limits,
@@ -459,7 +465,7 @@ pub(super) fn start_background_bridge(
                         "{} polling failed: {error}",
                         provider.display_name()
                     ));
-                    ui.set_popup_error(format!("{}: {error}", provider.display_name()));
+                    ui.set_provider_error(provider, error);
                     publish_popup_ui(&set_ui, &ui);
                 }
                 // All live provider workers are forwarded as scoped events.

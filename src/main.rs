@@ -54,14 +54,12 @@ fn run() -> Result<()> {
             eprintln!("failed to hydrate provider store: {error:#}");
             Default::default()
         });
-    let (workers, startup_errors) =
+    let (workers, startup_provider_errors) =
         start_enabled_workers(&settings, activation_path.clone(), worker_events_tx.clone());
     let commands = workers
         .iter()
         .map(|(provider, worker)| (*provider, worker.commands.clone()))
         .collect();
-    let startup_error = (!startup_errors.is_empty()).then(|| startup_errors.join("\n"));
-
     let (settings_tx, settings_rx) = mpsc::channel();
     let updates = UpdateController::new();
     if settings.check_for_updates {
@@ -71,8 +69,7 @@ fn run() -> Result<()> {
     // The host stays parked until Auto content reports its natural size. Never
     // expose an intentionally oversized first client area: that was the black
     // strip visible below the top-aligned XAML chrome.
-    let initial_height =
-        popup::height_for(startup_error.as_deref()).min(FALLBACK_CLIENT_HEIGHT_LIMIT);
+    let initial_height = popup::height_for(None).min(FALLBACK_CLIENT_HEIGHT_LIMIT);
     popup::set_client_height_dip(initial_height);
     let state = Arc::new(AppState {
         settings,
@@ -82,7 +79,7 @@ fn run() -> Result<()> {
         worker_events_rx: Mutex::new(Some(worker_events_rx)),
         worker_events_tx,
         activation_path,
-        startup_error,
+        startup_provider_errors,
         last_activation_at,
         settings_tx,
         settings_rx: Mutex::new(Some(settings_rx)),

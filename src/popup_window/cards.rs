@@ -13,6 +13,7 @@ pub(super) fn provider_cards(
     color_scheme: ColorScheme,
     drag_handle: Option<Element>,
     openrouter_actions: Option<OpenRouterPopupActions>,
+    provider_error: Option<(&str, Callback<()>)>,
 ) -> Vec<Element> {
     let (monthly_label, primary_label, secondary_label) = match provider {
         ProviderKind::Cursor => ("Auto + Composer", "Auto + Composer", "Auto + Composer"),
@@ -53,6 +54,12 @@ pub(super) fn provider_cards(
                 .into(),
         );
     }
+    let has_provider_error = provider_error.is_some();
+    if let Some((_, on_error)) = provider_error {
+        title_parts.push(
+            provider_error_badge(16.0, on_error).vertical_alignment(VerticalAlignment::Center),
+        );
+    }
     let title_row = hstack(title_parts)
         .spacing(4.0)
         .vertical_alignment(VerticalAlignment::Center)
@@ -80,9 +87,10 @@ pub(super) fn provider_cards(
                 bottom: 2.0,
             })
             .with_key(format!(
-                "{}-heading-{}",
+                "{}-heading-{}-{}",
                 provider.display_name(),
-                if is_first { "first" } else { "rest" }
+                if is_first { "first" } else { "rest" },
+                has_provider_error,
             ))
             .into(),
     ];

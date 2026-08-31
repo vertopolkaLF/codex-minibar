@@ -9,6 +9,7 @@ pub(super) const FOOTER_PADDING_RIGHT: f64 = 18.0;
 pub(super) const FOOTER_COLUMN_SPACING: f64 = 8.0;
 pub(super) const FOOTER_ACTION_SPACING: f64 = 4.0;
 pub(super) const FOOTER_ACTION_COUNT: f64 = 2.0;
+const PROVIDER_ERROR_COLOR: Color = Color::rgb(247, 117, 117);
 
 pub(super) fn provider_tab_strip_content_width(provider_count: usize) -> f64 {
     // Home + Usage + enabled provider tabs.
@@ -56,6 +57,7 @@ pub(super) fn popup_tab_button(
     label: Option<&'static str>,
     tip: &'static str,
     selected: bool,
+    has_error: bool,
     use_colored_provider_icons: bool,
     color_scheme: ColorScheme,
     hovered_action: &Option<String>,
@@ -63,6 +65,7 @@ pub(super) fn popup_tab_button(
     on_wheel: impl IntoCallback<PointerEventInfo>,
     on_click: impl IntoUnitCallback,
 ) -> Element {
+    let on_click = on_click.into_unit_callback();
     let hovered = hovered_action.as_deref() == Some(id);
     let set_on_enter = set_hovered_action.clone();
     let set_on_exit = set_hovered_action;
@@ -150,6 +153,19 @@ pub(super) fn popup_tab_button(
         }
     }
     layers.push(selection_marker);
+    if has_error {
+        layers.push(
+            provider_error_badge(13.0, on_click.clone())
+                .relative_align_right()
+                .relative_align_top()
+                .margin(Thickness {
+                    left: 0.0,
+                    top: 2.0,
+                    right: 2.0,
+                    bottom: 0.0,
+                }),
+        );
+    }
     // Cover swap-chain icons so wheel hits a normal XAML element and
     // bubbles here. SwapChainPanel often swallows wheel input.
     layers.push(
@@ -186,6 +202,19 @@ pub(super) fn popup_tab_button(
             color_scheme as i32
         ))
         .into()
+}
+
+/// Compact Fluent filled error-circle marker used in provider headings and
+/// footer tabs. Its identity key includes the requested tint, so the
+/// mount-only icon painter receives the exact `#F77575` color.
+pub(super) fn provider_error_badge(size: f64, on_click: Callback<()>) -> Element {
+    crate::icons::element("fluent-error-circle", size, PROVIDER_ERROR_COLOR)
+        .tooltip("Provider error")
+        .on_tapped(on_click)
+        .with_key(format!(
+            "provider-error-badge-{size}-{:02X}{:02X}{:02X}",
+            PROVIDER_ERROR_COLOR.r, PROVIDER_ERROR_COLOR.g, PROVIDER_ERROR_COLOR.b
+        ))
 }
 
 /// Icon-only chrome action. Refresh uses two rounded circular arrows and

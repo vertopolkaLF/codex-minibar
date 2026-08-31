@@ -39,7 +39,10 @@ pub struct AppState {
     pub worker_events_rx: Mutex<Option<Receiver<WorkerEvent>>>,
     pub worker_events_tx: Sender<WorkerEvent>,
     pub activation_path: std::path::PathBuf,
-    pub startup_error: Option<String>,
+    /// Provider-scoped errors from workers that could not be created at startup.
+    /// They remain visible until that provider returns a successful limits
+    /// response, just like errors received from a running worker.
+    pub startup_provider_errors: Vec<(ProviderKind, String)>,
     /// Last activation attempt loaded from persisted activation state.
     pub last_activation_at: Option<DateTime<Utc>>,
     /// Live settings pushes from the settings window; drained by the tray bridge.
@@ -110,7 +113,7 @@ impl AppState {
         &self,
         settings: &Settings,
         restart: &[ProviderKind],
-    ) -> Vec<String> {
+    ) -> Vec<(ProviderKind, String)> {
         let disabled = crate::provider_registry::PROVIDERS
             .iter()
             .map(|descriptor| descriptor.kind)
@@ -171,7 +174,7 @@ impl AppState {
                         workers.insert(provider, worker);
                     }
                 }
-                Err(error) => errors.push(format!("{}: {error:#}", provider.display_name())),
+                Err(error) => errors.push((provider, format!("{error:#}"))),
             }
         }
         errors
@@ -196,6 +199,7 @@ pub(super) struct UiState {
     pub(super) animations_enabled: bool,
     pub(super) time_format: TimeFormat,
     pub(super) last_activation: String,
+    pub(super) provider_errors: HashMap<ProviderKind, String>,
     pub(super) error: Option<String>,
     /// Changes for every successful worker sample.  Rate-limit data lives only
     /// in `AppState`, but this revision makes that external snapshot observable
@@ -238,6 +242,7 @@ impl Default for UiState {
             animations_enabled: true,
             time_format: TimeFormat::from_windows(),
             last_activation: "Never".into(),
+            provider_errors: HashMap::new(),
             error: None,
             limits_revision: 0,
             active_requests: Vec::new(),
@@ -270,15 +275,41 @@ impl Default for UiState {
 }
 
 impl UiState {
-    /// Shows an error in the popup and records it once per distinct message.
-    /// Polling can retry many times a second; duplicate popup errors would make
-    /// the diagnostic log unreadable.
+    /// Shows an app-level error in the popup and records it once per distinct
+    /// message. Provider polling uses [`set_provider_error`] instead so one
+    /// provider cannot overwrite another provider's diagnostic state.
     pub(super) fn set_popup_error(&mut self, error: impl Into<String>) {
         let error = error.into();
         if self.error.as_deref() != Some(error.as_str()) {
             crate::logger::info(format!("Popup error: {error}"));
         }
         self.error = Some(error);
+    }
+
+    /// Retain the latest provider error until that provider produces a
+    /// successful limits response. A changing message updates the detail while
+    /// keeping the red marker continuously visible.
+    pub(super) fn set_provider_error(&mut self, provider: ProviderKind, error: impl Into<String>) {
+        let error = error.into();
+        if self.provider_errors.get(&provider) != Some(&error) {
+            crate::logger::info(format!(
+                "{} provider error: {error}",
+                provider.display_name()
+            ));
+        }
+        self.provider_errors.insert(provider, error);
+    }
+
+    pub(super) fn clear_provider_error(&mut self, provider: ProviderKind) {
+        self.provider_errors.remove(&provider);
+    }
+
+    pub(super) fn provider_error(&self, provider: ProviderKind) -> Option<&str> {
+        self.provider_errors.get(&provider).map(String::as_str)
+    }
+
+    pub(super) fn has_provider_error(&self, provider: ProviderKind) -> bool {
+        self.provider_errors.contains_key(&provider)
     }
 
     pub(super) fn request_started(&mut self, provider: ProviderKind, kind: RequestKind) {

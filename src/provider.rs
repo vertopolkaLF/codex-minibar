@@ -19,7 +19,7 @@ pub fn start_enabled_workers(
     settings: &Settings,
     activation_path: PathBuf,
     events: Sender<WorkerEvent>,
-) -> (ProviderWorkers, Vec<String>) {
+) -> (ProviderWorkers, Vec<(ProviderKind, String)>) {
     let mut workers = ProviderWorkers::new();
     let mut errors = Vec::new();
     for provider in crate::provider_registry::PROVIDERS
@@ -38,7 +38,7 @@ pub fn start_enabled_workers(
                     "{} worker failed to start: {error:#}",
                     provider.display_name()
                 ));
-                errors.push(format!("{}: {error:#}", provider.display_name()));
+                errors.push((provider, format!("{error:#}")));
             }
         }
     }
