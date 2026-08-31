@@ -5,6 +5,9 @@ pub struct NavViewItem {
     pub content: String,
     pub tag: Option<String>,
     pub icon_path: Option<(String, String)>,
+    /// URI for a full-color ImageIcon. Unlike `icon_path`, this keeps all
+    /// paths and gradients from a multi-color SVG intact.
+    pub icon_image_uri: Option<String>,
     /// Trailing glyph shown at the right edge of the label (e.g. drill-in chevron).
     pub trailing_icon_path: Option<(String, String)>,
     pub is_header: bool,
@@ -31,6 +34,10 @@ impl NavViewItem {
     /// Use arbitrary vector geometry and a caller-selected color.
     pub fn icon_path(mut self, data: impl Into<String>, color: impl Into<String>) -> Self {
         self.icon_path = Some((data.into(), color.into()));
+        self
+    }
+    pub fn icon_image_uri(mut self, uri: impl Into<String>) -> Self {
+        self.icon_image_uri = Some(uri.into());
         self
     }
     pub fn trailing_icon_path(mut self, data: impl Into<String>, color: impl Into<String>) -> Self {

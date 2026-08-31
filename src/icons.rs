@@ -1,4 +1,5 @@
-//! Icon geometry from Iconify (Fluent for chrome actions, Phosphor for settings nav).
+//! Icon geometry from Iconify (Fluent for chrome actions, Fluent Color for
+//! settings navigation, Phosphor for the remaining settings content).
 
 use windows_reactor::*;
 
@@ -69,6 +70,37 @@ pub fn geom(name: &str) -> IconGeom {
 
 pub fn data(name: &str) -> &'static str {
     geom(name).path
+}
+
+/// Resolve a bundled Fluent UI System Color icon as a file URI.
+///
+/// The portable package keeps `assets` beside the executable, while local
+/// development runs from `target` without copying that directory. Support
+/// both layouts so the sidebar stays visible in either workflow.
+pub fn fluent_color_uri(name: &str) -> String {
+    let file_name = match name {
+        "general" => "fluent-color-home-24.svg",
+        "providers" => "fluent-color-apps-list-24.svg",
+        "customize" => "fluent-color-apps-24.svg",
+        "schedule" => "fluent-color-calendar-clock-24.svg",
+        "tray" => "fluent-color-chat-24.svg",
+        "notifications" => "fluent-color-alert-badge-24.svg",
+        "appearance" => "fluent-color-paint-brush-24.svg",
+        "advanced" => "fluent-color-settings-24.svg",
+        "log" => "fluent-color-history-24.svg",
+        "about" => "fluent-color-book-open-24.svg",
+        _ => panic!("unknown Fluent Color navigation icon: {name}"),
+    };
+    let packaged = std::env::current_exe().ok().and_then(|path| {
+        path.parent()
+            .map(|parent| parent.join("assets/icons").join(file_name))
+    });
+    let path = packaged.filter(|path| path.exists()).unwrap_or_else(|| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/icons")
+            .join(file_name)
+    });
+    format!("file:///{}", path.to_string_lossy().replace('\\', "/"))
 }
 
 fn viewbox_size(svg: &str) -> f64 {

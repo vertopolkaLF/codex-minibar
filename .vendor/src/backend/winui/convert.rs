@@ -51,6 +51,27 @@ pub(super) fn svg_icon(path: &str, color: &str) -> Result<bindings::IconElement>
     }
 }
 
+pub(super) fn image_icon(uri: &str) -> Result<bindings::IconElement> {
+    let uri = xml_escape_attr(uri);
+    let xaml = format!(
+        r#"<ImageIcon xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Source="{uri}" />"#
+    );
+    let factory: IXamlReaderStatics = {
+        static SHARED: windows_core::imp::FactoryCache<XamlReader, IXamlReaderStatics> =
+            windows_core::imp::FactoryCache::new();
+        SHARED.call(|factory| Ok(factory.clone()))?
+    };
+    unsafe {
+        let mut result = core::ptr::null_mut();
+        (windows_core::Interface::vtable(&factory).load)(
+            windows_core::Interface::as_raw(&factory),
+            core::mem::transmute_copy(&windows_core::HSTRING::from(xaml)),
+            &mut result,
+        )
+        .and_then(|| windows_core::Type::from_abi(result))
+    }
+}
+
 pub(super) fn to_xaml_gridlength(v: GridLength) -> Result<bindings::GridLength> {
     use bindings::GridUnitType;
     match v {
@@ -152,7 +173,10 @@ pub(super) fn build_nav_view_item(item: &NavViewItem) -> Result<windows_core::II
     nv_item
         .cast::<bindings::IFrameworkElement>()?
         .SetTag(&tag_inspectable)?;
-    if let Some((path, color)) = &item.icon_path {
+    if let Some(uri) = &item.icon_image_uri {
+        let icon_elem = image_icon(uri)?;
+        nv_item.SetIcon(&icon_elem)?;
+    } else if let Some((path, color)) = &item.icon_path {
         let icon_elem = svg_icon(path, color)?;
         nv_item.SetIcon(&icon_elem)?;
     }

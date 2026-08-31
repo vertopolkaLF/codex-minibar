@@ -1731,35 +1731,35 @@ fn root_nav_items(nav_icon_color: &str) -> [NavViewItem; 10] {
     [
         NavViewItem::new("General")
             .tag("general")
-            .icon_path(crate::icons::data("house"), nav_icon_color),
+            .icon_image_uri(crate::icons::fluent_color_uri("general")),
         NavViewItem::new("Providers")
             .tag("providers")
-            .icon_path(crate::icons::data("plugs-connected"), nav_icon_color)
+            .icon_image_uri(crate::icons::fluent_color_uri("providers"))
             .trailing_icon_path(crate::icons::data("caret-right"), nav_icon_color),
         NavViewItem::new("Customize")
             .tag("customize")
-            .icon_path(crate::icons::data("squares-four"), nav_icon_color),
+            .icon_image_uri(crate::icons::fluent_color_uri("customize")),
         NavViewItem::new("Schedule")
             .tag("schedule")
-            .icon_path(crate::icons::data("clock"), nav_icon_color),
+            .icon_image_uri(crate::icons::fluent_color_uri("schedule")),
         NavViewItem::new("Tray")
             .tag("tray")
-            .icon_path(crate::icons::data("chat-centered-text"), nav_icon_color),
+            .icon_image_uri(crate::icons::fluent_color_uri("tray")),
         NavViewItem::new("Notifications")
             .tag("notifications")
-            .icon_path(crate::icons::data("bell"), nav_icon_color),
+            .icon_image_uri(crate::icons::fluent_color_uri("notifications")),
         NavViewItem::new("Appearance")
             .tag("appearance")
-            .icon_path(crate::icons::data("paint-brush"), nav_icon_color),
+            .icon_image_uri(crate::icons::fluent_color_uri("appearance")),
         NavViewItem::new("Advanced")
             .tag("advanced")
-            .icon_path(crate::icons::data("fluent-settings"), nav_icon_color),
+            .icon_image_uri(crate::icons::fluent_color_uri("advanced")),
         NavViewItem::new("Log")
             .tag("log")
-            .icon_path(crate::icons::data("scroll"), nav_icon_color),
+            .icon_image_uri(crate::icons::fluent_color_uri("log")),
         NavViewItem::new("About & Updates")
             .tag("about")
-            .icon_path(crate::icons::data("info"), nav_icon_color),
+            .icon_image_uri(crate::icons::fluent_color_uri("about")),
     ]
 }
 
