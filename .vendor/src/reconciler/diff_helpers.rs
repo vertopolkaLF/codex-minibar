@@ -46,11 +46,20 @@ impl<B: Backend> Reconciler<B> {
     }
 
     pub fn apply_props(&mut self, id: ControlId, bindings: &[Binding]) {
+        // Apply properties before events. Generated bindings list Event first,
+        // and WinUI RangeBase (Slider, ProgressBar) fires ValueChanged when
+        // Minimum clamps the default 0. If the handler is already attached,
+        // that clamp is persisted as a real user edit and live-settings echo
+        // ping-pongs the minimum vs the intended value every frame.
+        for b in bindings {
+            if let Binding::Prop(p, v) = b {
+                self.backend.set_prop(id, *p, v);
+            }
+        }
         for b in bindings {
             match b {
-                Binding::Prop(p, v) => self.backend.set_prop(id, *p, v),
                 Binding::Event(e, Some(h)) => self.backend.attach_event(id, *e, h.clone()),
-                Binding::Event(_, None) => {}
+                Binding::Event(_, None) | Binding::Prop(_, _) => {}
             }
         }
     }

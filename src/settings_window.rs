@@ -3613,16 +3613,23 @@ fn tab_content(
                         5,
                         50,
                         5,
-                        move |value: f64| {
-                            let percent = value.round().clamp(5.0, 50.0) as u8;
-                            persist_u8(
-                                set_low_usage_threshold.clone(),
-                                apply_low_usage_threshold.clone(),
-                                percent,
-                                |settings, value| {
-                                    settings.notifications.low_usage_threshold_percent = value;
-                                },
-                            );
+                        {
+                            let set_low_usage_threshold = set_low_usage_threshold.clone();
+                            let apply_low_usage_threshold = apply_low_usage_threshold.clone();
+                            move |value: f64| {
+                                let percent = value.round().clamp(5.0, 50.0) as u8;
+                                if percent == low_usage_threshold {
+                                    return;
+                                }
+                                persist_u8(
+                                    set_low_usage_threshold.clone(),
+                                    apply_low_usage_threshold.clone(),
+                                    percent,
+                                    |settings, value| {
+                                        settings.notifications.low_usage_threshold_percent = value;
+                                    },
+                                );
+                            }
                         },
                     ),
                 )
@@ -3657,17 +3664,26 @@ fn tab_content(
                         5,
                         50,
                         5,
-                        move |value: f64| {
-                            let percent = value.round().clamp(5.0, 50.0) as u8;
-                            persist_u8(
-                                set_weekly_low_usage_threshold.clone(),
-                                apply_weekly_low_usage_threshold.clone(),
-                                percent,
-                                |settings, value| {
-                                    settings.notifications.weekly_low_usage_threshold_percent =
-                                        value;
-                                },
-                            );
+                        {
+                            let set_weekly_low_usage_threshold =
+                                set_weekly_low_usage_threshold.clone();
+                            let apply_weekly_low_usage_threshold =
+                                apply_weekly_low_usage_threshold.clone();
+                            move |value: f64| {
+                                let percent = value.round().clamp(5.0, 50.0) as u8;
+                                if percent == weekly_low_usage_threshold {
+                                    return;
+                                }
+                                persist_u8(
+                                    set_weekly_low_usage_threshold.clone(),
+                                    apply_weekly_low_usage_threshold.clone(),
+                                    percent,
+                                    |settings, value| {
+                                        settings.notifications.weekly_low_usage_threshold_percent =
+                                            value;
+                                    },
+                                );
+                            }
                         },
                     ),
                 )

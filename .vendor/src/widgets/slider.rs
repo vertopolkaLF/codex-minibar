@@ -74,7 +74,13 @@ impl Widget for Slider {
     fn bindings(&self) -> PropBindings {
         let mut out = generated::slider_bindings(self);
         if let Some(v) = self.step {
-            out.push(Binding::Prop(Prop::Step, PropValue::F64(v)));
+            // StepFrequency must land before Value so the thumb snaps during
+            // the initial property pass, not after ValueChanged is attached.
+            let binding = Binding::Prop(Prop::Step, PropValue::F64(v));
+            match out.iter().position(|b| matches!(b, Binding::Prop(Prop::Value, _))) {
+                Some(i) => out.insert(i, binding),
+                None => out.push(binding),
+            }
         }
         out
     }
