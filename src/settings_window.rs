@@ -176,6 +176,7 @@ struct SettingsWindowState {
     low_usage_threshold: SetState<u8>,
     weekly_low_usage_enabled: SetState<bool>,
     weekly_low_usage_threshold: SetState<u8>,
+    taskbar_widget_enabled: SetState<bool>,
     tray_widgets: SetState<Vec<TrayWidget>>,
     check_for_updates: SetState<bool>,
     notify_on_update: SetState<bool>,
@@ -257,6 +258,8 @@ impl SettingsWindowState {
             .call(settings.notifications.weekly_low_usage_enabled);
         self.weekly_low_usage_threshold
             .call(settings.notifications.weekly_low_usage_threshold_percent);
+        self.taskbar_widget_enabled
+            .call(settings.taskbar_widget_enabled);
         self.tray_widgets.call(settings.tray_widgets.clone());
         self.check_for_updates.call(settings.check_for_updates);
         self.notify_on_update
@@ -2155,6 +2158,8 @@ pub fn render(
     let (weekly_low_usage_expand_progress, set_weekly_low_usage_expand_progress) =
         cx.use_async_state(0.0_f64);
     let (hovered_card_id, set_hovered_card_id) = cx.use_state(None::<String>);
+    let (taskbar_widget_enabled, set_taskbar_widget_enabled) =
+        cx.use_state(settings.taskbar_widget_enabled);
     let (tray_widgets, set_tray_widgets) = cx.use_state(settings.tray_widgets.clone());
     let (expanded_tray_widget, set_expanded_tray_widget) = cx.use_state(None::<String>);
     let (editing_tray_indicator, set_editing_tray_indicator) =
@@ -2206,6 +2211,7 @@ pub fn render(
             low_usage_threshold: set_low_usage_threshold.clone(),
             weekly_low_usage_enabled: set_weekly_low_usage_enabled.clone(),
             weekly_low_usage_threshold: set_weekly_low_usage_threshold.clone(),
+            taskbar_widget_enabled: set_taskbar_widget_enabled.clone(),
             tray_widgets: set_tray_widgets.clone(),
             check_for_updates: set_check_for_updates.clone(),
             notify_on_update: set_notify_on_update.clone(),
@@ -2265,6 +2271,7 @@ pub fn render(
             weekly_low_usage_threshold,
             weekly_low_usage_expanded,
             weekly_low_usage_expand_progress,
+            taskbar_widget_enabled,
             &tray_widgets,
             &expanded_tray_widget,
             &editing_tray_indicator,
@@ -2319,6 +2326,7 @@ pub fn render(
             set_weekly_low_usage_threshold,
             set_weekly_low_usage_expanded,
             set_weekly_low_usage_expand_progress,
+            set_taskbar_widget_enabled,
             set_tray_widgets.clone(),
             set_expanded_tray_widget,
             set_editing_tray_indicator.clone(),
@@ -3040,6 +3048,7 @@ fn tab_content(
     weekly_low_usage_threshold: u8,
     weekly_low_usage_expanded: bool,
     weekly_low_usage_expand_progress: f64,
+    taskbar_widget_enabled: bool,
     tray_widgets: &[TrayWidget],
     expanded_tray_widget: &Option<String>,
     editing_tray_indicator: &Option<(String, usize)>,
@@ -3094,6 +3103,7 @@ fn tab_content(
     set_weekly_low_usage_threshold: SetState<u8>,
     set_weekly_low_usage_expanded: SetState<bool>,
     set_weekly_low_usage_expand_progress: AsyncSetState<f64>,
+    set_taskbar_widget_enabled: SetState<bool>,
     set_tray_widgets: SetState<Vec<TrayWidget>>,
     set_expanded_tray_widget: SetState<Option<String>>,
     set_editing_tray_indicator: AsyncSetState<Option<(String, usize)>>,
@@ -3509,9 +3519,32 @@ fn tab_content(
                     opencode_go_enabled,
                     openrouter_enabled,
                 );
-            (
-                "Tray",
-                tray_settings_cards(
+            let mut rows = vec![
+                settings_toggle_card_with_description(
+                    "Show metrics on the taskbar",
+                    Some("Embeds the configured tray limit widgets beside the Windows notification area."),
+                    taskbar_widget_enabled,
+                    {
+                        let set_taskbar_widget_enabled = set_taskbar_widget_enabled.clone();
+                        let apply_taskbar_widget_enabled = settings_tx.clone();
+                        move |value| {
+                            persist_bool(
+                                set_taskbar_widget_enabled.clone(),
+                                apply_taskbar_widget_enabled.clone(),
+                                value,
+                                |settings, value| settings.taskbar_widget_enabled = value,
+                            );
+                        }
+                    },
+                    "tray-taskbar-widget",
+                    hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("tray-taskbar-widget"),
+                settings_section_heading("Notification area widgets")
+                    .with_key("tray-notification-area-heading"),
+            ];
+            rows.extend(tray_settings_cards(
                     tray_widgets,
                     &enabled_providers,
                     expanded_tray_widget,
@@ -3525,8 +3558,8 @@ fn tab_content(
                     hovered_card_id,
                     set_hovered_card_id.clone(),
                     settings_tx.clone(),
-                ),
-            )
+                ));
+            ("Tray", rows)
         }
         Tab::Notifications => (
             "Notifications",
@@ -3728,6 +3761,7 @@ fn tab_content(
                 low_usage_threshold: set_low_usage_threshold,
                 weekly_low_usage_enabled: set_weekly_low_usage_enabled,
                 weekly_low_usage_threshold: set_weekly_low_usage_threshold,
+                taskbar_widget_enabled: set_taskbar_widget_enabled,
                 tray_widgets: set_tray_widgets,
                 check_for_updates: set_check_for_updates,
                 notify_on_update: set_notify_on_update,

@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{Receiver, Sender},
     },
     thread,
@@ -120,11 +120,15 @@ pub struct AppState {
     /// Live settings pushes from the settings window; drained by the tray bridge.
     pub settings_rx: Mutex<Option<Receiver<Settings>>>,
     pub settings_tx: Sender<Settings>,
+    /// Latest normalized taskbar view state, independent from the lifetime of
+    /// Explorer's child HWND so a restarted shell can mount a fresh host.
+    pub taskbar_widget_snapshot: Mutex<crate::taskbar_widget::TaskbarWidgetSnapshot>,
+    pub taskbar_widget_revision: AtomicU64,
     pub updates: Arc<UpdateController>,
 }
 
 impl AppState {
-    fn current_limits(&self) -> ProviderLimits {
+    pub(crate) fn current_limits(&self) -> ProviderLimits {
         self.limits
             .lock()
             .map(|limits| limits.clone())
@@ -162,6 +166,30 @@ impl AppState {
 
     fn take_worker_events(&self) -> Option<Receiver<WorkerEvent>> {
         self.worker_events_rx.lock().ok()?.take()
+    }
+
+    pub(crate) fn current_taskbar_widget_snapshot(
+        &self,
+    ) -> crate::taskbar_widget::TaskbarWidgetSnapshot {
+        self.taskbar_widget_snapshot
+            .lock()
+            .map(|snapshot| snapshot.clone())
+            .unwrap_or_else(|_| {
+                crate::taskbar_widget::TaskbarWidgetSnapshot::from_settings(
+                    &self.settings,
+                    self.current_limits(),
+                )
+            })
+    }
+
+    pub(crate) fn publish_taskbar_widget_snapshot(
+        &self,
+        snapshot: crate::taskbar_widget::TaskbarWidgetSnapshot,
+    ) {
+        if let Ok(mut current) = self.taskbar_widget_snapshot.lock() {
+            *current = snapshot;
+            self.taskbar_widget_revision.fetch_add(1, Ordering::Release);
+        }
     }
 
     fn worker_commands(&self) -> Vec<(ProviderKind, Sender<WorkerCommand>)> {
@@ -1917,6 +1945,22 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         }
     });
 
+    cx.use_effect_with_cleanup((), {
+        let state = Arc::clone(&state);
+        move || {
+            // Explorer owns the parent HWND. If Explorer restarts, its child
+            // can disappear with it; recreate the dormant reactor host on the
+            // UI thread and let its own layout pulse attach to the new taskbar.
+            let timer = DispatcherTimer::new(Duration::from_millis(1500), move || {
+                if let Err(error) = crate::taskbar_widget::ensure_host(Arc::clone(&state)) {
+                    eprintln!("Could not restore taskbar widget host: {error:?}");
+                }
+            })
+            .ok();
+            Some(move || drop(timer))
+        }
+    });
+
     cx.use_effect((), {
         let set_clock_tick = set_clock_tick.clone();
         move || {
@@ -3027,6 +3071,11 @@ fn start_background_bridge(
         let mut notification_settings = state.settings.notifications.clone();
         let mut limit_notifications = HashMap::<ProviderKind, LimitNotificationTracker>::new();
         let mut update_phase = updates.snapshot();
+        let mut taskbar_snapshot = crate::taskbar_widget::TaskbarWidgetSnapshot::from_settings(
+            &state.settings,
+            state.current_limits(),
+        );
+        state.publish_taskbar_widget_snapshot(taskbar_snapshot.clone());
         let mut ui = UiState {
             theme: state.settings.theme,
             accent_color: state.settings.accent_color,
@@ -3090,10 +3139,11 @@ fn start_background_bridge(
 
         let apply_settings = |ui: &mut UiState,
                               set_ui: &AsyncSetState<UiState>,
-                              notification_settings: &mut NotificationSettings,
-                              widgets: &mut Vec<TrayWidget>,
-                              tray: &mut TrayManager,
-                              settings: Settings| {
+                               notification_settings: &mut NotificationSettings,
+                               widgets: &mut Vec<TrayWidget>,
+                               tray: &mut TrayManager,
+                               taskbar_snapshot: &mut crate::taskbar_widget::TaskbarWidgetSnapshot,
+                               settings: Settings| {
             crate::settings_window::sync_open_window(settings.clone(), ui_dispatcher.clone());
             let phase = updates.snapshot();
             let providers_changed = ui.codex_enabled
@@ -3176,6 +3226,11 @@ fn start_background_bridge(
             ) {
                 ui.set_popup_error(error.to_string());
             }
+            *taskbar_snapshot = crate::taskbar_widget::TaskbarWidgetSnapshot::from_settings(
+                &settings,
+                state.current_limits(),
+            );
+            state.publish_taskbar_widget_snapshot(taskbar_snapshot.clone());
             for (provider, commands) in state.worker_commands() {
                 let _ = commands.send(WorkerCommand::SetAutomaticActivation(
                     settings.automatic_activation
@@ -3213,9 +3268,10 @@ fn start_background_bridge(
         let drain_settings = |ui: &mut UiState,
                               set_ui: &AsyncSetState<UiState>,
                               notification_settings: &mut NotificationSettings,
-                              widgets: &mut Vec<TrayWidget>,
-                              tray: &mut TrayManager,
-                              check_for_updates: &mut bool,
+                               widgets: &mut Vec<TrayWidget>,
+                               tray: &mut TrayManager,
+                               taskbar_snapshot: &mut crate::taskbar_widget::TaskbarWidgetSnapshot,
+                               check_for_updates: &mut bool,
                               notify_on_update: &mut bool| {
             let Some(settings_rx) = settings_rx.as_ref() else {
                 return;
@@ -3226,9 +3282,24 @@ fn start_background_bridge(
                 }
                 *check_for_updates = settings.check_for_updates;
                 *notify_on_update = settings.notifications.update_available;
-                apply_settings(ui, set_ui, notification_settings, widgets, tray, settings);
+                apply_settings(
+                    ui,
+                    set_ui,
+                    notification_settings,
+                    widgets,
+                    tray,
+                    taskbar_snapshot,
+                    settings,
+                );
             }
         };
+
+        let refresh_taskbar_system_theme =
+            |taskbar_snapshot: &mut crate::taskbar_widget::TaskbarWidgetSnapshot| {
+                if taskbar_snapshot.refresh_system_theme() {
+                    state.publish_taskbar_widget_snapshot(taskbar_snapshot.clone());
+                }
+            };
 
         let drain_updates = |ui: &mut UiState,
                              set_ui: &AsyncSetState<UiState>,
@@ -3269,12 +3340,14 @@ fn start_background_bridge(
                     ui.set_popup_error(error.to_string());
                     publish_popup_ui(&set_ui, &ui);
                 }
+                refresh_taskbar_system_theme(&mut taskbar_snapshot);
                 drain_settings(
                     &mut ui,
                     &set_ui,
                     &mut notification_settings,
                     &mut widgets,
                     &mut tray,
+                    &mut taskbar_snapshot,
                     &mut check_for_updates,
                     &mut notify_on_update,
                 );
@@ -3302,12 +3375,14 @@ fn start_background_bridge(
                 ui.set_popup_error(error.to_string());
                 publish_popup_ui(&set_ui, &ui);
             }
+            refresh_taskbar_system_theme(&mut taskbar_snapshot);
             drain_settings(
                 &mut ui,
                 &set_ui,
                 &mut notification_settings,
                 &mut widgets,
                 &mut tray,
+                &mut taskbar_snapshot,
                 &mut check_for_updates,
                 &mut notify_on_update,
             );
@@ -3355,6 +3430,8 @@ fn start_background_bridge(
                     // from that exact snapshot.
                     state.replace_limits(provider, limits);
                     let limits = state.current_limits();
+                    taskbar_snapshot.replace_limits(limits.clone());
+                    state.publish_taskbar_widget_snapshot(taskbar_snapshot.clone());
                     crate::settings_window::publish_discovered_popup_bricks(
                         &limits,
                         ui_dispatcher.clone(),

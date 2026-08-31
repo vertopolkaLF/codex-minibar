@@ -74,6 +74,11 @@ fn run() -> Result<()> {
     let initial_height =
         popup::height_for(startup_error.as_deref()).min(FALLBACK_CLIENT_HEIGHT_LIMIT);
     popup::set_client_height_dip(initial_height);
+    let taskbar_widget_snapshot =
+        codex_minibar::taskbar_widget::TaskbarWidgetSnapshot::from_settings(
+            &settings,
+            hydrated_limits.clone(),
+        );
     let state = Arc::new(AppState {
         settings,
         limits: Mutex::new(hydrated_limits),
@@ -86,6 +91,8 @@ fn run() -> Result<()> {
         last_activation_at,
         settings_tx,
         settings_rx: Mutex::new(Some(settings_rx)),
+        taskbar_widget_snapshot: Mutex::new(taskbar_widget_snapshot),
+        taskbar_widget_revision: std::sync::atomic::AtomicU64::new(0),
         updates: Arc::clone(&updates),
     });
     codex_minibar::updater::install_runtime(Arc::clone(&updates), {
@@ -99,6 +106,11 @@ fn run() -> Result<()> {
                 state.settings.theme,
                 state.settings.accent_color,
             );
+            // Create the taskbar surface first. windows-reactor retains one
+            // legacy "current window" slot for popup chrome; creating the main
+            // popup last keeps that slot pointed at the popup while theme
+            // propagation still reaches both roots.
+            codex_minibar::taskbar_widget::ensure_host(Arc::clone(&state))?;
             // Unlike `App::render`, this builds the WinUI host without calling
             // `Window::Activate`. The tray popup is the sole code path that
             // makes its HWND visible.

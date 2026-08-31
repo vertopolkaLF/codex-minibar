@@ -10,7 +10,7 @@ use chrono::{DateTime, Local, Timelike};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 30;
+pub const SETTINGS_VERSION: u32 = 31;
 
 /// 255 until `TimeFormat::apply` runs so first paint can still follow Windows.
 static TIME_FORMAT: AtomicU8 = AtomicU8::new(u8::MAX);
@@ -1262,6 +1262,9 @@ pub struct Settings {
     /// stored separately in protected Windows user storage.
     #[serde(default)]
     pub openrouter_accounts: Vec<OpenRouterAccount>,
+    /// Mirrors the configured tray metrics inside a compact child window
+    /// embedded into the primary Windows taskbar.
+    pub taskbar_widget_enabled: bool,
     pub tray_widgets: Vec<TrayWidget>,
     pub notifications: NotificationSettings,
     pub history_retention_days: u16,
@@ -1300,6 +1303,8 @@ impl Default for Settings {
             opencode_go_credentials_revision: 0,
             openrouter_credentials_revision: 0,
             openrouter_accounts: Vec::new(),
+            // Taskbar embedding is opt-in because it occupies taskbar space.
+            taskbar_widget_enabled: false,
             // An empty list intentionally means "show the ordinary app icon".
             tray_widgets: Vec::new(),
             notifications: NotificationSettings::default(),
@@ -2403,6 +2408,15 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.insert("version".into(), toml::Value::Integer(30));
                 version = 30;
             }
+            30 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("taskbar_widget_enabled")
+                    .or_insert(toml::Value::Boolean(false));
+                root.insert("version".into(), toml::Value::Integer(31));
+                version = 31;
+            }
             // Unknown future/gap versions: stamp current and keep decoding with
             // serde defaults rather than refusing to start.
             _ => {
@@ -2459,6 +2473,7 @@ mod tests {
         );
         assert_eq!(value.total_spend_period, TotalSpendPeriod::ThirtyDays);
         assert_eq!(value.history_retention_days, 30);
+        assert!(!value.taskbar_widget_enabled);
         assert!(value.tray_widgets.is_empty());
         assert_eq!(value.popup_order, PopupWidgetKind::default_order());
         assert!(!value.notifications.activation_success);
@@ -2499,6 +2514,20 @@ show_usage_stats = false
             PopupSurface::ProviderTab,
             true
         ));
+    }
+
+    #[test]
+    fn migrates_v30_taskbar_widget_as_opt_in() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(&path, "version = 30\n").unwrap();
+
+        let loaded = Settings::load_or_create(&path).unwrap();
+        assert_eq!(loaded.version, SETTINGS_VERSION);
+        assert!(!loaded.taskbar_widget_enabled);
+        assert!(fs::read_to_string(path)
+            .unwrap()
+            .contains("taskbar_widget_enabled = false"));
     }
 
     #[test]

@@ -24,6 +24,7 @@ mod settings_controls;
 pub mod settings_window;
 pub mod single_instance;
 pub mod store;
+pub mod taskbar_widget;
 pub mod theme;
 pub mod tray;
 pub mod updater;
