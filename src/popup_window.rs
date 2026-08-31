@@ -1621,6 +1621,7 @@ fn spending_card_with_title(
             ThemeRef::Accent,
             None,
             color_scheme,
+            0,
         ));
     }
 
@@ -3878,12 +3879,67 @@ fn popup_chrome_icon_color(color_scheme: ColorScheme, emphasized: bool) -> Color
     }
 }
 
+/// CSS `#0003` → `#00000033` interval ticks on the usage track.
+const INTERVAL_TICK_COLOR: Color = Color {
+    a: 0x33,
+    r: 0,
+    g: 0,
+    b: 0,
+};
+
+/// Interior ticks that divide a quota window into equal buckets.
+///
+/// 5-hour bars get hour marks 1–4, weekly bars get day marks 1–6, and
+/// monthly bars get three quarter marks (skipping 0% and 100%).
+fn interval_tick_count(window: &LimitWindow) -> u32 {
+    match window.duration_minutes {
+        Some(minutes) if minutes <= 12 * 60 => 4,
+        Some(minutes) if minutes <= 8 * 24 * 60 => 6,
+        Some(_) => 3,
+        None => 0,
+    }
+}
+
+/// Dots at the end of each interior bucket, right-aligned in equal columns.
+fn interval_ticks_layer(tick_count: u32) -> Option<Element> {
+    if tick_count == 0 {
+        return None;
+    }
+    const DOT: f64 = 4.0;
+    let segments = (tick_count + 1) as usize;
+    let dots: Vec<Element> = (0..tick_count)
+        .map(|index| {
+            border(Element::Empty)
+                .width(DOT)
+                .height(DOT)
+                .corner_radius(DOT / 2.0)
+                .background(INTERVAL_TICK_COLOR)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .vertical_alignment(VerticalAlignment::Center)
+                .grid_column(index as i32)
+                .into()
+        })
+        .collect();
+    Some(
+        grid(dots)
+            .columns(vec![GridLength::Star(1.0); segments])
+            .rows([GridLength::Star(1.0)])
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .vertical_alignment(VerticalAlignment::Stretch)
+            .grid_column(0)
+            .grid_row(0)
+            .with_key(format!("interval-ticks-{tick_count}"))
+            .into(),
+    )
+}
+
 /// Thin pill progress track with a rounded fill and optional pace marker.
 fn rounded_progress(
     value: f64,
     fill: ThemeRef,
     pace: Option<PaceTip>,
     color_scheme: ColorScheme,
+    interval_ticks: u32,
 ) -> Element {
     const HEIGHT: f64 = 6.0;
     let radius = HEIGHT / 2.0;
@@ -3919,6 +3975,9 @@ fn rounded_progress(
         .grid_row(0)
         .into();
     let mut layers: Vec<Element> = vec![track_layer, fill_layer.into()];
+    if let Some(ticks) = interval_ticks_layer(interval_ticks) {
+        layers.push(ticks);
+    }
     if let Some(pace) = pace {
         layers.push(pace_marker_layer(pace, color_scheme));
     }
@@ -4080,7 +4139,13 @@ fn limit_card(
     border(
         vstack((
             header,
-            rounded_progress(progress, accent, pace, color_scheme),
+            rounded_progress(
+                progress,
+                accent,
+                pace,
+                color_scheme,
+                interval_tick_count(window),
+            ),
             footer,
         ))
         .spacing(8.0),
