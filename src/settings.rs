@@ -10,7 +10,7 @@ use chrono::{DateTime, Local, Timelike};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 32;
+pub const SETTINGS_VERSION: u32 = 33;
 
 /// 255 until `TimeFormat::apply` runs so first paint can still follow Windows.
 static TIME_FORMAT: AtomicU8 = AtomicU8::new(u8::MAX);
@@ -874,6 +874,7 @@ pub enum TraySource {
 pub enum TrayPresentation {
     StackedNumbers,
     StackedBars,
+    VerticalBars,
     NestedRings,
     Number,
     Bar,
@@ -888,6 +889,7 @@ impl TrayPresentation {
             self,
             Self::StackedNumbers
                 | Self::StackedBars
+                | Self::VerticalBars
                 | Self::NestedRings
                 | Self::Number
                 | Self::Bar
@@ -899,6 +901,7 @@ impl TrayPresentation {
         match self {
             Self::StackedNumbers | Self::Number => Self::StackedNumbers,
             Self::StackedBars | Self::Bar => Self::StackedBars,
+            Self::VerticalBars => Self::VerticalBars,
             Self::NestedRings | Self::Ring => Self::NestedRings,
             other => other,
         }
@@ -1059,10 +1062,16 @@ pub struct TrayWidget {
     pub indicators: Vec<TrayIndicator>,
     #[serde(default = "default_tray_presentation")]
     pub presentation: TrayPresentation,
+    #[serde(default = "default_true")]
+    pub show_ring_text: bool,
 }
 
 fn default_tray_presentation() -> TrayPresentation {
     TrayPresentation::StackedNumbers
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 impl TrayWidget {
@@ -1085,6 +1094,7 @@ impl TrayWidget {
                 .map(|metric| TrayIndicator::new(provider, *metric))
                 .collect(),
             presentation: TrayPresentation::StackedNumbers,
+            show_ring_text: true,
         }
     }
 
@@ -1104,6 +1114,7 @@ impl TrayWidget {
             kind: TrayWidgetKind::Limits,
             indicators: vec![TrayIndicator::new(provider, metric)],
             presentation: TrayPresentation::StackedNumbers,
+            show_ring_text: true,
         }
     }
 
@@ -1113,6 +1124,7 @@ impl TrayWidget {
             kind: TrayWidgetKind::AppIcon,
             indicators: Vec::new(),
             presentation: TrayPresentation::StackedNumbers,
+            show_ring_text: true,
         }
     }
 
@@ -1179,16 +1191,26 @@ pub enum TaskbarSectionPresentation {
     #[default]
     Number,
     ProgressBar,
+    VerticalBar,
+    Ring,
     Clock,
 }
 
 impl TaskbarSectionPresentation {
-    pub const ALL: [Self; 3] = [Self::Number, Self::ProgressBar, Self::Clock];
+    pub const ALL: [Self; 5] = [
+        Self::Number,
+        Self::ProgressBar,
+        Self::VerticalBar,
+        Self::Ring,
+        Self::Clock,
+    ];
 
     pub const fn label(self) -> &'static str {
         match self {
             Self::Number => "Numbers",
             Self::ProgressBar => "Progress bars",
+            Self::VerticalBar => "Vertical bars",
+            Self::Ring => "Rings",
             Self::Clock => "Clock",
         }
     }
@@ -1197,16 +1219,24 @@ impl TaskbarSectionPresentation {
         match self {
             Self::Number => 0,
             Self::ProgressBar => 1,
-            Self::Clock => 2,
+            Self::VerticalBar => 2,
+            Self::Ring => 3,
+            Self::Clock => 4,
         }
     }
 
     pub const fn from_index(index: i32) -> Self {
         match index {
             1 => Self::ProgressBar,
-            2 => Self::Clock,
+            2 => Self::VerticalBar,
+            3 => Self::Ring,
+            4 => Self::Clock,
             _ => Self::Number,
         }
+    }
+
+    pub const fn is_ring(self) -> bool {
+        matches!(self, Self::Ring)
     }
 }
 
@@ -1296,6 +1326,8 @@ pub struct TaskbarWidgetSection {
     pub provider_id: Option<String>,
     #[serde(default)]
     pub presentation: TaskbarSectionPresentation,
+    #[serde(default = "default_true")]
+    pub show_ring_text: bool,
 }
 
 impl TaskbarWidgetSection {
@@ -1305,6 +1337,7 @@ impl TaskbarWidgetSection {
             kind,
             provider_id: Some(provider.id().into()),
             presentation: kind.default_presentation(),
+            show_ring_text: true,
         }
     }
 
@@ -1314,6 +1347,7 @@ impl TaskbarWidgetSection {
             kind,
             provider_id: None,
             presentation: kind.default_presentation(),
+            show_ring_text: true,
         }
     }
 
@@ -2662,6 +2696,13 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     .or_insert_with(|| toml::Value::Array(Vec::new()));
                 root.insert("version".into(), toml::Value::Integer(32));
                 version = 32;
+            }
+            32 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.insert("version".into(), toml::Value::Integer(33));
+                version = 33;
             }
             // Unknown future/gap versions: stamp current and keep decoding with
             // serde defaults rather than refusing to start.

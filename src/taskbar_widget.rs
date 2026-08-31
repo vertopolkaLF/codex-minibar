@@ -7,6 +7,7 @@
 
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     rc::Rc,
     sync::{
         Arc,
@@ -34,6 +35,9 @@ const CONTENT_PADDING_DIP: f64 = 6.0;
 const CONTENT_GAP_DIP: f64 = 8.0;
 const ICON_SIZE_DIP: f64 = 14.0;
 const BAR_WIDTH_DIP: f64 = 44.0;
+const VERTICAL_BAR_WIDTH_DIP: f64 = 4.0;
+const VERTICAL_BAR_HEIGHT_DIP: f64 = 22.0;
+const RING_SIZE_DIP: f64 = 26.0;
 const LAYOUT_REFRESH: Duration = Duration::from_millis(1500);
 const DATA_REFRESH: Duration = Duration::from_millis(250);
 
@@ -47,6 +51,8 @@ static HWND_BITS: AtomicIsize = AtomicIsize::new(0);
 pub enum TaskbarSectionStyle {
     Chip,
     Bar,
+    VerticalBar,
+    Ring,
     Clock,
 }
 
@@ -59,6 +65,7 @@ pub struct TaskbarSectionView {
     pub value: String,
     pub progress: Option<f64>,
     pub style: TaskbarSectionStyle,
+    pub show_ring_text: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -115,32 +122,6 @@ pub fn render_sections(
         .collect()
 }
 
-fn sample_limits(now: DateTime<Utc>) -> ProviderLimits {
-    let mut limits = ProviderLimits::default();
-    *limits.get_mut(ProviderKind::Codex) = RateLimits {
-        primary: LimitWindow {
-            used_percent: Some(28),
-            resets_at: Some(now + chrono::Duration::hours(2) + chrono::Duration::minutes(14)),
-            duration_minutes: Some(300),
-        },
-        secondary: LimitWindow {
-            used_percent: Some(41),
-            resets_at: Some(now + chrono::Duration::days(4)),
-            duration_minutes: Some(10_080),
-        },
-        ..RateLimits::default()
-    };
-    *limits.get_mut(ProviderKind::Claude) = RateLimits {
-        primary: LimitWindow {
-            used_percent: Some(55),
-            resets_at: Some(now + chrono::Duration::hours(1) + chrono::Duration::minutes(6)),
-            duration_minutes: Some(300),
-        },
-        ..RateLimits::default()
-    };
-    limits
-}
-
 fn render_section(
     section: &TaskbarWidgetSection,
     limits: &ProviderLimits,
@@ -150,7 +131,7 @@ fn render_section(
     let icon_provider = section.provider().unwrap_or(ProviderKind::Codex);
     let descriptor = crate::provider_registry::descriptor(icon_provider);
     let style = section_style(section.presentation);
-    let (title, value, progress) = match section.kind {
+    let (title, mut value, progress) = match section.kind {
         TaskbarWidgetSectionKind::Session => {
             quota_view(limits.get(icon_provider), true, show_used)?
         }
@@ -197,6 +178,18 @@ fn render_section(
             ("Tokens".into(), format_tokens(tokens), None)
         }
     };
+    if section.presentation == TaskbarSectionPresentation::Clock {
+        let window = match section.kind {
+            TaskbarWidgetSectionKind::Session | TaskbarWidgetSectionKind::Reset => {
+                Some(&limits.get(icon_provider).primary)
+            }
+            TaskbarWidgetSectionKind::Weekly => Some(&limits.get(icon_provider).secondary),
+            _ => None,
+        };
+        if let Some(window) = window {
+            value = format_reset_in(window.resets_at, now);
+        }
+    }
 
     Some(TaskbarSectionView {
         id: section.id.clone(),
@@ -206,6 +199,7 @@ fn render_section(
         value,
         progress,
         style,
+        show_ring_text: section.presentation.is_ring() && section.show_ring_text,
     })
 }
 
@@ -235,7 +229,19 @@ fn section_style(presentation: TaskbarSectionPresentation) -> TaskbarSectionStyl
     match presentation {
         TaskbarSectionPresentation::Number => TaskbarSectionStyle::Chip,
         TaskbarSectionPresentation::ProgressBar => TaskbarSectionStyle::Bar,
+        TaskbarSectionPresentation::VerticalBar => TaskbarSectionStyle::VerticalBar,
+        TaskbarSectionPresentation::Ring => TaskbarSectionStyle::Ring,
         TaskbarSectionPresentation::Clock => TaskbarSectionStyle::Clock,
+    }
+}
+
+fn style_tag(style: TaskbarSectionStyle) -> &'static str {
+    match style {
+        TaskbarSectionStyle::Chip => "chip",
+        TaskbarSectionStyle::Bar => "bar",
+        TaskbarSectionStyle::VerticalBar => "vbar",
+        TaskbarSectionStyle::Ring => "ring",
+        TaskbarSectionStyle::Clock => "clock",
     }
 }
 
@@ -329,6 +335,9 @@ fn section_width(section: &TaskbarSectionView) -> f64 {
     match section.style {
         TaskbarSectionStyle::Chip => ICON_SIZE_DIP + 6.0 + value_width,
         TaskbarSectionStyle::Bar => ICON_SIZE_DIP + 8.0 + BAR_WIDTH_DIP + 6.0 + value_width,
+        TaskbarSectionStyle::VerticalBar => ICON_SIZE_DIP + 6.0 + VERTICAL_BAR_WIDTH_DIP,
+        TaskbarSectionStyle::Ring if section.show_ring_text => RING_SIZE_DIP,
+        TaskbarSectionStyle::Ring => ICON_SIZE_DIP + 6.0 + RING_SIZE_DIP,
         TaskbarSectionStyle::Clock => ICON_SIZE_DIP + 6.0 + value_width + 4.0,
     }
 }
@@ -401,8 +410,6 @@ pub fn view(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let (snapshot, set_snapshot) = cx.use_async_state(initial);
     let initial_width = content_width_for(&snapshot.rendered_sections(Utc::now()));
     let (placement, set_placement) = cx.use_async_state(Placement::bootstrap(initial_width));
-    let (hovered, set_hovered) = cx.use_state(false);
-
     cx.use_effect_with_cleanup((), {
         let state = Arc::clone(&state);
         let set_snapshot = set_snapshot.clone();
@@ -450,47 +457,35 @@ pub fn view(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         widget_width,
         WIDGET_HEIGHT_DIP,
     );
-    let idle = border(Element::Empty)
-        .background(ThemeRef::ControlFillSecondary)
-        .corner_radius(8.0)
-        .border_thickness(Thickness::uniform(1.0))
-        .border_brush(ThemeRef::ControlStroke)
-        .width(widget_width)
-        .height(WIDGET_HEIGHT_DIP);
-    let hover = border(Element::Empty)
-        .background(ThemeRef::SubtleFill)
-        .corner_radius(8.0)
-        .width(widget_width)
-        .height(WIDGET_HEIGHT_DIP)
-        .opacity(if hovered { 1.0 } else { 0.0 })
-        .with_opacity_transition(crate::theme::duration(
-            crate::theme::CONTROL_FASTER_ANIMATION,
-        ));
-    let set_hovered_on_enter = set_hovered.clone();
     let hit_target = border(Element::Empty)
         .background(Color::transparent())
         .width(widget_width)
         .height(WIDGET_HEIGHT_DIP)
         .tooltip("Open Codex Minibar")
-        .on_pointer_entered(move |_: PointerEventInfo| set_hovered_on_enter.call(true))
-        .on_pointer_exited(move || set_hovered.call(false))
         .on_tapped(crate::popup::show_near_cursor);
 
-    let surface_layers: Vec<Element> =
-        vec![idle.into(), hover.into(), strip, hit_target.into()];
+    let surface_layers: Vec<Element> = vec![strip, hit_target.into()];
     let strip_identity = visible_sections
         .iter()
-        .map(|section| section.id.as_str())
+        .map(|section| {
+            format!(
+                "{}:{}:{}:{}",
+                section.id,
+                style_tag(section.style),
+                section.icon,
+                u8::from(section.show_ring_text)
+            )
+        })
         .collect::<Vec<_>>()
-        .join("-");
+        .join("|");
     let surface: Element = relative_panel(surface_layers)
         .width(widget_width)
         .height(WIDGET_HEIGHT_DIP)
         .canvas_left(placement.left_dip)
         .canvas_top(placement.top_dip)
         .with_key(format!(
-            "taskbar-strip-{strip_identity}-{}",
-            snapshot.system_uses_light_theme
+            "taskbar-strip-{strip_identity}-c{}-t{}",
+            snapshot.use_colored_provider_icons, snapshot.system_uses_light_theme
         ))
         .into();
 
@@ -526,8 +521,13 @@ pub fn widget_strip(
         sections
             .iter()
             .map(|section| {
-                section_element(section, use_colored_icons, light_theme)
-                    .with_key(format!("taskbar-section-{}", section.id))
+                section_element(section, use_colored_icons, light_theme).with_key(format!(
+                    "taskbar-section-{}-{}-{}-{}",
+                    section.id,
+                    style_tag(section.style),
+                    section.icon,
+                    u8::from(section.show_ring_text)
+                ))
             })
             .collect()
     };
@@ -541,9 +541,15 @@ pub fn widget_strip(
         .into()
 }
 
-pub fn preview_section(section: &TaskbarWidgetSection) -> Element {
+pub fn preview_section(
+    section: &TaskbarWidgetSection,
+    limits: &ProviderLimits,
+    show_used: bool,
+    use_colored_icons: bool,
+    light_theme: bool,
+) -> Element {
     let now = Utc::now();
-    let view = render_section(section, &sample_limits(now), false, now).unwrap_or_else(|| {
+    let view = render_section(section, limits, show_used, now).unwrap_or_else(|| {
         TaskbarSectionView {
             id: section.id.clone(),
             icon: "codex",
@@ -552,9 +558,11 @@ pub fn preview_section(section: &TaskbarWidgetSection) -> Element {
             value: "—".into(),
             progress: None,
             style: section_style(section.presentation),
+            show_ring_text: section.presentation.is_ring() && section.show_ring_text,
         }
     });
-    section_element(&view, true, false)
+    section_element(&view, use_colored_icons, light_theme)
+        .with_key(format!("widget-preview-{}", section.id))
 }
 
 fn section_element(
@@ -569,7 +577,7 @@ fn section_element(
     } else {
         Color::rgb(245, 245, 245)
     };
-    let icon = crate::icons::element(section.icon, ICON_SIZE_DIP, icon_color)
+    let icon = crate::icons::element_in_slot(section.icon, ICON_SIZE_DIP, icon_color, &section.id)
         .vertical_alignment(VerticalAlignment::Center);
     let value = text_block(section.value.clone())
         .font_size(12.0)
@@ -586,6 +594,24 @@ fn section_element(
                 .spacing(6.0)
                 .vertical_alignment(VerticalAlignment::Center)
                 .into()
+        }
+        TaskbarSectionStyle::VerticalBar => {
+            let bar = compact_vertical_bar(section.progress.unwrap_or(0.0));
+            hstack((icon, bar))
+                .spacing(6.0)
+                .vertical_alignment(VerticalAlignment::Center)
+                .into()
+        }
+        TaskbarSectionStyle::Ring => {
+            let ring = compact_ring(section);
+            if section.show_ring_text {
+                ring
+            } else {
+                hstack((icon, ring))
+                    .spacing(6.0)
+                    .vertical_alignment(VerticalAlignment::Center)
+                    .into()
+            }
         }
         TaskbarSectionStyle::Clock => {
             let caption = text_block(section.title.clone())
@@ -623,10 +649,182 @@ fn compact_bar(progress: f64) -> Element {
         .relative_align_v_center()
         .into();
     relative_panel(vec![track, fill_bar])
-    .width(BAR_WIDTH_DIP)
-    .height(6.0)
+        .width(BAR_WIDTH_DIP)
+        .height(6.0)
+        .vertical_alignment(VerticalAlignment::Center)
+        .into()
+}
+
+fn compact_vertical_bar(progress: f64) -> Element {
+    let fill = (VERTICAL_BAR_HEIGHT_DIP * (progress / 100.0).clamp(0.0, 1.0)).max(
+        if progress > 0.0 { 3.0 } else { 0.0 },
+    );
+    let track: Element = border(Element::Empty)
+        .background(ThemeRef::ControlFillSecondary)
+        .corner_radius(2.0)
+        .width(VERTICAL_BAR_WIDTH_DIP)
+        .height(VERTICAL_BAR_HEIGHT_DIP)
+        .relative_align_left()
+        .relative_align_bottom()
+        .into();
+    let fill_bar: Element = border(Element::Empty)
+        .background(ThemeRef::Accent)
+        .corner_radius(2.0)
+        .width(VERTICAL_BAR_WIDTH_DIP)
+        .height(fill)
+        .relative_align_left()
+        .relative_align_bottom()
+        .into();
+    relative_panel(vec![track, fill_bar])
+        .width(VERTICAL_BAR_WIDTH_DIP)
+        .height(VERTICAL_BAR_HEIGHT_DIP)
+        .vertical_alignment(VerticalAlignment::Center)
+        .into()
+}
+
+fn compact_ring(section: &TaskbarSectionView) -> Element {
+    thread_local! {
+        static RING_MOUNTS: RefCell<HashMap<String, windows_core::IInspectable>> =
+            RefCell::new(HashMap::new());
+        static RING_PROGRESS: RefCell<HashMap<String, u16>> = RefCell::new(HashMap::new());
+    }
+
+    let progress = section.progress.unwrap_or(0.0).clamp(0.0, 100.0);
+    let fill = section.brand_rgb;
+    let track = (70_u8, 70_u8, 70_u8);
+    let xaml = ring_xaml(progress, fill, track);
+    let host_key = format!(
+        "taskbar-ring-{}-{:02X}{:02X}{:02X}",
+        section.id, fill.0, fill.1, fill.2
+    );
+    let progress_bucket = (progress * 10.0).round() as u16;
+    let changed = RING_PROGRESS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        match cache.get(&host_key) {
+            Some(previous) if *previous == progress_bucket => false,
+            _ => {
+                cache.insert(host_key.clone(), progress_bucket);
+                true
+            }
+        }
+    });
+    if changed {
+        RING_MOUNTS.with(|mounts| {
+            if let Some(native) = mounts.borrow().get(&host_key).cloned()
+                && let Err(error) = crate::acrylic::install_spend_donut_into(native, &xaml)
+            {
+                eprintln!("Could not update taskbar ring: {error:?}");
+            }
+        });
+    }
+
+    let xaml_for_mount = xaml;
+    let key_for_mount = host_key.clone();
+    let key_for_unmount = host_key.clone();
+    let mut host = swap_chain_panel()
+        .width(RING_SIZE_DIP)
+        .height(RING_SIZE_DIP);
+    host.mounted = Some(Callback::new(
+        move |native: Option<windows_core::IInspectable>| {
+            if let Some(native) = native {
+                if let Err(error) =
+                    crate::acrylic::install_spend_donut_into(native.clone(), &xaml_for_mount)
+                {
+                    eprintln!("Could not install taskbar ring: {error:?}");
+                }
+                RING_MOUNTS.with(|mounts| {
+                    mounts.borrow_mut().insert(key_for_mount.clone(), native);
+                });
+            }
+        },
+    ));
+    host.unmounted = Some(Callback::new(
+        move |native: Option<windows_core::IInspectable>| {
+            if let Some(native) = native {
+                let _ = crate::acrylic::clear_children(native);
+            }
+            RING_MOUNTS.with(|mounts| {
+                mounts.borrow_mut().remove(&key_for_unmount);
+            });
+            RING_PROGRESS.with(|cache| {
+                cache.borrow_mut().remove(&key_for_unmount);
+            });
+        },
+    ));
+    let ring: Element = host.with_key(host_key).into();
+    if !section.show_ring_text {
+        return ring;
+    }
+    grid((
+        ring,
+        text_block(section.value.clone())
+            .font_size(8.0)
+            .semibold()
+            .horizontal_alignment(HorizontalAlignment::Center)
+            .vertical_alignment(VerticalAlignment::Center),
+    ))
+    .columns([GridLength::Pixel(RING_SIZE_DIP)])
+    .rows([GridLength::Pixel(RING_SIZE_DIP)])
+    .width(RING_SIZE_DIP)
+    .height(RING_SIZE_DIP)
     .vertical_alignment(VerticalAlignment::Center)
     .into()
+}
+
+fn ring_xaml(progress: f64, fill: (u8, u8, u8), track: (u8, u8, u8)) -> String {
+    const CENTER: f64 = RING_SIZE_DIP / 2.0;
+    const OUTER: f64 = CENTER - 1.5;
+    const INNER: f64 = OUTER - 3.0;
+    let track_path = ring_path(track, -90.0, 270.0, CENTER, OUTER, INNER);
+    let sweep = (progress / 100.0) * 360.0;
+    let fill_path = if sweep <= 0.5 {
+        String::new()
+    } else {
+        ring_path(fill, -90.0, -90.0 + sweep, CENTER, OUTER, INNER)
+    };
+    format!(
+        r#"<Canvas xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Width="{RING_SIZE_DIP:.0}" Height="{RING_SIZE_DIP:.0}">{track_path}{fill_path}</Canvas>"#
+    )
+}
+
+fn ring_path(
+    color: (u8, u8, u8),
+    start: f64,
+    end: f64,
+    center: f64,
+    outer: f64,
+    inner: f64,
+) -> String {
+    let sweep = (end - start).max(0.0);
+    if sweep <= 0.0 {
+        return String::new();
+    }
+    let fill = format!("#{:02X}{:02X}{:02X}", color.0, color.1, color.2);
+    if sweep >= 359.0 {
+        return format!(
+            r#"<Path Fill="{fill}" Data="M {center:.2} {outer_top:.2} A {outer:.2} {outer:.2} 0 1 1 {center:.2} {outer_bottom:.2} A {outer:.2} {outer:.2} 0 1 1 {center:.2} {outer_top:.2} M {center:.2} {inner_top:.2} A {inner:.2} {inner:.2} 0 1 0 {center:.2} {inner_bottom:.2} A {inner:.2} {inner:.2} 0 1 0 {center:.2} {inner_top:.2} Z" />"#,
+            outer_top = center - outer,
+            outer_bottom = center + outer,
+            inner_top = center - inner,
+            inner_bottom = center + inner,
+        );
+    }
+    let (outer_start_x, outer_start_y) = ring_point(center, outer, start);
+    let (outer_end_x, outer_end_y) = ring_point(center, outer, end);
+    let (inner_start_x, inner_start_y) = ring_point(center, inner, start);
+    let (inner_end_x, inner_end_y) = ring_point(center, inner, end);
+    let large_arc = u8::from(sweep > 180.0);
+    format!(
+        r#"<Path Fill="{fill}" Data="M {outer_start_x:.2} {outer_start_y:.2} A {outer:.2} {outer:.2} 0 {large_arc} 1 {outer_end_x:.2} {outer_end_y:.2} L {inner_end_x:.2} {inner_end_y:.2} A {inner:.2} {inner:.2} 0 {large_arc} 0 {inner_start_x:.2} {inner_start_y:.2} Z" />"#
+    )
+}
+
+fn ring_point(center: f64, radius: f64, degrees: f64) -> (f64, f64) {
+    let radians = degrees.to_radians();
+    (
+        center + radius * radians.cos(),
+        center + radius * radians.sin(),
+    )
 }
 
 fn primary_axis_origin(container: i32, anchor: Option<i32>, extent: i32) -> i32 {
@@ -643,16 +841,20 @@ mod platform {
     use std::{cell::RefCell, ffi::c_void, ptr};
     use windows_sys::Win32::{
         Foundation::{HWND, POINT, RECT},
-        Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, ScreenToClient, SetWindowRgn},
+        Graphics::{
+            Dwm::DwmExtendFrameIntoClientArea,
+            Gdi::{CreateRoundRectRgn, DeleteObject, ScreenToClient, SetWindowRgn},
+        },
         UI::{
+            Controls::MARGINS,
             HiDpi::GetDpiForWindow,
             WindowsAndMessaging::{
                 FindWindowExW, FindWindowW, GWL_EXSTYLE, GWL_STYLE, GetParent, GetWindowLongW,
                 GetWindowRect, IsWindow, SW_HIDE, SW_SHOWNOACTIVATE, SWP_ASYNCWINDOWPOS,
                 SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
                 SetParent, SetWindowLongW, SetWindowPos, ShowWindow, WS_CAPTION, WS_CHILD,
-                WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX,
-                WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+                WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
+                WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
             },
         },
     };
@@ -877,11 +1079,22 @@ mod platform {
             SetWindowLongW(hwnd, GWL_STYLE, style as i32);
 
             let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-            let ex_style = (ex_style | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) & !WS_EX_APPWINDOW;
+            let ex_style = (ex_style
+                | WS_EX_TOOLWINDOW
+                | WS_EX_NOACTIVATE
+                | WS_EX_NOREDIRECTIONBITMAP)
+                & !WS_EX_APPWINDOW;
             SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style as i32);
             if GetParent(hwnd) != taskbar {
                 SetParent(hwnd, taskbar);
             }
+            let glass = MARGINS {
+                cxLeftWidth: -1,
+                cxRightWidth: -1,
+                cyTopHeight: -1,
+                cyBottomHeight: -1,
+            };
+            let _ = DwmExtendFrameIntoClientArea(hwnd, &glass);
             SetWindowPos(
                 hwnd,
                 ptr::null_mut(),
@@ -992,6 +1205,60 @@ mod tests {
     }
 
     #[test]
+    fn clock_presentation_uses_the_window_reset_time() {
+        let mut section = TaskbarWidgetSection::for_provider(
+            TaskbarWidgetSectionKind::Weekly,
+            ProviderKind::Codex,
+        );
+        section.presentation = TaskbarSectionPresentation::Clock;
+        let now = Utc::now();
+        let mut limits = ProviderLimits::default();
+        limits.get_mut(ProviderKind::Codex).secondary = LimitWindow {
+            used_percent: Some(16),
+            resets_at: Some(now + chrono::Duration::hours(5)),
+            duration_minutes: Some(10_080),
+        };
+        let rendered = render_section(&section, &limits, false, now).unwrap();
+        assert_eq!(rendered.style, TaskbarSectionStyle::Clock);
+        assert_eq!(rendered.title, "Wk");
+        assert_eq!(rendered.value, "5h");
+    }
+
+    #[test]
+    fn ring_presentation_keeps_text_inside_when_requested() {
+        let mut section = TaskbarWidgetSection::for_provider(
+            TaskbarWidgetSectionKind::Session,
+            ProviderKind::Codex,
+        );
+        section.presentation = TaskbarSectionPresentation::Ring;
+        section.show_ring_text = true;
+        let mut limits = ProviderLimits::default();
+        limits.get_mut(ProviderKind::Codex).primary.used_percent = Some(19);
+        let rendered = render_section(&section, &limits, false, Utc::now()).unwrap();
+        assert_eq!(rendered.style, TaskbarSectionStyle::Ring);
+        assert!(rendered.show_ring_text);
+        assert_eq!(rendered.value, "81%");
+        assert!(section_width(&rendered) <= RING_SIZE_DIP + 1.0);
+    }
+
+    fn vertical_bar_is_narrower_than_a_horizontal_bar() {
+        let mut horizontal = TaskbarWidgetSection::for_provider(
+            TaskbarWidgetSectionKind::Session,
+            ProviderKind::Codex,
+        );
+        horizontal.presentation = TaskbarSectionPresentation::ProgressBar;
+        let mut vertical = horizontal.clone();
+        vertical.id = "taskbar-vertical".into();
+        vertical.presentation = TaskbarSectionPresentation::VerticalBar;
+        let mut limits = ProviderLimits::default();
+        limits.get_mut(ProviderKind::Codex).primary.used_percent = Some(40);
+        let now = Utc::now();
+        let horizontal = render_section(&horizontal, &limits, false, now).unwrap();
+        let vertical = render_section(&vertical, &limits, false, now).unwrap();
+        assert_eq!(vertical.style, TaskbarSectionStyle::VerticalBar);
+        assert!(section_width(&vertical) < section_width(&horizontal));
+    }
+
     fn progress_bar_presentation_is_available_without_a_template() {
         let mut section = TaskbarWidgetSection::for_provider(
             TaskbarWidgetSectionKind::Session,

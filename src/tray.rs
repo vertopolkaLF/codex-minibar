@@ -309,7 +309,20 @@ pub fn render_widget_with_accent(
     }
     match widget.presentation.canonical_percentage() {
         TrayPresentation::StackedBars => render_bars(&indicators),
-        TrayPresentation::NestedRings => render_rings(&indicators),
+        TrayPresentation::VerticalBars => render_vertical_bars(&indicators),
+        TrayPresentation::NestedRings => {
+            let mut pixels = render_rings(&indicators);
+            if widget.show_ring_text && indicators.len() == 1 {
+                paint_ring_label(
+                    &mut pixels,
+                    indicators[0]
+                        .displayed_percent
+                        .map_or_else(|| "?".into(), |value| format!("{value}%")),
+                    indicators[0].color,
+                );
+            }
+            pixels
+        }
         TrayPresentation::ResetTime | TrayPresentation::ResetCountdown => {
             let countdown = widget.presentation == TrayPresentation::ResetCountdown;
             // One provider: two stacked glyph lines (hours top, minutes bottom).
@@ -435,6 +448,72 @@ fn render_bars(values: &[ResolvedIndicator]) -> Vec<u8> {
         }
     }
     pixels
+}
+
+fn render_vertical_bars(values: &[ResolvedIndicator]) -> Vec<u8> {
+    let mut pixels = vec![0; ICON_SIZE * ICON_SIZE * 4];
+    let count = values.len().max(1);
+    let width = match count {
+        1 => 8,
+        2 => 6,
+        _ => 5,
+    };
+    let gap = if count >= 3 { 3 } else { 5 };
+    let total_width = count * width + count.saturating_sub(1) * gap;
+    let origin_x = ICON_SIZE.saturating_sub(total_width) / 2;
+    for (index, value) in values.iter().enumerate() {
+        let x = origin_x + index * (width + gap);
+        let filled = value.displayed_percent.unwrap_or(0) as usize * 24 / 100;
+        let color = value.color;
+        for xx in x..x + width {
+            for y in 4..28 {
+                let offset = (y * ICON_SIZE + xx) * 4;
+                let from_bottom = 27 - y;
+                let rgb = if from_bottom < filled {
+                    color
+                } else {
+                    [70, 70, 70]
+                };
+                pixels[offset..offset + 4].copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+            }
+        }
+    }
+    pixels
+}
+
+fn paint_ring_label(pixels: &mut [u8], label: String, rgb: [u8; 3]) {
+    let Some(font) = system_font() else {
+        return;
+    };
+    let fonts = [font];
+    let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
+    layout.reset(&LayoutSettings {
+        max_width: Some(ICON_SIZE as f32),
+        max_height: Some(ICON_SIZE as f32),
+        horizontal_align: HorizontalAlign::Center,
+        vertical_align: VerticalAlign::Middle,
+        ..LayoutSettings::default()
+    });
+    let font_size = if label.chars().count() <= 3 { 11.0 } else { 9.0 };
+    layout.append(&fonts, &TextStyle::new(&label, font_size, 0));
+    for glyph in layout.glyphs() {
+        let (metrics, coverage) = fonts[glyph.font_index].rasterize_config(glyph.key);
+        for row in 0..metrics.height {
+            for column in 0..metrics.width {
+                let x = glyph.x.round() as isize + column as isize;
+                let y = glyph.y.round() as isize + row as isize;
+                if x < 0 || y < 0 || x >= ICON_SIZE as isize || y >= ICON_SIZE as isize {
+                    continue;
+                }
+                let alpha = coverage[row * metrics.width + column];
+                if alpha == 0 {
+                    continue;
+                }
+                let offset = (y as usize * ICON_SIZE + x as usize) * 4;
+                pixels[offset..offset + 4].copy_from_slice(&[rgb[0], rgb[1], rgb[2], alpha]);
+            }
+        }
+    }
 }
 
 fn render_rings(values: &[ResolvedIndicator]) -> Vec<u8> {

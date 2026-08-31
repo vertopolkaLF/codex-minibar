@@ -142,6 +142,12 @@ fn viewbox_size(svg: &str) -> f64 {
 /// The host is keyed by glyph + tint. Swap-chain painters run only on mount,
 /// so any identity change must remount — never rely on in-place updates.
 pub fn element(name: &'static str, size: f64, color: Color) -> Element {
+    element_in_slot(name, size, color, "")
+}
+
+/// Same as [`element`], but the swap-chain key includes `slot` so two hosts
+/// with the same glyph/tint cannot recycle each other's painted child.
+pub fn element_in_slot(name: &'static str, size: f64, color: Color, slot: &str) -> Element {
     let icon = geom(name);
     let mut host = swap_chain_panel().width(size).height(size);
     host.mounted = Some(Callback::new(move |native: Option<_>| {
@@ -162,10 +168,12 @@ pub fn element(name: &'static str, size: f64, color: Color) -> Element {
         }
     }));
     let icon: Element = host.into();
-    icon.with_key(format!(
-        "filled-{name}-{:02X}{:02X}{:02X}",
-        color.r, color.g, color.b
-    ))
+    let tint = format!("{:02X}{:02X}{:02X}", color.r, color.g, color.b);
+    icon.with_key(if slot.is_empty() {
+        format!("filled-{name}-{tint}")
+    } else {
+        format!("filled-{name}-{slot}-{tint}")
+    })
 }
 
 /// Render an icon filled with the live Windows accent theme brush.

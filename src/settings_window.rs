@@ -64,6 +64,7 @@ const INDICATOR_MODAL_WIDTH: f64 = 520.0;
 const INDICATOR_MODAL_RADIUS: f64 = 12.0;
 
 static DISCOVERED_POPUP_BRICKS: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+static PREVIEW_LIMITS: Mutex<Option<crate::limits::ProviderLimits>> = Mutex::new(None);
 
 thread_local! {
     static HOST: RefCell<Option<Rc<ReactorHost>>> = const { RefCell::new(None) };
@@ -103,6 +104,14 @@ fn cached_discovered_popup_bricks() -> BTreeMap<String, String> {
         .unwrap_or_default()
 }
 
+fn cached_preview_limits() -> crate::limits::ProviderLimits {
+    PREVIEW_LIMITS
+        .lock()
+        .ok()
+        .and_then(|slot| slot.clone())
+        .unwrap_or_default()
+}
+
 fn discovered_popup_brick_labels(
     limits: &crate::limits::ProviderLimits,
 ) -> BTreeMap<String, String> {
@@ -123,6 +132,9 @@ pub fn publish_discovered_popup_bricks(
     limits: &crate::limits::ProviderLimits,
     ui_dispatcher: UiMarshaller,
 ) {
+    if let Ok(mut slot) = PREVIEW_LIMITS.lock() {
+        *slot = Some(limits.clone());
+    }
     let labels = discovered_popup_brick_labels(limits);
     if let Ok(mut slot) = DISCOVERED_POPUP_BRICKS.lock() {
         *slot = labels.clone();
@@ -130,10 +142,12 @@ pub fn publish_discovered_popup_bricks(
     if !is_open() {
         return;
     }
+    let limits = limits.clone();
     ui_dispatcher.dispatch(move || {
         LIVE_SETTINGS_STATE.with(|state| {
             if let Some(state) = state.borrow().as_ref() {
                 state.discovered_popup_bricks.call(labels);
+                state.preview_limits.call(limits);
             }
         });
     });
@@ -167,6 +181,7 @@ struct SettingsWindowState {
     show_usage_pace: SetState<bool>,
     popup_visibility: SetState<PopupVisibility>,
     discovered_popup_bricks: SetState<BTreeMap<String, String>>,
+    preview_limits: SetState<crate::limits::ProviderLimits>,
     show_total_spend_on_all_tab: SetState<bool>,
     total_spend_presentation: SetState<TotalSpendPresentation>,
     show_account_name: SetState<bool>,
@@ -2182,6 +2197,7 @@ pub fn render(
     let (expanded_popup_provider, set_expanded_popup_provider) = cx.use_state(None::<String>);
     let (discovered_popup_bricks, set_discovered_popup_bricks) =
         cx.use_state(cached_discovered_popup_bricks());
+    let (preview_limits, set_preview_limits) = cx.use_state(cached_preview_limits());
     let (check_for_updates, set_check_for_updates) = cx.use_state(settings.check_for_updates);
     let (notify_on_update, set_notify_on_update) =
         cx.use_state(settings.notifications.update_available);
@@ -2214,6 +2230,7 @@ pub fn render(
             show_usage_pace: set_show_usage_pace.clone(),
             popup_visibility: set_popup_visibility.clone(),
             discovered_popup_bricks: set_discovered_popup_bricks.clone(),
+            preview_limits: set_preview_limits.clone(),
             show_total_spend_on_all_tab: set_show_total_spend_on_all_tab.clone(),
             total_spend_presentation: set_total_spend_presentation.clone(),
             show_account_name: set_show_account_name.clone(),
@@ -2247,6 +2264,10 @@ pub fn render(
                 opencode_go_enabled,
                 openrouter_enabled,
             ],
+            theme,
+            use_colored_provider_icons,
+            show_used_percentage,
+            &preview_limits,
             &hovered_card_id,
             set_taskbar_widget_enabled,
             set_taskbar_widget_sections,
@@ -2348,6 +2369,7 @@ pub fn render(
             set_show_usage_pace,
             set_popup_visibility,
             set_discovered_popup_bricks,
+            set_preview_limits,
             set_show_total_spend_on_all_tab,
             set_total_spend_presentation,
             set_show_account_name,
@@ -3126,6 +3148,7 @@ fn tab_content(
     set_show_usage_pace: SetState<bool>,
     set_popup_visibility: SetState<PopupVisibility>,
     set_discovered_popup_bricks: SetState<BTreeMap<String, String>>,
+    set_preview_limits: SetState<crate::limits::ProviderLimits>,
     set_show_total_spend_on_all_tab: SetState<bool>,
     set_total_spend_presentation: SetState<TotalSpendPresentation>,
     set_show_account_name: SetState<bool>,
@@ -3769,6 +3792,7 @@ fn tab_content(
                 show_usage_pace: set_show_usage_pace,
                 popup_visibility: set_popup_visibility,
                 discovered_popup_bricks: set_discovered_popup_bricks,
+                preview_limits: set_preview_limits,
                 show_total_spend_on_all_tab: set_show_total_spend_on_all_tab,
                 total_spend_presentation: set_total_spend_presentation,
                 show_account_name: set_show_account_name,
@@ -3972,6 +3996,10 @@ fn widget_page_content(
     removed_section: &Option<(usize, TaskbarWidgetSection)>,
     popup_order: &[PopupWidgetKind],
     provider_enabled: [bool; 6],
+    theme: AppTheme,
+    use_colored_icons: bool,
+    show_used: bool,
+    limits: &crate::limits::ProviderLimits,
     hovered_card_id: &Option<String>,
     set_enabled: SetState<bool>,
     set_sections: SetState<Vec<TaskbarWidgetSection>>,
@@ -4010,6 +4038,10 @@ fn widget_page_content(
         &enabled_providers,
         expanded_section,
         removed_section,
+        theme,
+        use_colored_icons,
+        show_used,
+        limits,
         hovered_card_id,
         set_sections.clone(),
         set_expanded_section.clone(),
@@ -4025,7 +4057,20 @@ fn widget_page_content(
         .spacing(12.0)
         .grid_row(1)
         .horizontal_alignment(HorizontalAlignment::Stretch)
-        .with_key(format!("widgets-cards-{}", sections.len()));
+        .with_key(format!(
+            "widgets-cards-{}",
+            sections
+                .iter()
+                .map(|section| format!(
+                    "{}:{}:{}:{}",
+                    section.id,
+                    section.kind.index(),
+                    section.presentation.index(),
+                    u8::from(section.show_ring_text)
+                ))
+                .collect::<Vec<_>>()
+                .join("|")
+        ));
     grid((heading, cards))
         .columns([GridLength::Star(1.0)])
         .rows([GridLength::Auto, GridLength::Auto])
@@ -4053,6 +4098,14 @@ fn widget_enabled_providers(
         .collect()
 }
 
+fn settings_preview_uses_light(theme: AppTheme) -> bool {
+    match theme {
+        AppTheme::Light => true,
+        AppTheme::Dark => false,
+        AppTheme::Auto => crate::tray::system_uses_light_theme(),
+    }
+}
+
 fn widget_section_summary(section: &TaskbarWidgetSection) -> String {
     let provider = section
         .provider()
@@ -4070,6 +4123,10 @@ fn widget_section_cards(
     enabled_providers: &[ProviderKind],
     expanded_section: &Option<String>,
     removed_section: &Option<(usize, TaskbarWidgetSection)>,
+    theme: AppTheme,
+    use_colored_icons: bool,
+    show_used: bool,
+    limits: &crate::limits::ProviderLimits,
     hovered_card_id: &Option<String>,
     set_sections: SetState<Vec<TaskbarWidgetSection>>,
     set_expanded_section: SetState<Option<String>>,
@@ -4180,7 +4237,13 @@ fn widget_section_cards(
             reorder_buttons
                 .grid_column(0)
                 .vertical_alignment(VerticalAlignment::Center),
-            crate::taskbar_widget::preview_section(&section)
+            crate::taskbar_widget::preview_section(
+                &section,
+                limits,
+                show_used,
+                use_colored_icons,
+                settings_preview_uses_light(theme),
+            )
                 .grid_column(1)
                 .vertical_alignment(VerticalAlignment::Center),
             vstack((
@@ -4379,17 +4442,28 @@ fn widget_section_editor(
     let duplicate_tx = settings_tx.clone();
     let expand_duplicate = set_expanded_section;
     let sections_for_remove = sections.to_vec();
-    let remove_setter = set_sections;
+    let remove_setter = set_sections.clone();
     let removed_setter = set_removed_section;
-    let remove_tx = settings_tx;
+    let remove_tx = settings_tx.clone();
 
-    let appearance: Element = appearance.into();
-    let kind_box: Element = kind_box.into();
-    let provider_box: Element = provider_box.into();
-    vstack((
-        appearance,
-        kind_box,
-        provider_box,
+    let mut fields = vec![appearance.into(), kind_box.into(), provider_box.into()];
+    if section.presentation.is_ring() {
+        let sections_for_ring_text = sections.to_vec();
+        let ring_text_setter = set_sections.clone();
+        let ring_text_tx = settings_tx.clone();
+        fields.push(widget_inline_toggle(
+            "Show value inside ring",
+            section.show_ring_text,
+            move |enabled| {
+                let mut next = sections_for_ring_text.clone();
+                if let Some(item) = next.get_mut(index) {
+                    item.show_ring_text = enabled;
+                }
+                persist_taskbar_sections(ring_text_setter.clone(), ring_text_tx.clone(), next);
+            },
+        ));
+    }
+    fields.push(
         hstack((
             Button::new("Duplicate").on_click(move || {
                 let mut next = sections_for_duplicate.clone();
@@ -4407,9 +4481,36 @@ fn widget_section_editor(
             }),
         ))
         .spacing(8.0)
-        .horizontal_alignment(HorizontalAlignment::Left),
+        .horizontal_alignment(HorizontalAlignment::Left)
+        .into(),
+    );
+    vstack(fields).spacing(10.0).into()
+}
+
+fn widget_inline_toggle(
+    label: impl Into<String>,
+    enabled: bool,
+    on_toggled: impl IntoCallback<bool>,
+) -> Element {
+    grid((
+        text_block(label)
+            .font_size(13.0)
+            .vertical_alignment(VerticalAlignment::Center)
+            .grid_column(0),
+        ToggleSwitch::new(enabled)
+            .on_content("")
+            .off_content("")
+            .on_toggled(on_toggled)
+            .min_width(0.0)
+            .max_width(50.0)
+            .width(50.0)
+            .horizontal_alignment(HorizontalAlignment::Right)
+            .vertical_alignment(VerticalAlignment::Center)
+            .grid_column(1),
     ))
-    .spacing(10.0)
+    .columns([GridLength::Star(1.0), GridLength::Auto])
+    .rows([GridLength::Auto])
+    .horizontal_alignment(HorizontalAlignment::Stretch)
     .into()
 }
 
@@ -5299,9 +5400,10 @@ fn tray_widget_preview(widget: &TrayWidget) -> Element {
 fn tray_presentation_index(presentation: TrayPresentation) -> i32 {
     match presentation.canonical_percentage() {
         TrayPresentation::StackedBars => 1,
-        TrayPresentation::NestedRings => 2,
-        TrayPresentation::ResetTime => 3,
-        TrayPresentation::ResetCountdown => 4,
+        TrayPresentation::VerticalBars => 2,
+        TrayPresentation::NestedRings => 3,
+        TrayPresentation::ResetTime => 4,
+        TrayPresentation::ResetCountdown => 5,
         _ => 0,
     }
 }
@@ -5309,9 +5411,10 @@ fn tray_presentation_index(presentation: TrayPresentation) -> i32 {
 fn tray_presentation_from_index(index: i32) -> TrayPresentation {
     match index {
         1 => TrayPresentation::StackedBars,
-        2 => TrayPresentation::NestedRings,
-        3 => TrayPresentation::ResetTime,
-        4 => TrayPresentation::ResetCountdown,
+        2 => TrayPresentation::VerticalBars,
+        3 => TrayPresentation::NestedRings,
+        4 => TrayPresentation::ResetTime,
+        5 => TrayPresentation::ResetCountdown,
         _ => TrayPresentation::StackedNumbers,
     }
 }
@@ -5604,6 +5707,7 @@ fn tray_settings_cards(
                 ComboBox::new([
                     "Numbers",
                     "Progress bars",
+                    "Vertical bars",
                     "Rings",
                     "Reset time",
                     "Countdown",
@@ -5644,6 +5748,31 @@ fn tray_settings_cards(
                 })
                 .into(),
             );
+
+            if widget.presentation.canonical_percentage() == TrayPresentation::NestedRings
+                && widget.indicators.len() == 1
+            {
+                let widgets_for_ring_text = widgets.to_vec();
+                let ring_text_setter = set_widgets.clone();
+                let ring_text_tx = settings_tx.clone();
+                let providers_for_ring_text = enabled_providers.to_vec();
+                fields.push(widget_inline_toggle(
+                    "Show value inside ring",
+                    widget.show_ring_text,
+                    move |enabled| {
+                        let mut next = widgets_for_ring_text.clone();
+                        if let Some(item) = next.get_mut(index) {
+                            item.show_ring_text = enabled;
+                        }
+                        persist_tray_widgets(
+                            ring_text_setter.clone(),
+                            ring_text_tx.clone(),
+                            next,
+                            &providers_for_ring_text,
+                        );
+                    },
+                ));
+            }
 
             if widget.presentation.is_reset_clock() {
                 fields.push(tray_time_parameter_fields(

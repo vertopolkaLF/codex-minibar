@@ -3076,6 +3076,10 @@ fn start_background_bridge(
             state.current_limits(),
         );
         state.publish_taskbar_widget_snapshot(taskbar_snapshot.clone());
+        crate::settings_window::publish_discovered_popup_bricks(
+            &state.current_limits(),
+            ui_dispatcher.clone(),
+        );
         let mut ui = UiState {
             theme: state.settings.theme,
             accent_color: state.settings.accent_color,
@@ -3487,8 +3491,12 @@ fn start_background_bridge(
                     ));
                     state.replace_usage(provider, usage);
                     let limits = state.current_limits();
-                    taskbar_snapshot.replace_limits(limits);
+                    taskbar_snapshot.replace_limits(limits.clone());
                     state.publish_taskbar_widget_snapshot(taskbar_snapshot.clone());
+                    crate::settings_window::publish_discovered_popup_bricks(
+                        &limits,
+                        ui_dispatcher.clone(),
+                    );
                     ui.observe_limits_update();
                     publish_popup_ui(&set_ui, &ui);
                 }
