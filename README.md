@@ -41,6 +41,8 @@ Codex Minibar reads the usage data exposed by a locally authenticated Codex CLI/
 - Receive Windows notifications when a limit resets, usage becomes low, Codex cannot be
   reached, or an update is available.
 - Optionally start Codex automatically to activate a fresh five-hour window.
+- Configure planned limit activations and provider-specific quiet periods for
+  automatic activation, such as keeping a work Claude session inactive on weekends.
 - Start with Windows, update in place from GitHub Releases, and retain history locally.
 - Detect Codex installations automatically, with an override for a custom executable path.
 - Enable Codex, Claude, Cursor, OpenCode Zen, OpenCode Go, and OpenRouter independently in **Settings → Providers**. Providers refresh at the same time; OpenCode usage is read from its local SQLite history, Go quota is read from the account API, and OpenRouter usage is read from the configured API key.

@@ -10,7 +10,7 @@ use chrono::{DateTime, Local, Timelike};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 30;
+pub const SETTINGS_VERSION: u32 = 31;
 
 /// 255 until `TimeFormat::apply` runs so first paint can still follow Windows.
 static TIME_FORMAT: AtomicU8 = AtomicU8::new(u8::MAX);
@@ -576,6 +576,89 @@ impl ScheduledActivation {
         }
         changed
     }
+}
+
+/// A weekly local-time period during which automatic activation is skipped for
+/// one provider. Explicit scheduled activations remain independent of pauses.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutoActivationPause {
+    pub id: String,
+    pub provider_id: String,
+    pub weekdays: Vec<u8>,
+    pub start_time_minutes: u16,
+    pub end_time_minutes: u16,
+    pub enabled: bool,
+}
+
+impl Default for AutoActivationPause {
+    fn default() -> Self {
+        Self {
+            id: new_auto_activation_pause_id(),
+            provider_id: ProviderKind::Codex.id().into(),
+            // Weekend pauses are the useful default for a newly added rule.
+            weekdays: vec![5, 6],
+            start_time_minutes: 0,
+            end_time_minutes: 23 * 60 + 59,
+            enabled: true,
+        }
+    }
+}
+
+impl AutoActivationPause {
+    pub fn new(provider: ProviderKind) -> Self {
+        Self {
+            provider_id: provider.id().into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn provider(&self) -> Option<ProviderKind> {
+        ProviderKind::from_id(&self.provider_id)
+    }
+
+    pub fn occurs_on(&self, weekday: u8) -> bool {
+        self.weekdays.contains(&weekday)
+    }
+
+    pub fn normalize(&mut self) -> bool {
+        let start_time_minutes = self.start_time_minutes.min(23 * 60 + 59);
+        let end_time_minutes = self.end_time_minutes.min(23 * 60 + 59);
+        let mut weekdays = self
+            .weekdays
+            .iter()
+            .copied()
+            .filter(|day| *day <= 6)
+            .collect::<Vec<_>>();
+        weekdays.sort_unstable();
+        weekdays.dedup();
+        if weekdays.is_empty() {
+            weekdays.push(0);
+        }
+        let mut changed = start_time_minutes != self.start_time_minutes
+            || end_time_minutes != self.end_time_minutes
+            || weekdays != self.weekdays;
+        self.start_time_minutes = start_time_minutes;
+        self.end_time_minutes = end_time_minutes;
+        self.weekdays = weekdays;
+        if self.id.trim().is_empty() {
+            self.id = new_auto_activation_pause_id();
+            changed = true;
+        }
+        changed
+    }
+}
+
+fn new_auto_activation_pause_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let sequence = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    format!("auto-pause-{timestamp:x}-{sequence:x}")
 }
 
 fn new_scheduled_activation_id() -> String {
@@ -1225,6 +1308,8 @@ pub struct Settings {
     pub automatic_activation: bool,
     /// Weekly activations, each bound to exactly one provider.
     pub scheduled_activations: Vec<ScheduledActivation>,
+    /// Weekly local-time periods that suppress automatic activation per provider.
+    pub auto_activation_pauses: Vec<AutoActivationPause>,
     pub limit_refresh_interval: LimitRefreshInterval,
     pub start_at_login: bool,
     pub show_used_percentage: bool,
@@ -1284,6 +1369,7 @@ impl Default for Settings {
             replace_chatgpt_logo_with_codex: false,
             automatic_activation: false,
             scheduled_activations: Vec::new(),
+            auto_activation_pauses: Vec::new(),
             limit_refresh_interval: LimitRefreshInterval::default(),
             start_at_login: true,
             show_used_percentage: false,
@@ -1390,6 +1476,10 @@ impl Settings {
                         "scheduled_activations".into(),
                         toml::Value::Array(Vec::new()),
                     );
+                    root.insert(
+                        "auto_activation_pauses".into(),
+                        toml::Value::Array(Vec::new()),
+                    );
                 }
                 match document.try_into::<Self>() {
                     Ok(settings) => {
@@ -1414,6 +1504,10 @@ impl Settings {
         root.insert("tray_widgets".into(), toml::Value::Array(Vec::new()));
         root.insert(
             "scheduled_activations".into(),
+            toml::Value::Array(Vec::new()),
+        );
+        root.insert(
+            "auto_activation_pauses".into(),
             toml::Value::Array(Vec::new()),
         );
         root.insert(
@@ -1460,6 +1554,15 @@ impl Settings {
             if !schedule_ids.insert(schedule.id.clone()) {
                 schedule.id = new_scheduled_activation_id();
                 schedule_ids.insert(schedule.id.clone());
+                changed = true;
+            }
+        }
+        let mut auto_activation_pause_ids = std::collections::HashSet::new();
+        for pause in &mut self.auto_activation_pauses {
+            changed |= pause.normalize();
+            if !auto_activation_pause_ids.insert(pause.id.clone()) {
+                pause.id = new_auto_activation_pause_id();
+                auto_activation_pause_ids.insert(pause.id.clone());
                 changed = true;
             }
         }
@@ -2403,6 +2506,15 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.insert("version".into(), toml::Value::Integer(30));
                 version = 30;
             }
+            30 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("auto_activation_pauses")
+                    .or_insert_with(|| toml::Value::Array(Vec::new()));
+                root.insert("version".into(), toml::Value::Integer(31));
+                version = 31;
+            }
             // Unknown future/gap versions: stamp current and keep decoding with
             // serde defaults rather than refusing to start.
             _ => {
@@ -2437,6 +2549,7 @@ mod tests {
         assert!(value.use_colored_sidebar_icons);
         assert!(!value.replace_chatgpt_logo_with_codex);
         assert!(!value.automatic_activation);
+        assert!(value.auto_activation_pauses.is_empty());
         assert_eq!(value.limit_refresh_interval, LimitRefreshInterval::Minute1);
         assert!(value.start_at_login);
         assert!(!value.show_used_percentage);
@@ -2580,6 +2693,39 @@ show_usage_stats = false
         let expected = Settings::default();
         expected.save(&path).unwrap();
         assert_eq!(Settings::load_or_create(&path).unwrap(), expected);
+    }
+
+    #[test]
+    fn auto_activation_pause_normalizes_days_and_times() {
+        let mut pause = AutoActivationPause {
+            id: String::new(),
+            provider_id: ProviderKind::Claude.id().into(),
+            weekdays: vec![6, 8, 5, 5],
+            start_time_minutes: u16::MAX,
+            end_time_minutes: u16::MAX,
+            enabled: true,
+        };
+
+        assert!(pause.normalize());
+        assert_eq!(pause.weekdays, vec![5, 6]);
+        assert_eq!(pause.start_time_minutes, 23 * 60 + 59);
+        assert_eq!(pause.end_time_minutes, 23 * 60 + 59);
+        assert!(!pause.id.is_empty());
+    }
+
+    #[test]
+    fn migrates_v30_settings_with_empty_auto_activation_pauses() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(&path, "version = 30\n").unwrap();
+
+        let loaded = Settings::load_or_create(&path).unwrap();
+
+        assert_eq!(loaded.version, SETTINGS_VERSION);
+        assert!(loaded.auto_activation_pauses.is_empty());
+        assert!(fs::read_to_string(path)
+            .unwrap()
+            .contains("auto_activation_pauses = []"));
     }
 
     #[test]

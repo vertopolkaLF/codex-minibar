@@ -65,6 +65,7 @@ pub fn start_provider_worker(
                 activation_path,
                 automatic_activation,
                 schedules_for(provider, settings),
+                auto_activation_pauses_for(provider, settings),
                 settings.history_retention_days,
                 Duration::from_secs(settings.limit_refresh_interval.seconds()),
             )
@@ -80,6 +81,7 @@ pub fn start_provider_worker(
                 activation_path,
                 automatic_activation,
                 schedules_for(provider, settings),
+                auto_activation_pauses_for(provider, settings),
                 settings.history_retention_days,
                 Duration::from_secs(settings.limit_refresh_interval.seconds()),
             )
@@ -95,6 +97,7 @@ pub fn start_provider_worker(
                 activation_path,
                 false,
                 Vec::new(),
+                Vec::new(),
                 settings.history_retention_days,
                 Duration::from_secs(settings.limit_refresh_interval.seconds()),
             )
@@ -106,6 +109,7 @@ pub fn start_provider_worker(
             activation_path,
             false,
             Vec::new(),
+            Vec::new(),
             settings.history_retention_days,
             Duration::from_secs(settings.limit_refresh_interval.seconds()),
         ),
@@ -115,6 +119,7 @@ pub fn start_provider_worker(
             crate::openrouter::OpenRouterActivator,
             activation_path,
             false,
+            Vec::new(),
             Vec::new(),
             settings.history_retention_days,
             Duration::from_secs(settings.limit_refresh_interval.seconds()),
@@ -177,6 +182,21 @@ fn schedules_for(
         .scheduled_activations
         .iter()
         .filter(|rule| rule.provider() == Some(provider))
+        .cloned()
+        .collect()
+}
+
+fn auto_activation_pauses_for(
+    provider: ProviderKind,
+    settings: &Settings,
+) -> Vec<crate::settings::AutoActivationPause> {
+    if !crate::provider_registry::descriptor(provider).supports_activation {
+        return Vec::new();
+    }
+    settings
+        .auto_activation_pauses
+        .iter()
+        .filter(|pause| pause.provider() == Some(provider))
         .cloned()
         .collect()
 }
