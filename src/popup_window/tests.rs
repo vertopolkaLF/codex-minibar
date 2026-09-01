@@ -84,7 +84,7 @@ fn expired_at_includes_date_only_when_not_today() {
 fn unavailable_sample_has_clear_copy() {
     assert_eq!(
         format_last_updated(DateTime::default(), 0),
-        "Waiting for first update..."
+        "Waiting for first update"
     );
     assert_eq!(format_reset_in(None), "Unavailable");
 }

@@ -120,15 +120,9 @@ pub fn show_update_available(version: &str, release_url: &str) {
     }
 }
 
-/// Toast after a provider successfully starts a fresh 5h limit window.
+/// Toast after a provider successfully starts a 5-hour limit.
 pub fn show_activation_succeeded(provider: ProviderKind) {
-    show(
-        "5h limit window activated",
-        &format!(
-            "5h limit window for {} was successfully activated.",
-            provider.display_name()
-        ),
-    );
+    show("5-hour limit started", provider.display_name());
 }
 
 /// Tracks previous limit snapshots so reset / low-usage toasts fire once.
@@ -163,26 +157,14 @@ impl LimitNotificationTracker {
 
         if primary_reset {
             if settings.limits_changed {
-                show(
-                    "5-hour limit reset",
-                    &format!(
-                        "Your {} 5-hour usage window has reset.",
-                        provider.display_name()
-                    ),
-                );
+                show("5-hour limit reset", provider.display_name());
             }
         }
         // Free plans have no weekly limit. Their single monthly quota may shift
         // while the Codex API refreshes, which must not create a reset toast.
         if secondary_reset && can_notify_weekly(limits) {
             if settings.limits_changed {
-                show(
-                    "Weekly limit reset",
-                    &format!(
-                        "Your {} weekly usage window has reset.",
-                        provider.display_name()
-                    ),
-                );
+                show("Weekly limit reset", provider.display_name());
             }
         }
 
@@ -264,8 +246,8 @@ fn maybe_notify_low_usage(
     }
     let remaining = remaining.expect("notification requires a remaining percentage");
     show(
-        &format!("{label} usage low"),
-        &format!("Only {remaining}% remaining (alert at {threshold}%)."),
+        &format!("{label} limit is low"),
+        &format!("{remaining}% remaining"),
     );
 }
 

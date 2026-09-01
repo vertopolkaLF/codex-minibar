@@ -1033,7 +1033,7 @@ impl TotalSpendPeriod {
         match self {
             Self::Today => "Today",
             Self::Yesterday => "Yesterday",
-            Self::ThirtyDays => "30 Days",
+            Self::ThirtyDays => "30 days",
         }
     }
 

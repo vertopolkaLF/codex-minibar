@@ -87,7 +87,7 @@ pub fn show_post_update_success_if_needed() {
     match take_post_update_success_marker() {
         Ok(Some(version)) => notifications::show(
             "Update complete",
-            &format!("Codex Minibar was updated to {version} and is running again."),
+            &format!("Now running {version}."),
         ),
         Ok(None) => {}
         Err(error) => eprintln!("failed to read post-update marker: {error:#}"),

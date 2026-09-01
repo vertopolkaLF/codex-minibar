@@ -530,7 +530,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         {
             body.push(
                 InfoBar::new("No providers enabled")
-                    .message("Enable a provider in Settings > Providers.")
+                    .message("Turn one on in Settings > Providers.")
                     .is_closable(false)
                     .with_key("popup-no-providers")
                     .into(),

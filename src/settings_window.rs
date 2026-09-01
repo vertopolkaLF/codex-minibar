@@ -544,11 +544,11 @@ fn opencode_credentials_card(
     let manual_key_saved = crate::opencode::key_is_configured(provider);
     let detected = crate::opencode::is_installed(provider);
     let source = if manual_key_saved {
-        "Manual key saved in protected Windows user storage."
+        "Saved in Windows user storage."
     } else if detected {
-        "OpenCode auth.json or local history detected; automatic discovery is active."
+        "Using OpenCode auth or local history."
     } else {
-        "No key or local history detected yet."
+        "No key or local history yet."
     };
     let save_input = key_input.to_owned();
     let save_setter = set_key_input.clone();
@@ -562,7 +562,7 @@ fn opencode_credentials_card(
                 .bold(),
             text_block(source).font_size(11.0).opacity(0.72).wrap(),
             PasswordBox::new()
-                .placeholder_text("Paste a manual API key (optional)")
+                .placeholder_text("Paste an API key (optional)")
                 .on_password_changed(set_key_input)
                 .height(32.0),
             hstack((
@@ -606,9 +606,9 @@ fn opencode_credentials_card(
 fn opencode_detection_card(provider: ProviderKind) -> Element {
     let detected = crate::opencode::is_installed(provider);
     let status = if detected {
-        "Detected from OpenCode auth.json, environment, manual key, or local history."
+        "Found in OpenCode auth, environment, a saved key, or local history."
     } else {
-        "No OpenCode credential or local history detected yet."
+        "No credential or local history yet."
     };
     border(
         vstack((
@@ -667,9 +667,9 @@ fn openrouter_accounts_card(
                             .font_size(12.0)
                             .bold(),
                         text_block(if key_saved {
-                            "Saved in protected Windows user storage."
+                            "Saved in Windows user storage."
                         } else {
-                            "No API key configured yet."
+                            "No API key yet."
                         })
                         .font_size(11.0)
                         .opacity(0.72)
@@ -860,9 +860,9 @@ fn openrouter_accounts_card(
                         })
                         .height(32.0),
                     text_block(if management_saved {
-                        "Management key saved; it is used for the account credit balance."
+                        "Used for the account credit balance."
                     } else {
-                        "Add a management key to read the account credit balance."
+                        "Needed to show the credit balance."
                     })
                     .font_size(11.0)
                     .opacity(0.72)
@@ -960,7 +960,7 @@ fn openrouter_accounts_card(
         vstack((
             text_block("OpenRouter accounts").font_size(12.0).bold(),
             text_block(
-                "Each account can contain any number of API keys and one management key. API keys show individual usage; the management key provides the shared account balance.",
+                "API keys show per-key usage. A management key shows the shared credit balance.",
             )
             .font_size(11.0)
             .opacity(0.72)
@@ -1305,14 +1305,14 @@ fn onboarding_render(
     let (heading, description, cards): (&str, &str, Vec<Element>) = match step {
         OnboardingStep::Providers => (
             "Choose providers",
-            "We found the providers installed on this PC and selected them for you. You can change these choices now or later in Settings.",
+            "We turned on the providers found on this PC. You can change this later.",
             vec![
                 settings_toggle_card_with_description(
                     "Codex",
                     Some(if detected[0] {
-                        "Detected on this PC."
+                        "Found on this PC."
                     } else {
-                        "Not detected — enable it if it is installed elsewhere."
+                        "Not found. Turn it on if it's installed somewhere else."
                     }),
                     codex_enabled,
                     move |value| set_codex_enabled.call(value),
@@ -1324,9 +1324,9 @@ fn onboarding_render(
                 settings_toggle_card_with_description(
                     "Claude",
                     Some(if detected[1] {
-                        "Detected on this PC."
+                        "Found on this PC."
                     } else {
-                        "Not detected — enable it if it is installed elsewhere."
+                        "Not found. Turn it on if it's installed somewhere else."
                     }),
                     claude_enabled,
                     move |value| set_claude_enabled.call(value),
@@ -1338,9 +1338,9 @@ fn onboarding_render(
                 settings_toggle_card_with_description(
                     "Cursor",
                     Some(if detected[2] {
-                        "Detected on this PC."
+                        "Found on this PC."
                     } else {
-                        "Not detected — enable it if it is installed elsewhere."
+                        "Not found. Turn it on if it's installed somewhere else."
                     }),
                     cursor_enabled,
                     move |value| set_cursor_enabled.call(value),
@@ -1352,9 +1352,9 @@ fn onboarding_render(
                 settings_toggle_card_with_description(
                     "OpenCode Zen",
                     Some(if detected[3] {
-                        "Detected from OpenCode auth or local history."
+                        "Found in OpenCode auth or local history."
                     } else {
-                        "Not detected — enable it if OpenCode Zen is configured elsewhere."
+                        "Not found. Turn it on if it's set up elsewhere."
                     }),
                     opencode_zen_enabled,
                     move |value| set_opencode_zen_enabled.call(value),
@@ -1366,9 +1366,9 @@ fn onboarding_render(
                 settings_toggle_card_with_description(
                     "OpenCode Go",
                     Some(if detected[4] {
-                        "Detected from OpenCode auth or local history."
+                        "Found in OpenCode auth or local history."
                     } else {
-                        "Not detected — enable it if OpenCode Go is configured elsewhere."
+                        "Not found. Turn it on if it's set up elsewhere."
                     }),
                     opencode_go_enabled,
                     move |value| set_opencode_go_enabled.call(value),
@@ -1380,9 +1380,9 @@ fn onboarding_render(
                 settings_toggle_card_with_description(
                     "OpenRouter",
                     Some(if detected[5] {
-                        "OpenRouter account credentials are configured."
+                        "Account credentials are already set."
                     } else {
-                        "Optional — configure accounts later in Settings > Providers."
+                        "Optional. Add accounts later in Providers."
                     }),
                     openrouter_enabled,
                     move |value| set_openrouter_enabled.call(value),
@@ -1395,12 +1395,11 @@ fn onboarding_render(
         ),
         OnboardingStep::General => (
             "General settings",
-            "Set the basics for Codex Minibar. Every option can be changed later in Settings.",
+            "You can change these later in Settings.",
             vec![
                 settings_section_heading("Startup").with_key("onboarding-startup-heading"),
-                settings_toggle_card_with_description(
-                    "Start at login",
-                    Some("Opens Codex Minibar automatically after you sign in."),
+                settings_toggle_card(
+                    "Start with Windows",
                     start_at_login,
                     move |value| set_start_at_login.call(value),
                     "onboarding-start-at-login",
@@ -1410,8 +1409,8 @@ fn onboarding_render(
                 .with_key("onboarding-start-at-login"),
                 settings_section_heading("Features").with_key("onboarding-features-heading"),
                 settings_toggle_card_with_description(
-                    "Activate limits automatically",
-                    Some("Starts a supported provider's 5-hour window when needed."),
+                    "Start 5-hour sessions automatically",
+                    Some("Starts a new Codex or Claude session as soon as a window is available, instead of waiting for your first request."),
                     automatic_activation,
                     move |value| set_automatic_activation.call(value),
                     "onboarding-automatic-activation",
@@ -1420,8 +1419,8 @@ fn onboarding_render(
                 )
                 .with_key("onboarding-automatic-activation"),
                 settings_control_card(
-                    "Refresh limits period",
-                    Some("How often enabled providers fetch their current limits."),
+                    "Refresh limits",
+                    None,
                     ComboBox::new([
                         "30 seconds",
                         "1 minute",
@@ -1440,9 +1439,8 @@ fn onboarding_render(
                 .with_key("onboarding-limit-refresh-interval"),
                 settings_section_heading("Customization")
                     .with_key("onboarding-customization-heading"),
-                settings_toggle_card_with_description(
-                    "Replace amount left with amount used",
-                    Some("Shows consumed usage instead of the remaining amount."),
+                settings_toggle_card(
+                    "Show used instead of remaining",
                     show_used_percentage,
                     move |value| set_show_used_percentage.call(value),
                     "onboarding-show-used",
@@ -1452,7 +1450,7 @@ fn onboarding_render(
                 .with_key("onboarding-show-used"),
                 settings_toggle_card_with_description(
                     "Show usage pace",
-                    Some("Shows expected use and whether consumption is on pace."),
+                    Some("Marks whether you're burning quota faster or slower than an even pace."),
                     show_usage_pace,
                     move |value| set_show_usage_pace.call(value),
                     "onboarding-show-usage-pace",
@@ -1460,9 +1458,8 @@ fn onboarding_render(
                     set_hovered_card_id.clone(),
                 )
                 .with_key("onboarding-show-usage-pace"),
-                settings_toggle_card_with_description(
+                settings_toggle_card(
                     "Show account name",
-                    Some("Shows your Codex name or Claude organization in the popup."),
                     show_account_name,
                     move |value| set_show_account_name.call(value),
                     "onboarding-show-account-name",
@@ -1790,7 +1787,7 @@ fn providers_pane_add_footer(
     let rendered_page = set_rendered_page;
     border(
         vstack((
-            text_block("Add OpenRouter accounts here. Other providers use a single signed-in session.")
+            text_block("Only OpenRouter supports multiple accounts.")
                 .font_size(11.0)
                 .opacity(0.72)
                 .wrap(),
@@ -1826,8 +1823,8 @@ fn providers_pane_add_footer(
                     }
                     _ => {
                         notifications::show(
-                            "Single session",
-                            "This provider uses one signed-in session. Open its page to configure it.",
+                            "One signed-in session",
+                            "Open this provider's page to set it up.",
                         );
                     }
                 }),
@@ -2662,7 +2659,7 @@ fn provider_page_content(
     let enable_card = match provider {
         ProviderKind::Codex => settings_toggle_card_with_description(
                 "Enabled",
-                Some("Reads limits from the locally signed-in Codex CLI or desktop app."),
+                Some("Reads the signed-in Codex CLI or desktop app."),
                 codex_enabled,
                 move |value| {
                     persist_provider_enabled(
@@ -2682,7 +2679,7 @@ fn provider_page_content(
             ),
         ProviderKind::Claude => settings_toggle_card_with_description(
                 "Enabled",
-                Some("Reads limits with the existing signed-in Claude Code OAuth session."),
+                Some("Reads your existing Claude Code login."),
                 claude_enabled,
                 move |value| {
                     persist_provider_enabled(
@@ -2702,7 +2699,7 @@ fn provider_page_content(
             ),
         ProviderKind::Cursor => settings_toggle_card_with_description(
                 "Enabled",
-                Some("Reads your signed-in Cursor desktop app session and shows the current billing-cycle usage."),
+                Some("Reads the signed-in Cursor app for this billing cycle."),
                 cursor_enabled,
                 move |value| {
                     persist_cursor_enabled(
@@ -2721,7 +2718,7 @@ fn provider_page_content(
             ),
         ProviderKind::OpenCodeZen => settings_toggle_card_with_description(
                 "Enabled",
-                Some("Reads Zen authentication/models and local OpenCode usage history."),
+                Some("Reads Zen auth and local OpenCode history."),
                 opencode_zen_enabled,
                 move |value| {
                     persist_provider_enabled(
@@ -2741,7 +2738,7 @@ fn provider_page_content(
             ),
         ProviderKind::OpenCodeGo => settings_toggle_card_with_description(
                 "Enabled",
-                Some("Reads account-wide Go quota windows and local OpenCode usage history."),
+                Some("Reads Go quota windows and local OpenCode history."),
                 opencode_go_enabled,
                 move |value| {
                     persist_provider_enabled(
@@ -2761,7 +2758,7 @@ fn provider_page_content(
             ),
         ProviderKind::OpenRouter => settings_toggle_card_with_description(
                 "Enabled",
-                Some("Reads API-key usage and spending limits; a management key also provides the account credit balance."),
+                Some("Reads API-key usage and spend limits. A management key also shows credit balance."),
                 openrouter_enabled,
                 move |value| {
                     persist_provider_enabled(
@@ -2794,19 +2791,19 @@ fn provider_page_content(
         ProviderKind::Codex => (
             codex_path,
             "Codex CLI folder (optional)",
-            "Choose the folder containing codex.exe, codex.cmd, or codex.ps1. Leave it empty for automatic scanning.",
+            "Folder with codex.exe, codex.cmd, or codex.ps1. Leave empty to find it automatically.",
             r"C:\\Users\\you\\AppData\\Roaming\\npm",
         ),
         ProviderKind::Claude => (
             claude_path,
             "Claude Code CLI folder (optional)",
-            "Choose the folder containing claude.exe, claude.cmd, or claude.ps1. Leave it empty for automatic scanning.",
+            "Folder with claude.exe, claude.cmd, or claude.ps1. Leave empty to find it automatically.",
             r"C:\\Users\\you\\AppData\\Roaming\\npm",
         ),
         ProviderKind::Cursor => (
             cursor_path,
             "Cursor app folder (optional)",
-            "Choose the folder containing Cursor.exe. Leave it empty for automatic scanning; usage still comes from Cursor's signed-in local profile.",
+            "Folder with Cursor.exe. Leave empty to find it automatically. Usage still comes from the signed-in profile.",
             r"C:\\Users\\you\\AppData\\Local\\Programs\\Cursor",
         ),
         ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo | ProviderKind::OpenRouter => {
@@ -2942,9 +2939,9 @@ fn provider_page_content(
             settings_info_card(
                 "OpenRouter source",
                 if crate::openrouter::is_installed_for_accounts(openrouter_accounts) {
-                    "Protected account credentials"
+                    "Credentials saved"
                 } else {
-                    "No account credentials configured"
+                    "No credentials yet"
                 },
             ),
             openrouter_accounts_card(
@@ -3161,9 +3158,8 @@ fn tab_content(
         Tab::General => (
             "General",
             vec![
-                settings_toggle_card_with_description(
+                settings_toggle_card(
                     "Start with Windows",
-                    Some("Opens Codex Minibar automatically after you sign in."),
                     start_at_login,
                     move |value| {
                         persist_bool(
@@ -3181,8 +3177,8 @@ fn tab_content(
                 )
                 .with_key("general-startup"),
                 settings_control_card(
-                    "Refresh limits period",
-                    Some("How often enabled providers fetch the current limits."),
+                    "Refresh limits",
+                    None,
                     ComboBox::new(["30 seconds", "1 minute", "5 minutes", "10 minutes", "15 minutes"])
                         .selected_index(limit_refresh_interval.index())
                         .on_selection_changed(move |choice: i32| {
@@ -3203,8 +3199,8 @@ fn tab_content(
             let appearance_rows = vec![
                 settings_control_card(
                     "Color theme",
-                    Some("Follow Windows or keep Codex Minibar light or dark."),
-                    ComboBox::new(["Use Windows setting", "Light", "Dark"])
+                    None,
+                    ComboBox::new(["Windows", "Light", "Dark"])
                         .selected_index(theme.index())
                         .on_selection_changed(move |choice| {
                             let value = AppTheme::from_index(choice);
@@ -3230,9 +3226,9 @@ fn tab_content(
                 .with_key("appearance-theme"),
                 settings_control_card(
                     "Accent color",
-                    Some("Use the Windows accent or choose a color for highlighted controls."),
+                    None,
                     ComboBox::new([
-                        "Windows default",
+                        "Windows",
                         "Blue",
                         "Purple",
                         "Pink",
@@ -3255,9 +3251,8 @@ fn tab_content(
                     set_hovered_card_id.clone(),
                 )
                 .with_key("appearance-accent"),
-                settings_toggle_card_with_description(
+                settings_toggle_card(
                     "Colored sidebar icons",
-                    Some("Use Fluent Color glyphs in the Settings sidebar. Turn off for monochrome theme icons."),
                     use_colored_sidebar_icons,
                     {
                         let set_use_colored_sidebar_icons =
@@ -3282,7 +3277,7 @@ fn tab_content(
                 .with_key("appearance-colored-sidebar-icons"),
                 settings_control_card(
                     "Time format",
-                    Some("12-hour or 24-hour clocks in the popup and tray."),
+                    None,
                     ComboBox::new(["12-hour", "24-hour"])
                         .selected_index(time_format.index())
                         .on_selection_changed(move |choice| {
@@ -3299,9 +3294,8 @@ fn tab_content(
                 )
                 .with_key("appearance-time-format"),
                 settings_section_heading("Motion").with_key("appearance-motion-heading"),
-                settings_toggle_card_with_description(
+                settings_toggle_card(
                     "Animation effects",
-                    Some("Turn this off for the same reduced-motion behavior as disabling Animation effects in Windows."),
                     animations_enabled,
                     move |value| {
                         crate::theme::set_animations_enabled(value);
@@ -3391,9 +3385,8 @@ fn tab_content(
             }
             rows.extend([
                 settings_section_heading("Cards").with_key("customize-cards-heading"),
-                settings_toggle_card_with_description(
-                    "Replace \"amount left\" with \"amount used\"",
-                    Some("Shows consumed usage instead of the remaining amount."),
+                settings_toggle_card(
+                    "Show used instead of remaining",
                     show_used_percentage,
                     {
                         let set_show_used_percentage = set_show_used_percentage.clone();
@@ -3416,9 +3409,7 @@ fn tab_content(
                 .with_key("customize-show-used"),
                 settings_toggle_card_with_description(
                     "Show usage pace",
-                    Some(
-                        "Shows the expected-use marker and whether consumption is ahead of or behind schedule.",
-                    ),
+                    Some("Marks whether you're burning quota faster or slower than an even pace."),
                     show_usage_pace,
                     {
                         let set_show_usage_pace = set_show_usage_pace.clone();
@@ -3439,9 +3430,8 @@ fn tab_content(
                     set_hovered_card_id.clone(),
                 )
                 .with_key("customize-show-usage-pace"),
-                settings_toggle_card_with_description(
+                settings_toggle_card(
                     "Show account name",
-                    Some("Shows your Codex name or Claude organization beside the provider heading."),
                     show_account_name,
                     {
                         let set_show_account_name = set_show_account_name.clone();
@@ -3495,8 +3485,8 @@ fn tab_content(
                 .into_iter()
                 .next();
             let mut rows = vec![settings_toggle_card_with_description(
-                "Activate limits automatically",
-                Some("Starts a provider's fresh 5-hour window only when it is needed."),
+                "Start 5-hour sessions automatically",
+                Some("Starts a new Codex or Claude session as soon as a window is available, instead of waiting for your first request."),
                 automatic_activation,
                 move |value| {
                     persist_bool(
@@ -3520,7 +3510,7 @@ fn tab_content(
             let expand_added_pause = set_expanded_auto_activation_pause.clone();
             rows.push(activation_section_header(
                 "Quiet periods",
-                "Skip automatic activation for selected providers, days, and local times.",
+                "Don't auto-start sessions during these times.",
                 default_provider.is_some(),
                 move || {
                     let Some(provider) = default_provider else {
@@ -3557,7 +3547,7 @@ fn tab_content(
             let expand_added_schedule = set_expanded_scheduled_activation.clone();
             rows.push(activation_section_header(
                 "Scheduled activations",
-                "Start a fresh 5-hour window at an exact local time.",
+                "Start a 5-hour session at a set time.",
                 default_provider.is_some(),
                 move || {
                     let Some(provider) = default_provider else {
@@ -3623,7 +3613,7 @@ fn tab_content(
             "Notifications",
             vec![
                 settings_toggle_card(
-                    "Activation successes",
+                    "Successful activations",
                     activation_success,
                     move |value| {
                         persist_bool(
@@ -3641,7 +3631,7 @@ fn tab_content(
                 )
                 .with_key("notif-activation-success"),
                 settings_toggle_card(
-                    "Activation failures",
+                    "Failed activations",
                     activation_failure,
                     move |value| {
                         persist_bool(
@@ -3659,7 +3649,7 @@ fn tab_content(
                 )
                 .with_key("notif-activation-failure"),
                 settings_toggle_card(
-                    "When limits got reset",
+                    "When limits reset",
                     limits_reset,
                     move |value| {
                         persist_bool(
@@ -3677,7 +3667,7 @@ fn tab_content(
                 )
                 .with_key("notif-limits-reset"),
                 settings_toggle_expander(
-                    format!("When session usage is down to {low_usage_threshold}%"),
+                    format!("When 5-hour remaining hits {low_usage_threshold}%"),
                     None,
                     low_usage_enabled,
                     move |value| {
@@ -3699,7 +3689,7 @@ fn tab_content(
                     hovered_card_id,
                     set_hovered_card_id.clone(),
                     settings_slider_content(
-                        "Notify when remaining session usage reaches",
+                        "Threshold",
                         low_usage_threshold,
                         5,
                         50,
@@ -3727,7 +3717,7 @@ fn tab_content(
                 .with_key("notif-low-usage"),
                 settings_toggle_expander(
                     format!(
-                        "When weekly usage is down to {weekly_low_usage_threshold}%"
+                        "When weekly remaining hits {weekly_low_usage_threshold}%"
                     ),
                     None,
                     weekly_low_usage_enabled,
@@ -3750,7 +3740,7 @@ fn tab_content(
                     hovered_card_id,
                     set_hovered_card_id.clone(),
                     settings_slider_content(
-                        "Notify when remaining weekly usage reaches",
+                        "Threshold",
                         weekly_low_usage_threshold,
                         5,
                         50,
@@ -3910,8 +3900,8 @@ fn tab_content(
                 )
                 .with_key("log-open-file"),
                 settings_action_card(
-                    "Current and archived application logs",
-                    "Open logs folder",
+                    "Logs folder",
+                    "Open folder",
                     || {
                         if let Err(error) = crate::logger::open_folder() {
                             eprintln!("failed to open logs folder: {error:#}");
@@ -4326,7 +4316,7 @@ fn scheduled_activation_cards(
     if schedules.is_empty() {
         return vec![
             text_block(if activation_providers(provider_enabled).is_empty() {
-                "Enable Codex or Claude in Providers to add a scheduled activation."
+                "Turn on Codex or Claude in Providers first."
             } else {
                 "No scheduled activations."
             })
@@ -4369,7 +4359,7 @@ fn scheduled_activation_cards(
         let mut fields = Vec::<Element>::new();
         if choices.is_empty() {
             fields.push(
-                text_block("Enable Codex or Claude to select a provider.")
+                text_block("Turn on Codex or Claude in Providers first.")
                     .font_size(12.0)
                     .foreground(ThemeRef::SecondaryText)
                     .wrap()
@@ -4514,7 +4504,7 @@ fn auto_activation_pause_cards(
     if pauses.is_empty() {
         return vec![
             text_block(if activation_providers(provider_enabled).is_empty() {
-                "Enable Codex or Claude in Providers to add a quiet period."
+                "Turn on Codex or Claude in Providers first."
             } else {
                 "No quiet periods."
             })
@@ -4557,7 +4547,7 @@ fn auto_activation_pause_cards(
         let mut fields = Vec::<Element>::new();
         if choices.is_empty() {
             fields.push(
-                text_block("Enable Codex or Claude to select a provider.")
+                text_block("Turn on Codex or Claude in Providers first.")
                     .font_size(12.0)
                     .foreground(ThemeRef::SecondaryText)
                     .wrap()
@@ -4803,9 +4793,9 @@ fn settings_section_heading(title: impl Into<String>) -> Element {
 
 fn update_status_label(phase: &UpdatePhase) -> String {
     match phase {
-        UpdatePhase::Idle => "Look for the latest release on GitHub".into(),
-        UpdatePhase::Checking => "Checking updates".into(),
-        UpdatePhase::UpToDate => "No updates found".into(),
+        UpdatePhase::Idle => "Check GitHub for a new version".into(),
+        UpdatePhase::Checking => "Checking for updates".into(),
+        UpdatePhase::UpToDate => "You're up to date".into(),
         UpdatePhase::Available(update) => format!("Update {} available", update.version),
         UpdatePhase::Applying => "Installing update...".into(),
         // Never surface raw transport errors (e.g. "GET https://...").
@@ -4854,7 +4844,7 @@ fn about_settings_cards(
             ))
             .spacing(2.0)
             .horizontal_alignment(HorizontalAlignment::Center),
-            text_block("A lightweight Windows tray companion for Codex rate limits.")
+            text_block("Usage limits in the Windows tray.")
                 .font_size(15.0)
                 .wrap()
                 .foreground(ThemeRef::SecondaryText)
@@ -4934,7 +4924,7 @@ fn about_settings_cards(
     let update_actions: Element = if matches!(update_phase, UpdatePhase::Available(_)) {
         vstack((
             settings_action_card(
-                "Download and install the latest release",
+                "Install the latest version",
                 "Update",
                 || {
                     if let Err(error) = crate::updater::apply_pending_update() {
@@ -4948,7 +4938,7 @@ fn about_settings_cards(
             )
             .with_key("about-update-apply"),
             settings_action_card(
-                "Read the release notes on GitHub",
+                "GitHub release notes",
                 "What's New",
                 || {
                     if let Err(error) = crate::updater::open_release_notes() {
@@ -4988,7 +4978,7 @@ fn about_settings_cards(
         grid((
             about_action_card(
                 "GitHub",
-                "Browse the source code",
+                "Source code",
                 AboutCardIcon::Phosphor("github-logo"),
                 || {
                     let _ = crate::updater::open_url(REPO_URL);
@@ -6689,7 +6679,7 @@ fn legacy_tray_settings_cards(
         ];
         match enabled_providers {
             [] => fields.push(
-                text_block("Enable a provider to choose what this widget displays.")
+                text_block("Turn on a provider to choose what this widget shows.")
                     .font_size(12.0)
                     .foreground(ThemeRef::SecondaryText)
                     .wrap()
@@ -7025,9 +7015,8 @@ fn popup_settings_cards(
     let apply_total_spend_presentation = settings_tx.clone();
     let mut rows = vec![
         settings_section_heading("Home tab").with_key("popup-home-tab-heading"),
-        settings_toggle_card_with_description(
-            "Show Usage Stats",
-            Some("Shows the Usage Stats widget when Home is selected."),
+        settings_toggle_card(
+            "Usage Stats",
             show_total_spend_on_all_tab,
             move |value| {
                 persist_bool(
@@ -7045,8 +7034,8 @@ fn popup_settings_cards(
         )
         .with_key("popup-show-total-spend"),
         settings_control_card(
-            "Usage Stats layout",
-            Some("Choose donut or cost cards for Usage Stats on the Home tab."),
+            "Layout",
+            None,
             ComboBox::new(["Donut", "Cards"])
                 .selected_index(total_spend_presentation.index())
                 .on_selection_changed({
@@ -7077,7 +7066,7 @@ fn popup_settings_cards(
         rows.push(
             settings_info_card(
                 "Popup cards",
-                "Enable a provider to configure its popup cards.",
+                "Turn on a provider to set up its cards.",
             )
             .with_key("popup-empty"),
         );
@@ -7316,7 +7305,7 @@ fn choose_provider_folder() -> anyhow::Result<Option<PathBuf>> {
         SHBrowseForFolderW, SHGetPathFromIDListW,
     };
 
-    let title = "Choose the folder containing the provider files\0"
+    let title = "Select the folder with the provider files\0"
         .encode_utf16()
         .collect::<Vec<_>>();
     let mut display_name = [0_u16; 260];

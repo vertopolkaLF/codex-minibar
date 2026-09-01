@@ -132,7 +132,7 @@ pub(super) fn format_reset_in(reset: Option<DateTime<Utc>>) -> String {
 
 pub(super) fn format_last_updated(sampled_at: DateTime<Utc>, _clock_tick: u64) -> String {
     if sampled_at.timestamp() == 0 {
-        return "Waiting for first update...".into();
+        return "Waiting for first update".into();
     }
     let seconds = (Utc::now() - sampled_at).num_seconds().max(0);
     let elapsed = match seconds {

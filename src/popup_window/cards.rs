@@ -856,7 +856,7 @@ pub(super) fn limit_card(
         .horizontal_alignment(HorizontalAlignment::Right)
         .vertical_alignment(VerticalAlignment::Center)
         .into(),
-        None => text_block("Session is not activated")
+        None => text_block("Session not started")
             .foreground(Color::rgb(255, 255, 255))
             .horizontal_alignment(HorizontalAlignment::Right)
             .vertical_alignment(VerticalAlignment::Center)
@@ -1007,7 +1007,7 @@ pub(super) fn usage_statistics_card(provider: ProviderKind, limits: &RateLimits)
             vstack((
                 body_strong("Usage activity"),
                 caption(
-                    "Waiting for Cursor usage export. Refresh to retry; Cursor can delay new rows.",
+                    "Waiting for Cursor's usage export. Refresh to retry.",
                 )
                 .foreground(ThemeRef::TertiaryText)
                 .wrap(),
@@ -1024,12 +1024,12 @@ pub(super) fn usage_statistics_card(provider: ProviderKind, limits: &RateLimits)
     if is_cost_provider(provider) {
         let metrics = grid((
             usage_value_metric(
-                "Today spend",
+                "Today",
                 format_spend(statistics.today.estimated_cost_microusd),
                 statistics.today.requests,
             ),
             usage_value_metric(
-                &format!("Last {} days spend", statistics.history_days),
+                &format!("Last {} days", statistics.history_days),
                 format_spend(statistics.history.estimated_cost_microusd),
                 statistics.history.requests,
             )
@@ -1079,8 +1079,8 @@ pub(super) fn usage_statistics_card(provider: ProviderKind, limits: &RateLimits)
         statistics.history.requests,
     );
     let metrics = grid((
-        usage_tokens_and_cost_metric("Today tokens", today, today_value),
-        usage_tokens_and_cost_metric(&format!("Last {period} days tokens"), total, history_value)
+        usage_tokens_and_cost_metric("Today", today, today_value),
+        usage_tokens_and_cost_metric(&format!("Last {period} days"), total, history_value)
             .grid_column(1),
     ))
     .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
