@@ -692,7 +692,6 @@ fn usage_area_chart(
     let xaml = usage_area_chart_xaml(series, providers, max_value, plot_width, color_scheme);
     let plot = usage_area_chart_host(&xaml, series, providers, metric, color_scheme, plot_width);
     let count = series.len();
-    let step = plot_width / count.max(1) as f64;
     let hits = usage_chart_hit_target(
         count,
         plot_width,
@@ -708,7 +707,7 @@ fn usage_area_chart(
         relative_panel({
             let mut layers = vec![plot];
             if let Some(index) = hover {
-                layers.push(chart_hover_rule(step, index));
+                layers.push(chart_hover_rule(plot_width, count, index));
             }
             layers.push(hits);
             layers
@@ -788,7 +787,9 @@ fn usage_area_chart_host(
     let key_for_unmount = host_key.clone();
     let mut host = swap_chain_panel()
         .width(plot_width)
-        .height(CHART_PLOT_HEIGHT);
+        .height(CHART_PLOT_HEIGHT)
+        .relative_align_left()
+        .relative_align_top();
     host.mounted = Some(Callback::new(
         move |native: Option<windows_core::IInspectable>| {
             if let Some(native) = native {
@@ -826,7 +827,6 @@ fn usage_chart_hit_target(
     hover: Option<usize>,
     set_hover: SetState<Option<usize>>,
 ) -> Element {
-    let step = plot_width / count.max(1) as f64;
     let plot_left = 1.0 + USAGE_CARD_PAD + CHART_Y_AXIS_WIDTH + CHART_Y_GAP;
     let plot_top = usage_chart_plot_top(provider_count);
     let set_hover_move = set_hover.clone();
@@ -842,7 +842,7 @@ fn usage_chart_hit_target(
                 apply_chart_pointer(
                     info.x,
                     info.y,
-                    step,
+                    plot_width,
                     count,
                     plot_left,
                     plot_top,
@@ -855,7 +855,7 @@ fn usage_chart_hit_target(
             apply_chart_pointer(
                 info.x,
                 info.y,
-                step,
+                plot_width,
                 count,
                 plot_left,
                 plot_top,
@@ -874,7 +874,7 @@ fn usage_chart_hit_target(
 fn apply_chart_pointer(
     plot_x: f64,
     plot_y: f64,
-    step: f64,
+    plot_width: f64,
     count: usize,
     plot_left: f64,
     plot_top: f64,
@@ -884,7 +884,7 @@ fn apply_chart_pointer(
     if count == 0 {
         return;
     }
-    let index = (plot_x / step).floor().clamp(0.0, (count - 1) as f64) as usize;
+    let index = chart_index_at_x(plot_x, count, plot_width);
     remember_chart_cursor(plot_left + plot_x, plot_top + plot_y);
     if hover != Some(index) {
         set_hover.call(Some(index));
@@ -892,13 +892,13 @@ fn apply_chart_pointer(
     apply_chart_tooltip_offset();
 }
 
-fn chart_hover_rule(step: f64, index: usize) -> Element {
+fn chart_hover_rule(width: f64, count: usize, index: usize) -> Element {
     border(Element::Empty)
         .width(1.0)
         .height(CHART_PLOT_HEIGHT)
         .background(ThemeRef::PrimaryText)
         .margin(Thickness {
-            left: step * index as f64 + step / 2.0,
+            left: (chart_x_at(index, count, width) - 0.5).max(0.0),
             top: 0.0,
             right: 0.0,
             bottom: 0.0,
@@ -1042,13 +1042,37 @@ fn usage_area_chart_xaml(
 
 fn series_x_positions(count: usize, width: f64) -> Vec<f64> {
     let count = count.max(1);
-    let plot_w = (width - CHART_PAD_X * 2.0).max(1.0);
     if count == 1 {
         return vec![CHART_PAD_X, width - CHART_PAD_X];
     }
     (0..count)
-        .map(|index| CHART_PAD_X + plot_w * index as f64 / (count - 1) as f64)
+        .map(|index| chart_x_at(index, count, width))
         .collect()
+}
+
+fn chart_plot_width(width: f64) -> f64 {
+    (width - CHART_PAD_X * 2.0).max(1.0)
+}
+
+/// X of the `index`th vertex. Must match [`series_x_positions`] so the hover
+/// rule sits on the painted point instead of a bucket center.
+fn chart_x_at(index: usize, count: usize, width: f64) -> f64 {
+    let count = count.max(1);
+    let plot_w = chart_plot_width(width);
+    if count == 1 {
+        return CHART_PAD_X + plot_w / 2.0;
+    }
+    CHART_PAD_X + plot_w * index.min(count - 1) as f64 / (count - 1) as f64
+}
+
+fn chart_index_at_x(x: f64, count: usize, width: f64) -> usize {
+    let count = count.max(1);
+    if count == 1 {
+        return 0;
+    }
+    let plot_w = chart_plot_width(width);
+    let t = (x - CHART_PAD_X) / plot_w * (count - 1) as f64;
+    t.round().clamp(0.0, (count - 1) as f64) as usize
 }
 
 fn monotone_stroke_path(xs: &[f64], ys: &[f64]) -> String {

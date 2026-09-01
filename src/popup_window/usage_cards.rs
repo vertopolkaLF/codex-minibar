@@ -17,6 +17,9 @@ pub(super) fn combined_usage_card(
     use_colored_provider_icons: bool,
     presentation: TotalSpendPresentation,
     drag_handle: Option<Element>,
+    on_open_usage: impl Fn() + Clone + 'static,
+    hovered_chrome: Option<UsageStatsHover>,
+    set_hovered_chrome: SetState<Option<UsageStatsHover>>,
 ) -> Element {
     let enabled: Vec<_> = crate::provider_registry::PROVIDERS
         .iter()
@@ -69,11 +72,16 @@ pub(super) fn combined_usage_card(
         .vertical_alignment(VerticalAlignment::Center)
         .grid_column(1);
 
+    let on_open_title = on_open_usage.clone();
+    let set_hovered_title = set_hovered_chrome.clone();
     vstack((
         grid((
-            body_strong("Total Spend")
-                .foreground(ThemeRef::SecondaryText)
-                .vertical_alignment(VerticalAlignment::Center),
+            usage_stats_title(
+                hovered_chrome == Some(UsageStatsHover::Title),
+                set_hovered_title,
+                on_open_title,
+            )
+            .vertical_alignment(VerticalAlignment::Center),
             title_trailing,
         ))
         .columns([GridLength::Star(1.0), GridLength::Auto])
@@ -89,15 +97,128 @@ pub(super) fn combined_usage_card(
             "total-spend-heading-{}",
             if is_first { "first" } else { "rest" }
         )),
-        border(content)
-            .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
-            .padding(Thickness::uniform(12.0))
-            .background(ThemeRef::CardBackground)
-            .border_thickness(Thickness::uniform(1.0))
-            .border_brush(ThemeRef::CardStroke),
+        usage_stats_card(
+            content,
+            hovered_chrome == Some(UsageStatsHover::Card),
+            set_hovered_chrome,
+            on_open_usage,
+        ),
     ))
     .spacing(6.0)
     .into()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum UsageStatsHover {
+    Title,
+    Card,
+}
+
+fn usage_stats_title(
+    hovered: bool,
+    set_hovered: SetState<Option<UsageStatsHover>>,
+    on_open: impl Fn() + Clone + 'static,
+) -> Element {
+    let anim = crate::theme::duration(Duration::from_millis(200));
+    let set_on_enter = set_hovered.clone();
+    let set_on_exit = set_hovered;
+    let layers = vec![
+        body_strong("Usage Stats")
+            .foreground(ThemeRef::SecondaryText)
+            .opacity(if hovered { 0.0 } else { 1.0 })
+            .with_opacity_transition(anim)
+            .relative_align_left()
+            .relative_align_v_center()
+            .into(),
+        body_strong("Usage Stats")
+            .foreground(ThemeRef::Accent)
+            .opacity(if hovered { 1.0 } else { 0.0 })
+            .with_opacity_transition(anim)
+            .relative_align_left()
+            .relative_align_v_center()
+            .into(),
+        usage_stats_hit_layer(
+            on_open,
+            move |_| set_on_enter.call(Some(UsageStatsHover::Title)),
+            move || set_on_exit.call(None),
+            "usage-stats-title",
+        ),
+    ];
+    relative_panel(layers)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Center)
+        .with_key("usage-stats-title")
+        .into()
+}
+
+fn usage_stats_card(
+    content: Element,
+    hovered: bool,
+    set_hovered: SetState<Option<UsageStatsHover>>,
+    on_open: impl Fn() + Clone + 'static,
+) -> Element {
+    let radius = f64::from(popup::WINDOW_CORNER_RADIUS_DIP);
+    let hover_anim = crate::theme::duration(crate::theme::CONTROL_FASTER_ANIMATION);
+    let set_on_enter = set_hovered.clone();
+    let set_on_exit = set_hovered;
+    relative_panel(vec![
+        border(Element::Empty)
+            .background(ThemeRef::CardBackground)
+            .corner_radius(radius)
+            .border_thickness(Thickness::uniform(1.0))
+            .border_brush(ThemeRef::CardStroke)
+            .relative_align_left()
+            .relative_align_right()
+            .relative_align_top()
+            .relative_align_bottom()
+            .into(),
+        border(Element::Empty)
+            .background(ThemeRef::SubtleFill)
+            .opacity(if hovered { 1.0 } else { 0.0 })
+            .with_opacity_transition(hover_anim)
+            .corner_radius(radius)
+            .relative_align_left()
+            .relative_align_right()
+            .relative_align_top()
+            .relative_align_bottom()
+            .into(),
+        border(content)
+            .padding(Thickness::uniform(12.0))
+            .background(Color::transparent())
+            .relative_align_left()
+            .relative_align_right()
+            .relative_align_top()
+            .relative_align_bottom()
+            .into(),
+        usage_stats_hit_layer(
+            on_open,
+            move |_| set_on_enter.call(Some(UsageStatsHover::Card)),
+            move || set_on_exit.call(None),
+            "usage-stats-card",
+        ),
+    ])
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .with_key("usage-stats-card")
+    .into()
+}
+
+fn usage_stats_hit_layer(
+    on_open: impl Fn() + Clone + 'static,
+    on_enter: impl Fn(PointerEventInfo) + Clone + 'static,
+    on_exit: impl Fn() + Clone + 'static,
+    key: &str,
+) -> Element {
+    border(Element::Empty)
+        .background(Color::transparent())
+        .relative_align_left()
+        .relative_align_right()
+        .relative_align_top()
+        .relative_align_bottom()
+        .on_pointer_entered(on_enter)
+        .on_pointer_exited(on_exit)
+        .on_tapped(move || on_open())
+        .with_key(format!("{key}-hit"))
+        .into()
 }
 
 pub(super) fn combined_usage_donut_content(
@@ -588,7 +709,7 @@ fn spend_provider_tile(
         .columns([GridLength::Auto, GridLength::Star(1.0)])
         .column_spacing(8.0)
         .rows([GridLength::Auto]),
-        caption(format_spend_compact(spend))
+        caption(format_spend_full(spend))
             .font_weight(600)
             .foreground(ThemeRef::PrimaryText),
     ))

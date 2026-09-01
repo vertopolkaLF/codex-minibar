@@ -82,6 +82,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let (pager, pager_dispatch) = cx.use_reducer_fn(reduce_pager, PagerState::default());
     let (hovered_combined_usage_period, set_hovered_combined_usage_period) =
         cx.use_state(None::<TotalSpendPeriod>);
+    let (hovered_usage_stats, set_hovered_usage_stats) =
+        cx.use_state(None::<UsageStatsHover>);
     // Relative timestamps need an occasional render tick while the popup is
     // visible. `prepare_show_on_ui_thread` requests an immediate render on
     // every open, so there is no reason to reconcile the entire hidden WinUI
@@ -338,6 +340,12 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                                     set_widget_drag.clone(),
                                 )
                             }),
+                            {
+                                let pager_dispatch = pager_dispatch.clone();
+                                move || pager_dispatch.call(PagerAction::Select(PopupView::Usage))
+                            },
+                            hovered_usage_stats,
+                            set_hovered_usage_stats.clone(),
                         )
                         .with_key(format!(
                             "all-combined-usage-{}-{:?}-{}-{}-{}",
