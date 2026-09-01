@@ -209,6 +209,18 @@ pub(super) fn start_background_bridge(
                     .cloned()
                     .collect();
                 let _ = commands.send(WorkerCommand::SetScheduledActivations(schedules));
+                let auto_activation_pauses = settings
+                    .auto_activation_pauses
+                    .iter()
+                    .filter(|pause| {
+                        crate::provider_registry::descriptor(provider).supports_activation
+                            && pause.provider() == Some(provider)
+                    })
+                    .cloned()
+                    .collect();
+                let _ = commands.send(WorkerCommand::SetAutoActivationPauses(
+                    auto_activation_pauses,
+                ));
                 let _ = commands.send(WorkerCommand::SetLimitRefreshInterval(Duration::from_secs(
                     settings.limit_refresh_interval.seconds(),
                 )));

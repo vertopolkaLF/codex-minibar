@@ -5,7 +5,7 @@ use chrono::{DateTime, Datelike, Duration, Local, TimeZone, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::limits::LimitWindow;
-use crate::settings::ScheduledActivation;
+use crate::settings::{AutoActivationPause, ScheduledActivation};
 
 /// Auto activation must leave the upcoming planned window untouched.
 pub const AUTO_ACTIVATION_SCHEDULE_GUARD: Duration = Duration::hours(6);
@@ -126,6 +126,31 @@ pub fn scheduled_activation_within(
         .iter()
         .filter(|rule| rule.enabled)
         .any(|rule| next_scheduled_activation(rule, now) - now <= within)
+}
+
+/// Returns whether the current local time is inside any enabled pause for the
+/// provider handled by the caller. Endpoints are inclusive so 00:00–23:59 is
+/// a convenient way to express a whole-day pause.
+pub fn auto_activation_paused(rules: &[AutoActivationPause], now: DateTime<Utc>) -> bool {
+    let local_now = now.with_timezone(&Local);
+    let weekday = local_now.weekday().num_days_from_monday() as u8;
+    let previous_weekday = (weekday + 6) % 7;
+    let minutes = (local_now.hour() * 60 + local_now.minute()) as u16;
+    rules.iter().any(|rule| {
+        if !rule.enabled {
+            return false;
+        }
+        if rule.start_time_minutes <= rule.end_time_minutes {
+            rule.occurs_on(weekday)
+                && (rule.start_time_minutes..=rule.end_time_minutes).contains(&minutes)
+        } else {
+            // An overnight period starts on its selected day and ends on the
+            // following day, so the early-morning half belongs to yesterday's
+            // selected weekday rather than today's.
+            (rule.occurs_on(weekday) && minutes >= rule.start_time_minutes)
+                || (rule.occurs_on(previous_weekday) && minutes <= rule.end_time_minutes)
+        }
+    })
 }
 
 impl ActivationState {
@@ -661,5 +686,50 @@ mod tests {
                 .num_days_from_monday() as u8,
             today
         );
+    }
+
+    #[test]
+    fn automatic_activation_pause_matches_selected_weekend_period() {
+        let local = Local
+            .with_ymd_and_hms(2026, 7, 11, 12, 0, 0)
+            .single()
+            .unwrap();
+        let pause = AutoActivationPause {
+            id: "weekend".into(),
+            provider_id: "claude".into(),
+            weekdays: vec![5, 6],
+            start_time_minutes: 0,
+            end_time_minutes: 23 * 60 + 59,
+            enabled: true,
+        };
+
+        assert!(auto_activation_paused(&[pause.clone()], local.with_timezone(&Utc)));
+        assert!(!auto_activation_paused(
+            &[pause],
+            (local + Duration::days(2)).with_timezone(&Utc),
+        ));
+    }
+
+    #[test]
+    fn automatic_activation_pause_supports_overnight_periods() {
+        let pause = AutoActivationPause {
+            id: "overnight".into(),
+            provider_id: "codex".into(),
+            weekdays: vec![4],
+            start_time_minutes: 22 * 60,
+            end_time_minutes: 7 * 60,
+            enabled: true,
+        };
+        let late = Local
+            .with_ymd_and_hms(2026, 7, 10, 23, 0, 0)
+            .single()
+            .unwrap();
+        let morning = Local
+            .with_ymd_and_hms(2026, 7, 11, 6, 0, 0)
+            .single()
+            .unwrap();
+
+        assert!(auto_activation_paused(&[pause.clone()], late.with_timezone(&Utc)));
+        assert!(auto_activation_paused(&[pause], morning.with_timezone(&Utc)));
     }
 }

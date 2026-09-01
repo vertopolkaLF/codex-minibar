@@ -510,6 +510,7 @@ impl Component<CheckboxExpanderProps> for CheckboxExpander {
 #[derive(Clone, PartialEq)]
 struct ContentExpanderProps {
     header: Element,
+    trailing: Option<Element>,
     expanded: bool,
     on_expanding: Callback<bool>,
     card_id: String,
@@ -555,7 +556,7 @@ impl Component<ContentExpanderProps> for ContentExpander {
 
         settings_expander_card_with_header(
             props.header.clone(),
-            None,
+            props.trailing.clone(),
             props.expanded,
             progress,
             None,
@@ -680,10 +681,35 @@ pub(crate) fn settings_content_expander(
     set_hovered_id: SetState<Option<String>>,
     content: impl Into<Element>,
 ) -> Element {
+    settings_content_expander_with_trailing(
+        header,
+        None,
+        expanded,
+        on_expanding,
+        card_id,
+        hovered_id,
+        set_hovered_id,
+        content,
+    )
+}
+
+/// Same chrome as [`settings_content_expander`], plus a trailing header control
+/// that sits above the expand tap target so it does not toggle the card.
+pub(crate) fn settings_content_expander_with_trailing(
+    header: impl Into<Element>,
+    trailing: Option<Element>,
+    expanded: bool,
+    on_expanding: impl IntoCallback<bool>,
+    card_id: impl Into<String>,
+    hovered_id: &Option<String>,
+    set_hovered_id: SetState<Option<String>>,
+    content: impl Into<Element>,
+) -> Element {
     component(
         ContentExpander,
         ContentExpanderProps {
             header: header.into(),
+            trailing,
             expanded,
             on_expanding: on_expanding.into_callback(),
             card_id: card_id.into(),
@@ -692,143 +718,6 @@ pub(crate) fn settings_content_expander(
             content: content.into(),
         },
     )
-}
-
-/// Same chrome as [`settings_content_expander`], plus a trailing header control
-/// that sits above the expand tap target so it does not toggle the card.
-#[allow(dead_code)]
-pub(crate) fn settings_content_expander_with_trailing(
-    header: impl Into<Element>,
-    trailing: Option<Element>,
-    expanded: bool,
-    on_expanding: impl IntoCallback<bool>,
-    content: impl Into<Element>,
-) -> Element {
-    let on_expanding = on_expanding.into_callback();
-    let toggle_expand = {
-        let on_expanding = on_expanding.clone();
-        move || on_expanding.invoke(!expanded)
-    };
-    let trailing_reserve = if trailing.is_some() { 80.0 } else { 0.0 };
-
-    let chevron = border(
-        crate::icons::element("caret-down", 16.0, Color::rgb(138, 138, 138))
-            .horizontal_alignment(HorizontalAlignment::Center)
-            .vertical_alignment(VerticalAlignment::Center),
-    )
-    .width(CHEVRON_SIZE)
-    .height(CHEVRON_SIZE)
-    .background(Color::transparent())
-    .rotation(if expanded { 180.0 } else { 0.0 })
-    .with_rotation_transition(duration(CONTROL_NORMAL_ANIMATION))
-    .margin(Thickness {
-        left: 0.0,
-        top: 0.0,
-        right: CARD_PADDING_X,
-        bottom: 0.0,
-    })
-    .relative_align_right()
-    .relative_align_v_center()
-    .on_tapped({
-        let toggle_expand = toggle_expand.clone();
-        move || toggle_expand()
-    });
-
-    let mut header_children: Vec<Element> = vec![
-        border(Element::Empty)
-            .background(Color::transparent())
-            .relative_align_left()
-            .relative_align_right()
-            .relative_align_top()
-            .relative_align_bottom()
-            .on_tapped({
-                let toggle_expand = toggle_expand.clone();
-                move || toggle_expand()
-            })
-            .into(),
-        header
-            .into()
-            .margin(Thickness {
-                left: CARD_PADDING_X,
-                top: CARD_CONTENT_PADDING_Y,
-                right: CARD_PADDING_X + CHEVRON_SIZE + TOGGLE_CHEVRON_GAP + trailing_reserve,
-                bottom: CARD_CONTENT_PADDING_Y,
-            })
-            .relative_align_left()
-            .relative_align_right()
-            .relative_align_v_center()
-            .into(),
-    ];
-    if let Some(trailing) = trailing {
-        header_children.push(
-            border(trailing)
-                .background(Color::transparent())
-                .margin(Thickness {
-                    left: 0.0,
-                    top: 0.0,
-                    right: CARD_PADDING_X + CHEVRON_SIZE + TOGGLE_CHEVRON_GAP,
-                    bottom: 0.0,
-                })
-                .relative_align_right()
-                .relative_align_v_center()
-                .into(),
-        );
-    }
-    header_children.push(chevron.into());
-
-    let header_row = relative_panel(header_children)
-        // Never crop a wrapped description: the 60px row is a minimum, not
-        // a fixed height. Vertical padding must remain visible on every card.
-        .min_height(CARD_ROW_HEIGHT)
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .background(Color::transparent());
-
-    let body: Element = if expanded {
-        vstack((
-            border(Element::Empty)
-                .height(1.0)
-                .background(ThemeRef::CardStroke)
-                .horizontal_alignment(HorizontalAlignment::Stretch)
-                .margin(Thickness {
-                    left: CARD_PADDING_X,
-                    top: 0.0,
-                    right: CARD_PADDING_X,
-                    bottom: 0.0,
-                }),
-            border(content.into())
-                .padding(Thickness {
-                    left: CARD_PADDING_X,
-                    top: CARD_CONTENT_PADDING_Y,
-                    right: CARD_PADDING_X,
-                    bottom: CARD_CONTENT_PADDING_Y,
-                })
-                .horizontal_alignment(HorizontalAlignment::Stretch),
-        ))
-        .spacing(0.0)
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .with_opacity_transition(duration(CONTROL_NORMAL_ANIMATION))
-        .with_translation_transition(duration(CONTROL_NORMAL_ANIMATION))
-        .into()
-    } else {
-        Element::Empty
-    };
-
-    let (base, hover) = card_background_layers(false);
-    relative_panel(vec![
-        base,
-        hover,
-        vstack((header_row, body))
-            .spacing(0.0)
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .relative_align_left()
-            .relative_align_right()
-            .relative_align_top()
-            .relative_align_bottom()
-            .into(),
-    ])
-    .horizontal_alignment(HorizontalAlignment::Stretch)
-    .background(Color::transparent())
-    .into()
 }
 
 /// Nested slider row for use inside [`settings_toggle_expander`] content.
