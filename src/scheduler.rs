@@ -18,6 +18,12 @@ const NEW_WINDOW_MINIMUM_ADVANCE: Duration = Duration::minutes(5);
 /// observation series rather than unrelated polls hours apart.
 const UNACTIVATED_PROBE_MAX_GAP: Duration = Duration::minutes(5);
 
+/// After a failed Codex exec, wait before spending another activation attempt.
+pub const UNACTIVATED_RETRY_COOLDOWN: Duration = Duration::minutes(3);
+
+/// A real 5-hour deadline stays put; second-level jitter is not a slide.
+const FROZEN_RESET_TOLERANCE: Duration = Duration::seconds(2);
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct UnactivatedResetObservation {
     sampled_at: DateTime<Utc>,
@@ -192,9 +198,6 @@ impl ActivationState {
             return Decision::Skip;
         }
         if is_unactivated_candidate {
-            if self.attempted_without_active_window {
-                return Decision::Skip;
-            }
             let Some(resets_at) = primary.resets_at else {
                 return Decision::Skip;
             };
@@ -312,9 +315,14 @@ impl ActivationState {
     /// The worker uses a short follow-up poll while a Codex reset series still
     /// needs a second or third neighboring sample.
     pub fn awaits_unactivated_confirmation(&self) -> bool {
-        !self.attempted_without_active_window
-            && self.stable_unactivated_candidate_reset.is_none()
+        self.stable_unactivated_candidate_reset.is_none()
             && !self.unactivated_reset_observations.is_empty()
+    }
+
+    pub fn recently_attempted(&self, now: DateTime<Utc>) -> bool {
+        self.last_attempt_at.is_some_and(|attempted| {
+            now >= attempted && now - attempted < UNACTIVATED_RETRY_COOLDOWN
+        })
     }
 
     pub fn record_attempt(&mut self, now: DateTime<Utc>) {
@@ -376,6 +384,27 @@ fn unactivated_reset_series_is_moving(
         && unactivated_reset_moved(second, third)
         && third.sampled_at - first.sampled_at <= UNACTIVATED_PROBE_MAX_GAP
         && third.resets_at - first.resets_at <= UNACTIVATED_PROBE_MAX_GAP
+}
+
+/// A single Codex sample of a just-started 5-hour window still looks like the
+/// synthetic placeholder (0% used, reset ≈ now + 5h). Two neighboring samples
+/// decide it: a real window keeps the same deadline, the placeholder slides
+/// with the request clock. Uncertain pairs stay unconfirmed.
+pub fn session_activation_confirmed(
+    first: &LimitWindow,
+    second: &LimitWindow,
+    second_is_unactivated: bool,
+) -> bool {
+    if second.used_percent.is_some_and(|used| used > 1) {
+        return true;
+    }
+    if !second_is_unactivated && !second.is_empty() {
+        return true;
+    }
+    let (Some(first_reset), Some(second_reset)) = (first.resets_at, second.resets_at) else {
+        return false;
+    };
+    (second_reset - first_reset).abs() <= FROZEN_RESET_TOLERANCE
 }
 
 #[cfg(test)]
@@ -513,6 +542,45 @@ mod tests {
             ),
             Decision::Skip
         );
+    }
+
+    #[test]
+    fn frozen_reset_after_exec_confirms_an_active_session() {
+        let reset = at(15, 0) + Duration::hours(5);
+        assert!(session_activation_confirmed(
+            &window_at(reset),
+            &window_at(reset),
+            true,
+        ));
+        assert!(!session_activation_confirmed(
+            &window_at(reset),
+            &window_at(reset + Duration::seconds(10)),
+            true,
+        ));
+        let used = LimitWindow {
+            used_percent: Some(2),
+            resets_at: Some(reset + Duration::seconds(10)),
+            duration_minutes: Some(300),
+        };
+        assert!(session_activation_confirmed(
+            &window_at(reset),
+            &used,
+            false,
+        ));
+    }
+
+    #[test]
+    fn recent_attempt_blocks_another_codex_exec() {
+        let sampled_at = at(15, 0);
+        let mut state = ActivationState::default();
+        state.observe_with_unactivated(
+            &window_at(sampled_at + Duration::hours(5)),
+            true,
+            sampled_at,
+        );
+        state.record_attempt(sampled_at);
+        assert!(state.recently_attempted(sampled_at + Duration::minutes(2)));
+        assert!(!state.recently_attempted(sampled_at + Duration::minutes(3)));
     }
 
     #[test]

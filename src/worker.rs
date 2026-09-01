@@ -21,6 +21,7 @@ use crate::{
 
 pub const USAGE_STATS_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const UNACTIVATED_CONFIRMATION_INTERVAL: Duration = Duration::from_secs(30);
+const ACTIVATION_CONFIRM_GAP: Duration = Duration::from_secs(10);
 
 fn effective_limit_poll_interval(
     configured: Duration,
@@ -498,6 +499,7 @@ fn tick(
             now,
             scheduler::AUTO_ACTIVATION_SCHEDULE_GUARD,
         )
+        && !state.recently_attempted(now)
         && state.decide_with_unactivated(
             &limits.primary,
             limits.primary_window_is_unactivated,
@@ -511,15 +513,33 @@ fn tick(
                 if let Ok(fresh) = provider.read_limits() {
                     limits = fresh;
                 }
-                state.observe_with_unactivated(
-                    &limits.primary,
-                    limits.primary_window_is_unactivated,
-                    limits.sampled_at,
-                );
-                if let Some((rule, occurrence)) = scheduled_due {
-                    state.record_scheduled_activation(&rule.id, occurrence);
+                let confirmed = if limits.primary_window_is_unactivated {
+                    confirm_unactivated_session(provider, &mut limits)
+                } else {
+                    true
+                };
+                if confirmed {
+                    // Treat the window as established so the next poll cannot
+                    // spend another exec against the same 5-hour session.
+                    state.observe_with_unactivated(
+                        &limits.primary,
+                        false,
+                        limits.sampled_at,
+                    );
+                    if let Some((rule, occurrence)) = scheduled_due {
+                        state.record_scheduled_activation(&rule.id, occurrence);
+                    }
+                    events.push(WorkerEvent::ActivationSucceeded);
+                } else {
+                    state.observe_with_unactivated(
+                        &limits.primary,
+                        limits.primary_window_is_unactivated,
+                        limits.sampled_at,
+                    );
+                    events.push(WorkerEvent::ActivationFailed(
+                        "Codex 5-hour session window is still inactive".into(),
+                    ));
                 }
-                events.push(WorkerEvent::ActivationSucceeded);
             }
             Err(error) => events.push(WorkerEvent::ActivationFailed(error.to_string())),
         }
@@ -533,6 +553,55 @@ fn tick(
 
     events.insert(0, WorkerEvent::LimitsUpdated(limits));
     Ok(events)
+}
+
+fn activation_confirm_gap() -> Duration {
+    if cfg!(test) {
+        Duration::from_millis(0)
+    } else {
+        ACTIVATION_CONFIRM_GAP
+    }
+}
+
+/// A just-started Codex window still looks unactivated on one sample. Wait,
+/// read again, and only then decide whether the deadline froze.
+fn confirm_unactivated_session(
+    provider: &mut impl LimitProvider,
+    limits: &mut RateLimits,
+) -> bool {
+    let first = limits.clone();
+    let gap = activation_confirm_gap();
+    if !gap.is_zero() {
+        thread::sleep(gap);
+    }
+    match provider.read_limits() {
+        Ok(second) => {
+            let confirmed = scheduler::session_activation_confirmed(
+                &first.primary,
+                &second.primary,
+                second.primary_window_is_unactivated,
+            );
+            if confirmed {
+                crate::logger::info(format!(
+                    "Codex 5-hour window confirmed active: used={:?}%, reset={:?}",
+                    second.primary.used_percent, second.primary.resets_at
+                ));
+            } else {
+                crate::logger::info(format!(
+                    "Codex 5-hour window still inactive after exec: first_reset={:?} second_reset={:?}",
+                    first.primary.resets_at, second.primary.resets_at
+                ));
+            }
+            *limits = second;
+            confirmed
+        }
+        Err(error) => {
+            crate::logger::info(format!(
+                "Codex 5-hour window could not be re-read after exec: {error:#}"
+            ));
+            false
+        }
+    }
 }
 
 #[cfg(test)]
@@ -723,7 +792,22 @@ mod tests {
             primary_window_is_unactivated: true,
             ..RateLimits::default()
         };
-        let mut provider = ScriptedProvider::new(vec![fresh.clone(), fresh]);
+        let reset = sampled_at + ChronoDuration::hours(5);
+        let frozen_at = |later| RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(0),
+                resets_at: Some(reset),
+                duration_minutes: Some(300),
+            },
+            sampled_at: later,
+            primary_window_is_unactivated: true,
+            ..RateLimits::default()
+        };
+        let mut provider = ScriptedProvider::new(vec![
+            fresh,
+            frozen_at(sampled_at + ChronoDuration::seconds(10)),
+            frozen_at(sampled_at + ChronoDuration::seconds(20)),
+        ]);
         let mut activator = CountingActivator(0);
         let mut state = ActivationState::default();
         state.last_seen_resets_at = Some(previous_reset);
@@ -736,6 +820,46 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, WorkerEvent::ActivationSucceeded))
         );
+    }
+
+    #[test]
+    fn tick_rejects_codex_exec_when_the_session_window_keeps_sliding() {
+        let unactivated_at = |sampled_at: chrono::DateTime<Utc>| RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(0),
+                resets_at: Some(sampled_at + ChronoDuration::hours(5)),
+                duration_minutes: Some(300),
+            },
+            sampled_at,
+            primary_window_is_unactivated: true,
+            ..RateLimits::default()
+        };
+        let first_sample = Utc.with_ymd_and_hms(2026, 7, 10, 15, 0, 0).unwrap();
+        let second_sample = first_sample + ChronoDuration::seconds(30);
+        let third_sample = second_sample + ChronoDuration::seconds(30);
+        let mut provider = ScriptedProvider::new(vec![
+            unactivated_at(first_sample),
+            unactivated_at(second_sample),
+            unactivated_at(third_sample),
+            unactivated_at(third_sample + ChronoDuration::seconds(10)),
+            unactivated_at(third_sample + ChronoDuration::seconds(20)),
+        ]);
+        let mut activator = CountingActivator(0);
+        let mut state = ActivationState::default();
+
+        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
+        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
+        let events = tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
+
+        assert_eq!(activator.0, 1);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            WorkerEvent::ActivationFailed(message)
+                if message.contains("still inactive")
+        )));
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, WorkerEvent::ActivationSucceeded)));
     }
 
     #[test]

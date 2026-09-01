@@ -1,5 +1,7 @@
 use std::{
-    io::{BufRead, BufReader, Write},
+    ffi::OsStr,
+    fs,
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::mpsc,
@@ -61,62 +63,66 @@ impl CodexActivator {
     }
 
     pub fn activate_minimal(&self) -> Result<()> {
-        let args = [
-            "exec",
-            ACTIVATION_PROMPT,
-            "--model",
-            ACTIVATION_MODEL,
-            "--config",
-            "model_reasoning_effort=\"low\"",
-            "--sandbox",
-            "read-only",
-            "--ephemeral",
-            "--ignore-user-config",
-            "--ignore-rules",
-            "--skip-git-repo-check",
-            "--color",
-            "never",
-            "--disable",
-            "plugins",
-            "--disable",
-            "apps",
-            "--disable",
-            "browser_use",
-            "--disable",
-            "in_app_browser",
-            "--disable",
-            "computer_use",
-            "--disable",
-            "image_generation",
-            "--disable",
-            "multi_agent",
-            "--disable",
-            "goals",
-            "--disable",
-            "workspace_dependencies",
-            "--disable",
-            "hooks",
-            "--disable",
-            "tool_suggest",
-        ];
+        // Persist a real (tiny) session so the ChatGPT 5-hour window starts.
+        // `--ephemeral` previously returned exit 0 without opening quota.
+        let workspace =
+            tempfile::tempdir().context("create Codex activation workspace")?;
+        let last_message_path = workspace.path().join("last-message.txt");
+        let args = activation_args(workspace.path(), &last_message_path);
         let mut child = command_for_codex(&self.executable, &args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .with_context(|| format!("launch activation through {}", self.executable.display()))?;
+        let stderr = child.stderr.take();
+        let stderr_reader = thread::spawn(move || {
+            let mut buf = String::new();
+            if let Some(mut stderr) = stderr {
+                let _ = stderr.read_to_string(&mut buf);
+            }
+            buf
+        });
         let deadline = Instant::now() + self.timeout;
-        loop {
+        let status = loop {
             if let Some(status) = child.try_wait().context("wait for Codex activation")? {
-                anyhow::ensure!(status.success(), "Codex activation exited with {status}");
-                return Ok(());
+                break status;
             }
             if Instant::now() >= deadline {
                 terminate(&mut child);
-                bail!("Codex activation timed out after {:?}", self.timeout);
+                let stderr = stderr_reader
+                    .join()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned();
+                if stderr.is_empty() {
+                    bail!("Codex activation timed out after {:?}", self.timeout);
+                }
+                bail!(
+                    "Codex activation timed out after {:?}: {stderr}",
+                    self.timeout
+                );
             }
             thread::sleep(StdDuration::from_millis(100));
+        };
+        let stderr = stderr_reader.join().unwrap_or_default();
+        let stderr = stderr.trim();
+        if !status.success() {
+            if stderr.is_empty() {
+                bail!("Codex activation exited with {status}");
+            }
+            bail!("Codex activation exited with {status}: {stderr}");
         }
+        let reply = fs::read_to_string(&last_message_path).unwrap_or_default();
+        let reply = reply.trim();
+        if reply.is_empty() {
+            if stderr.is_empty() {
+                bail!("Codex activation produced no model output");
+            }
+            bail!("Codex activation produced no model output: {stderr}");
+        }
+        crate::logger::info(format!("Codex activation reply: {reply}"));
+        Ok(())
     }
 }
 
@@ -415,6 +421,50 @@ fn parse_timestamp(value: Option<&Value>) -> Option<chrono::DateTime<Utc>> {
         .and_then(|timestamp| Utc.timestamp_opt(timestamp, 0).single())
 }
 
+fn activation_args(workspace: &Path, last_message: &Path) -> Vec<String> {
+    vec![
+        "exec".into(),
+        ACTIVATION_PROMPT.into(),
+        "--model".into(),
+        ACTIVATION_MODEL.into(),
+        "--config".into(),
+        "model_reasoning_effort=\"low\"".into(),
+        "--sandbox".into(),
+        "read-only".into(),
+        "--ignore-user-config".into(),
+        "--ignore-rules".into(),
+        "--skip-git-repo-check".into(),
+        "--color".into(),
+        "never".into(),
+        "--cd".into(),
+        workspace.to_string_lossy().into_owned(),
+        "--output-last-message".into(),
+        last_message.to_string_lossy().into_owned(),
+        "--disable".into(),
+        "plugins".into(),
+        "--disable".into(),
+        "apps".into(),
+        "--disable".into(),
+        "browser_use".into(),
+        "--disable".into(),
+        "in_app_browser".into(),
+        "--disable".into(),
+        "computer_use".into(),
+        "--disable".into(),
+        "image_generation".into(),
+        "--disable".into(),
+        "multi_agent".into(),
+        "--disable".into(),
+        "goals".into(),
+        "--disable".into(),
+        "workspace_dependencies".into(),
+        "--disable".into(),
+        "hooks".into(),
+        "--disable".into(),
+        "tool_suggest".into(),
+    ]
+}
+
 fn spawn_codex(executable: &Path, args: &[&str]) -> Result<Child> {
     command_for_codex(executable, args)
         .stdin(Stdio::piped())
@@ -424,7 +474,10 @@ fn spawn_codex(executable: &Path, args: &[&str]) -> Result<Child> {
         .with_context(|| format!("launch {}", executable.display()))
 }
 
-fn command_for_codex(executable: &Path, args: &[&str]) -> Command {
+fn command_for_codex(
+    executable: &Path,
+    args: impl IntoIterator<Item = impl AsRef<OsStr>>,
+) -> Command {
     let extension = executable
         .extension()
         .and_then(|value| value.to_str())
@@ -607,5 +660,13 @@ mod tests {
             .read_rate_limits()
             .expect("Codex app-server should return rate limits");
         assert!(limits.primary.used_percent.is_some() || limits.primary.resets_at.is_some());
+    }
+
+    #[test]
+    fn activation_exec_persists_a_real_session_and_captures_the_reply() {
+        let args = activation_args(Path::new("C:\\tmp\\act"), Path::new("C:\\tmp\\act\\out.txt"));
+        assert!(args.contains(&"--output-last-message".into()));
+        assert!(args.contains(&"--cd".into()));
+        assert!(!args.iter().any(|arg| arg == "--ephemeral"));
     }
 }
