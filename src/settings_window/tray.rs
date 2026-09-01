@@ -155,11 +155,18 @@ fn tray_preview_limits() -> &'static crate::limits::ProviderLimits {
                 ProviderKind::Cursor,
                 crate::limits::RateLimits {
                     secondary: window(18),
-                    additional_limits: vec![crate::limits::AdditionalLimit {
-                        id: "cursor-api".into(),
-                        title: "API".into(),
-                        window: window(47),
-                    }],
+                    additional_limits: vec![
+                        crate::limits::AdditionalLimit {
+                            id: "cursor-api".into(),
+                            title: "API".into(),
+                            window: window(47),
+                        },
+                        crate::limits::AdditionalLimit {
+                            id: "cursor-grok-bot".into(),
+                            title: "Grok Bot".into(),
+                            window: window(1),
+                        },
+                    ],
                     ..Default::default()
                 },
             ),

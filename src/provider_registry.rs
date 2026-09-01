@@ -74,6 +74,11 @@ const CURSOR_METRICS: &[MetricDescriptor] = &[
         label: "API",
         source: MetricSource::Additional("cursor-api"),
     },
+    MetricDescriptor {
+        id: "cursor.grokBot",
+        label: "Grok Bot",
+        source: MetricSource::Additional("cursor-grok-bot"),
+    },
 ];
 
 // Zen has no authoritative percentage/reset windows exposed by its API.
@@ -483,6 +488,37 @@ mod tests {
         assert_eq!(
             provider_for_brick_id("codex.additional.runtime_lane"),
             Some(ProviderKind::Codex)
+        );
+    }
+
+    #[test]
+    fn cursor_grok_bot_maps_to_the_catalog_brick() {
+        assert_eq!(
+            additional_limit_brick_id(ProviderKind::Cursor, "cursor-grok-bot"),
+            "cursor.grokBot"
+        );
+        assert!(
+            catalog_brick_ids(ProviderKind::Cursor)
+                .iter()
+                .any(|id| id == "cursor.grokBot")
+        );
+        assert_eq!(
+            discovered_additional_brick_labels(
+                ProviderKind::Cursor,
+                &RateLimits {
+                    additional_limits: vec![crate::limits::AdditionalLimit {
+                        id: "cursor-grok-bot".into(),
+                        title: "Grok Bot".into(),
+                        window: LimitWindow {
+                            used_percent: Some(1),
+                            ..Default::default()
+                        },
+                    }],
+                    ..Default::default()
+                }
+            )
+            .len(),
+            0
         );
     }
 

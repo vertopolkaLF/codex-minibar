@@ -3,7 +3,7 @@
 //! Cursor persists its OAuth session in the application's VS Code state DB.
 //! We open that database read-only, refresh an expired access token only in
 //! memory, and query the same dashboard endpoints used by Cursor itself.
-//! The UI deliberately exposes its Auto and API lanes, not blended Total Usage.
+//! The UI deliberately exposes its Auto, API, and Grok Bot lanes, not blended Total Usage.
 
 use std::{
     collections::BTreeMap,
@@ -97,8 +97,10 @@ impl CursorClient {
         // valid desktop sessions. The dashboard's REST summary carries the
         // same Auto/API counters for current plans, so either source is
         // sufficient; only fail when both are unusable.
-        // Run both requests concurrently — they share a token and are independent.
-        let (usage, summary) = std::thread::scope(|scope| {
+        // Run the requests concurrently — they share a token and are independent.
+        // Grok Bot is a separate weekly allowance; a failed Sand lookup must
+        // never discard otherwise valid Auto/API usage.
+        let (usage, summary, sand) = std::thread::scope(|scope| {
             let usage = scope.spawn(|| {
                 self.connect_post(
                     "/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
@@ -106,6 +108,12 @@ impl CursorClient {
                 )
             });
             let summary = scope.spawn(|| self.usage_summary(&token));
+            let sand = scope.spawn(|| {
+                self.connect_post(
+                    "/aiserver.v1.DashboardService/GetSandUsageStatus",
+                    &token,
+                )
+            });
             (
                 usage
                     .join()
@@ -113,12 +121,15 @@ impl CursorClient {
                 summary
                     .join()
                     .unwrap_or_else(|_| Err(anyhow!("Cursor summary worker panicked"))),
+                sand.join()
+                    .unwrap_or_else(|_| Err(anyhow!("Cursor Grok Bot worker panicked")))
+                    .ok(),
             )
         });
         match (usage, summary) {
-            (Ok(usage), Ok(summary)) => map_usage(Some(&usage), Some(&summary)),
-            (Ok(usage), Err(_)) => map_usage(Some(&usage), None),
-            (Err(_), Ok(summary)) => map_usage(None, Some(&summary)),
+            (Ok(usage), Ok(summary)) => map_usage(Some(&usage), Some(&summary), sand.as_ref()),
+            (Ok(usage), Err(_)) => map_usage(Some(&usage), None, sand.as_ref()),
+            (Err(_), Ok(summary)) => map_usage(None, Some(&summary), sand.as_ref()),
             (Err(usage_error), Err(summary_error)) => Err(usage_error).context(format!(
                 "Cursor usage summary fallback also failed: {summary_error:#}"
             )),
@@ -544,7 +555,11 @@ fn jwt_payload(token: &str) -> Option<Value> {
     serde_json::from_slice(&bytes).ok()
 }
 
-fn map_usage(usage: Option<&Value>, summary: Option<&Value>) -> Result<RateLimits> {
+fn map_usage(
+    usage: Option<&Value>,
+    summary: Option<&Value>,
+    sand: Option<&Value>,
+) -> Result<RateLimits> {
     let now = Utc::now();
     let plan = usage
         .and_then(|usage| usage.get("planUsage"))
@@ -574,6 +589,9 @@ fn map_usage(usage: Option<&Value>, summary: Option<&Value>) -> Result<RateLimit
             title: "API".into(),
             window: make_window(percent),
         });
+    }
+    if let Some(limit) = grok_bot_limit(sand) {
+        additional_limits.push(limit);
     }
 
     Ok(RateLimits {
@@ -627,6 +645,44 @@ fn parse_time(value: &str) -> Option<DateTime<Utc>> {
         .map(|time| time.with_timezone(&Utc))
 }
 
+fn grok_bot_limit(sand: Option<&Value>) -> Option<AdditionalLimit> {
+    let sand = sand?;
+    if sand
+        .get("usesPooledEnterpriseAllowance")
+        .and_then(Value::as_bool)
+        == Some(true)
+        || sand.get("includedLimitZero").and_then(Value::as_bool) == Some(true)
+        || sand
+            .get("hasNonZeroIncludedLimit")
+            .and_then(Value::as_bool)
+            != Some(true)
+    {
+        return None;
+    }
+    let percent = number(sand.get("usagePercent")).filter(|percent| *percent >= 0.0)?;
+    let start = sand
+        .get("currentPeriodStart")
+        .and_then(Value::as_str)
+        .and_then(parse_time);
+    let resets_at = sand
+        .get("nextResetTimestampUtc")
+        .and_then(Value::as_str)
+        .and_then(parse_time);
+    let duration_minutes = match (start, resets_at) {
+        (Some(start), Some(end)) if end > start => u32::try_from((end - start).num_minutes()).ok(),
+        _ => Some(7 * 24 * 60),
+    };
+    Some(AdditionalLimit {
+        id: "cursor-grok-bot".into(),
+        title: "Grok Bot".into(),
+        window: LimitWindow {
+            used_percent: Some(percent.round().clamp(0.0, 100.0) as u8),
+            resets_at,
+            duration_minutes,
+        },
+    })
+}
+
 fn number(value: Option<&Value>) -> Option<f64> {
     value
         .and_then(Value::as_f64)
@@ -642,11 +698,71 @@ mod tests {
     fn maps_cursor_auto_and_api_percentages_and_cycle() {
         let usage = json!({"planUsage":{"limit":10000,"totalSpend":2500,"autoPercentUsed":12.4,"apiPercentUsed":3.6}});
         let summary = json!({"billingCycleStart":"2026-07-01T00:00:00Z","billingCycleEnd":"2026-08-01T00:00:00Z","individualUsage":{"plan":{"totalPercentUsed":25.0}}});
-        let limits = map_usage(Some(&usage), Some(&summary)).unwrap();
+        let limits = map_usage(Some(&usage), Some(&summary), None).unwrap();
         assert!(limits.primary.is_empty());
         assert_eq!(limits.secondary.used_percent, Some(12));
         assert_eq!(limits.additional_limits[0].title, "API");
         assert_eq!(limits.secondary.duration_minutes, Some(31 * 24 * 60));
+    }
+
+    #[test]
+    fn maps_grok_bot_weekly_window_after_api() {
+        let usage = json!({"planUsage":{"autoPercentUsed":12.4,"apiPercentUsed":3.6}});
+        let sand = json!({
+            "currentPeriodStart": "2026-09-01T19:10:22.052Z",
+            "nextResetTimestampUtc": "2026-09-08T19:10:22.052Z",
+            "usagePercent": 1.120428,
+            "hasAvailableUsage": true,
+            "hasNonZeroIncludedLimit": true
+        });
+        let limits = map_usage(Some(&usage), None, Some(&sand)).unwrap();
+        assert_eq!(limits.additional_limits.len(), 2);
+        assert_eq!(limits.additional_limits[0].id, "cursor-api");
+        assert_eq!(limits.additional_limits[1].id, "cursor-grok-bot");
+        assert_eq!(limits.additional_limits[1].title, "Grok Bot");
+        assert_eq!(limits.additional_limits[1].window.used_percent, Some(1));
+        assert_eq!(
+            limits.additional_limits[1].window.duration_minutes,
+            Some(7 * 24 * 60)
+        );
+        assert_eq!(
+            limits.additional_limits[1].window.resets_at,
+            parse_time("2026-09-08T19:10:22.052Z")
+        );
+    }
+
+    #[test]
+    fn hides_grok_bot_without_an_included_allowance() {
+        let usage = json!({"planUsage":{"autoPercentUsed":12.4,"apiPercentUsed":3.6}});
+        let sand = json!({
+            "usagePercent": 100,
+            "hasAvailableUsage": false,
+            "hasNonZeroIncludedLimit": false
+        });
+        let limits = map_usage(Some(&usage), None, Some(&sand)).unwrap();
+        assert_eq!(limits.additional_limits.len(), 1);
+        assert_eq!(limits.additional_limits[0].id, "cursor-api");
+    }
+
+    #[test]
+    fn hides_pooled_enterprise_grok_bot_meter() {
+        let usage = json!({"planUsage":{"autoPercentUsed":12.4}});
+        let sand = json!({
+            "usagePercent": 42,
+            "hasNonZeroIncludedLimit": true,
+            "usesPooledEnterpriseAllowance": true
+        });
+        let limits = map_usage(Some(&usage), None, Some(&sand)).unwrap();
+        assert!(limits.additional_limits.is_empty());
+    }
+
+    #[test]
+    fn missing_grok_bot_status_leaves_auto_and_api_intact() {
+        let usage = json!({"planUsage":{"autoPercentUsed":12.4,"apiPercentUsed":3.6}});
+        let limits = map_usage(Some(&usage), None, None).unwrap();
+        assert_eq!(limits.secondary.used_percent, Some(12));
+        assert_eq!(limits.additional_limits.len(), 1);
+        assert_eq!(limits.additional_limits[0].id, "cursor-api");
     }
 
     #[test]
@@ -657,7 +773,7 @@ mod tests {
             "membershipType":"pro",
             "individualUsage":{"plan":{"totalPercentUsed":25.0,"autoPercentUsed":10.0,"apiPercentUsed":5.0}}
         });
-        let limits = map_usage(None, Some(&summary)).unwrap();
+        let limits = map_usage(None, Some(&summary), None).unwrap();
         assert!(limits.primary.is_empty());
         assert_eq!(limits.secondary.used_percent, Some(10));
         assert_eq!(limits.additional_limits[0].window.used_percent, Some(5));
