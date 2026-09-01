@@ -17,8 +17,9 @@ use crate::settings_controls::{
     SETTINGS_CARD_PADDING, settings_action_card, settings_brick_body_height, settings_brick_row,
     settings_brick_table_header,
     settings_card_padding, settings_checkbox_expander, settings_content_expander,
-    settings_control_card, settings_info_card, settings_slider_content, settings_toggle_card,
-    settings_toggle_card_with_description, settings_toggle_expander, update_available_nav_card,
+    settings_content_expander_with_trailing, settings_control_card, settings_info_card,
+    settings_slider_content, settings_toggle_card, settings_toggle_card_with_description,
+    settings_toggle_expander, update_available_nav_card,
 };
 use crate::theme::{CONTROL_FAST_ANIMATION, CONTROL_NORMAL_ANIMATION, duration};
 use crate::updater::{
@@ -2130,6 +2131,10 @@ pub fn render(
         cx.use_state(settings.scheduled_activations.clone());
     let (auto_activation_pauses, set_auto_activation_pauses) =
         cx.use_state(settings.auto_activation_pauses.clone());
+    let (expanded_scheduled_activation, set_expanded_scheduled_activation) =
+        cx.use_state(None::<String>);
+    let (expanded_auto_activation_pause, set_expanded_auto_activation_pause) =
+        cx.use_state(None::<String>);
     let (limit_refresh_interval, set_limit_refresh_interval) =
         cx.use_state(settings.limit_refresh_interval);
     let (show_used_percentage, set_show_used_percentage) =
@@ -2253,6 +2258,8 @@ pub fn render(
             automatic_activation,
             &scheduled_activations,
             &auto_activation_pauses,
+            &expanded_scheduled_activation,
+            &expanded_auto_activation_pause,
             limit_refresh_interval,
             start_at_login,
             show_used_percentage,
@@ -2308,6 +2315,8 @@ pub fn render(
             set_automatic_activation,
             set_scheduled_activations.clone(),
             set_auto_activation_pauses.clone(),
+            set_expanded_scheduled_activation,
+            set_expanded_auto_activation_pause,
             set_limit_refresh_interval,
             set_start_at_login,
             set_show_used_percentage,
@@ -3030,6 +3039,8 @@ fn tab_content(
     automatic_activation: bool,
     scheduled_activations: &[ScheduledActivation],
     auto_activation_pauses: &[AutoActivationPause],
+    expanded_scheduled_activation: &Option<String>,
+    expanded_auto_activation_pause: &Option<String>,
     limit_refresh_interval: LimitRefreshInterval,
     start_at_login: bool,
     show_used_percentage: bool,
@@ -3085,6 +3096,8 @@ fn tab_content(
     set_automatic_activation: SetState<bool>,
     set_scheduled_activations: SetState<Vec<ScheduledActivation>>,
     set_auto_activation_pauses: SetState<Vec<AutoActivationPause>>,
+    set_expanded_scheduled_activation: SetState<Option<String>>,
+    set_expanded_auto_activation_pause: SetState<Option<String>>,
     set_limit_refresh_interval: SetState<LimitRefreshInterval>,
     set_start_at_login: SetState<bool>,
     set_show_used_percentage: SetState<bool>,
@@ -3481,104 +3494,93 @@ fn tab_content(
             let default_provider = activation_providers(&provider_enabled)
                 .into_iter()
                 .next();
-            let mut rows = vec![
-                settings_section_heading("Auto-activation").with_key("activation-auto-heading"),
-                settings_toggle_card_with_description(
-                    "Activate limits automatically",
-                    Some("Sends a short low-effort prompt through each enabled provider when needed to begin its 5-hour usage window."),
-                    automatic_activation,
-                    move |value| {
-                        persist_bool(
-                            set_automatic_activation.clone(),
-                            apply_automatic_activation.clone(),
-                            value,
-                            |settings, value| {
-                                settings.automatic_activation = value;
-                            },
-                        );
-                    },
-                    "activation-automatic",
-                    hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("activation-automatic"),
-            ];
-
-            let existing = scheduled_activations.to_vec();
-            let schedule_setter = set_scheduled_activations.clone();
-            let schedule_tx = settings_tx.clone();
-            rows.push(
-                grid((
-                    settings_section_heading("Scheduled activations")
-                        .grid_column(0)
-                        .with_key("activation-scheduled-heading"),
-                    Button::new("Add activation")
-                        .accent()
-                        .enabled(default_provider.is_some())
-                        .on_click(move || {
-                            let Some(provider) = default_provider else {
-                                return;
-                            };
-                            let mut next = existing.clone();
-                            next.push(ScheduledActivation::new(provider));
-                            persist_schedules(
-                                schedule_setter.clone(),
-                                schedule_tx.clone(),
-                                next,
-                            );
-                        })
-                        .grid_column(1)
-                        .vertical_alignment(VerticalAlignment::Center),
-                ))
-                .columns([GridLength::Star(1.0), GridLength::Auto])
-                .rows([GridLength::Auto])
-                .horizontal_alignment(HorizontalAlignment::Stretch)
-                .with_key("activation-scheduled-heading-row")
-                .into(),
-            );
-            rows.extend(scheduled_activation_cards(
-                scheduled_activations,
-                &provider_enabled,
-                set_scheduled_activations.clone(),
-                settings_tx.clone(),
-            ));
+            let mut rows = vec![settings_toggle_card_with_description(
+                "Activate limits automatically",
+                Some("Starts a provider's fresh 5-hour window only when it is needed."),
+                automatic_activation,
+                move |value| {
+                    persist_bool(
+                        set_automatic_activation.clone(),
+                        apply_automatic_activation.clone(),
+                        value,
+                        |settings, value| {
+                            settings.automatic_activation = value;
+                        },
+                    );
+                },
+                "activation-automatic",
+                hovered_card_id,
+                set_hovered_card_id.clone(),
+            )
+            .with_key("activation-automatic")];
 
             let existing_pauses = auto_activation_pauses.to_vec();
             let pause_setter = set_auto_activation_pauses.clone();
             let pause_tx = settings_tx.clone();
-            rows.push(
-                grid((
-                    settings_section_heading("Pause auto-activation")
-                        .grid_column(0)
-                        .with_key("activation-pauses-heading"),
-                    Button::new("Add pause")
-                        .accent()
-                        .enabled(default_provider.is_some())
-                        .on_click(move || {
-                            let Some(provider) = default_provider else {
-                                return;
-                            };
-                            let mut next = existing_pauses.clone();
-                            next.push(AutoActivationPause::new(provider));
-                            persist_auto_activation_pauses(
-                                pause_setter.clone(),
-                                pause_tx.clone(),
-                                next,
-                            );
-                        })
-                        .grid_column(1)
-                        .vertical_alignment(VerticalAlignment::Center),
-                ))
-                .columns([GridLength::Star(1.0), GridLength::Auto])
-                .rows([GridLength::Auto])
-                .horizontal_alignment(HorizontalAlignment::Stretch)
-                .with_key("activation-pauses-heading-row")
-                .into(),
-            );
+            let expand_added_pause = set_expanded_auto_activation_pause.clone();
+            rows.push(activation_section_header(
+                "Quiet periods",
+                "Skip automatic activation for selected providers, days, and local times.",
+                default_provider.is_some(),
+                move || {
+                    let Some(provider) = default_provider else {
+                        return;
+                    };
+                    let mut next = existing_pauses.clone();
+                    let pause = AutoActivationPause::new(provider);
+                    let id = pause.id.clone();
+                    next.push(pause);
+                    persist_auto_activation_pauses(
+                        pause_setter.clone(),
+                        pause_tx.clone(),
+                        next,
+                    );
+                    expand_added_pause.call(Some(id));
+                },
+                "activation-pauses-heading-row",
+            ));
             rows.extend(auto_activation_pause_cards(
                 auto_activation_pauses,
                 &provider_enabled,
+                time_format,
+                expanded_auto_activation_pause,
+                set_expanded_auto_activation_pause.clone(),
                 set_auto_activation_pauses,
+                hovered_card_id,
+                set_hovered_card_id.clone(),
+                settings_tx.clone(),
+            ));
+
+            let existing = scheduled_activations.to_vec();
+            let schedule_setter = set_scheduled_activations.clone();
+            let schedule_tx = settings_tx.clone();
+            let expand_added_schedule = set_expanded_scheduled_activation.clone();
+            rows.push(activation_section_header(
+                "Scheduled activations",
+                "Start a fresh 5-hour window at an exact local time.",
+                default_provider.is_some(),
+                move || {
+                    let Some(provider) = default_provider else {
+                        return;
+                    };
+                    let mut next = existing.clone();
+                    let schedule = ScheduledActivation::new(provider);
+                    let id = schedule.id.clone();
+                    next.push(schedule);
+                    persist_schedules(schedule_setter.clone(), schedule_tx.clone(), next);
+                    expand_added_schedule.call(Some(id));
+                },
+                "activation-scheduled-heading-row",
+            ));
+            rows.extend(scheduled_activation_cards(
+                scheduled_activations,
+                &provider_enabled,
+                time_format,
+                expanded_scheduled_activation,
+                set_expanded_scheduled_activation,
+                set_scheduled_activations.clone(),
+                hovered_card_id,
+                set_hovered_card_id.clone(),
                 settings_tx.clone(),
             ));
             ("Limit activation", rows)
@@ -3966,6 +3968,196 @@ fn tab_content(
         .into()
 }
 
+const ACTIVATION_WEEKDAY_LABELS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const ACTIVATION_TIME_PICKER_HEIGHT: f64 = 36.0;
+
+fn activation_time_segment(
+    label: String,
+    choices: Vec<String>,
+    on_selected: impl Fn(String) + Clone + 'static,
+) -> Element {
+    Button::new(label)
+        .subtle()
+        .min_width(0.0)
+        .height(ACTIVATION_TIME_PICKER_HEIGHT)
+        .padding(Thickness::uniform(0.0))
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .menu_flyout(choices.into_iter().map(menu_item).collect())
+        .on_item_clicked(on_selected)
+        .into()
+}
+
+fn activation_time_field(
+    label: &'static str,
+    minutes: u16,
+    time_format: TimeFormat,
+    on_changed: impl Fn(u16) + Clone + 'static,
+) -> Element {
+    let minutes = minutes.min(23 * 60 + 59);
+    let hour = minutes / 60;
+    let minute = minutes % 60;
+    let mut segments = Vec::<Element>::new();
+
+    let hour_label = match time_format {
+        TimeFormat::Hour24 => format!("{hour:02}"),
+        TimeFormat::Hour12 => format!("{}", match hour % 12 {
+            0 => 12,
+            value => value,
+        }),
+    };
+    let hour_values = match time_format {
+        TimeFormat::Hour24 => (0..24).map(|value| format!("{value:02}")).collect(),
+        TimeFormat::Hour12 => (1..=12).map(|value| value.to_string()).collect(),
+    };
+    let hour_changed = on_changed.clone();
+    segments.push(
+        activation_time_segment(hour_label, hour_values, move |value| {
+            let Ok(value) = value.parse::<u16>() else {
+                return;
+            };
+            let hour = match time_format {
+                TimeFormat::Hour24 => value.min(23),
+                TimeFormat::Hour12 => {
+                    let hour12 = value % 12;
+                    if hour >= 12 {
+                        hour12 + 12
+                    } else {
+                        hour12
+                    }
+                }
+            };
+            hour_changed(hour * 60 + minute);
+        })
+        .grid_column(0),
+    );
+
+    segments.push(
+        border(Element::Empty)
+            .width(1.0)
+            .background(ThemeRef::ControlStroke)
+            .grid_column(1)
+            .into(),
+    );
+
+    let minute_changed = on_changed.clone();
+    segments.push(
+        activation_time_segment(
+            format!("{minute:02}"),
+            (0..12).map(|value| format!("{:02}", value * 5)).collect(),
+            move |value| {
+                let Ok(value) = value.parse::<u16>() else {
+                    return;
+                };
+                minute_changed(hour * 60 + value.min(59));
+            },
+        )
+        .grid_column(2),
+    );
+
+    let columns = if time_format == TimeFormat::Hour12 {
+        segments.push(
+            border(Element::Empty)
+                .width(1.0)
+                .background(ThemeRef::ControlStroke)
+                .grid_column(3)
+                .into(),
+        );
+        let period_changed = on_changed;
+        segments.push(
+            activation_time_segment(
+                if hour >= 12 { "PM".into() } else { "AM".into() },
+                vec!["AM".into(), "PM".into()],
+                move |value| {
+                    let hour12 = match hour % 12 {
+                        0 => 12,
+                        value => value,
+                    };
+                    let hour = if value == "PM" {
+                        hour12 % 12 + 12
+                    } else {
+                        hour12 % 12
+                    };
+                    period_changed(hour * 60 + minute);
+                },
+            )
+            .grid_column(4),
+        );
+        vec![
+            GridLength::Star(1.0),
+            GridLength::Pixel(1.0),
+            GridLength::Star(1.0),
+            GridLength::Pixel(1.0),
+            GridLength::Star(1.0),
+        ]
+    } else {
+        vec![
+            GridLength::Star(1.0),
+            GridLength::Pixel(1.0),
+            GridLength::Star(1.0),
+        ]
+    };
+
+    vstack((
+        text_block(label)
+            .font_size(12.0)
+            .foreground(ThemeRef::SecondaryText),
+        border(
+            grid(segments)
+                .columns(columns)
+                .rows([GridLength::Pixel(ACTIVATION_TIME_PICKER_HEIGHT)])
+                .horizontal_alignment(HorizontalAlignment::Stretch),
+        )
+        .background(ThemeRef::ControlFill)
+        .border_thickness(Thickness::uniform(1.0))
+        .border_brush(ThemeRef::ControlStroke)
+        .corner_radius(4.0)
+        .height(ACTIVATION_TIME_PICKER_HEIGHT)
+        .horizontal_alignment(HorizontalAlignment::Stretch),
+    ))
+    .spacing(4.0)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .into()
+}
+
+fn activation_section_header(
+    title: &'static str,
+    description: &'static str,
+    enabled: bool,
+    on_click: impl IntoUnitCallback,
+    key: &'static str,
+) -> Element {
+    grid((
+        vstack((
+            text_block(title).font_size(16.0).semibold(),
+            text_block(description)
+                .font_size(12.0)
+                .foreground(ThemeRef::SecondaryText)
+                .wrap(),
+        ))
+        .spacing(2.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Center)
+        .grid_column(0),
+        Button::new("Add")
+            .icon(Symbol::Add)
+            .enabled(enabled)
+            .on_click(on_click)
+            .grid_column(1)
+            .vertical_alignment(VerticalAlignment::Center),
+    ))
+    .columns([GridLength::Star(1.0), GridLength::Auto])
+    .rows([GridLength::Auto])
+    .margin(Thickness {
+        left: 0.0,
+        top: 16.0,
+        right: 0.0,
+        bottom: 8.0,
+    })
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .with_key(key)
+    .into()
+}
+
 fn activation_providers(provider_enabled: &[bool; 6]) -> Vec<ProviderKind> {
     ProviderKind::ALL
         .into_iter()
@@ -3978,280 +4170,331 @@ fn activation_providers(provider_enabled: &[bool; 6]) -> Vec<ProviderKind> {
         .collect()
 }
 
+fn activation_provider_choices(
+    provider_enabled: &[bool; 6],
+    current: Option<ProviderKind>,
+) -> Vec<ProviderKind> {
+    ProviderKind::ALL
+        .into_iter()
+        .enumerate()
+        .filter(|(index, provider)| {
+            crate::provider_registry::descriptor(*provider).supports_activation
+                && (provider_enabled[*index] || current == Some(*provider))
+        })
+        .map(|(_, provider)| provider)
+        .collect()
+}
+
+fn activation_weekdays_summary(weekdays: &[u8]) -> String {
+    let mut weekdays = weekdays
+        .iter()
+        .copied()
+        .filter(|weekday| *weekday <= 6)
+        .collect::<Vec<_>>();
+    weekdays.sort_unstable();
+    weekdays.dedup();
+    match weekdays.as_slice() {
+        [0, 1, 2, 3, 4, 5, 6] => "Every day".into(),
+        [0, 1, 2, 3, 4] => "Weekdays".into(),
+        [5, 6] => "Weekends".into(),
+        [] => "No days".into(),
+        days => days
+            .iter()
+            .map(|day| ACTIVATION_WEEKDAY_LABELS[*day as usize])
+            .collect::<Vec<_>>()
+            .join(", "),
+    }
+}
+
+fn activation_time_label(time_format: TimeFormat, minutes: u16) -> String {
+    let minutes = minutes.min(23 * 60 + 59);
+    let hour = minutes / 60;
+    let minute = minutes % 60;
+    match time_format {
+        TimeFormat::Hour24 => format!("{hour:02}:{minute:02}"),
+        TimeFormat::Hour12 => {
+            let suffix = if hour < 12 { "AM" } else { "PM" };
+            let hour = match hour % 12 {
+                0 => 12,
+                value => value,
+            };
+            format!("{hour}:{minute:02} {suffix}")
+        }
+    }
+}
+
+fn activation_rule_header(provider: Option<ProviderKind>, summary: String) -> Element {
+    vstack((
+        text_block(
+            provider
+                .map(ProviderKind::display_name)
+                .unwrap_or("Unknown provider"),
+        )
+        .font_size(14.0),
+        text_block(summary)
+            .font_size(12.0)
+            .foreground(ThemeRef::SecondaryText)
+            .wrap(),
+    ))
+    .spacing(2.0)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .into()
+}
+
+fn activation_rule_toggle(
+    enabled: bool,
+    on_toggled: impl IntoCallback<bool>,
+) -> Element {
+    ToggleSwitch::new(enabled)
+        .on_content("")
+        .off_content("")
+        .on_toggled(on_toggled)
+        .min_width(0.0)
+        .max_width(50.0)
+        .width(50.0)
+        .into()
+}
+
+fn activation_weekday_selector(
+    selected: &[u8],
+    key_prefix: &str,
+    on_checked: impl Fn(u8, bool) + Clone + 'static,
+) -> Element {
+    let buttons = ACTIVATION_WEEKDAY_LABELS
+        .iter()
+        .enumerate()
+        .map(|(weekday, label)| {
+            let on_checked = on_checked.clone();
+            ToggleButton::new(*label, selected.contains(&(weekday as u8)))
+                .on_checked(move |checked| on_checked(weekday as u8, checked))
+                .grid_column(weekday as i32)
+                .min_width(0.0)
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .with_key(format!("{key_prefix}-{weekday}"))
+                .into()
+        })
+        .collect::<Vec<Element>>();
+    grid(buttons)
+        .columns(vec![GridLength::Star(1.0); 7])
+        .rows([GridLength::Auto])
+        .column_spacing(4.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .into()
+}
+
+fn activation_days_field(selector: Element) -> Element {
+    vstack((
+        text_block("Days")
+            .font_size(12.0)
+            .foreground(ThemeRef::SecondaryText),
+        selector,
+    ))
+    .spacing(4.0)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .into()
+}
+
+fn set_activation_weekday(weekdays: &mut Vec<u8>, day: u8, checked: bool) -> bool {
+    if checked {
+        if weekdays.contains(&day) {
+            return false;
+        }
+        weekdays.push(day);
+        weekdays.sort_unstable();
+        true
+    } else {
+        if weekdays.len() == 1 && weekdays[0] == day {
+            return false;
+        }
+        let previous_len = weekdays.len();
+        weekdays.retain(|candidate| *candidate != day);
+        weekdays.len() != previous_len
+    }
+}
+
 fn scheduled_activation_cards(
     schedules: &[ScheduledActivation],
     provider_enabled: &[bool; 6],
+    time_format: TimeFormat,
+    expanded_schedule: &Option<String>,
+    set_expanded_schedule: SetState<Option<String>>,
     set_schedules: SetState<Vec<ScheduledActivation>>,
+    hovered_card_id: &Option<String>,
+    set_hovered_card_id: SetState<Option<String>>,
     settings_tx: Sender<Settings>,
 ) -> Vec<Element> {
-    // A schedule can only target a currently enabled provider. Keeping the
-    // available choices in the card also avoids separate, provider-specific
-    // add buttons that made the narrow settings content overflow.
-    let available_providers = activation_providers(provider_enabled);
-    let provider_labels: Vec<String> = available_providers
-        .iter()
-        .map(|provider| provider.display_name().to_string())
-        .collect();
-    const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-    let mut rows: Vec<Element> = vec![
-        text_block("Start a provider's 5-hour limit window at a chosen local time. Automatic activation is paused for the six hours before each scheduled run.")
+    if schedules.is_empty() {
+        return vec![
+            text_block(if activation_providers(provider_enabled).is_empty() {
+                "Enable Codex or Claude in Providers to add a scheduled activation."
+            } else {
+                "No scheduled activations."
+            })
+            .font_size(12.0)
             .foreground(ThemeRef::SecondaryText)
             .wrap()
-            .margin(Thickness {
-                left: 0.0,
-                top: 0.0,
-                right: 0.0,
-                bottom: 8.0,
-            })
-            .with_key("schedule-description")
             .into(),
-    ];
-    for (index, schedule) in schedules.iter().enumerate() {
+        ];
+    }
+
+    let mut rows = Vec::with_capacity(schedules.len());
+    for schedule in schedules {
         let schedule_id = schedule.id.clone();
-        let schedule_id_for_enabled = schedule_id.clone();
-        let schedules_for_enabled = schedules.to_vec();
-        let enabled_setter = set_schedules.clone();
-        let enabled_tx = settings_tx.clone();
-        let schedules_for_provider = schedules.to_vec();
-        let provider_setter = set_schedules.clone();
-        let provider_tx = settings_tx.clone();
-        let schedules_for_time = schedules.to_vec();
-        let time_setter = set_schedules.clone();
-        let time_tx = settings_tx.clone();
-        let schedules_for_remove = schedules.to_vec();
-        let remove_setter = set_schedules.clone();
-        let remove_tx = settings_tx.clone();
+        let choices = activation_provider_choices(provider_enabled, schedule.provider());
+        let provider_labels = choices
+            .iter()
+            .map(|provider| provider.display_name().to_string())
+            .collect::<Vec<_>>();
         let selected_provider = schedule
             .provider()
-            .and_then(|provider| {
-                available_providers
-                    .iter()
-                    .position(|candidate| *candidate == provider)
-            })
+            .and_then(|provider| choices.iter().position(|candidate| *candidate == provider))
             .unwrap_or(0) as i32;
-        let provider_choices = available_providers.clone();
-        let weekday_buttons: Vec<Element> = WEEKDAYS
-            .iter()
-            .enumerate()
-            .map(|(weekday, label)| {
-                let schedules = schedules.to_vec();
-                let setter = set_schedules.clone();
-                let tx = settings_tx.clone();
-                let schedule_id = schedule.id.clone();
-                ToggleButton::new(*label, schedule.occurs_on(weekday as u8))
-                    .on_checked(move |checked| {
-                        let mut next = schedules.clone();
-                        let Some(rule) = next.iter_mut().find(|rule| rule.id == schedule_id) else {
+
+        let schedules_for_toggle = schedules.to_vec();
+        let toggle_setter = set_schedules.clone();
+        let toggle_tx = settings_tx.clone();
+        let toggle_id = schedule_id.clone();
+        let trailing = activation_rule_toggle(schedule.enabled, move |enabled| {
+            let mut next = schedules_for_toggle.clone();
+            let Some(rule) = next.iter_mut().find(|rule| rule.id == toggle_id) else {
+                return;
+            };
+            if rule.enabled == enabled {
+                return;
+            }
+            rule.enabled = enabled;
+            persist_schedules(toggle_setter.clone(), toggle_tx.clone(), next);
+        });
+
+        let mut fields = Vec::<Element>::new();
+        if choices.is_empty() {
+            fields.push(
+                text_block("Enable Codex or Claude to select a provider.")
+                    .font_size(12.0)
+                    .foreground(ThemeRef::SecondaryText)
+                    .wrap()
+                    .into(),
+            );
+        } else if choices.len() > 1 || schedule.provider().is_none() {
+            let schedules_for_provider = schedules.to_vec();
+            let provider_setter = set_schedules.clone();
+            let provider_tx = settings_tx.clone();
+            let provider_id = schedule_id.clone();
+            fields.push(
+                ComboBox::new(provider_labels)
+                    .header("Provider")
+                    .selected_index(selected_provider)
+                    .horizontal_alignment(HorizontalAlignment::Stretch)
+                    .on_selection_changed(move |choice: i32| {
+                        let Some(provider) = choices.get(choice.max(0) as usize).copied() else {
                             return;
                         };
-                        let day = weekday as u8;
-                        if checked {
-                            if rule.weekdays.contains(&day) {
-                                return;
-                            }
-                            rule.weekdays.push(day);
-                            rule.weekdays.sort_unstable();
-                        } else {
-                            // A rule with no selected days could never fire. Keep
-                            // its last day selected rather than saving a dead rule.
-                            if rule.weekdays.len() == 1 && rule.weekdays[0] == day {
-                                return;
-                            }
-                            rule.weekdays.retain(|candidate| *candidate != day);
-                        }
-                        rule.weekday = *rule.weekdays.first().unwrap_or(&0);
-                        persist_schedules(setter.clone(), tx.clone(), next);
-                    })
-                    .grid_column(weekday as i32)
-                    .min_width(0.0)
-                    .horizontal_alignment(HorizontalAlignment::Stretch)
-                    .with_key(format!("schedule-{}-weekday-{weekday}", schedule.id))
-                    .into()
-            })
-            .collect();
-        let weekday_selector = grid(weekday_buttons)
-            .columns(vec![GridLength::Star(1.0); 7])
-            .rows([GridLength::Auto])
-            .column_spacing(4.0)
-            .margin(Thickness {
-                left: 0.0,
-                top: 10.0,
-                right: 0.0,
-                bottom: 0.0,
-            })
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .grid_row(1)
-            .grid_column_span(3);
-        // Match the proven settings-card header layout: RelativePanel pins the
-        // switch to the card edge, and the explicit 50px width removes WinUI's
-        // invisible content slot from the switch template.
-        let header_children: Vec<Element> = vec![
-            text_block("Activate limit")
-                .font_size(14.0)
-                .margin(Thickness {
-                    left: SETTINGS_CARD_PADDING,
-                    top: SETTINGS_CARD_PADDING,
-                    right: 82.0,
-                    bottom: SETTINGS_CARD_PADDING,
-                })
-                .relative_align_left()
-                .relative_align_v_center()
-                .into(),
-            ToggleSwitch::new(schedule.enabled)
-                .on_content("")
-                .off_content("")
-                .on_toggled(move |enabled| {
-                    let mut next = schedules_for_enabled.clone();
-                    if let Some(rule) = next
-                        .iter_mut()
-                        .find(|rule| rule.id == schedule_id_for_enabled)
-                    {
-                        if rule.enabled == enabled {
+                        let mut next = schedules_for_provider.clone();
+                        let Some(rule) = next.iter_mut().find(|rule| rule.id == provider_id) else {
                             return;
-                        }
-                        rule.enabled = enabled;
-                    } else {
-                        return;
-                    }
-                    persist_schedules(enabled_setter.clone(), enabled_tx.clone(), next);
-                })
-                .min_width(0.0)
-                .max_width(50.0)
-                .width(50.0)
-                .margin(Thickness {
-                    left: 0.0,
-                    top: 0.0,
-                    // Compensate for the WinUI ToggleSwitch template's trailing
-                    // slot so the visible track, not merely its layout box,
-                    // shares the delete button's right edge.
-                    right: 7.0,
-                    bottom: 0.0,
-                })
-                .relative_align_right()
-                .relative_align_v_center()
-                .into(),
-        ];
-        let header = relative_panel(header_children)
-            .min_height(60.0)
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .background(Color::transparent());
-        let action_row = grid((
-            ComboBox::new(provider_labels.clone())
-                .selected_index(selected_provider)
-                .horizontal_alignment(HorizontalAlignment::Stretch)
-                .on_selection_changed(move |value: i32| {
-                    let Some(provider) = provider_choices.get(value.max(0) as usize).copied()
-                    else {
-                        return;
-                    };
-                    let mut next = schedules_for_provider.clone();
-                    if let Some(rule) = next.get_mut(index) {
+                        };
                         if rule.provider_id == provider.id() {
                             return;
                         }
                         rule.provider_id = provider.id().into();
-                    } else {
-                        return;
-                    }
-                    persist_schedules(provider_setter.clone(), provider_tx.clone(), next);
-                })
-                .grid_column(0),
-            TimePicker::new()
-                .clock_identifier("24HourClock")
-                .minute_increment(5)
-                .time_minutes(schedule.time_minutes)
-                .height(40.0)
-                .min_height(40.0)
-                .max_height(40.0)
-                .horizontal_alignment(HorizontalAlignment::Stretch)
-                .on_selected_time_changed(move |time: TimeSpan| {
-                    let mut next = schedules_for_time.clone();
-                    if let Some(rule) = next.get_mut(index) {
-                        let time_minutes = (time.duration / (60 * 10_000_000))
-                            .clamp(0, i64::from(23 * 60 + 59))
-                            as u16;
-                        if rule.time_minutes == time_minutes {
-                            return;
-                        }
-                        rule.time_minutes = time_minutes;
-                    } else {
-                        return;
-                    }
-                    persist_schedules(time_setter.clone(), time_tx.clone(), next);
-                })
-                .grid_column(1),
-            Button::new("\u{E74D}")
-                .font_family("Segoe Fluent Icons")
-                .font_size(14.0)
-                .width(32.0)
-                .height(32.0)
-                .min_width(32.0)
-                .min_height(32.0)
-                .padding(Thickness::uniform(0.0))
-                .tooltip("Remove activation")
+                        persist_schedules(provider_setter.clone(), provider_tx.clone(), next);
+                    })
+                    .into(),
+            );
+        }
+
+        let schedules_for_time = schedules.to_vec();
+        let time_setter = set_schedules.clone();
+        let time_tx = settings_tx.clone();
+        let time_id = schedule_id.clone();
+        fields.push(activation_time_field(
+            "Time",
+            schedule.time_minutes,
+            time_format,
+            move |time_minutes| {
+                let mut next = schedules_for_time.clone();
+                let Some(rule) = next.iter_mut().find(|rule| rule.id == time_id) else {
+                    return;
+                };
+                if rule.time_minutes == time_minutes {
+                    return;
+                }
+                rule.time_minutes = time_minutes;
+                persist_schedules(time_setter.clone(), time_tx.clone(), next);
+            },
+        ));
+
+        let schedules_for_days = schedules.to_vec();
+        let days_setter = set_schedules.clone();
+        let days_tx = settings_tx.clone();
+        let days_id = schedule_id.clone();
+        let weekday_selector = activation_weekday_selector(
+            &schedule.weekdays,
+            &format!("schedule-{schedule_id}-weekday"),
+            move |day, checked| {
+                let mut next = schedules_for_days.clone();
+                let Some(rule) = next.iter_mut().find(|rule| rule.id == days_id) else {
+                    return;
+                };
+                if !set_activation_weekday(&mut rule.weekdays, day, checked) {
+                    return;
+                }
+                rule.weekday = *rule.weekdays.first().unwrap_or(&0);
+                persist_schedules(days_setter.clone(), days_tx.clone(), next);
+            },
+        );
+        fields.push(activation_days_field(weekday_selector));
+
+        let schedules_for_remove = schedules.to_vec();
+        let remove_setter = set_schedules.clone();
+        let remove_tx = settings_tx.clone();
+        let remove_id = schedule_id.clone();
+        let clear_expanded = set_expanded_schedule.clone();
+        fields.push(
+            Button::new("Remove activation")
                 .on_click(move || {
                     let next = schedules_for_remove
                         .iter()
-                        .filter(|rule| rule.id != schedule_id)
+                        .filter(|rule| rule.id != remove_id)
                         .cloned()
                         .collect();
+                    clear_expanded.call(None);
                     persist_schedules(remove_setter.clone(), remove_tx.clone(), next);
                 })
-                .grid_column(2),
-            weekday_selector,
-        ))
-        .columns([
-            GridLength::Star(1.0),
-            GridLength::Star(2.0),
-            GridLength::Auto,
-        ])
-        .rows([GridLength::Auto, GridLength::Auto])
-        .column_spacing(8.0)
-        .horizontal_alignment(HorizontalAlignment::Stretch);
-        let body = border(action_row)
-            .padding(Thickness {
-                left: SETTINGS_CARD_PADDING,
-                top: 0.0,
-                right: SETTINGS_CARD_PADDING,
-                bottom: SETTINGS_CARD_PADDING,
-            })
-            .horizontal_alignment(HorizontalAlignment::Stretch);
-        let card_content: Element = vstack((header, body))
-            .spacing(0.0)
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .relative_align_left()
-            .relative_align_right()
-            .relative_align_top()
-            .into();
-        let shell_children: Vec<Element> = vec![
-            border(Element::Empty)
-                .background(ThemeRef::CardBackground)
-                .corner_radius(8.0)
-                .border_thickness(Thickness::uniform(1.0))
-                .border_brush(ThemeRef::CardStroke)
-                .relative_align_left()
-                .relative_align_right()
-                .relative_align_top()
-                .relative_align_bottom()
-                .into(),
-            card_content,
-        ];
-        rows.push(
-            relative_panel(shell_children)
-                .horizontal_alignment(HorizontalAlignment::Stretch)
-                .with_translation_transition(duration(CONTROL_NORMAL_ANIMATION))
-                .with_opacity_transition(duration(CONTROL_NORMAL_ANIMATION))
-                .with_key(format!("schedule-rule-{}", schedule.id))
+                .horizontal_alignment(HorizontalAlignment::Left)
                 .into(),
         );
-    }
 
-    if available_providers.is_empty() {
+        let header = activation_rule_header(
+            schedule.provider(),
+            format!(
+                "{} · {}",
+                activation_weekdays_summary(&schedule.weekdays),
+                activation_time_label(time_format, schedule.time_minutes),
+            ),
+        );
+        let is_expanded = expanded_schedule.as_deref() == Some(schedule.id.as_str());
+        let expand_setter = set_expanded_schedule.clone();
+        let expand_id = schedule_id.clone();
+        let content = vstack(fields)
+            .spacing(10.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch);
         rows.push(
-            text_block("Enable a provider in Providers to add a limit activation schedule.")
-                .foreground(ThemeRef::SecondaryText)
-                .wrap()
-                .into(),
+            settings_content_expander_with_trailing(
+                header,
+                Some(trailing),
+                is_expanded,
+                move |expanded: bool| {
+                    expand_setter.call(expanded.then(|| expand_id.clone()));
+                },
+                format!("schedule-rule-{schedule_id}"),
+                hovered_card_id,
+                set_hovered_card_id.clone(),
+                content,
+            )
+            .with_key(format!("schedule-rule-{schedule_id}"))
+            .with_translation_transition(duration(CONTROL_NORMAL_ANIMATION))
+            .with_opacity_transition(duration(CONTROL_NORMAL_ANIMATION)),
         );
     }
     rows
@@ -4260,300 +4503,238 @@ fn scheduled_activation_cards(
 fn auto_activation_pause_cards(
     pauses: &[AutoActivationPause],
     provider_enabled: &[bool; 6],
+    time_format: TimeFormat,
+    expanded_pause: &Option<String>,
+    set_expanded_pause: SetState<Option<String>>,
     set_pauses: SetState<Vec<AutoActivationPause>>,
+    hovered_card_id: &Option<String>,
+    set_hovered_card_id: SetState<Option<String>>,
     settings_tx: Sender<Settings>,
 ) -> Vec<Element> {
-    let available_providers = activation_providers(provider_enabled);
-    let provider_labels: Vec<String> = available_providers
-        .iter()
-        .map(|provider| provider.display_name().to_string())
-        .collect();
-    const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-    let mut rows: Vec<Element> = vec![
-        text_block("Skip automatic activation for a provider during selected local days and times. Scheduled activations remain active.")
+    if pauses.is_empty() {
+        return vec![
+            text_block(if activation_providers(provider_enabled).is_empty() {
+                "Enable Codex or Claude in Providers to add a quiet period."
+            } else {
+                "No quiet periods."
+            })
+            .font_size(12.0)
             .foreground(ThemeRef::SecondaryText)
             .wrap()
-            .margin(Thickness {
-                left: 0.0,
-                top: 0.0,
-                right: 0.0,
-                bottom: 8.0,
-            })
-            .with_key("activation-pauses-description")
             .into(),
-    ];
+        ];
+    }
 
-    for (index, pause) in pauses.iter().enumerate() {
+    let mut rows = Vec::with_capacity(pauses.len());
+    for pause in pauses {
         let pause_id = pause.id.clone();
-        let pause_id_for_enabled = pause_id.clone();
-        let pauses_for_enabled = pauses.to_vec();
-        let enabled_setter = set_pauses.clone();
-        let enabled_tx = settings_tx.clone();
-        let pauses_for_provider = pauses.to_vec();
-        let provider_setter = set_pauses.clone();
-        let provider_tx = settings_tx.clone();
-        let pauses_for_start = pauses.to_vec();
-        let start_setter = set_pauses.clone();
-        let start_tx = settings_tx.clone();
-        let pauses_for_end = pauses.to_vec();
-        let end_setter = set_pauses.clone();
-        let end_tx = settings_tx.clone();
-        let pauses_for_remove = pauses.to_vec();
-        let remove_setter = set_pauses.clone();
-        let remove_tx = settings_tx.clone();
-        let pause_key = pause_id.clone();
+        let choices = activation_provider_choices(provider_enabled, pause.provider());
+        let provider_labels = choices
+            .iter()
+            .map(|provider| provider.display_name().to_string())
+            .collect::<Vec<_>>();
         let selected_provider = pause
             .provider()
-            .and_then(|provider| {
-                available_providers
-                    .iter()
-                    .position(|candidate| *candidate == provider)
-            })
+            .and_then(|provider| choices.iter().position(|candidate| *candidate == provider))
             .unwrap_or(0) as i32;
-        let provider_choices = available_providers.clone();
-        let weekday_buttons: Vec<Element> = WEEKDAYS
-            .iter()
-            .enumerate()
-            .map(|(weekday, label)| {
-                let pauses = pauses.to_vec();
-                let setter = set_pauses.clone();
-                let tx = settings_tx.clone();
-                let pause_id = pause.id.clone();
-                ToggleButton::new(*label, pause.occurs_on(weekday as u8))
-                    .on_checked(move |checked| {
-                        let mut next = pauses.clone();
-                        let Some(rule) = next.iter_mut().find(|rule| rule.id == pause_id) else {
+
+        let pauses_for_toggle = pauses.to_vec();
+        let toggle_setter = set_pauses.clone();
+        let toggle_tx = settings_tx.clone();
+        let toggle_id = pause_id.clone();
+        let trailing = activation_rule_toggle(pause.enabled, move |enabled| {
+            let mut next = pauses_for_toggle.clone();
+            let Some(rule) = next.iter_mut().find(|rule| rule.id == toggle_id) else {
+                return;
+            };
+            if rule.enabled == enabled {
+                return;
+            }
+            rule.enabled = enabled;
+            persist_auto_activation_pauses(toggle_setter.clone(), toggle_tx.clone(), next);
+        });
+
+        let mut fields = Vec::<Element>::new();
+        if choices.is_empty() {
+            fields.push(
+                text_block("Enable Codex or Claude to select a provider.")
+                    .font_size(12.0)
+                    .foreground(ThemeRef::SecondaryText)
+                    .wrap()
+                    .into(),
+            );
+        } else if choices.len() > 1 || pause.provider().is_none() {
+            let pauses_for_provider = pauses.to_vec();
+            let provider_setter = set_pauses.clone();
+            let provider_tx = settings_tx.clone();
+            let provider_id = pause_id.clone();
+            fields.push(
+                ComboBox::new(provider_labels)
+                    .header("Provider")
+                    .selected_index(selected_provider)
+                    .horizontal_alignment(HorizontalAlignment::Stretch)
+                    .on_selection_changed(move |choice: i32| {
+                        let Some(provider) = choices.get(choice.max(0) as usize).copied() else {
                             return;
                         };
-                        let day = weekday as u8;
-                        if checked {
-                            if rule.weekdays.contains(&day) {
-                                return;
-                            }
-                            rule.weekdays.push(day);
-                            rule.weekdays.sort_unstable();
-                        } else {
-                            if rule.weekdays.len() == 1 && rule.weekdays[0] == day {
-                                return;
-                            }
-                            rule.weekdays.retain(|candidate| *candidate != day);
-                        }
-                        persist_auto_activation_pauses(setter.clone(), tx.clone(), next);
-                    })
-                    .grid_column(weekday as i32)
-                    .min_width(0.0)
-                    .horizontal_alignment(HorizontalAlignment::Stretch)
-                    .with_key(format!("auto-pause-{}-weekday-{weekday}", pause.id))
-                    .into()
-            })
-            .collect();
-        let weekday_selector = grid(weekday_buttons)
-            .columns(vec![GridLength::Star(1.0); 7])
-            .rows([GridLength::Auto])
-            .column_spacing(4.0)
-            .margin(Thickness {
-                left: 0.0,
-                top: 10.0,
-                right: 0.0,
-                bottom: 0.0,
-            })
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .grid_row(1)
-            .grid_column_span(5);
-        let header_children: Vec<Element> = vec![
-            text_block("Pause auto-activation")
-                .font_size(14.0)
-                .margin(Thickness {
-                    left: SETTINGS_CARD_PADDING,
-                    top: SETTINGS_CARD_PADDING,
-                    right: 82.0,
-                    bottom: SETTINGS_CARD_PADDING,
-                })
-                .relative_align_left()
-                .relative_align_v_center()
-                .into(),
-            ToggleSwitch::new(pause.enabled)
-                .on_content("")
-                .off_content("")
-                .on_toggled(move |enabled| {
-                    let mut next = pauses_for_enabled.clone();
-                    if let Some(rule) = next
-                        .iter_mut()
-                        .find(|rule| rule.id == pause_id_for_enabled)
-                    {
-                        if rule.enabled == enabled {
+                        let mut next = pauses_for_provider.clone();
+                        let Some(rule) = next.iter_mut().find(|rule| rule.id == provider_id) else {
                             return;
-                        }
-                        rule.enabled = enabled;
-                    } else {
-                        return;
-                    }
-                    persist_auto_activation_pauses(enabled_setter.clone(), enabled_tx.clone(), next);
-                })
-                .min_width(0.0)
-                .max_width(50.0)
-                .width(50.0)
-                .margin(Thickness {
-                    left: 0.0,
-                    top: 0.0,
-                    right: 7.0,
-                    bottom: 0.0,
-                })
-                .relative_align_right()
-                .relative_align_v_center()
-                .into(),
-        ];
-        let header = relative_panel(header_children)
-            .min_height(60.0)
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .background(Color::transparent());
-        let action_row = grid((
-            ComboBox::new(provider_labels.clone())
-                .selected_index(selected_provider)
-                .horizontal_alignment(HorizontalAlignment::Stretch)
-                .on_selection_changed(move |value: i32| {
-                    let Some(provider) = provider_choices.get(value.max(0) as usize).copied()
-                    else {
-                        return;
-                    };
-                    let mut next = pauses_for_provider.clone();
-                    if let Some(rule) = next.get_mut(index) {
+                        };
                         if rule.provider_id == provider.id() {
                             return;
                         }
                         rule.provider_id = provider.id().into();
-                    } else {
-                        return;
-                    }
-                    persist_auto_activation_pauses(provider_setter.clone(), provider_tx.clone(), next);
-                })
-                .grid_column(0),
-            TimePicker::new()
-                .clock_identifier("24HourClock")
-                .minute_increment(5)
-                .time_minutes(pause.start_time_minutes)
-                .height(40.0)
-                .min_height(40.0)
-                .max_height(40.0)
-                .horizontal_alignment(HorizontalAlignment::Stretch)
-                .on_selected_time_changed(move |time: TimeSpan| {
-                    let mut next = pauses_for_start.clone();
-                    if let Some(rule) = next.get_mut(index) {
-                        let time_minutes = (time.duration / (60 * 10_000_000))
-                            .clamp(0, i64::from(23 * 60 + 59))
-                            as u16;
+                        persist_auto_activation_pauses(
+                            provider_setter.clone(),
+                            provider_tx.clone(),
+                            next,
+                        );
+                    })
+                    .into(),
+            );
+        }
+
+        let pauses_for_start = pauses.to_vec();
+        let start_setter = set_pauses.clone();
+        let start_tx = settings_tx.clone();
+        let start_id = pause_id.clone();
+        let pauses_for_end = pauses.to_vec();
+        let end_setter = set_pauses.clone();
+        let end_tx = settings_tx.clone();
+        let end_id = pause_id.clone();
+        fields.push(
+            grid((
+                activation_time_field(
+                    "From",
+                    pause.start_time_minutes,
+                    time_format,
+                    move |time_minutes| {
+                        let mut next = pauses_for_start.clone();
+                        let Some(rule) = next.iter_mut().find(|rule| rule.id == start_id) else {
+                            return;
+                        };
                         if rule.start_time_minutes == time_minutes {
                             return;
                         }
                         rule.start_time_minutes = time_minutes;
-                    } else {
-                        return;
-                    }
-                    persist_auto_activation_pauses(start_setter.clone(), start_tx.clone(), next);
-                })
-                .grid_column(1),
-            text_block("to")
-                .horizontal_alignment(HorizontalAlignment::Center)
-                .vertical_alignment(VerticalAlignment::Center)
-                .grid_column(2),
-            TimePicker::new()
-                .clock_identifier("24HourClock")
-                .minute_increment(5)
-                .time_minutes(pause.end_time_minutes)
-                .height(40.0)
-                .min_height(40.0)
-                .max_height(40.0)
-                .horizontal_alignment(HorizontalAlignment::Stretch)
-                .on_selected_time_changed(move |time: TimeSpan| {
-                    let mut next = pauses_for_end.clone();
-                    if let Some(rule) = next.get_mut(index) {
-                        let time_minutes = (time.duration / (60 * 10_000_000))
-                            .clamp(0, i64::from(23 * 60 + 59))
-                            as u16;
+                        persist_auto_activation_pauses(
+                            start_setter.clone(),
+                            start_tx.clone(),
+                            next,
+                        );
+                    },
+                )
+                    .grid_column(0),
+                activation_time_field(
+                    "Until",
+                    pause.end_time_minutes,
+                    time_format,
+                    move |time_minutes| {
+                        let mut next = pauses_for_end.clone();
+                        let Some(rule) = next.iter_mut().find(|rule| rule.id == end_id) else {
+                            return;
+                        };
                         if rule.end_time_minutes == time_minutes {
                             return;
                         }
                         rule.end_time_minutes = time_minutes;
-                    } else {
-                        return;
-                    }
-                    persist_auto_activation_pauses(end_setter.clone(), end_tx.clone(), next);
-                })
-                .grid_column(3),
-            Button::new("\u{E74D}")
-                .font_family("Segoe Fluent Icons")
-                .font_size(14.0)
-                .width(32.0)
-                .height(32.0)
-                .min_width(32.0)
-                .min_height(32.0)
-                .padding(Thickness::uniform(0.0))
-                .tooltip("Remove pause")
+                        persist_auto_activation_pauses(
+                            end_setter.clone(),
+                            end_tx.clone(),
+                            next,
+                        );
+                    },
+                )
+                    .grid_column(1),
+            ))
+            .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
+            .rows([GridLength::Auto])
+            .column_spacing(8.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .into(),
+        );
+
+        let pauses_for_days = pauses.to_vec();
+        let days_setter = set_pauses.clone();
+        let days_tx = settings_tx.clone();
+        let days_id = pause_id.clone();
+        let weekday_selector = activation_weekday_selector(
+            &pause.weekdays,
+            &format!("auto-pause-{pause_id}-weekday"),
+            move |day, checked| {
+                let mut next = pauses_for_days.clone();
+                let Some(rule) = next.iter_mut().find(|rule| rule.id == days_id) else {
+                    return;
+                };
+                if !set_activation_weekday(&mut rule.weekdays, day, checked) {
+                    return;
+                }
+                persist_auto_activation_pauses(days_setter.clone(), days_tx.clone(), next);
+            },
+        );
+        fields.push(activation_days_field(weekday_selector));
+
+        let pauses_for_remove = pauses.to_vec();
+        let remove_setter = set_pauses.clone();
+        let remove_tx = settings_tx.clone();
+        let remove_id = pause_id.clone();
+        let clear_expanded = set_expanded_pause.clone();
+        fields.push(
+            Button::new("Remove quiet period")
                 .on_click(move || {
                     let next = pauses_for_remove
                         .iter()
-                        .filter(|rule| rule.id != pause_id)
+                        .filter(|rule| rule.id != remove_id)
                         .cloned()
                         .collect();
+                    clear_expanded.call(None);
                     persist_auto_activation_pauses(remove_setter.clone(), remove_tx.clone(), next);
                 })
-                .grid_column(4),
-            weekday_selector,
-        ))
-        .columns([
-            GridLength::Star(1.2),
-            GridLength::Star(1.0),
-            GridLength::Auto,
-            GridLength::Star(1.0),
-            GridLength::Auto,
-        ])
-        .rows([GridLength::Auto, GridLength::Auto])
-        .column_spacing(8.0)
-        .horizontal_alignment(HorizontalAlignment::Stretch);
-        let body = border(action_row)
-            .padding(Thickness {
-                left: SETTINGS_CARD_PADDING,
-                top: 0.0,
-                right: SETTINGS_CARD_PADDING,
-                bottom: SETTINGS_CARD_PADDING,
-            })
-            .horizontal_alignment(HorizontalAlignment::Stretch);
-        let card_content: Element = vstack((header, body))
-            .spacing(0.0)
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .relative_align_left()
-            .relative_align_right()
-            .relative_align_top()
-            .into();
-        let shell_children: Vec<Element> = vec![
-            border(Element::Empty)
-                .background(ThemeRef::CardBackground)
-                .corner_radius(8.0)
-                .border_thickness(Thickness::uniform(1.0))
-                .border_brush(ThemeRef::CardStroke)
-                .relative_align_left()
-                .relative_align_right()
-                .relative_align_top()
-                .relative_align_bottom()
-                .into(),
-            card_content,
-        ];
-        rows.push(
-            relative_panel(shell_children)
-                .horizontal_alignment(HorizontalAlignment::Stretch)
-                .with_translation_transition(duration(CONTROL_NORMAL_ANIMATION))
-                .with_opacity_transition(duration(CONTROL_NORMAL_ANIMATION))
-                .with_key(format!("auto-activation-pause-{pause_key}"))
+                .horizontal_alignment(HorizontalAlignment::Left)
                 .into(),
         );
-    }
 
-    if available_providers.is_empty() {
+        let time_summary = if pause.start_time_minutes == 0
+            && pause.end_time_minutes == 23 * 60 + 59
+        {
+            "All day".into()
+        } else {
+            format!(
+                "{}–{}",
+                activation_time_label(time_format, pause.start_time_minutes),
+                activation_time_label(time_format, pause.end_time_minutes),
+            )
+        };
+        let header = activation_rule_header(
+            pause.provider(),
+            format!(
+                "{} · {time_summary}",
+                activation_weekdays_summary(&pause.weekdays),
+            ),
+        );
+        let is_expanded = expanded_pause.as_deref() == Some(pause.id.as_str());
+        let expand_setter = set_expanded_pause.clone();
+        let expand_id = pause_id.clone();
+        let content = vstack(fields)
+            .spacing(10.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch);
         rows.push(
-            text_block("Enable Codex or Claude in Providers to add an auto-activation pause.")
-                .foreground(ThemeRef::SecondaryText)
-                .wrap()
-                .into(),
+            settings_content_expander_with_trailing(
+                header,
+                Some(trailing),
+                is_expanded,
+                move |expanded: bool| {
+                    expand_setter.call(expanded.then(|| expand_id.clone()));
+                },
+                format!("auto-activation-pause-{pause_id}"),
+                hovered_card_id,
+                set_hovered_card_id.clone(),
+                content,
+            )
+            .with_key(format!("auto-activation-pause-{pause_id}"))
+            .with_translation_transition(duration(CONTROL_NORMAL_ANIMATION))
+            .with_opacity_transition(duration(CONTROL_NORMAL_ANIMATION)),
         );
     }
     rows
