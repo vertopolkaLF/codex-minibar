@@ -113,44 +113,49 @@ fn activity_chart_groups_long_histories_without_losing_tokens() {
 }
 
 #[test]
-fn total_spend_periods_match_usage_page_ranges() {
+fn combined_spend_uses_the_selected_time_range() {
+    let mut statistics = crate::usage::UsageStatistics::default();
+    statistics.today.estimated_cost_microusd = 1_250_000;
+    statistics.history.estimated_cost_microusd = 9_750_000;
+    statistics.daily.push(crate::usage::DailyTokenUsage {
+        date: Local::now().date_naive() - ChronoDuration::days(1),
+        usage: crate::usage::TokenUsage {
+            estimated_cost_microusd: 2_500_000,
+            ..Default::default()
+        },
+    });
+
     assert_eq!(
-        OverviewRange::from_total_spend_period(TotalSpendPeriod::Past24h),
-        OverviewRange::Past24h
+        combined_usage_spend(&statistics, TotalSpendPeriod::Today),
+        1_250_000
     );
     assert_eq!(
-        OverviewRange::from_total_spend_period(TotalSpendPeriod::SevenDays),
-        OverviewRange::SevenDays
+        combined_usage_spend(&statistics, TotalSpendPeriod::Yesterday),
+        2_500_000
     );
     assert_eq!(
-        OverviewRange::from_total_spend_period(TotalSpendPeriod::ThirtyDays),
-        OverviewRange::ThirtyDays
+        combined_usage_spend(&statistics, TotalSpendPeriod::ThirtyDays),
+        9_750_000
     );
     assert_eq!(format_spend(1_250_000), "$1.25");
 }
 
 #[test]
-fn total_spend_provider_filter_covers_every_enabled_provider_combination() {
-    for mask in 0_u8..(1_u8 << ProviderKind::ALL.len()) {
-        let enabled = |index: usize| mask & (1_u8 << index) != 0;
-        let actual = total_spend_provider_count(
-            enabled(0),
-            enabled(1),
-            enabled(2),
-            enabled(3),
-            enabled(4),
-            enabled(5),
-        );
-        let expected = ProviderKind::ALL
-            .iter()
-            .enumerate()
-            .filter(|(index, provider)| {
-                enabled(*index)
-                    && crate::provider_registry::descriptor(**provider).include_in_total_spend
-            })
-            .count();
-        assert_eq!(actual, expected, "provider mask {mask:#08b}");
-    }
+fn spend_donut_uses_native_arc_geometry() {
+    let xaml = combined_usage_donut_xaml(
+        &[
+            (ProviderKind::Cursor, 2_000_000),
+            (ProviderKind::Claude, 1_000_000),
+            (ProviderKind::Codex, 500_000),
+        ],
+        3_500_000,
+        ColorScheme::Dark,
+    );
+
+    assert!(xaml.starts_with("<Grid"));
+    assert_eq!(xaml.matches("<Path ").count(), 3);
+    assert!(xaml.contains(" A 53.00 53.00 "));
+    assert!(!xaml.contains("Rectangle"));
 }
 
 #[test]

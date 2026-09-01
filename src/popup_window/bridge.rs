@@ -50,6 +50,7 @@ pub(super) fn start_background_bridge(
             show_usage_pace: state.settings.show_usage_pace,
             popup_visibility: state.settings.popup_visibility.clone(),
             show_total_spend_on_all_tab: state.settings.show_total_spend_on_all_tab,
+            total_spend_presentation: state.settings.total_spend_presentation,
             total_spend_period: state.settings.total_spend_period,
             show_account_name: state.settings.show_account_name,
             codex_enabled: state.settings.providers.is_enabled(ProviderKind::Codex),
@@ -131,6 +132,7 @@ pub(super) fn start_background_bridge(
             ui.show_usage_pace = settings.show_usage_pace;
             ui.popup_visibility = settings.popup_visibility.clone();
             ui.show_total_spend_on_all_tab = settings.show_total_spend_on_all_tab;
+            ui.total_spend_presentation = settings.total_spend_presentation;
             ui.total_spend_period = settings.total_spend_period;
             ui.show_account_name = settings.show_account_name;
             ui.codex_enabled = settings.providers.is_enabled(ProviderKind::Codex);

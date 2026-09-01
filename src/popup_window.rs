@@ -26,7 +26,8 @@ use crate::{
     },
     settings::{
         AccentColor, AppTheme, NotificationSettings, PopupSurface, PopupVisibility,
-        PopupWidgetKind, ProviderKind, Settings, TimeFormat, TotalSpendPeriod, TrayWidget,
+        PopupWidgetKind, ProviderKind, Settings, TimeFormat, TotalSpendPeriod,
+        TotalSpendPresentation, TrayWidget,
     },
     settings_controls::update_accent_button,
     tray::{TrayManager, TrayMenuAction},

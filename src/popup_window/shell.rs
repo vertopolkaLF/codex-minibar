@@ -23,6 +23,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         show_usage_pace: state.settings.show_usage_pace,
         popup_visibility: state.settings.popup_visibility.clone(),
         show_total_spend_on_all_tab: state.settings.show_total_spend_on_all_tab,
+        total_spend_presentation: state.settings.total_spend_presentation,
         total_spend_period: state.settings.total_spend_period,
         show_account_name: state.settings.show_account_name,
         codex_enabled: state.settings.providers.is_enabled(ProviderKind::Codex),
@@ -231,22 +232,14 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let show_provider_tabs = show_provider_icon_tabs;
     let show_footer_tabs = true;
     let selected_view = pager.current;
-    let enabled_spend: Vec<ProviderKind> = enabled_provider_order
-        .iter()
-        .copied()
-        .filter(|provider| {
-            crate::provider_registry::descriptor(*provider).include_in_total_spend
-        })
-        .collect();
-    let show_total_spend = ui.show_total_spend_on_all_tab && enabled_spend.len() > 1;
-    let total_spend_snapshot = show_total_spend.then(|| {
-        build_overview_snapshot(
-            &limits,
-            &enabled_spend,
-            OverviewMetric::Cost,
-            OverviewRange::from_total_spend_period(ui.total_spend_period),
-        )
-    });
+    let show_total_spend = ui.show_total_spend_on_all_tab
+        && total_spend_provider_count(
+            ui.codex_enabled,
+            ui.claude_enabled,
+            ui.cursor_enabled,
+            ui.opencode_zen_enabled,
+            ui.opencode_go_enabled,
+        ) > 1;
     let all_tab_widgets = visible_popup_widgets(
         &ui.popup_order,
         show_total_spend && show_provider_icon_tabs,
@@ -308,9 +301,6 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 let is_first = index == 0 && !has_preceding_section;
                 let section = match widget {
                     PopupWidgetKind::TotalSpend => {
-                        let total_spend_snapshot = total_spend_snapshot
-                            .as_ref()
-                            .expect("Total Spend is visible only with a snapshot");
                         let on_period = {
                             let settings_tx = settings_tx.clone();
                             let set_ui = set_ui.clone();
@@ -325,14 +315,20 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                             }
                         };
                         combined_usage_card(
-                            total_spend_snapshot,
+                            &limits,
                             is_first,
+                            ui.codex_enabled,
+                            ui.claude_enabled,
+                            ui.cursor_enabled,
+                            ui.opencode_zen_enabled,
+                            ui.opencode_go_enabled,
+                            ui.openrouter_enabled,
                             ui.total_spend_period,
                             on_period,
                             hovered_combined_usage_period,
                             set_hovered_combined_usage_period.clone(),
                             color_scheme,
-                            ui.use_colored_provider_icons,
+                            ui.total_spend_presentation,
                             can_reorder_widgets.then(|| {
                                 drag_handle(
                                     PopupWidgetKind::TotalSpend,
@@ -343,8 +339,9 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                             }),
                         )
                         .with_key(format!(
-                            "all-combined-usage-{}-{}",
+                            "all-combined-usage-{}-{:?}-{}",
                             ui.total_spend_period.key(),
+                            ui.total_spend_presentation,
                             if is_first { "first" } else { "rest" }
                         ))
                     }
@@ -423,6 +420,17 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 has_preceding_section = true;
             }
         } else if view == PopupView::Usage {
+            let enabled_spend: Vec<ProviderKind> = enabled_provider_order
+                .iter()
+                .copied()
+                .filter(|provider| {
+                    crate::provider_registry::PROVIDERS
+                        .iter()
+                        .any(|descriptor| {
+                            descriptor.kind == *provider && descriptor.include_in_total_spend
+                        })
+                })
+                .collect();
             let snapshot =
                 build_overview_snapshot(&limits, &enabled_spend, overview_metric, overview_range);
             body.push(crate::popup_usage::overview_page(
@@ -839,23 +847,23 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         // SizeChanged. Remounting the page is what tab switches already do so
         // the queued on_resize measure can shrink the HWND.
         let body_layout_key = format!(
-            "popup-page-{role}-{error}-{provider_error}-{visibility}-{show_total}-{period}-{account}-{codex}-{claude}-{cursor}-{openrouter}-{order}-{height}-{color:?}-{view:?}",
-            error = ui.error.is_some(),
-            provider_error = view
-                .provider()
+            "popup-page-{role}-{}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
+            ui.error.is_some(),
+            view.provider()
                 .is_some_and(|provider| ui.has_provider_error(provider)),
-            visibility = popup_visibility_key(&ui.popup_visibility),
-            show_total = ui.show_total_spend_on_all_tab,
-            period = ui.total_spend_period.key(),
-            account = ui.show_account_name,
-            codex = ui.codex_enabled,
-            claude = ui.claude_enabled,
-            cursor = ui.cursor_enabled,
-            openrouter = ui.openrouter_enabled,
-            order = popup_order_key(&ui.popup_order),
-            height = popup_body_height_key(&limits, view),
-            color = color_scheme as i32,
-            view = view,
+            popup_visibility_key(&ui.popup_visibility),
+            ui.show_total_spend_on_all_tab,
+            ui.total_spend_presentation,
+            ui.total_spend_period.key(),
+            ui.show_account_name,
+            ui.codex_enabled,
+            ui.claude_enabled,
+            ui.cursor_enabled,
+            ui.openrouter_enabled,
+            popup_order_key(&ui.popup_order),
+            popup_body_height_key(&limits, view),
+            color_scheme as i32,
+            view,
         );
         let mut content = vstack(body)
             .spacing(6.0)
