@@ -7046,8 +7046,8 @@ fn popup_settings_cards(
         .with_key("popup-show-total-spend"),
         settings_control_card(
             "Total spend layout",
-            Some("Choose how provider totals are arranged in the Home tab."),
-            ComboBox::new(["Donut", "Progress bar"])
+            Some("Choose donut or the Usage-style cost cards on the Home tab."),
+            ComboBox::new(["Donut", "Cards"])
                 .selected_index(total_spend_presentation.index())
                 .on_selection_changed({
                     let apply_total_spend_presentation = apply_total_spend_presentation.clone();

@@ -328,6 +328,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                             hovered_combined_usage_period,
                             set_hovered_combined_usage_period.clone(),
                             color_scheme,
+                            ui.use_colored_provider_icons,
                             ui.total_spend_presentation,
                             can_reorder_widgets.then(|| {
                                 drag_handle(
@@ -339,9 +340,11 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                             }),
                         )
                         .with_key(format!(
-                            "all-combined-usage-{}-{:?}-{}",
+                            "all-combined-usage-{}-{:?}-{}-{}-{}",
                             ui.total_spend_period.key(),
                             ui.total_spend_presentation,
+                            ui.use_colored_provider_icons,
+                            color_scheme as i32,
                             if is_first { "first" } else { "rest" }
                         ))
                     }

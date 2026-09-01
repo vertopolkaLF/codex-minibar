@@ -113,29 +113,27 @@ fn activity_chart_groups_long_histories_without_losing_tokens() {
 }
 
 #[test]
-fn combined_spend_uses_the_selected_time_range() {
-    let mut statistics = crate::usage::UsageStatistics::default();
-    statistics.today.estimated_cost_microusd = 1_250_000;
-    statistics.history.estimated_cost_microusd = 9_750_000;
-    statistics.daily.push(crate::usage::DailyTokenUsage {
-        date: Local::now().date_naive() - ChronoDuration::days(1),
-        usage: crate::usage::TokenUsage {
-            estimated_cost_microusd: 2_500_000,
-            ..Default::default()
-        },
-    });
-
+fn combined_spend_uses_usage_tab_windows() {
+    let today = Local::now().date_naive();
     assert_eq!(
-        combined_usage_spend(&statistics, TotalSpendPeriod::Today),
-        1_250_000
+        crate::usage_overview::dates_for_total_spend(TotalSpendPeriod::Today),
+        (today, today)
     );
     assert_eq!(
-        combined_usage_spend(&statistics, TotalSpendPeriod::Yesterday),
-        2_500_000
+        crate::usage_overview::dates_for_total_spend(TotalSpendPeriod::Yesterday),
+        (today - ChronoDuration::days(1), today - ChronoDuration::days(1))
     );
     assert_eq!(
-        combined_usage_spend(&statistics, TotalSpendPeriod::ThirtyDays),
-        9_750_000
+        crate::usage_overview::dates_for_total_spend(TotalSpendPeriod::ThirtyDays),
+        (
+            today
+                - ChronoDuration::days(i64::from(
+                    crate::usage_overview::OverviewRange::ThirtyDays
+                        .days()
+                        .saturating_sub(1)
+                )),
+            today
+        )
     );
     assert_eq!(format_spend(1_250_000), "$1.25");
 }

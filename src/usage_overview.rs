@@ -7,7 +7,7 @@ use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike,
 use crate::{
     limits::ProviderLimits,
     provider_registry,
-    settings::ProviderKind,
+    settings::{ProviderKind, TotalSpendPeriod},
     store::{self},
     usage::{DailyTokenUsage, TokenUsage},
 };
@@ -98,6 +98,57 @@ pub struct OverviewSnapshot {
     pub day_rows: Vec<BreakdownRow>,
 }
 
+/// Calendar window for the Home Total Spend card. Thirty days matches the
+/// Usage tab's 30-day Cost snapshot exactly; today/yesterday are slices of
+/// that same store aggregation.
+pub fn dates_for_total_spend(period: TotalSpendPeriod) -> (NaiveDate, NaiveDate) {
+    let today = Local::now().date_naive();
+    match period {
+        TotalSpendPeriod::Today => (today, today),
+        TotalSpendPeriod::Yesterday => {
+            let yesterday = today - Duration::days(1);
+            (yesterday, yesterday)
+        }
+        TotalSpendPeriod::ThirtyDays => {
+            let start = today
+                - Duration::days(i64::from(OverviewRange::ThirtyDays.days().saturating_sub(1)));
+            (start, today)
+        }
+    }
+}
+
+pub fn spend_entries(snapshot: &OverviewSnapshot) -> Vec<(ProviderKind, u64)> {
+    let mut entries: Vec<_> = snapshot
+        .providers
+        .iter()
+        .map(|entry| (entry.provider, entry.usage.estimated_cost_microusd))
+        .collect();
+    entries.sort_by(|(_, left), (_, right)| right.cmp(left));
+    entries
+}
+
+pub fn total_spend_snapshot(
+    limits: &ProviderLimits,
+    enabled: &[ProviderKind],
+    period: TotalSpendPeriod,
+) -> OverviewSnapshot {
+    match period {
+        TotalSpendPeriod::ThirtyDays => {
+            build_overview_snapshot(limits, enabled, OverviewMetric::Cost, OverviewRange::ThirtyDays)
+        }
+        TotalSpendPeriod::Today | TotalSpendPeriod::Yesterday => {
+            let (start_date, end_date) = dates_for_total_spend(period);
+            build_overview_snapshot_for_dates(
+                limits,
+                enabled,
+                OverviewMetric::Cost,
+                start_date,
+                end_date,
+            )
+        }
+    }
+}
+
 pub fn build_overview_snapshot(
     limits: &ProviderLimits,
     enabled: &[ProviderKind],
@@ -114,10 +165,39 @@ pub fn build_overview_snapshot(
     } else {
         end_date - Duration::days(i64::from(range.days().saturating_sub(1)))
     };
+    assemble_overview_snapshot(limits, enabled, metric, start_date, end_date, hourly)
+}
+
+fn build_overview_snapshot_for_dates(
+    limits: &ProviderLimits,
+    enabled: &[ProviderKind],
+    metric: OverviewMetric,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+) -> OverviewSnapshot {
+    assemble_overview_snapshot(limits, enabled, metric, start_date, end_date, false)
+}
+
+fn assemble_overview_snapshot(
+    limits: &ProviderLimits,
+    enabled: &[ProviderKind],
+    metric: OverviewMetric,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    hourly: bool,
+) -> OverviewSnapshot {
+    let now = Local::now();
+    let end_hour = crate::usage::truncate_local_hour(now);
+    let start_hour = end_hour - Duration::hours(23);
+    // statistics_from_daily is always anchored to today, so load enough days
+    // to include `start_date` even when the window ends on yesterday.
     let load_days = if hourly {
         2
     } else {
-        range.days().min(OVERVIEW_MAX_DAYS)
+        let span = (now.date_naive() - start_date).num_days() + 1;
+        u16::try_from(span.max(1))
+            .unwrap_or(OVERVIEW_MAX_DAYS)
+            .min(OVERVIEW_MAX_DAYS)
     };
 
     let mut snapshot = OverviewSnapshot {
@@ -438,12 +518,32 @@ pub fn build_overview_snapshot(
 
     // Keep in-memory limits as a fallback when the store has not hydrated yet.
     if snapshot.totals.requests == 0 {
-        for provider in &spend_providers {
-            let usage = slice_provider_usage(limits.get(*provider).usage.daily.as_slice(), start_date, end_date);
-            if usage.requests > 0 {
-                snapshot.totals.add(&usage);
-            }
+        snapshot.totals = TokenUsage::default();
+        snapshot.total_sessions = 0;
+        for entry in &mut snapshot.providers {
+            let usage = slice_provider_usage(
+                limits.get(entry.provider).usage.daily.as_slice(),
+                start_date,
+                end_date,
+            );
+            let sessions = usage.requests;
+            snapshot.totals.add(&usage);
+            snapshot.total_sessions = snapshot.total_sessions.saturating_add(sessions);
+            entry.usage = usage;
+            entry.sessions = sessions;
         }
+        let total_cost = snapshot.totals.estimated_cost_microusd.max(1);
+        let total_tokens = snapshot.totals.total_tokens().max(1);
+        for entry in &mut snapshot.providers {
+            entry.share_cost = entry.usage.estimated_cost_microusd as f64 / total_cost as f64 * 100.0;
+            entry.share_tokens = entry.usage.total_tokens() as f64 / total_tokens as f64 * 100.0;
+        }
+        snapshot.providers.sort_by(|left, right| {
+            right
+                .usage
+                .estimated_cost_microusd
+                .cmp(&left.usage.estimated_cost_microusd)
+        });
     }
 
     snapshot
@@ -479,4 +579,52 @@ fn slice_provider_usage(days: &[DailyTokenUsage], start: NaiveDate, end: NaiveDa
         }
     }
     usage
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thirty_day_total_spend_matches_usage_tab_range() {
+        let today = Local::now().date_naive();
+        let (start, end) = dates_for_total_spend(TotalSpendPeriod::ThirtyDays);
+        assert_eq!(end, today);
+        assert_eq!(
+            start,
+            today - Duration::days(i64::from(OverviewRange::ThirtyDays.days().saturating_sub(1)))
+        );
+    }
+
+    #[test]
+    fn spend_entries_use_overview_provider_costs() {
+        let snapshot = OverviewSnapshot {
+            providers: vec![
+                ProviderOverview {
+                    provider: ProviderKind::Claude,
+                    usage: TokenUsage {
+                        estimated_cost_microusd: 500_000,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ProviderOverview {
+                    provider: ProviderKind::Codex,
+                    usage: TokenUsage {
+                        estimated_cost_microusd: 2_000_000,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            spend_entries(&snapshot),
+            vec![
+                (ProviderKind::Codex, 2_000_000),
+                (ProviderKind::Claude, 500_000),
+            ]
+        );
+    }
 }
