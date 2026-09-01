@@ -629,13 +629,17 @@ pub(super) fn latest_sampled_at(limits: &ProviderLimits) -> chrono::DateTime<Utc
         .unwrap_or_default()
 }
 
-/// CSS `#0003` → `#00000033` interval ticks on the usage track.
+/// CSS `#0004` → `#00000044` interval ticks on the usage track.
 const INTERVAL_TICK_COLOR: Color = Color {
-    a: 0x33,
+    a: 0x44,
     r: 0,
     g: 0,
     b: 0,
 };
+
+const PROGRESS_TRACK_HEIGHT: f64 = 6.0;
+const INTERVAL_TICK_WIDTH: f64 = 2.0;
+const INTERVAL_TICK_HEIGHT: f64 = PROGRESS_TRACK_HEIGHT - 2.0;
 
 /// Interior ticks that divide a quota window into equal buckets.
 ///
@@ -650,19 +654,19 @@ pub(super) fn interval_tick_count(window: &LimitWindow) -> u32 {
     }
 }
 
-/// Dots at the end of each interior bucket, right-aligned in equal columns.
+/// Thin rounded rectangles at the end of each interior bucket, right-aligned
+/// in equal columns.
 pub(super) fn interval_ticks_layer(tick_count: u32) -> Option<Element> {
     if tick_count == 0 {
         return None;
     }
-    const DOT: f64 = 4.0;
     let segments = (tick_count + 1) as usize;
-    let dots: Vec<Element> = (0..tick_count)
+    let ticks: Vec<Element> = (0..tick_count)
         .map(|index| {
             border(Element::Empty)
-                .width(DOT)
-                .height(DOT)
-                .corner_radius(DOT / 2.0)
+                .width(INTERVAL_TICK_WIDTH)
+                .height(INTERVAL_TICK_HEIGHT)
+                .corner_radius(INTERVAL_TICK_WIDTH / 2.0)
                 .background(INTERVAL_TICK_COLOR)
                 .horizontal_alignment(HorizontalAlignment::Right)
                 .vertical_alignment(VerticalAlignment::Center)
@@ -671,7 +675,7 @@ pub(super) fn interval_ticks_layer(tick_count: u32) -> Option<Element> {
         })
         .collect();
     Some(
-        grid(dots)
+        grid(ticks)
             .columns(vec![GridLength::Star(1.0); segments])
             .rows([GridLength::Star(1.0)])
             .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -691,7 +695,7 @@ pub(super) fn rounded_progress(
     color_scheme: ColorScheme,
     interval_ticks: u32,
 ) -> Element {
-    const HEIGHT: f64 = 6.0;
+    const HEIGHT: f64 = PROGRESS_TRACK_HEIGHT;
     let radius = HEIGHT / 2.0;
     let filled = value.clamp(0.0, 100.0);
     let (fill_star, rest_star) = if filled <= 0.0 {
