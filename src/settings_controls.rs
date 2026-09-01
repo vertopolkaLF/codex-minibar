@@ -1,6 +1,8 @@
 //! Reusable controls shared by settings pages.
 
 use std::{
+    cell::RefCell,
+    rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
     thread,
     time::{Duration, Instant},
@@ -217,6 +219,63 @@ pub(crate) fn animate_expand_progress(
     );
 }
 
+fn start_native_body_height(
+    native: windows_core::IInspectable,
+    from: f64,
+    to: f64,
+    anim: &Rc<RefCell<Option<DispatcherTimer>>>,
+) {
+    if let Some(previous) = anim.borrow_mut().take() {
+        let _ = previous.stop();
+    }
+    let duration = duration(CONTROL_NORMAL_ANIMATION);
+    if duration.is_zero() || (from - to).abs() < 0.5 {
+        let _ = windows_reactor::set_element_height(&native, to);
+        return;
+    }
+    let start = Instant::now();
+    let _ = windows_reactor::set_element_height(&native, from);
+    let native_tick = native.clone();
+    let anim_tick = Rc::clone(anim);
+    let Ok(timer) = DispatcherTimer::new(Duration::from_millis(16), move || {
+        let t = (start.elapsed().as_secs_f64() / duration.as_secs_f64()).min(1.0);
+        let eased = 1.0 - (1.0 - t).powi(3);
+        let height = from + (to - from) * eased;
+        let _ = windows_reactor::set_element_height(&native_tick, height);
+        if t >= 1.0 {
+            let _ = windows_reactor::set_element_height(&native_tick, to);
+            if let Some(timer) = anim_tick.borrow().as_ref() {
+                let _ = timer.stop();
+            }
+        }
+    }) else {
+        let _ = windows_reactor::set_element_height(&native, to);
+        return;
+    };
+    *anim.borrow_mut() = Some(timer);
+}
+
+fn native_body_from_to(
+    native: Option<&windows_core::IInspectable>,
+    expanded: bool,
+    measured: f64,
+) -> (f64, f64) {
+    let actual = native
+        .map(windows_reactor::element_actual_height)
+        .unwrap_or(0.0);
+    let open_height = measured.max(1.0);
+    if expanded {
+        // Closing: the host may already be at 0 if Height was ignored; use the
+        // measured body so we still have a distance to animate.
+        (actual.max(open_height), 0.0)
+    } else {
+        // Opening: never start from ActualHeight. An unclipped stack reports
+        // the full desired size even when React pinned Height at 0, which made
+        // from ≈ to and skipped the expand animation.
+        (0.0, open_height)
+    }
+}
+
 fn animate_expand_progress_between(from: f64, to: f64, set_progress: AsyncSetState<f64>) {
     let anim_id = EXPAND_ANIM_GEN.fetch_add(1, Ordering::Relaxed) + 1;
     let duration = duration(CONTROL_NORMAL_ANIMATION);
@@ -259,11 +318,14 @@ fn settings_expander_card_with_header(
     card_id: impl Into<String>,
     hovered_id: &Option<String>,
     set_hovered_id: SetState<Option<String>>,
+    on_body_measured: Option<Callback<f64>>,
+    on_body_native: Option<Callback<Option<windows_core::IInspectable>>>,
+    native_body_layout: bool,
     content: impl Into<Element>,
 ) -> Element {
     let card_id = card_id.into();
     let hovered = card_is_hovered(hovered_id, &card_id);
-    let (on_enter, on_exit) = card_hover_handlers(card_id, set_hovered_id);
+    let (on_enter, on_exit) = card_hover_handlers(card_id.clone(), set_hovered_id);
     let progress = expand_progress.clamp(0.0, 1.0);
 
     let trailing_reserve = if trailing.is_some() { 80.0 } else { 0.0 };
@@ -287,7 +349,8 @@ fn settings_expander_card_with_header(
     .width(CHEVRON_SIZE)
     .height(CHEVRON_SIZE)
     .background(Color::transparent())
-    .rotation(progress * 180.0)
+    .rotation(if expanded { 180.0 } else { 0.0 })
+    .with_rotation_transition(duration(CONTROL_NORMAL_ANIMATION))
     .margin(Thickness {
         left: 0.0,
         top: 0.0,
@@ -345,44 +408,73 @@ fn settings_expander_card_with_header(
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .background(Color::transparent());
 
-    let body_content = border(
-        vstack((
-            border(Element::Empty)
-                .height(1.0)
-                .background(ThemeRef::CardStroke)
-                .horizontal_alignment(HorizontalAlignment::Stretch)
-                .margin(Thickness {
-                    left: CARD_PADDING_X,
-                    top: 0.0,
-                    right: CARD_PADDING_X,
-                    bottom: 0.0,
-                }),
-            border(content.into())
-                .padding(Thickness {
-                    left: CARD_PADDING_X,
-                    top: CARD_CONTENT_PADDING_Y,
-                    right: CARD_PADDING_X,
-                    bottom: CARD_CONTENT_PADDING_Y,
-                })
-                .horizontal_alignment(HorizontalAlignment::Stretch),
-        ))
+    let mut body_inner = vstack((
+        border(Element::Empty)
+            .height(1.0)
+            .background(ThemeRef::CardStroke)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .margin(Thickness {
+                left: CARD_PADDING_X,
+                top: 0.0,
+                right: CARD_PADDING_X,
+                bottom: 0.0,
+            }),
+        border(content.into())
+            .padding(Thickness {
+                left: CARD_PADDING_X,
+                top: CARD_CONTENT_PADDING_Y,
+                right: CARD_PADDING_X,
+                bottom: CARD_CONTENT_PADDING_Y,
+            })
+            .horizontal_alignment(HorizontalAlignment::Stretch),
+    ))
+    .spacing(0.0)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .vertical_alignment(VerticalAlignment::Top);
+    body_inner = if native_body_layout {
+        body_inner
+    } else {
+        body_inner.opacity(progress)
+    };
+    if let Some(on_body_measured) = on_body_measured {
+        body_inner = body_inner.on_resize(move |_, height| {
+            if height > 1.0 {
+                on_body_measured.invoke(height);
+            }
+        });
+    }
+    let clipped_body = border(body_inner)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Top);
+    let mut body_host = vstack((clipped_body,))
         .spacing(0.0)
         .horizontal_alignment(HorizontalAlignment::Stretch)
-        .opacity(progress),
-    )
-    .horizontal_alignment(HorizontalAlignment::Stretch);
-    let body: Element = match expanded_body_height {
-        Some(expanded_body_height) => {
-            let body_height = expanded_body_height * progress;
-            body_content
-                .height(body_height)
-                .max_height(body_height)
-                .into()
+        .vertical_alignment(VerticalAlignment::Top)
+        .with_key(format!("{card_id}-expand-body"));
+    if let Some(on_body_native) = on_body_native {
+        body_host.mounted = Some(Callback::new(move |native| {
+            on_body_native.invoke(native);
+        }));
+    }
+    let body: Element = if native_body_layout {
+        // Pin React height at 0 so later reconciles cannot clobber the
+        // UI-thread SetHeight animation that actually opens the card.
+        body_host.height(0.0).max_height(0.0).into()
+    } else {
+        let body_content = border(body_host).horizontal_alignment(HorizontalAlignment::Stretch);
+        match expanded_body_height {
+            Some(expanded_body_height) => {
+                let body_height = expanded_body_height * progress;
+                body_content
+                    .height(body_height)
+                    .max_height(body_height)
+                    .into()
+            }
+            None if expanded || progress > 0.0 => body_content
+                .max_height(EXPANDABLE_BODY_MAX_HEIGHT * progress)
+                .into(),
+            None => body_content.height(0.0).max_height(0.0).into(),
         }
-        None if expanded || progress > 0.0 => body_content
-            .max_height(EXPANDABLE_BODY_MAX_HEIGHT * progress)
-            .into(),
-        None => Element::Empty,
     };
 
     let (base, hover) = card_background_layers(hovered);
@@ -442,6 +534,9 @@ fn settings_expander_card(
         card_id,
         hovered_id,
         set_hovered_id,
+        None,
+        None,
+        false,
         content,
     )
 }
@@ -523,8 +618,11 @@ struct ContentExpander;
 
 impl Component<ContentExpanderProps> for ContentExpander {
     fn render(&self, props: &ContentExpanderProps, cx: &mut RenderCx) -> Element {
-        let (progress, set_progress) =
-            cx.use_async_state(if props.expanded { 1.0_f64 } else { 0.0_f64 });
+        let peak_body_height = cx.use_ref(0.0_f64);
+        let body_native = cx.use_ref(None::<windows_core::IInspectable>);
+        let height_anim = cx.use_ref(Rc::new(RefCell::new(None::<DispatcherTimer>)));
+        let expanded_ref = cx.use_ref(props.expanded);
+        expanded_ref.set(props.expanded);
         let content_ref = cx.use_ref(props.content.clone());
         if props.content != Element::Empty {
             content_ref.set(props.content.clone());
@@ -532,39 +630,76 @@ impl Component<ContentExpanderProps> for ContentExpander {
         let previous_expanded = cx.use_ref(props.expanded);
         if previous_expanded.get_cloned() != props.expanded {
             previous_expanded.set(props.expanded);
-            animate_expand_progress_between(
-                progress,
-                if props.expanded { 1.0 } else { 0.0 },
-                set_progress.clone(),
-            );
+            if let Some(native) = body_native.get_cloned() {
+                let (from, to) = native_body_from_to(
+                    Some(&native),
+                    !props.expanded,
+                    peak_body_height.get_cloned(),
+                );
+                start_native_body_height(native, from, to, &height_anim.get_cloned());
+            }
         }
 
         let next_expanded = !props.expanded;
         let toggle_expand = {
             let on_expanding = props.on_expanding.clone();
-            let set_progress = set_progress.clone();
-            let from = progress;
+            let body_native = body_native.clone();
+            let peak_body_height = peak_body_height.clone();
+            let height_anim = height_anim.get_cloned();
+            let currently_expanded = props.expanded;
             move || {
+                if let Some(native) = body_native.get_cloned() {
+                    let (from, to) =
+                        native_body_from_to(Some(&native), currently_expanded, peak_body_height.get_cloned());
+                    start_native_body_height(native, from, to, &height_anim);
+                }
                 on_expanding.invoke(next_expanded);
-                animate_expand_progress_between(
-                    from,
-                    if next_expanded { 1.0 } else { 0.0 },
-                    set_progress.clone(),
-                );
             }
+        };
+        let on_body_measured = {
+            let peak_body_height = peak_body_height.clone();
+            let body_native = body_native.clone();
+            let expanded_ref = expanded_ref.clone();
+            let height_anim = height_anim.get_cloned();
+            Callback::new(move |height: f64| {
+                let peak = peak_body_height.get_cloned();
+                if height + 0.5 < peak {
+                    return;
+                }
+                peak_body_height.set(height);
+                if !expanded_ref.get_cloned() {
+                    return;
+                }
+                let Some(native) = body_native.get_cloned() else {
+                    return;
+                };
+                if windows_reactor::element_actual_height(&native) >= 1.0 {
+                    return;
+                }
+                start_native_body_height(native, 0.0, height, &height_anim);
+            })
+        };
+        let on_body_native = {
+            let body_native = body_native.clone();
+            Callback::new(move |native: Option<windows_core::IInspectable>| {
+                body_native.set(native);
+            })
         };
 
         settings_expander_card_with_header(
             props.header.clone(),
             props.trailing.clone(),
             props.expanded,
-            progress,
+            if props.expanded { 1.0 } else { 0.0 },
             None,
             toggle_expand,
             false,
             props.card_id.clone(),
             &props.hovered_id,
             props.set_hovered_id.clone(),
+            Some(on_body_measured),
+            Some(on_body_native),
+            true,
             content_ref.get_cloned(),
         )
     }

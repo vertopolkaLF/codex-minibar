@@ -118,6 +118,36 @@ pub fn set_hit_test_visible(native: windows_core::IInspectable, visible: bool) -
     ui.SetIsHitTestVisible(visible)
 }
 
+/// Drive `FrameworkElement.Height`/`MaxHeight` without a React reconcile.
+/// Used for expander layout so siblings reflow even when UI-thread renders coalesce.
+///
+/// Vertical `StackPanel` does not clip overflowing children, so the first child
+/// also gets `MaxHeight` — a `Border` there will clip the expander body.
+pub fn set_element_height(native: &windows_core::IInspectable, height: f64) -> Result<()> {
+    let element = native.cast::<IFrameworkElement>()?;
+    let height = height.max(0.0);
+    element.SetHeight(height)?;
+    element.SetMaxHeight(height)?;
+    if let Ok(panel) = native.cast::<IPanel>()
+        && let Ok(children) = panel.Children()
+        && let Ok(child) = children.GetAt(0)
+        && let Ok(child) = child.cast::<IFrameworkElement>()
+    {
+        child.SetMaxHeight(height)?;
+    }
+    Ok(())
+}
+
+/// Arranged height in DIPs, or `0` when the element is not in a layout pass yet.
+pub fn element_actual_height(native: &windows_core::IInspectable) -> f64 {
+    native
+        .cast::<IFrameworkElement>()
+        .ok()
+        .and_then(|element| element.ActualHeight().ok())
+        .filter(|height| height.is_finite() && *height > 0.0)
+        .unwrap_or(0.0)
+}
+
 /// Snap compositor `Offset.X` without touching XAML layout.
 pub fn set_offset_x(native: windows_core::IInspectable, x: f32) -> Result<()> {
     let ui = native.cast::<UIElement>()?;
