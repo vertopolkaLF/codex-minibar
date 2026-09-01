@@ -7026,8 +7026,8 @@ fn popup_settings_cards(
     let mut rows = vec![
         settings_section_heading("Home tab").with_key("popup-home-tab-heading"),
         settings_toggle_card_with_description(
-            "Show total spend",
-            Some("Shows the provider spend breakdown when Home is selected."),
+            "Show Usage Stats",
+            Some("Shows the Usage Stats widget when Home is selected."),
             show_total_spend_on_all_tab,
             move |value| {
                 persist_bool(
@@ -7045,8 +7045,8 @@ fn popup_settings_cards(
         )
         .with_key("popup-show-total-spend"),
         settings_control_card(
-            "Total spend layout",
-            Some("Choose donut or the Usage-style cost cards on the Home tab."),
+            "Usage Stats layout",
+            Some("Choose donut or cost cards for Usage Stats on the Home tab."),
             ComboBox::new(["Donut", "Cards"])
                 .selected_index(total_spend_presentation.index())
                 .on_selection_changed({

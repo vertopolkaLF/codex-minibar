@@ -29,7 +29,7 @@ pub struct ProviderDescriptor {
     /// Whether the provider exposes a real operation that starts a fresh
     /// session limit window.
     pub supports_activation: bool,
-    /// Whether the provider contributes date-scoped token history to Total Spend.
+    /// Whether the provider contributes date-scoped token history to Usage Stats.
     pub include_in_total_spend: bool,
     /// Stable metrics shown before runtime-discovered provider-specific lanes.
     pub metrics: &'static [MetricDescriptor],

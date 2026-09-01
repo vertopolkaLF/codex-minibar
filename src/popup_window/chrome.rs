@@ -74,7 +74,7 @@ pub(super) fn popup_tab_button(
     let brand_icon_color = match icon_name {
         Some("codex") | Some("chatgpt") => Color::rgb(128, 159, 255),
         Some("claude") => Color::rgb(217, 119, 87),
-        // Match Total Spend: Cursor mark flips with the Windows text theme.
+        // Match Usage Stats: Cursor mark flips with the Windows text theme.
         Some("cursor") => combined_usage_color(ProviderKind::Cursor, color_scheme),
         Some("opencode") => combined_usage_color(ProviderKind::OpenCodeZen, color_scheme),
         Some("openrouter") => combined_usage_color(ProviderKind::OpenRouter, color_scheme),

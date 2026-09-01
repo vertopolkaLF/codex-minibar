@@ -878,7 +878,7 @@ pub enum PopupSurface {
     ProviderTab,
 }
 
-/// Ordered slots on the popup Home tab, including Total Spend.
+/// Ordered slots on the popup Home tab, including Usage Stats.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PopupWidgetKind {
@@ -1018,7 +1018,7 @@ impl TotalSpendPresentation {
     }
 }
 
-/// Time range for the Total Spend card on the popup Home tab.
+/// Time range for the Usage Stats card on the popup Home tab.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TotalSpendPeriod {
@@ -1298,7 +1298,7 @@ pub struct Settings {
     /// 12-hour or 24-hour clocks. Missing values follow the Windows locale.
     pub time_format: TimeFormat,
     pub providers: ProviderSettings,
-    /// Display order for Home-tab widgets (Total Spend + providers) and footer tabs.
+    /// Display order for Home-tab widgets (Usage Stats + providers) and footer tabs.
     pub popup_order: Vec<PopupWidgetKind>,
     pub use_colored_provider_icons: bool,
     /// Fluent Color glyphs in the Settings sidebar. When false, monochrome
@@ -1316,11 +1316,11 @@ pub struct Settings {
     pub show_usage_pace: bool,
     /// Per-card visibility for popup Home and provider tabs.
     pub popup_visibility: PopupVisibility,
-    /// Shows the compact provider spend breakdown on the popup's Home tab.
+    /// Shows the Usage Stats widget on the popup's Home tab.
     pub show_total_spend_on_all_tab: bool,
-    /// Chooses between the donut and progress-bar spend layouts.
+    /// Chooses between the donut and cost-card Usage Stats layouts.
     pub total_spend_presentation: TotalSpendPresentation,
-    /// Last selected Total Spend time range on the Home tab.
+    /// Last selected Usage Stats time range on the Home tab.
     pub total_spend_period: TotalSpendPeriod,
     pub show_account_name: bool,
     /// Optional explicit Codex CLI launcher. When unset, discovery continues
@@ -2266,7 +2266,7 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 version = 17;
             }
             17 => {
-                // Promote provider_order into popup_order and pin Total Spend
+                // Promote provider_order into popup_order and pin Usage Stats
                 // above the historical provider stack.
                 let root = document
                     .as_table_mut()

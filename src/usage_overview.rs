@@ -98,7 +98,7 @@ pub struct OverviewSnapshot {
     pub day_rows: Vec<BreakdownRow>,
 }
 
-/// Calendar window for the Home Total Spend card. Thirty days matches the
+/// Calendar window for the Home Usage Stats card. Thirty days matches the
 /// Usage tab's 30-day Cost snapshot exactly; today/yesterday are slices of
 /// that same store aggregation.
 pub fn dates_for_total_spend(period: TotalSpendPeriod) -> (NaiveDate, NaiveDate) {
