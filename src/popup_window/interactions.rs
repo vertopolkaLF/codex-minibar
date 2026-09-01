@@ -64,6 +64,7 @@ pub(super) fn commit_widget_drag(
             ui.cursor_enabled,
             ui.opencode_zen_enabled,
             ui.opencode_go_enabled,
+            ui.openrouter_enabled,
         ) > 1;
     let mut scratch = Settings {
         popup_order: ui.popup_order.clone(),

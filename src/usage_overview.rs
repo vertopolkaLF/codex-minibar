@@ -2,14 +2,14 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike, Utc, Weekday};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Utc, Weekday};
 
 use crate::{
     limits::ProviderLimits,
     provider_registry,
-    settings::ProviderKind,
+    settings::{ProviderKind, TotalSpendPeriod},
     store::{self},
-    usage::{DailyTokenUsage, TokenUsage},
+    usage::TokenUsage,
 };
 
 pub const OVERVIEW_MAX_DAYS: u16 = 90;
@@ -46,6 +46,14 @@ impl OverviewRange {
             Self::SevenDays => "7 days",
             Self::ThirtyDays => "30 days",
             Self::NinetyDays => "90 days",
+        }
+    }
+
+    pub const fn from_total_spend_period(period: TotalSpendPeriod) -> Self {
+        match period {
+            TotalSpendPeriod::Past24h => Self::Past24h,
+            TotalSpendPeriod::SevenDays => Self::SevenDays,
+            TotalSpendPeriod::ThirtyDays => Self::ThirtyDays,
         }
     }
 }
@@ -184,14 +192,28 @@ pub fn build_overview_snapshot(
     })
     .unwrap_or_default();
 
-    let (provider_daily, mut provider_hourly, provider_sessions, mut model_rows) = store_data;
-    let codex_has_usage = provider_daily.get(&ProviderKind::Codex).is_some_and(|days| {
-        days.iter().any(|entry| {
-            entry.date >= start_date
-                && entry.date <= end_date
-                && (entry.usage.requests > 0 || entry.usage.total_tokens() > 0)
-        })
-    });
+    let (mut provider_daily, mut provider_hourly, provider_sessions, mut model_rows) = store_data;
+    // The live limits snapshot is the only safe fallback while the SQLite
+    // usage tables are still being hydrated. Keep it in the same per-provider
+    // input map so totals, charts, and breakdowns all receive identical data.
+    for provider in &spend_providers {
+        let has_store_data = provider_daily
+            .get(provider)
+            .is_some_and(|days| days.iter().any(|entry| usage_has_data(&entry.usage)));
+        if !has_store_data {
+            let fallback = limits.get(*provider).usage.daily.clone();
+            if !fallback.is_empty() {
+                provider_daily.insert(*provider, fallback);
+            }
+        }
+    }
+    let codex_has_usage = provider_daily
+        .get(&ProviderKind::Codex)
+        .is_some_and(|days| {
+            days.iter().any(|entry| {
+                entry.date >= start_date && entry.date <= end_date && usage_has_data(&entry.usage)
+            })
+        });
     let codex_missing_models = !model_rows
         .keys()
         .any(|(provider, _)| *provider == ProviderKind::Codex);
@@ -436,16 +458,6 @@ pub fn build_overview_snapshot(
         OverviewMetric::Tokens => right.tokens.cmp(&left.tokens),
     });
 
-    // Keep in-memory limits as a fallback when the store has not hydrated yet.
-    if snapshot.totals.requests == 0 {
-        for provider in &spend_providers {
-            let usage = slice_provider_usage(limits.get(*provider).usage.daily.as_slice(), start_date, end_date);
-            if usage.requests > 0 {
-                snapshot.totals.add(&usage);
-            }
-        }
-    }
-
     snapshot
 }
 
@@ -465,18 +477,39 @@ pub fn format_hour_label(at: DateTime<Local>) -> String {
     crate::settings::TimeFormat::current().format_hour_label(at)
 }
 
+/// Compact API-value formatting shared by the Home Total Spend card and the
+/// Usage page. Keep cents visible for sub-thousand-dollar values so both
+/// surfaces report the same number instead of rounding one of them to a
+/// suspiciously tidy integer.
+pub fn format_spend(microusd: u64) -> String {
+    let dollars = microusd as f64 / 1_000_000.0;
+    if dollars >= 1_000_000.0 {
+        format!("${:.1}M", dollars / 1_000_000.0)
+    } else if dollars >= 1_000.0 {
+        format!("${:.1}K", dollars / 1_000.0)
+    } else {
+        format!("${dollars:.2}")
+    }
+}
+
 fn start_of_local_day(date: NaiveDate) -> DateTime<Local> {
     date.and_hms_opt(0, 0, 0)
         .and_then(|naive| Local.from_local_datetime(&naive).single())
         .unwrap_or_else(Local::now)
 }
 
-fn slice_provider_usage(days: &[DailyTokenUsage], start: NaiveDate, end: NaiveDate) -> TokenUsage {
-    let mut usage = TokenUsage::default();
-    for entry in days {
-        if entry.date >= start && entry.date <= end {
-            usage.add(&entry.usage);
-        }
+fn usage_has_data(usage: &TokenUsage) -> bool {
+    usage.requests > 0 || usage.total_tokens() > 0 || usage.estimated_cost_microusd > 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_spend_keeps_the_same_precision_as_total_spend() {
+        assert_eq!(format_spend(1_250_000), "$1.25");
+        assert_eq!(format_spend(1_250_000_000), "$1.2K");
+        assert_eq!(format_spend(1_250_000_000_000), "$1.2M");
     }
-    usage
 }

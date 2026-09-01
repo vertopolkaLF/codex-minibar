@@ -75,9 +75,13 @@ pub(super) fn popup_tab_button(
         Some("codex") | Some("chatgpt") => Color::rgb(128, 159, 255),
         Some("claude") => Color::rgb(217, 119, 87),
         // Match Total Spend: Cursor mark flips with the Windows text theme.
-        Some("cursor") => combined_usage_color(ProviderKind::Cursor, color_scheme),
-        Some("opencode") => combined_usage_color(ProviderKind::OpenCodeZen, color_scheme),
-        Some("openrouter") => combined_usage_color(ProviderKind::OpenRouter, color_scheme),
+        Some("cursor") => crate::popup_usage::usage_share_color(ProviderKind::Cursor, color_scheme),
+        Some("opencode") => {
+            crate::popup_usage::usage_share_color(ProviderKind::OpenCodeZen, color_scheme)
+        }
+        Some("openrouter") => {
+            crate::popup_usage::usage_share_color(ProviderKind::OpenRouter, color_scheme)
+        }
         Some("fluent-chart") | Some("fluent-home") => popup_chrome_icon_color(color_scheme, false),
         _ => idle_icon_color,
     };

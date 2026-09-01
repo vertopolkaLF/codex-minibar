@@ -992,38 +992,18 @@ impl TrayPresentation {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TotalSpendPresentation {
-    #[default]
-    #[serde(alias = "list")]
-    Donut,
-    #[serde(alias = "grouped")]
-    ProgressBar,
-}
-
-impl TotalSpendPresentation {
-    pub const fn index(self) -> i32 {
-        match self {
-            Self::Donut => 0,
-            Self::ProgressBar => 1,
-        }
-    }
-
-    pub const fn from_index(index: i32) -> Self {
-        match index {
-            1 => Self::ProgressBar,
-            _ => Self::Donut,
-        }
-    }
-}
-
 /// Time range for the Total Spend card on the popup Home tab.
+///
+/// The values intentionally mirror [`crate::usage_overview::OverviewRange`]
+/// so the Home card and the Usage page cannot silently disagree about the
+/// selected window. `today` and `yesterday` are accepted as deserialization
+/// aliases for settings written by older builds.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TotalSpendPeriod {
-    Today,
-    Yesterday,
+    #[serde(rename = "past_24h", alias = "today", alias = "yesterday")]
+    Past24h,
+    SevenDays,
     #[default]
     ThirtyDays,
 }
@@ -1031,16 +1011,16 @@ pub enum TotalSpendPeriod {
 impl TotalSpendPeriod {
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Today => "Today",
-            Self::Yesterday => "Yesterday",
-            Self::ThirtyDays => "30 Days",
+            Self::Past24h => "Past 24h",
+            Self::SevenDays => "7 days",
+            Self::ThirtyDays => "30 days",
         }
     }
 
     pub const fn key(self) -> &'static str {
         match self {
-            Self::Today => "today",
-            Self::Yesterday => "yesterday",
+            Self::Past24h => "past-24h",
+            Self::SevenDays => "7-days",
             Self::ThirtyDays => "30-days",
         }
     }
@@ -1318,8 +1298,6 @@ pub struct Settings {
     pub popup_visibility: PopupVisibility,
     /// Shows the compact provider spend breakdown on the popup's Home tab.
     pub show_total_spend_on_all_tab: bool,
-    /// Chooses between the donut and progress-bar spend layouts.
-    pub total_spend_presentation: TotalSpendPresentation,
     /// Last selected Total Spend time range on the Home tab.
     pub total_spend_period: TotalSpendPeriod,
     pub show_account_name: bool,
@@ -1376,7 +1354,6 @@ impl Default for Settings {
             show_usage_pace: true,
             popup_visibility: PopupVisibility::build_defaults(),
             show_total_spend_on_all_tab: true,
-            total_spend_presentation: TotalSpendPresentation::default(),
             total_spend_period: TotalSpendPeriod::default(),
             show_account_name: false,
             codex_path: None,
@@ -2237,11 +2214,13 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 version = 15;
             }
             15 => {
+                // Total Spend now uses the shared Usage hero card. Drop the
+                // obsolete presentation preference while preserving the
+                // remainder of the user's settings.
                 document
                     .as_table_mut()
                     .context("settings root must be a TOML table")?
-                    .entry("total_spend_presentation")
-                    .or_insert(toml::Value::String("donut".into()));
+                    .remove("total_spend_presentation");
                 document
                     .as_table_mut()
                     .expect("settings root was checked above")
@@ -2566,10 +2545,6 @@ mod tests {
         ));
         assert!(value.popup_visibility.provider_shown_on_all(ProviderKind::Codex));
         assert!(value.show_total_spend_on_all_tab);
-        assert_eq!(
-            value.total_spend_presentation,
-            TotalSpendPresentation::Donut
-        );
         assert_eq!(value.total_spend_period, TotalSpendPeriod::ThirtyDays);
         assert_eq!(value.history_retention_days, 30);
         assert!(value.tray_widgets.is_empty());
@@ -2760,10 +2735,6 @@ tray_widgets = []
             true
         ));
         assert!(migrated.show_total_spend_on_all_tab);
-        assert_eq!(
-            migrated.total_spend_presentation,
-            TotalSpendPresentation::Donut
-        );
         assert_eq!(migrated.total_spend_period, TotalSpendPeriod::ThirtyDays);
         assert_eq!(migrated.history_retention_days, 30);
         assert!(
@@ -2850,16 +2821,18 @@ enabled = ["codex", "claude"]
     }
 
     #[test]
-    fn total_spend_presentation_uses_stable_dropdown_indices() {
-        assert_eq!(TotalSpendPresentation::Donut.index(), 0);
-        assert_eq!(TotalSpendPresentation::ProgressBar.index(), 1);
+    fn total_spend_period_accepts_legacy_ranges_and_serializes_usage_ranges() {
         assert_eq!(
-            TotalSpendPresentation::from_index(1),
-            TotalSpendPresentation::ProgressBar
+            serde_json::from_str::<TotalSpendPeriod>(r#""today""#).unwrap(),
+            TotalSpendPeriod::Past24h
         );
         assert_eq!(
-            TotalSpendPresentation::from_index(99),
-            TotalSpendPresentation::Donut
+            serde_json::from_str::<TotalSpendPeriod>(r#""yesterday""#).unwrap(),
+            TotalSpendPeriod::Past24h
+        );
+        assert_eq!(
+            serde_json::to_string(&TotalSpendPeriod::Past24h).unwrap(),
+            r#""past_24h""#
         );
     }
 

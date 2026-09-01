@@ -386,7 +386,7 @@ fn usage_card(content: impl Into<Element>) -> Element {
         .into()
 }
 
-fn usage_hero(
+pub(crate) fn usage_hero(
     snapshot: &OverviewSnapshot,
     metric: OverviewMetric,
     color_scheme: ColorScheme,
@@ -429,7 +429,7 @@ fn usage_hero(
                 usage_share_bar(snapshot, metric, color_scheme),
             ))
             .spacing(8.0),
-            provider_grid(snapshot, metric, color_scheme, use_colored_provider_icons),
+            provider_grid(snapshot, color_scheme, use_colored_provider_icons),
         ))
         .spacing(16.0),
     )
@@ -490,7 +490,7 @@ fn usage_share_bar(
         .into()
 }
 
-fn usage_share_color(provider: ProviderKind, color_scheme: ColorScheme) -> Color {
+pub(crate) fn usage_share_color(provider: ProviderKind, color_scheme: ColorScheme) -> Color {
     match provider {
         ProviderKind::Codex => Color::rgb(128, 159, 255),
         ProviderKind::Claude => Color::rgb(217, 119, 87),
@@ -508,11 +508,10 @@ fn usage_share_color(provider: ProviderKind, color_scheme: ColorScheme) -> Color
 
 fn provider_grid(
     snapshot: &OverviewSnapshot,
-    metric: OverviewMetric,
     color_scheme: ColorScheme,
     use_colored_provider_icons: bool,
 ) -> Element {
-    const COLUMNS: usize = 2;
+    const COLUMNS: usize = 3;
     let row_count = snapshot.providers.len().div_ceil(COLUMNS).max(1);
     let set_key = snapshot
         .providers
@@ -532,7 +531,11 @@ fn provider_grid(
         .collect::<Vec<_>>();
 
     grid(cells)
-        .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
+        .columns([
+            GridLength::Star(1.0),
+            GridLength::Star(1.0),
+            GridLength::Star(1.0),
+        ])
         .rows(vec![GridLength::Auto; row_count])
         .row_spacing(16.0)
         .column_spacing(8.0)
@@ -546,34 +549,12 @@ fn provider_grid(
 
 fn provider_row(
     entry: &ProviderOverview,
-    metric: OverviewMetric,
     color_scheme: ColorScheme,
     use_colored_provider_icons: bool,
 ) -> Element {
     let descriptor = provider_registry::descriptor(entry.provider);
     let icon_name = descriptor.icon;
     let color = provider_brand_color(entry.provider, color_scheme, use_colored_provider_icons);
-    let value = match metric {
-        OverviewMetric::Cost => format_spend(entry.usage.estimated_cost_microusd),
-        OverviewMetric::Tokens => format_token_count(entry.usage.total_tokens()),
-    };
-    let share = match metric {
-        OverviewMetric::Cost => entry.share_cost,
-        OverviewMetric::Tokens => entry.share_tokens,
-    };
-    let other = match metric {
-        OverviewMetric::Cost => format_token_count(entry.usage.total_tokens()),
-        OverviewMetric::Tokens => format_spend(entry.usage.estimated_cost_microusd),
-    };
-    let detail = format!(
-        "{:.1}% of {} · {}",
-        share,
-        match metric {
-            OverviewMetric::Cost => "cost",
-            OverviewMetric::Tokens => "tokens",
-        },
-        other
-    );
 
     vstack((
         grid((
@@ -594,18 +575,9 @@ fn provider_row(
         .columns([GridLength::Auto, GridLength::Star(1.0)])
         .column_spacing(8.0)
         .rows([GridLength::Auto]),
-        vstack((
-            hstack((
-                caption(value)
-                    .font_weight(600)
-                    .foreground(ThemeRef::PrimaryText),
-                caption(format!("· {} sessions", entry.sessions))
-                    .foreground(ThemeRef::SecondaryText),
-            ))
-            .spacing(4.0),
-            caption(detail).foreground(ThemeRef::TertiaryText),
-        ))
-        .spacing(1.0),
+        caption(format_spend(entry.usage.estimated_cost_microusd))
+            .font_weight(600)
+            .foreground(ThemeRef::PrimaryText),
     ))
     .spacing(4.0)
     .with_key(format!("usage-hero-provider-{}", entry.provider.id()))
@@ -1309,8 +1281,8 @@ fn usage_header_height() -> f64 {
 }
 
 fn usage_hero_height(provider_count: usize) -> f64 {
-    let rows = provider_count.div_ceil(2).max(1) as f64;
-    let row_h = 57.0;
+    let rows = provider_count.div_ceil(3).max(1) as f64;
+    let row_h = 40.0;
     USAGE_CARD_PAD * 2.0
         + 2.0
         + 28.0
@@ -1956,7 +1928,7 @@ fn provider_brand_color(
 }
 
 fn format_spend(microusd: u64) -> String {
-    format_spend_dollars((microusd as f64 / 1_000_000.0).round() as u64)
+    crate::usage_overview::format_spend(microusd)
 }
 
 fn format_day_cost(microusd: u64) -> String {
@@ -2015,16 +1987,6 @@ fn format_spend_tenths_value(tenths: u64, microusd: u64) -> String {
         return format_spend(microusd);
     }
     format!("${:.1}", tenths as f64 / 10.0)
-}
-
-fn format_spend_dollars(dollars: u64) -> String {
-    if dollars >= 1_000_000 {
-        format!("${:.1}M", dollars as f64 / 1_000_000.0)
-    } else if dollars >= 1_000 {
-        format!("${:.1}K", dollars as f64 / 1_000.0)
-    } else {
-        format!("${dollars}")
-    }
 }
 
 fn format_token_count(tokens: u64) -> String {

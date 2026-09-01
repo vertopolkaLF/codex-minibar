@@ -107,12 +107,6 @@ pub fn install_accent_icon_into(
     install_into_inner(mount, &xaml)
 }
 
-/// Host a data-driven XAML chart inside a reactor swap-chain panel. The
-/// caller provides only locally generated XAML geometry (never user input).
-pub fn install_spend_donut_into(mount: windows_core::IInspectable, xaml: &str) -> Result<()> {
-    install_into_inner(mount, xaml)
-}
-
 /// Host overlapping usage-area geometry. Same mount-only paint rule as icons:
 /// the caller must remount or reinstall when the path data changes.
 pub fn install_usage_chart_into(mount: windows_core::IInspectable, xaml: &str) -> Result<()> {

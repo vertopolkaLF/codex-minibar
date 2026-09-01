@@ -10,7 +10,7 @@ use crate::settings::{
     AccentColor, AppTheme, AutoActivationPause, LimitRefreshInterval, LimitValue,
     OpenRouterAccount, PopupVisibility, PopupWidgetKind, ProviderKind, ScheduledActivation,
     Settings, TimeFormat,
-    TotalSpendPresentation, TrayColorMode, TrayFixedColor, TrayIndicator, TrayPresentation,
+    TrayColorMode, TrayFixedColor, TrayIndicator, TrayPresentation,
     TrayWidget, TrayWidgetKind,
 };
 use crate::settings_controls::{
@@ -170,7 +170,6 @@ struct SettingsWindowState {
     popup_visibility: SetState<PopupVisibility>,
     discovered_popup_bricks: SetState<BTreeMap<String, String>>,
     show_total_spend_on_all_tab: SetState<bool>,
-    total_spend_presentation: SetState<TotalSpendPresentation>,
     show_account_name: SetState<bool>,
     activation_success: SetState<bool>,
     activation_failure: SetState<bool>,
@@ -245,8 +244,6 @@ impl SettingsWindowState {
             .call(settings.popup_visibility.clone());
         self.show_total_spend_on_all_tab
             .call(settings.show_total_spend_on_all_tab);
-        self.total_spend_presentation
-            .call(settings.total_spend_presentation);
         self.show_account_name.call(settings.show_account_name);
         self.activation_success
             .call(settings.notifications.activation_success);
@@ -2144,8 +2141,6 @@ pub fn render(
         cx.use_state(settings.popup_visibility.clone());
     let (show_total_spend_on_all_tab, set_show_total_spend_on_all_tab) =
         cx.use_state(settings.show_total_spend_on_all_tab);
-    let (total_spend_presentation, set_total_spend_presentation) =
-        cx.use_state(settings.total_spend_presentation);
     let (show_account_name, set_show_account_name) = cx.use_state(settings.show_account_name);
     let (activation_success, set_activation_success) =
         cx.use_state(settings.notifications.activation_success);
@@ -2209,7 +2204,6 @@ pub fn render(
             popup_visibility: set_popup_visibility.clone(),
             discovered_popup_bricks: set_discovered_popup_bricks.clone(),
             show_total_spend_on_all_tab: set_show_total_spend_on_all_tab.clone(),
-            total_spend_presentation: set_total_spend_presentation.clone(),
             show_account_name: set_show_account_name.clone(),
             activation_success: set_activation_success.clone(),
             activation_failure: set_activation_failure.clone(),
@@ -2265,10 +2259,9 @@ pub fn render(
             show_used_percentage,
             show_usage_pace,
             &popup_visibility,
-            &discovered_popup_bricks,
-            show_total_spend_on_all_tab,
-            total_spend_presentation,
-            show_account_name,
+             &discovered_popup_bricks,
+             show_total_spend_on_all_tab,
+             show_account_name,
             activation_success,
             activation_failure,
             limits_reset,
@@ -2322,10 +2315,9 @@ pub fn render(
             set_show_used_percentage,
             set_show_usage_pace,
             set_popup_visibility,
-            set_discovered_popup_bricks,
-            set_show_total_spend_on_all_tab,
-            set_total_spend_presentation,
-            set_show_account_name,
+             set_discovered_popup_bricks,
+             set_show_total_spend_on_all_tab,
+             set_show_account_name,
             set_activation_success,
             set_activation_failure,
             set_limits_reset,
@@ -3048,7 +3040,6 @@ fn tab_content(
     popup_visibility: &PopupVisibility,
     discovered_popup_bricks: &BTreeMap<String, String>,
     show_total_spend_on_all_tab: bool,
-    total_spend_presentation: TotalSpendPresentation,
     show_account_name: bool,
     activation_success: bool,
     activation_failure: bool,
@@ -3105,7 +3096,6 @@ fn tab_content(
     set_popup_visibility: SetState<PopupVisibility>,
     set_discovered_popup_bricks: SetState<BTreeMap<String, String>>,
     set_show_total_spend_on_all_tab: SetState<bool>,
-    set_total_spend_presentation: SetState<TotalSpendPresentation>,
     set_show_account_name: SetState<bool>,
     set_activation_success: SetState<bool>,
     set_activation_failure: SetState<bool>,
@@ -3469,12 +3459,10 @@ fn tab_content(
                 popup_order,
                 &enabled,
                 show_total_spend_on_all_tab,
-                total_spend_presentation,
                 expanded_popup_provider,
                 set_expanded_popup_provider,
                 set_popup_visibility,
                 set_show_total_spend_on_all_tab,
-                set_total_spend_presentation,
                 hovered_card_id,
                 set_hovered_card_id.clone(),
                 settings_tx.clone(),
@@ -3811,7 +3799,6 @@ fn tab_content(
                 popup_visibility: set_popup_visibility,
                 discovered_popup_bricks: set_discovered_popup_bricks,
                 show_total_spend_on_all_tab: set_show_total_spend_on_all_tab,
-                total_spend_presentation: set_total_spend_presentation,
                 show_account_name: set_show_account_name,
                 activation_success: set_activation_success,
                 activation_failure: set_activation_failure,
@@ -7011,18 +6998,15 @@ fn popup_settings_cards(
     popup_order: &[PopupWidgetKind],
     enabled_providers: &[ProviderKind],
     show_total_spend_on_all_tab: bool,
-    total_spend_presentation: TotalSpendPresentation,
     expanded_popup_provider: &Option<String>,
     set_expanded_popup_provider: SetState<Option<String>>,
     set_popup_visibility: SetState<PopupVisibility>,
     set_show_total_spend_on_all_tab: SetState<bool>,
-    set_total_spend_presentation: SetState<TotalSpendPresentation>,
     hovered_card_id: &Option<String>,
     set_hovered_card_id: SetState<Option<String>>,
     settings_tx: Sender<Settings>,
 ) -> Vec<Element> {
     let apply_show_total_spend = settings_tx.clone();
-    let apply_total_spend_presentation = settings_tx.clone();
     let mut rows = vec![
         settings_section_heading("Home tab").with_key("popup-home-tab-heading"),
         settings_toggle_card_with_description(
@@ -7044,26 +7028,6 @@ fn popup_settings_cards(
             set_hovered_card_id.clone(),
         )
         .with_key("popup-show-total-spend"),
-        settings_control_card(
-            "Total spend layout",
-            Some("Choose how provider totals are arranged in the Home tab."),
-            ComboBox::new(["Donut", "Progress bar"])
-                .selected_index(total_spend_presentation.index())
-                .on_selection_changed({
-                    let apply_total_spend_presentation = apply_total_spend_presentation.clone();
-                    move |choice| {
-                        let value = TotalSpendPresentation::from_index(choice);
-                        set_total_spend_presentation.call(value);
-                        persist_update(apply_total_spend_presentation.clone(), move |settings| {
-                            settings.total_spend_presentation = value;
-                        });
-                    }
-                }),
-            "popup-total-spend-layout",
-            hovered_card_id,
-            set_hovered_card_id.clone(),
-        )
-        .with_key("popup-total-spend-layout"),
         settings_section_heading("Provider cards").with_key("popup-provider-cards-heading"),
     ];
 
