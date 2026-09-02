@@ -1227,17 +1227,11 @@ fn limit_card_compact(
         .into()
     };
     let radius = f64::from(popup::WINDOW_CORNER_RADIUS_DIP);
-    let mut layers: Vec<Element> = vec![
-        border(Element::Empty)
-            .background(ThemeRef::CardBackground)
-            .corner_radius(radius)
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .vertical_alignment(VerticalAlignment::Stretch)
-            .grid_column(0)
-            .grid_row(0)
-            .into(),
-        limit_card_progress_layer(progress, accent.clone(), radius),
-    ];
+    let mut layers: Vec<Element> = vec![limit_card_progress_layer(
+        progress,
+        accent.clone(),
+        radius,
+    )];
     if let Some(ticks) = compact_interval_ticks_layer(interval_tick_count(window)) {
         layers.push(
             ticks
@@ -1250,7 +1244,9 @@ fn limit_card_compact(
     if let Some(pace) = pace {
         layers.push(compact_pace_marker_layer(pace, color_scheme));
     }
-    let content: Element = if compact {
+    // When pace is disabled or unavailable, use its otherwise-empty slot for
+    // usage and keep the reset status on the same compact row.
+    let content: Element = if pace.is_none() {
         border(
             grid((
                 caption(title.to_uppercase())

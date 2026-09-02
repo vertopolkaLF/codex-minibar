@@ -861,7 +861,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         // SizeChanged. Remounting the page is what tab switches already do so
         // the queued on_resize measure can shrink the HWND.
         let body_layout_key = format!(
-            "popup-page-{role}-{}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
+            "popup-page-{role}-{}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
             ui.error.is_some(),
             view.provider()
                 .is_some_and(|provider| ui.has_provider_error(provider)),
@@ -877,6 +877,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             popup_order_key(&ui.popup_order),
             popup_body_height_key(&limits, view),
             ui.compact_usage_cards,
+            ui.settings_revision,
             color_scheme as i32,
             view,
         );

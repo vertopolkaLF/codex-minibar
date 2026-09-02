@@ -201,6 +201,9 @@ pub(super) struct UiState {
     pub(super) last_activation: String,
     pub(super) provider_errors: HashMap<ProviderKind, String>,
     pub(super) error: Option<String>,
+    /// Changes for every settings transaction so layout-sensitive toggles
+    /// force a fresh body measurement and popup resize.
+    pub(super) settings_revision: u64,
     /// Changes for every successful worker sample.  Rate-limit data lives only
     /// in `AppState`, but this revision makes that external snapshot observable
     /// to the reactive render loop even when all other view metadata is equal.
@@ -245,6 +248,7 @@ impl Default for UiState {
             last_activation: "Never".into(),
             provider_errors: HashMap::new(),
             error: None,
+            settings_revision: 0,
             limits_revision: 0,
             active_requests: Vec::new(),
             refreshing: false,

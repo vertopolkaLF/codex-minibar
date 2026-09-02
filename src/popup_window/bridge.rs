@@ -110,6 +110,7 @@ pub(super) fn start_background_bridge(
                               settings: Settings| {
             crate::settings_window::sync_open_window(settings.clone(), ui_dispatcher.clone());
             let phase = updates.snapshot();
+            ui.settings_revision = ui.settings_revision.wrapping_add(1);
             let providers_changed = ui.codex_enabled
                 != settings.providers.is_enabled(ProviderKind::Codex)
                 || ui.claude_enabled != settings.providers.is_enabled(ProviderKind::Claude)
