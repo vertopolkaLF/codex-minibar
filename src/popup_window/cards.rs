@@ -795,6 +795,37 @@ pub(super) fn pace_marker_layer(pace: PaceTip, color_scheme: ColorScheme) -> Ele
     .into()
 }
 
+/// Full-card quota track used by the compact limit-card layout.
+///
+/// The unfilled card surface is the track; the accent-tinted left segment is
+/// the progress fill. Keeping both layers behind the card content lets the
+/// card carry the progress affordance without a second inner bar.
+fn limit_card_progress_layer(value: f64, fill: ThemeRef, radius: f64) -> Element {
+    let filled = value.clamp(0.0, 100.0);
+    let (fill_star, rest_star) = if filled <= 0.0 {
+        (0.0001, 100.0)
+    } else if filled >= 100.0 {
+        (100.0, 0.0001)
+    } else {
+        (filled, 100.0 - filled)
+    };
+
+    grid((border(Element::Empty)
+        .background(fill)
+        .opacity(0.2)
+        .corner_radius(radius)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Stretch)
+        .grid_column(0),))
+    .columns([GridLength::Star(fill_star), GridLength::Star(rest_star)])
+    .rows([GridLength::Star(1.0)])
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .vertical_alignment(VerticalAlignment::Stretch)
+    .grid_column(0)
+    .grid_row(0)
+    .into()
+}
+
 pub(super) fn limit_card(
     title: &str,
     window: &LimitWindow,
@@ -804,8 +835,8 @@ pub(super) fn limit_card(
     color_scheme: ColorScheme,
 ) -> Element {
     let accent = ThemeRef::Accent;
-    let (remaining_label, progress, show_reset, compact) = if disabled {
-        ("Disabled".into(), 100.0, false, false)
+    let (remaining_label, progress) = if disabled {
+        ("Disabled".into(), 100.0)
     } else {
         let remaining = window.remaining_percent();
         let percentage = if show_used_percentage {
@@ -817,12 +848,7 @@ pub(super) fn limit_card(
         let label = percentage
             .map(|value| format!("{value}% {suffix}"))
             .unwrap_or_else(|| "Unavailable".into());
-        (
-            label,
-            f64::from(percentage.unwrap_or(0)),
-            true,
-            percentage == Some(0),
-        )
+        (label, f64::from(percentage.unwrap_or(0)))
     };
     let reset = window.resets_at.map(|at| format_reset_in(Some(at)));
 
@@ -834,58 +860,23 @@ pub(super) fn limit_card(
             text_block(reset).vertical_alignment(VerticalAlignment::Center),
         ))
         .spacing(6.0)
-        .horizontal_alignment(HorizontalAlignment::Right)
+        .horizontal_alignment(HorizontalAlignment::Left)
         .vertical_alignment(VerticalAlignment::Center)
         .into(),
         None => text_block("Session not started")
-            .foreground(Color::rgb(255, 255, 255))
-            .horizontal_alignment(HorizontalAlignment::Right)
+            .foreground(ThemeRef::PrimaryText)
+            .horizontal_alignment(HorizontalAlignment::Left)
             .vertical_alignment(VerticalAlignment::Center)
             .into(),
     };
-
-    if compact {
-        return border(
-            grid((
-                caption(title.to_uppercase())
-                    .foreground(ThemeRef::SecondaryText)
-                    .vertical_alignment(VerticalAlignment::Center),
-                text_block(remaining_label)
-                    .font_weight(600)
-                    .foreground(accent.clone())
-                    .vertical_alignment(VerticalAlignment::Center)
-                    .grid_column(1),
-                reset_status
-                    .margin(Thickness {
-                        left: 10.0,
-                        top: 0.0,
-                        right: 0.0,
-                        bottom: 0.0,
-                    })
-                    .grid_column(2),
-            ))
-            .columns([GridLength::Star(1.0), GridLength::Auto, GridLength::Auto])
-            .rows([GridLength::Auto])
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .vertical_alignment(VerticalAlignment::Center),
-        )
-        .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
-        .padding(Thickness::uniform(12.0))
-        .background(ThemeRef::CardBackground)
-        .border_thickness(Thickness::uniform(1.0))
-        .border_brush(ThemeRef::CardStroke)
-        .into();
-    }
 
     let pace = show_usage_pace
         .then(|| window.pace_tip(show_used_percentage, Utc::now()))
         .flatten();
 
-    let header: Element = if let Some(pace) = pace {
+    let top_row: Element = if let Some(pace) = pace {
         grid((
-            caption(title.to_uppercase())
-                .foreground(ThemeRef::SecondaryText)
-                .vertical_alignment(VerticalAlignment::Center),
+            reset_status,
             caption(pace.summary())
                 .foreground(ThemeRef::SecondaryText)
                 .horizontal_alignment(HorizontalAlignment::Right)
@@ -898,56 +889,84 @@ pub(super) fn limit_card(
         .vertical_alignment(VerticalAlignment::Center)
         .into()
     } else {
-        grid((caption(title.to_uppercase()).foreground(ThemeRef::SecondaryText),))
+        reset_status
+    };
+
+    let main_row: Element = grid((
+        text_block(title.to_owned())
+            .font_weight(600)
+            .foreground(ThemeRef::PrimaryText)
+            .vertical_alignment(VerticalAlignment::Center),
+        text_block(remaining_label)
+            .font_weight(600)
+            .foreground(ThemeRef::PrimaryText)
+            .horizontal_alignment(HorizontalAlignment::Right)
+            .vertical_alignment(VerticalAlignment::Center)
+            .grid_column(1),
+    ))
+    .columns([GridLength::Star(1.0), GridLength::Auto])
+    .rows([GridLength::Auto])
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .vertical_alignment(VerticalAlignment::Center)
+    .into();
+
+    let content = vstack((top_row, main_row))
+        .spacing(4.0)
+        .padding(Thickness {
+            left: 16.0,
+            top: 8.0,
+            right: 16.0,
+            bottom: 8.0,
+        })
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Stretch);
+
+    let radius = f64::from(popup::WINDOW_CORNER_RADIUS_DIP);
+    let mut layers: Vec<Element> = vec![
+        border(Element::Empty)
+            .background(ThemeRef::CardBackground)
+            .corner_radius(radius)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .vertical_alignment(VerticalAlignment::Stretch)
+            .grid_column(0)
+            .grid_row(0)
+            .into(),
+        limit_card_progress_layer(progress, accent, radius),
+    ];
+    if let Some(ticks) = interval_ticks_layer(interval_tick_count(window)) {
+        layers.push(
+            ticks
+                .height(INTERVAL_TICK_HEIGHT)
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .vertical_alignment(VerticalAlignment::Bottom)
+                .grid_column(0)
+                .grid_row(0),
+        );
+    }
+    if let Some(pace) = pace {
+        layers.push(
+            pace_marker_layer(pace, color_scheme)
+                .height(4.0)
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .vertical_alignment(VerticalAlignment::Top)
+                .grid_column(0)
+                .grid_row(0),
+        );
+    }
+    layers.push(content.grid_column(0).grid_row(0).into());
+
+    border(
+        grid(layers)
             .columns([GridLength::Star(1.0)])
             .rows([GridLength::Auto])
             .horizontal_alignment(HorizontalAlignment::Stretch)
-            .vertical_alignment(VerticalAlignment::Center)
-            .into()
-    };
-
-    let footer: Element = if show_reset {
-        grid((
-            hstack((text_block(remaining_label)
-                .font_weight(600)
-                .foreground(accent.clone())
-                .vertical_alignment(VerticalAlignment::Center),))
-            .vertical_alignment(VerticalAlignment::Center),
-            reset_status.grid_column(1),
-        ))
-        .columns([GridLength::Star(1.0), GridLength::Auto])
-        .rows([GridLength::Auto])
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .vertical_alignment(VerticalAlignment::Center)
-        .into()
-    } else {
-        hstack((text_block(remaining_label)
-            .font_weight(600)
-            .foreground(accent.clone())
-            .vertical_alignment(VerticalAlignment::Center),))
-        .vertical_alignment(VerticalAlignment::Center)
-        .into()
-    };
-
-    border(
-        vstack((
-            header,
-            rounded_progress(
-                progress,
-                accent,
-                pace,
-                color_scheme,
-                interval_tick_count(window),
-            ),
-            footer,
-        ))
-        .spacing(8.0),
+            .vertical_alignment(VerticalAlignment::Stretch),
     )
-    .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
-    .padding(Thickness::uniform(12.0))
-    .background(ThemeRef::CardBackground)
+    .corner_radius(radius)
+    .background(Color::transparent())
     .border_thickness(Thickness::uniform(1.0))
     .border_brush(ThemeRef::CardStroke)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
     .into()
 }
 
