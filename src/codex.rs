@@ -332,6 +332,7 @@ pub fn parse_rate_limits(
             .get("limitName")
             .and_then(Value::as_str)
             .map(str::to_owned),
+        secondary_limit_name: None,
         credits: parse_credits(limits.get("credits")),
         reset_credits: parse_reset_credits(response.pointer("/result/rateLimitResetCredits")),
         additional_limits: Default::default(),

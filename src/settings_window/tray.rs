@@ -158,7 +158,7 @@ fn tray_preview_limits() -> &'static crate::limits::ProviderLimits {
                     additional_limits: vec![
                         crate::limits::AdditionalLimit {
                             id: "cursor-api".into(),
-                            title: "API".into(),
+                            title: "Other Models".into(),
                             window: window(47),
                         },
                         crate::limits::AdditionalLimit {

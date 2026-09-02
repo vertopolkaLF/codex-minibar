@@ -66,12 +66,12 @@ const CLAUDE_METRICS: &[MetricDescriptor] = &[
 const CURSOR_METRICS: &[MetricDescriptor] = &[
     MetricDescriptor {
         id: "cursor.auto",
-        label: "Auto + Composer",
+        label: "Cursor Models",
         source: MetricSource::Secondary,
     },
     MetricDescriptor {
         id: "cursor.api",
-        label: "API",
+        label: "Other Models",
         source: MetricSource::Additional("cursor-api"),
     },
     MetricDescriptor {

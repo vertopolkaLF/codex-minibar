@@ -209,8 +209,9 @@ impl LimitNotificationTracker {
         }
         if settings.weekly_low_usage_enabled && can_notify_weekly(limits) {
             let threshold = settings.weekly_low_usage_threshold_percent;
+            let label = secondary_limit_label(limits, provider);
             maybe_notify_low_usage(
-                &format!("{} weekly", provider.display_name()),
+                &label,
                 limits.secondary.remaining_percent(),
                 limits.secondary.resets_at,
                 threshold,
@@ -273,6 +274,18 @@ fn reset_minute(reset: DateTime<Utc>) -> DateTime<Utc> {
 
 fn can_notify_weekly(limits: &RateLimits) -> bool {
     !limits.is_free_plan()
+}
+
+fn secondary_limit_label(limits: &RateLimits, provider: ProviderKind) -> String {
+    if let Some(name) = limits
+        .secondary_limit_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        return name.to_owned();
+    }
+    format!("{} weekly", provider.display_name())
 }
 
 fn maybe_notify_low_usage(
@@ -347,6 +360,29 @@ mod tests {
 
         assert!(!can_notify_weekly(&limits));
         assert!(can_notify_weekly(&RateLimits::default()));
+    }
+
+    #[test]
+    fn named_secondary_limit_is_used_in_low_usage_label() {
+        let limits = RateLimits {
+            secondary_limit_name: Some(
+                "Cursor Models".into(),
+            ),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            secondary_limit_label(&limits, ProviderKind::Cursor),
+            "Cursor Models"
+        );
+    }
+
+    #[test]
+    fn unnamed_secondary_limit_keeps_weekly_fallback() {
+        assert_eq!(
+            secondary_limit_label(&RateLimits::default(), ProviderKind::Codex),
+            "Codex weekly"
+        );
     }
 
     #[test]

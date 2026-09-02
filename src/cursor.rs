@@ -3,7 +3,8 @@
 //! Cursor persists its OAuth session in the application's VS Code state DB.
 //! We open that database read-only, refresh an expired access token only in
 //! memory, and query the same dashboard endpoints used by Cursor itself.
-//! The UI deliberately exposes its Auto, API, and Grok Bot lanes, not blended Total Usage.
+//! The UI deliberately exposes its Cursor Models, Other Models, and Grok Bot
+//! lanes, not blended Total Usage.
 
 use std::{
     collections::BTreeMap,
@@ -582,11 +583,14 @@ fn map_usage(
         .or_else(|| number(plan.and_then(|plan| plan.get("autoPercentUsed"))));
     let api_percent = number(summary_plan.and_then(|plan| plan.get("apiPercentUsed")))
         .or_else(|| number(plan.and_then(|plan| plan.get("apiPercentUsed"))));
+    let secondary_limit_name = auto_percent
+        .is_some()
+        .then(|| "Cursor Models".to_owned());
     let mut additional_limits = Vec::new();
     if let Some(percent) = api_percent {
         additional_limits.push(AdditionalLimit {
             id: "cursor-api".into(),
-            title: "API".into(),
+            title: "Other Models".into(),
             window: make_window(percent),
         });
     }
@@ -606,6 +610,7 @@ fn map_usage(
             .and_then(Value::as_str)
             .map(str::to_owned),
         limit_name: Some("Cursor".into()),
+        secondary_limit_name,
         additional_limits,
         ..RateLimits::default()
     })
@@ -701,7 +706,11 @@ mod tests {
         let limits = map_usage(Some(&usage), Some(&summary), None).unwrap();
         assert!(limits.primary.is_empty());
         assert_eq!(limits.secondary.used_percent, Some(12));
-        assert_eq!(limits.additional_limits[0].title, "API");
+        assert_eq!(
+            limits.secondary_limit_name.as_deref(),
+            Some("Cursor Models")
+        );
+        assert_eq!(limits.additional_limits[0].title, "Other Models");
         assert_eq!(limits.secondary.duration_minutes, Some(31 * 24 * 60));
     }
 

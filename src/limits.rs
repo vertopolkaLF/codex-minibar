@@ -203,6 +203,10 @@ pub struct RateLimits {
     pub account_name: Option<String>,
     pub plan_type: Option<String>,
     pub limit_name: Option<String>,
+    /// Provider-defined name for the secondary quota when it is not a
+    /// conventional weekly window, such as Cursor's Auto allowance.
+    #[serde(default)]
+    pub secondary_limit_name: Option<String>,
     pub credits: Credits,
     pub reset_credits: Option<RateLimitResetCreditsSummary>,
     /// Provider-specific quota windows beyond primary and secondary.

@@ -17,7 +17,11 @@ pub(super) fn provider_cards(
     provider_error: Option<(&str, Callback<()>)>,
 ) -> Vec<Element> {
     let (monthly_label, primary_label, secondary_label) = match provider {
-        ProviderKind::Cursor => ("Auto + Composer", "Auto + Composer", "Auto + Composer"),
+        ProviderKind::Cursor => (
+            "Cursor Models",
+            "Cursor Models",
+            "Cursor Models",
+        ),
         ProviderKind::OpenRouter => ("Spending", "Spending", "Spending"),
         _ => ("Monthly", "5h Session", "Weekly"),
     };
