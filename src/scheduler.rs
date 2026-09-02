@@ -19,7 +19,9 @@ const NEW_WINDOW_MINIMUM_ADVANCE: Duration = Duration::minutes(5);
 const UNACTIVATED_PROBE_MAX_GAP: Duration = Duration::minutes(5);
 
 /// After a failed Codex exec, wait before spending another activation attempt.
-pub const UNACTIVATED_RETRY_COOLDOWN: Duration = Duration::minutes(3);
+/// A real ChatGPT session window is one-shot per five hours, so this must not
+/// hammer the model while confirmation is still catching up.
+pub const UNACTIVATED_RETRY_COOLDOWN: Duration = Duration::minutes(15);
 
 /// A real 5-hour deadline stays put; second-level jitter is not a slide.
 const FROZEN_RESET_TOLERANCE: Duration = Duration::seconds(2);
@@ -57,6 +59,10 @@ pub struct ActivationState {
     /// The exact weekly occurrence already fired for each schedule rule.
     #[serde(default)]
     pub fired_scheduled_occurrences: std::collections::HashMap<String, DateTime<Utc>>,
+    /// Cooldown only applies inside the current process. A restart after a
+    /// failed exec must be allowed to try immediately with a new command.
+    #[serde(skip)]
+    attempted_this_process: bool,
 }
 
 /// Returns the next local-time occurrence on one selected weekday after `now`.
@@ -320,14 +326,16 @@ impl ActivationState {
     }
 
     pub fn recently_attempted(&self, now: DateTime<Utc>) -> bool {
-        self.last_attempt_at.is_some_and(|attempted| {
-            now >= attempted && now - attempted < UNACTIVATED_RETRY_COOLDOWN
-        })
+        self.attempted_this_process
+            && self.last_attempt_at.is_some_and(|attempted| {
+                now >= attempted && now - attempted < UNACTIVATED_RETRY_COOLDOWN
+            })
     }
 
     pub fn record_attempt(&mut self, now: DateTime<Utc>) {
         self.last_attempt_at = Some(now);
         self.attempted_without_active_window = true;
+        self.attempted_this_process = true;
     }
 
     pub fn load_or_default(path: &Path) -> Result<Self> {
@@ -579,8 +587,20 @@ mod tests {
             sampled_at,
         );
         state.record_attempt(sampled_at);
-        assert!(state.recently_attempted(sampled_at + Duration::minutes(2)));
-        assert!(!state.recently_attempted(sampled_at + Duration::minutes(3)));
+        assert!(state.recently_attempted(
+            sampled_at + UNACTIVATED_RETRY_COOLDOWN - Duration::minutes(1)
+        ));
+        assert!(!state.recently_attempted(sampled_at + UNACTIVATED_RETRY_COOLDOWN));
+    }
+
+    #[test]
+    fn persisted_failed_attempt_does_not_block_after_restart() {
+        let sampled_at = at(15, 0);
+        let mut state = ActivationState::default();
+        state.record_attempt(sampled_at);
+        let restored: ActivationState =
+            toml::from_str(&toml::to_string(&state).expect("serialize")).expect("reload");
+        assert!(!restored.recently_attempted(sampled_at + Duration::minutes(1)));
     }
 
     #[test]
