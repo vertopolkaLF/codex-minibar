@@ -534,6 +534,7 @@ pub fn render(
     let (show_used_percentage, set_show_used_percentage) =
         cx.use_state(settings.show_used_percentage);
     let (show_usage_pace, set_show_usage_pace) = cx.use_state(settings.show_usage_pace);
+    let (compact_usage_cards, set_compact_usage_cards) = cx.use_state(settings.compact_usage_cards);
     let (popup_visibility, set_popup_visibility) = cx.use_state(settings.popup_visibility.clone());
     let (show_total_spend_on_all_tab, set_show_total_spend_on_all_tab) =
         cx.use_state(settings.show_total_spend_on_all_tab);
@@ -599,6 +600,7 @@ pub fn render(
             start_at_login: set_start_at_login.clone(),
             show_used_percentage: set_show_used_percentage.clone(),
             show_usage_pace: set_show_usage_pace.clone(),
+            compact_usage_cards: set_compact_usage_cards.clone(),
             popup_visibility: set_popup_visibility.clone(),
             discovered_popup_bricks: set_discovered_popup_bricks.clone(),
             show_total_spend_on_all_tab: set_show_total_spend_on_all_tab.clone(),
@@ -655,6 +657,7 @@ pub fn render(
         start_at_login: start_at_login,
         show_used_percentage: show_used_percentage,
         show_usage_pace: show_usage_pace,
+        compact_usage_cards: compact_usage_cards,
         popup_visibility: &popup_visibility,
         discovered_popup_bricks: &discovered_popup_bricks,
         show_total_spend_on_all_tab: show_total_spend_on_all_tab,
@@ -712,6 +715,7 @@ pub fn render(
         set_start_at_login: set_start_at_login.clone(),
         set_show_used_percentage: set_show_used_percentage.clone(),
         set_show_usage_pace: set_show_usage_pace.clone(),
+        set_compact_usage_cards: set_compact_usage_cards.clone(),
         set_popup_visibility: set_popup_visibility.clone(),
         set_discovered_popup_bricks: set_discovered_popup_bricks.clone(),
         set_show_total_spend_on_all_tab: set_show_total_spend_on_all_tab.clone(),

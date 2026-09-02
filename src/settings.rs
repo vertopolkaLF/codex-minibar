@@ -1314,6 +1314,9 @@ pub struct Settings {
     pub start_at_login: bool,
     pub show_used_percentage: bool,
     pub show_usage_pace: bool,
+    /// Uses the compact full-card progress layout for popup quota cards.
+    /// False preserves the standard header, bar, and footer layout.
+    pub compact_usage_cards: bool,
     /// Per-card visibility for popup Home and provider tabs.
     pub popup_visibility: PopupVisibility,
     /// Shows the Usage Stats widget on the popup's Home tab.
@@ -1374,6 +1377,7 @@ impl Default for Settings {
             start_at_login: true,
             show_used_percentage: false,
             show_usage_pace: true,
+            compact_usage_cards: false,
             popup_visibility: PopupVisibility::build_defaults(),
             show_total_spend_on_all_tab: true,
             total_spend_presentation: TotalSpendPresentation::default(),
@@ -2554,6 +2558,7 @@ mod tests {
         assert!(value.start_at_login);
         assert!(!value.show_used_percentage);
         assert!(value.show_usage_pace);
+        assert!(!value.compact_usage_cards);
         assert!(value.popup_visibility.is_visible(
             "codex.usage",
             PopupSurface::ProviderTab,
@@ -2690,7 +2695,8 @@ show_usage_stats = false
     fn round_trips_through_disk() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.toml");
-        let expected = Settings::default();
+        let mut expected = Settings::default();
+        expected.compact_usage_cards = true;
         expected.save(&path).unwrap();
         assert_eq!(Settings::load_or_create(&path).unwrap(), expected);
     }
@@ -2749,6 +2755,7 @@ tray_widgets = []
         assert!(!migrated.automatic_activation);
         assert!(migrated.start_at_login);
         assert!(migrated.show_usage_pace);
+        assert!(!migrated.compact_usage_cards);
         assert!(migrated.popup_visibility.is_visible(
             "codex.resets",
             PopupSurface::HomeTab,

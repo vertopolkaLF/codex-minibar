@@ -21,6 +21,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         last_activation: format_last_activation(&RateLimits::default(), state.last_activation_at),
         show_used_percentage: state.settings.show_used_percentage,
         show_usage_pace: state.settings.show_usage_pace,
+        compact_usage_cards: state.settings.compact_usage_cards,
         popup_visibility: state.settings.popup_visibility.clone(),
         show_total_spend_on_all_tab: state.settings.show_total_spend_on_all_tab,
         total_spend_presentation: state.settings.total_spend_presentation,
@@ -384,6 +385,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                             limits_for_provider,
                             ui.show_used_percentage,
                             ui.show_usage_pace,
+                            ui.compact_usage_cards,
                             &ui.popup_visibility,
                             PopupSurface::HomeTab,
                             show_provider_tabs,
@@ -492,6 +494,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                         limits_for_provider,
                         ui.show_used_percentage,
                         ui.show_usage_pace,
+                        ui.compact_usage_cards,
                         &ui.popup_visibility,
                         surface,
                         show_provider_tabs,
@@ -858,7 +861,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         // SizeChanged. Remounting the page is what tab switches already do so
         // the queued on_resize measure can shrink the HWND.
         let body_layout_key = format!(
-            "popup-page-{role}-{}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
+            "popup-page-{role}-{}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
             ui.error.is_some(),
             view.provider()
                 .is_some_and(|provider| ui.has_provider_error(provider)),
@@ -873,6 +876,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             ui.openrouter_enabled,
             popup_order_key(&ui.popup_order),
             popup_body_height_key(&limits, view),
+            ui.compact_usage_cards,
             color_scheme as i32,
             view,
         );

@@ -29,6 +29,7 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let set_start_at_login = ctx.set_start_at_login.clone();
     let set_show_used_percentage = ctx.set_show_used_percentage.clone();
     let set_show_usage_pace = ctx.set_show_usage_pace.clone();
+    let set_compact_usage_cards = ctx.set_compact_usage_cards.clone();
     let set_popup_visibility = ctx.set_popup_visibility.clone();
     let set_discovered_popup_bricks = ctx.set_discovered_popup_bricks.clone();
     let set_show_total_spend_on_all_tab = ctx.set_show_total_spend_on_all_tab.clone();
@@ -76,6 +77,7 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
         start_at_login: set_start_at_login,
         show_used_percentage: set_show_used_percentage,
         show_usage_pace: set_show_usage_pace,
+        compact_usage_cards: set_compact_usage_cards,
         popup_visibility: set_popup_visibility,
         discovered_popup_bricks: set_discovered_popup_bricks,
         show_total_spend_on_all_tab: set_show_total_spend_on_all_tab,

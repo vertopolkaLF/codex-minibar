@@ -131,6 +131,10 @@ pub struct LimitNotificationTracker {
     primed: bool,
     primary_resets_at: Option<DateTime<Utc>>,
     secondary_resets_at: Option<DateTime<Utc>>,
+    /// Whether the initial snapshot was already inside the low-usage zone.
+    /// This remains useful when the provider supplies `resets_at` later.
+    startup_low_usage_primary: Option<bool>,
+    startup_low_usage_secondary: Option<bool>,
     /// `resets_at` of the window we already notified for low primary usage.
     low_usage_notified_primary: Option<DateTime<Utc>>,
     low_usage_notified_secondary: Option<DateTime<Utc>>,
@@ -143,19 +147,37 @@ impl LimitNotificationTracker {
         settings: &NotificationSettings,
         provider: ProviderKind,
     ) {
+        self.observe_at(limits, settings, provider, Utc::now());
+    }
+
+    fn observe_at(
+        &mut self,
+        limits: &RateLimits,
+        settings: &NotificationSettings,
+        provider: ProviderKind,
+        now: DateTime<Utc>,
+    ) {
         if !self.primed {
             self.capture(limits);
+            self.startup_low_usage_primary = low_usage_state(
+                limits.primary.remaining_percent(),
+                settings.low_usage_threshold_percent,
+            );
+            self.startup_low_usage_secondary = low_usage_state(
+                limits.secondary.remaining_percent(),
+                settings.weekly_low_usage_threshold_percent,
+            );
             self.primed = true;
             return;
         }
 
-        let now = Utc::now();
         let primary_reset =
             reset_has_occurred(self.primary_resets_at, limits.primary.resets_at, now);
         let secondary_reset =
             reset_has_occurred(self.secondary_resets_at, limits.secondary.resets_at, now);
 
         if primary_reset {
+            self.startup_low_usage_primary = None;
             if settings.limits_changed {
                 show("5-hour limit reset", provider.display_name());
             }
@@ -163,6 +185,7 @@ impl LimitNotificationTracker {
         // Free plans have no weekly limit. Their single monthly quota may shift
         // while the Codex API refreshes, which must not create a reset toast.
         if secondary_reset && can_notify_weekly(limits) {
+            self.startup_low_usage_secondary = None;
             if settings.limits_changed {
                 show("Weekly limit reset", provider.display_name());
             }
@@ -176,6 +199,12 @@ impl LimitNotificationTracker {
                 limits.primary.resets_at,
                 threshold,
                 &mut self.low_usage_notified_primary,
+                suppress_startup_low_usage(
+                    self.startup_low_usage_primary,
+                    limits.primary.remaining_percent(),
+                    threshold,
+                ),
+                now,
             );
         }
         if settings.weekly_low_usage_enabled && can_notify_weekly(limits) {
@@ -186,6 +215,12 @@ impl LimitNotificationTracker {
                 limits.secondary.resets_at,
                 threshold,
                 &mut self.low_usage_notified_secondary,
+                suppress_startup_low_usage(
+                    self.startup_low_usage_secondary,
+                    limits.secondary.remaining_percent(),
+                    threshold,
+                ),
+                now,
             );
         }
 
@@ -196,6 +231,18 @@ impl LimitNotificationTracker {
         self.primary_resets_at = limits.primary.resets_at;
         self.secondary_resets_at = limits.secondary.resets_at;
     }
+}
+
+fn low_usage_state(remaining: Option<u8>, threshold: u8) -> Option<bool> {
+    remaining.map(|remaining| remaining <= threshold)
+}
+
+fn suppress_startup_low_usage(
+    startup_low_usage: Option<bool>,
+    remaining: Option<u8>,
+    threshold: u8,
+) -> bool {
+    startup_low_usage == Some(true) && low_usage_state(remaining, threshold) == Some(true)
 }
 
 /// A reset toast is valid only after the previously advertised deadline has
@@ -234,14 +281,13 @@ fn maybe_notify_low_usage(
     resets_at: Option<DateTime<Utc>>,
     threshold: u8,
     already_notified_for: &mut Option<DateTime<Utc>>,
+    suppress_startup_low_usage: bool,
+    now: DateTime<Utc>,
 ) {
-    if !take_low_usage_notification(
-        remaining,
-        resets_at,
-        threshold,
-        already_notified_for,
-        Utc::now(),
-    ) {
+    if suppress_startup_low_usage {
+        return;
+    }
+    if !take_low_usage_notification(remaining, resets_at, threshold, already_notified_for, now) {
         return;
     }
     let remaining = remaining.expect("notification requires a remaining percentage");
@@ -287,6 +333,8 @@ fn take_low_usage_notification(
 #[cfg(test)]
 mod tests {
     use chrono::TimeZone;
+
+    use crate::limits::LimitWindow;
 
     use super::*;
 
@@ -418,6 +466,56 @@ mod tests {
             &mut notified_for,
             first_reset + chrono::Duration::minutes(1),
         ));
+    }
+
+    #[test]
+    fn startup_low_usage_stays_suppressed_when_reset_metadata_arrives_later() {
+        let reset = Utc.with_ymd_and_hms(2026, 7, 14, 12, 0, 0).unwrap();
+        let settings = NotificationSettings {
+            low_usage_enabled: true,
+            low_usage_threshold_percent: 20,
+            ..Default::default()
+        };
+        let initial = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(80),
+                resets_at: None,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let reset_metadata = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(80),
+                resets_at: Some(reset),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut tracker = LimitNotificationTracker::default();
+
+        tracker.observe_at(
+            &initial,
+            &settings,
+            ProviderKind::Codex,
+            reset - chrono::Duration::hours(5),
+        );
+        tracker.observe_at(
+            &reset_metadata,
+            &settings,
+            ProviderKind::Codex,
+            reset - chrono::Duration::hours(1),
+        );
+
+        assert!(tracker.low_usage_notified_primary.is_none());
+    }
+
+    #[test]
+    fn startup_low_usage_suppression_only_applies_while_still_low() {
+        assert!(suppress_startup_low_usage(Some(true), Some(20), 20));
+        assert!(!suppress_startup_low_usage(Some(true), Some(21), 20));
+        assert!(!suppress_startup_low_usage(Some(false), Some(20), 20));
+        assert!(!suppress_startup_low_usage(None, Some(20), 20));
     }
 }
 

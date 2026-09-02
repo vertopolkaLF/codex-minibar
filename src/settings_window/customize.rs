@@ -49,6 +49,7 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let replace_chatgpt_logo_with_codex = ctx.replace_chatgpt_logo_with_codex;
     let show_used_percentage = ctx.show_used_percentage;
     let show_usage_pace = ctx.show_usage_pace;
+    let compact_usage_cards = ctx.compact_usage_cards;
     let show_account_name = ctx.show_account_name;
     let popup_visibility = ctx.popup_visibility;
     let discovered_popup_bricks = ctx.discovered_popup_bricks;
@@ -59,6 +60,7 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let set_replace_chatgpt_logo_with_codex = ctx.set_replace_chatgpt_logo_with_codex.clone();
     let set_show_used_percentage = ctx.set_show_used_percentage.clone();
     let set_show_usage_pace = ctx.set_show_usage_pace.clone();
+    let set_compact_usage_cards = ctx.set_compact_usage_cards.clone();
     let set_show_account_name = ctx.set_show_account_name.clone();
     let set_popup_visibility = ctx.set_popup_visibility.clone();
     let set_show_total_spend_on_all_tab = ctx.set_show_total_spend_on_all_tab.clone();
@@ -71,6 +73,7 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let apply_replace_chatgpt_logo_with_codex = settings_tx.clone();
     let apply_show_used_percentage = settings_tx.clone();
     let apply_show_usage_pace = settings_tx.clone();
+    let apply_compact_usage_cards = settings_tx.clone();
     let apply_show_account_name = settings_tx.clone();
     let providers: Vec<ProviderKind> = popup_order
         .iter()
@@ -185,6 +188,29 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
             set_hovered_card_id.clone(),
         )
         .with_key("customize-show-usage-pace"),
+        settings_toggle_card_with_description(
+            "Use compact usage cards",
+            Some("Use the alternative full-card progress layout while keeping the standard element positions."),
+            compact_usage_cards,
+            {
+                let set_compact_usage_cards = set_compact_usage_cards.clone();
+                let apply_compact_usage_cards = apply_compact_usage_cards.clone();
+                move |value| {
+                    persist_bool(
+                        set_compact_usage_cards.clone(),
+                        apply_compact_usage_cards.clone(),
+                        value,
+                        |settings, value| {
+                            settings.compact_usage_cards = value;
+                        },
+                    );
+                }
+            },
+            "customize-compact-usage-cards",
+            hovered_card_id,
+            set_hovered_card_id.clone(),
+        )
+        .with_key("customize-compact-usage-cards"),
         settings_toggle_card(
             "Show account name",
             show_account_name,
