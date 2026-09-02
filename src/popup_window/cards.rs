@@ -162,6 +162,7 @@ pub(super) fn provider_cards(
                                 &api_key.spending,
                                 api_key.has_live_usage,
                                 show_used_percentage,
+                                compact_usage_cards,
                                 color_scheme,
                                 expired,
                                 api_key.expires_at,
@@ -171,12 +172,13 @@ pub(super) fn provider_cards(
                             // Identity includes glyph-like content (title/mask) so a
                             // recycled native card cannot keep a neighbor's text.
                             .with_key(format!(
-                                "{}-api-{}-{}-{}-{}",
+                                "{}-api-{}-{}-{}-{}-{}",
                                 account.id,
                                 api_key.id,
                                 title,
                                 masked,
-                                if expired { "expired" } else { "live" }
+                                if expired { "expired" } else { "live" },
+                                compact_usage_cards,
                             )),
                         );
                     }
@@ -192,8 +194,17 @@ pub(super) fn provider_cards(
                 }
             } else if let Some(spending) = limits.spending.as_ref() {
                 cards.push(
-                    spending_card(spending, show_used_percentage, color_scheme)
-                        .with_key(format!("{}-spending", provider.display_name())),
+                    spending_card(
+                        spending,
+                        show_used_percentage,
+                        compact_usage_cards,
+                        color_scheme,
+                    )
+                    .with_key(format!(
+                        "{}-spending-{}",
+                        provider.display_name(),
+                        compact_usage_cards,
+                    )),
                 );
             }
         }
@@ -314,6 +325,7 @@ pub(super) fn provider_cards(
 pub(super) fn spending_card(
     spending: &SpendingSummary,
     show_used_percentage: bool,
+    compact_usage_cards: bool,
     color_scheme: ColorScheme,
 ) -> Element {
     spending_card_with_title(
@@ -322,6 +334,7 @@ pub(super) fn spending_card(
         spending,
         true,
         show_used_percentage,
+        compact_usage_cards,
         color_scheme,
         false,
         None,
@@ -336,6 +349,7 @@ pub(super) fn spending_card_with_title(
     spending: &SpendingSummary,
     has_live_usage: bool,
     show_used_percentage: bool,
+    compact_usage_cards: bool,
     color_scheme: ColorScheme,
     expired: bool,
     expires_at: Option<DateTime<Utc>>,
@@ -495,19 +509,62 @@ pub(super) fn spending_card_with_title(
         .into()
     };
 
-    let mut rows: Vec<Element> = vec![header];
     // Expired keys keep title/mask only — no spend bar that looks "full".
-    if !expired && let Some(limit) = spending.limit_microusd.filter(|limit| *limit > 0) {
-        let used_percent = if has_live_usage {
-            ((spending.used_microusd.min(limit) as f64 / limit as f64) * 100.0).clamp(0.0, 100.0)
-        } else {
-            0.0
-        };
-        let progress = if show_used_percentage {
-            used_percent
-        } else {
-            100.0 - used_percent
-        };
+    let progress = if !expired {
+        spending
+            .limit_microusd
+            .filter(|limit| *limit > 0)
+            .map(|limit| {
+                let used_percent = if has_live_usage {
+                    ((spending.used_microusd.min(limit) as f64 / limit as f64) * 100.0)
+                        .clamp(0.0, 100.0)
+                } else {
+                    0.0
+                };
+                if show_used_percentage {
+                    used_percent
+                } else {
+                    100.0 - used_percent
+                }
+            })
+    } else {
+        None
+    };
+
+    if compact_usage_cards {
+        let radius = f64::from(popup::WINDOW_CORNER_RADIUS_DIP);
+        let mut layers: Vec<Element> = Vec::with_capacity(2);
+        if let Some(progress) = progress {
+            layers.push(limit_card_progress_layer(
+                progress,
+                ThemeRef::Accent,
+                radius,
+            ));
+        }
+        layers.push(
+            border(header)
+                .padding(Thickness::uniform(12.0))
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .vertical_alignment(VerticalAlignment::Stretch)
+                .into(),
+        );
+        return border(
+            grid(layers)
+                .columns([GridLength::Star(1.0)])
+                .rows([GridLength::Auto])
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .vertical_alignment(VerticalAlignment::Stretch),
+        )
+        .corner_radius(radius)
+        .background(ThemeRef::CardBackground)
+        .border_thickness(Thickness::uniform(1.0))
+        .border_brush(ThemeRef::CardStroke)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .into();
+    }
+
+    let mut rows: Vec<Element> = vec![header];
+    if let Some(progress) = progress {
         rows.push(rounded_progress(
             progress,
             ThemeRef::Accent,
@@ -1227,11 +1284,8 @@ fn limit_card_compact(
         .into()
     };
     let radius = f64::from(popup::WINDOW_CORNER_RADIUS_DIP);
-    let mut layers: Vec<Element> = vec![limit_card_progress_layer(
-        progress,
-        accent.clone(),
-        radius,
-    )];
+    let mut layers: Vec<Element> =
+        vec![limit_card_progress_layer(progress, accent.clone(), radius)];
     if let Some(ticks) = compact_interval_ticks_layer(interval_tick_count(window)) {
         layers.push(
             ticks
