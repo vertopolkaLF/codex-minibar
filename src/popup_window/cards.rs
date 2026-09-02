@@ -804,8 +804,8 @@ pub(super) fn limit_card(
     color_scheme: ColorScheme,
 ) -> Element {
     let accent = ThemeRef::Accent;
-    let (remaining_label, progress, show_reset, pace) = if disabled {
-        ("Disabled".into(), 100.0, false, None)
+    let (remaining_label, progress, show_reset, compact) = if disabled {
+        ("Disabled".into(), 100.0, false, false)
     } else {
         let remaining = window.remaining_percent();
         let percentage = if show_used_percentage {
@@ -817,12 +817,69 @@ pub(super) fn limit_card(
         let label = percentage
             .map(|value| format!("{value}% {suffix}"))
             .unwrap_or_else(|| "Unavailable".into());
-        let pace = show_usage_pace
-            .then(|| window.pace_tip(show_used_percentage, Utc::now()))
-            .flatten();
-        (label, f64::from(percentage.unwrap_or(0)), true, pace)
+        (
+            label,
+            f64::from(percentage.unwrap_or(0)),
+            true,
+            percentage == Some(0),
+        )
     };
     let reset = window.resets_at.map(|at| format_reset_in(Some(at)));
+
+    let reset_status: Element = match reset {
+        Some(reset) => hstack((
+            text_block("Resets in")
+                .foreground(ThemeRef::TertiaryText)
+                .vertical_alignment(VerticalAlignment::Center),
+            text_block(reset).vertical_alignment(VerticalAlignment::Center),
+        ))
+        .spacing(6.0)
+        .horizontal_alignment(HorizontalAlignment::Right)
+        .vertical_alignment(VerticalAlignment::Center)
+        .into(),
+        None => text_block("Session not started")
+            .foreground(Color::rgb(255, 255, 255))
+            .horizontal_alignment(HorizontalAlignment::Right)
+            .vertical_alignment(VerticalAlignment::Center)
+            .into(),
+    };
+
+    if compact {
+        return border(
+            grid((
+                caption(title.to_uppercase())
+                    .foreground(ThemeRef::SecondaryText)
+                    .vertical_alignment(VerticalAlignment::Center),
+                text_block(remaining_label)
+                    .font_weight(600)
+                    .foreground(accent.clone())
+                    .vertical_alignment(VerticalAlignment::Center)
+                    .grid_column(1),
+                reset_status
+                    .margin(Thickness {
+                        left: 10.0,
+                        top: 0.0,
+                        right: 0.0,
+                        bottom: 0.0,
+                    })
+                    .grid_column(2),
+            ))
+            .columns([GridLength::Star(1.0), GridLength::Auto, GridLength::Auto])
+            .rows([GridLength::Auto])
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .vertical_alignment(VerticalAlignment::Center),
+        )
+        .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+        .padding(Thickness::uniform(12.0))
+        .background(ThemeRef::CardBackground)
+        .border_thickness(Thickness::uniform(1.0))
+        .border_brush(ThemeRef::CardStroke)
+        .into();
+    }
+
+    let pace = show_usage_pace
+        .then(|| window.pace_tip(show_used_percentage, Utc::now()))
+        .flatten();
 
     let header: Element = if let Some(pace) = pace {
         grid((
@@ -847,24 +904,6 @@ pub(super) fn limit_card(
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .vertical_alignment(VerticalAlignment::Center)
             .into()
-    };
-
-    let reset_status: Element = match reset {
-        Some(reset) => hstack((
-            text_block("Resets in")
-                .foreground(ThemeRef::TertiaryText)
-                .vertical_alignment(VerticalAlignment::Center),
-            text_block(reset).vertical_alignment(VerticalAlignment::Center),
-        ))
-        .spacing(6.0)
-        .horizontal_alignment(HorizontalAlignment::Right)
-        .vertical_alignment(VerticalAlignment::Center)
-        .into(),
-        None => text_block("Session not started")
-            .foreground(Color::rgb(255, 255, 255))
-            .horizontal_alignment(HorizontalAlignment::Right)
-            .vertical_alignment(VerticalAlignment::Center)
-            .into(),
     };
 
     let footer: Element = if show_reset {
