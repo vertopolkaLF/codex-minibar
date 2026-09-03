@@ -2550,8 +2550,24 @@ impl Backend for WinUIBackend {
                 revokers.extend(revs);
             }
             (Event::ItemClicked, Handle::DropDownButton(_) | Handle::Button(_)) => {
-                // Store the handler so set_prop can wire when flyout is built.
-                self.menu_click_handlers.borrow_mut().insert(id, handler);
+                // Properties are applied before events during mount, so the
+                // flyout may already exist by the time its handler is attached.
+                // Keep the handler for future flyout rebuilds and wire the
+                // existing one now as well.
+                self.menu_click_handlers
+                    .borrow_mut()
+                    .insert(id, handler.clone());
+                if let Ok(button) = handle.cast_inner::<bindings::IButton>()
+                    && let Ok(flyout_base) = button.Flyout()
+                    && let Ok(flyout) = flyout_base.cast::<bindings::MenuFlyout>()
+                {
+                    let revs = Self::wire_flyout_clicks(&flyout, &handler);
+                    if !revs.is_empty() {
+                        self.event_revokers
+                            .borrow_mut()
+                            .insert((id, Event::ItemClicked), revs);
+                    }
+                }
             }
             (Event::CommandBarFlyoutClick, Handle::Button(_)) => {
                 // Store the handler so set_prop can wire when flyout is built.
