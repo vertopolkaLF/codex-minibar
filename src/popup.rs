@@ -866,7 +866,14 @@ fn apply_surface_window_region_for_rect(
     let arc = radius.saturating_mul(2);
 
     unsafe {
-        let shape = CreateRoundRectRgn(0, surface_top, width + 1, height + 1, arc, arc);
+        // GDI's round-region behavior for a zero ellipse is undefined enough
+        // to produce a malformed corner. A 0 DIP radius is an actual square,
+        // so use a rectangular region explicitly.
+        let shape = if radius == 0 {
+            CreateRectRgn(0, surface_top, width + 1, height + 1)
+        } else {
+            CreateRoundRectRgn(0, surface_top, width + 1, height + 1, arc, arc)
+        };
         if shape.is_null() {
             return;
         }
