@@ -8,10 +8,9 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let window_size = cx.use_inner_size();
     let color_scheme = cx.use_color_scheme();
     let window_corner_radius = f64::from(popup::WINDOW_CORNER_RADIUS_DIP);
-    // Keep the visual stroke one physical pixel inside the HWND clip so GDI's
-    // aliased region cannot trim its anti-aliased XAML corner pixels.
+    // Keep the content one physical pixel inside the Acrylic stroke so GDI's
+    // aliased region cannot trim its anti-aliased outer corner pixels.
     let border_inset = 96.0 / f64::from(dpi);
-    let inner_corner_radius = (window_corner_radius - border_inset).max(0.0);
     let (ui, set_ui) = cx.use_async_state(UiState {
         theme: state.settings.theme,
         accent_color: state.settings.accent_color,
@@ -979,9 +978,6 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             .vertical_alignment(VerticalAlignment::Stretch)
             .background(Color::transparent()),
     )
-    .border_thickness(Thickness::uniform(1.0))
-    .border_brush(ThemeRef::SurfaceStroke)
-    .corner_radius(inner_corner_radius)
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Stretch);
 

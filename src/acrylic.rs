@@ -16,20 +16,30 @@ use windows_core::{self, Interface, Result, RuntimeName, RuntimeType, Type, imp:
 /// larger radius from `popup::WINDOW_CORNER_RADIUS_DIP` separately.
 const SETTINGS_MICA_CORNER_RADIUS_DIP: i32 = 8;
 
-/// XAML host: acrylic clipped to the same radius as the popup chrome.
+/// XAML host: acrylic and its outer stroke are one visual surface. Keeping the
+/// stroke here prevents the pager/body layer from drawing a second, moving
+/// border over the fixed host during height transitions.
 fn acrylic_xaml() -> String {
     format!(
         r#"
-<SystemBackdropElement
+<Border
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    BorderBrush="{{ThemeResource SurfaceStrokeColorDefaultBrush}}"
+    BorderThickness="1"
     CornerRadius="{}"
     HorizontalAlignment="Stretch"
     VerticalAlignment="Stretch">
-    <SystemBackdropElement.SystemBackdrop>
-        <DesktopAcrylicBackdrop />
-    </SystemBackdropElement.SystemBackdrop>
-</SystemBackdropElement>
+    <SystemBackdropElement
+        CornerRadius="{}"
+        HorizontalAlignment="Stretch"
+        VerticalAlignment="Stretch">
+        <SystemBackdropElement.SystemBackdrop>
+            <DesktopAcrylicBackdrop />
+        </SystemBackdropElement.SystemBackdrop>
+    </SystemBackdropElement>
+</Border>
 "#,
+        crate::popup::WINDOW_CORNER_RADIUS_DIP,
         crate::popup::WINDOW_CORNER_RADIUS_DIP
     )
 }
