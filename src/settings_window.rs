@@ -5,7 +5,8 @@
 
 use crate::settings::{
     AccentColor, AppTheme, AutoActivationPause, BottomBarSize, LimitRefreshInterval, LimitValue,
-    OpenRouterAccount, PopupCornerRadius, PopupVisibility, PopupWidgetKind, ProviderKind,
+    OpenRouterAccount, PopupBackgroundMaterial, PopupCornerRadius, PopupVisibility,
+    PopupWidgetKind, ProviderKind,
     ScheduledActivation, Settings, TimeFormat, TotalSpendPresentation, TrayColorMode,
     TrayFixedColor, TrayIndicator, TrayPresentation, TrayWidget, TrayWidgetKind,
 };
@@ -290,6 +291,8 @@ pub fn render(
     let (bottom_bar_size, set_bottom_bar_size) = cx.use_state(settings.bottom_bar_size);
     let (popup_corner_radius, set_popup_corner_radius) =
         cx.use_state(settings.popup_corner_radius);
+    let (popup_background_material, set_popup_background_material) =
+        cx.use_state(settings.popup_background_material);
     let (time_format, set_time_format) = cx.use_state(settings.time_format);
     cx.use_effect(
         (theme, accent_color, animations_enabled, time_format),
@@ -583,6 +586,7 @@ pub fn render(
             animations_enabled: set_animations_enabled.clone(),
             bottom_bar_size: set_bottom_bar_size.clone(),
             popup_corner_radius: set_popup_corner_radius.clone(),
+            popup_background_material: set_popup_background_material.clone(),
             time_format: set_time_format.clone(),
             codex_enabled: set_codex_enabled.clone(),
             claude_enabled: set_claude_enabled.clone(),
@@ -630,6 +634,7 @@ pub fn render(
         animations_enabled: animations_enabled,
         bottom_bar_size: bottom_bar_size,
         popup_corner_radius: popup_corner_radius,
+        popup_background_material: popup_background_material,
         time_format: time_format,
         codex_enabled: codex_enabled,
         claude_enabled: claude_enabled,
@@ -697,6 +702,7 @@ pub fn render(
         set_animations_enabled: set_animations_enabled.clone(),
         set_bottom_bar_size: set_bottom_bar_size.clone(),
         set_popup_corner_radius: set_popup_corner_radius.clone(),
+        set_popup_background_material: set_popup_background_material.clone(),
         set_time_format: set_time_format.clone(),
         set_claude_enabled: set_claude_enabled.clone(),
         set_cursor_enabled: set_cursor_enabled.clone(),

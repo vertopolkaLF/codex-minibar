@@ -10,7 +10,7 @@ use chrono::{DateTime, Local, Timelike};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 32;
+pub const SETTINGS_VERSION: u32 = 33;
 
 /// 255 until `TimeFormat::apply` runs so first paint can still follow Windows.
 static TIME_FORMAT: AtomicU8 = AtomicU8::new(u8::MAX);
@@ -264,6 +264,35 @@ impl PopupCornerRadius {
             Self::Medium => 12,
             Self::Large => 16,
             Self::ExtraLarge => 20,
+        }
+    }
+}
+
+/// Material used by the popup's full-window background surface.
+///
+/// Acrylic remains the default to preserve the existing popup appearance for
+/// upgraded installations; Mica is available for a less aggressively blurred
+/// desktop surface.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PopupBackgroundMaterial {
+    #[default]
+    Acrylic,
+    Mica,
+}
+
+impl PopupBackgroundMaterial {
+    pub const fn index(self) -> i32 {
+        match self {
+            Self::Acrylic => 0,
+            Self::Mica => 1,
+        }
+    }
+
+    pub const fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Mica,
+            _ => Self::Acrylic,
         }
     }
 }
@@ -1470,6 +1499,8 @@ pub struct Settings {
     pub bottom_bar_size: BottomBarSize,
     /// Popup outer corner radius in DIPs; 8 DIP preserves the historical look.
     pub popup_corner_radius: PopupCornerRadius,
+    /// Material used by the popup's full-window background.
+    pub popup_background_material: PopupBackgroundMaterial,
     /// 12-hour or 24-hour clocks. Missing values follow the Windows locale.
     pub time_format: TimeFormat,
     pub providers: ProviderSettings,
@@ -1541,6 +1572,7 @@ impl Default for Settings {
             animations_enabled: true,
             bottom_bar_size: BottomBarSize::default(),
             popup_corner_radius: PopupCornerRadius::default(),
+            popup_background_material: PopupBackgroundMaterial::default(),
             time_format: TimeFormat::from_windows(),
             providers: ProviderSettings::default(),
             popup_order: PopupWidgetKind::default_order(),
@@ -1959,7 +1991,11 @@ impl Settings {
     /// Applies settings whose effect lives outside the render tree.
     pub fn apply_runtime_effects(&self) -> Result<()> {
         crate::theme::set_animations_enabled(self.animations_enabled);
-        crate::popup::apply_popup_appearance(self.bottom_bar_size, self.popup_corner_radius);
+        crate::popup::apply_popup_appearance(
+            self.bottom_bar_size,
+            self.popup_corner_radius,
+            self.popup_background_material,
+        );
         self.time_format.apply();
         apply_startup_registration(self.start_at_login)
     }
@@ -2708,6 +2744,15 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.insert("version".into(), toml::Value::Integer(32));
                 version = 32;
             }
+            32 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("popup_background_material")
+                    .or_insert_with(|| toml::Value::String("acrylic".into()));
+                root.insert("version".into(), toml::Value::Integer(33));
+                version = 33;
+            }
             // Unknown future/gap versions: stamp current and keep decoding with
             // serde defaults rather than refusing to start.
             _ => {
@@ -2739,6 +2784,10 @@ mod tests {
         assert!(value.animations_enabled);
         assert_eq!(value.bottom_bar_size, BottomBarSize::Comfortable);
         assert_eq!(value.popup_corner_radius, PopupCornerRadius::Small);
+        assert_eq!(
+            value.popup_background_material,
+            PopupBackgroundMaterial::Acrylic
+        );
         assert_eq!(value.time_format, TimeFormat::from_windows());
         assert!(!value.use_colored_provider_icons);
         assert!(value.use_colored_sidebar_icons);
@@ -2828,9 +2877,14 @@ mod tests {
         assert_eq!(loaded.version, SETTINGS_VERSION);
         assert_eq!(loaded.bottom_bar_size, BottomBarSize::Comfortable);
         assert_eq!(loaded.popup_corner_radius, PopupCornerRadius::Small);
+        assert_eq!(
+            loaded.popup_background_material,
+            PopupBackgroundMaterial::Acrylic
+        );
         let rewritten = fs::read_to_string(path).unwrap();
         assert!(rewritten.contains("bottom_bar_size = \"comfortable\""));
         assert!(rewritten.contains("popup_corner_radius = \"small\""));
+        assert!(rewritten.contains("popup_background_material = \"acrylic\""));
     }
 
     #[test]
@@ -2840,6 +2894,7 @@ mod tests {
         let settings = Settings {
             bottom_bar_size: BottomBarSize::Compact,
             popup_corner_radius: PopupCornerRadius::Large,
+            popup_background_material: PopupBackgroundMaterial::Mica,
             ..Settings::default()
         };
         settings.save(&path).unwrap();
@@ -2848,6 +2903,10 @@ mod tests {
 
         assert_eq!(loaded.bottom_bar_size, BottomBarSize::Compact);
         assert_eq!(loaded.popup_corner_radius, PopupCornerRadius::Large);
+        assert_eq!(
+            loaded.popup_background_material,
+            PopupBackgroundMaterial::Mica
+        );
     }
 
     #[test]

@@ -16,12 +16,12 @@ use windows_core::{self, Interface, Result, RuntimeName, RuntimeType, Type, imp:
 /// its live radius from the popup appearance settings.
 const SETTINGS_MICA_CORNER_RADIUS_DIP: i32 = 8;
 
-/// XAML host: acrylic and its outer stroke are one visual surface. Keeping the
-/// stroke here prevents the pager/body layer from drawing a second, moving
-/// border over the fixed host during height transitions.
+/// XAML host: acrylic, its dimming layer, and its outer stroke are one visual
+/// surface. Keeping the stroke here prevents the pager/body layer from drawing
+/// a second, moving border over the fixed host during height transitions.
 fn acrylic_xaml() -> String {
     format!(
-        r#"
+        r##"
 <Border
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     BorderBrush="{{ThemeResource SurfaceStrokeColorDefaultBrush}}"
@@ -29,16 +29,26 @@ fn acrylic_xaml() -> String {
     CornerRadius="{}"
     HorizontalAlignment="Stretch"
     VerticalAlignment="Stretch">
-    <SystemBackdropElement
-        CornerRadius="{}"
+    <Grid
         HorizontalAlignment="Stretch"
         VerticalAlignment="Stretch">
-        <SystemBackdropElement.SystemBackdrop>
-            <DesktopAcrylicBackdrop />
-        </SystemBackdropElement.SystemBackdrop>
-    </SystemBackdropElement>
+        <SystemBackdropElement
+            CornerRadius="{}"
+            HorizontalAlignment="Stretch"
+            VerticalAlignment="Stretch">
+            <SystemBackdropElement.SystemBackdrop>
+                <DesktopAcrylicBackdrop />
+            </SystemBackdropElement.SystemBackdrop>
+        </SystemBackdropElement>
+        <Border
+            Background="#40000000"
+            CornerRadius="{}"
+            HorizontalAlignment="Stretch"
+            VerticalAlignment="Stretch" />
+    </Grid>
 </Border>
-"#,
+"##,
+        crate::popup::corner_radius_dip(),
         crate::popup::corner_radius_dip(),
         crate::popup::corner_radius_dip()
     )
@@ -50,6 +60,10 @@ fn acrylic_xaml() -> String {
 /// radius on this element is important: the popup HWND is region-clipped and
 /// must not reveal square Mica corners while it slides in.
 fn mica_xaml() -> String {
+    mica_xaml_with_radius(SETTINGS_MICA_CORNER_RADIUS_DIP)
+}
+
+fn mica_xaml_with_radius(radius_dip: i32) -> String {
     format!(
         r#"
 <SystemBackdropElement
@@ -62,7 +76,7 @@ fn mica_xaml() -> String {
     </SystemBackdropElement.SystemBackdrop>
 </SystemBackdropElement>
 "#,
-        SETTINGS_MICA_CORNER_RADIUS_DIP
+        radius_dip
     )
 }
 
@@ -93,6 +107,15 @@ pub fn install_into(mount: windows_core::IInspectable) {
 /// Host Mica inside `mount` as part of the XAML composition tree.
 pub fn install_mica_into(mount: windows_core::IInspectable) -> Result<()> {
     install_into_inner(mount, &mica_xaml())
+}
+
+/// Host popup Mica with the popup's live corner radius. Settings uses a fixed
+/// radius because its navigation shell has its own authored geometry.
+pub fn install_popup_mica_into(mount: windows_core::IInspectable) -> Result<()> {
+    install_into_inner(
+        mount,
+        &mica_xaml_with_radius(crate::popup::corner_radius_dip()),
+    )
 }
 
 /// Host a Phosphor path with a caller-supplied color. The geometry and tint

@@ -17,7 +17,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use crate::settings::{BottomBarSize, PopupCornerRadius};
+use crate::settings::{BottomBarSize, PopupBackgroundMaterial, PopupCornerRadius};
 use windows_reactor::{ReactorHost, Rendering, on_rendering};
 use windows_sys::Win32::{
     Foundation::{HWND, POINT, RECT},
@@ -116,6 +116,8 @@ static ANIMATED_SURFACE_HEIGHT_DIP: AtomicI32 = AtomicI32::new(POPUP_HEIGHT);
 static HOST_CLIENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(POPUP_HEIGHT);
 static BOTTOM_BAR_SIZE: AtomicU8 = AtomicU8::new(BottomBarSize::Comfortable.index() as u8);
 static CORNER_RADIUS_DIP: AtomicI32 = AtomicI32::new(WINDOW_CORNER_RADIUS_DIP);
+static POPUP_BACKGROUND_MATERIAL: AtomicU8 =
+    AtomicU8::new(PopupBackgroundMaterial::Acrylic.index() as u8);
 /// Natural height of the body stack, including its padding, in DIPs.
 static BODY_CONTENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(0);
 /// Dynamic client-height limit for the monitor that owns the current popup.
@@ -235,16 +237,28 @@ pub fn corner_radius_dip() -> i32 {
     CORNER_RADIUS_DIP.load(Ordering::SeqCst)
 }
 
+pub fn background_material() -> PopupBackgroundMaterial {
+    PopupBackgroundMaterial::from_index(i32::from(POPUP_BACKGROUND_MATERIAL.load(Ordering::SeqCst)))
+}
+
 /// Apply appearance values that affect the popup outside the reactive tree.
 /// Startup calls this before the host exists; later calls update the visible
-/// region immediately and the next render picks up the new XAML geometry.
-pub fn apply_popup_appearance(size: BottomBarSize, radius: PopupCornerRadius) {
+/// region immediately and the next render picks up the new XAML geometry and
+/// backdrop material.
+pub fn apply_popup_appearance(
+    size: BottomBarSize,
+    radius: PopupCornerRadius,
+    background_material: PopupBackgroundMaterial,
+) {
     let size_index = size.index() as u8;
     let size_changed = BOTTOM_BAR_SIZE.swap(size_index, Ordering::SeqCst) != size_index;
     let radius_dip = radius.dip();
     let radius_changed = CORNER_RADIUS_DIP.swap(radius_dip, Ordering::SeqCst) != radius_dip;
+    let background_index = background_material.index() as u8;
+    let background_changed =
+        POPUP_BACKGROUND_MATERIAL.swap(background_index, Ordering::SeqCst) != background_index;
 
-    if !size_changed && !radius_changed {
+    if !size_changed && !radius_changed && !background_changed {
         return;
     }
 

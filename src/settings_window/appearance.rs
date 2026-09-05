@@ -10,6 +10,7 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let animations_enabled = ctx.animations_enabled;
     let bottom_bar_size = ctx.bottom_bar_size;
     let popup_corner_radius = ctx.popup_corner_radius;
+    let popup_background_material = ctx.popup_background_material;
     let time_format = ctx.time_format;
     let use_colored_sidebar_icons = ctx.use_colored_sidebar_icons;
     let set_theme = ctx.set_theme.clone();
@@ -17,6 +18,7 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let set_animations_enabled = ctx.set_animations_enabled.clone();
     let set_bottom_bar_size = ctx.set_bottom_bar_size.clone();
     let set_popup_corner_radius = ctx.set_popup_corner_radius.clone();
+    let set_popup_background_material = ctx.set_popup_background_material.clone();
     let set_time_format = ctx.set_time_format.clone();
     let set_use_colored_sidebar_icons = ctx.set_use_colored_sidebar_icons.clone();
     let theme_navigation_guard = ctx.theme_navigation_guard.clone();
@@ -29,6 +31,7 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let apply_animations_enabled = settings_tx.clone();
     let apply_bottom_bar_size = settings_tx.clone();
     let apply_popup_corner_radius = settings_tx.clone();
+    let apply_popup_background_material = settings_tx.clone();
     let apply_time_format = settings_tx.clone();
     let apply_use_colored_sidebar_icons = settings_tx.clone();
     let appearance_rows = vec![
@@ -120,6 +123,31 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
         .with_key("appearance-time-format"),
         settings_section_heading("Popup").with_key("appearance-popup-heading"),
         settings_control_card(
+            "Popup background",
+            None,
+            ComboBox::new(["Acrylic", "Mica"])
+                .selected_index(popup_background_material.index())
+                .on_selection_changed(move |choice| {
+                    let value = PopupBackgroundMaterial::from_index(choice);
+                    if value == popup_background_material {
+                        return;
+                    }
+                    set_popup_background_material.call(value);
+                    crate::popup::apply_popup_appearance(
+                        bottom_bar_size,
+                        popup_corner_radius,
+                        value,
+                    );
+                    persist_update(apply_popup_background_material.clone(), move |settings| {
+                        settings.popup_background_material = value;
+                    });
+                }),
+            "appearance-popup-background",
+            hovered_card_id,
+            set_hovered_card_id.clone(),
+        )
+        .with_key("appearance-popup-background"),
+        settings_control_card(
             "Bottom bar size",
             None,
             ComboBox::new(["Comfortable", "Compact"])
@@ -127,7 +155,11 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
                 .on_selection_changed(move |choice| {
                     let value = BottomBarSize::from_index(choice);
                     set_bottom_bar_size.call(value);
-                    crate::popup::apply_popup_appearance(value, popup_corner_radius);
+                    crate::popup::apply_popup_appearance(
+                        value,
+                        popup_corner_radius,
+                        popup_background_material,
+                    );
                     persist_update(apply_bottom_bar_size.clone(), move |settings| {
                         settings.bottom_bar_size = value;
                     });
@@ -150,7 +182,11 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
                             return;
                         }
                         set_popup_corner_radius.call(value);
-                        crate::popup::apply_popup_appearance(bottom_bar_size, value);
+                        crate::popup::apply_popup_appearance(
+                            bottom_bar_size,
+                            value,
+                            popup_background_material,
+                        );
                         persist_update(apply_popup_corner_radius.clone(), move |settings| {
                             settings.popup_corner_radius = value;
                         });

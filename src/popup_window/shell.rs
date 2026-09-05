@@ -9,7 +9,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let color_scheme = cx.use_color_scheme();
     let bottom_bar_size = popup::bottom_bar_size();
     let window_corner_radius = f64::from(popup::corner_radius_dip());
-    // Keep the content one physical pixel inside the Acrylic stroke so GDI's
+    // Keep the content one physical pixel inside the selected backdrop stroke so GDI's
     // aliased region cannot trim its anti-aliased outer corner pixels.
     let border_inset = 96.0 / f64::from(dpi);
     let (ui, set_ui) = cx.use_async_state(UiState {
@@ -546,7 +546,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let outgoing_body = pager.outgoing.map(|view| build_body(view, true));
 
     let footer_background = match color_scheme {
-        // Low-alpha overlay keeps the Acrylic material visible beneath chrome.
+        // Low-alpha overlay keeps the selected material visible beneath chrome.
         ColorScheme::Dark => Color {
             a: 0x24,
             r: 0,
@@ -986,23 +986,34 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Stretch);
 
-    // Desktop Acrylic behind the fixed native host; reconciler does not manage
-    // this panel's children. It is element-level Acrylic rather than
-    // `Window.SystemBackdrop`: the latter ignores the popup's Win32 rounded
-    // region and paints past its edges. Keeping this layer at host height is
-    // important: during a shrink, the old GDI clip can briefly expose space
-    // above the new bottom-aligned content, and that space must stay painted.
+    // The selected material sits behind the fixed native host; reconciler does
+    // not manage this panel's children. Element-level backdrops are used
+    // rather than `Window.SystemBackdrop`: the latter ignores the popup's
+    // Win32 rounded region and paints past its edges. Keeping this layer at
+    // host height is important: during a shrink, the old GDI clip can briefly
+    // expose space above the new bottom-aligned content, and that space must
+    // stay painted.
     // Height is owned solely by the body's desired-size callback above. Using
     // this layer's arranged height as a second source fed ResizeClient back
     // into layout and caused a resize loop / spurious scrollbars.
-    let acrylic = {
+    let background_material = popup::background_material();
+    let background_material_key = background_material.index();
+    let background = {
         let mut host = swap_chain_panel()
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .vertical_alignment(VerticalAlignment::Stretch);
-        host.mounted = Some(Callback::new(|native: Option<_>| {
+        host.mounted = Some(Callback::new(move |native: Option<_>| {
             if let Some(native) = native {
-                if let Err(error) = crate::acrylic::install_acrylic_into(native) {
-                    eprintln!("Could not install popup Acrylic element: {error:?}");
+                let result = match background_material {
+                    crate::settings::PopupBackgroundMaterial::Acrylic => {
+                        crate::acrylic::install_acrylic_into(native)
+                    }
+                    crate::settings::PopupBackgroundMaterial::Mica => {
+                        crate::acrylic::install_popup_mica_into(native)
+                    }
+                };
+                if let Err(error) = result {
+                    eprintln!("Could not install popup background material: {error:?}");
                 }
             }
         }));
@@ -1011,8 +1022,11 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 let _ = crate::acrylic::clear_children(native);
             }
         }));
-        let acrylic: Element = host.into();
-        acrylic.with_key(format!("popup-acrylic-{}", popup::corner_radius_dip()))
+        let background: Element = host.into();
+        background.with_key(format!(
+            "popup-background-{background_material_key}-{}",
+            popup::corner_radius_dip()
+        ))
     };
 
     let surface_height =
@@ -1023,7 +1037,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             .columns([GridLength::Star(1.0)])
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .vertical_alignment(VerticalAlignment::Stretch)
-            // Keep the content shell transparent so host-level Desktop Acrylic
+            // Keep the content shell transparent so the host-level backdrop
             // remains visible between cards and during the animated settle.
             .background(Color::transparent()),
     )
@@ -1040,7 +1054,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     // keeps any transition-only host area painted instead of exposing a black
     // client clear. The GDI region still limits what reaches the desktop.
     border(
-        grid((acrylic, popup_surface))
+        grid((background, popup_surface))
             .rows([GridLength::Star(1.0)])
             .columns([GridLength::Star(1.0)])
             .horizontal_alignment(HorizontalAlignment::Stretch)
