@@ -985,10 +985,12 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Stretch);
 
-    // Desktop Acrylic behind content; reconciler does not manage this panel's
-    // children. It is element-level Acrylic rather than `Window.SystemBackdrop`:
-    // the latter
-    // ignores the popup's Win32 rounded region and paints past its edges.
+    // Desktop Acrylic behind the fixed native host; reconciler does not manage
+    // this panel's children. It is element-level Acrylic rather than
+    // `Window.SystemBackdrop`: the latter ignores the popup's Win32 rounded
+    // region and paints past its edges. Keeping this layer at host height is
+    // important: during a shrink, the old GDI clip can briefly expose space
+    // above the new bottom-aligned content, and that space must stay painted.
     // Height is owned solely by the body's desired-size callback above. Using
     // this layer's arranged height as a second source fed ResizeClient back
     // into layout and caused a resize loop / spurious scrollbars.
@@ -1012,16 +1014,16 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         acrylic.with_key("popup-acrylic")
     };
 
-    let surface_height = f64::from(popup::surface_height_dip())
-        .clamp(1.0, window_size.height.max(1.0));
+    let surface_height =
+        f64::from(popup::surface_height_dip()).clamp(1.0, window_size.height.max(1.0));
     let popup_surface = border(
-        grid((acrylic, body_panel))
+        grid((body_panel,))
             .rows([GridLength::Star(1.0)])
             .columns([GridLength::Star(1.0)])
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .vertical_alignment(VerticalAlignment::Stretch)
-            // Keep the shell transparent so Desktop Acrylic remains visible
-            // between cards and during the animated height settle.
+            // Keep the content shell transparent so host-level Desktop Acrylic
+            // remains visible between cards and during the animated settle.
             .background(Color::transparent()),
     )
     .padding(Thickness::uniform(border_inset))
@@ -1034,13 +1036,21 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
 
     // The native host is deliberately fixed-height while the visible capsule
     // changes size. This gives the footer a real bottom-aligned parent and
-    // keeps any transition-only host area outside the window region.
-    border(popup_surface)
-        .corner_radius(window_corner_radius)
-        .background(Color::transparent())
-        .width(window_size.width.max(1.0))
-        .height(window_size.height.max(1.0))
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .vertical_alignment(VerticalAlignment::Stretch)
-        .into()
+    // keeps any transition-only host area painted instead of exposing a black
+    // client clear. The GDI region still limits what reaches the desktop.
+    border(
+        grid((acrylic, popup_surface))
+            .rows([GridLength::Star(1.0)])
+            .columns([GridLength::Star(1.0)])
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .vertical_alignment(VerticalAlignment::Stretch)
+            .background(Color::transparent()),
+    )
+    .corner_radius(window_corner_radius)
+    .background(Color::transparent())
+    .width(window_size.width.max(1.0))
+    .height(window_size.height.max(1.0))
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .vertical_alignment(VerticalAlignment::Stretch)
+    .into()
 }
