@@ -51,9 +51,11 @@ use windows_sys::Win32::{
 
 const WINDOW_TITLE: &str = "Codex Minibar";
 const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
-/// Native rounded frame in the settled state. The temporary GDI region exists
-/// only while the surface crosses a monitor edge.
-const DWMWCP_ROUND: u32 = 2;
+/// Do not let DWM add its own rounded non-client frame; the visible capsule is
+/// clipped and painted by our XAML surface.
+const DWMWCP_DONOTROUND: u32 = 1;
+const DWMWA_NCRENDERING_POLICY: u32 = 2;
+const DWMNCRP_DISABLED: u32 = 1;
 /// Ignore outside presses briefly after open so the tray click that showed us
 /// cannot immediately dismiss. Counted from the moment the slide starts.
 const SHOW_GRACE_MS: i64 = 200;
@@ -950,8 +952,11 @@ fn set_system_backdrop(hwnd: HWND, backdrop: i32) {
     }
 }
 
-fn set_frame_margins(hwnd: HWND, fill: bool) {
-    let margins = if fill {
+/// Extend the DWM glass surface through the entire technical host. Without
+/// this, transparent XAML outside the capsule falls back to the HWND's opaque
+/// client clear color — the infamous black rectangle.
+fn set_frame_margins(hwnd: HWND, full_glass: bool) {
+    let margins = if full_glass {
         MARGINS {
             cxLeftWidth: -1,
             cxRightWidth: -1,
@@ -971,23 +976,9 @@ fn set_frame_margins(hwnd: HWND, fill: bool) {
     }
 }
 
-/// A one-pixel glass frame lets DWM retain the native top-level shadow while
-/// the XAML element remains responsible for the actual Acrylic surface.
-fn set_shadow_frame_margins(hwnd: HWND) {
-    let margins = MARGINS {
-        cxLeftWidth: 1,
-        cxRightWidth: 1,
-        cyTopHeight: 1,
-        cyBottomHeight: 1,
-    };
-    unsafe {
-        let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
-    }
-}
-
 fn set_corner_preference(hwnd: HWND) {
     unsafe {
-        let corner = DWMWCP_ROUND;
+        let corner = DWMWCP_DONOTROUND;
         let _ = DwmSetWindowAttribute(
             hwnd,
             DWMWA_WINDOW_CORNER_PREFERENCE,
@@ -1044,8 +1035,8 @@ fn resolve_monitor(anchor_x: i32, anchor_y: i32) -> (HMONITOR, RECT, RECT) {
     }
 }
 
-/// Settled shell chrome: element-level Acrylic supplies the material while DWM
-/// supplies the native rounded frame and top-level shadow.
+/// Settled shell chrome: the XAML capsule supplies the material, border, and
+/// radius; DWM contributes no visible non-client frame or shadow.
 fn apply_popup_chrome(hwnd: HWND) {
     unsafe {
         let no_border = DWMWA_COLOR_NONE;
@@ -1056,14 +1047,29 @@ fn apply_popup_chrome(hwnd: HWND) {
             size_of::<u32>() as u32,
         );
     }
-    set_corner_preference(hwnd);
+    disable_native_frame(hwnd);
     set_system_backdrop(hwnd, DWMSBT_NONE);
-    set_shadow_frame_margins(hwnd);
     if is_visible() {
         apply_surface_window_region(hwnd, f64::from(animated_surface_height_dip()), None);
     } else {
         clear_window_region(hwnd);
     }
+}
+
+/// Disable DWM non-client rendering. The HWND is only a transparent technical
+/// host; border, radius, shadow, and backdrop belong to the XAML capsule.
+fn disable_native_frame(hwnd: HWND) {
+    unsafe {
+        let policy = DWMNCRP_DISABLED;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_NCRENDERING_POLICY,
+            &policy as *const u32 as *const _,
+            size_of::<u32>() as u32,
+        );
+    }
+    set_corner_preference(hwnd);
+    set_frame_margins(hwnd, true);
 }
 
 /// Keep the popup out of the taskbar and Alt+Tab forever.
@@ -1176,10 +1182,9 @@ pub fn hide() {
         park(hwnd);
         return;
     }
-    // The settled DWM shadow is intentionally unconstrained. Replace it with a
-    // monitor-clipped region before the first exit frame so neither the shadow
-    // nor the surface can spill onto an adjacent display.
-    set_frame_margins(hwnd, false);
+    // Keep the technical host glass-transparent while the monitor-clipped
+    // region owns the entering surface shape.
+    set_frame_margins(hwnd, true);
     apply_surface_window_region(
         hwnd,
         f64::from(animated_surface_height_dip()),
@@ -1261,10 +1266,10 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
     CORNER_RADIUS_PX.store(corner_px.max(1), Ordering::SeqCst);
 
     unsafe {
-        // Element-level Acrylic stays clipped by XAML; suspend the DWM frame while
-        // the temporary monitor-edge region owns the entering surface shape.
+        // Element-level Acrylic stays clipped by XAML; full-host glass keeps the
+        // technical area outside the capsule transparent during the slide-in.
         set_system_backdrop(hwnd, DWMSBT_NONE);
-        set_frame_margins(hwnd, false);
+        set_frame_margins(hwnd, true);
 
         let (width, height) = popup_pixel_size(hwnd, hmonitor);
         let target_x = monitor.right - width - EDGE_MARGIN;
