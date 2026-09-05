@@ -257,7 +257,7 @@ pub fn apply_popup_appearance(size: BottomBarSize, radius: PopupCornerRadius) {
 
     if radius_changed {
         let radius_px = (i64::from(radius_dip) * i64::from(host_dpi(96)) / 96) as i32;
-        CORNER_RADIUS_PX.store(radius_px.max(1), Ordering::SeqCst);
+        CORNER_RADIUS_PX.store(radius_px.max(0), Ordering::SeqCst);
         if is_visible()
             && let Some(hwnd) = current_hwnd()
         {
@@ -862,7 +862,7 @@ fn apply_surface_window_region_for_rect(
         .round()
         .clamp(1.0, f64::from(height)) as i32;
     let surface_top = height.saturating_sub(surface_height);
-    let radius = CORNER_RADIUS_PX.load(Ordering::SeqCst).max(1);
+    let radius = CORNER_RADIUS_PX.load(Ordering::SeqCst).max(0);
     let arc = radius.saturating_mul(2);
 
     unsafe {
@@ -1332,7 +1332,7 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
     sync_host_constraints();
     prepare_hidden_host_height(max_client_height_dip());
     let corner_px = (i64::from(corner_radius_dip()) * i64::from(dpi) / 96) as i32;
-    CORNER_RADIUS_PX.store(corner_px.max(1), Ordering::SeqCst);
+    CORNER_RADIUS_PX.store(corner_px.max(0), Ordering::SeqCst);
 
     unsafe {
         // Element-level Acrylic stays clipped by XAML; full-host glass keeps the

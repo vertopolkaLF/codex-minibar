@@ -2,6 +2,36 @@ use super::persistence::{persist_bool, persist_update};
 use super::shared::settings_section_heading;
 use super::*;
 
+const RADIUS_SLIDER_WIDTH: f64 = 128.0;
+const RADIUS_TICK_START: f64 = 8.0;
+const RADIUS_TICK_END: f64 = 120.0;
+
+fn radius_tick(left: f64) -> Element {
+    border(Element::Empty)
+        .width(1.0)
+        .height(18.0)
+        .background(ThemeRef::ControlStrokeSecondary)
+        .canvas_left(left)
+        .canvas_top(7.0)
+        .into()
+}
+
+fn radius_tick_marks() -> Element {
+    let step = (RADIUS_TICK_END - RADIUS_TICK_START) / 5.0;
+    Canvas::new(vec![
+        radius_tick(RADIUS_TICK_START),
+        radius_tick(RADIUS_TICK_START + step),
+        radius_tick(RADIUS_TICK_START + step * 2.0),
+        radius_tick(RADIUS_TICK_START + step * 3.0),
+        radius_tick(RADIUS_TICK_START + step * 4.0),
+        radius_tick(RADIUS_TICK_END),
+    ])
+    .width(RADIUS_SLIDER_WIDTH)
+    .height(32.0)
+    .background(Color::transparent())
+    .into()
+}
+
 pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Element>) {
     let theme = ctx.theme;
     let accent_color = ctx.accent_color;
@@ -138,37 +168,35 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
         settings_control_card(
             "Popup corner radius",
             None,
-            grid((
-                text_block(format!("{} DIP", popup_corner_radius.dip()))
-                    .foreground(ThemeRef::SecondaryText)
-                    .grid_row(0)
-                    .grid_column(1)
-                    .horizontal_alignment(HorizontalAlignment::Right),
-                Slider::new(f64::from(popup_corner_radius.dip()))
-                    .range(8.0, 20.0)
-                    .step(4.0)
-                    .on_value_changed(move |raw_value: f64| {
-                        let value = PopupCornerRadius::from_dip(raw_value.round() as i32);
-                        if value == popup_corner_radius {
-                            return;
-                        }
-                        set_popup_corner_radius.call(value);
-                        crate::popup::apply_popup_appearance(bottom_bar_size, value);
-                        persist_update(apply_popup_corner_radius.clone(), move |settings| {
-                            settings.popup_corner_radius = value;
-                        });
-                    })
-                    .grid_row(1)
-                    .grid_column_span(2)
-                    .margin(Thickness {
-                        left: 0.0,
-                        top: 2.0,
-                        right: 0.0,
-                        bottom: 0.0,
-                    }),
+            hstack((
+                grid((
+                    radius_tick_marks(),
+                    Slider::new(f64::from(popup_corner_radius.dip()))
+                        .range(0.0, 20.0)
+                        .step(4.0)
+                        .on_value_changed(move |raw_value: f64| {
+                            let value = PopupCornerRadius::from_dip(raw_value.round() as i32);
+                            if value == popup_corner_radius {
+                                return;
+                            }
+                            set_popup_corner_radius.call(value);
+                            crate::popup::apply_popup_appearance(bottom_bar_size, value);
+                            persist_update(apply_popup_corner_radius.clone(), move |settings| {
+                                settings.popup_corner_radius = value;
+                            });
+                        })
+                        .grid_row(0),
+                ))
+                .width(RADIUS_SLIDER_WIDTH)
+                .height(32.0),
+                text_block(format!("{}", popup_corner_radius.dip()))
+                    .font_size(14.0)
+                    .width(24.0)
+                    .horizontal_alignment(HorizontalAlignment::Right)
+                    .vertical_alignment(VerticalAlignment::Center),
             ))
-            .columns([GridLength::Star(1.0), GridLength::Auto])
-            .rows([GridLength::Auto, GridLength::Auto])
+            .spacing(8.0)
+            .vertical_alignment(VerticalAlignment::Center)
             .horizontal_alignment(HorizontalAlignment::Stretch),
             "appearance-popup-corner-radius",
             hovered_card_id,

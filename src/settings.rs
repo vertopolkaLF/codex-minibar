@@ -213,6 +213,8 @@ impl BottomBarSize {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PopupCornerRadius {
+    Zero,
+    Four,
     #[default]
     Small,
     Medium,
@@ -223,24 +225,30 @@ pub enum PopupCornerRadius {
 impl PopupCornerRadius {
     pub const fn index(self) -> i32 {
         match self {
-            Self::Small => 0,
-            Self::Medium => 1,
-            Self::Large => 2,
-            Self::ExtraLarge => 3,
+            Self::Zero => 0,
+            Self::Four => 1,
+            Self::Small => 2,
+            Self::Medium => 3,
+            Self::Large => 4,
+            Self::ExtraLarge => 5,
         }
     }
 
     pub const fn from_index(index: i32) -> Self {
         match index {
-            1 => Self::Medium,
-            2 => Self::Large,
-            3 => Self::ExtraLarge,
+            0 => Self::Zero,
+            1 => Self::Four,
+            3 => Self::Medium,
+            4 => Self::Large,
+            5 => Self::ExtraLarge,
             _ => Self::Small,
         }
     }
 
     pub const fn from_dip(dip: i32) -> Self {
         match dip {
+            0 => Self::Zero,
+            4 => Self::Four,
             12 => Self::Medium,
             16 => Self::Large,
             20 => Self::ExtraLarge,
@@ -250,6 +258,8 @@ impl PopupCornerRadius {
 
     pub const fn dip(self) -> i32 {
         match self {
+            Self::Zero => 0,
+            Self::Four => 4,
             Self::Small => 8,
             Self::Medium => 12,
             Self::Large => 16,
@@ -2793,11 +2803,13 @@ mod tests {
             BottomBarSize::Compact.padding_bottom()
         );
 
-        assert_eq!(PopupCornerRadius::Small.index(), 0);
-        assert_eq!(PopupCornerRadius::ExtraLarge.index(), 3);
-        assert_eq!(PopupCornerRadius::from_index(2), PopupCornerRadius::Large);
+        assert_eq!(PopupCornerRadius::Small.index(), 2);
+        assert_eq!(PopupCornerRadius::ExtraLarge.index(), 5);
+        assert_eq!(PopupCornerRadius::from_index(4), PopupCornerRadius::Large);
         assert_eq!(PopupCornerRadius::from_index(99), PopupCornerRadius::Small);
         assert_eq!(PopupCornerRadius::from_dip(8), PopupCornerRadius::Small);
+        assert_eq!(PopupCornerRadius::from_dip(0), PopupCornerRadius::Zero);
+        assert_eq!(PopupCornerRadius::from_dip(4), PopupCornerRadius::Four);
         assert_eq!(PopupCornerRadius::from_dip(12), PopupCornerRadius::Medium);
         assert_eq!(PopupCornerRadius::from_dip(16), PopupCornerRadius::Large);
         assert_eq!(PopupCornerRadius::from_dip(20), PopupCornerRadius::ExtraLarge);
