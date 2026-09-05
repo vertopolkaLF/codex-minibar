@@ -44,6 +44,7 @@ pub(super) fn start_background_bridge(
             theme: state.settings.theme,
             accent_color: state.settings.accent_color,
             animations_enabled: state.settings.animations_enabled,
+            popup_background_material: state.settings.popup_background_material,
             provider_errors: state.startup_provider_errors.iter().cloned().collect(),
             last_activation: format_last_activation(&RateLimits::default(), fallback_attempt),
             show_used_percentage: state.settings.show_used_percentage,
@@ -129,6 +130,7 @@ pub(super) fn start_background_bridge(
             ui.theme = settings.theme;
             ui.accent_color = settings.accent_color;
             ui.animations_enabled = settings.animations_enabled;
+            ui.popup_background_material = settings.popup_background_material;
             ui.time_format = settings.time_format;
             ui.show_used_percentage = settings.show_used_percentage;
             ui.show_usage_pace = settings.show_usage_pace;

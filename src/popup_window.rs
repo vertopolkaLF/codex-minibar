@@ -25,7 +25,8 @@ use crate::{
         resets_brick_id, spending_brick_id, usage_brick_id,
     },
     settings::{
-        AccentColor, AppTheme, NotificationSettings, PopupSurface, PopupVisibility,
+        AccentColor, AppTheme, NotificationSettings, PopupBackgroundMaterial, PopupSurface,
+        PopupVisibility,
         PopupWidgetKind, ProviderKind, Settings, TimeFormat, TotalSpendPeriod,
         TotalSpendPresentation, TrayWidget,
     },

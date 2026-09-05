@@ -16,6 +16,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         theme: state.settings.theme,
         accent_color: state.settings.accent_color,
         animations_enabled: state.settings.animations_enabled,
+        popup_background_material: state.settings.popup_background_material,
         time_format: state.settings.time_format,
         provider_errors: state.startup_provider_errors.iter().cloned().collect(),
         last_activation: format_last_activation(&RateLimits::default(), state.last_activation_at),
@@ -996,28 +997,26 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     // Height is owned solely by the body's desired-size callback above. Using
     // this layer's arranged height as a second source fed ResizeClient back
     // into layout and caused a resize loop / spurious scrollbars.
-    let background_material = popup::background_material();
+    let background_material = ui.popup_background_material;
     let background_material_key = background_material.index();
     let background = {
         let mut host = swap_chain_panel()
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .vertical_alignment(VerticalAlignment::Stretch);
-        host.mounted = Some(Callback::new(move |native: Option<_>| {
-            if let Some(native) = native {
-                let result = match background_material {
-                    crate::settings::PopupBackgroundMaterial::Acrylic => {
-                        crate::acrylic::install_acrylic_into(native)
+        host.mounted = Some(Callback::new(
+            move |native: Option<windows_core::IInspectable>| {
+                if let Some(native) = native {
+                    popup::register_background_mount(native.clone());
+                    let result =
+                        popup::install_background_material_into(native, background_material);
+                    if let Err(error) = result {
+                        eprintln!("Could not install popup background material: {error:?}");
                     }
-                    crate::settings::PopupBackgroundMaterial::Mica => {
-                        crate::acrylic::install_popup_mica_into(native)
-                    }
-                };
-                if let Err(error) = result {
-                    eprintln!("Could not install popup background material: {error:?}");
                 }
-            }
-        }));
+            },
+        ));
         host.unmounted = Some(Callback::new(|native: Option<_>| {
+            popup::clear_background_mount();
             if let Some(native) = native {
                 let _ = crate::acrylic::clear_children(native);
             }

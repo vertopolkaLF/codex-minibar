@@ -135,6 +135,8 @@ static PINNED_WIN_BOTTOM_PX: AtomicI32 = AtomicI32::new(0);
 
 thread_local! {
     static POPUP_HOST: RefCell<Option<Rc<ReactorHost>>> = const { RefCell::new(None) };
+    static POPUP_BACKGROUND_MOUNT: RefCell<Option<windows_core::IInspectable>> =
+        const { RefCell::new(None) };
     static POPUP_RENDERING: RefCell<Option<Rendering>> = const { RefCell::new(None) };
 }
 
@@ -241,6 +243,24 @@ pub fn background_material() -> PopupBackgroundMaterial {
     PopupBackgroundMaterial::from_index(i32::from(POPUP_BACKGROUND_MATERIAL.load(Ordering::SeqCst)))
 }
 
+pub(crate) fn register_background_mount(mount: windows_core::IInspectable) {
+    POPUP_BACKGROUND_MOUNT.with(|slot| *slot.borrow_mut() = Some(mount));
+}
+
+pub(crate) fn clear_background_mount() {
+    POPUP_BACKGROUND_MOUNT.with(|slot| *slot.borrow_mut() = None);
+}
+
+pub(crate) fn install_background_material_into(
+    mount: windows_core::IInspectable,
+    material: PopupBackgroundMaterial,
+) -> windows_core::Result<()> {
+    match material {
+        PopupBackgroundMaterial::Acrylic => crate::acrylic::install_acrylic_into(mount),
+        PopupBackgroundMaterial::Mica => crate::acrylic::install_popup_mica_into(mount),
+    }
+}
+
 /// Apply appearance values that affect the popup outside the reactive tree.
 /// Startup calls this before the host exists; later calls update the visible
 /// region immediately and the next render picks up the new XAML geometry and
@@ -277,6 +297,17 @@ pub fn apply_popup_appearance(
         {
             apply_surface_window_region(hwnd, f64::from(animated_surface_height_dip()), None);
         }
+    }
+
+    if background_changed {
+        POPUP_BACKGROUND_MOUNT.with(|slot| {
+            let Some(mount) = slot.borrow().as_ref().cloned() else {
+                return;
+            };
+            if let Err(error) = install_background_material_into(mount, background_material) {
+                eprintln!("Could not update popup background material: {error:?}");
+            }
+        });
     }
 
     if current_hwnd().is_some()
