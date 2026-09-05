@@ -536,7 +536,7 @@ pub(super) fn spending_card_with_title(
     };
 
     if compact_usage_cards {
-        let radius = f64::from(popup::WINDOW_CORNER_RADIUS_DIP);
+        let radius = f64::from(popup::CARD_CORNER_RADIUS_DIP);
         let mut layers: Vec<Element> = Vec::with_capacity(2);
         if let Some(progress) = progress {
             layers.push(limit_card_progress_layer(
@@ -579,7 +579,7 @@ pub(super) fn spending_card_with_title(
     }
 
     border(vstack(rows).spacing(8.0))
-        .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+        .corner_radius(f64::from(popup::CARD_CORNER_RADIUS_DIP))
         .padding(Thickness::uniform(12.0))
         .background(ThemeRef::CardBackground)
         .border_thickness(Thickness::uniform(1.0))
@@ -1053,7 +1053,7 @@ fn limit_card_base(
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .vertical_alignment(VerticalAlignment::Center),
         )
-        .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+        .corner_radius(f64::from(popup::CARD_CORNER_RADIUS_DIP))
         .padding(Thickness::uniform(12.0))
         .background(ThemeRef::CardBackground)
         .border_thickness(Thickness::uniform(1.0))
@@ -1127,7 +1127,7 @@ fn limit_card_base(
         ))
         .spacing(8.0),
     )
-    .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+    .corner_radius(f64::from(popup::CARD_CORNER_RADIUS_DIP))
     .padding(Thickness::uniform(12.0))
     .background(ThemeRef::CardBackground)
     .border_thickness(Thickness::uniform(1.0))
@@ -1287,7 +1287,7 @@ fn limit_card_compact(
         .vertical_alignment(VerticalAlignment::Center)
         .into()
     };
-    let radius = f64::from(popup::WINDOW_CORNER_RADIUS_DIP);
+    let radius = f64::from(popup::CARD_CORNER_RADIUS_DIP);
     let mut layers: Vec<Element> =
         vec![limit_card_progress_layer(progress, accent.clone(), radius)];
     if let Some(ticks) = compact_interval_ticks_layer(interval_tick_count(window)) {
@@ -1379,7 +1379,7 @@ pub(super) fn credits_card(limits: &RateLimits) -> Element {
         .rows([GridLength::Auto])
         .horizontal_alignment(HorizontalAlignment::Stretch),
     )
-    .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+    .corner_radius(f64::from(popup::CARD_CORNER_RADIUS_DIP))
     .padding(Thickness {
         left: 16.0,
         top: 12.0,
@@ -1435,7 +1435,7 @@ pub(super) fn reset_credits_card(limits: &RateLimits) -> Element {
         .rows([GridLength::Auto])
         .horizontal_alignment(HorizontalAlignment::Stretch),
     )
-    .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+    .corner_radius(f64::from(popup::CARD_CORNER_RADIUS_DIP))
     .padding(Thickness {
         left: 16.0,
         top: 12.0,
@@ -1462,7 +1462,7 @@ pub(super) fn usage_statistics_card(provider: ProviderKind, limits: &RateLimits)
             ))
             .spacing(6.0),
         )
-        .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+        .corner_radius(f64::from(popup::CARD_CORNER_RADIUS_DIP))
         .padding(Thickness::uniform(12.0))
         .background(ThemeRef::CardBackground)
         .border_thickness(Thickness::uniform(1.0))
@@ -1499,7 +1499,7 @@ pub(super) fn usage_statistics_card(provider: ProviderKind, limits: &RateLimits)
             ))
             .spacing(12.0),
         )
-        .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+        .corner_radius(f64::from(popup::CARD_CORNER_RADIUS_DIP))
         .padding(Thickness::uniform(12.0))
         .background(ThemeRef::CardBackground)
         .border_thickness(Thickness::uniform(1.0))
@@ -1544,7 +1544,7 @@ pub(super) fn usage_statistics_card(provider: ProviderKind, limits: &RateLimits)
         ))
         .spacing(12.0),
     )
-    .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+    .corner_radius(f64::from(popup::CARD_CORNER_RADIUS_DIP))
     .padding(Thickness::uniform(12.0))
     .background(ThemeRef::CardBackground)
     .border_thickness(Thickness::uniform(1.0))

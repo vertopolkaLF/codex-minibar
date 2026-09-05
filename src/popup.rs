@@ -63,7 +63,7 @@ pub const POPUP_WIDTH: i32 = 380;
 const LIMIT_CARD_HEIGHT: i32 = 82;
 const BODY_PAD_Y: i32 = 36; // top 16 + bottom 20
 const BODY_SPACING: i32 = 12;
-const FOOTER_HEIGHT: i32 = 61; // padding + icon row + top border
+const FOOTER_HEIGHT: i32 = 51; // 8 + 32px icon row + 10 + top border
 const CHROME_HEIGHT: i32 = 4; // outer border + inset
 /// Baseline height when the two standard limit cards and footer are shown.
 pub const POPUP_HEIGHT: i32 =
@@ -79,14 +79,20 @@ pub const FALLBACK_CLIENT_HEIGHT_LIMIT: i32 = 4_096;
 /// Popup height as a share of the monitor it is opened on.
 const POPUP_SCREEN_HEIGHT_FRACTION: f64 = 0.80;
 /// Must match the root XAML `corner_radius` in `app.rs`.
-pub const WINDOW_CORNER_RADIUS_DIP: i32 = 8;
+pub const WINDOW_CORNER_RADIUS_DIP: i32 = 16;
+/// Inner card radius. Keep cards visibly nested without turning the whole
+/// popup into a stack of identical rounded rectangles.
+pub const CARD_CORNER_RADIUS_DIP: i32 = 10;
 const PARKED_X: i32 = -32_000;
 const PARKED_Y: i32 = -32_000;
 /// Fluent motion tokens used by Windows edge panels.
 const OPEN_ANIMATION_DURATION: Duration = Duration::from_millis(250);
 const CLOSE_ANIMATION_DURATION: Duration = Duration::from_millis(167);
-/// Matches the popup page-slide duration so shell and content ease together.
-const HEIGHT_ANIMATION_DURATION: Duration = Duration::from_millis(250);
+/// Critical-damping frequency for the popup shell height spring. This is
+/// intentionally a physics-based settle rather than a fixed-duration ease:
+/// DesiredSize can change while a page is still rendering, and retargeting a
+/// spring preserves velocity instead of making the bottom edge restart/bob.
+const HEIGHT_SPRING_OMEGA: f64 = 24.0;
 /// Gap from the monitor edge.
 const EDGE_MARGIN: i32 = 20;
 
@@ -98,11 +104,13 @@ static ESCAPE_WAS_DOWN: AtomicBool = AtomicBool::new(false);
 static IGNORE_OUTSIDE_UNTIL_MS: AtomicI64 = AtomicI64::new(0);
 /// Current client height in DIP (updated when content changes).
 static CLIENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(POPUP_HEIGHT);
-/// Last height actually presented by the HWND, including intermediate frames.
-static APPLIED_CLIENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(POPUP_HEIGHT);
-/// Grow target waiting for a finished XAML render before `ResizeClient`.
-/// Zero means none. Shrink never uses this path.
-static PENDING_GROW_HEIGHT_DIP: AtomicI32 = AtomicI32::new(0);
+/// Height used by the XAML surface layout. It changes once per new target,
+/// never once per spring frame.
+static LAYOUT_SURFACE_HEIGHT_DIP: AtomicI32 = AtomicI32::new(POPUP_HEIGHT);
+/// Current height of the clipped visible surface while its spring is running.
+static ANIMATED_SURFACE_HEIGHT_DIP: AtomicI32 = AtomicI32::new(POPUP_HEIGHT);
+/// Fixed native host height while the visible capsule animates inside it.
+static HOST_CLIENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(POPUP_HEIGHT);
 /// Natural height of the body stack, including its padding, in DIPs.
 static BODY_CONTENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(0);
 /// Dynamic client-height limit for the monitor that owns the current popup.
@@ -140,10 +148,10 @@ struct WindowMotion {
 
 #[derive(Clone, Debug)]
 struct HeightMotion {
-    from_dip: i32,
-    to_dip: i32,
-    started_at: Instant,
-    duration: Duration,
+    position_dip: f64,
+    velocity_dip_per_second: f64,
+    target_dip: f64,
+    last_sample: Instant,
 }
 
 struct PopupMotion {
@@ -197,11 +205,6 @@ fn pinned_bottom_px() -> i32 {
     }
 }
 
-fn lock_pinned_win_bottom(hwnd: HWND) {
-    let win = window_rect(hwnd);
-    PINNED_WIN_BOTTOM_PX.store(win.bottom, Ordering::SeqCst);
-}
-
 /// Maximum client height for the monitor selected when the popup was opened.
 pub fn max_client_height_dip() -> i32 {
     MAX_CLIENT_HEIGHT_DIP.load(Ordering::SeqCst)
@@ -209,9 +212,23 @@ pub fn max_client_height_dip() -> i32 {
 
 /// Visible body height in DIP (popup client minus footer and chrome).
 pub fn body_viewport_height_dip() -> f64 {
-    let applied = APPLIED_CLIENT_HEIGHT_DIP.load(Ordering::SeqCst);
-    let target = CLIENT_HEIGHT_DIP.load(Ordering::SeqCst);
-    f64::from((applied.max(target) - FOOTER_HEIGHT - CHROME_HEIGHT).max(80))
+    let layout_height = LAYOUT_SURFACE_HEIGHT_DIP.load(Ordering::SeqCst);
+    f64::from((layout_height - FOOTER_HEIGHT - CHROME_HEIGHT).max(80))
+}
+
+/// Current visible capsule height in DIPs. The native host can be larger while
+/// a popup height transition is running; layout must follow the capsule, not
+/// the clipped host rectangle.
+pub fn surface_height_dip() -> i32 {
+    LAYOUT_SURFACE_HEIGHT_DIP
+        .load(Ordering::SeqCst)
+        .clamp(80, HOST_CLIENT_HEIGHT_DIP.load(Ordering::SeqCst).max(80))
+}
+
+fn animated_surface_height_dip() -> i32 {
+    ANIMATED_SURFACE_HEIGHT_DIP
+        .load(Ordering::SeqCst)
+        .clamp(80, HOST_CLIENT_HEIGHT_DIP.load(Ordering::SeqCst).max(80))
 }
 
 /// The same DPI used by `ReactorHost::resize_client`; mixing it with the
@@ -252,35 +269,31 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// CSS `cubic-bezier(x1, y1, x2, y2)` sample for unit progress in `[0, 1]`.
-fn cubic_bezier(x1: f64, y1: f64, x2: f64, y2: f64, progress: f64) -> f64 {
-    let x = progress.clamp(0.0, 1.0);
-    if x <= 0.0 {
+/// Normalized critically-damped spring curve used for the short window slide.
+/// It is monotonic, so the popup never overshoots across a monitor seam.
+fn critical_spring_curve(progress: f64, omega: f64) -> f64 {
+    let t = progress.clamp(0.0, 1.0);
+    if t <= 0.0 {
         return 0.0;
     }
-    if x >= 1.0 {
+    if t >= 1.0 {
         return 1.0;
     }
-
-    // Solve cubic Bezier x(t) = x for t via Newton, then sample y(t).
-    let mut t = x;
-    for _ in 0..8 {
-        let u = 1.0 - t;
-        let x_t = 3.0 * u * u * t * x1 + 3.0 * u * t * t * x2 + t * t * t;
-        let dx = 3.0 * u * u * x1 + 6.0 * u * t * (x2 - x1) + 3.0 * t * t * (1.0 - x2);
-        if dx.abs() < 1e-9 {
-            break;
-        }
-        t = (t - (x_t - x) / dx).clamp(0.0, 1.0);
-    }
-
-    let u = 1.0 - t;
-    3.0 * u * u * t * y1 + 3.0 * u * t * t * y2 + t * t * t
+    (1.0 - (1.0 + omega * t) * (-omega * t).exp()).clamp(0.0, 1.0)
 }
 
-/// Fluent direct entrance: fast response with a soft landing.
+/// Return and remember the stable logical bottom for the current work area.
+/// DWM's extended frame includes a shadow that can vary by a pixel while the
+/// popup is moving; using it as a vertical anchor makes the footer drift.
+fn refresh_bottom_anchor() -> i32 {
+    let seam = loaded_work_bottom().saturating_sub(EDGE_MARGIN);
+    PINNED_WIN_BOTTOM_PX.store(seam, Ordering::SeqCst);
+    seam
+}
+
+/// Spring-based entrance: fast response with a soft landing.
 fn ease_entrance(progress: f64) -> f64 {
-    cubic_bezier(0.0, 0.0, 0.0, 1.0, progress)
+    critical_spring_curve(progress, 8.0)
 }
 
 /// Respect the Windows "Animation effects" accessibility preference.
@@ -301,14 +314,9 @@ pub fn animations_enabled() -> bool {
     crate::theme::animations_enabled()
 }
 
-/// Fluent gentle exit: the surface gains speed as it leaves.
+/// Spring-based gentle exit: the surface gains speed as it leaves.
 fn ease_exit(progress: f64) -> f64 {
-    cubic_bezier(1.0, 0.0, 1.0, 1.0, progress)
-}
-
-/// Fluent point-to-point curve for shell height changes.
-fn ease_existing(progress: f64) -> f64 {
-    cubic_bezier(0.55, 0.55, 0.0, 1.0, progress)
+    critical_spring_curve(progress, 7.0)
 }
 
 fn elapsed_progress(started_at: Instant, duration: Duration, now: Instant) -> f64 {
@@ -320,6 +328,36 @@ fn elapsed_progress(started_at: Instant, duration: Duration, now: Instant) -> f6
 
 fn lerp_i32(from: i32, to: i32, progress: f64) -> i32 {
     (f64::from(from) + f64::from(to - from) * progress).round() as i32
+}
+
+/// Advance a critical-damping spring without resetting its velocity when the
+/// target changes. The closed-form step is stable across uneven compositor
+/// frame intervals and avoids the accumulated jitter of a hand-written Euler
+/// integrator.
+fn step_height_spring(motion: &mut HeightMotion, now: Instant) -> (i32, bool) {
+    let dt = now
+        .saturating_duration_since(motion.last_sample)
+        .as_secs_f64()
+        .clamp(0.0, 0.05);
+    motion.last_sample = now;
+
+    let offset = motion.position_dip - motion.target_dip;
+    let omega = HEIGHT_SPRING_OMEGA;
+    let decay = (-omega * dt).exp();
+    let next_offset = (offset + (motion.velocity_dip_per_second + omega * offset) * dt) * decay;
+    let next_velocity = (motion.velocity_dip_per_second
+        - omega * (motion.velocity_dip_per_second + omega * offset) * dt)
+        * decay;
+
+    motion.position_dip = motion.target_dip + next_offset;
+    motion.velocity_dip_per_second = next_velocity;
+    let settled = next_offset.abs() < 0.25 && next_velocity.abs() < 1.0;
+    if settled {
+        motion.position_dip = motion.target_dip;
+        motion.velocity_dip_per_second = 0.0;
+    }
+
+    (motion.position_dip.round() as i32, settled)
 }
 
 fn encode_wide(value: &str) -> Vec<u16> {
@@ -352,7 +390,6 @@ fn park(hwnd: HWND) {
         motion.window = None;
         motion.height = None;
     }
-    PENDING_GROW_HEIGHT_DIP.store(0, Ordering::SeqCst);
     PINNED_WIN_BOTTOM_PX.store(0, Ordering::SeqCst);
     stop_rendering_if_idle();
     unsafe {
@@ -443,11 +480,6 @@ pub fn register_host(host: Rc<ReactorHost>) {
     let _ = host.relax_height_constraints(f64::from(max_client_height_dip()));
     // Pin taskbar exclusion as early as possible — before the first show.
     let _ = host.set_shown_in_switchers(false);
-    // After each reconcile, commit any deferred shell grow so the HWND/island
-    // only enlarge once the root has already been laid out at that height.
-    host.set_render_complete(|_| {
-        commit_pending_grow_height();
-    });
     POPUP_HOST.with(|slot| *slot.borrow_mut() = Some(host));
     // Do not subscribe CompositionTarget.Rendering here. A permanent
     // subscription keeps the compositor spinning for the whole process life
@@ -495,35 +527,35 @@ fn resize_for_body_content() {
     set_client_height_dip(body_height + FOOTER_HEIGHT + CHROME_HEIGHT);
 }
 
-/// Resize the WinUI client to `height_dip` and re-pin if the popup is open.
+/// Retarget the visible capsule and re-pin it if the popup is open.
 ///
-/// Shell height eases on the compositor clock. Every frame applies HWND geometry
-/// and the reactor layout size together so XAML never lags behind the window
-/// (the black clear under the footer). Layout noise during a page slide may
-/// retarget the destination, but never restarts the ease from a stale origin.
+/// The XAML surface receives one layout update for the new target. The spring
+/// then animates only the clipped native surface, so a heavy page is not
+/// reconciled again on every compositor frame.
 pub fn set_client_height_dip(height_dip: i32) {
     let height_dip = height_dip.clamp(80, max_client_height_dip());
     let previous_target = CLIENT_HEIGHT_DIP.swap(height_dip, Ordering::SeqCst);
     if previous_target == height_dip {
         return;
     }
+    LAYOUT_SURFACE_HEIGHT_DIP.store(height_dip, Ordering::SeqCst);
+    windows_reactor::request_ui_rerender_on_ui_thread();
 
     if !is_visible() || !animations_enabled() {
         apply_client_height_immediately(height_dip);
         return;
     }
 
-    let applied = APPLIED_CLIENT_HEIGHT_DIP.load(Ordering::SeqCst);
+    let applied = ANIMATED_SURFACE_HEIGHT_DIP.load(Ordering::SeqCst);
     let mut motion = popup_motion();
     if let Some(height) = motion.height.as_mut() {
-        // Already easing — only move the destination. Restarting from a stale
-        // `from_dip` on every DesiredSize blip made the bottom edge bob.
-        if (height.to_dip - height_dip).abs() <= 1 {
+        // Already springing — only move the destination. Keeping position and
+        // velocity makes a DesiredSize blip retarget smoothly instead of
+        // restarting from a stale integer frame.
+        if (height.target_dip - f64::from(height_dip)).abs() <= 0.5 {
             return;
         }
-        height.from_dip = applied;
-        height.to_dip = height_dip;
-        height.started_at = Instant::now();
+        height.target_dip = f64::from(height_dip);
         drop(motion);
         ensure_rendering();
         return;
@@ -533,10 +565,10 @@ pub fn set_client_height_dip(height_dip: i32) {
         return;
     }
     motion.height = Some(HeightMotion {
-        from_dip: applied,
-        to_dip: height_dip,
-        started_at: Instant::now(),
-        duration: HEIGHT_ANIMATION_DURATION,
+        position_dip: f64::from(applied),
+        velocity_dip_per_second: 0.0,
+        target_dip: f64::from(height_dip),
+        last_sample: Instant::now(),
     });
     drop(motion);
     ensure_rendering();
@@ -548,26 +580,29 @@ pub fn sync_host_constraints() {
         .load(Ordering::SeqCst)
         .clamp(80, max_client_height_dip());
     CLIENT_HEIGHT_DIP.store(height, Ordering::SeqCst);
+    LAYOUT_SURFACE_HEIGHT_DIP.store(height, Ordering::SeqCst);
+    HOST_CLIENT_HEIGHT_DIP.store(height, Ordering::SeqCst);
+    ANIMATED_SURFACE_HEIGHT_DIP.store(height, Ordering::SeqCst);
     POPUP_HOST.with(|slot| {
         if let Some(host) = slot.borrow().as_ref() {
             let _ = host.relax_height_constraints(f64::from(max_client_height_dip()));
             let _ = host.resize_client(f64::from(POPUP_WIDTH), f64::from(height));
-            APPLIED_CLIENT_HEIGHT_DIP.store(height, Ordering::SeqCst);
         }
     });
 }
 
 fn apply_client_height_immediately(height_dip: i32) {
-    PENDING_GROW_HEIGHT_DIP.store(0, Ordering::SeqCst);
-    POPUP_HOST.with(|slot| {
-        if let Some(host) = slot.borrow().as_ref() {
-            let _ = host.relax_height_constraints(f64::from(max_client_height_dip()));
-            let _ = host.resize_client(f64::from(POPUP_WIDTH), f64::from(height_dip));
-        }
-    });
-    APPLIED_CLIENT_HEIGHT_DIP.store(height_dip, Ordering::SeqCst);
+    LAYOUT_SURFACE_HEIGHT_DIP.store(height_dip, Ordering::SeqCst);
+    ANIMATED_SURFACE_HEIGHT_DIP.store(height_dip, Ordering::SeqCst);
 
     if !is_visible() {
+        HOST_CLIENT_HEIGHT_DIP.store(height_dip, Ordering::SeqCst);
+        POPUP_HOST.with(|slot| {
+            if let Some(host) = slot.borrow().as_ref() {
+                let _ = host.relax_height_constraints(f64::from(max_client_height_dip()));
+                let _ = host.resize_client(f64::from(POPUP_WIDTH), f64::from(height_dip));
+            }
+        });
         return;
     }
     let Some(hwnd) = current_hwnd().or_else(find_hwnd) else {
@@ -576,19 +611,27 @@ fn apply_client_height_immediately(height_dip: i32) {
     HWND_BITS.store(hwnd as isize, Ordering::SeqCst);
     let monitor = loaded_monitor();
     if monitor.right > monitor.left {
-        pin_bottom_right(hwnd, monitor, loaded_work_bottom());
-        lock_pinned_win_bottom(hwnd);
+        // ResizeClient re-anchors the top-left corner. Re-apply the stable
+        // bottom seam after an immediate settings/content resize as well.
+        pin_right_edge(hwnd);
+        pin_win_bottom_to_seam(hwnd, refresh_bottom_anchor());
+        windows_reactor::request_ui_rerender_on_ui_thread();
+        apply_surface_window_region(hwnd, f64::from(height_dip), Some(monitor));
     }
 }
 
-/// Apply island + HWND height with `GetWindowRect().bottom` frozen on the seam.
+/// Resize the fixed native host while preserving the logical bottom seam.
 ///
-/// Uses `AppWindow.MoveAndResize` so position and size land in one WinUI
-/// transaction. The old path did `SetWindowPos` then `ResizeClient` — the
-/// latter re-anchors top-left every frame, which is exactly the bottom bob.
-fn apply_shell_height_now(hwnd: HWND, height_dip: i32) {
+/// The visible capsule is clipped inside this host and owns the animated
+/// height; the host itself should only change when the monitor-sized shell is
+/// prepared or the monitor constraints change.
+fn resize_host_height_now(hwnd: HWND, height_dip: i32) {
+    let height_dip = height_dip.clamp(80, max_client_height_dip());
+    if HOST_CLIENT_HEIGHT_DIP.load(Ordering::SeqCst) == height_dip {
+        return;
+    }
     if PINNED_WIN_BOTTOM_PX.load(Ordering::SeqCst) == 0 {
-        lock_pinned_win_bottom(hwnd);
+        refresh_bottom_anchor();
     }
     let seam = pinned_bottom_px();
     let win = window_rect(hwnd);
@@ -596,6 +639,11 @@ fn apply_shell_height_now(hwnd: HWND, height_dip: i32) {
     POPUP_HOST.with(|slot| {
         if let Some(host) = slot.borrow().as_ref() {
             let _ = host.relax_height_constraints(f64::from(max_client_height_dip()));
+            // Set the island target before changing the HWND. Both operations
+            // run on the UI thread, so the next compositor frame sees one
+            // geometry target instead of exposing a black clear while XAML
+            // catches up with native window resizing.
+            host.sync_render_size(f64::from(POPUP_WIDTH), f64::from(height_dip));
             let _ = host.move_and_resize_bottom_pinned(
                 win.left,
                 seam,
@@ -604,52 +652,42 @@ fn apply_shell_height_now(hwnd: HWND, height_dip: i32) {
             );
         }
     });
+    HOST_CLIENT_HEIGHT_DIP.store(height_dip, Ordering::SeqCst);
     pin_win_bottom_to_seam(hwnd, seam);
-    APPLIED_CLIENT_HEIGHT_DIP.store(height_dip, Ordering::SeqCst);
 }
 
-/// Enlarge the shell only after XAML has rendered at the pending height.
-fn commit_pending_grow_height() {
-    let pending = PENDING_GROW_HEIGHT_DIP.swap(0, Ordering::SeqCst);
-    if pending < 80 {
-        return;
-    }
-    let Some(hwnd) = current_hwnd() else {
-        return;
-    };
-    if !is_visible() {
-        return;
-    }
-    apply_shell_height_now(hwnd, pending);
+/// Prepare the larger off-screen host before the popup is shown.
+fn prepare_hidden_host_height(height_dip: i32) {
+    let height_dip = height_dip.clamp(80, max_client_height_dip());
+    HOST_CLIENT_HEIGHT_DIP.store(height_dip, Ordering::SeqCst);
+    POPUP_HOST.with(|slot| {
+        if let Some(host) = slot.borrow().as_ref() {
+            host.sync_render_size(f64::from(POPUP_WIDTH), f64::from(height_dip));
+            let _ = host.resize_client(f64::from(POPUP_WIDTH), f64::from(height_dip));
+        }
+    });
 }
 
-/// One compositor tick of shell-height motion.
+/// One compositor tick of shell-surface spring motion.
 ///
-/// Growing: update reactor layout first; `ResizeClient` runs from
-/// `render_complete` once the root already fills that height.
-/// Shrinking: resize the shell immediately (HWND first, never an empty band).
+/// The native host remains fixed while only the bottom-aligned capsule changes
+/// height. This prevents Window.ContentPresenter from exposing its opaque
+/// client background below a still-rendering root.
 fn apply_animated_client_height(hwnd: HWND, height_dip: i32) {
-    let applied = APPLIED_CLIENT_HEIGHT_DIP.load(Ordering::SeqCst);
-    if height_dip >= applied {
-        POPUP_HOST.with(|slot| {
-            if let Some(host) = slot.borrow().as_ref() {
-                host.sync_render_size(f64::from(POPUP_WIDTH), f64::from(height_dip));
-            }
-        });
-        PENDING_GROW_HEIGHT_DIP.store(height_dip, Ordering::SeqCst);
-        return;
+    let host_height = HOST_CLIENT_HEIGHT_DIP.load(Ordering::SeqCst);
+    if height_dip > host_height {
+        resize_host_height_now(hwnd, height_dip);
     }
-
-    PENDING_GROW_HEIGHT_DIP.store(0, Ordering::SeqCst);
-    apply_shell_height_now(hwnd, height_dip);
+    ANIMATED_SURFACE_HEIGHT_DIP.store(height_dip, Ordering::SeqCst);
+    apply_surface_window_region(hwnd, f64::from(height_dip), Some(loaded_monitor()));
 }
 
 fn finish_height_animation(hwnd: HWND, height_dip: i32, pin: bool) {
-    PENDING_GROW_HEIGHT_DIP.store(0, Ordering::SeqCst);
-    apply_shell_height_now(hwnd, height_dip);
+    ANIMATED_SURFACE_HEIGHT_DIP.store(height_dip, Ordering::SeqCst);
+    apply_surface_window_region(hwnd, f64::from(height_dip), None);
     if pin {
-        // Horizontal settle only — full `pin_bottom_right` uses DWM frame math
-        // and will yank the locked vertical seam by a pixel or two.
+        // Horizontal settle only — full DWM-frame-based pinning can yank the
+        // locked vertical seam by a pixel or two.
         pin_right_edge(hwnd);
         pin_win_bottom_to_seam(hwnd, pinned_bottom_px());
     }
@@ -700,7 +738,7 @@ fn popup_pixel_size(hwnd: HWND, monitor: HMONITOR) -> (i32, i32) {
     let measured_h = (rect.bottom - rect.top).abs();
 
     let dpi = host_dpi(monitor_dpi(monitor));
-    let height_dip = CLIENT_HEIGHT_DIP.load(Ordering::SeqCst);
+    let height_dip = HOST_CLIENT_HEIGHT_DIP.load(Ordering::SeqCst);
     let expected_w = (i64::from(POPUP_WIDTH) * i64::from(dpi) / 96) as i32;
     let expected_h = (i64::from(height_dip) * i64::from(dpi) / 96) as i32;
 
@@ -725,58 +763,10 @@ fn move_hwnd(hwnd: HWND, x: i32, y: i32) {
     }
 }
 
-/// Pin the HWND to the bottom-right of the target monitor.
-///
-/// Uses the union of `GetWindowRect` and DWM extended bounds so we never
-/// underestimate size, and clamps against `rcMonitor` (the real seam to the
-/// next display) — not just `rcWork`.
-fn pin_bottom_right(hwnd: HWND, monitor: RECT, work_bottom: i32) {
-    for _ in 0..6 {
-        let frame = frame_bounds(hwnd);
-        let win = window_rect(hwnd);
-        let left = frame.left.min(win.left);
-        let top = frame.top.min(win.top);
-        let right = frame.right.max(win.right);
-        let bottom = frame.bottom.max(win.bottom);
-        let width = (right - left).max(1);
-        let height = (bottom - top).max(1);
-
-        let target_x = monitor.right - width - EDGE_MARGIN;
-        let target_y = work_bottom - height - EDGE_MARGIN;
-
-        let dx = target_x - left;
-        let dy = target_y - top;
-        if dx == 0 && dy == 0 {
-            break;
-        }
-        move_hwnd(hwnd, win.left + dx, win.top + dy);
-        unsafe {
-            let _ = DwmFlush();
-        }
-    }
-
-    // Absolute hard stop: nothing past the monitor seam.
-    let win = window_rect(hwnd);
-    let frame = frame_bounds(hwnd);
-    let right = frame.right.max(win.right);
-    if right > monitor.right - EDGE_MARGIN {
-        let dx = right - (monitor.right - EDGE_MARGIN);
-        move_hwnd(hwnd, win.left - dx, win.top);
-    }
-
-    // The settled popup must remain an ordinary DWM surface; leaving a GDI
-    // region installed here suppresses the native frame shadow.
-    clear_window_region(hwnd);
-}
-
-/// Rounded HWND shape (and optional monitor clip during edge motion).
-///
-/// During edge entry/exit a GDI region clips the surface to the selected monitor.
-/// The region is cleared as soon as the popup settles so DWM owns its corners
-/// and shadow for the remainder of the interaction.
-fn apply_window_region(hwnd: HWND, monitor_clip: Option<RECT>) {
+/// Clip the fixed native host to the visible bottom-aligned capsule.
+fn apply_surface_window_region(hwnd: HWND, surface_height_dip: f64, monitor_clip: Option<RECT>) {
     let window = window_rect(hwnd);
-    apply_window_region_for_rect(hwnd, window, monitor_clip);
+    apply_surface_window_region_for_rect(hwnd, window, surface_height_dip, monitor_clip);
 }
 
 fn monitor_clip_bounds(window: RECT, monitor: RECT) -> (i32, i32, i32, i32) {
@@ -789,14 +779,23 @@ fn monitor_clip_bounds(window: RECT, monitor: RECT) -> (i32, i32, i32, i32) {
     (left, top, right, bottom)
 }
 
-fn apply_window_region_for_rect(hwnd: HWND, window: RECT, monitor_clip: Option<RECT>) {
+fn apply_surface_window_region_for_rect(
+    hwnd: HWND,
+    window: RECT,
+    surface_height_dip: f64,
+    monitor_clip: Option<RECT>,
+) {
     let width = (window.right - window.left).max(1);
     let height = (window.bottom - window.top).max(1);
+    let surface_height = (surface_height_dip * f64::from(host_dpi(96)) / 96.0)
+        .round()
+        .clamp(1.0, f64::from(height)) as i32;
+    let surface_top = height.saturating_sub(surface_height);
     let radius = CORNER_RADIUS_PX.load(Ordering::SeqCst).max(1);
     let arc = radius.saturating_mul(2);
 
     unsafe {
-        let shape = CreateRoundRectRgn(0, 0, width + 1, height + 1, arc, arc);
+        let shape = CreateRoundRectRgn(0, surface_top, width + 1, height + 1, arc, arc);
         if shape.is_null() {
             return;
         }
@@ -843,15 +842,17 @@ fn animation_frame() {
 
     {
         let mut motion = popup_motion();
-        if let Some(height) = motion.height.as_ref() {
-            let progress =
-                elapsed_progress(height.started_at, height.duration, now).clamp(0.0, 1.0);
-            let value = lerp_i32(height.from_dip, height.to_dip, ease_existing(progress));
+        let mut finish_height = None;
+        if let Some(height) = motion.height.as_mut() {
+            let (value, settled) = step_height_spring(height, now);
             height_frame = Some(value);
-            if progress >= 1.0 {
-                height_finished = Some(height.to_dip);
-                motion.height = None;
+            if settled {
+                finish_height = Some(height.target_dip.round() as i32);
             }
+        }
+        if finish_height.is_some() {
+            motion.height = None;
+            height_finished = finish_height;
         }
 
         if let Some(window) = motion.window.as_ref() {
@@ -887,11 +888,20 @@ fn animation_frame() {
                 right: x.saturating_add(width),
                 bottom: rect.top.saturating_add(height),
             };
-            apply_window_region_for_rect(hwnd, next_rect, Some(loaded_monitor()));
+            apply_surface_window_region_for_rect(
+                hwnd,
+                next_rect,
+                f64::from(animated_surface_height_dip()),
+                Some(loaded_monitor()),
+            );
             move_hwnd(hwnd, x, rect.top);
         } else {
             move_hwnd(hwnd, x, rect.top);
-            apply_window_region(hwnd, Some(loaded_monitor()));
+            apply_surface_window_region(
+                hwnd,
+                f64::from(animated_surface_height_dip()),
+                Some(loaded_monitor()),
+            );
         }
     }
 
@@ -918,8 +928,12 @@ fn finish_opening(hwnd: HWND) {
     }
     let monitor = loaded_monitor();
     if monitor.right > monitor.left {
-        pin_bottom_right(hwnd, monitor, loaded_work_bottom());
-        lock_pinned_win_bottom(hwnd);
+        // Keep the logical window bottom fixed to the work-area seam from the
+        // first visible frame. The old DWM-union correction ran only at the
+        // end of the slide, so a height change during opening could establish
+        // a different bottom and make the footer drift.
+        pin_right_edge(hwnd);
+        pin_win_bottom_to_seam(hwnd, refresh_bottom_anchor());
     }
     IGNORE_OUTSIDE_UNTIL_MS.store(now_ms() + SHOW_GRACE_MS, Ordering::SeqCst);
     BUTTON_WAS_DOWN.store(true, Ordering::SeqCst);
@@ -958,7 +972,7 @@ fn set_frame_margins(hwnd: HWND, fill: bool) {
 }
 
 /// A one-pixel glass frame lets DWM retain the native top-level shadow while
-/// the XAML element remains responsible for the actual Mica surface.
+/// the XAML element remains responsible for the actual Acrylic surface.
 fn set_shadow_frame_margins(hwnd: HWND) {
     let margins = MARGINS {
         cxLeftWidth: 1,
@@ -1030,7 +1044,7 @@ fn resolve_monitor(anchor_x: i32, anchor_y: i32) -> (HMONITOR, RECT, RECT) {
     }
 }
 
-/// Settled shell chrome: element-level Mica supplies the material while DWM
+/// Settled shell chrome: element-level Acrylic supplies the material while DWM
 /// supplies the native rounded frame and top-level shadow.
 fn apply_popup_chrome(hwnd: HWND) {
     unsafe {
@@ -1045,7 +1059,11 @@ fn apply_popup_chrome(hwnd: HWND) {
     set_corner_preference(hwnd);
     set_system_backdrop(hwnd, DWMSBT_NONE);
     set_shadow_frame_margins(hwnd);
-    clear_window_region(hwnd);
+    if is_visible() {
+        apply_surface_window_region(hwnd, f64::from(animated_surface_height_dip()), None);
+    } else {
+        clear_window_region(hwnd);
+    }
 }
 
 /// Keep the popup out of the taskbar and Alt+Tab forever.
@@ -1162,7 +1180,11 @@ pub fn hide() {
     // monitor-clipped region before the first exit frame so neither the shadow
     // nor the surface can spill onto an adjacent display.
     set_frame_margins(hwnd, false);
-    apply_window_region(hwnd, Some(monitor));
+    apply_surface_window_region(
+        hwnd,
+        f64::from(animated_surface_height_dip()),
+        Some(monitor),
+    );
     popup_motion().window = Some(WindowMotion {
         kind: WindowMotionKind::Closing,
         from_x: rect.left,
@@ -1212,7 +1234,8 @@ pub fn keep_on_monitor() {
     if monitor.right <= monitor.left {
         return;
     }
-    pin_bottom_right(hwnd, monitor, loaded_work_bottom());
+    pin_right_edge(hwnd);
+    pin_win_bottom_to_seam(hwnd, refresh_bottom_anchor());
 }
 
 /// Show the popup near the tray click, anchored above the taskbar.
@@ -1233,11 +1256,12 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
     // before reading native bounds; otherwise popup_pixel_size preserves the stale
     // oversized HWND until a tab switch happens to publish a different height.
     sync_host_constraints();
+    prepare_hidden_host_height(max_client_height_dip());
     let corner_px = (i64::from(WINDOW_CORNER_RADIUS_DIP) * i64::from(dpi) / 96) as i32;
     CORNER_RADIUS_PX.store(corner_px.max(1), Ordering::SeqCst);
 
     unsafe {
-        // Element-level Mica stays clipped by XAML; suspend the DWM frame while
+        // Element-level Acrylic stays clipped by XAML; suspend the DWM frame while
         // the temporary monitor-edge region owns the entering surface shape.
         set_system_backdrop(hwnd, DWMSBT_NONE);
         set_frame_margins(hwnd, false);
@@ -1251,10 +1275,19 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
         // flash the full window onto the neighboring monitor.
         hide_window_pixels(hwnd);
         move_hwnd(hwnd, start_x, target_y);
-        apply_window_region(hwnd, Some(monitor));
+        // Establish the vertical seam before the opening spring starts. From
+        // this point onward every height frame uses the same bottom anchor.
+        let bottom_seam = work.bottom.saturating_sub(EDGE_MARGIN);
+        PINNED_WIN_BOTTOM_PX.store(bottom_seam, Ordering::SeqCst);
+        pin_win_bottom_to_seam(hwnd, bottom_seam);
+        apply_surface_window_region(
+            hwnd,
+            f64::from(animated_surface_height_dip()),
+            Some(monitor),
+        );
         let _ = DwmFlush();
         // Keep native moves non-activating. We activate once the final clipped
-        // frame is in place so element-level Mica uses its active wallpaper
+        // frame is in place so element-level Acrylic uses its active wallpaper
         // material instead of the dimmed inactive fallback.
 
         // Mark visible before scheduling the non-blocking compositor motion.
@@ -1359,16 +1392,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fluent_curves_keep_exact_endpoints() {
-        for easing in [ease_entrance, ease_exit, ease_existing] {
+    fn spring_curves_keep_exact_endpoints() {
+        for easing in [ease_entrance, ease_exit] {
             assert_eq!(easing(0.0), 0.0);
             assert_eq!(easing(1.0), 1.0);
         }
     }
 
     #[test]
-    fn fluent_curves_are_monotonic() {
-        for easing in [ease_entrance, ease_exit, ease_existing] {
+    fn spring_curves_are_monotonic() {
+        for easing in [ease_entrance, ease_exit] {
             let samples = (0..=100)
                 .map(|step| easing(f64::from(step) / 100.0))
                 .collect::<Vec<_>>();
@@ -1381,6 +1414,29 @@ mod tests {
         assert_eq!(lerp_i32(300, 700, 0.0), 300);
         assert_eq!(lerp_i32(300, 700, 1.0), 700);
         assert_eq!(lerp_i32(700, 300, 0.5), 500);
+    }
+
+    #[test]
+    fn height_spring_converges_without_overshooting() {
+        let started = Instant::now();
+        let mut motion = HeightMotion {
+            position_dip: 300.0,
+            velocity_dip_per_second: 0.0,
+            target_dip: 700.0,
+            last_sample: started,
+        };
+        let mut previous = 300;
+        let mut settled = false;
+        for frame in 1..=120 {
+            let (value, done) =
+                step_height_spring(&mut motion, started + Duration::from_millis(frame * 16));
+            assert!(value >= previous && value <= 700);
+            previous = value;
+            settled |= done;
+        }
+        assert!(settled);
+        assert_eq!(previous, 700);
+        assert_eq!(motion.velocity_dip_per_second, 0.0);
     }
 
     #[test]

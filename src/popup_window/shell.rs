@@ -546,15 +546,15 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let outgoing_body = pager.outgoing.map(|view| build_body(view, true));
 
     let footer_background = match color_scheme {
-        // CSS shorthand: #0002 = #00000022; #0001 = #00000011.
+        // Low-alpha overlay keeps the Acrylic material visible beneath chrome.
         ColorScheme::Dark => Color {
-            a: 0x30,
+            a: 0x24,
             r: 0,
             g: 0,
             b: 0,
         },
         ColorScheme::Light => Color {
-            a: 0x11,
+            a: 0x0d,
             r: 0,
             g: 0,
             b: 0,
@@ -793,9 +793,9 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                         .min_height(ICON_BUTTON_SIZE)
                         .max_height(ICON_BUTTON_SIZE)
                         .padding(Thickness {
-                            left: 12.0,
+                            left: 10.0,
                             top: 0.0,
-                            right: 12.0,
+                            right: 10.0,
                             bottom: 0.0,
                         })
                         .vertical_alignment(VerticalAlignment::Center)
@@ -823,11 +823,11 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         .horizontal_alignment(HorizontalAlignment::Stretch),
     )
     .padding(Thickness {
-        left: if show_footer_tabs { 14.0 } else { 24.0 },
-        top: 10.0,
-        right: 18.0,
+        left: if show_footer_tabs { 12.0 } else { 18.0 },
+        top: 8.0,
+        right: 14.0,
         // Extra bottom padding so content clears the rounded window corners.
-        bottom: 14.0,
+        bottom: 10.0,
     })
     .border_thickness(Thickness {
         left: 0.0,
@@ -985,20 +985,21 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Stretch);
 
-    // Mica behind content; reconciler does not manage this panel's children.
-    // It is element-level Mica rather than `Window.SystemBackdrop`: the latter
+    // Desktop Acrylic behind content; reconciler does not manage this panel's
+    // children. It is element-level Acrylic rather than `Window.SystemBackdrop`:
+    // the latter
     // ignores the popup's Win32 rounded region and paints past its edges.
     // Height is owned solely by the body's desired-size callback above. Using
     // this layer's arranged height as a second source fed ResizeClient back
     // into layout and caused a resize loop / spurious scrollbars.
-    let mica = {
+    let acrylic = {
         let mut host = swap_chain_panel()
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .vertical_alignment(VerticalAlignment::Stretch);
         host.mounted = Some(Callback::new(|native: Option<_>| {
             if let Some(native) = native {
-                if let Err(error) = crate::acrylic::install_mica_into(native) {
-                    eprintln!("Could not install popup Mica element: {error:?}");
+                if let Err(error) = crate::acrylic::install_acrylic_into(native) {
+                    eprintln!("Could not install popup Acrylic element: {error:?}");
                 }
             }
         }));
@@ -1007,26 +1008,39 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 let _ = crate::acrylic::clear_children(native);
             }
         }));
-        let mica: Element = host.into();
-        mica.with_key("popup-mica")
+        let acrylic: Element = host.into();
+        acrylic.with_key("popup-acrylic")
     };
 
-    border(
-        grid((mica, body_panel))
+    let surface_height = f64::from(popup::surface_height_dip())
+        .clamp(1.0, window_size.height.max(1.0));
+    let popup_surface = border(
+        grid((acrylic, body_panel))
             .rows([GridLength::Star(1.0)])
             .columns([GridLength::Star(1.0)])
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .vertical_alignment(VerticalAlignment::Stretch)
-            // Match card chrome — SolidBackground is near-black in dark mode and
-            // reads as the same "black gap" when Mica lags a frame behind resize.
-            .background(ThemeRef::CardBackground),
+            // Keep the shell transparent so Desktop Acrylic remains visible
+            // between cards and during the animated height settle.
+            .background(Color::transparent()),
     )
     .padding(Thickness::uniform(border_inset))
     .corner_radius(window_corner_radius)
-    .background(ThemeRef::CardBackground)
+    .background(Color::transparent())
     .width(window_size.width.max(1.0))
-    .height(window_size.height.max(1.0))
+    .height(surface_height)
     .horizontal_alignment(HorizontalAlignment::Stretch)
-    .vertical_alignment(VerticalAlignment::Stretch)
-    .into()
+    .vertical_alignment(VerticalAlignment::Bottom);
+
+    // The native host is deliberately fixed-height while the visible capsule
+    // changes size. This gives the footer a real bottom-aligned parent and
+    // keeps any transition-only host area outside the window region.
+    border(popup_surface)
+        .corner_radius(window_corner_radius)
+        .background(Color::transparent())
+        .width(window_size.width.max(1.0))
+        .height(window_size.height.max(1.0))
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Stretch)
+        .into()
 }

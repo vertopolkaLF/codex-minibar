@@ -1,13 +1,13 @@
 use super::*;
 
-pub(super) const ICON_BUTTON_SIZE: f64 = 36.0;
+pub(super) const ICON_BUTTON_SIZE: f64 = 32.0;
 pub(super) const REORDER_BUTTON_SIZE: f64 = 28.0;
-pub(super) const ALL_TAB_WIDTH: f64 = 44.0;
+pub(super) const ALL_TAB_WIDTH: f64 = 40.0;
 pub(super) const TAB_STRIP_SPACING: f64 = 2.0;
-pub(super) const FOOTER_TAB_PADDING_LEFT: f64 = 14.0;
-pub(super) const FOOTER_PADDING_RIGHT: f64 = 18.0;
-pub(super) const FOOTER_COLUMN_SPACING: f64 = 8.0;
-pub(super) const FOOTER_ACTION_SPACING: f64 = 4.0;
+pub(super) const FOOTER_TAB_PADDING_LEFT: f64 = 12.0;
+pub(super) const FOOTER_PADDING_RIGHT: f64 = 14.0;
+pub(super) const FOOTER_COLUMN_SPACING: f64 = 6.0;
+pub(super) const FOOTER_ACTION_SPACING: f64 = 2.0;
 pub(super) const FOOTER_ACTION_COUNT: f64 = 2.0;
 const PROVIDER_ERROR_COLOR: Color = Color::rgb(247, 117, 117);
 
@@ -129,7 +129,7 @@ pub(super) fn popup_tab_button(
         let icon_name = icon_name.expect("provider tab icon");
         if use_colored_provider_icons {
             layers.push(
-                crate::icons::element(icon_name, 18.0, brand_icon_color)
+                crate::icons::element(icon_name, 16.0, brand_icon_color)
                     .relative_align_h_center()
                     .relative_align_v_center()
                     .into(),
@@ -137,14 +137,14 @@ pub(super) fn popup_tab_button(
         } else {
             // Crossfade idle/emphasized hosts instead of remounting on hover.
             layers.push(
-                crate::icons::element(icon_name, 18.0, idle_icon_color)
+                crate::icons::element(icon_name, 16.0, idle_icon_color)
                     .opacity(if hovered { 0.0 } else { 1.0 })
                     .relative_align_h_center()
                     .relative_align_v_center()
                     .into(),
             );
             layers.push(
-                crate::icons::element(icon_name, 18.0, hover_icon_color)
+                crate::icons::element(icon_name, 16.0, hover_icon_color)
                     .opacity(if hovered { 1.0 } else { 0.0 })
                     .relative_align_h_center()
                     .relative_align_v_center()
@@ -238,7 +238,7 @@ pub(super) fn icon_button(
         hover_icon,
         tip,
         ICON_BUTTON_SIZE,
-        18.0,
+        16.0,
         is_refreshing,
         rotation,
         color_scheme,

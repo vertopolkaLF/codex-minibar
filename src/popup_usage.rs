@@ -377,7 +377,7 @@ fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: bool) -> Eleme
 
 fn usage_card(content: impl Into<Element>) -> Element {
     border(content.into())
-        .corner_radius(f64::from(popup::WINDOW_CORNER_RADIUS_DIP))
+        .corner_radius(f64::from(popup::CARD_CORNER_RADIUS_DIP))
         .padding(Thickness::uniform(USAGE_CARD_PAD))
         .background(ThemeRef::CardBackground)
         .border_thickness(Thickness::uniform(1.0))

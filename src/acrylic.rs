@@ -12,6 +12,10 @@
 
 use windows_core::{self, Interface, Result, RuntimeName, RuntimeType, Type, imp::FactoryCache};
 
+/// Preserve the existing Settings window Mica clipping; popup chrome uses the
+/// larger radius from `popup::WINDOW_CORNER_RADIUS_DIP` separately.
+const SETTINGS_MICA_CORNER_RADIUS_DIP: i32 = 8;
+
 /// XAML host: acrylic clipped to the same radius as the popup chrome.
 fn acrylic_xaml() -> String {
     format!(
@@ -48,7 +52,7 @@ fn mica_xaml() -> String {
     </SystemBackdropElement.SystemBackdrop>
 </SystemBackdropElement>
 "#,
-        crate::popup::WINDOW_CORNER_RADIUS_DIP
+        SETTINGS_MICA_CORNER_RADIUS_DIP
     )
 }
 
@@ -66,9 +70,14 @@ fn accent_github_xaml() -> &'static str {
 "#
 }
 
-/// Host a rounded `SystemBackdropElement` inside `mount` (a `Panel`).
+/// Host a rounded Desktop Acrylic `SystemBackdropElement` inside `mount`.
+pub fn install_acrylic_into(mount: windows_core::IInspectable) -> Result<()> {
+    install_into_inner(mount, &acrylic_xaml())
+}
+
+/// Backwards-compatible convenience wrapper for older callers.
 pub fn install_into(mount: windows_core::IInspectable) {
-    let _ = install_into_inner(mount, &acrylic_xaml());
+    let _ = install_acrylic_into(mount);
 }
 
 /// Host Mica inside `mount` as part of the XAML composition tree.

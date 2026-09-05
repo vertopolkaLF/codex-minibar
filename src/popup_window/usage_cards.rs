@@ -157,7 +157,7 @@ fn usage_stats_card(
     set_hovered: SetState<Option<UsageStatsHover>>,
     on_open: impl Fn() + Clone + 'static,
 ) -> Element {
-    let radius = f64::from(popup::WINDOW_CORNER_RADIUS_DIP);
+    let radius = f64::from(popup::CARD_CORNER_RADIUS_DIP);
     let hover_anim = crate::theme::duration(crate::theme::CONTROL_FASTER_ANIMATION);
     let set_on_enter = set_hovered.clone();
     let set_on_exit = set_hovered;
