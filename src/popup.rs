@@ -12,11 +12,12 @@ use std::{
     rc::Rc,
     sync::{
         Mutex, MutexGuard,
-        atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicIsize, Ordering},
+        atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicIsize, AtomicU8, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use crate::settings::{BottomBarSize, PopupCornerRadius};
 use windows_reactor::{ReactorHost, Rendering, on_rendering};
 use windows_sys::Win32::{
     Foundation::{HWND, POINT, RECT},
@@ -65,11 +66,11 @@ pub const POPUP_WIDTH: i32 = 380;
 const LIMIT_CARD_HEIGHT: i32 = 82;
 const BODY_PAD_Y: i32 = 36; // top 16 + bottom 20
 const BODY_SPACING: i32 = 12;
-const FOOTER_HEIGHT: i32 = 51; // 8 + 32px icon row + 10 + top border
+const DEFAULT_FOOTER_HEIGHT: i32 = BottomBarSize::Comfortable.footer_height_dip();
 const CHROME_HEIGHT: i32 = 4; // outer border + inset
 /// Baseline height when the two standard limit cards and footer are shown.
 pub const POPUP_HEIGHT: i32 =
-    BODY_PAD_Y + LIMIT_CARD_HEIGHT * 2 + BODY_SPACING + FOOTER_HEIGHT + CHROME_HEIGHT;
+    BODY_PAD_Y + LIMIT_CARD_HEIGHT * 2 + BODY_SPACING + DEFAULT_FOOTER_HEIGHT + CHROME_HEIGHT;
 /// Smallest popup: two limit cards plus the footer.
 pub const POPUP_HEIGHT_MIN: i32 = POPUP_HEIGHT;
 /// Temporary safety ceiling before the popup is assigned to a monitor.
@@ -80,8 +81,8 @@ pub const POPUP_HEIGHT_MIN: i32 = POPUP_HEIGHT;
 pub const FALLBACK_CLIENT_HEIGHT_LIMIT: i32 = 4_096;
 /// Popup height as a share of the monitor it is opened on.
 const POPUP_SCREEN_HEIGHT_FRACTION: f64 = 0.80;
-/// Must match the root XAML `corner_radius` in `app.rs`.
-pub const WINDOW_CORNER_RADIUS_DIP: i32 = 16;
+/// Historical popup radius used before runtime appearance settings are loaded.
+pub const WINDOW_CORNER_RADIUS_DIP: i32 = PopupCornerRadius::Small.dip();
 /// Inner card radius. Keep cards visibly nested without turning the whole
 /// popup into a stack of identical rounded rectangles.
 pub const CARD_CORNER_RADIUS_DIP: i32 = 10;
@@ -113,6 +114,8 @@ static LAYOUT_SURFACE_HEIGHT_DIP: AtomicI32 = AtomicI32::new(POPUP_HEIGHT);
 static ANIMATED_SURFACE_HEIGHT_DIP: AtomicI32 = AtomicI32::new(POPUP_HEIGHT);
 /// Fixed native host height while the visible capsule animates inside it.
 static HOST_CLIENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(POPUP_HEIGHT);
+static BOTTOM_BAR_SIZE: AtomicU8 = AtomicU8::new(BottomBarSize::Comfortable.index() as u8);
+static CORNER_RADIUS_DIP: AtomicI32 = AtomicI32::new(WINDOW_CORNER_RADIUS_DIP);
 /// Natural height of the body stack, including its padding, in DIPs.
 static BODY_CONTENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(0);
 /// Dynamic client-height limit for the monitor that owns the current popup.
@@ -212,10 +215,67 @@ pub fn max_client_height_dip() -> i32 {
     MAX_CLIENT_HEIGHT_DIP.load(Ordering::SeqCst)
 }
 
+pub fn bottom_bar_size() -> BottomBarSize {
+    BottomBarSize::from_index(i32::from(BOTTOM_BAR_SIZE.load(Ordering::SeqCst)))
+}
+
+pub fn bottom_bar_icon_size() -> f64 {
+    bottom_bar_size().icon_button_size()
+}
+
+pub fn bottom_bar_icon_glyph_size() -> f64 {
+    bottom_bar_size().icon_glyph_size()
+}
+
+fn footer_height_dip() -> i32 {
+    bottom_bar_size().footer_height_dip()
+}
+
+pub fn corner_radius_dip() -> i32 {
+    CORNER_RADIUS_DIP.load(Ordering::SeqCst)
+}
+
+/// Apply appearance values that affect the popup outside the reactive tree.
+/// Startup calls this before the host exists; later calls update the visible
+/// region immediately and the next render picks up the new XAML geometry.
+pub fn apply_popup_appearance(size: BottomBarSize, radius: PopupCornerRadius) {
+    let size_index = size.index() as u8;
+    let size_changed = BOTTOM_BAR_SIZE.swap(size_index, Ordering::SeqCst) != size_index;
+    let radius_dip = radius.dip();
+    let radius_changed = CORNER_RADIUS_DIP.swap(radius_dip, Ordering::SeqCst) != radius_dip;
+
+    if !size_changed && !radius_changed {
+        return;
+    }
+
+    if size_changed {
+        let body_height = BODY_CONTENT_HEIGHT_DIP.load(Ordering::SeqCst);
+        if body_height > 0 {
+            set_client_height_dip(body_height + footer_height_dip() + CHROME_HEIGHT);
+        }
+    }
+
+    if radius_changed {
+        let radius_px = (i64::from(radius_dip) * i64::from(host_dpi(96)) / 96) as i32;
+        CORNER_RADIUS_PX.store(radius_px.max(1), Ordering::SeqCst);
+        if is_visible()
+            && let Some(hwnd) = current_hwnd()
+        {
+            apply_surface_window_region(hwnd, f64::from(animated_surface_height_dip()), None);
+        }
+    }
+
+    if current_hwnd().is_some()
+        && (!size_changed || BODY_CONTENT_HEIGHT_DIP.load(Ordering::SeqCst) == 0)
+    {
+        windows_reactor::request_ui_rerender_on_ui_thread();
+    }
+}
+
 /// Visible body height in DIP (popup client minus footer and chrome).
 pub fn body_viewport_height_dip() -> f64 {
     let layout_height = LAYOUT_SURFACE_HEIGHT_DIP.load(Ordering::SeqCst);
-    f64::from((layout_height - FOOTER_HEIGHT - CHROME_HEIGHT).max(80))
+    f64::from((layout_height - footer_height_dip() - CHROME_HEIGHT).max(80))
 }
 
 /// Current visible capsule height in DIPs. The native host can be larger while
@@ -463,9 +523,18 @@ pub fn height_for(error: Option<&str>) -> i32 {
         blocks.insert(0, info_bar_height(message));
     }
     let spacings = BODY_SPACING * (blocks.len().saturating_sub(1) as i32);
-    let height = BODY_PAD_Y + blocks.iter().sum::<i32>() + spacings + FOOTER_HEIGHT + CHROME_HEIGHT;
+    let height =
+        BODY_PAD_Y + blocks.iter().sum::<i32>() + spacings + footer_height_dip() + CHROME_HEIGHT;
     let max_height = max_client_height_dip();
-    height.clamp(POPUP_HEIGHT_MIN.min(max_height), max_height)
+    height.clamp(minimum_popup_height_dip().min(max_height), max_height)
+}
+
+fn minimum_popup_height_dip() -> i32 {
+    BODY_PAD_Y
+        + LIMIT_CARD_HEIGHT * 2
+        + BODY_SPACING
+        + footer_height_dip()
+        + CHROME_HEIGHT
 }
 
 fn info_bar_height(message: &str) -> i32 {
@@ -526,7 +595,7 @@ fn resize_for_body_content() {
     if body_height < 1 {
         return;
     }
-    set_client_height_dip(body_height + FOOTER_HEIGHT + CHROME_HEIGHT);
+    set_client_height_dip(body_height + footer_height_dip() + CHROME_HEIGHT);
 }
 
 /// Retarget the visible capsule and re-pin it if the popup is open.
@@ -1262,7 +1331,7 @@ pub fn show_near(anchor_x: i32, anchor_y: i32) {
     // oversized HWND until a tab switch happens to publish a different height.
     sync_host_constraints();
     prepare_hidden_host_height(max_client_height_dip());
-    let corner_px = (i64::from(WINDOW_CORNER_RADIUS_DIP) * i64::from(dpi) / 96) as i32;
+    let corner_px = (i64::from(corner_radius_dip()) * i64::from(dpi) / 96) as i32;
     CORNER_RADIUS_PX.store(corner_px.max(1), Ordering::SeqCst);
 
     unsafe {

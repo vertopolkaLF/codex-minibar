@@ -7,7 +7,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     // and sits top-aligned in a taller HWND, leaving a black band under the footer.
     let window_size = cx.use_inner_size();
     let color_scheme = cx.use_color_scheme();
-    let window_corner_radius = f64::from(popup::WINDOW_CORNER_RADIUS_DIP);
+    let bottom_bar_size = popup::bottom_bar_size();
+    let window_corner_radius = f64::from(popup::corner_radius_dip());
     // Keep the content one physical pixel inside the Acrylic stroke so GDI's
     // aliased region cannot trim its anti-aliased outer corner pixels.
     let border_inset = 96.0 / f64::from(dpi);
@@ -690,7 +691,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         );
         horizontal_wheel_strip(
             hstack(provider_tabs)
-                .spacing(2.0)
+                .spacing(bottom_bar_size.tab_spacing())
                 .horizontal_alignment(HorizontalAlignment::Left)
                 .vertical_alignment(VerticalAlignment::Center)
                 .margin(Thickness {
@@ -705,7 +706,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 // a prior tab's text/icon. Scroll offset stays out of the
                 // key so panning cannot recycle swap-chain hosts.
                 .with_key(tabs_key.clone()),
-            ICON_BUTTON_SIZE,
+            bottom_bar_size.icon_button_size(),
             tabs_key,
             on_tab_wheel,
         )
@@ -788,13 +789,13 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                                 notifications::show("Update failed", &format!("{error:#}"));
                             }
                         })
-                        .height(ICON_BUTTON_SIZE)
-                        .min_height(ICON_BUTTON_SIZE)
-                        .max_height(ICON_BUTTON_SIZE)
+                        .height(bottom_bar_size.icon_button_size())
+                        .min_height(bottom_bar_size.icon_button_size())
+                        .max_height(bottom_bar_size.icon_button_size())
                         .padding(Thickness {
-                            left: 10.0,
+                            left: bottom_bar_size.update_button_padding(),
                             top: 0.0,
-                            right: 10.0,
+                            right: bottom_bar_size.update_button_padding(),
                             bottom: 0.0,
                         })
                         .vertical_alignment(VerticalAlignment::Center)
@@ -804,7 +805,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 }
                 actions
             })
-            .spacing(4.0)
+            .spacing(bottom_bar_size.action_spacing())
             .horizontal_alignment(HorizontalAlignment::Right)
             .vertical_alignment(VerticalAlignment::Center)
             // Update membership swaps control kinds; key the whole strip so
@@ -818,15 +819,19 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         ))
         .rows([GridLength::Auto])
         .columns([GridLength::Star(1.0), GridLength::Auto])
-        .column_spacing(8.0)
+        .column_spacing(bottom_bar_size.column_spacing())
         .horizontal_alignment(HorizontalAlignment::Stretch),
     )
     .padding(Thickness {
-        left: if show_footer_tabs { 12.0 } else { 18.0 },
-        top: 8.0,
-        right: 14.0,
+        left: if show_footer_tabs {
+            bottom_bar_size.tab_padding_left()
+        } else {
+            bottom_bar_size.no_tabs_padding_left()
+        },
+        top: bottom_bar_size.padding_top(),
+        right: bottom_bar_size.padding_right(),
         // Extra bottom padding so content clears the rounded window corners.
-        bottom: 10.0,
+        bottom: bottom_bar_size.padding_bottom(),
     })
     .border_thickness(Thickness {
         left: 0.0,
@@ -1007,7 +1012,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             }
         }));
         let acrylic: Element = host.into();
-        acrylic.with_key("popup-acrylic")
+        acrylic.with_key(format!("popup-acrylic-{}", popup::corner_radius_dip()))
     };
 
     let surface_height =

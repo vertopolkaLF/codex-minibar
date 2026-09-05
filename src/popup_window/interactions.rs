@@ -296,12 +296,12 @@ pub(super) fn openrouter_delete_button(
         .into();
     relative_panel(vec![hover_background, idle_icon, accent_icon])
         .tooltip("Remove key")
-        .width(ICON_BUTTON_SIZE)
-        .height(ICON_BUTTON_SIZE)
-        .min_width(ICON_BUTTON_SIZE)
-        .min_height(ICON_BUTTON_SIZE)
-        .max_width(ICON_BUTTON_SIZE)
-        .max_height(ICON_BUTTON_SIZE)
+        .width(POPUP_ACTION_SIZE)
+        .height(POPUP_ACTION_SIZE)
+        .min_width(POPUP_ACTION_SIZE)
+        .min_height(POPUP_ACTION_SIZE)
+        .max_width(POPUP_ACTION_SIZE)
+        .max_height(POPUP_ACTION_SIZE)
         .background(Color::transparent())
         .on_pointer_entered(move |_: PointerEventInfo| {
             set_on_enter.call(Some(button_id.clone()));
@@ -310,7 +310,7 @@ pub(super) fn openrouter_delete_button(
         .on_tapped(on_click)
         .with_key(format!(
             "{id}-delete-{}-18-{:02X}{:02X}{:02X}",
-            ICON_BUTTON_SIZE, idle_color.r, idle_color.g, idle_color.b
+            POPUP_ACTION_SIZE, idle_color.r, idle_color.g, idle_color.b
         ))
         .into()
 }

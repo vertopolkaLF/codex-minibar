@@ -12,8 +12,8 @@
 
 use windows_core::{self, Interface, Result, RuntimeName, RuntimeType, Type, imp::FactoryCache};
 
-/// Preserve the existing Settings window Mica clipping; popup chrome uses the
-/// larger radius from `popup::WINDOW_CORNER_RADIUS_DIP` separately.
+/// Preserve the existing Settings window Mica clipping; popup Acrylic reads
+/// its live radius from the popup appearance settings.
 const SETTINGS_MICA_CORNER_RADIUS_DIP: i32 = 8;
 
 /// XAML host: acrylic and its outer stroke are one visual surface. Keeping the
@@ -39,8 +39,8 @@ fn acrylic_xaml() -> String {
     </SystemBackdropElement>
 </Border>
 "#,
-        crate::popup::WINDOW_CORNER_RADIUS_DIP,
-        crate::popup::WINDOW_CORNER_RADIUS_DIP
+        crate::popup::corner_radius_dip(),
+        crate::popup::corner_radius_dip()
     )
 }
 

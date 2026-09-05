@@ -8,6 +8,8 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let set_theme = ctx.set_theme.clone();
     let set_accent_color = ctx.set_accent_color.clone();
     let set_animations_enabled = ctx.set_animations_enabled.clone();
+    let set_bottom_bar_size = ctx.set_bottom_bar_size.clone();
+    let set_popup_corner_radius = ctx.set_popup_corner_radius.clone();
     let set_time_format = ctx.set_time_format.clone();
     let set_claude_enabled = ctx.set_claude_enabled.clone();
     let set_cursor_enabled = ctx.set_cursor_enabled.clone();
@@ -55,6 +57,8 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
         theme: set_theme,
         accent_color: set_accent_color,
         animations_enabled: set_animations_enabled,
+        bottom_bar_size: set_bottom_bar_size,
+        popup_corner_radius: set_popup_corner_radius,
         time_format: set_time_format,
         codex_enabled: set_codex_enabled,
         claude_enabled: set_claude_enabled,

@@ -10,7 +10,7 @@ use chrono::{DateTime, Local, Timelike};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 31;
+pub const SETTINGS_VERSION: u32 = 32;
 
 /// 255 until `TimeFormat::apply` runs so first paint can still follow Windows.
 static TIME_FORMAT: AtomicU8 = AtomicU8::new(u8::MAX);
@@ -93,6 +93,167 @@ impl AccentColor {
             Self::Orange => Some((0xCA, 0x50, 0x10)),
             Self::Green => Some((0x10, 0x7C, 0x10)),
             Self::Teal => Some((0x00, 0x83, 0x8C)),
+        }
+    }
+}
+
+/// Density presets for the popup footer. `Comfortable` preserves the original
+/// footer proportions; `Compact` is the newer, tighter presentation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BottomBarSize {
+    #[default]
+    Comfortable,
+    Compact,
+}
+
+impl BottomBarSize {
+    pub const fn index(self) -> i32 {
+        match self {
+            Self::Comfortable => 0,
+            Self::Compact => 1,
+        }
+    }
+
+    pub const fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Compact,
+            _ => Self::Comfortable,
+        }
+    }
+
+    pub const fn footer_height_dip(self) -> i32 {
+        match self {
+            Self::Comfortable => 61,
+            Self::Compact => 51,
+        }
+    }
+
+    pub const fn icon_button_size(self) -> f64 {
+        match self {
+            Self::Comfortable => 36.0,
+            Self::Compact => 32.0,
+        }
+    }
+
+    pub const fn icon_glyph_size(self) -> f64 {
+        match self {
+            Self::Comfortable => 18.0,
+            Self::Compact => 16.0,
+        }
+    }
+
+    pub const fn all_tab_width(self) -> f64 {
+        match self {
+            Self::Comfortable => 44.0,
+            Self::Compact => 40.0,
+        }
+    }
+
+    pub const fn tab_padding_left(self) -> f64 {
+        match self {
+            Self::Comfortable => 14.0,
+            Self::Compact => 12.0,
+        }
+    }
+
+    pub const fn tab_spacing(self) -> f64 {
+        2.0
+    }
+
+    pub const fn padding_right(self) -> f64 {
+        match self {
+            Self::Comfortable => 18.0,
+            Self::Compact => 14.0,
+        }
+    }
+
+    pub const fn column_spacing(self) -> f64 {
+        match self {
+            Self::Comfortable => 8.0,
+            Self::Compact => 6.0,
+        }
+    }
+
+    pub const fn action_spacing(self) -> f64 {
+        match self {
+            Self::Comfortable => 4.0,
+            Self::Compact => 2.0,
+        }
+    }
+
+    pub const fn padding_top(self) -> f64 {
+        match self {
+            Self::Comfortable => 12.0,
+            Self::Compact => 9.0,
+        }
+    }
+
+    pub const fn padding_bottom(self) -> f64 {
+        self.padding_top()
+    }
+
+    pub const fn no_tabs_padding_left(self) -> f64 {
+        match self {
+            Self::Comfortable => 24.0,
+            Self::Compact => 18.0,
+        }
+    }
+
+    pub const fn update_button_padding(self) -> f64 {
+        match self {
+            Self::Comfortable => 12.0,
+            Self::Compact => 10.0,
+        }
+    }
+}
+
+/// Discrete popup corner-radius choices. The historical 8 DIP radius is the
+/// default; larger values remain available for the softer modern shell.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PopupCornerRadius {
+    #[default]
+    Small,
+    Medium,
+    Large,
+    ExtraLarge,
+}
+
+impl PopupCornerRadius {
+    pub const fn index(self) -> i32 {
+        match self {
+            Self::Small => 0,
+            Self::Medium => 1,
+            Self::Large => 2,
+            Self::ExtraLarge => 3,
+        }
+    }
+
+    pub const fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Medium,
+            2 => Self::Large,
+            3 => Self::ExtraLarge,
+            _ => Self::Small,
+        }
+    }
+
+    pub const fn from_dip(dip: i32) -> Self {
+        match dip {
+            12 => Self::Medium,
+            16 => Self::Large,
+            20 => Self::ExtraLarge,
+            _ => Self::Small,
+        }
+    }
+
+    pub const fn dip(self) -> i32 {
+        match self {
+            Self::Small => 8,
+            Self::Medium => 12,
+            Self::Large => 16,
+            Self::ExtraLarge => 20,
         }
     }
 }
@@ -1295,6 +1456,10 @@ pub struct Settings {
     /// App-level accessibility override. The Windows animation preference is
     /// still honored when this remains enabled.
     pub animations_enabled: bool,
+    /// Popup footer density; the historical, roomier footer is the default.
+    pub bottom_bar_size: BottomBarSize,
+    /// Popup outer corner radius in DIPs; 8 DIP preserves the historical look.
+    pub popup_corner_radius: PopupCornerRadius,
     /// 12-hour or 24-hour clocks. Missing values follow the Windows locale.
     pub time_format: TimeFormat,
     pub providers: ProviderSettings,
@@ -1364,6 +1529,8 @@ impl Default for Settings {
             theme: AppTheme::Auto,
             accent_color: AccentColor::Windows,
             animations_enabled: true,
+            bottom_bar_size: BottomBarSize::default(),
+            popup_corner_radius: PopupCornerRadius::default(),
             time_format: TimeFormat::from_windows(),
             providers: ProviderSettings::default(),
             popup_order: PopupWidgetKind::default_order(),
@@ -1782,6 +1949,7 @@ impl Settings {
     /// Applies settings whose effect lives outside the render tree.
     pub fn apply_runtime_effects(&self) -> Result<()> {
         crate::theme::set_animations_enabled(self.animations_enabled);
+        crate::popup::apply_popup_appearance(self.bottom_bar_size, self.popup_corner_radius);
         self.time_format.apply();
         apply_startup_registration(self.start_at_login)
     }
@@ -2519,6 +2687,17 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.insert("version".into(), toml::Value::Integer(31));
                 version = 31;
             }
+            31 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("bottom_bar_size")
+                    .or_insert_with(|| toml::Value::String("comfortable".into()));
+                root.entry("popup_corner_radius")
+                    .or_insert_with(|| toml::Value::String("small".into()));
+                root.insert("version".into(), toml::Value::Integer(32));
+                version = 32;
+            }
             // Unknown future/gap versions: stamp current and keep decoding with
             // serde defaults rather than refusing to start.
             _ => {
@@ -2548,6 +2727,8 @@ mod tests {
         assert_eq!(value.theme, AppTheme::Auto);
         assert_eq!(value.accent_color, AccentColor::Windows);
         assert!(value.animations_enabled);
+        assert_eq!(value.bottom_bar_size, BottomBarSize::Comfortable);
+        assert_eq!(value.popup_corner_radius, PopupCornerRadius::Small);
         assert_eq!(value.time_format, TimeFormat::from_windows());
         assert!(!value.use_colored_provider_icons);
         assert!(value.use_colored_sidebar_icons);
@@ -2589,6 +2770,72 @@ mod tests {
         assert!(!value.notifications.weekly_low_usage_enabled);
         assert_eq!(value.notifications.weekly_low_usage_threshold_percent, 20);
         assert!(value.notifications.update_available);
+    }
+
+    #[test]
+    fn popup_appearance_presets_keep_stable_indices_and_metrics() {
+        assert_eq!(BottomBarSize::Comfortable.index(), 0);
+        assert_eq!(BottomBarSize::Compact.index(), 1);
+        assert_eq!(BottomBarSize::from_index(1), BottomBarSize::Compact);
+        assert_eq!(BottomBarSize::from_index(99), BottomBarSize::Comfortable);
+        assert_eq!(BottomBarSize::Comfortable.footer_height_dip(), 61);
+        assert_eq!(BottomBarSize::Compact.footer_height_dip(), 51);
+        assert_eq!(BottomBarSize::Comfortable.icon_button_size(), 36.0);
+        assert_eq!(BottomBarSize::Compact.icon_button_size(), 32.0);
+        assert_eq!(BottomBarSize::Comfortable.icon_glyph_size(), 18.0);
+        assert_eq!(BottomBarSize::Compact.icon_glyph_size(), 16.0);
+        assert_eq!(
+            BottomBarSize::Comfortable.padding_top(),
+            BottomBarSize::Comfortable.padding_bottom()
+        );
+        assert_eq!(
+            BottomBarSize::Compact.padding_top(),
+            BottomBarSize::Compact.padding_bottom()
+        );
+
+        assert_eq!(PopupCornerRadius::Small.index(), 0);
+        assert_eq!(PopupCornerRadius::ExtraLarge.index(), 3);
+        assert_eq!(PopupCornerRadius::from_index(2), PopupCornerRadius::Large);
+        assert_eq!(PopupCornerRadius::from_index(99), PopupCornerRadius::Small);
+        assert_eq!(PopupCornerRadius::from_dip(8), PopupCornerRadius::Small);
+        assert_eq!(PopupCornerRadius::from_dip(12), PopupCornerRadius::Medium);
+        assert_eq!(PopupCornerRadius::from_dip(16), PopupCornerRadius::Large);
+        assert_eq!(PopupCornerRadius::from_dip(20), PopupCornerRadius::ExtraLarge);
+        assert_eq!(PopupCornerRadius::Small.dip(), 8);
+        assert_eq!(PopupCornerRadius::ExtraLarge.dip(), 20);
+    }
+
+    #[test]
+    fn migrates_v31_settings_with_popup_appearance_defaults() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(&path, "version = 31\n").unwrap();
+
+        let loaded = Settings::load_or_create(&path).unwrap();
+
+        assert_eq!(loaded.version, SETTINGS_VERSION);
+        assert_eq!(loaded.bottom_bar_size, BottomBarSize::Comfortable);
+        assert_eq!(loaded.popup_corner_radius, PopupCornerRadius::Small);
+        let rewritten = fs::read_to_string(path).unwrap();
+        assert!(rewritten.contains("bottom_bar_size = \"comfortable\""));
+        assert!(rewritten.contains("popup_corner_radius = \"small\""));
+    }
+
+    #[test]
+    fn popup_appearance_settings_round_trip_through_disk() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        let settings = Settings {
+            bottom_bar_size: BottomBarSize::Compact,
+            popup_corner_radius: PopupCornerRadius::Large,
+            ..Settings::default()
+        };
+        settings.save(&path).unwrap();
+
+        let loaded = Settings::load_or_create(&path).unwrap();
+
+        assert_eq!(loaded.bottom_bar_size, BottomBarSize::Compact);
+        assert_eq!(loaded.popup_corner_radius, PopupCornerRadius::Large);
     }
 
     #[test]

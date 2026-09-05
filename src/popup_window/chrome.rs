@@ -1,31 +1,28 @@
 use super::*;
 
-pub(super) const ICON_BUTTON_SIZE: f64 = 32.0;
+pub(super) const POPUP_ACTION_SIZE: f64 = 32.0;
 pub(super) const REORDER_BUTTON_SIZE: f64 = 28.0;
-pub(super) const ALL_TAB_WIDTH: f64 = 40.0;
 pub(super) const TAB_STRIP_SPACING: f64 = 2.0;
-pub(super) const FOOTER_TAB_PADDING_LEFT: f64 = 12.0;
-pub(super) const FOOTER_PADDING_RIGHT: f64 = 14.0;
-pub(super) const FOOTER_COLUMN_SPACING: f64 = 6.0;
-pub(super) const FOOTER_ACTION_SPACING: f64 = 2.0;
 pub(super) const FOOTER_ACTION_COUNT: f64 = 2.0;
 const PROVIDER_ERROR_COLOR: Color = Color::rgb(247, 117, 117);
 
 pub(super) fn provider_tab_strip_content_width(provider_count: usize) -> f64 {
     // Home + Usage + enabled provider tabs.
-    ICON_BUTTON_SIZE
-        + ICON_BUTTON_SIZE
+    let size = popup::bottom_bar_size();
+    size.icon_button_size()
+        + size.icon_button_size()
         + TAB_STRIP_SPACING
-        + provider_count as f64 * (ICON_BUTTON_SIZE + TAB_STRIP_SPACING)
+        + provider_count as f64 * (size.icon_button_size() + TAB_STRIP_SPACING)
 }
 
 pub(super) fn provider_tab_strip_viewport_width() -> f64 {
+    let size = popup::bottom_bar_size();
     f64::from(popup::POPUP_WIDTH)
-        - FOOTER_TAB_PADDING_LEFT
-        - FOOTER_PADDING_RIGHT
-        - FOOTER_COLUMN_SPACING
-        - (ICON_BUTTON_SIZE * FOOTER_ACTION_COUNT
-            + FOOTER_ACTION_SPACING * (FOOTER_ACTION_COUNT - 1.0))
+        - size.tab_padding_left()
+        - size.padding_right()
+        - size.column_spacing()
+        - (size.icon_button_size() * FOOTER_ACTION_COUNT
+            + size.action_spacing() * (FOOTER_ACTION_COUNT - 1.0))
 }
 
 pub(super) fn provider_tabs_key(
@@ -34,19 +31,24 @@ pub(super) fn provider_tabs_key(
     use_colored_provider_icons: bool,
     color_scheme: ColorScheme,
 ) -> String {
+    let size = popup::bottom_bar_size();
     format!(
-        "provider-tabs-home-usage-{}-{}-{}-{}",
+        "provider-tabs-home-usage-{}-{}-{}-{}-{}",
         provider_order_key(providers),
         show_provider_icon_tabs,
         use_colored_provider_icons,
         color_scheme as i32,
+        size.index(),
     )
 }
 
 pub(super) fn footer_actions_key(update_available: bool, color_scheme: ColorScheme) -> String {
+    let size = popup::bottom_bar_size();
     format!(
-        "footer-actions-{}-{}",
-        update_available, color_scheme as i32
+        "footer-actions-{}-{}-{}",
+        update_available,
+        color_scheme as i32,
+        size.index(),
     )
 }
 
@@ -66,6 +68,8 @@ pub(super) fn popup_tab_button(
     on_click: impl IntoUnitCallback,
 ) -> Element {
     let on_click = on_click.into_unit_callback();
+    let bottom_bar = popup::bottom_bar_size();
+    let glyph_size = bottom_bar.icon_glyph_size();
     let hovered = hovered_action.as_deref() == Some(id);
     let set_on_enter = set_hovered_action.clone();
     let set_on_exit = set_hovered_action;
@@ -82,9 +86,9 @@ pub(super) fn popup_tab_button(
         _ => idle_icon_color,
     };
     let tab_width = if label.is_some() {
-        ALL_TAB_WIDTH
+        bottom_bar.all_tab_width()
     } else {
-        ICON_BUTTON_SIZE
+        bottom_bar.icon_button_size()
     };
     let hover_background: Element = border(Element::Empty)
         .background(ThemeRef::SubtleFill)
@@ -129,7 +133,7 @@ pub(super) fn popup_tab_button(
         let icon_name = icon_name.expect("provider tab icon");
         if use_colored_provider_icons {
             layers.push(
-                crate::icons::element(icon_name, 16.0, brand_icon_color)
+                crate::icons::element(icon_name, glyph_size, brand_icon_color)
                     .relative_align_h_center()
                     .relative_align_v_center()
                     .into(),
@@ -137,14 +141,14 @@ pub(super) fn popup_tab_button(
         } else {
             // Crossfade idle/emphasized hosts instead of remounting on hover.
             layers.push(
-                crate::icons::element(icon_name, 16.0, idle_icon_color)
+                crate::icons::element(icon_name, glyph_size, idle_icon_color)
                     .opacity(if hovered { 0.0 } else { 1.0 })
                     .relative_align_h_center()
                     .relative_align_v_center()
                     .into(),
             );
             layers.push(
-                crate::icons::element(icon_name, 16.0, hover_icon_color)
+                crate::icons::element(icon_name, glyph_size, hover_icon_color)
                     .opacity(if hovered { 1.0 } else { 0.0 })
                     .relative_align_h_center()
                     .relative_align_v_center()
@@ -183,11 +187,11 @@ pub(super) fn popup_tab_button(
     relative_panel(layers)
         .tooltip(tip)
         .width(tab_width)
-        .height(ICON_BUTTON_SIZE)
+        .height(bottom_bar.icon_button_size())
         .min_width(tab_width)
-        .min_height(ICON_BUTTON_SIZE)
+        .min_height(bottom_bar.icon_button_size())
         .max_width(tab_width)
-        .max_height(ICON_BUTTON_SIZE)
+        .max_height(bottom_bar.icon_button_size())
         .background(Color::transparent())
         .on_pointer_entered(move |_: PointerEventInfo| {
             set_on_enter.call(Some(id.to_string()));
@@ -237,8 +241,8 @@ pub(super) fn icon_button(
         normal_icon,
         hover_icon,
         tip,
-        ICON_BUTTON_SIZE,
-        16.0,
+        popup::bottom_bar_icon_size(),
+        popup::bottom_bar_icon_glyph_size(),
         is_refreshing,
         rotation,
         color_scheme,

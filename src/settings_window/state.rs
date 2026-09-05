@@ -5,6 +5,8 @@ pub(super) struct SettingsWindowState {
     pub(super) theme: SetState<AppTheme>,
     pub(super) accent_color: SetState<AccentColor>,
     pub(super) animations_enabled: SetState<bool>,
+    pub(super) bottom_bar_size: SetState<BottomBarSize>,
+    pub(super) popup_corner_radius: SetState<PopupCornerRadius>,
     pub(super) time_format: SetState<TimeFormat>,
     pub(super) codex_enabled: SetState<bool>,
     pub(super) claude_enabled: SetState<bool>,
@@ -50,6 +52,8 @@ impl SettingsWindowState {
         self.theme.call(settings.theme);
         self.accent_color.call(settings.accent_color);
         self.animations_enabled.call(settings.animations_enabled);
+        self.bottom_bar_size.call(settings.bottom_bar_size);
+        self.popup_corner_radius.call(settings.popup_corner_radius);
         self.time_format.call(settings.time_format);
         self.codex_enabled
             .call(settings.providers.is_enabled(ProviderKind::Codex));
@@ -138,6 +142,8 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) theme: AppTheme,
     pub(super) accent_color: AccentColor,
     pub(super) animations_enabled: bool,
+    pub(super) bottom_bar_size: BottomBarSize,
+    pub(super) popup_corner_radius: PopupCornerRadius,
     pub(super) time_format: TimeFormat,
     pub(super) codex_enabled: bool,
     pub(super) claude_enabled: bool,
@@ -203,6 +209,8 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) set_theme: SetState<AppTheme>,
     pub(super) set_accent_color: SetState<AccentColor>,
     pub(super) set_animations_enabled: SetState<bool>,
+    pub(super) set_bottom_bar_size: SetState<BottomBarSize>,
+    pub(super) set_popup_corner_radius: SetState<PopupCornerRadius>,
     pub(super) set_time_format: SetState<TimeFormat>,
     pub(super) set_claude_enabled: SetState<bool>,
     pub(super) set_cursor_enabled: SetState<bool>,

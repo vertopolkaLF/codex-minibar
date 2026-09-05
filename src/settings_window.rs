@@ -4,10 +4,10 @@
 //! details; both surfaces share tokens from [`crate::theme`].
 
 use crate::settings::{
-    AccentColor, AppTheme, AutoActivationPause, LimitRefreshInterval, LimitValue,
-    OpenRouterAccount, PopupVisibility, PopupWidgetKind, ProviderKind, ScheduledActivation,
-    Settings, TimeFormat, TotalSpendPresentation, TrayColorMode, TrayFixedColor, TrayIndicator,
-    TrayPresentation, TrayWidget, TrayWidgetKind,
+    AccentColor, AppTheme, AutoActivationPause, BottomBarSize, LimitRefreshInterval, LimitValue,
+    OpenRouterAccount, PopupCornerRadius, PopupVisibility, PopupWidgetKind, ProviderKind,
+    ScheduledActivation, Settings, TimeFormat, TotalSpendPresentation, TrayColorMode,
+    TrayFixedColor, TrayIndicator, TrayPresentation, TrayWidget, TrayWidgetKind,
 };
 use crate::settings_controls::{
     SETTINGS_CARD_PADDING, settings_action_card, settings_brick_body_height, settings_brick_row,
@@ -287,6 +287,9 @@ pub fn render(
     let (theme, set_theme) = cx.use_state(settings.theme);
     let (accent_color, set_accent_color) = cx.use_state(settings.accent_color);
     let (animations_enabled, set_animations_enabled) = cx.use_state(settings.animations_enabled);
+    let (bottom_bar_size, set_bottom_bar_size) = cx.use_state(settings.bottom_bar_size);
+    let (popup_corner_radius, set_popup_corner_radius) =
+        cx.use_state(settings.popup_corner_radius);
     let (time_format, set_time_format) = cx.use_state(settings.time_format);
     cx.use_effect(
         (theme, accent_color, animations_enabled, time_format),
@@ -578,6 +581,8 @@ pub fn render(
             theme: set_theme.clone(),
             accent_color: set_accent_color.clone(),
             animations_enabled: set_animations_enabled.clone(),
+            bottom_bar_size: set_bottom_bar_size.clone(),
+            popup_corner_radius: set_popup_corner_radius.clone(),
             time_format: set_time_format.clone(),
             codex_enabled: set_codex_enabled.clone(),
             claude_enabled: set_claude_enabled.clone(),
@@ -623,6 +628,8 @@ pub fn render(
         theme: theme,
         accent_color: accent_color,
         animations_enabled: animations_enabled,
+        bottom_bar_size: bottom_bar_size,
+        popup_corner_radius: popup_corner_radius,
         time_format: time_format,
         codex_enabled: codex_enabled,
         claude_enabled: claude_enabled,
@@ -688,6 +695,8 @@ pub fn render(
         set_theme: set_theme.clone(),
         set_accent_color: set_accent_color.clone(),
         set_animations_enabled: set_animations_enabled.clone(),
+        set_bottom_bar_size: set_bottom_bar_size.clone(),
+        set_popup_corner_radius: set_popup_corner_radius.clone(),
         set_time_format: set_time_format.clone(),
         set_claude_enabled: set_claude_enabled.clone(),
         set_cursor_enabled: set_cursor_enabled.clone(),
