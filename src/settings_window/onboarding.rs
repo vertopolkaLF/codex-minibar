@@ -356,12 +356,12 @@ pub(super) fn onboarding_render(
     let body = grid((content, footer))
         .rows([GridLength::Star(1.0), GridLength::Auto])
         .columns([GridLength::Star(1.0)])
-        .background(ThemeRef::LayerFill)
+        .background(Color::transparent())
         .grid_row(1);
     grid((title_bar.grid_row(0), body))
         .rows([GridLength::Auto, GridLength::Star(1.0)])
         .columns([GridLength::Star(1.0)])
-        .background(ThemeRef::LayerFill)
+        .background(Color::transparent())
         .into()
 }
 

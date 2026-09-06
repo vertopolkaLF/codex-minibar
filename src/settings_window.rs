@@ -820,9 +820,34 @@ pub fn render(
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Stretch);
 
-    let page = border(page_content)
-        // Standard Fluent content layer over the element-level Mica base.
-        .background(ThemeRef::LayerFill)
+    let page = border(
+        relative_panel::<Vec<Element>>(vec![
+            // A low-opacity Mica layer keeps the material visible while
+            // lifting the content plane slightly above the normal window bg.
+            border(Element::Empty)
+                .background(ThemeRef::custom(
+                    "LayerOnMicaBaseAltFillColorDefaultBrush",
+                ))
+                .opacity(0.3)
+                .corner_radii(CornerRadii {
+                    top_left: 12.0,
+                    ..Default::default()
+                })
+                .relative_align_left()
+                .relative_align_right()
+                .relative_align_top()
+                .relative_align_bottom()
+                .into(),
+            page_content
+                .relative_align_left()
+                .relative_align_right()
+                .relative_align_top()
+                .relative_align_bottom()
+                .into(),
+        ])
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Stretch),
+    )
         .corner_radii(CornerRadii {
             top_left: 12.0,
             ..Default::default()
@@ -934,7 +959,8 @@ pub fn render(
                 eprintln!("Could not install settings Mica element: {error:?}");
             }
         }));
-        host
+        let mica: Element = host.into();
+        mica.with_key(format!("settings-mica-{}", color_scheme as i32))
     };
     relative_panel::<Vec<Element>>(vec![
         mica.relative_align_left()
