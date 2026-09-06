@@ -656,9 +656,15 @@ pub(super) fn openrouter_accounts_strip_key(limits: &RateLimits) -> String {
     key
 }
 
-/// Membership + expired chrome that change popup body height. Usage dollars
-/// stay out so a poll cannot remount swap-chain hosts every minute.
-pub(super) fn popup_body_height_key(limits: &ProviderLimits, view: PopupView) -> String {
+/// Structural changes that can change popup body height. Usage values and pace
+/// text stay out so a poll cannot remount swap-chain hosts every minute; the
+/// pace-label presence is included because it changes the card's layout.
+pub(super) fn popup_body_height_key(
+    limits: &ProviderLimits,
+    view: PopupView,
+    show_used_percentage: bool,
+    show_usage_pace: bool,
+) -> String {
     let mut key = String::new();
     let providers: Vec<ProviderKind> = match view {
         PopupView::Home => crate::provider_registry::PROVIDERS
@@ -688,9 +694,60 @@ pub(super) fn popup_body_height_key(limits: &ProviderLimits, view: PopupView) ->
                 '-'
             });
             key.push(if snapshot.usage.has_data() { 'u' } else { '-' });
+            key.push(if snapshot.is_free_plan() { 'f' } else { 'p' });
+            if snapshot.is_free_plan() {
+                if !snapshot.secondary.is_empty() {
+                    key.push(pace_label_layout_key(
+                        &snapshot.secondary,
+                        show_used_percentage,
+                        show_usage_pace,
+                    ));
+                }
+            } else {
+                if !snapshot.primary.is_empty() {
+                    key.push(pace_label_layout_key(
+                        &snapshot.primary,
+                        show_used_percentage,
+                        show_usage_pace,
+                    ));
+                }
+                if !snapshot.secondary.is_empty() {
+                    key.push(pace_label_layout_key(
+                        &snapshot.secondary,
+                        show_used_percentage,
+                        show_usage_pace,
+                    ));
+                }
+            }
+            for limit in &snapshot.additional_limits {
+                key.push('|');
+                key.push_str(&limit.id);
+                key.push(pace_label_layout_key(
+                    &limit.window,
+                    show_used_percentage,
+                    show_usage_pace,
+                ));
+            }
         }
     }
     key
+}
+
+/// Return only the structural part of the pace state. The summary itself is
+/// deliberately excluded: changing from "On pace" to "9% in reserve" does
+/// not require rebuilding the popup's measurement root, while crossing the
+/// threshold from no label to a label does.
+fn pace_label_layout_key(
+    window: &LimitWindow,
+    show_used_percentage: bool,
+    show_usage_pace: bool,
+) -> char {
+    let (_, _, _, compact) = limit_card_presentation(window, show_used_percentage, false);
+    if show_usage_pace && !compact && window.pace_tip(show_used_percentage, Utc::now()).is_some() {
+        'p'
+    } else {
+        '-'
+    }
 }
 
 pub(super) fn latest_sampled_at(limits: &ProviderLimits) -> chrono::DateTime<Utc> {

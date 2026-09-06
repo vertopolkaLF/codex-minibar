@@ -890,7 +890,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             ui.cursor_enabled,
             ui.openrouter_enabled,
             popup_order_key(&ui.popup_order),
-            popup_body_height_key(&limits, view),
+            popup_body_height_key(&limits, view, ui.show_used_percentage, ui.show_usage_pace),
             ui.compact_usage_cards,
             ui.settings_revision,
             color_scheme as i32,

@@ -219,6 +219,41 @@ fn exhausted_limit_is_compact_in_both_percentage_modes() {
 }
 
 #[test]
+fn popup_body_key_changes_when_pace_label_appears_or_hides() {
+    let now = Utc::now();
+    let visible = RateLimits {
+        primary: LimitWindow {
+            used_percent: Some(20),
+            resets_at: Some(now + ChronoDuration::hours(4)),
+            duration_minutes: Some(300),
+        },
+        ..Default::default()
+    };
+    let hidden = RateLimits {
+        primary: LimitWindow {
+            used_percent: Some(20),
+            resets_at: Some(now + ChronoDuration::hours(4) + ChronoDuration::minutes(55)),
+            duration_minutes: Some(300),
+        },
+        ..Default::default()
+    };
+    let visible_key = popup_body_height_key(
+        &ProviderLimits::from_entries([(ProviderKind::Codex, visible)]),
+        PopupView::Codex,
+        false,
+        true,
+    );
+    let hidden_key = popup_body_height_key(
+        &ProviderLimits::from_entries([(ProviderKind::Codex, hidden)]),
+        PopupView::Codex,
+        false,
+        true,
+    );
+
+    assert_ne!(visible_key, hidden_key);
+}
+
+#[test]
 fn swap_chain_strip_keys_include_identity_inputs_without_hover_state() {
     let providers = vec![ProviderKind::Codex, ProviderKind::Claude];
     let same = provider_tabs_key(&providers, true, false, ColorScheme::Dark);
