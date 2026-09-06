@@ -28,7 +28,9 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let set_automatic_activation = ctx.set_automatic_activation.clone();
     let set_scheduled_activations = ctx.set_scheduled_activations.clone();
     let set_auto_activation_pauses = ctx.set_auto_activation_pauses.clone();
+    let set_usage_stats_enabled = ctx.set_usage_stats_enabled.clone();
     let set_limit_refresh_interval = ctx.set_limit_refresh_interval.clone();
+    let set_usage_refresh_interval = ctx.set_usage_refresh_interval.clone();
     let set_start_at_login = ctx.set_start_at_login.clone();
     let set_show_used_percentage = ctx.set_show_used_percentage.clone();
     let set_show_usage_pace = ctx.set_show_usage_pace.clone();
@@ -80,7 +82,9 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
         automatic_activation: set_automatic_activation,
         scheduled_activations: set_scheduled_activations.clone(),
         auto_activation_pauses: set_auto_activation_pauses.clone(),
+        usage_stats_enabled: set_usage_stats_enabled,
         limit_refresh_interval: set_limit_refresh_interval,
+        usage_refresh_interval: set_usage_refresh_interval,
         start_at_login: set_start_at_login,
         show_used_percentage: set_show_used_percentage,
         show_usage_pace: set_show_usage_pace,

@@ -59,6 +59,7 @@ impl PopupView {
 #[cfg(test)]
 pub(super) fn enabled_popup_views(
     popup_order: &[PopupWidgetKind],
+    usage_enabled: bool,
     codex: bool,
     claude: bool,
     cursor: bool,
@@ -66,7 +67,10 @@ pub(super) fn enabled_popup_views(
     opencode_go: bool,
     openrouter: bool,
 ) -> Vec<PopupView> {
-    let mut views = vec![PopupView::Home, PopupView::Usage];
+    let mut views = vec![PopupView::Home];
+    if usage_enabled {
+        views.push(PopupView::Usage);
+    }
     for widget in popup_order {
         let Some(provider) = widget.as_provider() else {
             continue;

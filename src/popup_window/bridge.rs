@@ -58,6 +58,7 @@ pub(super) fn start_background_bridge(
             show_usage_pace: state.settings.show_usage_pace,
             compact_usage_cards: state.settings.compact_usage_cards,
             popup_visibility: state.settings.popup_visibility.clone(),
+            usage_stats_enabled: state.settings.usage_stats_enabled,
             show_total_spend_on_all_tab: state.settings.show_total_spend_on_all_tab,
             total_spend_presentation: state.settings.total_spend_presentation,
             total_spend_period: state.settings.total_spend_period,
@@ -143,6 +144,7 @@ pub(super) fn start_background_bridge(
             ui.show_usage_pace = settings.show_usage_pace;
             ui.compact_usage_cards = settings.compact_usage_cards;
             ui.popup_visibility = settings.popup_visibility.clone();
+            ui.usage_stats_enabled = settings.usage_stats_enabled;
             ui.show_total_spend_on_all_tab = settings.show_total_spend_on_all_tab;
             ui.total_spend_presentation = settings.total_spend_presentation;
             ui.total_spend_period = settings.total_spend_period;
@@ -236,11 +238,17 @@ pub(super) fn start_background_bridge(
                 let _ = commands.send(WorkerCommand::SetLimitRefreshInterval(Duration::from_secs(
                     settings.limit_refresh_interval.seconds(),
                 )));
-                // The worker refreshes immediately after receiving this command,
-                // so the selected history range is reflected in the open popup
-                // without asking the user to restart the application.
+                let _ = commands.send(WorkerCommand::SetUsageRefreshInterval(
+                    Duration::from_secs(settings.usage_refresh_interval.seconds()),
+                ));
+                // The worker reloads the selected history range immediately,
+                // so changes are reflected in the open popup without asking the
+                // user to restart the application.
                 let _ = commands.send(WorkerCommand::SetHistoryRetentionDays(
                     settings.history_retention_days,
+                ));
+                let _ = commands.send(WorkerCommand::SetUsageCollectionEnabled(
+                    settings.usage_stats_enabled,
                 ));
                 if (provider == ProviderKind::OpenCodeZen && opencode_zen_credentials_changed)
                     || (provider == ProviderKind::OpenCodeGo && opencode_go_credentials_changed)

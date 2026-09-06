@@ -256,19 +256,20 @@ fn popup_body_key_changes_when_pace_label_appears_or_hides() {
 #[test]
 fn swap_chain_strip_keys_include_identity_inputs_without_hover_state() {
     let providers = vec![ProviderKind::Codex, ProviderKind::Claude];
-    let same = provider_tabs_key(&providers, true, false, ColorScheme::Dark);
+    let same = provider_tabs_key(&providers, true, true, false, ColorScheme::Dark);
     assert_eq!(
         same,
-        provider_tabs_key(&providers, true, false, ColorScheme::Dark)
+        provider_tabs_key(&providers, true, true, false, ColorScheme::Dark)
     );
     assert_ne!(
         same,
-        provider_tabs_key(&[ProviderKind::Codex], true, false, ColorScheme::Dark)
+        provider_tabs_key(&[ProviderKind::Codex], true, true, false, ColorScheme::Dark)
     );
     assert_ne!(
         same,
         provider_tabs_key(
             &[ProviderKind::Claude, ProviderKind::Codex],
+            true,
             true,
             false,
             ColorScheme::Dark,
@@ -276,11 +277,11 @@ fn swap_chain_strip_keys_include_identity_inputs_without_hover_state() {
     );
     assert_ne!(
         same,
-        provider_tabs_key(&providers, true, true, ColorScheme::Dark)
+        provider_tabs_key(&providers, true, true, true, ColorScheme::Dark)
     );
     assert_ne!(
         same,
-        provider_tabs_key(&providers, true, false, ColorScheme::Light)
+        provider_tabs_key(&providers, true, true, false, ColorScheme::Light)
     );
 
     assert_ne!(
@@ -560,6 +561,42 @@ fn provider_error_survives_until_that_provider_succeeds() {
 }
 
 #[test]
+fn forbidden_provider_error_is_shortened_for_ui() {
+    let mut ui = UiState::default();
+
+    ui.set_provider_error(
+        ProviderKind::Codex,
+        "codex stderr: unexpected status 403 Forbidden: <html>the full response</html>",
+    );
+
+    assert_eq!(ui.provider_error(ProviderKind::Codex), Some("403 Forbidden"));
+}
+
+#[test]
+fn non_forbidden_provider_error_keeps_its_detail() {
+    let mut ui = UiState::default();
+
+    ui.set_provider_error(ProviderKind::Codex, "Codex app-server response timed out");
+
+    assert_eq!(
+        ui.provider_error(ProviderKind::Codex),
+        Some("Codex app-server response timed out")
+    );
+}
+
+#[test]
+fn unrelated_403_text_is_not_treated_as_an_http_status() {
+    let mut ui = UiState::default();
+
+    ui.set_provider_error(ProviderKind::Codex, "model 4030 is unavailable");
+
+    assert_eq!(
+        ui.provider_error(ProviderKind::Codex),
+        Some("model 4030 is unavailable")
+    );
+}
+
+#[test]
 fn refresh_indicator_waits_for_both_limit_and_usage_requests() {
     let mut ui = UiState::default();
 
@@ -619,6 +656,7 @@ fn every_provider_membership_has_the_expected_tab_order() {
         let openrouter = mask & 0b100000 != 0;
         let views = enabled_popup_views(
             &default_order,
+            true,
             codex,
             claude,
             cursor,
@@ -661,7 +699,7 @@ fn every_provider_membership_has_the_expected_tab_order() {
         PopupWidgetKind::OpenCodeGo,
         PopupWidgetKind::OpenRouter,
     ];
-    let views = enabled_popup_views(&reversed, true, true, true, true, true, true);
+    let views = enabled_popup_views(&reversed, true, true, true, true, true, true, true);
     assert_eq!(
         views,
         vec![
@@ -675,6 +713,12 @@ fn every_provider_membership_has_the_expected_tab_order() {
             PopupView::OpenRouter,
         ]
     );
+}
+
+#[test]
+fn usage_stats_toggle_removes_only_the_usage_view() {
+    let views = enabled_popup_views(&PopupWidgetKind::default_order(), false, true, false, false, false, false, false);
+    assert_eq!(views, vec![PopupView::Home, PopupView::Codex]);
 }
 
 #[test]

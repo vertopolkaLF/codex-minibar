@@ -47,6 +47,8 @@ pub(super) fn onboarding_render(
         cx.use_state(settings.automatic_activation);
     let (limit_refresh_interval, set_limit_refresh_interval) =
         cx.use_state(settings.limit_refresh_interval);
+    let (usage_refresh_interval, set_usage_refresh_interval) =
+        cx.use_state(settings.usage_refresh_interval);
     let (show_used_percentage, set_show_used_percentage) =
         cx.use_state(settings.show_used_percentage);
     let (show_usage_pace, set_show_usage_pace) = cx.use_state(settings.show_usage_pace);
@@ -188,6 +190,28 @@ pub(super) fn onboarding_render(
                     set_hovered_card_id.clone(),
                 )
                 .with_key("onboarding-limit-refresh-interval"),
+                settings_control_card(
+                    "Collect usage data",
+                    Some("Scans local provider history for Usage Stats."),
+                    ComboBox::new([
+                        "1 minute",
+                        "5 minutes",
+                        "10 minutes",
+                        "15 minutes",
+                        "30 minutes",
+                        "45 minutes",
+                        "60 minutes",
+                    ])
+                    .selected_index(usage_refresh_interval.index())
+                    .on_selection_changed(move |choice| {
+                        set_usage_refresh_interval
+                            .call(UsageRefreshInterval::from_index(choice));
+                    }),
+                    "onboarding-usage-refresh-interval",
+                    &hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("onboarding-usage-refresh-interval"),
                 settings_section_heading("Customization")
                     .with_key("onboarding-customization-heading"),
                 settings_toggle_card(
@@ -269,6 +293,7 @@ pub(super) fn onboarding_render(
                     completed.start_at_login = start_at_login;
                     completed.automatic_activation = automatic_activation;
                     completed.limit_refresh_interval = limit_refresh_interval;
+                    completed.usage_refresh_interval = usage_refresh_interval;
                     completed.show_used_percentage = show_used_percentage;
                     completed.show_usage_pace = show_usage_pace;
                     completed.show_account_name = show_account_name;

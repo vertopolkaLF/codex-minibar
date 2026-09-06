@@ -26,7 +26,9 @@ pub(super) struct SettingsWindowState {
     pub(super) automatic_activation: SetState<bool>,
     pub(super) scheduled_activations: SetState<Vec<ScheduledActivation>>,
     pub(super) auto_activation_pauses: SetState<Vec<AutoActivationPause>>,
+    pub(super) usage_stats_enabled: SetState<bool>,
     pub(super) limit_refresh_interval: SetState<LimitRefreshInterval>,
+    pub(super) usage_refresh_interval: SetState<UsageRefreshInterval>,
     pub(super) start_at_login: SetState<bool>,
     pub(super) show_used_percentage: SetState<bool>,
     pub(super) show_usage_pace: SetState<bool>,
@@ -103,8 +105,11 @@ impl SettingsWindowState {
             .call(settings.scheduled_activations.clone());
         self.auto_activation_pauses
             .call(settings.auto_activation_pauses.clone());
+        self.usage_stats_enabled.call(settings.usage_stats_enabled);
         self.limit_refresh_interval
             .call(settings.limit_refresh_interval);
+        self.usage_refresh_interval
+            .call(settings.usage_refresh_interval);
         self.start_at_login.call(settings.start_at_login);
         self.show_used_percentage
             .call(settings.show_used_percentage);
@@ -178,7 +183,9 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) auto_activation_pauses: &'a [AutoActivationPause],
     pub(super) expanded_scheduled_activation: &'a Option<String>,
     pub(super) expanded_auto_activation_pause: &'a Option<String>,
+    pub(super) usage_stats_enabled: bool,
     pub(super) limit_refresh_interval: LimitRefreshInterval,
+    pub(super) usage_refresh_interval: UsageRefreshInterval,
     pub(super) start_at_login: bool,
     pub(super) show_used_percentage: bool,
     pub(super) show_usage_pace: bool,
@@ -239,7 +246,9 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) set_auto_activation_pauses: SetState<Vec<AutoActivationPause>>,
     pub(super) set_expanded_scheduled_activation: SetState<Option<String>>,
     pub(super) set_expanded_auto_activation_pause: SetState<Option<String>>,
+    pub(super) set_usage_stats_enabled: SetState<bool>,
     pub(super) set_limit_refresh_interval: SetState<LimitRefreshInterval>,
+    pub(super) set_usage_refresh_interval: SetState<UsageRefreshInterval>,
     pub(super) set_start_at_login: SetState<bool>,
     pub(super) set_show_used_percentage: SetState<bool>,
     pub(super) set_show_usage_pace: SetState<bool>,

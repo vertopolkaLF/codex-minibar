@@ -274,7 +274,7 @@ pub(super) fn popup_settings_cards(
     let mut rows = vec![
         settings_section_heading("Home tab").with_key("popup-home-tab-heading"),
         settings_toggle_card(
-            "Usage Stats",
+            "Show on Home tab",
             show_total_spend_on_all_tab,
             move |value| {
                 persist_bool(

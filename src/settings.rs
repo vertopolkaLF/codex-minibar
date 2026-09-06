@@ -10,7 +10,7 @@ use chrono::{DateTime, Local, Timelike};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 33;
+pub const SETTINGS_VERSION: u32 = 35;
 
 /// 255 until `TimeFormat::apply` runs so first paint can still follow Windows.
 static TIME_FORMAT: AtomicU8 = AtomicU8::new(u8::MAX);
@@ -511,6 +511,57 @@ impl LimitRefreshInterval {
             3 => Self::Minutes10,
             4 => Self::Minutes15,
             _ => Self::Minute1,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageRefreshInterval {
+    Minute1,
+    Minutes5,
+    Minutes10,
+    #[default]
+    Minutes15,
+    Minutes30,
+    Minutes45,
+    Minutes60,
+}
+
+impl UsageRefreshInterval {
+    pub const fn seconds(self) -> u64 {
+        match self {
+            Self::Minute1 => 60,
+            Self::Minutes5 => 5 * 60,
+            Self::Minutes10 => 10 * 60,
+            Self::Minutes15 => 15 * 60,
+            Self::Minutes30 => 30 * 60,
+            Self::Minutes45 => 45 * 60,
+            Self::Minutes60 => 60 * 60,
+        }
+    }
+
+    pub const fn index(self) -> i32 {
+        match self {
+            Self::Minute1 => 0,
+            Self::Minutes5 => 1,
+            Self::Minutes10 => 2,
+            Self::Minutes15 => 3,
+            Self::Minutes30 => 4,
+            Self::Minutes45 => 5,
+            Self::Minutes60 => 6,
+        }
+    }
+
+    pub const fn from_index(index: i32) -> Self {
+        match index {
+            0 => Self::Minute1,
+            2 => Self::Minutes10,
+            3 => Self::Minutes15,
+            4 => Self::Minutes30,
+            5 => Self::Minutes45,
+            6 => Self::Minutes60,
+            _ => Self::Minutes5,
         }
     }
 }
@@ -1516,7 +1567,10 @@ pub struct Settings {
     pub scheduled_activations: Vec<ScheduledActivation>,
     /// Weekly local-time periods that suppress automatic activation per provider.
     pub auto_activation_pauses: Vec<AutoActivationPause>,
+    /// Enables the Usage tab, Usage Stats home card, and background usage collection.
+    pub usage_stats_enabled: bool,
     pub limit_refresh_interval: LimitRefreshInterval,
+    pub usage_refresh_interval: UsageRefreshInterval,
     pub start_at_login: bool,
     pub show_used_percentage: bool,
     pub show_usage_pace: bool,
@@ -1582,7 +1636,9 @@ impl Default for Settings {
             automatic_activation: false,
             scheduled_activations: Vec::new(),
             auto_activation_pauses: Vec::new(),
+            usage_stats_enabled: true,
             limit_refresh_interval: LimitRefreshInterval::default(),
+            usage_refresh_interval: UsageRefreshInterval::default(),
             start_at_login: true,
             show_used_percentage: false,
             show_usage_pace: true,
@@ -2753,6 +2809,24 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.insert("version".into(), toml::Value::Integer(33));
                 version = 33;
             }
+            33 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("usage_refresh_interval")
+                    .or_insert_with(|| toml::Value::String("minutes15".into()));
+                root.insert("version".into(), toml::Value::Integer(34));
+                version = 34;
+            }
+            34 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("usage_stats_enabled")
+                    .or_insert(toml::Value::Boolean(true));
+                root.insert("version".into(), toml::Value::Integer(35));
+                version = 35;
+            }
             // Unknown future/gap versions: stamp current and keep decoding with
             // serde defaults rather than refusing to start.
             _ => {
@@ -2794,7 +2868,9 @@ mod tests {
         assert!(!value.replace_chatgpt_logo_with_codex);
         assert!(!value.automatic_activation);
         assert!(value.auto_activation_pauses.is_empty());
+        assert!(value.usage_stats_enabled);
         assert_eq!(value.limit_refresh_interval, LimitRefreshInterval::Minute1);
+        assert_eq!(value.usage_refresh_interval, UsageRefreshInterval::Minutes15);
         assert!(value.start_at_login);
         assert!(!value.show_used_percentage);
         assert!(value.show_usage_pace);
@@ -2881,10 +2957,14 @@ mod tests {
             loaded.popup_background_material,
             PopupBackgroundMaterial::Acrylic
         );
+        assert_eq!(loaded.usage_refresh_interval, UsageRefreshInterval::Minutes15);
+        assert!(loaded.usage_stats_enabled);
         let rewritten = fs::read_to_string(path).unwrap();
         assert!(rewritten.contains("bottom_bar_size = \"comfortable\""));
         assert!(rewritten.contains("popup_corner_radius = \"small\""));
         assert!(rewritten.contains("popup_background_material = \"acrylic\""));
+        assert!(rewritten.contains("usage_refresh_interval = \"minutes15\""));
+        assert!(rewritten.contains("usage_stats_enabled = true"));
     }
 
     #[test]
@@ -3115,6 +3195,17 @@ tray_widgets = []
         assert_eq!(TimeFormat::Hour24.index(), 1);
         assert_eq!(TimeFormat::from_index(1), TimeFormat::Hour24);
         assert_eq!(TimeFormat::from_index(0), TimeFormat::Hour12);
+    }
+
+    #[test]
+    fn usage_refresh_interval_uses_stable_dropdown_indices() {
+        assert_eq!(UsageRefreshInterval::Minute1.index(), 0);
+        assert_eq!(UsageRefreshInterval::Minutes5.index(), 1);
+        assert_eq!(UsageRefreshInterval::Minutes60.index(), 6);
+        assert_eq!(UsageRefreshInterval::from_index(0), UsageRefreshInterval::Minute1);
+        assert_eq!(UsageRefreshInterval::from_index(1), UsageRefreshInterval::Minutes5);
+        assert_eq!(UsageRefreshInterval::from_index(99), UsageRefreshInterval::Minutes5);
+        assert_eq!(UsageRefreshInterval::Minutes45.seconds(), 45 * 60);
     }
 
     #[test]

@@ -9,6 +9,7 @@ use crate::settings::{
     PopupWidgetKind, ProviderKind,
     ScheduledActivation, Settings, TimeFormat, TotalSpendPresentation, TrayColorMode,
     TrayFixedColor, TrayIndicator, TrayPresentation, TrayWidget, TrayWidgetKind,
+    UsageRefreshInterval,
 };
 use crate::settings_controls::{
     SETTINGS_CARD_PADDING, settings_action_card, settings_brick_body_height, settings_brick_row,
@@ -539,8 +540,12 @@ pub fn render(
         cx.use_state(None::<String>);
     let (expanded_auto_activation_pause, set_expanded_auto_activation_pause) =
         cx.use_state(None::<String>);
+    let (usage_stats_enabled, set_usage_stats_enabled) =
+        cx.use_state(settings.usage_stats_enabled);
     let (limit_refresh_interval, set_limit_refresh_interval) =
         cx.use_state(settings.limit_refresh_interval);
+    let (usage_refresh_interval, set_usage_refresh_interval) =
+        cx.use_state(settings.usage_refresh_interval);
     let (show_used_percentage, set_show_used_percentage) =
         cx.use_state(settings.show_used_percentage);
     let (show_usage_pace, set_show_usage_pace) = cx.use_state(settings.show_usage_pace);
@@ -609,7 +614,9 @@ pub fn render(
             automatic_activation: set_automatic_activation.clone(),
             scheduled_activations: set_scheduled_activations.clone(),
             auto_activation_pauses: set_auto_activation_pauses.clone(),
+            usage_stats_enabled: set_usage_stats_enabled.clone(),
             limit_refresh_interval: set_limit_refresh_interval.clone(),
+            usage_refresh_interval: set_usage_refresh_interval.clone(),
             start_at_login: set_start_at_login.clone(),
             show_used_percentage: set_show_used_percentage.clone(),
             show_usage_pace: set_show_usage_pace.clone(),
@@ -669,7 +676,9 @@ pub fn render(
         auto_activation_pauses: &auto_activation_pauses,
         expanded_scheduled_activation: &expanded_scheduled_activation,
         expanded_auto_activation_pause: &expanded_auto_activation_pause,
+        usage_stats_enabled: usage_stats_enabled,
         limit_refresh_interval: limit_refresh_interval,
+        usage_refresh_interval: usage_refresh_interval,
         start_at_login: start_at_login,
         show_used_percentage: show_used_percentage,
         show_usage_pace: show_usage_pace,
@@ -730,7 +739,9 @@ pub fn render(
         set_auto_activation_pauses: set_auto_activation_pauses.clone(),
         set_expanded_scheduled_activation: set_expanded_scheduled_activation.clone(),
         set_expanded_auto_activation_pause: set_expanded_auto_activation_pause.clone(),
+        set_usage_stats_enabled: set_usage_stats_enabled.clone(),
         set_limit_refresh_interval: set_limit_refresh_interval.clone(),
+        set_usage_refresh_interval: set_usage_refresh_interval.clone(),
         set_start_at_login: set_start_at_login.clone(),
         set_show_used_percentage: set_show_used_percentage.clone(),
         set_show_usage_pace: set_show_usage_pace.clone(),

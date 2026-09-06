@@ -6,11 +6,12 @@ pub(super) const TAB_STRIP_SPACING: f64 = 2.0;
 pub(super) const FOOTER_ACTION_COUNT: f64 = 2.0;
 const PROVIDER_ERROR_COLOR: Color = Color::rgb(247, 117, 117);
 
-pub(super) fn provider_tab_strip_content_width(provider_count: usize) -> f64 {
-    // Home + Usage + enabled provider tabs.
+pub(super) fn provider_tab_strip_content_width(
+    provider_count: usize,
+    usage_enabled: bool,
+) -> f64 {
     let size = popup::bottom_bar_size();
-    size.icon_button_size()
-        + size.icon_button_size()
+    (size.icon_button_size() * (1.0 + f64::from(usage_enabled)))
         + TAB_STRIP_SPACING
         + provider_count as f64 * (size.icon_button_size() + TAB_STRIP_SPACING)
 }
@@ -27,14 +28,16 @@ pub(super) fn provider_tab_strip_viewport_width() -> f64 {
 
 pub(super) fn provider_tabs_key(
     providers: &[ProviderKind],
+    usage_enabled: bool,
     show_provider_icon_tabs: bool,
     use_colored_provider_icons: bool,
     color_scheme: ColorScheme,
 ) -> String {
     let size = popup::bottom_bar_size();
     format!(
-        "provider-tabs-home-usage-{}-{}-{}-{}-{}",
+        "provider-tabs-home-usage-{}-{}-{}-{}-{}-{}",
         provider_order_key(providers),
+        usage_enabled,
         show_provider_icon_tabs,
         use_colored_provider_icons,
         color_scheme as i32,

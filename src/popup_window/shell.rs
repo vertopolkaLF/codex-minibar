@@ -18,12 +18,17 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         animations_enabled: state.settings.animations_enabled,
         popup_background_material: state.settings.popup_background_material,
         time_format: state.settings.time_format,
-        provider_errors: state.startup_provider_errors.iter().cloned().collect(),
+        provider_errors: state
+            .startup_provider_errors
+            .iter()
+            .map(|(provider, error)| (*provider, UiState::error_for_ui(error)))
+            .collect(),
         last_activation: format_last_activation(&RateLimits::default(), state.last_activation_at),
         show_used_percentage: state.settings.show_used_percentage,
         show_usage_pace: state.settings.show_usage_pace,
         compact_usage_cards: state.settings.compact_usage_cards,
         popup_visibility: state.settings.popup_visibility.clone(),
+        usage_stats_enabled: state.settings.usage_stats_enabled,
         show_total_spend_on_all_tab: state.settings.show_total_spend_on_all_tab,
         total_spend_presentation: state.settings.total_spend_presentation,
         total_spend_period: state.settings.total_spend_period,
@@ -148,6 +153,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             ui.opencode_zen_enabled,
             ui.opencode_go_enabled,
             ui.openrouter_enabled,
+            ui.usage_stats_enabled,
             popup_order_key(&ui.popup_order),
         ),
         {
@@ -156,7 +162,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             move || {
                 pager_dispatch.call(PagerAction::SetProviderOrder(order.clone()));
                 let available = match pager.current {
-                    PopupView::Home | PopupView::Usage => true,
+                    PopupView::Home => true,
+                    PopupView::Usage => ui.usage_stats_enabled,
                     PopupView::Codex => ui.codex_enabled,
                     PopupView::Claude => ui.claude_enabled,
                     PopupView::Cursor => ui.cursor_enabled,
@@ -236,7 +243,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let show_provider_tabs = show_provider_icon_tabs;
     let show_footer_tabs = true;
     let selected_view = pager.current;
-    let show_total_spend = ui.show_total_spend_on_all_tab
+    let show_total_spend = ui.usage_stats_enabled
+        && ui.show_total_spend_on_all_tab
         && total_spend_provider_count(
             ui.codex_enabled,
             ui.claude_enabled,
@@ -580,7 +588,10 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         } else {
             0
         };
-        let tab_content_width = provider_tab_strip_content_width(provider_tab_count);
+        let tab_content_width = provider_tab_strip_content_width(
+            provider_tab_count,
+            ui.usage_stats_enabled,
+        );
         let tab_viewport_width = provider_tab_strip_viewport_width();
         let tab_max_offset = (tab_content_width - tab_viewport_width).max(0.0);
         let tab_scroll_x = tab_scroll_x.clamp(0.0, tab_max_offset);
@@ -619,23 +630,25 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 move || pager_dispatch.call(PagerAction::Select(PopupView::Home))
             },
         )];
-        provider_tabs.push(popup_tab_button(
-            "provider-tab-usage",
-            Some("fluent-chart"),
-            None,
-            "Usage",
-            selected_view == PopupView::Usage,
-            false,
-            ui.use_colored_provider_icons,
-            color_scheme,
-            &hovered_action,
-            set_hovered_action.clone(),
-            on_tab_wheel.clone(),
-            {
-                let pager_dispatch = pager_dispatch.clone();
-                move || pager_dispatch.call(PagerAction::Select(PopupView::Usage))
-            },
-        ));
+        if ui.usage_stats_enabled {
+            provider_tabs.push(popup_tab_button(
+                "provider-tab-usage",
+                Some("fluent-chart"),
+                None,
+                "Usage",
+                selected_view == PopupView::Usage,
+                false,
+                ui.use_colored_provider_icons,
+                color_scheme,
+                &hovered_action,
+                set_hovered_action.clone(),
+                on_tab_wheel.clone(),
+                {
+                    let pager_dispatch = pager_dispatch.clone();
+                    move || pager_dispatch.call(PagerAction::Select(PopupView::Usage))
+                },
+            ));
+        }
         if show_provider_icon_tabs {
             for provider in &enabled_provider_order {
                 let (tab_id, icon_name, tip, view) = match provider {
@@ -695,6 +708,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         }
         let tabs_key = provider_tabs_key(
             &enabled_provider_order,
+            ui.usage_stats_enabled,
             show_provider_icon_tabs,
             ui.use_colored_provider_icons,
             color_scheme,
@@ -876,7 +890,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         // SizeChanged. Remounting the page is what tab switches already do so
         // the queued on_resize measure can shrink the HWND.
         let body_layout_key = format!(
-            "popup-page-{role}-{}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
+            "popup-page-{role}-{}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
             ui.error.is_some(),
             view.provider()
                 .is_some_and(|provider| ui.has_provider_error(provider)),
@@ -892,6 +906,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             popup_order_key(&ui.popup_order),
             popup_body_height_key(&limits, view, ui.show_used_percentage, ui.show_usage_pace),
             ui.compact_usage_cards,
+            ui.usage_stats_enabled,
             ui.settings_revision,
             color_scheme as i32,
             view,

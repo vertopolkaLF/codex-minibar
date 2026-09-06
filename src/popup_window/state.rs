@@ -230,6 +230,7 @@ pub(super) struct UiState {
     pub(super) show_usage_pace: bool,
     pub(super) compact_usage_cards: bool,
     pub(super) popup_visibility: PopupVisibility,
+    pub(super) usage_stats_enabled: bool,
     pub(super) show_total_spend_on_all_tab: bool,
     pub(super) total_spend_presentation: TotalSpendPresentation,
     pub(super) total_spend_period: TotalSpendPeriod,
@@ -272,6 +273,7 @@ impl Default for UiState {
             show_usage_pace: true,
             compact_usage_cards: false,
             popup_visibility: PopupVisibility::build_defaults(),
+            usage_stats_enabled: true,
             show_total_spend_on_all_tab: true,
             total_spend_presentation: TotalSpendPresentation::default(),
             total_spend_period: TotalSpendPeriod::default(),
@@ -297,29 +299,52 @@ impl Default for UiState {
 }
 
 impl UiState {
+    /// Keep known HTTP authorization/access failures readable in the popup
+    /// while retaining the complete provider error in the application log.
+    pub(super) fn error_for_ui(error: &str) -> String {
+        let tokens = error
+            .split(|character: char| !character.is_ascii_alphanumeric())
+            .filter(|token| !token.is_empty())
+            .collect::<Vec<_>>();
+        let is_forbidden = tokens.windows(2).any(|pair| {
+            (pair[1] == "403"
+                && ["status", "code", "http"]
+                    .iter()
+                    .any(|prefix| pair[0].eq_ignore_ascii_case(prefix)))
+                || (pair[0] == "403" && pair[1].eq_ignore_ascii_case("forbidden"))
+        });
+        if is_forbidden {
+            "403 Forbidden".into()
+        } else {
+            error.into()
+        }
+    }
+
     /// Shows an app-level error in the popup and records it once per distinct
     /// message. Provider polling uses [`set_provider_error`] instead so one
     /// provider cannot overwrite another provider's diagnostic state.
     pub(super) fn set_popup_error(&mut self, error: impl Into<String>) {
-        let error = error.into();
-        if self.error.as_deref() != Some(error.as_str()) {
-            crate::logger::info(format!("Popup error: {error}"));
+        let raw_error = error.into();
+        let display_error = Self::error_for_ui(&raw_error);
+        if self.error.as_deref() != Some(display_error.as_str()) {
+            crate::logger::info(format!("Popup error: {raw_error}"));
         }
-        self.error = Some(error);
+        self.error = Some(display_error);
     }
 
     /// Retain the latest provider error until that provider produces a
     /// successful limits response. A changing message updates the detail while
     /// keeping the red marker continuously visible.
     pub(super) fn set_provider_error(&mut self, provider: ProviderKind, error: impl Into<String>) {
-        let error = error.into();
-        if self.provider_errors.get(&provider) != Some(&error) {
+        let raw_error = error.into();
+        let display_error = Self::error_for_ui(&raw_error);
+        if self.provider_errors.get(&provider) != Some(&display_error) {
             crate::logger::info(format!(
-                "{} provider error: {error}",
+                "{} provider error: {raw_error}",
                 provider.display_name()
             ));
         }
-        self.provider_errors.insert(provider, error);
+        self.provider_errors.insert(provider, display_error);
     }
 
     pub(super) fn clear_provider_error(&mut self, provider: ProviderKind) {
