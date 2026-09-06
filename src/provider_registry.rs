@@ -190,6 +190,21 @@ pub fn descriptor(provider: ProviderKind) -> &'static ProviderDescriptor {
         .expect("every ProviderKind must have a registry descriptor")
 }
 
+/// Brand colors used by small provider icons on the light popup cards.
+///
+/// The source brand colors remain on [`ProviderDescriptor`] for charts and
+/// other surfaces where they are useful as-is. These icon-specific values keep
+/// the requested provider identity visible against the light card surface.
+pub fn light_surface_brand_rgb(provider: ProviderKind) -> (u8, u8, u8) {
+    match provider {
+        ProviderKind::Codex => (27, 63, 147),
+        ProviderKind::Claude => (217, 119, 87),
+        ProviderKind::Cursor => (51, 51, 51),
+        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => (77, 77, 77),
+        ProviderKind::OpenRouter => (118, 36, 244),
+    }
+}
+
 pub fn metric(provider: ProviderKind, id: &str) -> Option<&'static MetricDescriptor> {
     descriptor(provider)
         .metrics

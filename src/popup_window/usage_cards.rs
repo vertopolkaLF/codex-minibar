@@ -594,7 +594,10 @@ fn spend_provider_icon_color(
             ColorScheme::Light => Color::rgb(96, 96, 96),
         };
     }
-    let (red, green, blue) = crate::provider_registry::descriptor(provider).brand_rgb;
+    let (red, green, blue) = match color_scheme {
+        ColorScheme::Light => crate::provider_registry::light_surface_brand_rgb(provider),
+        ColorScheme::Dark => crate::provider_registry::descriptor(provider).brand_rgb,
+    };
     Color::rgb(red, green, blue)
 }
 

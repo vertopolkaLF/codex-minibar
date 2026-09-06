@@ -1048,8 +1048,9 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         }));
         let background: Element = host.into();
         background.with_key(format!(
-            "popup-background-{background_material_key}-{}",
-            popup::corner_radius_dip()
+            "popup-background-{background_material_key}-{}-{}",
+            popup::corner_radius_dip(),
+            color_scheme as i32,
         ))
     };
 

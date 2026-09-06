@@ -102,12 +102,34 @@ fn apply_accent_palette(palette: AccentPalette) -> windows_core::Result<()> {
     let resources = Application::Current()?.Resources()?;
     let map = resources.cast::<IMap<windows_core::IInspectable, windows_core::IInspectable>>()?;
 
+    // WinUI's Light theme defines AccentFillColor* brushes through these
+    // SystemAccentColor* Color resources. Updating only the derived brushes
+    // is not enough: ThemeResource re-resolution can restore the old system
+    // accent on the next theme/style pass.
+    for (key_name, next) in accent_color_resources(palette) {
+        let key = windows_reference::IReference::from(windows_core::HSTRING::from(key_name));
+        let value = windows_reference::IReference::from(next);
+        map.Insert(&key, &value)?;
+    }
+
     for (key_name, next) in accent_brushes(roles, is_dark) {
         let key = windows_reference::IReference::from(windows_core::HSTRING::from(key_name));
         let brush = map.Lookup(&key)?.cast::<SolidColorBrush>()?;
         brush.SetColor(next)?;
     }
     Ok(())
+}
+
+fn accent_color_resources(palette: AccentPalette) -> [(&'static str, Color); 7] {
+    [
+        ("SystemAccentColor", opaque(palette.base)),
+        ("SystemAccentColorLight1", opaque(palette.light1)),
+        ("SystemAccentColorLight2", opaque(palette.light2)),
+        ("SystemAccentColorLight3", opaque(palette.light3)),
+        ("SystemAccentColorDark1", opaque(palette.dark1)),
+        ("SystemAccentColorDark2", opaque(palette.dark2)),
+        ("SystemAccentColorDark3", opaque(palette.dark3)),
+    ]
 }
 
 #[derive(Clone, Copy)]

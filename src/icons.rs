@@ -190,3 +190,27 @@ pub fn accent_element(name: &'static str, size: f64) -> Element {
     let icon: Element = host.into();
     icon.with_key(format!("filled-{name}-accent"))
 }
+
+/// Render an icon using WinUI's live InfoBar error brush.
+pub fn info_bar_error_element(name: &'static str, size: f64) -> Element {
+    let icon = geom(name);
+    let mut host = swap_chain_panel().width(size).height(size);
+    host.mounted = Some(Callback::new(move |native: Option<_>| {
+        if let Some(native) = native
+            && let Err(error) = crate::acrylic::install_info_bar_error_icon_into(
+                native,
+                icon.path,
+                icon.canvas,
+            )
+        {
+            eprintln!("Could not install InfoBar error icon: {error:?}");
+        }
+    }));
+    host.unmounted = Some(Callback::new(move |native: Option<_>| {
+        if let Some(native) = native {
+            let _ = crate::acrylic::clear_children(native);
+        }
+    }));
+    let icon: Element = host.into();
+    icon.with_key(format!("filled-{name}-infobar-error"))
+}

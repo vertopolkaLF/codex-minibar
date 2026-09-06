@@ -1094,7 +1094,7 @@ fn limit_card_base(
         .vertical_alignment(VerticalAlignment::Center)
         .into(),
         None => text_block("Session not started")
-            .foreground(Color::rgb(255, 255, 255))
+            .foreground(ThemeRef::TertiaryText)
             .horizontal_alignment(HorizontalAlignment::Right)
             .vertical_alignment(VerticalAlignment::Center)
             .into(),
@@ -1286,7 +1286,7 @@ fn limit_card_compact(
         .vertical_alignment(VerticalAlignment::Center)
         .into(),
         None => text_block("Session not started")
-            .foreground(ThemeRef::PrimaryText)
+            .foreground(ThemeRef::TertiaryText)
             .horizontal_alignment(HorizontalAlignment::Right)
             .vertical_alignment(VerticalAlignment::Center)
             .into(),

@@ -4,7 +4,6 @@ pub(super) const POPUP_ACTION_SIZE: f64 = 32.0;
 pub(super) const REORDER_BUTTON_SIZE: f64 = 28.0;
 pub(super) const TAB_STRIP_SPACING: f64 = 2.0;
 pub(super) const FOOTER_ACTION_COUNT: f64 = 2.0;
-const PROVIDER_ERROR_COLOR: Color = Color::rgb(247, 117, 117);
 
 pub(super) fn provider_tab_strip_content_width(
     provider_count: usize,
@@ -79,12 +78,13 @@ pub(super) fn popup_tab_button(
     let idle_icon_color = popup_chrome_icon_color(color_scheme, false);
     let hover_icon_color = popup_chrome_icon_color(color_scheme, true);
     let brand_icon_color = match icon_name {
-        Some("codex") | Some("chatgpt") => Color::rgb(128, 159, 255),
-        Some("claude") => Color::rgb(217, 119, 87),
-        // Match Usage Stats: Cursor mark flips with the Windows text theme.
-        Some("cursor") => combined_usage_color(ProviderKind::Cursor, color_scheme),
-        Some("opencode") => combined_usage_color(ProviderKind::OpenCodeZen, color_scheme),
-        Some("openrouter") => combined_usage_color(ProviderKind::OpenRouter, color_scheme),
+        Some("codex") | Some("chatgpt") => {
+            popup_provider_icon_color(ProviderKind::Codex, color_scheme)
+        }
+        Some("claude") => popup_provider_icon_color(ProviderKind::Claude, color_scheme),
+        Some("cursor") => popup_provider_icon_color(ProviderKind::Cursor, color_scheme),
+        Some("opencode") => popup_provider_icon_color(ProviderKind::OpenCodeZen, color_scheme),
+        Some("openrouter") => popup_provider_icon_color(ProviderKind::OpenRouter, color_scheme),
         Some("fluent-chart") | Some("fluent-home") => popup_chrome_icon_color(color_scheme, false),
         _ => idle_icon_color,
     };
@@ -211,17 +211,13 @@ pub(super) fn popup_tab_button(
         .into()
 }
 
-/// Compact Fluent filled error-circle marker used in provider headings and
-/// footer tabs. Its identity key includes the requested tint, so the
-/// mount-only icon painter receives the exact `#F77575` color.
+/// Compact Fluent error-circle marker used in provider headings and footer
+/// tabs. It uses the same live brush as WinUI's error InfoBar.
 pub(super) fn provider_error_badge(size: f64, on_click: Callback<()>) -> Element {
-    crate::icons::element("fluent-error-circle", size, PROVIDER_ERROR_COLOR)
+    crate::icons::info_bar_error_element("fluent-error-circle", size)
         .tooltip("Provider error")
         .on_tapped(on_click)
-        .with_key(format!(
-            "provider-error-badge-{size}-{:02X}{:02X}{:02X}",
-            PROVIDER_ERROR_COLOR.r, PROVIDER_ERROR_COLOR.g, PROVIDER_ERROR_COLOR.b
-        ))
+        .with_key(format!("provider-error-badge-{size}"))
 }
 
 /// Icon-only chrome action. Refresh uses two rounded circular arrows and
@@ -327,13 +323,7 @@ pub(super) fn chrome_icon_button(
 /// bind ThemeRef brushes directly.
 pub(super) fn popup_chrome_icon_color(color_scheme: ColorScheme, emphasized: bool) -> Color {
     match color_scheme {
-        ColorScheme::Light => {
-            if emphasized {
-                Color::rgb(0, 0, 0)
-            } else {
-                Color::rgb(96, 96, 96)
-            }
-        }
+        ColorScheme::Light => Color::rgb(17, 17, 17),
         ColorScheme::Dark => {
             if emphasized {
                 Color::rgb(230, 230, 230)
@@ -342,4 +332,12 @@ pub(super) fn popup_chrome_icon_color(color_scheme: ColorScheme, emphasized: boo
             }
         }
     }
+}
+
+fn popup_provider_icon_color(provider: ProviderKind, color_scheme: ColorScheme) -> Color {
+    let (r, g, b) = match color_scheme {
+        ColorScheme::Light => crate::provider_registry::light_surface_brand_rgb(provider),
+        ColorScheme::Dark => crate::provider_registry::descriptor(provider).brand_rgb,
+    };
+    Color::rgb(r, g, b)
 }

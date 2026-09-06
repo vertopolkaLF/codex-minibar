@@ -16,16 +16,18 @@ use windows_core::{self, Interface, Result, RuntimeName, RuntimeType, Type, imp:
 /// its live radius from the popup appearance settings.
 const SETTINGS_MICA_CORNER_RADIUS_DIP: i32 = 8;
 
-/// XAML host: acrylic, its dimming layer, and its outer stroke are one visual
-/// surface. Keeping the stroke here prevents the pager/body layer from drawing
-/// a second, moving border over the fixed host during height transitions.
+/// XAML host: acrylic and its dimming layer are one visual surface. The host
+/// still supplies the rounded clip, while the cards own their visible strokes;
+/// an outer surface stroke leaks into the GDI clip on two edges.
 fn acrylic_xaml() -> String {
+    let dimming_color = match windows_reactor::current_color_scheme() {
+        windows_reactor::ColorScheme::Light => "#10000000",
+        windows_reactor::ColorScheme::Dark => "#40000000",
+    };
     format!(
         r##"
 <Border
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    BorderBrush="{{ThemeResource SurfaceStrokeColorDefaultBrush}}"
-    BorderThickness="1"
     CornerRadius="{}"
     HorizontalAlignment="Stretch"
     VerticalAlignment="Stretch">
@@ -41,7 +43,7 @@ fn acrylic_xaml() -> String {
             </SystemBackdropElement.SystemBackdrop>
         </SystemBackdropElement>
         <Border
-            Background="#40000000"
+            Background="{dimming_color}"
             CornerRadius="{}"
             HorizontalAlignment="Stretch"
             VerticalAlignment="Stretch" />
@@ -50,7 +52,7 @@ fn acrylic_xaml() -> String {
 "##,
         crate::popup::corner_radius_dip(),
         crate::popup::corner_radius_dip(),
-        crate::popup::corner_radius_dip()
+        crate::popup::corner_radius_dip(),
     )
 }
 
@@ -60,23 +62,45 @@ fn acrylic_xaml() -> String {
 /// radius on this element is important: the popup HWND is region-clipped and
 /// must not reveal square Mica corners while it slides in.
 fn mica_xaml() -> String {
-    mica_xaml_with_radius(SETTINGS_MICA_CORNER_RADIUS_DIP)
+    mica_xaml_with_radius_and_overlay(SETTINGS_MICA_CORNER_RADIUS_DIP, "#00000000")
 }
 
 fn mica_xaml_with_radius(radius_dip: i32) -> String {
+    let dimming_color = match windows_reactor::current_color_scheme() {
+        windows_reactor::ColorScheme::Light => "#14000000",
+        windows_reactor::ColorScheme::Dark => "#08000000",
+    };
+    mica_xaml_with_radius_and_overlay(radius_dip, dimming_color)
+}
+
+fn mica_xaml_with_radius_and_overlay(radius_dip: i32, dimming_color: &str) -> String {
     format!(
         r#"
-<SystemBackdropElement
+<Border
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     CornerRadius="{}"
     HorizontalAlignment="Stretch"
     VerticalAlignment="Stretch">
-    <SystemBackdropElement.SystemBackdrop>
-        <MicaBackdrop />
-    </SystemBackdropElement.SystemBackdrop>
-</SystemBackdropElement>
+    <Grid
+        HorizontalAlignment="Stretch"
+        VerticalAlignment="Stretch">
+        <SystemBackdropElement
+            CornerRadius="{}"
+            HorizontalAlignment="Stretch"
+            VerticalAlignment="Stretch">
+            <SystemBackdropElement.SystemBackdrop>
+                <MicaBackdrop />
+            </SystemBackdropElement.SystemBackdrop>
+        </SystemBackdropElement>
+        <Border
+            Background="{}"
+            CornerRadius="{}"
+            HorizontalAlignment="Stretch"
+            VerticalAlignment="Stretch" />
+    </Grid>
+</Border>
 "#,
-        radius_dip
+        radius_dip, radius_dip, dimming_color, radius_dip
     )
 }
 
@@ -145,6 +169,19 @@ pub fn install_accent_icon_into(
 ) -> Result<()> {
     let xaml = format!(
         r##"<Viewbox xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Stretch="Uniform"><Canvas Width="{canvas}" Height="{canvas}"><Path Fill="{{ThemeResource AccentFillColorDefaultBrush}}" Data="{path}" /></Canvas></Viewbox>"##
+    );
+    install_into_inner(mount, &xaml)
+}
+
+/// Host an error icon with the exact brush used by WinUI's error InfoBar.
+/// Keeping this as a ThemeResource also preserves high-contrast behavior.
+pub fn install_info_bar_error_icon_into(
+    mount: windows_core::IInspectable,
+    path: &str,
+    canvas: f64,
+) -> Result<()> {
+    let xaml = format!(
+        r##"<Viewbox xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Stretch="Uniform"><Canvas Width="{canvas}" Height="{canvas}"><Path Fill="{{ThemeResource InfoBarErrorSeverityIconBackground}}" Data="{path}" /></Canvas></Viewbox>"##
     );
     install_into_inner(mount, &xaml)
 }

@@ -2057,7 +2057,10 @@ fn provider_brand_color(
             ColorScheme::Light => Color::rgb(96, 96, 96),
         };
     }
-    let (r, g, b) = provider_registry::descriptor(provider).brand_rgb;
+    let (r, g, b) = match color_scheme {
+        ColorScheme::Light => provider_registry::light_surface_brand_rgb(provider),
+        ColorScheme::Dark => provider_registry::descriptor(provider).brand_rgb,
+    };
     Color::rgb(r, g, b)
 }
 
