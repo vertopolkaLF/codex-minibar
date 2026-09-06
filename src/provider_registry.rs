@@ -197,7 +197,7 @@ pub fn descriptor(provider: ProviderKind) -> &'static ProviderDescriptor {
 /// the requested provider identity visible against the light card surface.
 pub fn light_surface_brand_rgb(provider: ProviderKind) -> (u8, u8, u8) {
     match provider {
-        ProviderKind::Codex => (27, 63, 147),
+        ProviderKind::Codex => (107, 132, 244),
         ProviderKind::Claude => (217, 119, 87),
         ProviderKind::Cursor => (51, 51, 51),
         ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => (77, 77, 77),
