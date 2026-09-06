@@ -192,6 +192,33 @@ fn usage_statistics_section_respects_its_live_toggle() {
 }
 
 #[test]
+fn exhausted_limit_is_compact_in_both_percentage_modes() {
+    let exhausted = LimitWindow {
+        used_percent: Some(100),
+        ..Default::default()
+    };
+
+    let (used_label, used_progress, _, used_compact) =
+        limit_card_presentation(&exhausted, true, false);
+    assert_eq!(used_label, "100% used");
+    assert_eq!(used_progress, 100.0);
+    assert!(used_compact);
+
+    let (left_label, left_progress, _, left_compact) =
+        limit_card_presentation(&exhausted, false, false);
+    assert_eq!(left_label, "0% left");
+    assert_eq!(left_progress, 0.0);
+    assert!(left_compact);
+
+    let fresh = LimitWindow {
+        used_percent: Some(0),
+        ..Default::default()
+    };
+    let (_, _, _, fresh_compact) = limit_card_presentation(&fresh, false, false);
+    assert!(!fresh_compact);
+}
+
+#[test]
 fn swap_chain_strip_keys_include_identity_inputs_without_hover_state() {
     let providers = vec![ProviderKind::Codex, ProviderKind::Claude];
     let same = provider_tabs_key(&providers, true, false, ColorScheme::Dark);

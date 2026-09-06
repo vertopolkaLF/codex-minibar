@@ -979,6 +979,39 @@ pub(super) fn limit_card(
     }
 }
 
+/// Resolve the label/progress pair while keeping compactness tied to the
+/// actual quota state rather than the selected label mode.
+///
+/// An exhausted limit is therefore compact in both modes: `100% used` and
+/// `0% left` describe the same underlying state.
+pub(super) fn limit_card_presentation(
+    window: &LimitWindow,
+    show_used_percentage: bool,
+    disabled: bool,
+) -> (String, f64, bool, bool) {
+    if disabled {
+        return ("Disabled".into(), 100.0, false, false);
+    }
+
+    let remaining = window.remaining_percent();
+    let percentage = if show_used_percentage {
+        window.used_percent
+    } else {
+        remaining
+    };
+    let suffix = if show_used_percentage { "used" } else { "left" };
+    let label = percentage
+        .map(|value| format!("{value}% {suffix}"))
+        .unwrap_or_else(|| "Unavailable".into());
+
+    (
+        label,
+        f64::from(percentage.unwrap_or(0)),
+        true,
+        remaining == Some(0),
+    )
+}
+
 fn limit_card_base(
     title: &str,
     window: &LimitWindow,
@@ -988,26 +1021,8 @@ fn limit_card_base(
     color_scheme: ColorScheme,
 ) -> Element {
     let accent = ThemeRef::Accent;
-    let (remaining_label, progress, show_reset, compact) = if disabled {
-        ("Disabled".into(), 100.0, false, false)
-    } else {
-        let remaining = window.remaining_percent();
-        let percentage = if show_used_percentage {
-            window.used_percent
-        } else {
-            remaining
-        };
-        let suffix = if show_used_percentage { "used" } else { "left" };
-        let label = percentage
-            .map(|value| format!("{value}% {suffix}"))
-            .unwrap_or_else(|| "Unavailable".into());
-        (
-            label,
-            f64::from(percentage.unwrap_or(0)),
-            true,
-            percentage == Some(0),
-        )
-    };
+    let (remaining_label, progress, show_reset, compact) =
+        limit_card_presentation(window, show_used_percentage, disabled);
     let reset = window.resets_at.map(|at| format_reset_in(Some(at)));
 
     let reset_status: Element = match reset {
@@ -1199,26 +1214,8 @@ fn limit_card_compact(
     color_scheme: ColorScheme,
 ) -> Element {
     let accent = ThemeRef::Accent;
-    let (remaining_label, progress, show_reset, compact) = if disabled {
-        ("Disabled".into(), 100.0, false, false)
-    } else {
-        let remaining = window.remaining_percent();
-        let percentage = if show_used_percentage {
-            window.used_percent
-        } else {
-            remaining
-        };
-        let suffix = if show_used_percentage { "used" } else { "left" };
-        let label = percentage
-            .map(|value| format!("{value}% {suffix}"))
-            .unwrap_or_else(|| "Unavailable".into());
-        (
-            label,
-            f64::from(percentage.unwrap_or(0)),
-            true,
-            percentage == Some(0),
-        )
-    };
+    let (remaining_label, progress, show_reset, compact) =
+        limit_card_presentation(window, show_used_percentage, disabled);
     let reset = window.resets_at.map(|at| format_reset_in(Some(at)));
     let reset_status: Element = match reset {
         Some(reset) => hstack((
