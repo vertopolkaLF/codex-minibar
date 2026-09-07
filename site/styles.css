@@ -1676,6 +1676,37 @@ html[data-theme="light"] .win-taskbar .widget-rings circle[style] {
   transform: none;
 }
 
+.provider-logos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 20px;
+  margin-top: 28px;
+}
+
+.provider-logos span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.provider-logos img {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+
+html[data-theme="dark"] .provider-logos img:not([src*="claude"]) {
+  filter: invert(1);
+}
+
+
+.hero-copy {
+  width: min(46%, 40rem);
+}
+
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;

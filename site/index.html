@@ -4,8 +4,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Codex Minibar — Windows tray companion for Codex limits</title>
-  <meta name="description" content="Free open-source Windows tray app for Codex five-hour and weekly rate limits. Configurable widgets, popup, notifications, auto-start, updates, and local history." />
+  <title>Codex Minibar — Windows tray companion for AI usage</title>
+  <meta name="description" content="Free open-source Windows tray app for Codex, Claude, Cursor, OpenCode and OpenRouter. Track rate limits, costs, tokens and API keys in one place." />
   <meta name="theme-color" content="#0a0a0a" />
   <meta name="color-scheme" content="dark" />
   <link rel="icon" type="image/png" href="assets/app-icon.png" />
@@ -28,6 +28,7 @@
   </script>
   <link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,400..700;1,400..700&family=Inter:wght@400;500;600&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="demo.css" />
   <meta name="google-site-verification" content="CN0KPL7OL2JQjfR8SxVWxJBgcG0YM13Ha_szf1kNfYs" />
 </head>
 
@@ -76,10 +77,10 @@
               <p class="hero-eyebrow">
                 <span><a class="link" href="https://codexbar.app/" target="_blank">Codexbar</a> but for Windows</span>
               </p>
-              <h1>Your Codex limits, one glance away.</h1>
+              <h1>Your AI usage, one glance away.</h1>
               <p class="lede">
-                Free native Windows tray companion for five-hour and weekly Codex
-                usage — without leaving what you are building.
+                Limits, costs, and tokens across your AI tools. A free native Windows
+                tray companion — without leaving what you are building.
               </p>
               <div class="cta-row">
                 <a class="btn" href="https://github.com/vertopolkaLF/codex-minibar/releases/latest">
@@ -96,6 +97,13 @@
                 </a>
               </div>
               <p class="meta">Free & Open Source · Windows 10 / 11</p>
+              <div class="provider-logos" aria-label="Supported providers">
+                <span><img src="assets/provider-chatgpt.svg" alt="" />Codex</span>
+                <span><img src="assets/provider-claude.svg" alt="" />Claude</span>
+                <span><img src="assets/provider-cursor.svg" alt="" />Cursor</span>
+                <span><img src="assets/provider-opencode.svg" alt="" />OpenCode</span>
+                <span><img src="assets/provider-openrouter.svg" alt="" />OpenRouter</span>
+              </div>
             </div>
 
             <div class="hero-visual reveal" aria-label="Codex Minibar popup above the Windows 11 tray">
@@ -103,6 +111,7 @@
                 <div class="demo-cursor" aria-hidden="true">
                   <img src="assets/ph-cursor-fill.svg" alt="" width="28" height="28" />
                 </div>
+
 
                 <div class="popup-mock" role="img" aria-label="Codex Minibar usage popup with Codex, Claude, and Cursor">
                   <div class="popup-body">
@@ -315,7 +324,7 @@
     </div>
 
 
-    <section class="features" id="features">
+    <!-- <section class="features" id="features">
       <div class="shell">
         <div class="section-head reveal">
           <h2>Everything in the tray</h2>
@@ -399,27 +408,28 @@
         <p class="meta">Windows 10/11 · x86, x64 and ARM64</p>
       </div>
     </section>
-  </main>
+  </main> -->
 
-  <footer class="site-footer">
-    <div class="shell footer-row">
-      <div class="footer-brand">
-        <img src="assets/app-icon.png" alt="" width="24" height="24" />
-        <span>Codex Minibar</span>
+    <footer class="site-footer">
+      <div class="shell footer-row">
+        <div class="footer-brand">
+          <img src="assets/app-icon.png" alt="" width="24" height="24" />
+          <span>Codex Minibar</span>
+        </div>
+        <p>
+          Independent project. Not affiliated with, endorsed by, or sponsored by
+          OpenAI.
+        </p>
+        <div class="footer-links">
+          <a href="https://github.com/vertopolkaLF/codex-minibar">Source</a>
+          <a href="https://github.com/vertopolkaLF/codex-minibar/issues">Issues</a>
+          <a href="https://github.com/vertopolkaLF/codex-minibar/blob/main/LICENSE">License</a>
+        </div>
       </div>
-      <p>
-        Independent project. Not affiliated with, endorsed by, or sponsored by
-        OpenAI.
-      </p>
-      <div class="footer-links">
-        <a href="https://github.com/vertopolkaLF/codex-minibar">Source</a>
-        <a href="https://github.com/vertopolkaLF/codex-minibar/issues">Issues</a>
-        <a href="https://github.com/vertopolkaLF/codex-minibar/blob/main/LICENSE">License</a>
-      </div>
-    </div>
-  </footer>
+    </footer>
 
-  <script src="script.js" defer></script>
+    <script src="demo.js" defer></script>
+    <script src="script.js" defer></script>
 </body>
 
 </html>
