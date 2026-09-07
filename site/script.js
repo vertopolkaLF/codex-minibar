@@ -571,6 +571,8 @@ void main() {
   scalePopupToFit();
   window.addEventListener("resize", scalePopupToFit, { passive: true });
   new ResizeObserver(scalePopupToFit).observe(heroVisual);
+  // Switching demo tabs changes the popup's natural height.
+  window.addEventListener("demo:rendered", scalePopupToFit);
 
   const setPopupOpen = (open) => {
     if (!popupMock) return;

@@ -1,6 +1,5 @@
 /* The preview deliberately follows the app's Segoe UI typography and surfaces. */
-.popup-mock,
-.demo-settings {
+.popup-mock {
   --demo-accent: #ff993e;
   --demo-bg: #201e1e;
   --demo-surface: #ffffff09;
@@ -15,10 +14,14 @@
 }
 
 .popup-mock {
+  border: 1px solid color-mix(in srgb, var(--demo-text) 14%, transparent);
+  box-shadow: 0 24px 70px #0000006e;
   width: 475px;
   max-width: calc(100% - 32px);
   border-radius: 18px;
-  background: linear-gradient(150deg, #211e1ef5, #271c19f5 65%, #1e1e1ef5);
+  background: color-mix(in srgb, var(--demo-bg) 86%, transparent);
+  backdrop-filter: blur(28px) saturate(150%);
+  -webkit-backdrop-filter: blur(28px) saturate(150%);
 }
 
 .popup-mock.is-open {
@@ -54,8 +57,7 @@
   margin-top: 8px;
 }
 
-.popup-mock button,
-.demo-settings button {
+.popup-mock button {
   font: inherit;
   color: inherit;
   cursor: pointer;
@@ -66,24 +68,20 @@
   transition: background .18s, transform .18s;
 }
 
-.popup-mock button:hover,
-.demo-settings button:hover {
+.popup-mock button:hover {
   background: #8882;
 }
 
-.popup-mock button:active,
-.demo-settings button:active {
+.popup-mock button:active {
   transform: scale(.97);
 }
 
-.popup-mock :focus-visible,
-.demo-settings :focus-visible {
+.popup-mock :focus-visible {
   outline: 2px solid var(--demo-accent);
   outline-offset: 2px;
 }
 
-.popup-mock button:disabled,
-.demo-settings button:disabled {
+.popup-mock button:disabled {
   opacity: .45;
   cursor: default;
 }
@@ -146,14 +144,17 @@
   color: var(--demo-muted);
 }
 
+.demo-spacer {
+  flex: 1 1 auto;
+  min-width: 8px;
+}
+
 .demo-account-name {
-  margin-left: auto;
   color: var(--demo-muted);
   font-size: 14px;
 }
 
 .demo-handle {
-  margin-left: auto;
   color: var(--demo-muted) !important;
   cursor: grab !important;
   padding: 2px !important;
@@ -161,7 +162,6 @@
 
 .demo-periods {
   display: flex;
-  margin-left: auto;
 }
 
 .demo-periods button {
@@ -228,7 +228,7 @@
   gap: 15px 9px;
 }
 
-.demo-legend button {
+.demo-legend>* {
   display: grid;
   grid-template-columns: 23px 1fr;
   gap: 3px 7px;
@@ -236,7 +236,7 @@
   padding: 0;
 }
 
-.demo-legend span,
+.demo-legend>*>span,
 .demo-legend small {
   grid-column: 1 / -1;
   font-size: 14px;
@@ -290,7 +290,9 @@
   position: absolute;
   inset: auto 0 0;
   height: 8px;
-  background: repeating-linear-gradient(90deg, transparent 0 19%, #0003 19% 19.7%, transparent 19.7% 20%);
+  background: repeating-linear-gradient(90deg,
+      transparent 0 calc(var(--seg, 20%) - 2px),
+      #0004 calc(var(--seg, 20%) - 2px) var(--seg, 20%));
 }
 
 .demo-limit.expanded {
@@ -325,24 +327,36 @@
 .demo-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 12px 14px;
-  gap: 4px;
-  background: #16161699;
+  padding: 15px 22px 15px 17px;
+  gap: 10px;
 }
 
-.demo-tabs,
+.demo-tabs {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
 .demo-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 5px;
 }
 
 .demo-footer button {
   position: relative;
-  height: 44px;
-  min-width: 32px;
-  padding: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 45px;
+  height: 45px;
+  min-width: 45px;
+  padding: 0;
+  border-radius: 5px;
+}
+
+.demo-actions button {
+  border-radius: 8px;
 }
 
 .demo-tab[aria-pressed="true"]::after {
@@ -352,8 +366,8 @@
   background: var(--demo-accent);
   border-radius: 2px;
   bottom: 0;
-  left: 8px;
-  right: 8px;
+  left: 11px;
+  right: 11px;
 }
 
 .demo-actions {
@@ -361,8 +375,8 @@
 }
 
 .demo-actions .demo-icon {
-  width: 21px;
-  height: 21px;
+  width: 23px;
+  height: 23px;
 }
 
 .demo-account {
@@ -518,187 +532,13 @@
   background: #8882;
 }
 
-.demo-status {
-  position: absolute;
-  bottom: 76px;
-  left: 20px;
-  right: 20px;
-  padding: 10px;
-  border-radius: 8px;
-  background: var(--demo-bg);
-  border: 1px solid #8885;
-  font-size: 13px;
-  pointer-events: none;
-  opacity: 0;
-  transform: translateY(5px);
-  transition: opacity .2s, transform .2s;
-}
-
-.demo-status.visible {
-  opacity: 1;
-  transform: none;
-}
-
-.demo-settings {
-  border: 1px solid #8884;
-  border-radius: 14px;
-  padding: 0;
-  width: min(820px, calc(100vw - 24px));
-  max-height: 85dvh;
-  margin: auto;
-  box-shadow: 0 25px 90px #0008;
-}
-
-.demo-settings::backdrop {
-  background: #0008;
-  backdrop-filter: blur(5px);
-}
-
-.demo-settings header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 20px;
-  border-bottom: 1px solid #8883;
-}
-
-.demo-settings-layout {
-  display: grid;
-  grid-template-columns: 175px 1fr;
-  min-height: 440px;
-}
-
-.demo-settings nav {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 12px;
-  background: #8881;
-}
-
-.demo-settings nav button {
-  text-align: left;
-  padding: 9px 12px;
-}
-
-.demo-settings nav button[aria-current="page"] {
-  background: #8882;
-  box-shadow: inset 3px 0 var(--demo-accent);
-}
-
-.demo-settings section {
-  padding: 24px;
-  max-height: 68dvh;
-  overflow-y: auto;
-}
-
-.demo-settings h2 {
-  font-size: 26px;
-  margin: 0 0 20px;
-}
-
-.demo-settings h3 {
-  font-size: 17px;
-  margin: 18px 0 10px;
-}
-
-.demo-settings p {
-  margin: 12px 0;
-}
-
-.demo-setting {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  background: var(--demo-surface);
-  padding: 14px;
-  margin: 4px 0;
-  border-radius: 7px;
-  font-size: 14px;
-}
-
-.demo-setting input[type="checkbox"] {
-  accent-color: var(--demo-accent);
-  width: 32px;
-  height: 19px;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.demo-setting select,
-.demo-setting input:not([type="checkbox"]) {
-  color: var(--demo-text);
-  background: var(--demo-bg);
-  padding: 6px;
-  border: 1px solid #8885;
-  border-radius: 5px;
-  font: inherit;
-  max-width: 50%;
-}
-
-.demo-setting input[type="color"] {
-  width: 45px;
-  height: 30px;
-  padding: 2px;
-}
-
-.demo-setting-provider {
-  margin-bottom: 14px;
-}
-
-.demo-setting-provider>small {
-  color: var(--demo-muted);
-  margin: 6px 14px;
-  display: block;
-}
-
-.demo-settings details {
-  margin: 6px 0;
-  padding: 8px;
-  background: #8881;
-  border-radius: 6px;
-  font-size: 14px;
-}
-
-.demo-settings summary {
-  cursor: pointer;
-  padding: 5px;
-}
-
-.demo-settings section>button,
-.demo-setting-provider>button,
-.demo-settings details button {
-  background: #8882;
-  margin: 8px 0;
-}
-
-.demo-settings-note {
-  font-size: 12px;
-  color: var(--demo-muted);
-  padding-top: 16px;
-}
-
-.demo-log {
-  white-space: pre-wrap;
-  font-size: 13px;
-  line-height: 2;
-}
-
-.demo-about-icon {
-  width: 56px;
-  height: 56px;
-}
-
 .demo-empty {
   padding: 20px;
   color: var(--demo-muted);
 }
 
 .popup-mock[data-demo-theme="light"],
-.demo-settings[data-demo-theme="light"],
-html[data-theme="light"] .popup-mock[data-demo-theme="auto"],
-html[data-theme="light"] .demo-settings[data-demo-theme="auto"] {
+html[data-theme="light"] .popup-mock[data-demo-theme="auto"] {
   --demo-bg: #f5f3f1;
   --demo-text: #242323;
   --demo-muted: #6b6663;
@@ -707,7 +547,7 @@ html[data-theme="light"] .demo-settings[data-demo-theme="auto"] {
   color: var(--demo-text);
 }
 
-:is(.popup-mock, .demo-settings)[data-demo-theme="dark"] {
+.popup-mock[data-demo-theme="dark"] {
   background: var(--demo-bg);
   color: var(--demo-text);
 }
@@ -724,6 +564,127 @@ html[data-theme="light"] .demo-settings[data-demo-theme="auto"] {
 .popup-mock[data-demo-theme="light"] .demo-icon:not(.icon-codex):not(.icon-claude):not(.icon-openrouter),
 html[data-theme="light"] .popup-mock[data-demo-theme="auto"] .demo-icon:not(.icon-codex):not(.icon-claude):not(.icon-openrouter) {
   filter: none;
+}
+
+/* ---- pieces added for the interactive mock ------------------------- */
+
+.demo-content section>*,
+.demo-account>* {
+  min-width: 0;
+}
+
+.demo-section-head b button {
+  font-weight: inherit;
+}
+
+/* Scoped to `.popup-mock` so it outranks the generic `.popup-mock button`
+   reset, which would otherwise strip the card surface and padding. */
+.popup-mock .demo-stats-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 15px;
+  border-radius: 13px;
+  background: var(--demo-surface);
+}
+
+.popup-mock .demo-stats-card:hover {
+  background: color-mix(in srgb, var(--demo-text) 8%, var(--demo-surface));
+}
+
+.demo-total {
+  display: block;
+}
+
+.demo-stats-card .demo-stacked {
+  margin-bottom: 15px;
+}
+
+/* Single-row limit card: caption, remaining, reset — no pace marker. */
+.demo-limit.single {
+  min-height: 0;
+  padding: 16px 15px;
+}
+
+.demo-limit.single .demo-row:first-child {
+  font-size: 16px;
+  color: inherit;
+}
+
+.demo-limit.single .demo-cap {
+  flex: 1;
+  font-size: 14px;
+  color: var(--demo-muted);
+}
+
+.demo-reset {
+  white-space: nowrap;
+}
+
+.demo-banked>span {
+  display: grid;
+  gap: 2px;
+}
+
+.demo-banked b {
+  font-weight: 400;
+}
+
+.demo-key {
+  min-height: 0;
+  padding: 13px 15px;
+  font-size: 15px;
+}
+
+.demo-key>span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.demo-key small {
+  margin-top: 0;
+}
+
+.demo-inline-segments {
+  padding: 3px;
+  border-radius: 9px;
+}
+
+.demo-inline-segments button {
+  padding: 4px 14px;
+}
+
+.demo-spark b {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.demo-spark small:last-child {
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+.demo-chart-dates small {
+  font-size: 12px;
+}
+
+.demo-chart svg {
+  color: var(--demo-text);
+}
+
+.demo-totals>div {
+  min-width: 0;
+}
+
+.demo-table tbody tr+tr td {
+  border-top: 1px solid #8882;
+}
+
+/* Light surfaces use the app's darker OpenRouter brand purple. */
+.popup-mock[data-demo-theme="light"] .icon-openrouter,
+html[data-theme="light"] .popup-mock[data-demo-theme="auto"] .icon-openrouter {
+  filter: invert(13%) sepia(94%) saturate(7151%) hue-rotate(270deg) brightness(96%) contrast(119%);
 }
 
 @keyframes demo-enter {
@@ -760,9 +721,8 @@ html[data-theme="light"] .popup-mock[data-demo-theme="auto"] .demo-icon:not(.ico
 
 @media (prefers-reduced-motion:reduce) {
 
-  .popup-mock *,
-  .demo-settings *,
-  .popup-mock {
+  .popup-mock,
+  .popup-mock * {
     animation: none !important;
     transition: none !important;
   }
@@ -891,21 +851,4 @@ html[data-theme="light"] .popup-mock[data-demo-theme="auto"] .demo-icon:not(.ico
     padding: 6px 10px;
   }
 
-  .demo-settings-layout {
-    grid-template-columns: 1fr;
-  }
-
-  .demo-settings nav {
-    flex-direction: row;
-    overflow-x: auto;
-  }
-
-  .demo-settings nav button {
-    white-space: nowrap;
-  }
-
-  .demo-settings section {
-    padding: 16px;
-    max-height: 58dvh;
-  }
 }
