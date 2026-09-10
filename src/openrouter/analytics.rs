@@ -166,6 +166,15 @@ fn query(
         .into_string()
         .context("read OpenRouter analytics response")
 }
+// The provider card's display period is independent of the Usage tab's range.
+// Fetch enough history for every supported overview range, including on upgrades.
+fn first_fetch_day(today: NaiveDate, history_days: u16) -> NaiveDate {
+    let days = history_days
+        .clamp(1, 365)
+        .max(crate::usage_overview::OVERVIEW_MAX_DAYS);
+    today - Duration::days(i64::from(days - 1))
+}
+
 pub(super) fn refresh(client: &OpenRouterClient, history_days: u16) -> Result<UsageStatistics> {
     let mut cache = cache(client)?;
     let mut seen = HashSet::new();
@@ -185,7 +194,7 @@ pub(super) fn refresh(client: &OpenRouterClient, history_days: u16) -> Result<Us
     );
     let now = Utc::now();
     let today = now.with_timezone(&Local).date_naive();
-    let first = today - Duration::days(i64::from(history_days.clamp(1, 365) - 1));
+    let first = first_fetch_day(today, history_days);
     let mut changed = false;
     for date in first.iter_days().take_while(|d| *d <= today) {
         let (start, end) = boundaries(date)?;
@@ -526,6 +535,46 @@ mod tests {
         let legacy = r#"{"revision":0,"accounts":[],"days":{}}"#;
         assert!(cached_hourly_rows(legacy, start, end).unwrap().is_empty());
     }
+    #[test]
+    fn fetches_full_overview_history_without_changing_the_card_period() {
+        let today = Local::now().date_naive();
+        let first = first_fetch_day(today, 30);
+        assert_eq!(
+            (today - first).num_days() + 1,
+            i64::from(crate::usage_overview::OVERVIEW_MAX_DAYS)
+        );
+        assert_eq!(first_fetch_day(today, 1), first);
+        assert_eq!((today - first_fetch_day(today, 365)).num_days() + 1, 365);
+        let mut cache = Cache::default();
+        for date in first.iter_days().take_while(|date| *date <= today) {
+            cache.days.insert(
+                date,
+                CachedDay {
+                    start: date.and_hms_opt(0, 0, 0).unwrap().and_utc(),
+                    end: date
+                        .succ_opt()
+                        .unwrap()
+                        .and_hms_opt(0, 0, 0)
+                        .unwrap()
+                        .and_utc(),
+                    fetched_at: Utc::now(),
+                    models: BTreeMap::from([(
+                        "test/model".into(),
+                        TokenUsage {
+                            requests: 1,
+                            ..Default::default()
+                        },
+                    )]),
+                },
+            );
+        }
+        let stored_days = daily(&cache);
+        let card = statistics_from_daily(&stored_days, 30);
+        assert_eq!(card.history_days, 30);
+        assert_eq!(card.history.requests, 30);
+        assert_eq!(statistics_from_daily(&stored_days, 90).history.requests, 90);
+    }
+
     #[test]
     fn cache_expires_and_detects_timezone_changes() {
         let now = Utc::now();
