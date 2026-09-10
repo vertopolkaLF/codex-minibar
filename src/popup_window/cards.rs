@@ -212,6 +212,14 @@ pub(super) fn provider_cards(
                 );
             }
         }
+        if popup_visibility.is_visible(&usage_brick_id(provider), surface, show_provider_tabs)
+            && limits.usage.has_data()
+        {
+            cards.push(
+                usage_statistics_card(provider, limits)
+                    .with_key(format!("{}-usage-statistics", provider.display_name())),
+            );
+        }
         return cards;
     }
     // Cursor usage is fetched from a remote CSV export rather than scanned

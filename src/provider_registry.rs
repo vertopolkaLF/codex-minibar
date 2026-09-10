@@ -177,7 +177,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         icon: "openrouter",
         brand_rgb: (200, 255, 0),
         supports_activation: false,
-        include_in_total_spend: false,
+        include_in_total_spend: true,
         metrics: OPENROUTER_METRICS,
         default_tray_metrics: &["openrouter.limit"],
     },
@@ -556,7 +556,7 @@ mod tests {
         assert!(!descriptor(ProviderKind::OpenCodeZen).supports_activation);
         assert!(!descriptor(ProviderKind::OpenCodeGo).supports_activation);
         assert!(!descriptor(ProviderKind::OpenRouter).supports_activation);
-        assert!(!descriptor(ProviderKind::OpenRouter).include_in_total_spend);
+        assert!(descriptor(ProviderKind::OpenRouter).include_in_total_spend);
     }
 
     #[test]

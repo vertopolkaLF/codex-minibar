@@ -274,11 +274,10 @@ pub(crate) fn collect_codex_hourly_since(
 }
 
 pub(crate) fn truncate_local_hour(timestamp: DateTime<Local>) -> DateTime<Local> {
-    timestamp
-        .with_minute(0)
-        .and_then(|value| value.with_second(0))
-        .and_then(|value| value.with_nanosecond(0))
-        .unwrap_or(timestamp)
+    // Preserve the UTC offset during repeated local hours at the DST transition.
+    timestamp - Duration::minutes(i64::from(timestamp.minute()))
+        - Duration::seconds(i64::from(timestamp.second()))
+        - Duration::nanoseconds(i64::from(timestamp.nanosecond()))
 }
 
 fn statistics_from_cache(cache: &UsageCache, history_days: u16) -> UsageStatistics {

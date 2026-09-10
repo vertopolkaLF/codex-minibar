@@ -26,7 +26,10 @@ const SECRET_PREFIX: &str = "openrouter-account-";
 const LEGACY_ACCOUNT_ID: &str = "legacy";
 const LEGACY_API_KEY_ID: &str = "legacy";
 
+pub(crate) mod analytics;
+
 pub struct OpenRouterClient {
+    credentials_revision: u64,
     agent: ureq::Agent,
     accounts: Vec<AccountCredentials>,
     /// Stable key metadata (name/limit/reset). Usage is never stored here.
@@ -60,6 +63,7 @@ struct CachedOpenRouterKey {
 impl OpenRouterClient {
     pub fn new(settings: &Settings) -> Result<Self> {
         Ok(Self {
+            credentials_revision: settings.openrouter_credentials_revision,
             agent: ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build(),
             accounts: load_credentials(settings)?,
             key_cache: load_key_cache_from_store(),
@@ -420,15 +424,12 @@ pub fn save_management_key(account_id: &str, value: Option<&str>) -> Result<()> 
 }
 
 impl UsageProvider for OpenRouterClient {
-    fn load_cached_usage_statistics(&mut self, _history_days: u16) -> Result<UsageStatistics> {
-        Ok(UsageStatistics::default())
+    fn load_cached_usage_statistics(&mut self, history_days: u16) -> Result<UsageStatistics> {
+        analytics::load(self, history_days)
     }
 
-    fn refresh_usage_statistics(&mut self, _history_days: u16) -> Result<UsageStatistics> {
-        // `/key` reports aggregate dollar usage, not token history. Do not
-        // manufacture a daily chart or pretend that one aggregate is today's
-        // spend; the provider summary renders the authoritative value.
-        Ok(UsageStatistics::default())
+    fn refresh_usage_statistics(&mut self, history_days: u16) -> Result<UsageStatistics> {
+        analytics::refresh(self, history_days)
     }
 }
 
