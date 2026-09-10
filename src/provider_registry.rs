@@ -328,6 +328,25 @@ pub fn settings_brick_ids(
     ids
 }
 
+/// Tray selectors contain quota metrics only, including API-discovered windows.
+pub fn tray_metric_options(
+    provider: ProviderKind,
+    discovered_labels: &std::collections::BTreeMap<String, String>,
+) -> Vec<(String, String)> {
+    let mut options = descriptor(provider)
+        .metrics
+        .iter()
+        .map(|metric| (metric.id.to_string(), metric.label.to_string()))
+        .collect::<Vec<_>>();
+    let prefix = format!("{}.additional.", descriptor(provider).id);
+    for (id, label) in discovered_labels {
+        if id.starts_with(&prefix) && !options.iter().any(|(known, _)| known == id) {
+            options.push((id.clone(), label.clone()));
+        }
+    }
+    options
+}
+
 /// Prefer the live provider title for a discovered additional window.
 pub fn settings_brick_label(
     provider: ProviderKind,
@@ -475,6 +494,51 @@ pub fn resolve_metric<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tray_options_include_dynamic_windows_and_resolve_the_selected_quota() {
+        let limits = RateLimits {
+            additional_limits: vec![crate::limits::AdditionalLimit {
+                id: "claude-weekly-scoped-claude-fable-5-promo".into(),
+                title: "Fable only".into(),
+                window: LimitWindow {
+                    used_percent: Some(42),
+                    duration_minutes: Some(10080),
+                    ..Default::default()
+                },
+            }],
+            ..Default::default()
+        };
+        let mut labels = discovered_additional_brick_labels(ProviderKind::Claude, &limits)
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        labels.insert("codex.additional.other".into(), "Other provider".into());
+        labels.insert("claude.usage".into(), "Usage stats".into());
+        let options = tray_metric_options(ProviderKind::Claude, &labels);
+        assert_eq!(options.len(), CLAUDE_METRICS.len() + 1);
+        let (id, label) = options.last().unwrap();
+        assert_eq!(label, "Fable only");
+        let (resolved_id, _, window) = resolve_metric(ProviderKind::Claude, &limits, id).unwrap();
+        assert_eq!(&resolved_id, id);
+        assert_eq!(window.used_percent, Some(42));
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        let mut settings = crate::settings::Settings::default();
+        let mut widget = crate::settings::TrayWidget::custom_for_provider(ProviderKind::Claude);
+        widget.indicators[0].metric_id = id.clone();
+        settings.tray_widgets = vec![widget];
+        settings.save(&path).unwrap();
+        let loaded = crate::settings::Settings::load_or_create(&path).unwrap();
+        assert_eq!(&loaded.tray_widgets[0].indicators[0].metric_id, id);
+        assert_eq!(
+            tray_metric_options(ProviderKind::Codex, &labels).len(),
+            CODEX_METRICS.len() + 1
+        );
+        assert_eq!(
+            tray_metric_options(ProviderKind::Claude, &Default::default()).len(),
+            CLAUDE_METRICS.len()
+        );
+    }
 
     #[test]
     fn registry_covers_every_provider_exactly_once() {
