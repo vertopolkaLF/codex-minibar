@@ -40,6 +40,7 @@ use crate::{
 #[cfg(windows)]
 static KEEP_ON_MONITOR_QUEUED: AtomicBool = AtomicBool::new(false);
 
+mod activity_chart;
 mod bridge;
 mod cards;
 mod chrome;
@@ -56,6 +57,7 @@ mod tests;
 pub use shell::app;
 pub use state::AppState;
 
+use activity_chart::*;
 use bridge::*;
 use cards::*;
 use chrome::*;
