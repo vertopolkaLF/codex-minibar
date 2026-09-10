@@ -248,10 +248,15 @@ fn assemble_overview_snapshot(
                     .unwrap_or(0),
             );
             let breakdown = if hourly && *provider == ProviderKind::OpenRouter {
-                store.load_openrouter_hourly_rows(start_hour, end_hour)?
-                    .into_iter().map(|(model, _, usage)| (model, usage)).collect()
+                store
+                    .load_openrouter_hourly_rows(start_hour, end_hour)?
+                    .into_iter()
+                    .map(|(model, _, usage)| (model, usage))
+                    .collect()
             } else {
-                store.load_model_breakdown(*provider, start_date, end_date).unwrap_or_default()
+                store
+                    .load_model_breakdown(*provider, start_date, end_date)
+                    .unwrap_or_default()
             };
             for (model, usage) in breakdown {
                 let model = if *provider == ProviderKind::Cursor {

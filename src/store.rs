@@ -528,7 +528,9 @@ impl ProviderStore {
             }
         }
         let existing = {
-            let mut statement = self.conn.prepare("SELECT date FROM usage_daily WHERE provider = ?1")?;
+            let mut statement = self
+                .conn
+                .prepare("SELECT date FROM usage_daily WHERE provider = ?1")?;
             let rows =
                 statement.query_map(params![provider.id()], |row| row.get::<_, String>(0))?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
@@ -1163,7 +1165,8 @@ impl ProviderStore {
             }
         }
         let existing = {
-            let mut statement = self.conn
+            let mut statement = self
+                .conn
                 .prepare("SELECT date, model FROM usage_model_daily WHERE provider = ?1")?;
             let rows = statement.query_map(params![provider.id()], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -1581,7 +1584,7 @@ mod tests {
         store
             .save_openrouter_analytics(
                 "first",
-                &[day.clone()],
+                std::slice::from_ref(&day),
                 &[("model".into(), day.date, day.usage.clone())],
                 Utc::now(),
             )
