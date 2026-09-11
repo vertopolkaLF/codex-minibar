@@ -37,6 +37,13 @@ impl LimitProvider for CodexClient {
 }
 
 impl UsageProvider for CodexClient {
+    fn account_identity(&self) -> Option<String> {
+        Some(crate::store::codex_accounts::current_id())
+    }
+    fn identity_poll_interval(&self) -> StdDuration {
+        StdDuration::from_secs(1)
+    }
+
     fn load_cached_usage_statistics(
         &mut self,
         history_days: u16,

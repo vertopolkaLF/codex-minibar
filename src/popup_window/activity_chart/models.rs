@@ -238,7 +238,6 @@ pub(super) fn bar(
     date: NaiveDate,
     cost: bool,
     scheme: ColorScheme,
-    width: f64,
     height: f64,
     transition: Duration,
 ) -> Element {
@@ -264,7 +263,7 @@ pub(super) fn bar(
         })
         .collect();
     border(grid(segments).rows(rows).columns([GridLength::Star(1.0)]))
-        .width(width)
+        .max_width(12.0)
         .height(height)
         .corner_radius(1.5)
         .background(Color::transparent())

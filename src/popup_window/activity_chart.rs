@@ -296,7 +296,13 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
         |(provider, statistics, today): (ProviderKind, UsageStatistics, NaiveDate)| {
             let bounds = buckets(&statistics, today);
             crate::store::with_store(|store| {
-                store.load_model_daily(provider, bounds[0].first, today)
+                if provider == ProviderKind::Codex
+                    && let Some(account) = statistics.account_id.as_deref()
+                {
+                    store.account_daily_for(account, bounds[0].first, today)
+                } else {
+                    store.load_model_daily(provider, bounds[0].first, today)
+                }
             })
             .map(|rows| Arc::new(models::group(rows, &bounds, provider)))
             .map_err(|error| format!("Could not load model data: {error:#}"))
@@ -321,9 +327,6 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
         mask,
         cost: cost_mode,
     } = selection;
-    let chart_width = f64::from(popup::POPUP_WIDTH) - 2.0 - 32.0 - 2.0 - 24.0;
-    let slot_width = chart_width / data.len() as f64;
-    let bar_width = (slot_width - 2.0).clamp(1.0, 12.0);
     let maximum = data
         .iter()
         .map(|b| {
@@ -341,7 +344,8 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
     let active_hover = hovered.filter(|date| data.iter().any(|b| b.first == *date));
     let bars: Vec<Element> = data
         .iter()
-        .map(|bucket| {
+        .enumerate()
+        .map(|(index, bucket)| {
             let value = if by_model {
                 model_data.map_or(0, |models| models.value(bucket.first, cost_mode))
             } else if cost_mode {
@@ -367,13 +371,12 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
                     date,
                     cost_mode,
                     props.scheme,
-                    bar_width,
                     height,
                     transition,
                 )
             } else if cost_mode || value == 0 {
                 border(Element::Empty)
-                    .width(bar_width)
+                    .max_width(12.0)
                     .height(height)
                     .corner_radius(1.5)
                     .background(ThemeRef::Accent)
@@ -410,7 +413,7 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
                     .collect();
                 // Round the complete bar so tiny end segments cannot flatten it.
                 border(grid(segments).rows(rows).columns([GridLength::Star(1.0)]))
-                    .width(bar_width)
+                    .max_width(12.0)
                     .height(height)
                     .corner_radius(1.5)
                     .background(Color::transparent())
@@ -422,11 +425,16 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
             };
             let column = grid([bar
                 .vertical_alignment(VerticalAlignment::Bottom)
-                .horizontal_alignment(HorizontalAlignment::Center)])
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .margin(Thickness {
+                    left: 1.0,
+                    right: 1.0,
+                    top: 0.0,
+                    bottom: 0.0,
+                })])
             .rows([GridLength::Star(1.0)])
             .columns([GridLength::Star(1.0)])
             .height(HEIGHT)
-            .width(slot_width)
             .opacity(if active_hover.is_none_or(|h| h == date) {
                 1.0
             } else {
@@ -436,7 +444,6 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
             // A transparent overlay owns pointer input for the entire day. The
             // colored segments must not become separate hover targets.
             let mut hit_target = border(Element::Empty)
-                .width(slot_width)
                 .height(HEIGHT)
                 .background(Color {
                     a: 0,
@@ -481,16 +488,25 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
                 }
             }
             grid((column, hit_target))
+                .grid_column(index as i32)
                 .rows([GridLength::Star(1.0)])
                 .columns([GridLength::Star(1.0)])
-                .width(slot_width)
                 .height(HEIGHT)
                 .with_key(format!("bar-{date}"))
                 .into()
         })
         .collect();
     let exit = set_hovered.clone();
-    let mut chart_children: Vec<Element> = vec![hstack(bars).spacing(0.0).height(HEIGHT).into()];
+    // Let WinUI distribute rounding within the available width. Independently
+    // rounded fixed-width StackPanel children can clip the final (today) bar.
+    let mut chart_children: Vec<Element> = vec![
+        grid(bars)
+            .columns((0..data.len()).map(|_| GridLength::Star(1.0)))
+            .rows([GridLength::Star(1.0)])
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .height(HEIGHT)
+            .into(),
+    ];
     let empty_label = if by_model && model_resource.error().is_some() {
         Some("Model data unavailable")
     } else if by_model && model_resource.is_loading() {
@@ -517,7 +533,7 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
     }
     let chart = grid(chart_children)
         .rows([GridLength::Auto])
-        .columns([GridLength::Auto])
+        .columns([GridLength::Star(1.0)])
         .height(HEIGHT)
         .on_pointer_exited(move || exit.call(None));
 

@@ -493,6 +493,11 @@ pub(super) fn start_background_bridge(
                     publish_popup_ui(&set_ui, &ui);
                 }
                 Ok(WorkerEvent::ProviderUsageUpdated(provider, usage)) => {
+                    if provider == ProviderKind::Codex
+                        && usage.account_id.as_deref().is_some_and(|id| id != crate::store::codex_accounts::current_id())
+                    {
+                        continue;
+                    }
                     if (provider == ProviderKind::Codex && !ui.codex_enabled)
                         || (provider == ProviderKind::Claude && !ui.claude_enabled)
                         || (provider == ProviderKind::Cursor && !ui.cursor_enabled)

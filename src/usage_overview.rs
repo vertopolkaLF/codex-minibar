@@ -294,6 +294,7 @@ fn assemble_overview_snapshot(
         }
     }
     if hourly
+        && store::with_store(|store| Ok(store.codex_attribution()?.is_none())).unwrap_or(false)
         && spend_providers.contains(&ProviderKind::Codex)
         && provider_hourly
             .get(&ProviderKind::Codex)

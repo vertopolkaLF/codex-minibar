@@ -24,6 +24,8 @@ use crate::usage::{
     DailyTokenUsage, TokenUsage, UsageCache, UsageStatistics, statistics_from_daily,
 };
 
+pub(crate) mod codex_accounts;
+
 const SCHEMA_VERSION: i64 = 1;
 const CODEX_CACHE_VERSION: u8 = 7;
 const CLAUDE_CACHE_VERSION: u8 = 4;
@@ -34,6 +36,11 @@ static SHARED: OnceLock<Arc<Mutex<ProviderStore>>> = OnceLock::new();
 
 /// Process-wide store. Opened once, shared by startup hydration and workers.
 pub fn shared() -> Result<Arc<Mutex<ProviderStore>>> {
+    if let Some(store) = SHARED.get() {
+        return Ok(Arc::clone(store));
+    }
+    static OPEN: Mutex<()> = Mutex::new(());
+    let _open = OPEN.lock().map_err(|_| anyhow!("provider store initialization lock poisoned"))?;
     if let Some(store) = SHARED.get() {
         return Ok(Arc::clone(store));
     }
@@ -64,6 +71,7 @@ impl ProviderStore {
         let store = Self { conn };
         store.migrate()?;
         store.migrate_legacy_json_caches();
+        store.initialize_codex_attribution()?;
         Ok(store)
     }
 
@@ -141,6 +149,7 @@ impl ProviderStore {
             ",
         )?;
         self.migrate_schema_updates()?;
+        self.migrate_codex_accounts()?;
         self.set_meta("schema_version", &SCHEMA_VERSION.to_string())?;
         Ok(())
     }
@@ -308,6 +317,9 @@ impl ProviderStore {
         provider: ProviderKind,
         history_days: u16,
     ) -> Result<UsageStatistics> {
+        if provider == ProviderKind::Codex && self.use_codex_account_data()? {
+            return self.account_statistics_for(&codex_accounts::current_id(), history_days);
+        }
         let mut statement = self.conn.prepare(
             "SELECT date, input_tokens, cached_input_tokens, output_tokens,
                     requests, estimated_cost_microusd, priced_requests, cache_savings_microusd
@@ -340,8 +352,22 @@ impl ProviderStore {
             "usage_file_model_daily",
             "usage_events",
             "scan_files",
+            "codex_account_events",
+            "codex_legacy_daily",
+            "codex_legacy_model_daily",
+            "codex_legacy_hourly",
+            "codex_legacy_sessions",
+            "codex_legacy_cursors",
         ] {
             tx.execute(&format!("DELETE FROM {table}"), [])?;
+        }
+        // Rebuild existing attribution after a clear; never reassign history.
+        if let Some(mut state) = self.codex_attribution()? {
+            state.ready = false;
+            tx.execute(
+                "UPDATE meta SET value=?1 WHERE key='codex.accounts.v1'",
+                [serde_json::to_string(&state)?],
+            )?;
         }
         tx.execute("UPDATE provider_meta SET usage_fetched_at = NULL", [])?;
         tx.commit()?;
@@ -356,6 +382,9 @@ impl ProviderStore {
         start: DateTime<Local>,
         end: DateTime<Local>,
     ) -> Result<BTreeMap<DateTime<Local>, TokenUsage>> {
+        if provider == ProviderKind::Codex && self.use_codex_account_data()? {
+            return self.account_hourly(start, end);
+        }
         let from_events = self.load_event_hourly(provider, start, end)?;
         if !from_events.is_empty() {
             return Ok(from_events);
@@ -1004,6 +1033,9 @@ impl ProviderStore {
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<u64> {
+        if provider == ProviderKind::Codex && self.use_codex_account_data()? {
+            return self.account_sessions(start, end);
+        }
         let from_files: i64 = self.conn.query_row(
             "SELECT COUNT(DISTINCT path) FROM usage_file_daily
              WHERE provider = ?1 AND date >= ?2 AND date <= ?3",
@@ -1038,6 +1070,15 @@ impl ProviderStore {
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<Vec<(String, TokenUsage)>> {
+        if provider == ProviderKind::Codex && self.use_codex_account_data()? {
+            let mut merged = BTreeMap::<String, TokenUsage>::new();
+            for (model, _, usage) in
+                self.account_daily_for(&codex_accounts::current_id(), start, end)?
+            {
+                merged.entry(model).or_default().add(&usage);
+            }
+            return Ok(merged.into_iter().collect());
+        }
         let mut statement = self.conn.prepare(
             "SELECT model, input_tokens, cached_input_tokens, output_tokens,
                     requests, estimated_cost_microusd, priced_requests, cache_savings_microusd
@@ -1067,6 +1108,9 @@ impl ProviderStore {
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<Vec<(String, NaiveDate, TokenUsage)>> {
+        if provider == ProviderKind::Codex && self.use_codex_account_data()? {
+            return self.account_daily_for(&codex_accounts::current_id(), start, end);
+        }
         let mut statement = self.conn.prepare(
             "SELECT model, date, input_tokens, cached_input_tokens, output_tokens,
                     requests, estimated_cost_microusd, priced_requests, cache_savings_microusd
