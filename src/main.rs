@@ -1,27 +1,20 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
-use std::{
-    
-    sync::{Arc, Mutex, mpsc},
-};
+use std::sync::{mpsc, Arc, Mutex};
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use codex_minibar::{
     gpui_ui::AppState,
     notifications,
-    
     provider::start_enabled_workers,
     scheduler::ActivationState,
     settings::Settings,
     single_instance::{self, SingleInstance},
     store,
-    updater::{
-        UpdateController, show_post_update_success_if_needed, sync_installed_display_version,
-    },
+    updater::{show_post_update_success_if_needed, sync_installed_display_version, UpdateController},
     worker::WorkerEvent,
 };
-
 
 fn run() -> Result<()> {
     notifications::initialize();
@@ -40,10 +33,9 @@ fn run() -> Result<()> {
         eprintln!("failed to apply startup registration: {error:#}");
     }
     let activation_path = path.with_file_name("activation.toml");
-    let last_activation_at: Option<DateTime<Utc>> =
-        ActivationState::load_or_default(&activation_path)
-            .ok()
-            .and_then(|state| state.last_attempt_at);
+    let last_activation_at: Option<DateTime<Utc>> = ActivationState::load_or_default(&activation_path)
+        .ok()
+        .and_then(|state| state.last_attempt_at);
 
     let (worker_events_tx, worker_events_rx) = mpsc::channel::<WorkerEvent>();
     let hydrated_limits = store::shared()
@@ -63,8 +55,6 @@ fn run() -> Result<()> {
         .iter()
         .map(|(provider, worker)| (*provider, worker.commands.clone()))
         .collect();
-    let (settings_tx, settings_rx) = mpsc::channel();
-    let (usage_actions_tx, usage_actions_rx) = mpsc::channel();
     let updates = UpdateController::new();
     if settings.check_for_updates {
         updates.check_async(true, settings.notifications.update_available);
@@ -80,10 +70,6 @@ fn run() -> Result<()> {
         activation_path,
         startup_provider_errors,
         last_activation_at,
-        settings_tx,
-        settings_rx: Mutex::new(Some(settings_rx)),
-        usage_actions_tx,
-        usage_actions_rx: Mutex::new(Some(usage_actions_rx)),
         updates: Arc::clone(&updates),
     });
     codex_minibar::updater::install_runtime(Arc::clone(&updates), {
@@ -144,4 +130,3 @@ fn main() {
     }
     single_instance::release_for_update();
 }
-

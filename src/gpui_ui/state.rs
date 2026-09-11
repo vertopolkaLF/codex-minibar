@@ -1,6 +1,20 @@
-use std::{collections::HashMap, sync::{Arc, Mutex, mpsc::{Receiver, Sender}}};
+use std::{
+    collections::HashMap,
+    sync::{
+        mpsc::{Receiver, Sender},
+        Arc, Mutex,
+    },
+};
+
 use chrono::{DateTime, Utc};
-use crate::{settings::{Settings, ProviderKind}, limits::{ProviderLimits, RateLimits}, updater::UpdateController, worker::{WorkerCommand, WorkerEvent, UsageAction}};
+
+use crate::{
+    limits::{ProviderLimits, RateLimits},
+    settings::{ProviderKind, Settings},
+    updater::UpdateController,
+    worker::{WorkerCommand, WorkerEvent},
+};
+
 pub struct AppState {
     pub settings: Settings,
     /// The sole live rate-limit snapshot. Both the tray and popup read this
@@ -18,13 +32,6 @@ pub struct AppState {
     pub startup_provider_errors: Vec<(ProviderKind, String)>,
     /// Last activation attempt loaded from persisted activation state.
     pub last_activation_at: Option<DateTime<Utc>>,
-    /// Live settings pushes from the settings window; drained by the tray bridge.
-    pub settings_rx: Mutex<Option<Receiver<Settings>>>,
-    pub settings_tx: Sender<Settings>,
-    /// Destructive usage actions are serialized by the tray bridge and then
-    /// fanned out to every provider usage worker.
-    pub usage_actions_rx: Mutex<Option<Receiver<UsageAction>>>,
-    pub usage_actions_tx: Sender<UsageAction>,
     pub updates: Arc<UpdateController>,
 }
 
@@ -176,5 +183,3 @@ impl AppState {
         }
     }
 }
-
-

@@ -68,20 +68,6 @@ function Copy-RuntimeItem {
     Copy-Item -LiteralPath $Source -Destination $Destination -Recurse -Force
 }
 
-function Clear-WasMsixExtractCache {
-    # windows-reactor-setup extracts MSIX into a shared folder without an arch
-    # suffix. Clear it before each target so cross-arch builds do not reuse the
-    # wrong native DLLs.
-    $candidates = @(
-        (Join-Path $env:LOCALAPPDATA "windows-reactor-setup\temp\Microsoft.WindowsAppSDK.Runtime-2.1.3\.msix_extract")
-    )
-    foreach ($path in $candidates) {
-        if (Test-Path -LiteralPath $path) {
-            Remove-Item -LiteralPath $path -Recurse -Force
-        }
-    }
-}
-
 function Ensure-RustTarget {
     param([Parameter(Mandatory = $true)][string]$Triple)
 
@@ -395,7 +381,6 @@ try {
         Write-Host "======== $archName ($triple) ========"
         Import-VisualStudioBuildEnvironment -Architecture $archName
         Ensure-RustTarget -Triple $triple
-        Clear-WasMsixExtractCache
 
         Write-Host "==> cargo build --release --target $triple"
         & cargo build --release --target $triple --locked
@@ -439,10 +424,6 @@ finally {
 Write-Host ""
 Write-Host "Cleaning staging..."
 Remove-Item -LiteralPath $StageRoot -Recurse -Force -ErrorAction SilentlyContinue
-
-# Leave the shared WAS extract cache empty so the next host `cargo run` does
-# not pick up the last cross-arch runtime DLLs.
-Clear-WasMsixExtractCache
 
 Write-Host ""
 Write-Host "Done."

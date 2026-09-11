@@ -20,14 +20,14 @@
   <img src="https://img.shields.io/github/downloads/vertopolkalf/codex-minibar/total?style=flat-square" alt="Downloads">
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-blue?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/Rust-2024-orange?style=flat-square" alt="Rust edition">
-  <img src="https://img.shields.io/badge/UI-WinUI%203-green?style=flat-square" alt="UI framework">
+  <img src="https://img.shields.io/badge/UI-GPUI-green?style=flat-square" alt="UI framework">
 </p>
 
 ---
 
 ## Overview
 
-Codex Minibar reads the usage data exposed by a locally authenticated Codex CLI/Desktop installation or Claude Code session and keeps your five-hour and weekly limits visible in the notification area. It is a native WinUI 3 application written in Rust.
+Codex Minibar reads the usage data exposed by a locally authenticated Codex CLI/Desktop installation or Claude Code session and keeps your five-hour and weekly limits visible in the notification area. It is a native GPUI application written in Rust.
 
 > Codex Minibar is an independent project. It is not affiliated with, endorsed by, or sponsored by OpenAI.
 
@@ -96,8 +96,7 @@ This produces architecture-specific portable ZIP files and NSIS installers under
 
 ## Development
 
-The UI uses [windows-reactor](https://github.com/microsoft/windows-rs/pull/4479) with WinUI 3;
-the Windows App SDK runtime is bundled through `windows-reactor-setup` self-contained deployment.
+The UI uses [GPUI](https://www.gpui.rs/) with [gpui-component](https://longbridge.github.io/gpui-component/).
 CI checks formatting, lints, tests, and a release build on Windows.
 
 Bug reports and focused pull requests are welcome. Please include your Windows version,
