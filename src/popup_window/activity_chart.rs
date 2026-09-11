@@ -6,8 +6,11 @@ use std::collections::BTreeMap;
 const HEIGHT: f64 = 56.0;
 const MAX_BARS: usize = 60;
 
+mod models;
+
 #[derive(Clone, PartialEq)]
 struct ChartProps {
+    provider: ProviderKind,
     statistics: UsageStatistics,
     cost_based: bool,
     today: NaiveDate,
@@ -269,6 +272,7 @@ pub(super) fn usage_activity_chart(
     component(
         render_chart,
         ChartProps {
+            provider,
             statistics: statistics.clone(),
             cost_based,
             today: Local::now().date_naive(),
@@ -285,10 +289,31 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
         cost: props.cost_based,
     });
     let (hovered, set_hovered) = cx.use_state(None::<NaiveDate>);
+    let (by_model, set_by_model) = cx.use_state(false);
+    let (model_page, set_model_page) = cx.use_reducer(0_usize);
+    // Only a changed usage snapshot/date refetches; hover and toggles stay in memory.
+    let model_resource = cx.use_resource(
+        |(provider, statistics, today): (ProviderKind, UsageStatistics, NaiveDate)| {
+            let bounds = buckets(&statistics, today);
+            crate::store::with_store(|store| {
+                store.load_model_daily(provider, bounds[0].first, today)
+            })
+            .map(|rows| Arc::new(models::group(rows, &bounds, provider)))
+            .map_err(|error| format!("Could not load model data: {error:#}"))
+        },
+        (props.provider, props.statistics.clone(), props.today),
+    );
     let data = cx.use_memo((props.statistics.clone(), props.today), || {
         buckets(&props.statistics, props.today)
     });
-    let availability = Availability::from_buckets(&data);
+    let model_data = model_resource.data();
+    let availability = if by_model {
+        model_data
+            .map(|models| models.availability())
+            .unwrap_or_default()
+    } else {
+        Availability::from_buckets(&data)
+    };
     // Resolve against the displayed period without erasing the user's choices
     // while data is loading or a metric is temporarily unavailable.
     let selection = availability.selection(requested_selection);
@@ -302,7 +327,9 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
     let maximum = data
         .iter()
         .map(|b| {
-            if cost_mode {
+            if by_model {
+                model_data.map_or(0, |models| models.value(b.first, cost_mode))
+            } else if cost_mode {
                 b.usage.estimated_cost_microusd
             } else {
                 visible_tokens(&b.usage, mask)
@@ -315,20 +342,36 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
     let bars: Vec<Element> = data
         .iter()
         .map(|bucket| {
-            let value = if cost_mode {
+            let value = if by_model {
+                model_data.map_or(0, |models| models.value(bucket.first, cost_mode))
+            } else if cost_mode {
                 bucket.usage.estimated_cost_microusd
             } else {
                 visible_tokens(&bucket.usage, mask)
             };
             let date = bucket.first;
             let enter = set_hovered.clone();
-            let tooltip = bucket_tooltip(bucket);
+            let tooltip = if by_model {
+                model_data.map_or_else(String::new, |models| models.description(bucket, cost_mode))
+            } else {
+                bucket_tooltip(bucket)
+            };
             let height = if maximum == 0 {
                 2.0
             } else {
                 (HEIGHT * value as f64 / maximum as f64).max(2.0)
             };
-            let bar: Element = if cost_mode || value == 0 {
+            let bar: Element = if by_model && value > 0 {
+                models::bar(
+                    model_data.expect("model value requires data"),
+                    date,
+                    cost_mode,
+                    props.scheme,
+                    bar_width,
+                    height,
+                    transition,
+                )
+            } else if cost_mode || value == 0 {
                 border(Element::Empty)
                     .width(bar_width)
                     .height(height)
@@ -402,14 +445,40 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
                     b: 0,
                 })
                 .automation_name(tooltip)
-                .on_pointer_entered(move |_: PointerEventInfo| enter.call(Some(date)))
+                .on_pointer_entered({
+                    let page = set_model_page.clone();
+                    move |_: PointerEventInfo| {
+                        page.call(|_| 0);
+                        enter.call(Some(date));
+                    }
+                })
                 .with_key("hover-target");
+            if by_model && model_data.is_some_and(|models| models.pages(date) > 1) {
+                let pages = model_data.map_or(1, |models| models.pages(date));
+                let page = set_model_page.clone();
+                hit_target = hit_target.on_pointer_wheel(move |event: PointerEventInfo| {
+                    if !event.wheel_is_horizontal && event.wheel_delta != 0 {
+                        page.call(move |current| {
+                            models::next_page(current, pages, event.wheel_delta)
+                        });
+                    }
+                });
+            }
             if active_hover == Some(date) {
-                hit_target = hit_target.tooltip_with(
-                    Tooltip::xaml(bucket_tooltip_xaml(bucket, props.scheme))
-                        .placement(TooltipPlacement::Top)
-                        .open(true),
-                );
+                let markup = if by_model {
+                    model_data.map(|models| {
+                        models.tooltip(bucket, cost_mode, props.provider, props.scheme, model_page)
+                    })
+                } else {
+                    Some(bucket_tooltip_xaml(bucket, props.scheme))
+                };
+                if let Some(markup) = markup {
+                    hit_target = hit_target.tooltip_with(
+                        Tooltip::xaml(markup)
+                            .placement(TooltipPlacement::Top)
+                            .open(true),
+                    );
+                }
             }
             grid((column, hit_target))
                 .rows([GridLength::Star(1.0)])
@@ -422,9 +491,15 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
         .collect();
     let exit = set_hovered.clone();
     let mut chart_children: Vec<Element> = vec![hstack(bars).spacing(0.0).height(HEIGHT).into()];
-    let empty_label = if availability.series == 0 && !availability.cost {
+    let empty_label = if by_model && model_resource.error().is_some() {
+        Some("Model data unavailable")
+    } else if by_model && model_resource.is_loading() {
+        Some("Loading models…")
+    } else if by_model && availability.series == 0 && !availability.cost {
+        Some("No model data")
+    } else if availability.series == 0 && !availability.cost {
         Some("No usage data")
-    } else if !cost_mode && mask == 0 {
+    } else if !by_model && !cost_mode && mask == 0 {
         Some("No series selected")
     } else {
         None
@@ -558,6 +633,54 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
                 .into()
         })
         .collect();
+    let model_available = model_data.is_some_and(|models| models.has_data());
+    let model_hint = if let Some(error) = model_resource.error() {
+        error.to_owned()
+    } else if model_resource.is_loading() {
+        "Loading model breakdown".into()
+    } else if !model_available {
+        "No model data for this period".into()
+    } else {
+        "Group tokens or cost by model".into()
+    };
+    let model_selector = border(
+        grid((
+            border(Element::Empty)
+                .background(ThemeRef::ControlFill)
+                .corner_radius(4.0)
+                .opacity(if by_model { 1.0 } else { 0.0 })
+                .with_opacity_transition(transition),
+            HyperlinkButton::new("Model")
+                .enabled(model_available || by_model)
+                .font_size(10.0)
+                .min_width(0.0)
+                .min_height(0.0)
+                .height(22.0)
+                .padding(Thickness::uniform(0.0))
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .foreground(if by_model {
+                    ThemeRef::PrimaryText
+                } else {
+                    ThemeRef::SecondaryText
+                })
+                .on_click(move || set_by_model.call(!by_model))
+                .tooltip(model_hint)
+                .automation_name(if by_model {
+                    "Ungroup models (selected)"
+                } else {
+                    "Group by model"
+                }),
+        ))
+        .columns([GridLength::Star(1.0)])
+        .rows([GridLength::Star(1.0)])
+        .with_key("Model"),
+    )
+    .width(48.0)
+    .height(26.0)
+    .padding(Thickness::uniform(2.0))
+    .corner_radius(6.0)
+    .background(ThemeRef::SubtleFill)
+    .with_key("model-selector");
     let metric_selector = border(
         grid(modes)
             .columns([GridLength::Pixel(46.0), GridLength::Pixel(38.0)])
@@ -591,15 +714,26 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
         )
     };
     let summary = format!("{total} · {} requests", props.statistics.history.requests);
-    let footer = grid((
+    let legend: Element = if by_model {
+        // Keep the footer height stable without invisible focusable controls.
+        border(Element::Empty)
+            .height(24.0)
+            .with_key("model-legend-space")
+            .into()
+    } else {
         hstack(legend)
             .spacing(2.0)
             .tooltip(summary)
-            .vertical_alignment(VerticalAlignment::Center),
-        metric_selector,
-    ))
-    .columns([GridLength::Star(1.0), GridLength::Auto])
-    .rows([GridLength::Auto]);
+            .vertical_alignment(VerticalAlignment::Center)
+            .with_key("token-legend")
+            .into()
+    };
+    let selectors = hstack((model_selector, metric_selector))
+        .spacing(8.0)
+        .grid_column(1);
+    let footer = grid((legend, selectors))
+        .columns([GridLength::Star(1.0), GridLength::Auto])
+        .rows([GridLength::Auto]);
     vstack((chart, footer)).spacing(6.0).into()
 }
 

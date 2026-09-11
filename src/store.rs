@@ -1059,6 +1059,36 @@ impl ProviderStore {
         Ok(merged.into_iter().collect())
     }
 
+    /// Date-preserving model rows for activity cards, using the same cached data
+    /// as the Usage screen. Call off the UI thread; no provider requests.
+    pub(crate) fn load_model_daily(
+        &self,
+        provider: ProviderKind,
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> Result<Vec<(String, NaiveDate, TokenUsage)>> {
+        let mut statement = self.conn.prepare(
+            "SELECT model, date, input_tokens, cached_input_tokens, output_tokens,
+                    requests, estimated_cost_microusd, priced_requests, cache_savings_microusd
+             FROM usage_model_daily
+             WHERE provider = ?1 AND date >= ?2 AND date <= ?3
+             ORDER BY date, model",
+        )?;
+        let rows = statement.query_map(
+            params![provider.id(), start.to_string(), end.to_string()],
+            |row| {
+                let model: String = row.get(0)?;
+                let date: String = row.get(1)?;
+                Ok((model, date, token_usage_from_row(row, 2)?))
+            },
+        )?;
+        rows.map(|row| {
+            let (model, date, usage) = row?;
+            Ok((model, NaiveDate::parse_from_str(&date, "%Y-%m-%d")?, usage))
+        })
+        .collect()
+    }
+
     pub(crate) fn replace_usage_model_daily(
         &self,
         provider: ProviderKind,
@@ -1460,6 +1490,38 @@ mod tests {
         let store = ProviderStore { conn };
         store.migrate().unwrap();
         store
+    }
+
+    #[test]
+    fn model_daily_keeps_dates_and_filters_provider_and_period() {
+        let dir = tempdir().unwrap();
+        let store = test_store(&dir.path().join("models.sqlite"));
+        let day = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
+        let usage = TokenUsage {
+            input_tokens: 10,
+            requests: 1,
+            ..Default::default()
+        };
+        store.replace_usage_model_daily(
+            ProviderKind::Codex,
+            &[
+                ("a".into(), day, usage.clone()),
+                ("a".into(), day + Duration::days(1), usage.clone()),
+                ("b".into(), day + Duration::days(1), usage.clone()),
+                ("old".into(), day - Duration::days(1), usage.clone()),
+            ],
+        ).unwrap();
+        store.replace_usage_model_daily(
+            ProviderKind::Claude,
+            &[("other".into(), day, usage.clone())],
+        ).unwrap();
+        let rows = store
+            .load_model_daily(ProviderKind::Codex, day, day + Duration::days(1))
+            .unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0], ("a".into(), day, usage.clone()));
+        assert_eq!(rows[1], ("a".into(), day + Duration::days(1), usage));
+        assert_eq!(rows[2].0, "b");
     }
 
     fn sample_codex_cache() -> UsageCache {
