@@ -2047,11 +2047,6 @@ impl Settings {
     /// Applies settings whose effect lives outside the render tree.
     pub fn apply_runtime_effects(&self) -> Result<()> {
         crate::theme::set_animations_enabled(self.animations_enabled);
-        crate::popup::apply_popup_appearance(
-            self.bottom_bar_size,
-            self.popup_corner_radius,
-            self.popup_background_material,
-        );
         self.time_format.apply();
         apply_startup_registration(self.start_at_login)
     }
@@ -3611,3 +3606,4 @@ enabled = ["codex"]
         assert!(path.with_extension("toml.corrupt").exists());
     }
 }
+

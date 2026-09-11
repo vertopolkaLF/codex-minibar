@@ -1,16 +1,16 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 use std::{
-    rc::Rc,
+    
     sync::{Arc, Mutex, mpsc},
 };
 
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use codex_minibar::{
-    app::{AppState, app},
+    gpui_ui::AppState,
     notifications,
-    popup::{self, FALLBACK_CLIENT_HEIGHT_LIMIT, POPUP_WIDTH},
+    
     provider::start_enabled_workers,
     scheduler::ActivationState,
     settings::Settings,
@@ -21,7 +21,7 @@ use codex_minibar::{
     },
     worker::WorkerEvent,
 };
-use windows_reactor::*;
+
 
 fn run() -> Result<()> {
     notifications::initialize();
@@ -69,12 +69,7 @@ fn run() -> Result<()> {
     if settings.check_for_updates {
         updates.check_async(true, settings.notifications.update_available);
     }
-    let onboarding_needed = !settings.onboarding_completed;
-    // The host stays parked until Auto content reports its natural size. Never
-    // expose an intentionally oversized first client area: that was the black
-    // strip visible below the top-aligned XAML chrome.
-    let initial_height = popup::height_for(None).min(FALLBACK_CLIENT_HEIGHT_LIMIT);
-    popup::set_client_height_dip(initial_height);
+
     let state = Arc::new(AppState {
         settings,
         limits: Mutex::new(hydrated_limits),
@@ -96,45 +91,7 @@ fn run() -> Result<()> {
         move || state.shutdown_worker()
     });
 
-    App::new()
-        .run_custom(move |_| {
-            codex_minibar::theme::apply_appearance(
-                state.settings.theme,
-                state.settings.accent_color,
-            );
-            // Unlike `App::render`, this builds the WinUI host without calling
-            // `Window::Activate`. The tray popup is the sole code path that
-            // makes its HWND visible.
-            let render_state = Arc::clone(&state);
-            let host = Rc::new(ReactorHost::new_with_window_options(
-                "Codex Minibar",
-                Some(WindowSize {
-                    width: f64::from(POPUP_WIDTH),
-                    height: f64::from(initial_height),
-                }),
-                InnerConstraints {
-                    min_width: Some(f64::from(POPUP_WIDTH)),
-                    // Keep min tiny — OverlappedPresenter preferred-min was blocking shrink.
-                    min_height: Some(80.0),
-                    max_width: Some(f64::from(POPUP_WIDTH)),
-                    // The actual 80% cap is selected from the monitor at
-                    // popup-show time. A fixed 640 DIP creation constraint
-                    // cannot be raised reliably by AppWindow later.
-                    max_height: Some(f64::from(FALLBACK_CLIENT_HEIGHT_LIMIT)),
-                },
-                Box::new(move |_: &(), cx: &mut RenderCx| app(cx, Arc::clone(&render_state))),
-                |_| {},
-            )?);
-            popup::register_host(Rc::clone(&host));
-            if onboarding_needed {
-                // First launch configures providers before any worker has a
-                // chance to poll. The regular popup stays parked until Done.
-                codex_minibar::settings_window::open_onboarding(state.settings_tx.clone())?;
-            }
-            let _host = Box::leak(Box::new(host));
-            Ok(())
-        })
-        .map_err(|error| anyhow!("windows-reactor failed: {error:?}"))
+    codex_minibar::gpui_ui::run(state)
 }
 
 fn show_error(message: &str) {
@@ -187,3 +144,4 @@ fn main() {
     }
     single_instance::release_for_update();
 }
+

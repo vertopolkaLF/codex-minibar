@@ -1,19 +1,15 @@
-pub mod acrylic;
-pub mod app;
 pub mod claude;
 pub mod claude_desktop;
 pub mod codex;
 pub mod cursor;
 pub mod discovery;
-pub mod icons;
 pub mod limits;
 pub mod logger;
 pub mod notifications;
 pub mod opencode;
 pub mod openrouter;
+#[path = "gpui_ui/platform.rs"]
 pub mod popup;
-pub mod popup_usage;
-pub mod popup_window;
 pub mod pricing;
 pub mod usage_overview;
 pub mod provider;
@@ -21,12 +17,14 @@ pub mod provider_registry;
 pub mod scheduler;
 pub mod secrets;
 pub mod settings;
-mod settings_controls;
-pub mod settings_window;
 pub mod single_instance;
 pub mod store;
+#[path = "gpui_ui/theme.rs"]
 pub mod theme;
 pub mod tray;
 pub mod updater;
 pub mod usage;
 pub mod worker;
+
+pub mod gpui_ui;
+

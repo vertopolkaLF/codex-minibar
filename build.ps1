@@ -23,47 +23,9 @@ $AppExeName = "codex-minibar.exe"
 $NsisVersion = "3.11"
 $NsisUrl = "https://github.com/tauri-apps/binary-releases/releases/download/nsis-$NsisVersion/nsis-$NsisVersion.zip"
 
-# Windows App SDK / WinUI runtime files deployed by windows-reactor-setup::as_self_contained()
-# plus WebView2 Core DLL and the app binary.
-$RuntimeFiles = @(
-    "codex-minibar.exe",
-    "CoreMessagingXP.dll",
-    "dcompi.dll",
-    "dwmcorei.dll",
-    "DwmSceneI.dll",
-    "DWriteCore.dll",
-    "marshal.dll",
-    "Microsoft.DirectManipulation.dll",
-    "Microsoft.Graphics.Imaging.dll",
-    "Microsoft.InputStateManager.dll",
-    "Microsoft.Internal.FrameworkUdk.dll",
-    "Microsoft.UI.Composition.OSSupport.dll",
-    "Microsoft.UI.dll",
-    "Microsoft.UI.Input.dll",
-    "Microsoft.UI.pri",
-    "Microsoft.UI.Windowing.Core.dll",
-    "Microsoft.UI.Windowing.dll",
-    "Microsoft.UI.Xaml.Controls.dll",
-    "Microsoft.UI.Xaml.Controls.pri",
-    "Microsoft.ui.xaml.dll",
-    "Microsoft.UI.Xaml.Internal.dll",
-    "Microsoft.UI.Xaml.Phone.dll",
-    "Microsoft.ui.xaml.resources.19h1.dll",
-    "Microsoft.ui.xaml.resources.common.dll",
-    "Microsoft.Web.WebView2.Core.dll",
-    "Microsoft.Windows.ApplicationModel.Resources.dll",
-    "Microsoft.WindowsAppRuntime.dll",
-    "Microsoft.WindowsAppRuntime.pri",
-    "MRM.dll",
-    "resources.pri",
-    "SessionHandleIPCProxyStub.dll",
-    "WinUIEdit.dll",
-    "wuceffectsi.dll"
-)
-
-$RuntimeDirs = @(
-    "Microsoft.UI.Xaml"
-)
+# GPUI renders directly; Windows App SDK and WebView2 are not deployed.
+$RuntimeFiles = @("codex-minibar.exe")
+$RuntimeDirs = @()
 
 $TargetMap = [ordered]@{
     x86   = "i686-pc-windows-msvc"
@@ -81,13 +43,7 @@ function Get-CargoVersion {
     return $match.Matches[0].Groups[1].Value
 }
 
-$RequiredRuntimeFiles = @(
-    "codex-minibar.exe",
-    "Microsoft.ui.xaml.dll",
-    "Microsoft.WindowsAppRuntime.dll",
-    "Microsoft.Web.WebView2.Core.dll",
-    "resources.pri"
-)
+$RequiredRuntimeFiles = @("codex-minibar.exe")
 
 function Copy-RuntimeItem {
     param(
@@ -497,3 +453,5 @@ foreach ($path in $artifacts) {
     $sizeMb = [math]::Round($item.Length / 1MB, 2)
     Write-Host ("  - {0} ({1} MB)" -f $item.Name, $sizeMb)
 }
+
+

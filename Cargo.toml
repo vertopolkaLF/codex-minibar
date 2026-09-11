@@ -7,7 +7,7 @@ license = "Apache-2.0"
 repository = "https://github.com/vertopolkaLF/codex-minibar"
 homepage = "https://github.com/vertopolkaLF/codex-minibar"
 readme = "README.md"
-keywords = ["codex", "windows", "tray", "usage", "winui"]
+keywords = ["codex", "windows", "tray", "usage", "gpui"]
 categories = ["command-line-utilities", "gui"]
 
 [dependencies]
@@ -28,13 +28,13 @@ tempfile = "3"
 ureq = { version = "2", default-features = false, features = ["tls", "native-tls"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 zip = "2"
-windows-collections = { git = "https://github.com/microsoft/windows-rs", features = ["std"] }
-windows-core = { git = "https://github.com/microsoft/windows-rs" }
-windows-reactor = { path = ".vendor" }
+gpui = { version = "=0.2.2", default-features = false, features = ["windows-manifest"] }
+gpui-component = { version = "=0.5.1", default-features = false }
+raw-window-handle = "0.6"
 
 [target.'cfg(windows)'.dependencies]
 tray-icon = { version = "0.24", default-features = false }
-windows = { git = "https://github.com/microsoft/windows-rs", default-features = false, features = [
+windows = { version = "0.61", default-features = false, features = [
     "Data_Xml_Dom",
     "Foundation",
     "UI_Notifications",
@@ -43,7 +43,6 @@ windows = { git = "https://github.com/microsoft/windows-rs", default-features = 
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Security_Cryptography", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Controls", "Win32_UI_Controls_Dialogs", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
 
 [build-dependencies]
-windows-reactor-setup = { git = "https://github.com/microsoft/windows-rs" }
 winresource = "0.1"
 
 [profile.release]
