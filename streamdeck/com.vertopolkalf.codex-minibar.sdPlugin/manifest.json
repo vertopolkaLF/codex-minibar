@@ -9,12 +9,12 @@
   "CategoryIcon": "imgs/plugin",
   "Category": "Codex Minibar",
   "CodePath": "bin/plugin.js",
-  "SDKVersion": 2,
+  "SDKVersion": 3,
   "Nodejs": {
     "Version": "20"
   },
   "Software": {
-    "MinimumVersion": "6.8"
+    "MinimumVersion": "6.9"
   },
   "OS": [
     {

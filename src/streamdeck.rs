@@ -288,7 +288,7 @@ fn build_catalog(state: &AppState) -> Vec<ProviderInfo> {
                 })
                 .collect::<Vec<_>>();
             for additional in &live_limits.additional_limits {
-                let metric_id = provider_registry::dynamic_metric_id(provider, &additional.id);
+                let metric_id = provider_registry::additional_limit_brick_id(provider, &additional.id);
                 if metrics.iter().all(|metric| metric.id != metric_id) {
                     metrics.push(MetricInfo {
                         id: metric_id,
@@ -348,7 +348,7 @@ fn provider_snapshot(provider: ProviderKind, limits: &ProviderLimits) -> Provide
             .iter()
             .map(|additional| AdditionalSnapshot {
                 id: additional.id.clone(),
-                metric_id: provider_registry::dynamic_metric_id(provider, &additional.id),
+                metric_id: provider_registry::additional_limit_brick_id(provider, &additional.id),
                 label: additional.title.clone(),
                 window: window_snapshot(&additional.window),
             })

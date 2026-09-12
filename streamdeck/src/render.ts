@@ -222,13 +222,33 @@ function statusColor(remaining: number | null): string {
 
 const DEPLETED_RING = "#e64a48";
 
+function compactMetricId(id: string): string {
+  return id.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function additionalMatches(
+  item: { id: string; metric_id: string },
+  metricId: string,
+  providerId: string,
+): boolean {
+  if (item.metric_id === metricId || item.id === metricId) return true;
+  if (metricId === `${providerId}.additional.${item.id}`) return true;
+  const wanted = compactMetricId(metricId);
+  return [
+    item.id,
+    item.metric_id,
+    `${providerId}.${item.id}`,
+    `${providerId}.additional.${item.id}`,
+  ].some(candidate => compactMetricId(candidate) === wanted);
+}
+
 function metricWindow(provider: ProviderSnapshot, metricId: string): MetricRow | null {
   if (metricId === `${provider.id}.primary`) return { label: "5h session", window: provider.primary };
   if (metricId === `${provider.id}.secondary`) return { label: "Weekly", window: provider.secondary };
   if (metricId.endsWith(".session")) return { label: "5h session", window: provider.primary };
   if (metricId.endsWith(".weekly")) return { label: "Weekly", window: provider.secondary };
   if (metricId === "cursor.auto") return { label: "Cursor Models", window: provider.secondary };
-  const extra = provider.additional.find(item => item.metric_id === metricId);
+  const extra = provider.additional.find(item => additionalMatches(item, metricId, provider.id));
   return extra ? { label: extra.label, window: extra.window } : null;
 }
 
@@ -271,31 +291,45 @@ function fittedFontSize(text: string, base: number): number {
 }
 
 function formatCountdown(reset: string | null): string | null {
-  if (!reset) return null;
-  const seconds = Math.max(0, Math.round((Date.parse(reset) - Date.now()) / 1000));
-  const days = Math.floor(seconds / 86_400);
-  const hours = Math.floor((seconds % 86_400) / 3_600);
-  const minutes = Math.floor((seconds % 3_600) / 60);
+  const totalMinutes = remainingResetMinutes(reset);
+  if (totalMinutes === null || totalMinutes <= 0) return null;
+  const days = Math.floor(totalMinutes / 1_440);
+  const hours = Math.floor((totalMinutes % 1_440) / 60);
+  const minutes = totalMinutes % 60;
   if (days > 0) return `${days}d ${hours}h`;
   if (hours > 0) return `${hours}h ${minutes}m`;
   return `${minutes}m`;
 }
 
-function countdownParts(reset: string | null): { hours: string; minutes: string } {
-  if (!reset) return { hours: "?", minutes: "?" };
-  const totalMinutes = Math.max(0, Math.floor((Date.parse(reset) - Date.now()) / 60_000));
+function countdownParts(reset: string | null): { hours: string; minutes: string } | null {
+  const totalMinutes = remainingResetMinutes(reset);
+  if (totalMinutes === null || totalMinutes <= 0) return null;
   return {
     hours: String(Math.floor(totalMinutes / 60)),
     minutes: String(totalMinutes % 60).padStart(2, "0"),
   };
 }
 
-function resetCopy(reset: string | null, display: ResetDisplay): { label: string; value: string } | null {
-  if (display === "hidden") return null;
+function remainingResetMinutes(reset: string | null): number | null {
+  if (!reset) return null;
+  const parsed = Date.parse(reset);
+  if (Number.isNaN(parsed)) return null;
+  return Math.floor((parsed - Date.now()) / 60_000);
+}
+
+function hasActiveReset(window: WindowSnapshot): boolean {
+  if (window.duration_minutes === 0) return false;
+  const remaining = remainingResetMinutes(window.resets_at);
+  return remaining !== null && remaining > 0;
+}
+
+function resetCopy(window: WindowSnapshot, display: ResetDisplay): { label: string; value: string } | null {
+  if (display === "hidden" || !hasActiveReset(window)) return null;
   if (display === "time") {
-    return { label: "reset time", value: formatResetTime(reset) };
+    return { label: "reset time", value: formatResetTime(window.resets_at) };
   }
-  const parts = countdownParts(reset);
+  const parts = countdownParts(window.resets_at);
+  if (!parts) return null;
   return { label: "reset in", value: `${parts.hours}:${parts.minutes}` };
 }
 
@@ -393,6 +427,9 @@ function fadedRingArc(cx: number, cy: number, radius: number, value: number, col
   if (clamped <= 0) {
     return `${track}<circle cx="${cx}" cy="${cy}" r="${radius}" fill="none" stroke="${DEPLETED_RING}" stroke-width="${strokeWidth}"/>`;
   }
+  if (clamped >= 100) {
+    return `${track}<circle cx="${cx}" cy="${cy}" r="${radius}" fill="none" stroke="${color}" stroke-width="${strokeWidth}"/>`;
+  }
 
   const circumference = 2 * Math.PI * radius;
   const progressLen = circumference * clamped / 100;
@@ -435,13 +472,13 @@ function renderSingleRing(row: MetricRow, settings: ActionSettings, provider: Pr
   const percent = formatPercent(rawValue, settings);
   const fontSize = fittedFontSize(percent, 36);
   const color = statusColor(row.window.remaining_percent);
-  const reset = resetCopy(row.window.resets_at, settings.resetDisplay);
+  const reset = resetCopy(row.window, settings.resetDisplay);
   const mark = resolvedProviderMark(settings);
   // Stream Deck key canvas is 144x144. Stroke sits 4px in from the edge.
   const strokeWidth = 11;
   const radius = 72 - 4 - strokeWidth / 2;
   const percentY = Math.round(72 + fontSize * 0.36);
-  const resetY = 72 + radius - strokeWidth / 2 - 10;
+  const resetY = 72 + radius - strokeWidth / 2 - 14;
   const font = fontFamily(settings);
   const watermark = mark === "logo" ? providerLogo(provider, 101, settings) : "";
   const nameMarkup = mark === "text" ? providerNameMarkup(provider, settings, 40) : "";
@@ -489,6 +526,7 @@ function renderResetCountdown(rows: MetricRow[], settings: ActionSettings): stri
   const font = fontFamily(settings);
   if (rows.length === 1) {
     const parts = countdownParts(rows[0].window.resets_at);
+    if (!parts) return renderNoData(settings);
     const color = statusColor(rows[0].window.remaining_percent);
     return svg(`<text x="72" y="64" text-anchor="middle" font-family="${font}" font-size="52" font-weight="700" fill="${color}">${escapeXml(parts.hours)}</text><text x="72" y="116" text-anchor="middle" font-family="${font}" font-size="52" font-weight="700" fill="${color}">${escapeXml(parts.minutes)}</text>`);
   }
@@ -496,6 +534,7 @@ function renderResetCountdown(rows: MetricRow[], settings: ActionSettings): stri
   const positions = rows.length === 2 ? [66, 108] : [48, 84, 120];
   const times = rows.map((row, index) => {
     const parts = countdownParts(row.window.resets_at);
+    if (!parts) return "";
     return `<text x="72" y="${positions[index]}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="${statusColor(row.window.remaining_percent)}">${escapeXml(`${parts.hours}:${parts.minutes}`)}</text>`;
   }).join("");
   return svg(times);
