@@ -146,6 +146,8 @@ function statusColor(remaining: number | null): string {
   return "#34bc84";
 }
 
+const DEPLETED_RING = "#e64a48";
+
 function metricWindow(provider: ProviderSnapshot, metricId: string): MetricRow | null {
   if (metricId === `${provider.id}.primary`) return { label: "5h session", window: provider.primary };
   if (metricId === `${provider.id}.secondary`) return { label: "Weekly", window: provider.secondary };
@@ -288,9 +290,13 @@ function renderRings(rows: MetricRow[], settings: ActionSettings): string {
 
 /** Progress ring: dark near 12-o'clock (zero), solid stop at the current value. */
 function fadedRingArc(cx: number, cy: number, radius: number, value: number, color: string, strokeWidth: number): string {
-  const clamped = Math.max(0, Math.min(100, value));
   const track = `<circle cx="${cx}" cy="${cy}" r="${radius}" fill="none" stroke="#111" stroke-width="${strokeWidth}"/>`;
-  if (clamped <= 0) return track;
+  // Missing data: track only. Actual 0%: a full red ring so depletion is obvious.
+  if (value < 0) return track;
+  const clamped = Math.max(0, Math.min(100, value));
+  if (clamped <= 0) {
+    return `${track}<circle cx="${cx}" cy="${cy}" r="${radius}" fill="none" stroke="${DEPLETED_RING}" stroke-width="${strokeWidth}"/>`;
+  }
 
   const circumference = 2 * Math.PI * radius;
   const progressLen = circumference * clamped / 100;
@@ -329,7 +335,7 @@ function fadedRingArc(cx: number, cy: number, radius: number, value: number, col
 
 function renderSingleRing(row: MetricRow, settings: ActionSettings): string {
   const rawValue = displayedValue(row, settings);
-  const value = Math.max(0, Math.min(100, rawValue ?? 0));
+  const value = rawValue === null ? -1 : Math.max(0, Math.min(100, rawValue));
   const percent = formatPercent(rawValue, settings);
   const fontSize = fittedFontSize(percent, 36);
   const color = statusColor(row.window.remaining_percent);
@@ -340,9 +346,7 @@ function renderSingleRing(row: MetricRow, settings: ActionSettings): string {
   const percentY = Math.round(72 + fontSize * 0.36);
   const resetY = 72 + radius - strokeWidth / 2 - 10;
   const font = fontFamily(settings);
-  const percentMarkup = reset
-    ? `<text x="72" y="${percentY}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="#ffffff">${escapeXml(percent)}</text>`
-    : `<text x="72" y="72" text-anchor="middle" dominant-baseline="central" alignment-baseline="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="#ffffff">${escapeXml(percent)}</text>`;
+  const percentMarkup = `<text x="72" y="${percentY}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="#ffffff">${escapeXml(percent)}</text>`;
   const resetMarkup = reset
     ? `<text x="72" y="${resetY}" text-anchor="middle" font-family="${font}" font-size="21" fill="#ececec">${escapeXml(reset.value)}</text>`
     : "";
@@ -352,7 +356,7 @@ function renderSingleRing(row: MetricRow, settings: ActionSettings): string {
 function ringValue(row: MetricRow, settings: ActionSettings): { value: number; percent: string; color: string } {
   const rawValue = displayedValue(row, settings);
   return {
-    value: Math.max(0, Math.min(100, rawValue ?? 0)),
+    value: rawValue === null ? -1 : Math.max(0, Math.min(100, rawValue)),
     percent: formatPercent(rawValue, settings),
     color: statusColor(row.window.remaining_percent),
   };
