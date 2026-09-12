@@ -239,6 +239,49 @@ function darkenStatusColor(color: string): string {
   return `#${rgb.map(channel => channel.toString(16).padStart(2, "0")).join("")}`;
 }
 
+const FILL_TEXT_MAX_WIDTH = 144 * 0.9;
+
+/** Keep fill-canvas type inside 90% of the available slot. */
+function fillFittedSize(text: string, base: number, maxWidth = FILL_TEXT_MAX_WIDTH): number {
+  const digitEm = 0.64;
+  const symbolEm = text.includes("%") ? 0.82 : 0;
+  const digits = text.replace("%", "").length;
+  const width = (digits * digitEm + symbolEm) * base;
+  const floor = Math.min(18, base);
+  if (width <= maxWidth) return base;
+  return Math.max(floor, Math.round(base * maxWidth / width));
+}
+
+function fillCanvasName(provider: ProviderSnapshot, settings: ActionSettings, fill: string): string {
+  const label = provider.name;
+  let size = label.length > 10 ? 14 : 17;
+  const estimated = label.length * size * 0.52;
+  if (estimated > FILL_TEXT_MAX_WIDTH) {
+    size = Math.max(11, Math.round(size * FILL_TEXT_MAX_WIDTH / estimated));
+  }
+  return `<text x="72" y="28" text-anchor="middle" font-family="${fontFamily(settings)}" font-size="${size}" font-weight="700" fill="${fill}">${escapeXml(label)}</text>`;
+}
+
+function fillCanvasOverlay(
+  settings: ActionSettings,
+  provider: ProviderSnapshot,
+  percent: string,
+  reset: { label: string; value: string } | null,
+  textColor: string,
+  showName: boolean,
+): string {
+  const font = fontFamily(settings);
+  const percentSize = fillFittedSize(percent, reset ? 48 : 54);
+  // Optical center of the key; name/reset overlay without shifting this.
+  const percentY = Math.round(72 + percentSize * 0.36);
+  const name = showName ? fillCanvasName(provider, settings, textColor) : "";
+  const percentMarkup = `<text x="72" y="${percentY}" text-anchor="middle" font-family="${font}" font-size="${percentSize}" font-weight="700" fill="${textColor}">${escapeXml(percent)}</text>`;
+  const resetMarkup = reset
+    ? `<text x="72" y="128" text-anchor="middle" font-family="${font}" font-size="22" font-weight="600" fill="${textColor}">${escapeXml(reset.value)}</text>`
+    : "";
+  return `${name}${percentMarkup}${resetMarkup}`;
+}
+
 function textColorForBackground(color: string): string {
   const channels = color.match(/^#([0-9a-f]{6})$/i)?.[1];
   if (!channels) return "#f7f9fc";
@@ -464,38 +507,41 @@ function progressTextColor(value: number | null, color: string, orientation: "ho
 function renderSolid(rows: MetricRow[], settings: ActionSettings, provider: ProviderSnapshot): string {
   const font = fontFamily(settings);
   const mark = resolvedProviderMark(settings);
+  const watermark = mark === "logo" ? providerLogo(provider, 101, settings) : "";
   if (rows.length === 1) {
     const row = rows[0];
     const color = statusColor(row.window.remaining_percent);
     const textColor = textColorForBackground(color);
     const percent = formatPercent(displayedValue(row, settings), settings);
     const reset = resetCopy(row.window, settings.resetDisplay);
-    const percentSize = fittedFontSize(percent, reset ? 58 : 64);
-    const percentY = reset ? 82 : 90;
-    const watermark = mark === "logo" ? providerLogo(provider, 101, settings) : "";
-    const name = mark === "text" ? providerNameMarkup(provider, settings, 20, textColor) : "";
-    const resetMarkup = reset
-      ? `<text x="72" y="134" text-anchor="middle" font-family="${font}" font-size="15" font-weight="600" fill="${textColor}">${escapeXml(reset.value)}</text>`
-      : "";
-    return svg(`<rect width="144" height="144" fill="${color}"/>${watermark}${name}<text x="72" y="${percentY}" text-anchor="middle" font-family="${font}" font-size="${percentSize}" font-weight="700" fill="${textColor}">${escapeXml(percent)}</text>${resetMarkup}`);
+    const overlay = fillCanvasOverlay(settings, provider, percent, reset, textColor, mark === "text");
+    return svg(`<rect width="144" height="144" fill="${color}"/>${watermark}${overlay}`);
   }
 
   const bandHeight = 144 / rows.length;
   const body = rows.map((row, index) => {
     const color = statusColor(row.window.remaining_percent);
     const percent = formatPercent(displayedValue(row, settings), settings);
-    const fontSize = fittedFontSize(percent, rows.length === 2 ? 42 : 32);
+    const reset = resetCopy(row.window, settings.resetDisplay);
+    const showReset = reset !== null && rows.length === 2;
+    const fontSize = fillFittedSize(percent, showReset ? 32 : rows.length === 2 ? 40 : 26);
     const y = bandHeight * index;
-    const baseline = y + bandHeight / 2 + fontSize * 0.34;
-    return `<rect x="0" y="${y}" width="144" height="${bandHeight}" fill="${color}"/><text x="72" y="${baseline}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="${textColorForBackground(color)}">${escapeXml(percent)}</text>`;
+    const textColor = textColorForBackground(color);
+    const baseline = showReset
+      ? y + bandHeight / 2 + fontSize * 0.22
+      : y + bandHeight / 2 + fontSize * 0.36;
+    const resetMarkup = showReset && reset
+      ? `<text x="72" y="${(y + bandHeight - 11).toFixed(1)}" text-anchor="middle" font-family="${font}" font-size="15" font-weight="600" fill="${textColor}">${escapeXml(reset.value)}</text>`
+      : "";
+    return `<rect x="0" y="${y}" width="144" height="${bandHeight}" fill="${color}"/><text x="72" y="${baseline.toFixed(1)}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="${textColor}">${escapeXml(percent)}</text>${resetMarkup}`;
   }).join("");
-  const watermark = mark === "logo" ? providerLogo(provider, 101, settings) : "";
   return svg(`${body}${watermark}`);
 }
 
 function renderProgress(rows: MetricRow[], settings: ActionSettings, provider: ProviderSnapshot, orientation: "horizontal" | "vertical"): string {
   const font = fontFamily(settings);
   const mark = resolvedProviderMark(settings);
+  const watermark = mark === "logo" ? providerLogo(provider, 101, settings) : "";
   if (rows.length === 1) {
     const row = rows[0];
     const color = statusColor(row.window.remaining_percent);
@@ -503,16 +549,10 @@ function renderProgress(rows: MetricRow[], settings: ActionSettings, provider: P
     const percent = formatPercent(value, settings);
     const textColor = progressTextColor(value, color, orientation);
     const reset = resetCopy(row.window, settings.resetDisplay);
-    const percentSize = fittedFontSize(percent, reset ? 58 : 64);
-    const percentY = reset ? 82 : 90;
-    const watermark = mark === "logo" ? providerLogo(provider, 101, settings) : "";
-    const name = mark === "text" ? providerNameMarkup(provider, settings, 20, textColor) : "";
-    const resetMarkup = reset
-      ? `<text x="72" y="134" text-anchor="middle" font-family="${font}" font-size="15" font-weight="600" fill="${textColor}">${escapeXml(reset.value)}</text>`
-      : "";
+    const overlay = fillCanvasOverlay(settings, provider, percent, reset, textColor, mark === "text");
     const track = `<rect width="144" height="144" fill="${darkenStatusColor(color)}"/>`;
     const fill = progressFill(value, color, orientation);
-    return svg(`${track}${fill}${watermark}${name}<text x="72" y="${percentY}" text-anchor="middle" font-family="${font}" font-size="${percentSize}" font-weight="700" fill="${textColor}">${escapeXml(percent)}</text>${resetMarkup}`);
+    return svg(`${track}${fill}${watermark}${overlay}`);
   }
 
   const segmentSize = 144 / rows.length;
@@ -520,18 +560,29 @@ function renderProgress(rows: MetricRow[], settings: ActionSettings, provider: P
     const color = statusColor(row.window.remaining_percent);
     const value = displayedValue(row, settings);
     const percent = formatPercent(value, settings);
-    const fontSize = fittedFontSize(percent, rows.length === 2 ? 34 : 26);
+    const reset = resetCopy(row.window, settings.resetDisplay);
+    const showReset = reset !== null && rows.length === 2 && orientation === "horizontal";
+    const slotWidth = orientation === "vertical" ? segmentSize : 144;
+    const fontSize = fillFittedSize(
+      percent,
+      orientation === "vertical" ? 22 : showReset ? 28 : rows.length === 2 ? 34 : 24,
+      slotWidth * 0.9,
+    );
     if (orientation === "horizontal") {
       const y = segmentSize * index;
-      const textY = y + segmentSize / 2 + fontSize * 0.34;
-      return `<rect x="0" y="${y}" width="144" height="${segmentSize}" fill="${darkenStatusColor(color)}"/>${progressFill(value, color, orientation, 0, y, 144, segmentSize)}<text x="72" y="${textY}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="${progressTextColor(value, color, orientation)}">${escapeXml(percent)}</text>`;
+      const textY = showReset
+        ? y + segmentSize / 2 + fontSize * 0.22
+        : y + segmentSize / 2 + fontSize * 0.36;
+      const resetMarkup = showReset && reset
+        ? `<text x="72" y="${(y + segmentSize - 10).toFixed(1)}" text-anchor="middle" font-family="${font}" font-size="15" font-weight="600" fill="${progressTextColor(value, color, orientation)}">${escapeXml(reset.value)}</text>`
+        : "";
+      return `<rect x="0" y="${y}" width="144" height="${segmentSize}" fill="${darkenStatusColor(color)}"/>${progressFill(value, color, orientation, 0, y, 144, segmentSize)}<text x="72" y="${textY.toFixed(1)}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="${progressTextColor(value, color, orientation)}">${escapeXml(percent)}</text>${resetMarkup}`;
     }
     const x = segmentSize * index;
     const textX = x + segmentSize / 2;
-    const textY = 72 + fontSize * 0.34;
+    const textY = 72 + fontSize * 0.36;
     return `<rect x="${x}" y="0" width="${segmentSize}" height="144" fill="${darkenStatusColor(color)}"/>${progressFill(value, color, orientation, x, 0, segmentSize, 144)}<text x="${textX}" y="${textY}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="${progressTextColor(value, color, orientation)}">${escapeXml(percent)}</text>`;
   }).join("");
-  const watermark = mark === "logo" ? providerLogo(provider, 101, settings) : "";
   return svg(`${body}${watermark}`);
 }
 
