@@ -4,6 +4,12 @@ The app reads [`data/codex-resets.json`](../data/codex-resets.json) from the
 repository's `main` branch through GitHub raw content. A bot should replace the
 `resets` array in one commit whenever Tibo confirms a reset in X.
 
+The current contract is schema version `2`. The app temporarily accepts the
+older version `1` so an existing feed keeps working during migration. A reset
+without `source_url` is still accepted, cached, shown, and eligible for a
+notification; it simply has no clickable verification link. New bot writes
+should use version `2` and include the direct source URL whenever one is known.
+
 ```json
 {
   "schema_version": 2,
@@ -28,8 +34,9 @@ repository's `main` branch through GitHub raw content. A bot should replace the
 Rules for the bot:
 
 - `reset_at` is always an ISO-8601 UTC timestamp.
-- `source_url` is the HTTPS post or page that confirms the reset. It is
-  required for a forced reset to appear in the app.
+- `source_url` is optional. When present, it must be the HTTPS post or page
+  that confirms the reset; the corresponding reset row becomes clickable in
+  the app. When absent, the reset must still be emitted normally.
 - `id` is stable across corrections. If the time is corrected, update the
   existing entry instead of creating a second id.
 - `type` is either `forced` or `banked`. The app intentionally discards

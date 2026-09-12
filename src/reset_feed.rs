@@ -23,6 +23,7 @@ use crate::{settings::Settings, worker::WorkerEvent};
 pub const FEED_URL: &str =
     "https://raw.githubusercontent.com/vertopolkaLF/codex-minibar/main/data/codex-resets.json";
 const FEED_SCHEMA_VERSION: u8 = 2;
+const LEGACY_FEED_SCHEMA_VERSION: u8 = 1;
 const USER_AGENT: &str = "codex-minibar-reset-feed";
 const MAX_FEED_ENTRIES: usize = 32;
 const MAX_NOTIFIED_IDS: usize = 256;
@@ -32,9 +33,9 @@ pub struct ForcedReset {
     /// Stable bot-generated identity. It must not change when the description
     /// or the timestamp is corrected.
     pub id: String,
-    /// HTTPS page where the announcement can be verified by the user.
+    /// Optional HTTPS page where the announcement can be verified by the user.
     #[serde(default)]
-    pub source_url: String,
+    pub source_url: Option<String>,
     /// Optional human-readable context, for example "weekly quota".
     #[serde(default)]
     pub label: Option<String>,
@@ -93,7 +94,7 @@ struct ResetFeedEntry {
     #[serde(rename = "type")]
     kind: ResetKind,
     #[serde(default)]
-    source_url: String,
+    source_url: Option<String>,
     #[serde(default)]
     label: Option<String>,
     reset_at: DateTime<Utc>,
@@ -130,9 +131,16 @@ pub fn start_worker(
 }
 
 pub fn parse_feed(body: &str, now: DateTime<Utc>) -> Result<Vec<ForcedReset>> {
+    parse_feed_with_stats(body, now).map(|(resets, _)| resets)
+}
+
+fn parse_feed_with_stats(body: &str, now: DateTime<Utc>) -> Result<(Vec<ForcedReset>, usize)> {
     let document: ResetFeedDocument =
         serde_json::from_str(body).context("parse Codex reset feed JSON")?;
-    if document.schema_version != FEED_SCHEMA_VERSION {
+    if !matches!(
+        document.schema_version,
+        LEGACY_FEED_SCHEMA_VERSION | FEED_SCHEMA_VERSION
+    ) {
         bail!(
             "unsupported Codex reset feed schema version {}",
             document.schema_version
@@ -141,6 +149,7 @@ pub fn parse_feed(body: &str, now: DateTime<Utc>) -> Result<Vec<ForcedReset>> {
 
     let mut resets = Vec::new();
     let mut ids = HashSet::new();
+    let mut missing_source_urls = 0;
     for entry in document.resets {
         // Banked resets are provider credits, not Tibo's forced reset
         // announcements. Ignore them at the ingestion boundary so no later
@@ -152,12 +161,16 @@ pub fn parse_feed(body: &str, now: DateTime<Utc>) -> Result<Vec<ForcedReset>> {
             break;
         }
         let id = entry.id.trim().to_owned();
-        let source_url = entry.source_url.trim().to_owned();
-        if id.is_empty()
-            || !is_valid_source_url(&source_url)
-            || entry.reset_at <= now
-            || !ids.insert(id.clone())
-        {
+        let source_url = entry
+            .source_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|url| is_valid_source_url(url))
+            .map(str::to_owned);
+        if source_url.is_none() {
+            missing_source_urls += 1;
+        }
+        if id.is_empty() || entry.reset_at <= now || !ids.insert(id.clone()) {
             continue;
         }
         let label = entry
@@ -172,7 +185,7 @@ pub fn parse_feed(body: &str, now: DateTime<Utc>) -> Result<Vec<ForcedReset>> {
         });
     }
     sort_resets(&mut resets);
-    Ok(resets)
+    Ok((resets, missing_source_urls))
 }
 
 fn run(
@@ -183,11 +196,22 @@ fn run(
     events: mpsc::Sender<WorkerEvent>,
 ) {
     let mut cache = load_cache(&cache_path, Utc::now());
+    crate::logger::info(format!(
+        "Codex reset feed starting: enabled={enabled}, interval={}s, cache={}, cached_resets={}, notified_ids={}",
+        refresh_interval.as_secs(),
+        cache_path.display(),
+        cache.resets.len(),
+        cache.notified_ids.len(),
+    ));
     if enabled {
+        // Publish the client-side snapshot before touching the network. This
+        // is what makes received resets survive an app restart or an offline
+        // launch instead of blinking out until GitHub answers.
         send_snapshot(&events, &cache);
     }
     let agent = http_agent();
-    let mut next_refresh = enabled.then(Instant::now).unwrap_or_else(Instant::now);
+    // The first remote refresh is deliberately due immediately on launch.
+    let mut next_refresh = Instant::now();
 
     loop {
         if enabled && next_refresh <= Instant::now() {
@@ -196,6 +220,12 @@ fn run(
                     cache.resets = resets;
                     if let Err(error) = save_cache(&cache_path, &cache) {
                         eprintln!("failed to cache Codex reset feed: {error:#}");
+                    } else {
+                        crate::logger::info(format!(
+                            "Codex reset feed cache updated: cached_resets={}, notified_ids={}",
+                            cache.resets.len(),
+                            cache.notified_ids.len(),
+                        ));
                     }
                     send_snapshot(&events, &cache);
                 }
@@ -256,6 +286,7 @@ fn run(
 }
 
 fn fetch(agent: &Agent) -> Result<Vec<ForcedReset>> {
+    crate::logger::info(format!("Codex reset feed request: GET {FEED_URL}"));
     let response = agent
         .get(FEED_URL)
         .set("User-Agent", USER_AGENT)
@@ -267,10 +298,32 @@ fn fetch(agent: &Agent) -> Result<Vec<ForcedReset>> {
     let body = response
         .into_string()
         .context("read Codex reset feed body")?;
+    crate::logger::info(format!(
+        "Codex reset feed response: status={status}, bytes={}",
+        body.len()
+    ));
     if status / 100 != 2 {
         bail!("Codex reset feed returned {status}: {body}");
     }
-    parse_feed(&body, Utc::now())
+    let (resets, legacy_source_fallbacks) = parse_feed_with_stats(&body, Utc::now())?;
+    let details = resets
+        .iter()
+        .map(|reset| {
+            format!(
+                "{}@{}<{}>",
+                reset.id,
+                reset.reset_at,
+                reset.source_url.as_deref().unwrap_or("<none>")
+            )
+        })
+        .collect::<Vec<_>>();
+    crate::logger::info(format!(
+        "Codex reset feed result: accepted_forced_resets={}, legacy_source_fallbacks={}, entries=[{}]",
+        resets.len(),
+        legacy_source_fallbacks,
+        details.join(", ")
+    ));
+    Ok(resets)
 }
 
 fn http_agent() -> Agent {
@@ -291,10 +344,7 @@ fn load_cache(path: &Path, now: DateTime<Utc>) -> ResetFeedCache {
     let mut resets = cache.resets;
     let mut ids = HashSet::new();
     resets.retain(|reset| {
-        reset.reset_at > now
-            && !reset.id.trim().is_empty()
-            && is_valid_source_url(&reset.source_url)
-            && ids.insert(reset.id.clone())
+        reset.reset_at > now && !reset.id.trim().is_empty() && ids.insert(reset.id.clone())
     });
     sort_resets(&mut resets);
     ResetFeedCache {
@@ -347,11 +397,11 @@ mod tests {
     fn parses_forced_resets_and_discards_banked_resets() {
         let resets = parse_feed(
             r#"{
-                "schema_version": 2,
+                "schema_version": 1,
                 "resets": [
                     {"id":"banked-1","type":"banked","source_url":"https://x.com/tibo/status/1","reset_at":"2026-09-13T12:00:00Z"},
                     {"id":"forced-2","type":"forced","source_url":"https://x.com/tibo/status/2","label":"Weekly quota","reset_at":"2026-09-14T12:00:00Z"},
-                    {"id":"forced-1","type":"forced","source_url":"https://x.com/tibo/status/1","reset_at":"2026-09-13T12:00:00Z"}
+                    {"id":"forced-1","type":"forced","reset_at":"2026-09-13T12:00:00Z"}
                 ]
             }"#,
             now(),
@@ -360,7 +410,7 @@ mod tests {
 
         assert_eq!(resets.len(), 2);
         assert_eq!(resets[0].id, "forced-1");
-        assert_eq!(resets[0].source_url, "https://x.com/tibo/status/1");
+        assert_eq!(resets[0].source_url, None);
         assert_eq!(resets[1].label.as_deref(), Some("Weekly quota"));
     }
 
@@ -391,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_entries_without_a_verifiable_https_source() {
+    fn keeps_entries_without_a_verifiable_https_source() {
         let resets = parse_feed(
             r#"{
                 "schema_version": 2,
@@ -410,8 +460,31 @@ mod tests {
                 .iter()
                 .map(|reset| reset.id.as_str())
                 .collect::<Vec<_>>(),
-            ["valid"]
+            ["http", "missing", "valid"]
         );
+        assert_eq!(resets[0].source_url, None);
+        assert_eq!(resets[1].source_url, None);
+        assert_eq!(
+            resets[2].source_url.as_deref(),
+            Some("https://example.com/status")
+        );
+    }
+
+    #[test]
+    fn accepts_a_legacy_entry_without_a_source_url() {
+        let resets = parse_feed(
+            r#"{
+                "schema_version": 1,
+                "resets": [
+                    {"id":"legacy","type":"forced","reset_at":"2026-09-13T12:00:00Z"}
+                ]
+            }"#,
+            now(),
+        )
+        .unwrap();
+
+        assert_eq!(resets.len(), 1);
+        assert_eq!(resets[0].source_url, None);
     }
 
     #[test]
@@ -420,5 +493,28 @@ mod tests {
             ResetAnnouncementRefreshInterval::default().seconds(),
             60 * 60
         );
+    }
+
+    #[test]
+    fn client_cache_remembers_received_resets_and_sent_notification_ids() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("codex-resets-cache.json");
+        let reset = ForcedReset {
+            id: "forced-1".into(),
+            source_url: Some("https://x.com/tibo/status/1".into()),
+            label: Some("Weekly quota".into()),
+            reset_at: now() + chrono::Duration::days(1),
+        };
+        let cache = ResetFeedCache {
+            schema_version: FEED_SCHEMA_VERSION,
+            resets: vec![reset.clone()],
+            notified_ids: vec!["forced-0".into()],
+        };
+
+        save_cache(&path, &cache).unwrap();
+        let loaded = load_cache(&path, now());
+
+        assert_eq!(loaded.resets, vec![reset]);
+        assert_eq!(loaded.notified_ids, vec!["forced-0"]);
     }
 }

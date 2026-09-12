@@ -1505,17 +1505,15 @@ pub(super) fn reset_credits_card(limits: &RateLimits) -> Element {
 /// Shows the nearest confirmed Codex forced resets from the public feed.
 ///
 /// This is deliberately a separate card from provider-reported banked reset
-/// credits. The feed parser already discards banked entries; filtering again
-/// here keeps this UI contract obvious at the final presentation boundary.
+/// credits. The feed parser already discards banked entries; rows without an
+/// optional source still render, but remain non-interactive.
 pub(super) fn forced_reset_card(
     resets: &[crate::reset_feed::ForcedReset],
 ) -> Option<Element> {
     let now = Utc::now();
     let upcoming = resets
         .iter()
-        .filter(|reset| {
-            reset.reset_at > now && crate::reset_feed::is_valid_source_url(&reset.source_url)
-        })
+        .filter(|reset| reset.reset_at > now)
         .take(3)
         .collect::<Vec<_>>();
     if upcoming.is_empty() {
@@ -1537,7 +1535,7 @@ pub(super) fn forced_reset_card(
                 .as_deref()
                 .filter(|label| !label.trim().is_empty())
                 .unwrap_or("Codex limits");
-            let row: Element = grid((
+            let row = grid((
                 vstack((
                     text_block(label)
                         .font_weight(600)
@@ -1563,17 +1561,20 @@ pub(super) fn forced_reset_card(
             ))
             .columns([GridLength::Star(1.0), GridLength::Auto])
             .rows([GridLength::Auto])
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .on_tapped(move || {
-                if let Err(error) = crate::updater::open_url(&source_url) {
-                    crate::logger::info(format!(
-                        "failed to open forced reset source {source_url}: {error:#}"
-                    ));
-                }
-            })
-            .tooltip("Open announcement source")
-            .into();
-            row
+            .horizontal_alignment(HorizontalAlignment::Stretch);
+            match source_url {
+                Some(source_url) => row
+                    .on_tapped(move || {
+                        if let Err(error) = crate::updater::open_url(&source_url) {
+                            crate::logger::info(format!(
+                                "failed to open forced reset source {source_url}: {error:#}"
+                            ));
+                        }
+                    })
+                    .tooltip("Open announcement source")
+                    .into(),
+                None => row.tooltip("Source not provided").into(),
+            }
         })
         .collect::<Vec<Element>>();
 
