@@ -1,4 +1,12 @@
 {
   "schema_version": 2,
-  "resets": []
+  "resets": [
+    {
+      "id": "forced-2026-09-12T07:00:00Z",
+      "type": "forced",
+      "source_url": "https://x.com/thsottiaux/status/2098612714704891959",
+      "label": "Astra quality-fix reset",
+      "reset_at": "2026-09-12T07:00:00Z"
+    }
+  ]
 }
