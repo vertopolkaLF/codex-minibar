@@ -501,7 +501,7 @@ fn escape_ps_single_quoted_str(value: &str) -> String {
     value.replace('\'', "''")
 }
 
-fn download_file(url: &str, destination: &Path) -> Result<()> {
+pub(crate) fn download_file(url: &str, destination: &Path) -> Result<()> {
     let response = http_agent()
         .get(url)
         .set("User-Agent", USER_AGENT)
@@ -565,25 +565,6 @@ pub fn open_url(url: &str) -> Result<()> {
 pub fn open_path(path: &Path) -> Result<()> {
     let description = path.display().to_string();
     open_shell_target(path.as_os_str(), &description)
-}
-
-pub(crate) fn download_latest_release_asset(
-    name_suffix: &str,
-    destination: &Path,
-) -> Result<String> {
-    let release: GhRelease = github_get(LATEST_RELEASE_API)?;
-    let asset = release
-        .assets
-        .iter()
-        .find(|asset| asset.name.ends_with(name_suffix))
-        .with_context(|| {
-            format!(
-                "release {} has no asset ending with {name_suffix:?}",
-                release.tag_name
-            )
-        })?;
-    download_file(&asset.browser_download_url, destination)?;
-    Ok(asset.name.clone())
 }
 
 fn open_shell_target(target: &std::ffi::OsStr, description: &str) -> Result<()> {

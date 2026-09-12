@@ -24,7 +24,9 @@ use crate::{
     settings::{ProviderKind, Settings},
 };
 
-const PLUGIN_ASSET_SUFFIX: &str = ".streamDeckPlugin";
+const PLUGIN_FILE_NAME: &str = "com.vertopolkalf.codex-minibar.streamDeckPlugin";
+const PLUGIN_DOWNLOAD_URL: &str =
+    "https://raw.githubusercontent.com/vertopolkaLF/codex-minibar/main/data/com.vertopolkalf.codex-minibar.streamDeckPlugin";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InstallPhase {
@@ -65,10 +67,10 @@ fn download_latest_plugin() -> anyhow::Result<PathBuf> {
     let directory = std::env::temp_dir().join("Codex Minibar");
     fs::create_dir_all(&directory)?;
     let path = directory.join(format!(
-        "codex-minibar-streamdeck-{}-{stamp}{PLUGIN_ASSET_SUFFIX}",
+        "codex-minibar-streamdeck-{}-{stamp}-{PLUGIN_FILE_NAME}",
         std::process::id()
     ));
-    crate::updater::download_latest_release_asset(PLUGIN_ASSET_SUFFIX, &path)?;
+    crate::updater::download_file(PLUGIN_DOWNLOAD_URL, &path)?;
     Ok(path)
 }
 
