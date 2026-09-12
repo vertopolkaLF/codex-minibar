@@ -247,10 +247,18 @@ fn assemble_overview_snapshot(
                     .count_session_paths(*provider, start_date, end_date)
                     .unwrap_or(0),
             );
-            for (model, usage) in store
-                .load_model_breakdown(*provider, start_date, end_date)
-                .unwrap_or_default()
-            {
+            let breakdown = if hourly && *provider == ProviderKind::OpenRouter {
+                store
+                    .load_openrouter_hourly_rows(start_hour, end_hour)?
+                    .into_iter()
+                    .map(|(model, _, usage)| (model, usage))
+                    .collect()
+            } else {
+                store
+                    .load_model_breakdown(*provider, start_date, end_date)
+                    .unwrap_or_default()
+            };
+            for (model, usage) in breakdown {
                 let model = if *provider == ProviderKind::Cursor {
                     crate::cursor::normalize_cursor_model_name(&model)
                 } else {
@@ -336,7 +344,7 @@ fn assemble_overview_snapshot(
                 }
             }
             // Cursor (and anyone else without timestamps) still has daily rows.
-            if usage.requests == 0 {
+            if usage.requests == 0 && *provider != ProviderKind::OpenRouter {
                 if let Some(days) = provider_daily.get(provider) {
                     for entry in days {
                         if entry.date >= start_date && entry.date <= end_date {

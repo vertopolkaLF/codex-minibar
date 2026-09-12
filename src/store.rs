@@ -343,6 +343,7 @@ impl ProviderStore {
         ] {
             tx.execute(&format!("DELETE FROM {table}"), [])?;
         }
+        tx.execute("DELETE FROM meta WHERE key = 'openrouter.analytics.v1'", [])?;
         tx.execute("UPDATE provider_meta SET usage_fetched_at = NULL", [])?;
         tx.commit()?;
         Ok(())
@@ -356,6 +357,13 @@ impl ProviderStore {
         start: DateTime<Local>,
         end: DateTime<Local>,
     ) -> Result<BTreeMap<DateTime<Local>, TokenUsage>> {
+        if provider == ProviderKind::OpenRouter {
+            let mut hours = BTreeMap::<DateTime<Local>, TokenUsage>::new();
+            for (_, at, usage) in self.load_openrouter_hourly_rows(start, end)? {
+                hours.entry(at).or_default().add(&usage);
+            }
+            return Ok(hours);
+        }
         let from_events = self.load_event_hourly(provider, start, end)?;
         if !from_events.is_empty() {
             return Ok(from_events);
@@ -471,9 +479,19 @@ impl ProviderStore {
         days: &[DailyTokenUsage],
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
+        self.replace_usage_daily_in_transaction(provider, days)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn replace_usage_daily_in_transaction(
+        &self,
+        provider: ProviderKind,
+        days: &[DailyTokenUsage],
+    ) -> Result<()> {
         let mut retained = BTreeSet::new();
         {
-            let mut insert = tx.prepare(
+            let mut insert = self.conn.prepare(
                 "INSERT INTO usage_daily(
                     provider, date, input_tokens, cached_input_tokens, output_tokens,
                     requests, estimated_cost_microusd, priced_requests, cache_savings_microusd
@@ -510,20 +528,21 @@ impl ProviderStore {
             }
         }
         let existing = {
-            let mut statement = tx.prepare("SELECT date FROM usage_daily WHERE provider = ?1")?;
+            let mut statement = self
+                .conn
+                .prepare("SELECT date FROM usage_daily WHERE provider = ?1")?;
             let rows =
                 statement.query_map(params![provider.id()], |row| row.get::<_, String>(0))?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
         for date in existing {
             if !retained.contains(&date) {
-                tx.execute(
+                self.conn.execute(
                     "DELETE FROM usage_daily WHERE provider = ?1 AND date = ?2",
                     params![provider.id(), date],
                 )?;
             }
         }
-        tx.commit()?;
         Ok(())
     }
 
@@ -988,6 +1007,44 @@ impl ProviderStore {
         Ok(())
     }
 
+    pub(crate) fn load_openrouter_hourly_rows(
+        &self,
+        start: DateTime<Local>,
+        end: DateTime<Local>,
+    ) -> Result<Vec<(String, DateTime<Local>, TokenUsage)>> {
+        match self.load_openrouter_analytics()? {
+            Some(raw) => crate::openrouter::analytics::cached_hourly_rows(&raw, start, end),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) fn load_openrouter_analytics(&self) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'openrouter.analytics.v1'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub(crate) fn save_openrouter_analytics(
+        &self,
+        cache: &str,
+        daily: &[DailyTokenUsage],
+        models: &[(String, NaiveDate, TokenUsage)],
+        at: DateTime<Utc>,
+    ) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        self.replace_usage_daily_in_transaction(ProviderKind::OpenRouter, daily)?;
+        self.replace_usage_model_daily_in_transaction(ProviderKind::OpenRouter, models)?;
+        self.set_meta("openrouter.analytics.v1", cache)?;
+        self.set_usage_fetched_at(ProviderKind::OpenRouter, at)?;
+        tx.commit()?;
+        Ok(())
+    }
+
     fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         self.conn.execute(
             "INSERT INTO meta(key, value) VALUES(?1, ?2)
@@ -1065,9 +1122,19 @@ impl ProviderStore {
         rows: &[(String, NaiveDate, TokenUsage)],
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
+        self.replace_usage_model_daily_in_transaction(provider, rows)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn replace_usage_model_daily_in_transaction(
+        &self,
+        provider: ProviderKind,
+        rows: &[(String, NaiveDate, TokenUsage)],
+    ) -> Result<()> {
         let mut retained = BTreeSet::new();
         {
-            let mut insert = tx.prepare(
+            let mut insert = self.conn.prepare(
                 "INSERT INTO usage_model_daily(
                     provider, date, model, input_tokens, cached_input_tokens, output_tokens,
                     requests, estimated_cost_microusd, priced_requests, cache_savings_microusd
@@ -1098,7 +1165,8 @@ impl ProviderStore {
             }
         }
         let existing = {
-            let mut statement = tx
+            let mut statement = self
+                .conn
                 .prepare("SELECT date, model FROM usage_model_daily WHERE provider = ?1")?;
             let rows = statement.query_map(params![provider.id()], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -1107,13 +1175,12 @@ impl ProviderStore {
         };
         for (date, model) in existing {
             if !retained.contains(&(date.clone(), model.clone())) {
-                tx.execute(
+                self.conn.execute(
                     "DELETE FROM usage_model_daily WHERE provider = ?1 AND date = ?2 AND model = ?3",
                     params![provider.id(), date, model],
                 )?;
             }
         }
-        tx.commit()?;
         Ok(())
     }
 
@@ -1501,6 +1568,54 @@ mod tests {
                 },
             )]),
         }
+    }
+
+    #[test]
+    fn openrouter_analytics_is_atomic_and_cleared() {
+        let dir = tempdir().unwrap();
+        let store = test_store(&dir.path().join("test.sqlite"));
+        let day = DailyTokenUsage {
+            date: Local::now().date_naive(),
+            usage: TokenUsage {
+                requests: 2,
+                ..Default::default()
+            },
+        };
+        store
+            .save_openrouter_analytics(
+                "first",
+                std::slice::from_ref(&day),
+                &[("model".into(), day.date, day.usage.clone())],
+                Utc::now(),
+            )
+            .unwrap();
+        store.conn.execute_batch("CREATE TRIGGER reject_analytics BEFORE INSERT ON usage_model_daily BEGIN SELECT RAISE(ABORT, 'test failure'); END;").unwrap();
+        let mut changed = day.clone();
+        changed.usage.requests = 10;
+        assert!(
+            store
+                .save_openrouter_analytics(
+                    "second",
+                    &[changed.clone()],
+                    &[("model".into(), changed.date, changed.usage)],
+                    Utc::now()
+                )
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .load_usage_daily(ProviderKind::OpenRouter, 30)
+                .unwrap()
+                .history
+                .requests,
+            2
+        );
+        assert_eq!(
+            store.load_openrouter_analytics().unwrap().as_deref(),
+            Some("first")
+        );
+        store.clear_usage_data().unwrap();
+        assert!(store.load_openrouter_analytics().unwrap().is_none());
     }
 
     #[test]
