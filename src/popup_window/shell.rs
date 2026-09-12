@@ -263,6 +263,38 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         ui.opencode_go_enabled,
         ui.openrouter_enabled,
     );
+    // Child hover changes rebuild this root. Keep store aggregation outside
+    // that hot path: only data, provider, time-window or query changes invalidate it.
+    let enabled_spend = enabled_provider_order
+        .iter()
+        .copied()
+        .filter(|provider| {
+            crate::provider_registry::PROVIDERS
+                .iter()
+                .any(|descriptor| descriptor.kind == *provider && descriptor.include_in_total_spend)
+        })
+        .collect::<Vec<_>>();
+    let snapshot_inputs = usage_snapshots::Inputs {
+        limits: limits.clone(),
+        revision: ui.limits_revision,
+        enabled: enabled_spend.clone(),
+        hour: crate::usage::truncate_local_hour(Local::now()),
+    };
+    let home_visible = selected_view == PopupView::Home || pager.outgoing == Some(PopupView::Home);
+    let overview_visible =
+        selected_view == PopupView::Usage || pager.outgoing == Some(PopupView::Usage);
+    let spend_query = (home_visible && all_tab_widgets.contains(&PopupWidgetKind::TotalSpend))
+        .then_some(usage_snapshots::Query::Spend(ui.total_spend_period));
+    let overview_query = overview_visible.then_some(usage_snapshots::Query::Overview(
+        overview_metric,
+        overview_range,
+    ));
+    let spend_snapshot = usage_snapshots::memoize(cx, snapshot_inputs.clone(), spend_query, || {
+        crate::usage_overview::total_spend_snapshot(&limits, &enabled_spend, ui.total_spend_period)
+    });
+    let overview_snapshot = usage_snapshots::memoize(cx, snapshot_inputs, overview_query, || {
+        build_overview_snapshot(&limits, &enabled_spend, overview_metric, overview_range)
+    });
     let can_reorder_widgets = selected_view == PopupView::Home && all_tab_widgets.len() > 1;
     let build_body = |view: PopupView, retain_disabled_detail: bool| {
         let surface = if view == PopupView::Home {
@@ -327,14 +359,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                             }
                         };
                         combined_usage_card(
-                            &limits,
+                            &spend_snapshot,
                             is_first,
-                            ui.codex_enabled,
-                            ui.claude_enabled,
-                            ui.cursor_enabled,
-                            ui.opencode_zen_enabled,
-                            ui.opencode_go_enabled,
-                            ui.openrouter_enabled,
                             ui.total_spend_period,
                             on_period,
                             hovered_combined_usage_period,
@@ -442,19 +468,6 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 has_preceding_section = true;
             }
         } else if view == PopupView::Usage {
-            let enabled_spend: Vec<ProviderKind> = enabled_provider_order
-                .iter()
-                .copied()
-                .filter(|provider| {
-                    crate::provider_registry::PROVIDERS
-                        .iter()
-                        .any(|descriptor| {
-                            descriptor.kind == *provider && descriptor.include_in_total_spend
-                        })
-                })
-                .collect();
-            let snapshot =
-                build_overview_snapshot(&limits, &enabled_spend, overview_metric, overview_range);
             let usage_recalculating = ui
                 .active_requests
                 .iter()
@@ -463,7 +476,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 .iter()
                 .find_map(|provider| ui.usage_error(*provider));
             body.push(crate::popup_usage::overview_page(
-                &snapshot,
+                &overview_snapshot,
                 overview_metric,
                 overview_range,
                 overview_breakdown,

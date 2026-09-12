@@ -50,6 +50,7 @@ mod navigation;
 mod shell;
 mod state;
 mod usage_cards;
+mod usage_snapshots;
 
 #[cfg(test)]
 mod tests;

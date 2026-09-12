@@ -1,14 +1,8 @@
 use super::*;
 
 pub(super) fn combined_usage_card(
-    limits: &ProviderLimits,
+    snapshot: &crate::usage_overview::OverviewSnapshot,
     is_first: bool,
-    codex_enabled: bool,
-    claude_enabled: bool,
-    cursor_enabled: bool,
-    opencode_zen_enabled: bool,
-    opencode_go_enabled: bool,
-    openrouter_enabled: bool,
     period: TotalSpendPeriod,
     on_period: impl Fn(TotalSpendPeriod) + Clone + 'static,
     hovered_period: Option<TotalSpendPeriod>,
@@ -21,25 +15,7 @@ pub(super) fn combined_usage_card(
     hovered_chrome: Option<UsageStatsHover>,
     set_hovered_chrome: SetState<Option<UsageStatsHover>>,
 ) -> Element {
-    let enabled: Vec<_> = crate::provider_registry::PROVIDERS
-        .iter()
-        .filter_map(|descriptor| {
-            if !descriptor.include_in_total_spend {
-                return None;
-            }
-            let enabled = match descriptor.kind {
-                ProviderKind::Codex => codex_enabled,
-                ProviderKind::Claude => claude_enabled,
-                ProviderKind::Cursor => cursor_enabled,
-                ProviderKind::OpenCodeZen => opencode_zen_enabled,
-                ProviderKind::OpenCodeGo => opencode_go_enabled,
-                ProviderKind::OpenRouter => openrouter_enabled,
-            };
-            enabled.then_some(descriptor.kind)
-        })
-        .collect();
-    let snapshot = crate::usage_overview::total_spend_snapshot(limits, &enabled, period);
-    let entries = crate::usage_overview::spend_entries(&snapshot);
+    let entries = crate::usage_overview::spend_entries(snapshot);
     let total_spend = entries
         .iter()
         .fold(0_u64, |total, (_, spend)| total.saturating_add(*spend));
