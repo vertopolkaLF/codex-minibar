@@ -5,7 +5,15 @@ import type { JsonObject } from "@elgato/utils";
 import type { ProviderSnapshot, SnapshotResponse, WindowSnapshot } from "./bridge";
 
 export type ValueMode = "remaining" | "used";
-export type Presentation = "numbers" | "bars" | "rings" | "reset_time" | "reset_countdown";
+export type Presentation =
+  | "numbers"
+  | "bars"
+  | "rings"
+  | "solid"
+  | "progress_horizontal"
+  | "progress_vertical"
+  | "reset_time"
+  | "reset_countdown";
 export type WidgetKind = "single_limit" | "dual_limit";
 export type ResetDisplay = "countdown" | "time" | "hidden";
 export type ClickAction = "open_popup" | "open_provider" | "cycle_provider";
@@ -52,6 +60,9 @@ function normalizePresentation(value: unknown): Presentation {
   switch (value) {
     case "bars":
     case "rings":
+    case "solid":
+    case "progress_horizontal":
+    case "progress_vertical":
     case "reset_time":
     case "reset_countdown":
       return value;
@@ -155,10 +166,10 @@ function providerLogo(provider: ProviderSnapshot, size: number, settings: Action
   return `<g transform="translate(${origin} ${origin}) scale(${scale})"><path d="${glyph.d}" fill="${fill}" fill-opacity="${opacity}"${rule}/></g>`;
 }
 
-function providerNameMarkup(provider: ProviderSnapshot, settings: ActionSettings, y: number): string {
+function providerNameMarkup(provider: ProviderSnapshot, settings: ActionSettings, y: number, fillOverride?: string): string {
   const label = provider.name;
   const size = label.length > 10 ? 10 : 12;
-  const fill = settings.coloredProviderMark ? brandHex(provider) : "#c8c8c8";
+  const fill = fillOverride ?? (settings.coloredProviderMark ? brandHex(provider) : "#c8c8c8");
   return `<text x="72" y="${y}" text-anchor="middle" font-family="${fontFamily(settings)}" font-size="${size}" font-weight="700" fill="${fill}">${escapeXml(label)}</text>`;
 }
 
@@ -218,6 +229,25 @@ function statusColor(remaining: number | null): string {
   if (remaining <= 15) return "#e64a48";
   if (remaining <= 50) return "#f59e0b";
   return "#34bc84";
+}
+
+function darkenStatusColor(color: string): string {
+  const channels = color.match(/^#([0-9a-f]{6})$/i)?.[1];
+  if (!channels) return "#35404e";
+  const rgb = channels.match(/../g)?.map(channel => Math.round(Number.parseInt(channel, 16) * 0.38));
+  if (!rgb || rgb.length !== 3) return "#35404e";
+  return `#${rgb.map(channel => channel.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function textColorForBackground(color: string): string {
+  const channels = color.match(/^#([0-9a-f]{6})$/i)?.[1];
+  if (!channels) return "#f7f9fc";
+  const rgb = channels.match(/../g)?.map(channel => Number.parseInt(channel, 16) / 255);
+  if (!rgb || rgb.length !== 3) return "#f7f9fc";
+  const luminance = rgb
+    .map(channel => channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
+    .reduce((total, channel, index) => total + channel * [0.2126, 0.7152, 0.0722][index], 0);
+  return luminance > 0.179 ? "#101820" : "#f7f9fc";
 }
 
 const DEPLETED_RING = "#e64a48";
@@ -413,6 +443,98 @@ function renderBars(rows: MetricRow[], settings: ActionSettings): string {
   return svg(`${bars}${footer}`);
 }
 
+function progressFill(value: number | null, color: string, orientation: "horizontal" | "vertical", x = 0, y = 0, width = 144, height = 144): string {
+  if (value === null || value <= 0) return "";
+  const clamped = Math.max(0, Math.min(100, value));
+  if (orientation === "horizontal") {
+    return `<rect x="${x}" y="${y}" width="${(width * clamped / 100).toFixed(2)}" height="${height}" fill="${color}"/>`;
+  }
+  const filledHeight = height * clamped / 100;
+  return `<rect x="${x}" y="${(y + height - filledHeight).toFixed(2)}" width="${width}" height="${filledHeight.toFixed(2)}" fill="${color}"/>`;
+}
+
+function progressTextColor(value: number | null, color: string, orientation: "horizontal" | "vertical"): string {
+  if (value === null) return "#f7f9fc";
+  const clamped = Math.max(0, Math.min(100, value));
+  if (orientation === "vertical" && clamped > 8) return textColorForBackground(color);
+  if (orientation === "horizontal" && clamped >= 50) return textColorForBackground(color);
+  return "#f7f9fc";
+}
+
+function renderSolid(rows: MetricRow[], settings: ActionSettings, provider: ProviderSnapshot): string {
+  const font = fontFamily(settings);
+  const mark = resolvedProviderMark(settings);
+  if (rows.length === 1) {
+    const row = rows[0];
+    const color = statusColor(row.window.remaining_percent);
+    const textColor = textColorForBackground(color);
+    const percent = formatPercent(displayedValue(row, settings), settings);
+    const reset = resetCopy(row.window, settings.resetDisplay);
+    const percentSize = fittedFontSize(percent, reset ? 58 : 64);
+    const percentY = reset ? 82 : 90;
+    const watermark = mark === "logo" ? providerLogo(provider, 101, settings) : "";
+    const name = mark === "text" ? providerNameMarkup(provider, settings, 20, textColor) : "";
+    const resetMarkup = reset
+      ? `<text x="72" y="134" text-anchor="middle" font-family="${font}" font-size="15" font-weight="600" fill="${textColor}">${escapeXml(reset.value)}</text>`
+      : "";
+    return svg(`<rect width="144" height="144" fill="${color}"/>${watermark}${name}<text x="72" y="${percentY}" text-anchor="middle" font-family="${font}" font-size="${percentSize}" font-weight="700" fill="${textColor}">${escapeXml(percent)}</text>${resetMarkup}`);
+  }
+
+  const bandHeight = 144 / rows.length;
+  const body = rows.map((row, index) => {
+    const color = statusColor(row.window.remaining_percent);
+    const percent = formatPercent(displayedValue(row, settings), settings);
+    const fontSize = fittedFontSize(percent, rows.length === 2 ? 42 : 32);
+    const y = bandHeight * index;
+    const baseline = y + bandHeight / 2 + fontSize * 0.34;
+    return `<rect x="0" y="${y}" width="144" height="${bandHeight}" fill="${color}"/><text x="72" y="${baseline}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="${textColorForBackground(color)}">${escapeXml(percent)}</text>`;
+  }).join("");
+  const watermark = mark === "logo" ? providerLogo(provider, 101, settings) : "";
+  return svg(`${body}${watermark}`);
+}
+
+function renderProgress(rows: MetricRow[], settings: ActionSettings, provider: ProviderSnapshot, orientation: "horizontal" | "vertical"): string {
+  const font = fontFamily(settings);
+  const mark = resolvedProviderMark(settings);
+  if (rows.length === 1) {
+    const row = rows[0];
+    const color = statusColor(row.window.remaining_percent);
+    const value = displayedValue(row, settings);
+    const percent = formatPercent(value, settings);
+    const textColor = progressTextColor(value, color, orientation);
+    const reset = resetCopy(row.window, settings.resetDisplay);
+    const percentSize = fittedFontSize(percent, reset ? 58 : 64);
+    const percentY = reset ? 82 : 90;
+    const watermark = mark === "logo" ? providerLogo(provider, 101, settings) : "";
+    const name = mark === "text" ? providerNameMarkup(provider, settings, 20, textColor) : "";
+    const resetMarkup = reset
+      ? `<text x="72" y="134" text-anchor="middle" font-family="${font}" font-size="15" font-weight="600" fill="${textColor}">${escapeXml(reset.value)}</text>`
+      : "";
+    const track = `<rect width="144" height="144" fill="${darkenStatusColor(color)}"/>`;
+    const fill = progressFill(value, color, orientation);
+    return svg(`${track}${fill}${watermark}${name}<text x="72" y="${percentY}" text-anchor="middle" font-family="${font}" font-size="${percentSize}" font-weight="700" fill="${textColor}">${escapeXml(percent)}</text>${resetMarkup}`);
+  }
+
+  const segmentSize = 144 / rows.length;
+  const body = rows.map((row, index) => {
+    const color = statusColor(row.window.remaining_percent);
+    const value = displayedValue(row, settings);
+    const percent = formatPercent(value, settings);
+    const fontSize = fittedFontSize(percent, rows.length === 2 ? 34 : 26);
+    if (orientation === "horizontal") {
+      const y = segmentSize * index;
+      const textY = y + segmentSize / 2 + fontSize * 0.34;
+      return `<rect x="0" y="${y}" width="144" height="${segmentSize}" fill="${darkenStatusColor(color)}"/>${progressFill(value, color, orientation, 0, y, 144, segmentSize)}<text x="72" y="${textY}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="${progressTextColor(value, color, orientation)}">${escapeXml(percent)}</text>`;
+    }
+    const x = segmentSize * index;
+    const textX = x + segmentSize / 2;
+    const textY = 72 + fontSize * 0.34;
+    return `<rect x="${x}" y="0" width="${segmentSize}" height="144" fill="${darkenStatusColor(color)}"/>${progressFill(value, color, orientation, x, 0, segmentSize, 144)}<text x="${textX}" y="${textY}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="${progressTextColor(value, color, orientation)}">${escapeXml(percent)}</text>`;
+  }).join("");
+  const watermark = mark === "logo" ? providerLogo(provider, 101, settings) : "";
+  return svg(`${body}${watermark}`);
+}
+
 function renderRings(rows: MetricRow[], settings: ActionSettings, provider: ProviderSnapshot): string {
   if (rows.length === 1) return renderSingleRing(rows[0], settings, provider);
   return renderDualRings(rows, settings, provider);
@@ -545,7 +667,25 @@ function renderSvg(provider: ProviderSnapshot | null, settings: ActionSettings, 
   if (!provider) return renderNoData(settings);
   const rows = rowsFor(provider, settings);
   if (rows.length === 0) return renderNoData(settings);
-  return renderRings(rows, settings, provider);
+  switch (settings.presentation) {
+    case "numbers":
+      return renderNumbers(rows, settings);
+    case "bars":
+      return renderBars(rows, settings);
+    case "solid":
+      return renderSolid(rows, settings, provider);
+    case "progress_horizontal":
+      return renderProgress(rows, settings, provider, "horizontal");
+    case "progress_vertical":
+      return renderProgress(rows, settings, provider, "vertical");
+    case "reset_time":
+      return renderResetTime(rows, settings);
+    case "reset_countdown":
+      return renderResetCountdown(rows, settings);
+    case "rings":
+    default:
+      return renderRings(rows, settings, provider);
+  }
 }
 
 export function renderIndicator(snapshot: SnapshotResponse | null, settings: ActionSettings, connected: boolean): string {

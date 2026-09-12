@@ -7,6 +7,7 @@
     "build": "rollup -c && node scripts/sync-manifest.mjs",
     "dev": "streamdeck dev",
     "reload": "streamdeck dev && streamdeck restart com.vertopolkalf.codex-minibar",
+    "install:reload": "npm run build && streamdeck dev && streamdeck link com.vertopolkalf.codex-minibar.sdPlugin && streamdeck restart com.vertopolkalf.codex-minibar",
     "pack": "npm run build && streamdeck pack com.vertopolkalf.codex-minibar.sdPlugin"
   },
   "dependencies": {

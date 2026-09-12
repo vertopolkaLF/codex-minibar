@@ -29,6 +29,18 @@
   <select id="singleMetric"></select>
   <p id="dualHint" class="hint" hidden></p>
 
+  <label for="presentation">Style</label>
+  <select id="presentation">
+    <option value="rings">Progress ring</option>
+    <option value="solid">Solid status color</option>
+    <option value="progress_horizontal">Horizontal progress bar</option>
+    <option value="progress_vertical">Vertical progress bar</option>
+    <option value="numbers">Stacked numbers</option>
+    <option value="bars">Stacked bars</option>
+    <option value="reset_time">Reset time</option>
+    <option value="reset_countdown">Reset countdown</option>
+  </select>
+
   <label for="resetDisplay">Reset display</label>
   <select id="resetDisplay">
     <option value="countdown">Countdown (1:42)</option>
@@ -96,6 +108,7 @@
     const widget = document.querySelector("#widget");
     const singleMetric = document.querySelector("#singleMetric");
     const dualHint = document.querySelector("#dualHint");
+    const presentation = document.querySelector("#presentation");
     const resetDisplay = document.querySelector("#resetDisplay");
     const valueMode = document.querySelector("#valueMode");
     const showPercentSymbol = document.querySelector("#showPercentSymbol");
@@ -141,6 +154,9 @@
       const singleMetricId = input?.singleMetricId ?? incomingMetrics[0] ?? metrics[0]?.[0] ?? defaultSettings.singleMetricId;
       const reset = input?.resetDisplay
         ?? (input?.presentation === "reset_time" ? "time" : input?.showCountdown === false ? "hidden" : defaultSettings.resetDisplay);
+      const presentationKind = ["numbers", "bars", "rings", "solid", "progress_horizontal", "progress_vertical", "reset_time", "reset_countdown"].includes(input?.presentation)
+        ? input.presentation
+        : defaultSettings.presentation;
       return {
         ...defaultSettings,
         ...(input ?? {}),
@@ -148,6 +164,7 @@
         widget: widgetKind === "dual_limit" ? "dual_limit" : "single_limit",
         singleMetricId,
         metricIds: incomingMetrics.length ? incomingMetrics : [singleMetricId],
+        presentation: presentationKind,
         resetDisplay: ["countdown", "time", "hidden"].includes(reset) ? reset : defaultSettings.resetDisplay,
         showPercentSymbol: input?.showPercentSymbol !== false,
         font: ["inter", "segoe", "arial", "consolas"].includes(input?.font) ? input.font : defaultSettings.font,
@@ -198,6 +215,7 @@
       providerSelect.value = settings.provider;
       widget.value = settings.widget;
       singleMetric.value = settings.singleMetricId;
+      presentation.value = settings.presentation;
       resetDisplay.value = settings.resetDisplay;
       valueMode.value = settings.valueMode;
       showPercentSymbol.checked = settings.showPercentSymbol !== false;
@@ -236,6 +254,7 @@
       settings.metricIds = [settings.singleMetricId];
       sendSettings();
     });
+    presentation.addEventListener("change", () => { settings.presentation = presentation.value; sendSettings(); });
     resetDisplay.addEventListener("change", () => {
       settings.resetDisplay = resetDisplay.value;
       settings.showCountdown = settings.resetDisplay !== "hidden";
