@@ -105,6 +105,23 @@ CI checks formatting, lints, tests, and a release build on Windows.
 Bug reports and focused pull requests are welcome. Please include your Windows version,
 Codex installation type, and clear reproduction steps when reporting a problem.
 
+## Contributing
+
+We especially need help supporting the many different providers people use. Provider APIs,
+local data formats, authentication flows, and quota semantics all vary, so testing integrations
+with real provider accounts and keeping them working over time is particularly valuable.
+
+To contribute:
+
+1. Fork the repository and create a focused branch.
+2. Make the smallest change that solves the problem.
+3. Run the relevant checks from [Build from source](#build-from-source).
+4. Open a pull request with a clear description, reproduction steps, and provider-specific
+   setup details when applicable.
+
+For provider changes, include sanitized sample data or fixtures when possible. Never commit
+credentials, tokens, or personal usage history.
+
 ## License
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
