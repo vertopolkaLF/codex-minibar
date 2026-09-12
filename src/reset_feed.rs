@@ -22,7 +22,7 @@ use crate::{settings::Settings, worker::WorkerEvent};
 
 pub const FEED_URL: &str =
     "https://raw.githubusercontent.com/vertopolkaLF/codex-minibar/main/data/codex-resets.json";
-const FEED_SCHEMA_VERSION: u8 = 1;
+const FEED_SCHEMA_VERSION: u8 = 2;
 const USER_AGENT: &str = "codex-minibar-reset-feed";
 const MAX_FEED_ENTRIES: usize = 32;
 const MAX_NOTIFIED_IDS: usize = 256;
@@ -32,6 +32,9 @@ pub struct ForcedReset {
     /// Stable bot-generated identity. It must not change when the description
     /// or the timestamp is corrected.
     pub id: String,
+    /// HTTPS page where the announcement can be verified by the user.
+    #[serde(default)]
+    pub source_url: String,
     /// Optional human-readable context, for example "weekly quota".
     #[serde(default)]
     pub label: Option<String>,
@@ -90,6 +93,8 @@ struct ResetFeedEntry {
     #[serde(rename = "type")]
     kind: ResetKind,
     #[serde(default)]
+    source_url: String,
+    #[serde(default)]
     label: Option<String>,
     reset_at: DateTime<Utc>,
 }
@@ -147,7 +152,12 @@ pub fn parse_feed(body: &str, now: DateTime<Utc>) -> Result<Vec<ForcedReset>> {
             break;
         }
         let id = entry.id.trim().to_owned();
-        if id.is_empty() || entry.reset_at <= now || !ids.insert(id.clone()) {
+        let source_url = entry.source_url.trim().to_owned();
+        if id.is_empty()
+            || !is_valid_source_url(&source_url)
+            || entry.reset_at <= now
+            || !ids.insert(id.clone())
+        {
             continue;
         }
         let label = entry
@@ -156,6 +166,7 @@ pub fn parse_feed(body: &str, now: DateTime<Utc>) -> Result<Vec<ForcedReset>> {
             .filter(|label| !label.is_empty());
         resets.push(ForcedReset {
             id,
+            source_url,
             label,
             reset_at: entry.reset_at,
         });
@@ -280,7 +291,10 @@ fn load_cache(path: &Path, now: DateTime<Utc>) -> ResetFeedCache {
     let mut resets = cache.resets;
     let mut ids = HashSet::new();
     resets.retain(|reset| {
-        reset.reset_at > now && !reset.id.trim().is_empty() && ids.insert(reset.id.clone())
+        reset.reset_at > now
+            && !reset.id.trim().is_empty()
+            && is_valid_source_url(&reset.source_url)
+            && ids.insert(reset.id.clone())
     });
     sort_resets(&mut resets);
     ResetFeedCache {
@@ -314,6 +328,10 @@ fn sort_resets(resets: &mut [ForcedReset]) {
     });
 }
 
+pub(crate) fn is_valid_source_url(url: &str) -> bool {
+    url.trim().to_ascii_lowercase().starts_with("https://")
+}
+
 #[cfg(test)]
 mod tests {
     use crate::settings::ResetAnnouncementRefreshInterval;
@@ -329,11 +347,11 @@ mod tests {
     fn parses_forced_resets_and_discards_banked_resets() {
         let resets = parse_feed(
             r#"{
-                "schema_version": 1,
+                "schema_version": 2,
                 "resets": [
-                    {"id":"banked-1","type":"banked","reset_at":"2026-09-13T12:00:00Z"},
-                    {"id":"forced-2","type":"forced","label":"Weekly quota","reset_at":"2026-09-14T12:00:00Z"},
-                    {"id":"forced-1","type":"forced","reset_at":"2026-09-13T12:00:00Z"}
+                    {"id":"banked-1","type":"banked","source_url":"https://x.com/tibo/status/1","reset_at":"2026-09-13T12:00:00Z"},
+                    {"id":"forced-2","type":"forced","source_url":"https://x.com/tibo/status/2","label":"Weekly quota","reset_at":"2026-09-14T12:00:00Z"},
+                    {"id":"forced-1","type":"forced","source_url":"https://x.com/tibo/status/1","reset_at":"2026-09-13T12:00:00Z"}
                 ]
             }"#,
             now(),
@@ -342,6 +360,7 @@ mod tests {
 
         assert_eq!(resets.len(), 2);
         assert_eq!(resets[0].id, "forced-1");
+        assert_eq!(resets[0].source_url, "https://x.com/tibo/status/1");
         assert_eq!(resets[1].label.as_deref(), Some("Weekly quota"));
     }
 
@@ -349,12 +368,12 @@ mod tests {
     fn ignores_duplicate_empty_and_past_forced_entries() {
         let resets = parse_feed(
             r#"{
-                "schema_version": 1,
+                "schema_version": 2,
                 "resets": [
-                    {"id":"same","type":"forced","reset_at":"2026-09-11T12:00:00Z"},
-                    {"id":"same","type":"forced","reset_at":"2026-09-13T12:00:00Z"},
-                    {"id":"same","type":"forced","reset_at":"2026-09-14T12:00:00Z"},
-                    {"id":" ","type":"forced","reset_at":"2026-09-15T12:00:00Z"}
+                    {"id":"same","type":"forced","source_url":"https://x.com/tibo/status/1","reset_at":"2026-09-11T12:00:00Z"},
+                    {"id":"same","type":"forced","source_url":"https://x.com/tibo/status/1","reset_at":"2026-09-13T12:00:00Z"},
+                    {"id":"same","type":"forced","source_url":"https://x.com/tibo/status/1","reset_at":"2026-09-14T12:00:00Z"},
+                    {"id":" ","type":"forced","source_url":"https://x.com/tibo/status/1","reset_at":"2026-09-15T12:00:00Z"}
                 ]
             }"#,
             now(),
@@ -367,8 +386,32 @@ mod tests {
 
     #[test]
     fn rejects_unknown_schema_versions() {
-        let error = parse_feed(r#"{"schema_version":2,"resets":[]}"#, now()).unwrap_err();
+        let error = parse_feed(r#"{"schema_version":3,"resets":[]}"#, now()).unwrap_err();
         assert!(error.to_string().contains("unsupported"));
+    }
+
+    #[test]
+    fn rejects_entries_without_a_verifiable_https_source() {
+        let resets = parse_feed(
+            r#"{
+                "schema_version": 2,
+                "resets": [
+                    {"id":"http","type":"forced","source_url":"http://example.com","reset_at":"2026-09-13T12:00:00Z"},
+                    {"id":"missing","type":"forced","reset_at":"2026-09-14T12:00:00Z"},
+                    {"id":"valid","type":"forced","source_url":"https://example.com/status","reset_at":"2026-09-15T12:00:00Z"}
+                ]
+            }"#,
+            now(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            resets
+                .iter()
+                .map(|reset| reset.id.as_str())
+                .collect::<Vec<_>>(),
+            ["valid"]
+        );
     }
 
     #[test]

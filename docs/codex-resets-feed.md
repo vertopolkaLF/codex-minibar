@@ -6,17 +6,19 @@ repository's `main` branch through GitHub raw content. A bot should replace the
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "resets": [
     {
       "id": "forced-2026-09-15T18:00:00Z",
       "type": "forced",
+      "source_url": "https://x.com/tibo/status/1234567890",
       "label": "Codex weekly quota",
       "reset_at": "2026-09-15T18:00:00Z"
     },
     {
       "id": "banked-2026-09-16T18:00:00Z",
       "type": "banked",
+      "source_url": "https://x.com/tibo/status/1234567891",
       "reset_at": "2026-09-16T18:00:00Z"
     }
   ]
@@ -26,6 +28,8 @@ repository's `main` branch through GitHub raw content. A bot should replace the
 Rules for the bot:
 
 - `reset_at` is always an ISO-8601 UTC timestamp.
+- `source_url` is the HTTPS post or page that confirms the reset. It is
+  required for a forced reset to appear in the app.
 - `id` is stable across corrections. If the time is corrected, update the
   existing entry instead of creating a second id.
 - `type` is either `forced` or `banked`. The app intentionally discards

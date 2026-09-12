@@ -1513,7 +1513,9 @@ pub(super) fn forced_reset_card(
     let now = Utc::now();
     let upcoming = resets
         .iter()
-        .filter(|reset| reset.reset_at > now)
+        .filter(|reset| {
+            reset.reset_at > now && crate::reset_feed::is_valid_source_url(&reset.source_url)
+        })
         .take(3)
         .collect::<Vec<_>>();
     if upcoming.is_empty() {
@@ -1523,6 +1525,7 @@ pub(super) fn forced_reset_card(
     let rows = upcoming
         .into_iter()
         .map(|reset| {
+            let source_url = reset.source_url.clone();
             let local = reset.reset_at.with_timezone(&Local);
             let date = format!(
                 "{}, {}",
@@ -1534,10 +1537,11 @@ pub(super) fn forced_reset_card(
                 .as_deref()
                 .filter(|label| !label.trim().is_empty())
                 .unwrap_or("Codex limits");
-            grid((
+            let row: Element = grid((
                 vstack((
                     text_block(label)
                         .font_weight(600)
+                        .wrap()
                         .vertical_alignment(VerticalAlignment::Center),
                     caption(date).foreground(ThemeRef::TertiaryText),
                 ))
@@ -1560,7 +1564,16 @@ pub(super) fn forced_reset_card(
             .columns([GridLength::Star(1.0), GridLength::Auto])
             .rows([GridLength::Auto])
             .horizontal_alignment(HorizontalAlignment::Stretch)
-            .into()
+            .on_tapped(move || {
+                if let Err(error) = crate::updater::open_url(&source_url) {
+                    crate::logger::info(format!(
+                        "failed to open forced reset source {source_url}: {error:#}"
+                    ));
+                }
+            })
+            .tooltip("Open announcement source")
+            .into();
+            row
         })
         .collect::<Vec<Element>>();
 
