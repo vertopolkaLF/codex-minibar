@@ -340,9 +340,11 @@ function renderSingleRing(row: MetricRow, settings: ActionSettings): string {
   const percentY = Math.round(72 + fontSize * 0.36);
   const resetY = 72 + radius - strokeWidth / 2 - 10;
   const font = fontFamily(settings);
-  const percentMarkup = `<text x="72" y="${percentY}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="#ffffff">${escapeXml(percent)}</text>`;
+  const percentMarkup = reset
+    ? `<text x="72" y="${percentY}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="#ffffff">${escapeXml(percent)}</text>`
+    : `<text x="72" y="72" text-anchor="middle" dominant-baseline="central" alignment-baseline="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="#ffffff">${escapeXml(percent)}</text>`;
   const resetMarkup = reset
-    ? `<text x="72" y="${resetY}" text-anchor="middle" font-family="${font}" font-size="20" fill="#ececec">${escapeXml(reset.value)}</text>`
+    ? `<text x="72" y="${resetY}" text-anchor="middle" font-family="${font}" font-size="21" fill="#ececec">${escapeXml(reset.value)}</text>`
     : "";
   return svg(`<rect width="144" height="144" fill="#000"/>${fadedRingArc(72, 72, radius, value, color, strokeWidth)}${percentMarkup}${resetMarkup}`);
 }
