@@ -113,7 +113,7 @@ function statusColor(remaining: number | null): string {
   if (remaining === null) return "#8490a3";
   if (remaining <= 15) return "#e64a48";
   if (remaining <= 50) return "#f59e0b";
-  return "#31c48d";
+  return "#34bc84";
 }
 
 function metricWindow(provider: ProviderSnapshot, metricId: string): MetricRow | null {
@@ -250,6 +250,41 @@ function ringArc(cx: number, cy: number, radius: number, value: number, color: s
   return `<circle cx="${cx}" cy="${cy}" r="${radius}" fill="none" stroke="${trackColor}" stroke-width="${strokeWidth}"/><circle cx="${cx}" cy="${cy}" r="${radius}" fill="none" stroke="${color}" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-dasharray="${progress} ${circumference}" transform="rotate(-90 ${cx} ${cy})"/>`;
 }
 
+/** Progress ring matching the Stream Deck key look: flat 12-o'clock start, no track, soft fade at the trailing tip. */
+function fadedRingArc(cx: number, cy: number, radius: number, value: number, color: string, strokeWidth: number): string {
+  const clamped = Math.max(0, Math.min(100, value));
+  if (clamped <= 0) return "";
+
+  const circumference = 2 * Math.PI * radius;
+  const progressLen = circumference * clamped / 100;
+  // Soft tip occupies a fixed angular span, capped so short arcs still have a solid head.
+  const fadeLen = Math.min(progressLen * 0.32, circumference * 0.22, Math.max(0, progressLen - circumference * 0.08));
+  const solidLen = Math.max(0, progressLen - fadeLen);
+  const rotate = `transform="rotate(-90 ${cx} ${cy})"`;
+  const base = `cx="${cx}" cy="${cy}" r="${radius}" fill="none" stroke="${color}" stroke-width="${strokeWidth}" stroke-linecap="butt" ${rotate}`;
+
+  const parts: string[] = [];
+  if (solidLen > 0.5) {
+    parts.push(`<circle ${base} stroke-dasharray="${solidLen} ${circumference}"/>`);
+  }
+
+  const fadeSteps = 18;
+  for (let i = 0; i < fadeSteps; i++) {
+    const t0 = i / fadeSteps;
+    const t1 = (i + 1) / fadeSteps;
+    const start = solidLen + fadeLen * t0;
+    const segLen = Math.max(0.75, fadeLen * (t1 - t0) + 0.6);
+    // Ease-out opacity so the tip dissolves into black instead of a hard cut.
+    const opacity = Math.pow(1 - t0, 1.35);
+    if (opacity < 0.02) continue;
+    parts.push(
+      `<circle ${base} stroke-opacity="${opacity.toFixed(3)}" stroke-dasharray="${segLen.toFixed(2)} ${circumference.toFixed(2)}" stroke-dashoffset="${(-start).toFixed(2)}"/>`,
+    );
+  }
+
+  return parts.join("");
+}
+
 function renderSingleRing(row: MetricRow, settings: ActionSettings): string {
   const rawValue = displayedValue(row, settings);
   const value = Math.max(0, Math.min(100, rawValue ?? 0));
@@ -257,9 +292,12 @@ function renderSingleRing(row: MetricRow, settings: ActionSettings): string {
   const color = statusColor(row.window.remaining_percent);
   const reset = resetCopy(row.window.resets_at, settings.resetDisplay);
   const textMarkup = reset
-    ? `<text x="72" y="69" text-anchor="middle" font-family="Segoe UI,Arial" font-size="35" font-weight="700" fill="#f1f3f5">${escapeXml(percent)}</text><text x="72" y="83" text-anchor="middle" font-family="Segoe UI,Arial" font-size="9" fill="#8490a3">${reset.label}</text><text x="72" y="102" text-anchor="middle" font-family="Segoe UI,Arial" font-size="17" fill="#f1f3f5">${escapeXml(reset.value)}</text>`
-    : `<text x="72" y="84" text-anchor="middle" font-family="Segoe UI,Arial" font-size="35" font-weight="700" fill="#f1f3f5">${escapeXml(percent)}</text>`;
-  return svg(`<rect x="7" y="7" width="130" height="130" rx="22" fill="#000"/>${ringArc(72, 72, 52, value, color, 12)}${textMarkup}`);
+    ? `<text x="72" y="68" text-anchor="middle" font-family="Segoe UI,Arial" font-size="36" font-weight="700" fill="#ffffff">${escapeXml(percent)}</text><text x="72" y="84" text-anchor="middle" font-family="Segoe UI,Arial" font-size="10" fill="#9a9a9a">${reset.label}</text><text x="72" y="104" text-anchor="middle" font-family="Segoe UI,Arial" font-size="18" fill="#ececec">${escapeXml(reset.value)}</text>`
+    : `<text x="72" y="84" text-anchor="middle" font-family="Segoe UI,Arial" font-size="36" font-weight="700" fill="#ffffff">${escapeXml(percent)}</text>`;
+  // Stream Deck key canvas is 144x144. Stroke sits 4px in from the edge.
+  const strokeWidth = 11;
+  const radius = 72 - 4 - strokeWidth / 2;
+  return svg(`<rect width="144" height="144" fill="#000"/>${fadedRingArc(72, 72, radius, value, color, strokeWidth)}${textMarkup}`);
 }
 
 function dualRingLabel(row: MetricRow): string {
@@ -283,7 +321,7 @@ function renderDualRings(rows: MetricRow[], settings: ActionSettings): string {
       : "";
     return `${ringArc(cx, 52, 27, value, statusColor(row.window.remaining_percent), 8)}<text x="${cx}" y="58" text-anchor="middle" font-family="Segoe UI,Arial" font-size="18" font-weight="700" fill="#f1f3f5">${escapeXml(percent)}</text><text x="${cx}" y="101" text-anchor="middle" font-family="Segoe UI,Arial" font-size="10" fill="#8490a3">${escapeXml(dualRingLabel(row))}</text>${resetMarkup}`;
   }).join("");
-  return svg(`<rect x="7" y="7" width="130" height="130" rx="22" fill="#000"/>${markup}`);
+  return svg(`<rect width="144" height="144" fill="#000"/>${markup}`);
 }
 
 function renderResetTime(rows: MetricRow[]): string {

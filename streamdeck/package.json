@@ -6,15 +6,17 @@
   "scripts": {
     "build": "rollup -c && node scripts/sync-manifest.mjs",
     "dev": "streamdeck dev",
+    "reload": "streamdeck dev && streamdeck restart com.vertopolkalf.codex-minibar",
     "pack": "npm run build && streamdeck pack com.vertopolkalf.codex-minibar.sdPlugin"
   },
   "dependencies": {
     "@elgato/streamdeck": "^2.1.2"
   },
   "devDependencies": {
+    "@elgato/cli": "^1.9.0",
     "@rollup/plugin-commonjs": "^28.0.2",
-    "@rollup/plugin-typescript": "^12.1.4",
     "@rollup/plugin-node-resolve": "^16.0.1",
+    "@rollup/plugin-typescript": "^12.1.4",
     "@types/node": "^22.13.4",
     "rollup": "^4.34.8",
     "tslib": "^2.8.1",
