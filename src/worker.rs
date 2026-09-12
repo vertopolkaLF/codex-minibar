@@ -39,6 +39,9 @@ pub trait LimitProvider: Send + 'static {
 }
 
 pub trait UsageProvider: Send + 'static {
+    /// Allows long remote history refreshes to stop when this worker is replaced.
+    fn set_cancellation(&mut self, _cancelled: Arc<AtomicBool>) {}
+
     fn load_cached_usage_statistics(&mut self, history_days: u16) -> Result<UsageStatistics>;
     fn refresh_usage_statistics(&mut self, history_days: u16) -> Result<UsageStatistics>;
 
@@ -237,6 +240,9 @@ fn start_worker_with_channels(
     event_sender: Sender<WorkerEvent>,
     publish_stopped: bool,
 ) -> WorkerHandle {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let mut usage_provider = usage_provider;
+    usage_provider.set_cancellation(Arc::clone(&cancelled));
     let (limit_commands, limit_commands_rx) = mpsc::channel();
     let (usage_commands, usage_commands_rx) = mpsc::channel();
     let limits_ready = Arc::new(AtomicBool::new(usage_provider.refresh_without_limits()));
@@ -279,6 +285,7 @@ fn start_worker_with_channels(
         while let Ok(command) = command_receiver.recv() {
             match command {
                 WorkerCommand::Shutdown => {
+                    cancelled.store(true, Ordering::Release);
                     let _ = limit_commands.send(WorkerCommand::Shutdown);
                     let _ = usage_commands.send(WorkerCommand::Shutdown);
                     break;
@@ -316,6 +323,7 @@ fn start_worker_with_channels(
                 }
             }
         }
+        cancelled.store(true, Ordering::Release);
         let _ = limit_commands.send(WorkerCommand::Shutdown);
         let _ = usage_commands.send(WorkerCommand::Shutdown);
         let _ = limit_join.join();

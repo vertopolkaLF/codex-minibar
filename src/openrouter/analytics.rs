@@ -8,7 +8,14 @@ use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration as StdDuration, Instant},
+};
 
 #[derive(Default, Serialize, Deserialize)]
 struct Cache {
@@ -132,6 +139,27 @@ fn fresh(day: &CachedDay, start: DateTime<Utc>, end: DateTime<Utc>, now: DateTim
     };
     day.start == start && day.end == end && now >= day.fetched_at && now - day.fetched_at < ttl
 }
+fn wait_for_request(cancelled: &AtomicBool, duration: StdDuration) -> Result<()> {
+    let deadline = Instant::now() + duration;
+    loop {
+        ensure!(
+            !cancelled.load(Ordering::Acquire),
+            "OpenRouter analytics refresh cancelled"
+        );
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(());
+        }
+        std::thread::sleep(remaining.min(StdDuration::from_millis(100)));
+    }
+}
+
+fn reserve_request(next: &mut Option<Instant>, now: Instant) -> StdDuration {
+    let slot = next.unwrap_or(now).max(now);
+    *next = Some(slot + StdDuration::from_millis(1100));
+    slot.saturating_duration_since(now)
+}
+
 fn query(
     client: &OpenRouterClient,
     key: &str,
@@ -151,20 +179,55 @@ fn query(
     if let Some(g) = granularity {
         body["granularity"] = json!(g);
     }
-    client
-        .agent
-        .post("https://openrouter.ai/api/v1/analytics/query")
-        .set("Authorization", &format!("Bearer {key}"))
-        .set("Content-Type", "application/json")
-        .send_string(&body.to_string())
-        .map_err(|e| match e {
-            ureq::Error::Status(401 | 403, _) => anyhow::anyhow!(
+    // Shared by all clients, including workers being replaced after a settings edit.
+    // Stay below the analytics API's 64 requests/minute limit.
+    static NEXT_REQUEST: Mutex<Option<Instant>> = Mutex::new(None);
+    for attempt in 0..3 {
+        let wait = {
+            let mut next = NEXT_REQUEST
+                .lock()
+                .map_err(|_| anyhow::anyhow!("OpenRouter request limiter unavailable"))?;
+            reserve_request(&mut next, Instant::now())
+        };
+        wait_for_request(&client.cancelled, wait)?;
+        match client
+            .agent
+            .post("https://openrouter.ai/api/v1/analytics/query")
+            .set("Authorization", &format!("Bearer {key}"))
+            .set("Content-Type", "application/json")
+            .send_string(&body.to_string())
+        {
+            Ok(response) => {
+                return response
+                    .into_string()
+                    .context("read OpenRouter analytics response");
+            }
+            Err(ureq::Error::Status(429, response)) if attempt < 2 => {
+                let delay = response
+                    .header("Retry-After")
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(5 * (attempt + 1));
+                ensure!(
+                    delay <= 60,
+                    "OpenRouter analytics rate limited; retry on the next refresh"
+                );
+                let mut next = NEXT_REQUEST
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("OpenRouter request limiter unavailable"))?;
+                let retry = Instant::now() + StdDuration::from_secs(delay.max(1));
+                *next = Some(next.unwrap_or(retry).max(retry));
+            }
+            Err(ureq::Error::Status(401 | 403, _)) => anyhow::bail!(
                 "OpenRouter usage stats: save a valid management key in Providers / OpenRouter"
             ),
-            other => anyhow::anyhow!("OpenRouter analytics request failed: {other}"),
-        })?
-        .into_string()
-        .context("read OpenRouter analytics response")
+            Err(error) => {
+                return Err(anyhow::anyhow!(
+                    "OpenRouter analytics request failed: {error}"
+                ));
+            }
+        }
+    }
+    unreachable!("the last request returns its response or error")
 }
 // The provider card's display period is independent of the Usage tab's range.
 // Fetch enough history for every supported overview range, including on upgrades.
@@ -263,6 +326,7 @@ pub(super) fn refresh(client: &OpenRouterClient, history_days: u16) -> Result<Us
         .retain(|date, _| *date >= today - Duration::days(364) && *date <= today);
     let days = daily(&cache);
     if changed {
+        wait_for_request(&client.cancelled, StdDuration::ZERO)?;
         let models: Vec<_> = cache
             .days
             .iter()
@@ -573,6 +637,51 @@ mod tests {
         assert_eq!(card.history_days, 30);
         assert_eq!(card.history.requests, 30);
         assert_eq!(statistics_from_daily(&stored_days, 90).history.requests, 90);
+    }
+
+    #[test]
+    fn multiple_accounts_cannot_burst_past_the_analytics_rate_limit() {
+        let now = Instant::now();
+        let mut next = None;
+        let slots: Vec<_> = (0..182).map(|_| reserve_request(&mut next, now)).collect();
+        assert_eq!(slots[0], StdDuration::ZERO);
+        for window in slots.windows(64) {
+            assert!(window[63] - window[0] > StdDuration::from_secs(60));
+        }
+        // Once the recovery is over, a later refresh can start immediately.
+        assert_eq!(
+            reserve_request(&mut next, now + StdDuration::from_secs(300)),
+            StdDuration::ZERO
+        );
+    }
+
+    #[test]
+    fn retry_after_delays_all_accounts_and_worker_replacements() {
+        let now = Instant::now();
+        let mut next = Some(now + StdDuration::from_secs(30));
+        assert_eq!(reserve_request(&mut next, now), StdDuration::from_secs(30));
+        assert_eq!(
+            reserve_request(&mut next, now),
+            StdDuration::from_millis(31100)
+        );
+    }
+
+    #[test]
+    fn cancellation_interrupts_rate_limit_waits() {
+        let cancelled = std::sync::Arc::new(AtomicBool::new(false));
+        let worker_flag = cancelled.clone();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            done_tx
+                .send(wait_for_request(&worker_flag, StdDuration::from_secs(60)).is_err())
+                .unwrap();
+        });
+        started_rx.recv_timeout(StdDuration::from_secs(2)).unwrap();
+        cancelled.store(true, Ordering::Release);
+        assert!(done_rx.recv_timeout(StdDuration::from_secs(2)).unwrap());
+        worker.join().unwrap();
     }
 
     #[test]

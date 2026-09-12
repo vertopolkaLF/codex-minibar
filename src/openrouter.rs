@@ -1,6 +1,10 @@
 //! OpenRouter API-key quota provider.
 
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, atomic::AtomicBool},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, TimeZone, Utc};
@@ -29,6 +33,7 @@ const LEGACY_API_KEY_ID: &str = "legacy";
 pub(crate) mod analytics;
 
 pub struct OpenRouterClient {
+    cancelled: Arc<AtomicBool>,
     credentials_revision: u64,
     agent: ureq::Agent,
     accounts: Vec<AccountCredentials>,
@@ -63,6 +68,7 @@ struct CachedOpenRouterKey {
 impl OpenRouterClient {
     pub fn new(settings: &Settings) -> Result<Self> {
         Ok(Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
             credentials_revision: settings.openrouter_credentials_revision,
             agent: ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build(),
             accounts: load_credentials(settings)?,
@@ -424,6 +430,10 @@ pub fn save_management_key(account_id: &str, value: Option<&str>) -> Result<()> 
 }
 
 impl UsageProvider for OpenRouterClient {
+    fn set_cancellation(&mut self, cancelled: Arc<AtomicBool>) {
+        self.cancelled = cancelled;
+    }
+
     fn load_cached_usage_statistics(&mut self, history_days: u16) -> Result<UsageStatistics> {
         analytics::load(self, history_days)
     }
