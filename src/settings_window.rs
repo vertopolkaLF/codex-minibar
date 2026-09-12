@@ -9,7 +9,7 @@ use crate::settings::{
     PopupWidgetKind, ProviderKind,
     ScheduledActivation, Settings, TimeFormat, TotalSpendPresentation, TrayColorMode,
     TrayFixedColor, TrayIndicator, TrayPresentation, TrayWidget, TrayWidgetKind,
-    UsageRefreshInterval,
+    ResetAnnouncementRefreshInterval, UsageRefreshInterval,
 };
 use crate::settings_controls::{
     SETTINGS_CARD_PADDING, settings_action_card, settings_brick_body_height, settings_brick_row,
@@ -546,6 +546,8 @@ pub fn render(
         cx.use_state(settings.limit_refresh_interval);
     let (usage_refresh_interval, set_usage_refresh_interval) =
         cx.use_state(settings.usage_refresh_interval);
+    let (reset_announcement_refresh_interval, set_reset_announcement_refresh_interval) =
+        cx.use_state(settings.reset_announcement_refresh_interval);
     let (show_used_percentage, set_show_used_percentage) =
         cx.use_state(settings.show_used_percentage);
     let (show_usage_pace, set_show_usage_pace) = cx.use_state(settings.show_usage_pace);
@@ -587,6 +589,10 @@ pub fn render(
     let (check_for_updates, set_check_for_updates) = cx.use_state(settings.check_for_updates);
     let (notify_on_update, set_notify_on_update) =
         cx.use_state(settings.notifications.update_available);
+    let (forced_reset_feed_enabled, set_forced_reset_feed_enabled) =
+        cx.use_state(settings.notifications.forced_reset_feed_enabled);
+    let (forced_reset_notifications, set_forced_reset_notifications) =
+        cx.use_state(settings.notifications.forced_reset_notifications);
 
     LIVE_SETTINGS_STATE.with(|state| {
         *state.borrow_mut() = Some(SettingsWindowState {
@@ -617,6 +623,7 @@ pub fn render(
             usage_stats_enabled: set_usage_stats_enabled.clone(),
             limit_refresh_interval: set_limit_refresh_interval.clone(),
             usage_refresh_interval: set_usage_refresh_interval.clone(),
+            reset_announcement_refresh_interval: set_reset_announcement_refresh_interval.clone(),
             start_at_login: set_start_at_login.clone(),
             show_used_percentage: set_show_used_percentage.clone(),
             show_usage_pace: set_show_usage_pace.clone(),
@@ -636,6 +643,8 @@ pub fn render(
             tray_widgets: set_tray_widgets.clone(),
             check_for_updates: set_check_for_updates.clone(),
             notify_on_update: set_notify_on_update.clone(),
+            forced_reset_feed_enabled: set_forced_reset_feed_enabled.clone(),
+            forced_reset_notifications: set_forced_reset_notifications.clone(),
         });
     });
 
@@ -679,6 +688,7 @@ pub fn render(
         usage_stats_enabled: usage_stats_enabled,
         limit_refresh_interval: limit_refresh_interval,
         usage_refresh_interval: usage_refresh_interval,
+        reset_announcement_refresh_interval: reset_announcement_refresh_interval,
         start_at_login: start_at_login,
         show_used_percentage: show_used_percentage,
         show_usage_pace: show_usage_pace,
@@ -707,6 +717,8 @@ pub fn render(
         expanded_popup_provider: &expanded_popup_provider,
         check_for_updates: check_for_updates,
         notify_on_update: notify_on_update,
+        forced_reset_feed_enabled: forced_reset_feed_enabled,
+        forced_reset_notifications: forced_reset_notifications,
         update_phase: &update_phase,
         log_content: &log_content,
         set_codex_enabled: set_codex_enabled.clone(),
@@ -742,6 +754,7 @@ pub fn render(
         set_usage_stats_enabled: set_usage_stats_enabled.clone(),
         set_limit_refresh_interval: set_limit_refresh_interval.clone(),
         set_usage_refresh_interval: set_usage_refresh_interval.clone(),
+        set_reset_announcement_refresh_interval: set_reset_announcement_refresh_interval.clone(),
         set_start_at_login: set_start_at_login.clone(),
         set_show_used_percentage: set_show_used_percentage.clone(),
         set_show_usage_pace: set_show_usage_pace.clone(),
@@ -771,6 +784,8 @@ pub fn render(
         set_hovered_card_id: set_hovered_card_id.clone(),
         set_check_for_updates: set_check_for_updates.clone(),
         set_notify_on_update: set_notify_on_update.clone(),
+        set_forced_reset_feed_enabled: set_forced_reset_feed_enabled.clone(),
+        set_forced_reset_notifications: set_forced_reset_notifications.clone(),
         theme_navigation_guard: theme_navigation_guard.clone(),
         theme_navigation_guard_timer: theme_navigation_guard_timer.clone(),
         settings_tx: settings_tx.clone(),

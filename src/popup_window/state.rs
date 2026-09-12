@@ -34,10 +34,15 @@ pub struct AppState {
     /// store, and worker results replace it atomically before either surface
     /// is repainted.
     pub limits: Mutex<ProviderLimits>,
+    /// Latest valid public forced-reset announcements. Kept outside UiState so
+    /// hidden popups avoid a full native-tree publish on every feed poll.
+    pub forced_resets: Mutex<Vec<crate::reset_feed::ForcedReset>>,
     pub commands: Mutex<HashMap<ProviderKind, Sender<WorkerCommand>>>,
     pub workers: Mutex<crate::provider::ProviderWorkers>,
     pub worker_events_rx: Mutex<Option<Receiver<WorkerEvent>>>,
     pub worker_events_tx: Sender<WorkerEvent>,
+    /// Independent public-feed worker for announced Codex forced resets.
+    pub reset_feed_worker: Mutex<Option<crate::reset_feed::ResetFeedWorker>>,
     pub activation_path: std::path::PathBuf,
     /// Provider-scoped errors from workers that could not be created at startup.
     /// They remain visible until that provider returns a successful limits
@@ -118,6 +123,50 @@ impl AppState {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    pub(super) fn current_forced_resets(&self) -> Vec<crate::reset_feed::ForcedReset> {
+        self.forced_resets
+            .lock()
+            .map(|resets| resets.clone())
+            .unwrap_or_default()
+    }
+
+    pub(super) fn replace_forced_resets(
+        &self,
+        resets: Vec<crate::reset_feed::ForcedReset>,
+    ) {
+        if let Ok(mut current) = self.forced_resets.lock() {
+            *current = resets;
+        }
+    }
+
+    pub(super) fn sync_reset_feed(&self, settings: &Settings) {
+        let Ok(worker) = self.reset_feed_worker.lock() else {
+            return;
+        };
+        let Some(worker) = worker.as_ref() else {
+            return;
+        };
+        let _ = worker.commands.send(crate::reset_feed::ResetFeedCommand::SetEnabled(
+            settings.notifications.forced_reset_feed_enabled,
+        ));
+        let _ = worker.commands.send(
+            crate::reset_feed::ResetFeedCommand::SetRefreshInterval(Duration::from_secs(
+                settings.reset_announcement_refresh_interval.seconds(),
+            )),
+        );
+    }
+
+    pub(super) fn mark_forced_reset_notified(&self, id: String) {
+        let Ok(worker) = self.reset_feed_worker.lock() else {
+            return;
+        };
+        if let Some(worker) = worker.as_ref() {
+            let _ = worker
+                .commands
+                .send(crate::reset_feed::ResetFeedCommand::MarkNotified(id));
+        }
     }
 
     /// Applies provider toggles without disturbing workers that remain enabled.
@@ -201,6 +250,11 @@ impl AppState {
         if let Ok(mut commands) = self.commands.lock() {
             commands.clear();
         }
+        if let Ok(mut worker) = self.reset_feed_worker.lock()
+            && let Some(worker) = worker.take()
+        {
+            worker.shutdown();
+        }
     }
 }
 
@@ -222,6 +276,8 @@ pub(super) struct UiState {
     /// in `AppState`, but this revision makes that external snapshot observable
     /// to the reactive render loop even when all other view metadata is equal.
     pub(super) limits_revision: u64,
+    /// Same bridge for the independently polled forced-reset feed.
+    pub(super) forced_resets_revision: u64,
     /// Provider limit/usage requests currently in flight. The refresh icon
     /// stays active until every operation started by the workers has finished.
     pub(super) active_requests: Vec<(ProviderKind, RequestKind)>,
@@ -267,6 +323,7 @@ impl Default for UiState {
             error: None,
             settings_revision: 0,
             limits_revision: 0,
+            forced_resets_revision: 0,
             active_requests: Vec::new(),
             refreshing: false,
             show_used_percentage: false,
@@ -393,5 +450,9 @@ impl UiState {
     /// not discard an otherwise identical UI state as a no-op.
     pub(super) fn observe_limits_update(&mut self) {
         self.limits_revision = self.limits_revision.wrapping_add(1);
+    }
+
+    pub(super) fn observe_forced_resets_update(&mut self) {
+        self.forced_resets_revision = self.forced_resets_revision.wrapping_add(1);
     }
 }

@@ -1502,6 +1502,85 @@ pub(super) fn reset_credits_card(limits: &RateLimits) -> Element {
     .into()
 }
 
+/// Shows the nearest confirmed Codex forced resets from the public feed.
+///
+/// This is deliberately a separate card from provider-reported banked reset
+/// credits. The feed parser already discards banked entries; filtering again
+/// here keeps this UI contract obvious at the final presentation boundary.
+pub(super) fn forced_reset_card(
+    resets: &[crate::reset_feed::ForcedReset],
+) -> Option<Element> {
+    let now = Utc::now();
+    let upcoming = resets
+        .iter()
+        .filter(|reset| reset.reset_at > now)
+        .take(3)
+        .collect::<Vec<_>>();
+    if upcoming.is_empty() {
+        return None;
+    }
+
+    let rows = upcoming
+        .into_iter()
+        .map(|reset| {
+            let local = reset.reset_at.with_timezone(&Local);
+            let date = format!(
+                "{}, {}",
+                local.format("%b %-d"),
+                TimeFormat::current().format_hm(local)
+            );
+            let label = reset
+                .label
+                .as_deref()
+                .filter(|label| !label.trim().is_empty())
+                .unwrap_or("Codex limits");
+            grid((
+                vstack((
+                    text_block(label)
+                        .font_weight(600)
+                        .vertical_alignment(VerticalAlignment::Center),
+                    caption(date).foreground(ThemeRef::TertiaryText),
+                ))
+                .spacing(2.0)
+                .vertical_alignment(VerticalAlignment::Center),
+                vstack((
+                    caption("Resets in")
+                        .foreground(ThemeRef::TertiaryText)
+                        .horizontal_alignment(HorizontalAlignment::Right),
+                    text_block(format_reset_in(Some(reset.reset_at)))
+                        .font_weight(600)
+                        .foreground(ThemeRef::Accent)
+                        .horizontal_alignment(HorizontalAlignment::Right),
+                ))
+                .spacing(1.0)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .vertical_alignment(VerticalAlignment::Center)
+                .grid_column(1),
+            ))
+            .columns([GridLength::Star(1.0), GridLength::Auto])
+            .rows([GridLength::Auto])
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .into()
+        })
+        .collect::<Vec<Element>>();
+
+    Some(
+        border(
+            vstack((
+                caption("CODEX FORCED RESETS").foreground(ThemeRef::SecondaryText),
+                vstack(rows).spacing(8.0),
+            ))
+            .spacing(8.0),
+        )
+        .corner_radius(f64::from(popup::CARD_CORNER_RADIUS_DIP))
+        .padding(Thickness::uniform(12.0))
+        .background(ThemeRef::CardBackground)
+        .border_thickness(Thickness::uniform(1.0))
+        .border_brush(ThemeRef::CardStroke)
+        .into(),
+    )
+}
+
 pub(super) fn usage_statistics_card(provider: ProviderKind, limits: &RateLimits) -> Element {
     let statistics = &limits.usage;
     if provider == ProviderKind::Cursor && !statistics.has_data() {

@@ -40,6 +40,8 @@ Codex Minibar reads the usage data exposed by a locally authenticated Codex CLI/
   statistics (today, the configured history window, and a compact activity bar chart).
 - Receive Windows notifications when a limit resets, usage becomes low, Codex cannot be
   reached, or an update is available.
+- Receive announced Codex forced-reset countdowns from the public GitHub feed. The feed
+  contract and bot update rules live in [`docs/codex-resets-feed.md`](docs/codex-resets-feed.md).
 - Optionally start Codex automatically to activate a fresh five-hour window.
 - Configure planned limit activations and provider-specific quiet periods for
   automatic activation, such as keeping a work Claude session inactive on weekends.

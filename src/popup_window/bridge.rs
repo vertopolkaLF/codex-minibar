@@ -1,5 +1,39 @@
 use super::*;
 
+use std::collections::HashSet;
+
+fn forced_reset_notification_body(reset: &crate::reset_feed::ForcedReset) -> String {
+    let local = reset.reset_at.with_timezone(&Local);
+    let when = format!(
+        "{}, {}",
+        local.format("%b %-d"),
+        TimeFormat::current().format_hm(local)
+    );
+    let countdown = format_reset_in(Some(reset.reset_at));
+    reset.label.as_deref().map_or_else(
+        || format!("Codex limits reset in {countdown} ({when})"),
+        |label| format!("{label}: reset in {countdown} ({when})"),
+    )
+}
+
+fn notify_forced_resets(
+    resets: &[crate::reset_feed::ForcedReset],
+    notified_ids: &mut HashSet<String>,
+    settings: &NotificationSettings,
+    state: &AppState,
+) {
+    if !settings.forced_reset_feed_enabled || !settings.forced_reset_notifications {
+        return;
+    }
+    let now = Utc::now();
+    for reset in resets.iter().filter(|reset| reset.reset_at > now) {
+        if notified_ids.insert(reset.id.clone()) {
+            notifications::show("Codex forced reset", &forced_reset_notification_body(reset));
+            state.mark_forced_reset_notified(reset.id.clone());
+        }
+    }
+}
+
 pub(super) fn update_available_from_phase(phase: &UpdatePhase) -> bool {
     matches!(phase, UpdatePhase::Available(_))
 }
@@ -44,6 +78,7 @@ pub(super) fn start_background_bridge(
         let fallback_attempt = state.last_activation_at;
         let mut notification_settings = state.settings.notifications.clone();
         let mut limit_notifications = HashMap::<ProviderKind, LimitNotificationTracker>::new();
+        let mut forced_reset_notified_ids = HashSet::<String>::new();
         let mut usage_clear_generation = 0_u64;
         let mut pending_usage_clear: Option<(u64, Vec<ProviderKind>)> = None;
         let mut update_phase = updates.snapshot();
@@ -165,6 +200,11 @@ pub(super) fn start_background_bridge(
             ui.use_colored_provider_icons = settings.use_colored_provider_icons;
             ui.replace_chatgpt_logo_with_codex = settings.replace_chatgpt_logo_with_codex;
             *notification_settings = settings.notifications.clone();
+            state.sync_reset_feed(&settings);
+            if !settings.notifications.forced_reset_feed_enabled {
+                state.replace_forced_resets(Vec::new());
+                ui.observe_forced_resets_update();
+            }
             *widgets = settings
                 .tray_widgets
                 .iter()
@@ -266,7 +306,8 @@ pub(super) fn start_background_bridge(
                               widgets: &mut Vec<TrayWidget>,
                               tray: &mut TrayManager,
                               check_for_updates: &mut bool,
-                              notify_on_update: &mut bool| {
+                              notify_on_update: &mut bool,
+                              forced_reset_notified_ids: &mut HashSet<String>| {
             let Some(settings_rx) = settings_rx.as_ref() else {
                 return;
             };
@@ -277,6 +318,12 @@ pub(super) fn start_background_bridge(
                 *check_for_updates = settings.check_for_updates;
                 *notify_on_update = settings.notifications.update_available;
                 apply_settings(ui, set_ui, notification_settings, widgets, tray, settings);
+                notify_forced_resets(
+                    &state.current_forced_resets(),
+                    forced_reset_notified_ids,
+                    notification_settings,
+                    &state,
+                );
             }
         };
 
@@ -373,6 +420,7 @@ pub(super) fn start_background_bridge(
                     &mut tray,
                     &mut check_for_updates,
                     &mut notify_on_update,
+                    &mut forced_reset_notified_ids,
                 );
                 drain_updates(&mut ui, &set_ui, &mut tray, &mut update_phase, &mut widgets);
                 if pump_tray_and_dismiss(
@@ -412,6 +460,7 @@ pub(super) fn start_background_bridge(
                 &mut tray,
                 &mut check_for_updates,
                 &mut notify_on_update,
+                &mut forced_reset_notified_ids,
             );
             drain_updates(&mut ui, &set_ui, &mut tray, &mut update_phase, &mut widgets);
             if pump_tray_and_dismiss(
@@ -427,6 +476,25 @@ pub(super) fn start_background_bridge(
                 std::process::exit(0);
             }
             match events.recv_timeout(Duration::from_millis(16)) {
+                Ok(WorkerEvent::ForcedResetsUpdated(snapshot)) => {
+                    forced_reset_notified_ids.extend(snapshot.notified_ids);
+                    if notification_settings.forced_reset_feed_enabled {
+                        state.replace_forced_resets(snapshot.resets.clone());
+                    } else {
+                        state.replace_forced_resets(Vec::new());
+                    }
+                    ui.observe_forced_resets_update();
+                    notify_forced_resets(
+                        &snapshot.resets,
+                        &mut forced_reset_notified_ids,
+                        &notification_settings,
+                        &state,
+                    );
+                    publish_popup_ui(&set_ui, &ui);
+                }
+                Ok(WorkerEvent::ForcedResetsRefreshFailed(error)) => {
+                    crate::logger::info(format!("Codex reset feed refresh failed: {error}"));
+                }
                 Ok(WorkerEvent::ProviderRequestStarted(provider, kind)) => {
                     ui.request_started(provider, kind);
                     publish_popup_ui(&set_ui, &ui);

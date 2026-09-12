@@ -31,6 +31,8 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let set_usage_stats_enabled = ctx.set_usage_stats_enabled.clone();
     let set_limit_refresh_interval = ctx.set_limit_refresh_interval.clone();
     let set_usage_refresh_interval = ctx.set_usage_refresh_interval.clone();
+    let set_reset_announcement_refresh_interval =
+        ctx.set_reset_announcement_refresh_interval.clone();
     let set_start_at_login = ctx.set_start_at_login.clone();
     let set_show_used_percentage = ctx.set_show_used_percentage.clone();
     let set_show_usage_pace = ctx.set_show_usage_pace.clone();
@@ -50,6 +52,8 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let set_tray_widgets = ctx.set_tray_widgets.clone();
     let set_check_for_updates = ctx.set_check_for_updates.clone();
     let set_notify_on_update = ctx.set_notify_on_update.clone();
+    let set_forced_reset_feed_enabled = ctx.set_forced_reset_feed_enabled.clone();
+    let set_forced_reset_notifications = ctx.set_forced_reset_notifications.clone();
     let hovered_card_id = ctx.hovered_card_id;
     let set_hovered_card_id = ctx.set_hovered_card_id.clone();
     let settings_tx = ctx.settings_tx.clone();
@@ -85,6 +89,7 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
         usage_stats_enabled: set_usage_stats_enabled,
         limit_refresh_interval: set_limit_refresh_interval,
         usage_refresh_interval: set_usage_refresh_interval,
+        reset_announcement_refresh_interval: set_reset_announcement_refresh_interval,
         start_at_login: set_start_at_login,
         show_used_percentage: set_show_used_percentage,
         show_usage_pace: set_show_usage_pace,
@@ -104,6 +109,8 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
         tray_widgets: set_tray_widgets,
         check_for_updates: set_check_for_updates,
         notify_on_update: set_notify_on_update,
+        forced_reset_feed_enabled: set_forced_reset_feed_enabled,
+        forced_reset_notifications: set_forced_reset_notifications,
     };
     let reset_state = import_state.clone();
     let reset_dispatcher = ui_dispatcher.clone();

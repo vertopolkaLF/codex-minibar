@@ -298,6 +298,10 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         }
 
         if view == PopupView::Home {
+            if let Some(card) = forced_reset_card(&state.current_forced_resets()) {
+                body.push(card.with_key("forced-reset-announcements"));
+                has_preceding_section = true;
+            }
             let widgets = visible_popup_widgets(
                 &ui.popup_order,
                 show_total_spend,
@@ -562,6 +566,12 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
 
     let body = build_body(selected_view, false);
     let outgoing_body = pager.outgoing.map(|view| build_body(view, true));
+    let forced_reset_count = state
+        .current_forced_resets()
+        .iter()
+        .filter(|reset| reset.reset_at > Utc::now())
+        .take(3)
+        .count();
 
     let footer_background = match color_scheme {
         // Low-alpha overlay keeps the selected material visible beneath chrome.
@@ -890,7 +900,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         // SizeChanged. Remounting the page is what tab switches already do so
         // the queued on_resize measure can shrink the HWND.
         let body_layout_key = format!(
-            "popup-page-{role}-{}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
+            "popup-page-{role}-{}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
             ui.error.is_some(),
             view.provider()
                 .is_some_and(|provider| ui.has_provider_error(provider)),
@@ -908,6 +918,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             ui.compact_usage_cards,
             ui.usage_stats_enabled,
             ui.settings_revision,
+            forced_reset_count,
             color_scheme as i32,
             view,
         );
