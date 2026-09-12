@@ -2,7 +2,7 @@ use super::*;
 
 use std::collections::HashSet;
 
-fn forced_reset_notification_body(reset: &crate::reset_feed::ForcedReset) -> String {
+fn forced_reset_info_body(reset: &crate::reset_feed::ForcedReset) -> String {
     let local = reset.reset_at.with_timezone(&Local);
     let when = format!(
         "{}, {}",
@@ -11,12 +11,15 @@ fn forced_reset_notification_body(reset: &crate::reset_feed::ForcedReset) -> Str
     );
     let countdown = format_reset_in(Some(reset.reset_at));
     reset.label.as_deref().map_or_else(
-        || format!("Codex limits reset in {countdown} ({when})"),
-        |label| format!("{label}: reset in {countdown} ({when})"),
+        || format!("A possible Codex reset is scheduled for {when} (in {countdown})"),
+        |label| format!("{label}: possible reset on {when} (in {countdown})"),
     )
 }
 
-fn notify_forced_resets(
+/// Notifies only that new feed information arrived. This is intentionally
+/// unrelated to the API-driven `limits_changed` notification: the feed never
+/// proves that a reset actually happened at `reset_at`.
+fn notify_new_forced_reset_info(
     resets: &[crate::reset_feed::ForcedReset],
     notified_ids: &mut HashSet<String>,
     settings: &NotificationSettings,
@@ -28,8 +31,8 @@ fn notify_forced_resets(
     let now = Utc::now();
     for reset in resets.iter().filter(|reset| reset.reset_at > now) {
         if notified_ids.insert(reset.id.clone()) {
-            notifications::show("Codex forced reset", &forced_reset_notification_body(reset));
-            state.mark_forced_reset_notified(reset.id.clone());
+            notifications::show("New Codex reset info", &forced_reset_info_body(reset));
+            state.mark_forced_reset_info_notified(reset.id.clone());
         }
     }
 }
@@ -318,7 +321,7 @@ pub(super) fn start_background_bridge(
                 *check_for_updates = settings.check_for_updates;
                 *notify_on_update = settings.notifications.update_available;
                 apply_settings(ui, set_ui, notification_settings, widgets, tray, settings);
-                notify_forced_resets(
+                notify_new_forced_reset_info(
                     &state.current_forced_resets(),
                     forced_reset_notified_ids,
                     notification_settings,
@@ -484,7 +487,7 @@ pub(super) fn start_background_bridge(
                         state.replace_forced_resets(Vec::new());
                     }
                     ui.observe_forced_resets_update();
-                    notify_forced_resets(
+                    notify_new_forced_reset_info(
                         &snapshot.resets,
                         &mut forced_reset_notified_ids,
                         &notification_settings,

@@ -51,3 +51,8 @@ The app checks immediately on startup and then at the configured interval
 in the user's app-data directory, so a temporary GitHub failure does not erase
 an already confirmed reset and reopening the app does not send the same toast
 again.
+
+The feed notification means only that new possible-reset information arrived;
+it is not confirmation that the reset happened. The `Codex limits reset`
+notification remains driven exclusively by the provider API changing its
+reported limits snapshot, and is never scheduled from `reset_at` in this feed.

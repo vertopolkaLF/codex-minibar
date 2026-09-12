@@ -1,5 +1,4 @@
-use super::persistence::{persist_bool, persist_u8, persist_update};
-use super::shared::settings_section_heading;
+use super::persistence::{persist_bool, persist_u8};
 use super::*;
 
 pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Element>) {
@@ -14,9 +13,6 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let weekly_low_usage_threshold = ctx.weekly_low_usage_threshold;
     let weekly_low_usage_expanded = ctx.weekly_low_usage_expanded;
     let weekly_low_usage_expand_progress = ctx.weekly_low_usage_expand_progress;
-    let forced_reset_feed_enabled = ctx.forced_reset_feed_enabled;
-    let forced_reset_notifications = ctx.forced_reset_notifications;
-    let reset_announcement_refresh_interval = ctx.reset_announcement_refresh_interval;
     let set_activation_success = ctx.set_activation_success.clone();
     let set_activation_failure = ctx.set_activation_failure.clone();
     let set_limits_reset = ctx.set_limits_reset.clone();
@@ -28,10 +24,6 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let set_weekly_low_usage_threshold = ctx.set_weekly_low_usage_threshold.clone();
     let set_weekly_low_usage_expanded = ctx.set_weekly_low_usage_expanded.clone();
     let set_weekly_low_usage_expand_progress = ctx.set_weekly_low_usage_expand_progress.clone();
-    let set_forced_reset_feed_enabled = ctx.set_forced_reset_feed_enabled.clone();
-    let set_forced_reset_notifications = ctx.set_forced_reset_notifications.clone();
-    let set_reset_announcement_refresh_interval =
-        ctx.set_reset_announcement_refresh_interval.clone();
     let hovered_card_id = ctx.hovered_card_id;
     let set_hovered_card_id = ctx.set_hovered_card_id.clone();
     let settings_tx = ctx.settings_tx.clone();
@@ -42,9 +34,6 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let apply_low_usage_threshold = settings_tx.clone();
     let apply_weekly_low_usage_enabled = settings_tx.clone();
     let apply_weekly_low_usage_threshold = settings_tx.clone();
-    let apply_forced_reset_feed_enabled = settings_tx.clone();
-    let apply_forced_reset_notifications = settings_tx.clone();
-    let apply_reset_announcement_refresh_interval = settings_tx.clone();
     (
         "Notifications",
         vec![
@@ -186,74 +175,6 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
                 }),
             )
             .with_key("notif-weekly-low-usage"),
-            settings_section_heading("Codex forced resets").with_key("notif-forced-resets-heading"),
-            settings_toggle_card_with_description(
-                "Check for confirmed forced resets",
-                Some("Reads the app's public GitHub feed and keeps the latest announcement cached."),
-                forced_reset_feed_enabled,
-                move |value| {
-                    persist_bool(
-                        set_forced_reset_feed_enabled.clone(),
-                        apply_forced_reset_feed_enabled.clone(),
-                        value,
-                        |settings, value| {
-                            settings.notifications.forced_reset_feed_enabled = value;
-                        },
-                    );
-                },
-                "notif-forced-reset-feed",
-                hovered_card_id,
-                set_hovered_card_id.clone(),
-            )
-            .with_key("notif-forced-reset-feed"),
-            settings_toggle_card_with_description(
-                "Notify about forced resets",
-                Some("Shows a Windows notification when a future reset is confirmed."),
-                forced_reset_notifications,
-                move |value| {
-                    persist_bool(
-                        set_forced_reset_notifications.clone(),
-                        apply_forced_reset_notifications.clone(),
-                        value,
-                        |settings, value| {
-                            settings.notifications.forced_reset_notifications = value;
-                        },
-                    );
-                },
-                "notif-forced-reset-toast",
-                hovered_card_id,
-                set_hovered_card_id.clone(),
-            )
-            .with_key("notif-forced-reset-toast"),
-            settings_control_card(
-                "Check every",
-                Some("The feed is also checked immediately when the app starts or this option is enabled."),
-                ComboBox::new([
-                    "15 minutes",
-                    "30 minutes",
-                    "1 hour",
-                    "3 hours",
-                    "6 hours",
-                    "12 hours",
-                    "24 hours",
-                ])
-                .selected_index(reset_announcement_refresh_interval.index())
-                .enabled(forced_reset_feed_enabled)
-                .on_selection_changed(move |choice: i32| {
-                    let value = ResetAnnouncementRefreshInterval::from_index(choice);
-                    set_reset_announcement_refresh_interval.call(value);
-                    persist_update(
-                        apply_reset_announcement_refresh_interval.clone(),
-                        move |settings| {
-                            settings.reset_announcement_refresh_interval = value;
-                        },
-                    );
-                }),
-                "notif-forced-reset-interval",
-                hovered_card_id,
-                set_hovered_card_id.clone(),
-            )
-            .with_key("notif-forced-reset-interval"),
         ],
     )
 }

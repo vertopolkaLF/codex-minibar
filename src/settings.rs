@@ -1556,7 +1556,8 @@ pub struct NotificationSettings {
     pub activation_failure: bool,
     pub codex_unavailable: bool,
     pub approaching_reset: bool,
-    /// Notify when a rate-limit window resets (`resets_at` changes).
+    /// Notify when the provider API reports that a rate-limit window reset
+    /// (`resets_at` changes). This is never driven by the public reset feed.
     pub limits_changed: bool,
     /// Notify when remaining session usage drops to [`Self::low_usage_threshold_percent`].
     pub low_usage_enabled: bool,
@@ -1571,7 +1572,8 @@ pub struct NotificationSettings {
     pub update_available: bool,
     /// Read the public GitHub feed containing announced Codex forced resets.
     pub forced_reset_feed_enabled: bool,
-    /// Show a Windows toast when a new future forced reset is confirmed.
+    /// Show a Windows toast when new forced-reset information arrives. This is
+    /// not the API-driven notification that confirms an actual reset.
     pub forced_reset_notifications: bool,
 }
 

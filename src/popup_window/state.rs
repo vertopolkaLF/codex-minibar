@@ -158,7 +158,7 @@ impl AppState {
         );
     }
 
-    pub(super) fn mark_forced_reset_notified(&self, id: String) {
+    pub(super) fn mark_forced_reset_info_notified(&self, id: String) {
         let Ok(worker) = self.reset_feed_worker.lock() else {
             return;
         };
