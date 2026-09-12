@@ -286,37 +286,43 @@ function renderRings(rows: MetricRow[], settings: ActionSettings): string {
   return renderDualRings(rows, settings);
 }
 
-/** Progress ring matching the Stream Deck key look: flat 12-o'clock start, no track, soft fade at the trailing tip. */
+/** Progress ring: dark near 12-o'clock (zero), solid stop at the current value. */
 function fadedRingArc(cx: number, cy: number, radius: number, value: number, color: string, strokeWidth: number): string {
   const clamped = Math.max(0, Math.min(100, value));
-  if (clamped <= 0) return "";
+  const track = `<circle cx="${cx}" cy="${cy}" r="${radius}" fill="none" stroke="#111" stroke-width="${strokeWidth}"/>`;
+  if (clamped <= 0) return track;
 
   const circumference = 2 * Math.PI * radius;
   const progressLen = circumference * clamped / 100;
-  // Soft tip occupies a fixed angular span, capped so short arcs still have a solid head.
+  // Fade occupies the start of the arc; keep a solid head so the stop stays readable.
   const fadeLen = Math.min(progressLen * 0.32, circumference * 0.22, Math.max(0, progressLen - circumference * 0.08));
   const solidLen = Math.max(0, progressLen - fadeLen);
   const rotate = `transform="rotate(-90 ${cx} ${cy})"`;
   const base = `cx="${cx}" cy="${cy}" r="${radius}" fill="none" stroke="${color}" stroke-width="${strokeWidth}" stroke-linecap="butt" ${rotate}`;
 
-  const parts: string[] = [];
-  if (solidLen > 0.5) {
-    parts.push(`<circle ${base} stroke-dasharray="${solidLen} ${circumference}"/>`);
-  }
-
+  const parts: string[] = [track];
   const fadeSteps = 18;
   for (let i = 0; i < fadeSteps; i++) {
     const t0 = i / fadeSteps;
     const t1 = (i + 1) / fadeSteps;
-    const start = solidLen + fadeLen * t0;
+    const start = fadeLen * t0;
     const segLen = Math.max(0.75, fadeLen * (t1 - t0) + 0.6);
-    // Ease-out opacity so the tip dissolves into black instead of a hard cut.
-    const opacity = Math.pow(1 - t0, 1.35);
+    // Dark at zero, ramping up toward the stop.
+    const opacity = 0.12 + 0.88 * Math.pow(t0, 1.1);
     if (opacity < 0.02) continue;
     parts.push(
       `<circle ${base} stroke-opacity="${opacity.toFixed(3)}" stroke-dasharray="${segLen.toFixed(2)} ${circumference.toFixed(2)}" stroke-dashoffset="${(-start).toFixed(2)}"/>`,
     );
   }
+
+  if (solidLen > 0.5) {
+    parts.push(`<circle ${base} stroke-dasharray="${solidLen} ${circumference}" stroke-dashoffset="${(-fadeLen).toFixed(2)}"/>`);
+  }
+
+  const theta = -Math.PI / 2 + (clamped / 100) * 2 * Math.PI;
+  const capX = cx + radius * Math.cos(theta);
+  const capY = cy + radius * Math.sin(theta);
+  parts.push(`<circle cx="${capX.toFixed(2)}" cy="${capY.toFixed(2)}" r="${(strokeWidth / 2).toFixed(2)}" fill="${color}"/>`);
 
   return parts.join("");
 }
