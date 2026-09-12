@@ -1,10 +1,14 @@
 use super::*;
 use crate::usage::{TokenUsage, UsageStatistics};
 use chrono::NaiveDate;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 const HEIGHT: f64 = 56.0;
 const MAX_BARS: usize = 60;
+const USAGE_CARD_PAD: f64 = 12.0;
+const USAGE_CARD_SECTION_GAP: f64 = 12.0;
+const USAGE_CARD_FOOTER_GAP: f64 = 6.0;
 
 mod models;
 
@@ -464,22 +468,6 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
                     }
                 });
             }
-            if active_hover == Some(date) {
-                let markup = if by_model {
-                    model_data.map(|models| {
-                        models.tooltip(bucket, cost_mode, props.provider, props.scheme, model_page)
-                    })
-                } else {
-                    Some(bucket_tooltip_xaml(bucket, props.scheme))
-                };
-                if let Some(markup) = markup {
-                    hit_target = hit_target.tooltip_with(
-                        Tooltip::xaml(markup)
-                            .placement(TooltipPlacement::Top)
-                            .open(true),
-                    );
-                }
-            }
             grid((column, hit_target))
                 .rows([GridLength::Star(1.0)])
                 .columns([GridLength::Star(1.0)])
@@ -519,7 +507,10 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
         .rows([GridLength::Auto])
         .columns([GridLength::Auto])
         .height(HEIGHT)
-        .on_pointer_exited(move || exit.call(None));
+        .on_pointer_exited({
+            let provider = props.provider;
+            move || dismiss_activity_hover(provider, &exit)
+        });
 
     let legend: Vec<Element> = Series::ALL
         .into_iter()
@@ -734,7 +725,625 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
     let footer = grid((legend, selectors))
         .columns([GridLength::Star(1.0), GridLength::Auto])
         .rows([GridLength::Auto]);
-    vstack((chart, footer)).spacing(6.0).into()
+    let tip = active_hover.and_then(|date| {
+        data.iter().find(|bucket| bucket.first == date).and_then(|bucket| {
+            if by_model {
+                model_data.map(|models| {
+                    activity_tip_from_models(
+                        bucket,
+                        models,
+                        cost_mode,
+                        props.provider,
+                        props.scheme,
+                        model_page,
+                    )
+                })
+            } else {
+                Some(activity_tip_from_bucket(bucket, props.provider, props.scheme))
+            }
+        })
+    });
+    publish_activity_page_tip(tip);
+
+    let metrics = usage_card_metrics(props.provider, &props.statistics);
+    border(
+        vstack((
+            metrics,
+            vstack((chart, footer)).spacing(USAGE_CARD_FOOTER_GAP),
+        ))
+        .spacing(USAGE_CARD_SECTION_GAP),
+    )
+    .corner_radius(f64::from(popup::CARD_CORNER_RADIUS_DIP))
+    .padding(Thickness::uniform(USAGE_CARD_PAD))
+    .background(ThemeRef::CardBackground)
+    .border_thickness(Thickness::uniform(1.0))
+    .border_brush(ThemeRef::CardStroke)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .with_key(format!("activity-card-{}", props.provider.id()))
+    .into()
+}
+
+const TOOLTIP_PAD_X: f64 = 14.0;
+const TOOLTIP_PAD_Y: f64 = 8.0;
+const TOOLTIP_CURSOR_GAP: f64 = 10.0;
+const TOOLTIP_EDGE_INSET: f64 = 4.0;
+const TOOLTIP_ROW_GAP: f64 = 8.0;
+const TOOLTIP_VALUE_GAP: f64 = 24.0;
+const TOOLTIP_CHAR_CAPTION: f64 = 6.5;
+const TOOLTIP_CHAR_TITLE: f64 = 8.0;
+
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct ActivityTipData {
+    provider: ProviderKind,
+    title: String,
+    kind: ActivityTipKind,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum ActivityTipKind {
+    Usage {
+        total: String,
+        cost: String,
+        requests: String,
+        series: Vec<(u8, String)>,
+    },
+    Model {
+        metric: String,
+        rows: Vec<(String, String, Color)>,
+        footer: Option<String>,
+    },
+}
+
+struct ActivityTooltipTrack {
+    host: Option<windows_core::IInspectable>,
+    cursor: Option<(f64, f64)>,
+    tip_width: f64,
+    tip_height: f64,
+}
+
+thread_local! {
+    static ACTIVITY_TOOLTIP_TRACK: RefCell<ActivityTooltipTrack> = RefCell::new(ActivityTooltipTrack {
+        host: None,
+        cursor: None,
+        tip_width: 0.0,
+        tip_height: 0.0,
+    });
+    static ACTIVITY_TOOLTIP_MOUNTED: Callback<Option<windows_core::IInspectable>> =
+        Callback::new(|native: Option<windows_core::IInspectable>| {
+            if let Some(host) = native.clone() {
+                let _ = windows_reactor::set_hit_test_visible(host, false);
+            }
+            ACTIVITY_TOOLTIP_TRACK.with(|track| {
+                track.borrow_mut().host = native;
+            });
+            apply_activity_tooltip_offset();
+        });
+    static ACTIVITY_PAGE_TIP: RefCell<Option<SetState<Option<ActivityTipData>>>> =
+        RefCell::new(None);
+    static ACTIVITY_PAGE_TIP_LAST: RefCell<Option<ActivityTipData>> = RefCell::new(None);
+}
+
+pub(super) fn install_activity_page_tip(set_tip: SetState<Option<ActivityTipData>>) {
+    ACTIVITY_PAGE_TIP.with(|cell| {
+        *cell.borrow_mut() = Some(set_tip);
+    });
+}
+
+fn publish_activity_page_tip(data: Option<ActivityTipData>) {
+    ACTIVITY_PAGE_TIP_LAST.with(|last| {
+        if *last.borrow() == data {
+            return;
+        }
+        *last.borrow_mut() = data.clone();
+        ACTIVITY_PAGE_TIP.with(|cell| {
+            if let Some(set_tip) = cell.borrow().as_ref() {
+                set_tip.call(data);
+            }
+        });
+    });
+}
+
+pub(super) fn remember_activity_page_cursor(x: f64, y: f64) {
+    ACTIVITY_TOOLTIP_TRACK.with(|track| {
+        track.borrow_mut().cursor = Some((x, y));
+    });
+    apply_activity_tooltip_offset();
+}
+
+pub(super) fn dismiss_activity_page_tip() {
+    ACTIVITY_TOOLTIP_TRACK.with(|track| {
+        let mut track = track.borrow_mut();
+        track.cursor = None;
+        track.host = None;
+    });
+    publish_activity_page_tip(None);
+}
+
+fn dismiss_activity_hover(_provider: ProviderKind, set_hover: &SetState<Option<NaiveDate>>) {
+    dismiss_activity_page_tip();
+    set_hover.call(None);
+}
+
+fn apply_activity_tooltip_offset() {
+    ACTIVITY_TOOLTIP_TRACK.with(|track| {
+        let track = track.borrow();
+        let Some(host) = track.host.clone() else {
+            return;
+        };
+        let Some((cursor_x, cursor_y)) = track.cursor else {
+            return;
+        };
+        let page_width = activity_page_width();
+        let visible = (popup::body_viewport_height_dip() - 32.0).max(80.0);
+        let left = activity_tooltip_offset_x(cursor_x, track.tip_width, page_width);
+        let top = activity_tooltip_offset_y(cursor_y, track.tip_height, visible);
+        let _ = windows_reactor::set_translation_xy(host, left as f32, top as f32);
+    });
+}
+
+fn activity_page_width() -> f64 {
+    f64::from(popup::POPUP_WIDTH) - 2.0 - 32.0
+}
+
+fn usage_card_metrics(provider: ProviderKind, statistics: &UsageStatistics) -> Element {
+    if is_cost_provider(provider) {
+        return grid((
+            usage_value_metric(
+                "Today",
+                format_spend(statistics.today.estimated_cost_microusd),
+                statistics.today.requests,
+            ),
+            usage_value_metric(
+                &format!("Last {} days", statistics.history_days),
+                format_spend(statistics.history.estimated_cost_microusd),
+                statistics.history.requests,
+            )
+            .grid_column(1),
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
+        .rows([GridLength::Auto])
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .into();
+    }
+    let period = statistics.history_days;
+    let total = format_token_count(statistics.history.total_tokens());
+    let today = format_token_count(statistics.today.total_tokens());
+    let today_value = statistics
+        .today
+        .estimated_api_value_usd()
+        .map(format_usd)
+        .unwrap_or_else(|| "No data".into());
+    let history_value = statistics
+        .history
+        .estimated_api_value_usd()
+        .map(format_usd)
+        .unwrap_or_else(|| "No data".into());
+    grid((
+        usage_tokens_and_cost_metric("Today", today, today_value),
+        usage_tokens_and_cost_metric(&format!("Last {period} days"), total, history_value)
+            .grid_column(1),
+    ))
+    .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
+    .rows([GridLength::Auto])
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .into()
+}
+
+fn activity_tooltip_offset_x(cursor_x: f64, tip_width: f64, area_width: f64) -> f64 {
+    let min_x = TOOLTIP_EDGE_INSET;
+    let max_x = (area_width - TOOLTIP_EDGE_INSET - tip_width).max(min_x);
+    let prefer_right = cursor_x + TOOLTIP_CURSOR_GAP + tip_width <= area_width - TOOLTIP_EDGE_INSET;
+    let raw = if prefer_right {
+        cursor_x + TOOLTIP_CURSOR_GAP
+    } else {
+        cursor_x - TOOLTIP_CURSOR_GAP - tip_width
+    };
+    raw.clamp(min_x, max_x)
+}
+
+fn activity_tooltip_offset_y(cursor_y: f64, tip_height: f64, area_height: f64) -> f64 {
+    let min_y = TOOLTIP_EDGE_INSET;
+    let max_y = (area_height - TOOLTIP_EDGE_INSET - tip_height).max(min_y);
+    let prefer_below = cursor_y + TOOLTIP_CURSOR_GAP + tip_height <= area_height - TOOLTIP_EDGE_INSET;
+    let raw = if prefer_below {
+        cursor_y + TOOLTIP_CURSOR_GAP
+    } else {
+        cursor_y - TOOLTIP_CURSOR_GAP - tip_height
+    };
+    raw.clamp(min_y, max_y)
+}
+
+fn remember_activity_tip_size(tip_width: f64, tip_height: f64) {
+    ACTIVITY_TOOLTIP_TRACK.with(|track| {
+        let mut track = track.borrow_mut();
+        track.tip_width = tip_width;
+        track.tip_height = tip_height;
+    });
+}
+
+fn activity_tooltip_row(label: impl Into<Element>, amount: impl Into<String>) -> Element {
+    grid((
+        label.into().vertical_alignment(VerticalAlignment::Center),
+        caption(amount.into())
+            .font_weight(600)
+            .foreground(ThemeRef::Accent)
+            .horizontal_alignment(HorizontalAlignment::Right)
+            .vertical_alignment(VerticalAlignment::Center)
+            .grid_column(1),
+    ))
+    .columns([GridLength::Star(1.0), GridLength::Auto])
+    .column_spacing(TOOLTIP_VALUE_GAP)
+    .rows([GridLength::Auto])
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .into()
+}
+
+fn activity_tooltip_shell(
+    title: String,
+    rows: Vec<Element>,
+    tip_width: f64,
+    tip_height: f64,
+    body_key: impl Into<String>,
+) -> Element {
+    remember_activity_tip_size(tip_width, tip_height);
+    let body_width = (tip_width - TOOLTIP_PAD_X * 2.0).max(1.0);
+    let mut host = vstack((border(
+        vstack((
+            body_strong(title).with_key("activity-tip-title"),
+            vstack(rows)
+                .spacing(0.0)
+                .width(body_width)
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .with_key(body_key),
+        ))
+        .spacing(10.0)
+        .with_key("activity-tip-body"),
+    )
+    .padding(Thickness {
+        left: TOOLTIP_PAD_X,
+        top: TOOLTIP_PAD_Y,
+        right: TOOLTIP_PAD_X,
+        bottom: TOOLTIP_PAD_Y,
+    })
+    .corner_radius(6.0)
+    .background(ThemeRef::SolidBackground)
+    .border_thickness(Thickness::uniform(1.0))
+    .border_brush(ThemeRef::CardStroke)
+    .horizontal_alignment(HorizontalAlignment::Left),));
+    host.mounted = Some(ACTIVITY_TOOLTIP_MOUNTED.with(Callback::clone));
+    apply_activity_tooltip_offset();
+    host.horizontal_alignment(HorizontalAlignment::Left)
+        .vertical_alignment(VerticalAlignment::Top)
+        .relative_align_left()
+        .relative_align_top()
+        .with_key("activity-tip-host")
+        .into()
+}
+
+fn bucket_title(bucket: &Bucket) -> String {
+    if bucket.first == bucket.last {
+        bucket.first.format("%a, %b %-d, %Y").to_string()
+    } else {
+        format!(
+            "{} – {}",
+            bucket.first.format("%b %-d, %Y"),
+            bucket.last.format("%b %-d, %Y")
+        )
+    }
+}
+
+fn activity_tip_from_bucket(
+    bucket: &Bucket,
+    provider: ProviderKind,
+    _scheme: ColorScheme,
+) -> ActivityTipData {
+    let usage = &bucket.usage;
+    let cost = if usage.priced_requests > 0 {
+        format_spend(usage.estimated_cost_microusd)
+    } else if usage.requests == 0 {
+        "$0.00".into()
+    } else {
+        "Unavailable".into()
+    };
+    let requests = if usage.priced_requests > 0 && usage.priced_requests < usage.requests {
+        format!(
+            "{} requests · {} priced",
+            usage.requests, usage.priced_requests
+        )
+    } else {
+        format!("{} requests", usage.requests)
+    };
+    ActivityTipData {
+        provider,
+        title: bucket_title(bucket),
+        kind: ActivityTipKind::Usage {
+            total: format_token_count(usage.total_tokens()),
+            cost,
+            requests,
+            series: Series::ALL
+                .into_iter()
+                .map(|series| (series as u8, format_token_count(series.value(usage))))
+                .collect(),
+        },
+    }
+}
+
+fn activity_tip_from_models(
+    bucket: &Bucket,
+    models: &models::ModelData,
+    cost: bool,
+    provider: ProviderKind,
+    scheme: ColorScheme,
+    page: usize,
+) -> ActivityTipData {
+    let (entries, total) = models.page_rows(bucket.first, cost, scheme, page);
+    let page = page.min(models.pages(bucket.first).saturating_sub(1));
+    let footer = if entries.is_empty() {
+        Some("No model data".into())
+    } else if total > models::PAGE_SIZE {
+        Some(format!(
+            "{}–{} of {total} models · Scroll for more",
+            page * models::PAGE_SIZE + 1,
+            ((page + 1) * models::PAGE_SIZE).min(total)
+        ))
+    } else {
+        None
+    };
+    ActivityTipData {
+        provider,
+        title: bucket_title(bucket),
+        kind: ActivityTipKind::Model {
+            metric: if cost {
+                "Cost (USD) by model".into()
+            } else {
+                "Tokens by model".into()
+            },
+            rows: entries,
+            footer,
+        },
+    }
+}
+
+pub(super) fn activity_page_tooltip(data: &ActivityTipData, scheme: ColorScheme) -> Element {
+    match &data.kind {
+        ActivityTipKind::Usage {
+            total,
+            cost,
+            requests,
+            series,
+        } => activity_usage_tooltip(
+            data.provider,
+            data.title.clone(),
+            total,
+            cost,
+            requests,
+            series,
+            scheme,
+        ),
+        ActivityTipKind::Model {
+            metric,
+            rows,
+            footer,
+        } => activity_models_tooltip(
+            data.provider,
+            data.title.clone(),
+            metric,
+            rows,
+            footer.as_deref(),
+            scheme,
+        ),
+    }
+}
+
+fn activity_usage_tooltip(
+    _provider: ProviderKind,
+    title: String,
+    total: &str,
+    cost: &str,
+    requests: &str,
+    series: &[(u8, String)],
+    scheme: ColorScheme,
+) -> Element {
+    let mut name_width = 16.0 * TOOLTIP_CHAR_CAPTION;
+    let mut amount_width = total.chars().count().max(cost.chars().count()) as f64 * TOOLTIP_CHAR_CAPTION;
+    let mut rows: Vec<Element> = vec![
+        grid((
+            vstack((
+                caption("Tokens").foreground(ThemeRef::SecondaryText),
+                text_block(total.clone())
+                    .font_size(20.0)
+                    .font_weight(600)
+                    .with_key("activity-tip-tokens"),
+            ))
+            .spacing(2.0),
+            vstack((
+                caption("Cost")
+                    .foreground(ThemeRef::SecondaryText)
+                    .horizontal_alignment(HorizontalAlignment::Right),
+                text_block(cost.clone())
+                    .font_size(16.0)
+                    .font_weight(600)
+                    .foreground(ThemeRef::Accent)
+                    .horizontal_alignment(HorizontalAlignment::Right)
+                    .with_key("activity-tip-cost"),
+            ))
+            .spacing(2.0)
+            .horizontal_alignment(HorizontalAlignment::Right)
+            .grid_column(1),
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Auto])
+        .column_spacing(12.0)
+        .rows([GridLength::Auto])
+        .margin(Thickness {
+            left: 0.0,
+            top: 0.0,
+            right: 0.0,
+            bottom: 6.0,
+        })
+        .with_key("activity-tip-hero")
+        .into(),
+        border(Element::Empty)
+            .height(1.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .background(ThemeRef::DividerStroke)
+            .margin(Thickness {
+                left: 0.0,
+                top: 0.0,
+                right: 0.0,
+                bottom: 6.0,
+            })
+            .with_key("activity-tip-rule")
+            .into(),
+    ];
+
+    for (index, amount) in series {
+        let Some(series) = Series::ALL.get(*index as usize).copied() else {
+            continue;
+        };
+        name_width = name_width.max(series.menu_label().chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
+        amount_width = amount_width.max(amount.chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
+        let label = hstack((
+            border(Element::Empty)
+                .width(6.0)
+                .height(6.0)
+                .corner_radius(3.0)
+                .background(series.brush(scheme))
+                .vertical_alignment(VerticalAlignment::Center)
+                .with_key(format!("activity-tip-dot-{}", series.label())),
+            caption(series.menu_label())
+                .foreground(ThemeRef::SecondaryText)
+                .vertical_alignment(VerticalAlignment::Center),
+        ))
+        .spacing(TOOLTIP_ROW_GAP)
+        .with_key(format!("activity-tip-label-{}", series.label()));
+        rows.push(
+            border(activity_tooltip_row(label, amount.clone()).with_key(format!(
+                "activity-tip-row-{}",
+                series.label()
+            )))
+            .padding(Thickness {
+                left: 0.0,
+                top: 0.0,
+                right: 0.0,
+                bottom: 6.0,
+            })
+            .with_key(format!("activity-tip-slot-{}", series.label()))
+            .into(),
+        );
+    }
+    rows.push(
+        caption(requests.to_owned())
+            .foreground(ThemeRef::SecondaryText)
+            .with_key("activity-tip-requests")
+            .into(),
+    );
+
+    let inner_width = (6.0 + TOOLTIP_ROW_GAP + name_width + TOOLTIP_VALUE_GAP + amount_width)
+        .max(5.0 * TOOLTIP_CHAR_CAPTION + 12.0 + amount_width);
+    let tip_width =
+        (title.chars().count() as f64 * TOOLTIP_CHAR_TITLE).max(inner_width) + TOOLTIP_PAD_X * 2.0;
+    let tip_height = TOOLTIP_PAD_Y * 2.0 + 20.0 + 10.0 + 44.0 + 7.0 + 3.0 * 26.0 + 16.0;
+    activity_tooltip_shell(
+        title,
+        rows,
+        tip_width,
+        tip_height,
+        format!("activity-tip-rows-{}", scheme as i32),
+    )
+}
+
+fn activity_models_tooltip(
+    provider: ProviderKind,
+    title: String,
+    metric: &str,
+    entries: &[(String, String, Color)],
+    footer: Option<&str>,
+    scheme: ColorScheme,
+) -> Element {
+    let mut name_width = 14.0 * TOOLTIP_CHAR_CAPTION;
+    let mut amount_width = 6.0 * TOOLTIP_CHAR_CAPTION;
+    let mut rows: Vec<Element> = vec![
+        caption(metric.to_owned())
+            .foreground(ThemeRef::SecondaryText)
+            .margin(Thickness {
+                left: 0.0,
+                top: 0.0,
+                right: 0.0,
+                bottom: 6.0,
+            })
+            .with_key("activity-tip-metric")
+            .into(),
+    ];
+    for slot in 0..models::PAGE_SIZE {
+        let hidden = slot >= entries.len();
+        let (name, amount, color) = entries.get(slot).cloned().unwrap_or_else(|| {
+            (String::new(), String::new(), Color::transparent())
+        });
+        if !hidden {
+            name_width = name_width.max(name.chars().count().min(28) as f64 * TOOLTIP_CHAR_CAPTION);
+            amount_width = amount_width.max(amount.chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
+        }
+        let label = hstack((
+            border(Element::Empty)
+                .width(6.0)
+                .height(6.0)
+                .corner_radius(3.0)
+                .background(color)
+                .vertical_alignment(VerticalAlignment::Center)
+                .with_key(format!("activity-tip-model-dot-{slot}")),
+            caption(name)
+                .foreground(ThemeRef::SecondaryText)
+                .vertical_alignment(VerticalAlignment::Center),
+        ))
+        .spacing(TOOLTIP_ROW_GAP)
+        .with_key(format!("activity-tip-model-label-{slot}"));
+        let mut slot_el = border(
+            activity_tooltip_row(label, amount).with_key(format!("activity-tip-model-row-{slot}")),
+        )
+        .opacity(if hidden { 0.0 } else { 1.0 })
+        .with_key(format!("activity-tip-model-slot-{slot}"));
+        if hidden {
+            slot_el = slot_el.height(0.0);
+        } else {
+            slot_el = slot_el.padding(Thickness {
+                left: 0.0,
+                top: 0.0,
+                right: 0.0,
+                bottom: 6.0,
+            });
+        }
+        rows.push(slot_el.into());
+    }
+    if let Some(footer) = footer {
+        rows.push(
+            caption(footer.to_owned())
+                .foreground(ThemeRef::SecondaryText)
+                .with_key("activity-tip-model-footer")
+                .into(),
+        );
+    }
+    let visible = if entries.is_empty() { 1 } else { entries.len() };
+    let paging = usize::from(footer.is_some() && !entries.is_empty());
+    let inner_width = 6.0 + TOOLTIP_ROW_GAP + name_width + TOOLTIP_VALUE_GAP + amount_width;
+    let tip_width =
+        (title.chars().count() as f64 * TOOLTIP_CHAR_TITLE).max(inner_width) + TOOLTIP_PAD_X * 2.0;
+    let tip_height = TOOLTIP_PAD_Y * 2.0
+        + 20.0
+        + 10.0
+        + 22.0
+        + visible as f64 * 26.0
+        + paging as f64 * 16.0;
+    activity_tooltip_shell(
+        title,
+        rows,
+        tip_width,
+        tip_height,
+        format!(
+            "activity-tip-models-{}-{}",
+            provider.id(),
+            scheme as i32
+        ),
+    )
 }
 
 #[cfg(test)]

@@ -87,6 +87,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let (overview_range, set_overview_range) = cx.use_state(OverviewRange::default());
     let (overview_breakdown, set_overview_breakdown) = cx.use_state(BreakdownMode::default());
     let (overview_chart_hover, set_overview_chart_hover) = cx.use_state(None::<usize>);
+    let (activity_page_tip, set_activity_page_tip) = cx.use_state(None::<ActivityTipData>);
+    install_activity_page_tip(set_activity_page_tip);
     let (pager, pager_dispatch) = cx.use_reducer_fn(reduce_pager, PagerState::default());
     cx.use_effect((), {
         let pager_dispatch = pager_dispatch.clone();
@@ -258,6 +260,9 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let show_provider_tabs = show_provider_icon_tabs;
     let show_footer_tabs = true;
     let selected_view = pager.current;
+    if selected_view == PopupView::Usage {
+        dismiss_activity_page_tip();
+    }
     let show_total_spend = ui.usage_stats_enabled
         && ui.show_total_spend_on_all_tab
         && total_spend_provider_count(
@@ -997,7 +1002,29 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 popup::set_client_height_from_body_content(height);
             });
         }
-        scroll_viewer(content.with_key(body_layout_key))
+        let page: Element = if view == PopupView::Usage {
+            content.with_key(body_layout_key).into()
+        } else {
+            let mut page_layers = vec![content
+                .relative_align_left()
+                .relative_align_right()
+                .relative_align_top()
+                .with_key("popup-page-body")
+                .into()];
+            if let Some(tip) = activity_page_tip.as_ref() {
+                page_layers.push(activity_page_tooltip(tip, color_scheme));
+            }
+            relative_panel(page_layers)
+                .on_pointer_entered(move |info: PointerEventInfo| {
+                    remember_activity_page_cursor(info.x, info.y);
+                })
+                .on_pointer_moved(move |info: PointerEventInfo| {
+                    remember_activity_page_cursor(info.x, info.y);
+                })
+                .with_key(body_layout_key)
+                .into()
+        };
+        scroll_viewer(page)
             .horizontal_scroll_bar_visibility(ScrollBarVisibility::Disabled)
             .vertical_scroll_bar_visibility(if measure_height {
                 ScrollBarVisibility::Auto
