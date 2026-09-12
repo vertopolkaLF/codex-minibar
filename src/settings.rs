@@ -199,13 +199,6 @@ impl BottomBarSize {
             Self::Compact => 18.0,
         }
     }
-
-    pub const fn update_button_padding(self) -> f64 {
-        match self {
-            Self::Comfortable => 12.0,
-            Self::Compact => 10.0,
-        }
-    }
 }
 
 /// Discrete popup corner-radius choices. The historical 8 DIP radius is the

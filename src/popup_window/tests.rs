@@ -313,6 +313,14 @@ fn swap_chain_strip_keys_include_identity_inputs_without_hover_state() {
         footer_actions_key(false, ColorScheme::Dark),
         footer_actions_key(false, ColorScheme::Light)
     );
+
+    let without_update = provider_tab_strip_viewport_width(false);
+    let with_update = provider_tab_strip_viewport_width(true);
+    let size = popup::bottom_bar_size();
+    assert_eq!(
+        without_update - with_update,
+        size.icon_button_size() + size.action_spacing()
+    );
 }
 
 #[test]

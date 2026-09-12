@@ -613,7 +613,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             provider_tab_count,
             ui.usage_stats_enabled,
         );
-        let tab_viewport_width = provider_tab_strip_viewport_width();
+        let tab_viewport_width =
+            provider_tab_strip_viewport_width(ui.update_version.is_some());
         let tab_max_offset = (tab_content_width - tab_viewport_width).max(0.0);
         let tab_scroll_x = tab_scroll_x.clamp(0.0, tab_max_offset);
         let on_tab_wheel = Callback::new({
@@ -829,24 +830,20 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 ];
                 if ui.update_version.is_some() {
                     actions.push(
-                        update_accent_button("Update", || {
-                            if let Err(error) = crate::updater::apply_pending_update() {
-                                eprintln!("failed to apply update: {error:#}");
-                                notifications::show("Update failed", &format!("{error:#}"));
-                            }
-                        })
-                        .height(bottom_bar_size.icon_button_size())
-                        .min_height(bottom_bar_size.icon_button_size())
-                        .max_height(bottom_bar_size.icon_button_size())
-                        .padding(Thickness {
-                            left: bottom_bar_size.update_button_padding(),
-                            top: 0.0,
-                            right: bottom_bar_size.update_button_padding(),
-                            bottom: 0.0,
-                        })
-                        .vertical_alignment(VerticalAlignment::Center)
-                        .with_key("footer-update")
-                        .into(),
+                        accent_icon_button(
+                            "update",
+                            "fluent-arrow-download",
+                            "Install update",
+                            color_scheme,
+                            &hovered_action,
+                            set_hovered_action.clone(),
+                            || {
+                                if let Err(error) = crate::updater::apply_pending_update() {
+                                    eprintln!("failed to apply update: {error:#}");
+                                    notifications::show("Update failed", &format!("{error:#}"));
+                                }
+                            },
+                        ),
                     );
                 }
                 actions

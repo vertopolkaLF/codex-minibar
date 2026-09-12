@@ -30,7 +30,6 @@ use crate::{
         PopupWidgetKind, ProviderKind, Settings, TimeFormat, TotalSpendPeriod,
         TotalSpendPresentation, TrayWidget,
     },
-    settings_controls::update_accent_button,
     tray::{TrayManager, TrayMenuAction},
     updater::{UpdateController, UpdatePhase},
     usage_overview::{BreakdownMode, OverviewMetric, OverviewRange, build_overview_snapshot},

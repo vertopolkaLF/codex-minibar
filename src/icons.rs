@@ -15,6 +15,9 @@ pub fn geom(name: &str) -> IconGeom {
         "fluent-refresh" | "arrows-clockwise" | "popup-refresh" => {
             include_str!("../assets/icons/fluent-arrow-sync-24-filled.svg")
         }
+        "fluent-arrow-download" => {
+            include_str!("../assets/icons/fluent-arrow-download-24-filled.svg")
+        }
         "fluent-settings" | "sliders" | "popup-settings" => {
             include_str!("../assets/icons/fluent-settings-20-filled.svg")
         }
