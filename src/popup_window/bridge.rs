@@ -407,13 +407,22 @@ pub(super) fn start_background_bridge(
                     crate::streamdeck::Command::OpenPopup { provider } => {
                         let ui_dispatcher = ui_dispatcher.clone();
                         ui_dispatcher.dispatch(move || {
+                            if popup::is_visible() {
+                                // Match tray-click toggle: a second press dismisses
+                                // the flyout. Keep it when Settings is using it as
+                                // a live preview.
+                                if !crate::settings_window::is_open() {
+                                    popup::hide();
+                                }
+                                return;
+                            }
                             match provider {
                                 Some(provider) =>
                                     crate::popup_window::request_provider_view(provider),
                                 None => crate::popup_window::request_home_view(),
                             }
                             if popup::prepare_show_on_ui_thread() {
-                                popup::show_near_cursor();
+                                popup::show_on_primary();
                             }
                         });
                     }

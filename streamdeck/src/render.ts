@@ -7,6 +7,7 @@ export type Presentation = "numbers" | "bars" | "rings" | "reset_time" | "reset_
 export type WidgetKind = "single_limit" | "dual_limit";
 export type ResetDisplay = "countdown" | "time" | "hidden";
 export type ClickAction = "open_popup" | "open_provider" | "cycle_provider";
+export type KeyFont = "inter" | "segoe" | "arial" | "consolas";
 
 export interface ActionSettings extends JsonObject {
   provider: string;
@@ -17,6 +18,7 @@ export interface ActionSettings extends JsonObject {
   resetDisplay: ResetDisplay;
   valueMode: ValueMode;
   showPercentSymbol: boolean;
+  font: KeyFont;
   showCountdown: boolean;
   clickAction: ClickAction;
   cycleProviders: string[];
@@ -32,6 +34,7 @@ export const DEFAULT_SETTINGS: ActionSettings = {
   resetDisplay: "countdown",
   valueMode: "remaining",
   showPercentSymbol: true,
+  font: "inter",
   showCountdown: true,
   clickAction: "open_popup",
   cycleProviders: ["codex", "claude", "cursor"],
@@ -64,6 +67,29 @@ function normalizeResetDisplay(value: unknown): ResetDisplay {
   }
 }
 
+function normalizeFont(value: unknown): KeyFont {
+  switch (value) {
+    case "segoe":
+    case "arial":
+    case "consolas":
+      return value;
+    default:
+      return "inter";
+  }
+}
+
+// Stream Deck's SVG rasterizer treats font-family as a single family name, not a CSS stack.
+const FONT_FAMILIES: Record<KeyFont, string> = {
+  inter: "Inter",
+  segoe: "Segoe UI",
+  arial: "Arial",
+  consolas: "Consolas",
+};
+
+function fontFamily(settings: ActionSettings): string {
+  return FONT_FAMILIES[settings.font] ?? FONT_FAMILIES.inter;
+}
+
 export function normalizeSettings(settings: Partial<ActionSettings> | undefined): ActionSettings {
   const legacyMetricIds = settings?.metricIds?.filter(Boolean) ?? [];
   const widget = normalizeWidget(
@@ -83,6 +109,7 @@ export function normalizeSettings(settings: Partial<ActionSettings> | undefined)
     presentation: normalizePresentation(settings?.presentation),
     resetDisplay,
     showPercentSymbol: settings?.showPercentSymbol !== false,
+    font: normalizeFont(settings?.font),
     metricIds: legacyMetricIds.length ? legacyMetricIds : DEFAULT_SETTINGS.metricIds,
     cycleProviders: settings?.cycleProviders?.length ? settings.cycleProviders : DEFAULT_SETTINGS.cycleProviders,
     cycleIndex: Math.max(0, settings?.cycleIndex ?? 0),
@@ -216,24 +243,25 @@ function svg(body: string): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">${body}</svg>`;
 }
 
-function renderOffline(): string {
-  return svg(`<text x="72" y="88" text-anchor="middle" font-family="Segoe UI,Arial" font-size="72" font-weight="700" fill="#8490a3">?</text>`);
+function renderOffline(settings: ActionSettings): string {
+  return svg(`<text x="72" y="88" text-anchor="middle" font-family="${fontFamily(settings)}" font-size="72" font-weight="700" fill="#8490a3">?</text>`);
 }
 
-function renderNoData(): string {
-  return svg(`<text x="72" y="88" text-anchor="middle" font-family="Segoe UI,Arial" font-size="62" font-weight="700" fill="#8490a3">?</text>`);
+function renderNoData(settings: ActionSettings): string {
+  return svg(`<text x="72" y="88" text-anchor="middle" font-family="${fontFamily(settings)}" font-size="62" font-weight="700" fill="#8490a3">?</text>`);
 }
 
 function renderNumbers(rows: MetricRow[], settings: ActionSettings): string {
   const fontSize = rows.length === 1 ? 72 : rows.length === 2 ? 54 : 40;
   const positions = rows.length === 1 ? [86] : rows.length === 2 ? [63, 108] : [48, 84, 120];
+  const font = fontFamily(settings);
   const numbers = rows.map((row, index) => {
     const value = displayedValue(row, settings);
     const text = formatPercent(value, settings);
-    return `<text x="72" y="${positions[index]}" text-anchor="middle" font-family="Segoe UI,Arial" font-size="${fontSize}" font-weight="700" fill="${statusColor(row.window.remaining_percent)}">${text}</text>`;
+    return `<text x="72" y="${positions[index]}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="${statusColor(row.window.remaining_percent)}">${text}</text>`;
   }).join("");
   const reset = settings.showCountdown ? formatCountdown(nearestReset(rows)) : null;
-  const footer = reset ? `<text x="72" y="140" text-anchor="middle" font-family="Segoe UI,Arial" font-size="12" fill="#8490a3">${escapeXml(reset)}</text>` : "";
+  const footer = reset ? `<text x="72" y="140" text-anchor="middle" font-family="${font}" font-size="12" fill="#8490a3">${escapeXml(reset)}</text>` : "";
   return svg(`${numbers}${footer}`);
 }
 
@@ -249,7 +277,7 @@ function renderBars(rows: MetricRow[], settings: ActionSettings): string {
     return `<rect x="12" y="${y}" width="120" height="${barHeight}" rx="${barHeight / 2}" fill="#35404e"/><rect x="12" y="${y}" width="${1.2 * value}" height="${barHeight}" rx="${barHeight / 2}" fill="${color}"/>`;
   }).join("");
   const reset = settings.showCountdown ? formatCountdown(nearestReset(rows)) : null;
-  const footer = reset ? `<text x="72" y="137" text-anchor="middle" font-family="Segoe UI,Arial" font-size="12" fill="#8490a3">${escapeXml(reset)}</text>` : "";
+  const footer = reset ? `<text x="72" y="137" text-anchor="middle" font-family="${fontFamily(settings)}" font-size="12" fill="#8490a3">${escapeXml(reset)}</text>` : "";
   return svg(`${bars}${footer}`);
 }
 
@@ -300,13 +328,17 @@ function renderSingleRing(row: MetricRow, settings: ActionSettings): string {
   const fontSize = fittedFontSize(percent, 36);
   const color = statusColor(row.window.remaining_percent);
   const reset = resetCopy(row.window.resets_at, settings.resetDisplay);
-  const textMarkup = reset
-    ? `<text x="72" y="68" text-anchor="middle" font-family="Segoe UI,Arial" font-size="${fontSize}" font-weight="700" fill="#ffffff">${escapeXml(percent)}</text><text x="72" y="84" text-anchor="middle" font-family="Segoe UI,Arial" font-size="10" fill="#9a9a9a">${reset.label}</text><text x="72" y="104" text-anchor="middle" font-family="Segoe UI,Arial" font-size="18" fill="#ececec">${escapeXml(reset.value)}</text>`
-    : `<text x="72" y="84" text-anchor="middle" font-family="Segoe UI,Arial" font-size="${fontSize}" font-weight="700" fill="#ffffff">${escapeXml(percent)}</text>`;
   // Stream Deck key canvas is 144x144. Stroke sits 4px in from the edge.
   const strokeWidth = 11;
   const radius = 72 - 4 - strokeWidth / 2;
-  return svg(`<rect width="144" height="144" fill="#000"/>${fadedRingArc(72, 72, radius, value, color, strokeWidth)}${textMarkup}`);
+  const percentY = Math.round(72 + fontSize * 0.36);
+  const resetY = 72 + radius - strokeWidth / 2 - 10;
+  const font = fontFamily(settings);
+  const percentMarkup = `<text x="72" y="${percentY}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="#ffffff">${escapeXml(percent)}</text>`;
+  const resetMarkup = reset
+    ? `<text x="72" y="${resetY}" text-anchor="middle" font-family="${font}" font-size="20" fill="#ececec">${escapeXml(reset.value)}</text>`
+    : "";
+  return svg(`<rect width="144" height="144" fill="#000"/>${fadedRingArc(72, 72, radius, value, color, strokeWidth)}${percentMarkup}${resetMarkup}`);
 }
 
 function ringValue(row: MetricRow, settings: ActionSettings): { value: number; percent: string; color: string } {
@@ -328,37 +360,40 @@ function renderDualRings(rows: MetricRow[], settings: ActionSettings): string {
   const innerRadius = outerRadius - strokeWidth - 6;
   const outerSize = fittedFontSize(outer.percent, 26);
   const innerSize = fittedFontSize(inner.percent, 20);
-  const labels = `<text x="72" y="66" text-anchor="middle" font-family="Segoe UI,Arial" font-size="${outerSize}" font-weight="700" fill="${outer.color}">${escapeXml(outer.percent)}</text><text x="72" y="94" text-anchor="middle" font-family="Segoe UI,Arial" font-size="${innerSize}" font-weight="700" fill="${inner.color}">${escapeXml(inner.percent)}</text>`;
+  const font = fontFamily(settings);
+  const labels = `<text x="72" y="66" text-anchor="middle" font-family="${font}" font-size="${outerSize}" font-weight="700" fill="${outer.color}">${escapeXml(outer.percent)}</text><text x="72" y="94" text-anchor="middle" font-family="${font}" font-size="${innerSize}" font-weight="700" fill="${inner.color}">${escapeXml(inner.percent)}</text>`;
   return svg(`<rect width="144" height="144" fill="#000"/>${fadedRingArc(72, 72, outerRadius, outer.value, outer.color, strokeWidth)}${fadedRingArc(72, 72, innerRadius, inner.value, inner.color, strokeWidth)}${labels}`);
 }
 
-function renderResetTime(rows: MetricRow[]): string {
+function renderResetTime(rows: MetricRow[], settings: ActionSettings): string {
   const fontSize = rows.length === 1 ? 48 : rows.length === 2 ? 36 : 27;
   const positions = rows.length === 1 ? [88] : rows.length === 2 ? [66, 108] : [48, 84, 120];
-  const times = rows.map((row, index) => `<text x="72" y="${positions[index]}" text-anchor="middle" font-family="Segoe UI,Arial" font-size="${fontSize}" font-weight="700" fill="${statusColor(row.window.remaining_percent)}">${formatResetTime(row.window.resets_at)}</text>`).join("");
+  const font = fontFamily(settings);
+  const times = rows.map((row, index) => `<text x="72" y="${positions[index]}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="${statusColor(row.window.remaining_percent)}">${formatResetTime(row.window.resets_at)}</text>`).join("");
   return svg(times);
 }
 
-function renderResetCountdown(rows: MetricRow[]): string {
+function renderResetCountdown(rows: MetricRow[], settings: ActionSettings): string {
+  const font = fontFamily(settings);
   if (rows.length === 1) {
     const parts = countdownParts(rows[0].window.resets_at);
     const color = statusColor(rows[0].window.remaining_percent);
-    return svg(`<text x="72" y="64" text-anchor="middle" font-family="Segoe UI,Arial" font-size="52" font-weight="700" fill="${color}">${escapeXml(parts.hours)}</text><text x="72" y="116" text-anchor="middle" font-family="Segoe UI,Arial" font-size="52" font-weight="700" fill="${color}">${escapeXml(parts.minutes)}</text>`);
+    return svg(`<text x="72" y="64" text-anchor="middle" font-family="${font}" font-size="52" font-weight="700" fill="${color}">${escapeXml(parts.hours)}</text><text x="72" y="116" text-anchor="middle" font-family="${font}" font-size="52" font-weight="700" fill="${color}">${escapeXml(parts.minutes)}</text>`);
   }
   const fontSize = rows.length === 2 ? 38 : 28;
   const positions = rows.length === 2 ? [66, 108] : [48, 84, 120];
   const times = rows.map((row, index) => {
     const parts = countdownParts(row.window.resets_at);
-    return `<text x="72" y="${positions[index]}" text-anchor="middle" font-family="Segoe UI,Arial" font-size="${fontSize}" font-weight="700" fill="${statusColor(row.window.remaining_percent)}">${escapeXml(`${parts.hours}:${parts.minutes}`)}</text>`;
+    return `<text x="72" y="${positions[index]}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="${statusColor(row.window.remaining_percent)}">${escapeXml(`${parts.hours}:${parts.minutes}`)}</text>`;
   }).join("");
   return svg(times);
 }
 
 function renderSvg(provider: ProviderSnapshot | null, settings: ActionSettings, connected: boolean): string {
-  if (!connected) return renderOffline();
-  if (!provider) return renderNoData();
+  if (!connected) return renderOffline(settings);
+  if (!provider) return renderNoData(settings);
   const rows = rowsFor(provider, settings);
-  if (rows.length === 0) return renderNoData();
+  if (rows.length === 0) return renderNoData(settings);
   return renderRings(rows, settings);
 }
 

@@ -46,6 +46,14 @@
     Show % symbol
   </label>
 
+  <label for="font">Font</label>
+  <select id="font">
+    <option value="inter">Inter</option>
+    <option value="segoe">Segoe UI</option>
+    <option value="arial">Arial</option>
+    <option value="consolas">Consolas</option>
+  </select>
+
   <label for="clickAction">On key press</label>
   <select id="clickAction">
     <option value="open_popup">Open Minibar popup</option>
@@ -68,7 +76,7 @@
       "opencode-go": { name: "OpenCode Go", metrics: [["opencode-go.session", "5h session"], ["opencode-go.weekly", "Weekly"], ["opencode-go.monthly", "Monthly"]] },
       openrouter: { name: "OpenRouter", metrics: [["openrouter.limit", "Spending limit"]] }
     };
-    const defaultSettings = { provider: "codex", widget: "single_limit", singleMetricId: "codex.session", metricIds: ["codex.session"], presentation: "rings", resetDisplay: "countdown", valueMode: "remaining", showPercentSymbol: true, showCountdown: true, clickAction: "open_popup", cycleProviders: ["codex", "claude", "cursor"], cycleIndex: 0 };
+    const defaultSettings = { provider: "codex", widget: "single_limit", singleMetricId: "codex.session", metricIds: ["codex.session"], presentation: "rings", resetDisplay: "countdown", valueMode: "remaining", showPercentSymbol: true, font: "inter", showCountdown: true, clickAction: "open_popup", cycleProviders: ["codex", "claude", "cursor"], cycleIndex: 0 };
     let settings = { ...defaultSettings };
     let websocket;
     let context;
@@ -80,6 +88,7 @@
     const resetDisplay = document.querySelector("#resetDisplay");
     const valueMode = document.querySelector("#valueMode");
     const showPercentSymbol = document.querySelector("#showPercentSymbol");
+    const fontSelect = document.querySelector("#font");
     const clickAction = document.querySelector("#clickAction");
     const cycleOptions = document.querySelector("#cycleOptions");
     const cycleProviders = document.querySelector("#cycleProviders");
@@ -123,6 +132,7 @@
         metricIds: incomingMetrics.length ? incomingMetrics : [singleMetricId],
         resetDisplay: ["countdown", "time", "hidden"].includes(reset) ? reset : defaultSettings.resetDisplay,
         showPercentSymbol: input?.showPercentSymbol !== false,
+        font: ["inter", "segoe", "arial", "consolas"].includes(input?.font) ? input.font : defaultSettings.font,
       };
     }
     function renderMetrics() {
@@ -171,6 +181,7 @@
       resetDisplay.value = settings.resetDisplay;
       valueMode.value = settings.valueMode;
       showPercentSymbol.checked = settings.showPercentSymbol !== false;
+      fontSelect.value = settings.font;
       clickAction.value = settings.clickAction;
       cycleOptions.hidden = settings.clickAction !== "cycle_provider";
       renderMetrics();
@@ -207,6 +218,7 @@
     });
     valueMode.addEventListener("change", () => { settings.valueMode = valueMode.value; sendSettings(); });
     showPercentSymbol.addEventListener("change", () => { settings.showPercentSymbol = showPercentSymbol.checked; sendSettings(); });
+    fontSelect.addEventListener("change", () => { settings.font = fontSelect.value; sendSettings(); });
     clickAction.addEventListener("change", () => { settings.clickAction = clickAction.value; render(); sendSettings(); });
     window.connectElgatoStreamDeckSocket = (port, uuid, registerEvent, info, actionInfo) => {
       const parsed = JSON.parse(actionInfo);
