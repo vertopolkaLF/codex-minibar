@@ -276,6 +276,9 @@ pub(super) struct UiState {
     /// in `AppState`, but this revision makes that external snapshot observable
     /// to the reactive render loop even when all other view metadata is equal.
     pub(super) limits_revision: u64,
+    /// Changes for every successful usage refresh or usage-data clear. Usage
+    /// snapshot memoization keys off this revision rather than quota polls.
+    pub(super) usage_revision: u64,
     /// Same bridge for the independently polled forced-reset feed.
     pub(super) forced_resets_revision: u64,
     /// Provider limit/usage requests currently in flight. The refresh icon
@@ -323,6 +326,7 @@ impl Default for UiState {
             error: None,
             settings_revision: 0,
             limits_revision: 0,
+            usage_revision: 0,
             forced_resets_revision: 0,
             active_requests: Vec::new(),
             refreshing: false,
@@ -450,6 +454,10 @@ impl UiState {
     /// not discard an otherwise identical UI state as a no-op.
     pub(super) fn observe_limits_update(&mut self) {
         self.limits_revision = self.limits_revision.wrapping_add(1);
+    }
+
+    pub(super) fn observe_usage_update(&mut self) {
+        self.usage_revision = self.usage_revision.wrapping_add(1);
     }
 
     pub(super) fn observe_forced_resets_update(&mut self) {

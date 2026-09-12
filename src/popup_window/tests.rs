@@ -107,12 +107,6 @@ fn popup_refresh_is_sent_to_every_provider_worker() {
 }
 
 #[test]
-fn activity_chart_groups_long_histories_without_losing_tokens() {
-    assert_eq!(compact_activity_bars(&[2, 3, 5], 60), vec![2, 3, 5]);
-    assert_eq!(compact_activity_bars(&[2, 3, 5, 7, 11], 2), vec![10, 18]);
-}
-
-#[test]
 fn combined_spend_uses_usage_tab_windows() {
     let today = Local::now().date_naive();
     assert_eq!(
@@ -570,14 +564,19 @@ fn every_limits_sample_forces_a_reactive_state_change() {
     ui.observe_limits_update();
     assert_ne!(ui, initial);
     assert_eq!(ui.limits_revision, 1);
+    assert_eq!(ui.usage_revision, 0);
 
     // A Plus sample can have the same footer metadata as the preceding
     // Free sample; the revision still guarantees a rerender of the shared
     // snapshot.
     ui.observe_limits_update();
     assert_eq!(ui.limits_revision, 2);
+    assert_eq!(ui.usage_revision, 0);
     assert_eq!(ui.last_activation, initial.last_activation);
     assert_eq!(ui.error, initial.error);
+
+    ui.observe_usage_update();
+    assert_eq!(ui.usage_revision, 1);
 }
 
 #[test]

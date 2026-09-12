@@ -357,7 +357,7 @@ pub(super) fn start_background_bridge(
                     })
                     .collect::<Vec<_>>();
                 state.clear_usage_snapshot();
-                ui.observe_limits_update();
+                ui.observe_usage_update();
                 publish_popup_ui(set_ui, ui);
 
                 if targets.is_empty() {
@@ -613,9 +613,7 @@ pub(super) fn start_background_bridge(
                     ));
                     state.replace_usage(provider, usage);
                     ui.clear_usage_error(provider);
-                    // Usage stats affect only the popup, but they share the
-                    // reactive snapshot revision with quota updates.
-                    ui.observe_limits_update();
+                    ui.observe_usage_update();
                     publish_popup_ui(&set_ui, &ui);
                 }
                 Ok(WorkerEvent::ProviderUsageRefreshFailed(provider, error)) => {

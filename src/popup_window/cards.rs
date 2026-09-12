@@ -1648,18 +1648,8 @@ pub(super) fn usage_statistics_card(provider: ProviderKind, limits: &RateLimits)
         .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
         .rows([GridLength::Auto])
         .horizontal_alignment(HorizontalAlignment::Stretch);
-        let detail = format!(
-            "{} requests · {} tokens",
-            statistics.history.requests,
-            format_token_count(statistics.history.total_tokens()),
-        );
         return border(
-            vstack((
-                metrics,
-                usage_activity_chart(statistics, true),
-                caption(detail).foreground(ThemeRef::TertiaryText),
-            ))
-            .spacing(12.0),
+            vstack((metrics, usage_activity_chart(provider, statistics, true))).spacing(12.0),
         )
         .corner_radius(f64::from(popup::CARD_CORNER_RADIUS_DIP))
         .padding(Thickness::uniform(12.0))
@@ -1681,13 +1671,6 @@ pub(super) fn usage_statistics_card(provider: ProviderKind, limits: &RateLimits)
         .estimated_api_value_usd()
         .map(format_usd)
         .unwrap_or_else(|| "No data".into());
-    let detail = format!(
-        "{} in · {} out · {} cached · {} requests",
-        format_token_count(statistics.history.input_tokens),
-        format_token_count(statistics.history.output_tokens),
-        format_token_count(statistics.history.cached_input_tokens),
-        statistics.history.requests,
-    );
     let metrics = grid((
         usage_tokens_and_cost_metric("Today", today, today_value),
         usage_tokens_and_cost_metric(&format!("Last {period} days"), total, history_value)
@@ -1696,16 +1679,9 @@ pub(super) fn usage_statistics_card(provider: ProviderKind, limits: &RateLimits)
     .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
     .rows([GridLength::Auto])
     .horizontal_alignment(HorizontalAlignment::Stretch);
-    let chart = usage_activity_chart(statistics, false);
+    let chart = usage_activity_chart(provider, statistics, false);
 
-    border(
-        vstack((
-            metrics,
-            chart,
-            caption(detail).foreground(ThemeRef::TertiaryText),
-        ))
-        .spacing(12.0),
-    )
+    border(vstack((metrics, chart)).spacing(12.0))
     .corner_radius(f64::from(popup::CARD_CORNER_RADIUS_DIP))
     .padding(Thickness::uniform(12.0))
     .background(ThemeRef::CardBackground)

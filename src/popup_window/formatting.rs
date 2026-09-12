@@ -37,17 +37,6 @@ pub(super) fn format_last_activation(
         .unwrap_or_else(|| "Never".into())
 }
 
-pub(super) fn compact_activity_bars(values: &[u64], max_bars: usize) -> Vec<u64> {
-    if values.len() <= max_bars || max_bars == 0 {
-        return values.to_vec();
-    }
-    let per_bar = values.len().div_ceil(max_bars);
-    values
-        .chunks(per_bar)
-        .map(|chunk| chunk.iter().copied().sum())
-        .collect()
-}
-
 pub(super) fn format_token_count(tokens: u64) -> String {
     match tokens {
         0..=999 => tokens.to_string(),

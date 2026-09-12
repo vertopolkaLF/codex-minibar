@@ -39,6 +39,7 @@ use crate::{
 #[cfg(windows)]
 static KEEP_ON_MONITOR_QUEUED: AtomicBool = AtomicBool::new(false);
 
+mod activity_chart;
 #[derive(Clone, Copy)]
 enum PendingPopupView {
     Home,
@@ -46,7 +47,6 @@ enum PendingPopupView {
 }
 
 static PENDING_POPUP_VIEW: Mutex<Option<PendingPopupView>> = Mutex::new(None);
-
 mod bridge;
 mod cards;
 mod chrome;
@@ -56,6 +56,7 @@ mod navigation;
 mod shell;
 mod state;
 mod usage_cards;
+mod usage_snapshots;
 
 #[cfg(test)]
 mod tests;
@@ -63,6 +64,7 @@ mod tests;
 pub use shell::app;
 pub use state::AppState;
 
+use activity_chart::*;
 /// Requests a provider tab for the next popup render. The request is
 /// intentionally ephemeral, matching clicks from the tray and Stream Deck.
 pub fn request_provider_view(provider: ProviderKind) {
@@ -85,7 +87,6 @@ fn take_popup_view_request() -> Option<PendingPopupView> {
         .ok()
         .and_then(|mut pending| pending.take())
 }
-
 use bridge::*;
 use cards::*;
 use chrome::*;
