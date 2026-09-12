@@ -54,6 +54,17 @@
     <option value="consolas">Consolas</option>
   </select>
 
+  <label for="providerMark">Show provider</label>
+  <select id="providerMark">
+    <option value="hidden">Hidden</option>
+    <option value="text">Name above</option>
+    <option value="logo">Logo background</option>
+  </select>
+  <label class="check" for="coloredProviderMark">
+    <input id="coloredProviderMark" type="checkbox">
+    Colored name / logo
+  </label>
+
   <label for="clickAction">On key press</label>
   <select id="clickAction">
     <option value="open_popup">Open Minibar popup</option>
@@ -76,7 +87,7 @@
       "opencode-go": { name: "OpenCode Go", metrics: [["opencode-go.session", "5h session"], ["opencode-go.weekly", "Weekly"], ["opencode-go.monthly", "Monthly"]] },
       openrouter: { name: "OpenRouter", metrics: [["openrouter.limit", "Spending limit"]] }
     };
-    const defaultSettings = { provider: "codex", widget: "single_limit", singleMetricId: "codex.session", metricIds: ["codex.session"], presentation: "rings", resetDisplay: "countdown", valueMode: "remaining", showPercentSymbol: true, font: "inter", showCountdown: true, clickAction: "open_popup", cycleProviders: ["codex", "claude", "cursor"], cycleIndex: 0 };
+    const defaultSettings = { provider: "codex", widget: "single_limit", singleMetricId: "codex.session", metricIds: ["codex.session"], presentation: "rings", resetDisplay: "countdown", valueMode: "remaining", showPercentSymbol: true, font: "inter", providerMark: "hidden", coloredProviderMark: false, showCountdown: true, clickAction: "open_popup", cycleProviders: ["codex", "claude", "cursor"], cycleIndex: 0 };
     let settings = { ...defaultSettings };
     let websocket;
     let context;
@@ -89,6 +100,8 @@
     const valueMode = document.querySelector("#valueMode");
     const showPercentSymbol = document.querySelector("#showPercentSymbol");
     const fontSelect = document.querySelector("#font");
+    const providerMark = document.querySelector("#providerMark");
+    const coloredProviderMark = document.querySelector("#coloredProviderMark");
     const clickAction = document.querySelector("#clickAction");
     const cycleOptions = document.querySelector("#cycleOptions");
     const cycleProviders = document.querySelector("#cycleProviders");
@@ -115,6 +128,11 @@
     function providerMetrics(provider = providers[providerSelect.value] ?? providers.codex) {
       return provider?.metrics ?? [];
     }
+    function normalizeProviderMark(value, widgetKind) {
+      if (value === "logo") return "logo";
+      if (value === "text") return widgetKind === "dual_limit" ? "logo" : "text";
+      return "hidden";
+    }
     function normalizeSettings(input) {
       const incomingMetrics = Array.isArray(input?.metricIds) ? input.metricIds.filter(Boolean) : [];
       const provider = providers[input?.provider] ? input.provider : defaultSettings.provider;
@@ -133,6 +151,8 @@
         resetDisplay: ["countdown", "time", "hidden"].includes(reset) ? reset : defaultSettings.resetDisplay,
         showPercentSymbol: input?.showPercentSymbol !== false,
         font: ["inter", "segoe", "arial", "consolas"].includes(input?.font) ? input.font : defaultSettings.font,
+        providerMark: normalizeProviderMark(input?.providerMark, widgetKind === "dual_limit" ? "dual_limit" : "single_limit"),
+        coloredProviderMark: input?.coloredProviderMark === true,
       };
     }
     function renderMetrics() {
@@ -182,6 +202,10 @@
       valueMode.value = settings.valueMode;
       showPercentSymbol.checked = settings.showPercentSymbol !== false;
       fontSelect.value = settings.font;
+      providerMark.value = settings.providerMark ?? "hidden";
+      providerMark.querySelector('[value="text"]').disabled = settings.widget === "dual_limit";
+      coloredProviderMark.checked = settings.coloredProviderMark === true;
+      coloredProviderMark.disabled = (settings.providerMark ?? "hidden") === "hidden";
       clickAction.value = settings.clickAction;
       cycleOptions.hidden = settings.clickAction !== "cycle_provider";
       renderMetrics();
@@ -203,6 +227,7 @@
       if (settings.widget === "single_limit" && !metrics.some(metric => metric[0] === settings.singleMetricId)) {
         settings.singleMetricId = metrics[0]?.[0] ?? "";
       }
+      if (settings.widget === "dual_limit" && settings.providerMark === "text") settings.providerMark = "logo";
       render();
       sendSettings();
     });
@@ -219,6 +244,8 @@
     valueMode.addEventListener("change", () => { settings.valueMode = valueMode.value; sendSettings(); });
     showPercentSymbol.addEventListener("change", () => { settings.showPercentSymbol = showPercentSymbol.checked; sendSettings(); });
     fontSelect.addEventListener("change", () => { settings.font = fontSelect.value; sendSettings(); });
+    providerMark.addEventListener("change", () => { settings.providerMark = providerMark.value; render(); sendSettings(); });
+    coloredProviderMark.addEventListener("change", () => { settings.coloredProviderMark = coloredProviderMark.checked; sendSettings(); });
     clickAction.addEventListener("change", () => { settings.clickAction = clickAction.value; render(); sendSettings(); });
     window.connectElgatoStreamDeckSocket = (port, uuid, registerEvent, info, actionInfo) => {
       const parsed = JSON.parse(actionInfo);
