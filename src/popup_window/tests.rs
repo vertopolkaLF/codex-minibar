@@ -730,3 +730,89 @@ fn stale_pager_completion_cannot_end_a_newer_transition() {
     );
     assert_eq!(unchanged, state);
 }
+
+#[test]
+fn openrouter_places_each_chart_inside_its_own_account_on_both_surfaces() {
+    fn chart_keys(element: &Element, keys: &mut Vec<String>) {
+        if let Some(key) = element
+            .key()
+            .filter(|key| key.starts_with("openrouter-account-usage-"))
+        {
+            keys.push(key.into());
+        }
+        match element {
+            Element::StackPanel(panel) => {
+                for child in &panel.children {
+                    chart_keys(child, keys);
+                }
+            }
+            Element::Grid(grid) => {
+                for child in &grid.children {
+                    chart_keys(child, keys);
+                }
+            }
+            Element::Border(border) => chart_keys(&border.child, keys),
+            _ => {}
+        }
+    }
+    let date = Local::now().date_naive();
+    let mut limits = RateLimits::default();
+    for (id, requests) in [("first", 2), ("second", 7)] {
+        limits.openrouter_accounts.push(OpenRouterAccountSnapshot {
+            id: id.into(),
+            name: id.into(),
+            ..Default::default()
+        });
+        let stats = crate::usage::statistics_from_daily(
+            &[crate::usage::DailyTokenUsage {
+                date,
+                usage: crate::usage::TokenUsage {
+                    requests,
+                    ..Default::default()
+                },
+            }],
+            30,
+        );
+        limits.usage.accounts.insert(id.into(), stats);
+    }
+    for scheme in [ColorScheme::Dark, ColorScheme::Light] {
+        for surface in [PopupSurface::HomeTab, PopupSurface::ProviderTab] {
+            for spending in [true, false] {
+                let mut visibility = all_visible();
+                visibility.set_brick("openrouter.spending", spending, spending);
+                visibility.set_brick("openrouter.usage", true, true);
+                let cards = provider_cards(
+                    ProviderKind::OpenRouter,
+                    true,
+                    &limits,
+                    false,
+                    true,
+                    false,
+                    &visibility,
+                    surface,
+                    true,
+                    false,
+                    scheme,
+                    None,
+                    None,
+                    None,
+                );
+                assert_eq!(cards.len(), 3); // provider heading and two account strips; no combined card.
+                for (index, id) in ["first", "second"].iter().enumerate() {
+                    let mut keys = Vec::new();
+                    chart_keys(&cards[index + 1], &mut keys);
+                    assert_eq!(keys, vec![format!("openrouter-account-usage-{id}")]);
+                }
+            }
+        }
+    }
+    let before = openrouter_accounts_strip_key(&limits);
+    limits
+        .usage
+        .accounts
+        .get_mut("first")
+        .unwrap()
+        .daily
+        .clear();
+    assert_ne!(before, openrouter_accounts_strip_key(&limits));
+}

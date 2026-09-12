@@ -102,7 +102,9 @@ pub(super) fn provider_cards(
     if provider == ProviderKind::OpenRouter {
         let spending_visible =
             popup_visibility.is_visible(&spending_brick_id(provider), surface, show_provider_tabs);
-        if spending_visible {
+        let usage_visible =
+            popup_visibility.is_visible(&usage_brick_id(provider), surface, show_provider_tabs);
+        if spending_visible || usage_visible {
             if !limits.openrouter_accounts.is_empty() {
                 // Nest each account as its own keyed strip. A flat list of headings
                 // + key cards lets WinUI recycle siblings across account boundaries
@@ -116,7 +118,12 @@ pub(super) fn provider_cards(
                             .with_key(format!("{}-account-heading", account.id)),
                     );
                     let mut key_identity = String::new();
-                    for (index, api_key) in account.api_keys.iter().enumerate() {
+                    for (index, api_key) in account
+                        .api_keys
+                        .iter()
+                        .enumerate()
+                        .filter(|_| spending_visible)
+                    {
                         let title = api_key
                             .label
                             .as_deref()
@@ -186,6 +193,12 @@ pub(super) fn provider_cards(
                             )),
                         );
                     }
+                    if usage_visible {
+                        account_strip.push(
+                            openrouter_account_usage(limits, &account.id)
+                                .with_key(format!("openrouter-account-usage-{}", account.id)),
+                        );
+                    }
                     cards.push(
                         vstack(account_strip)
                             .spacing(6.0)
@@ -196,7 +209,9 @@ pub(super) fn provider_cards(
                             .into(),
                     );
                 }
-            } else if let Some(spending) = limits.spending.as_ref() {
+            } else if spending_visible
+                && let Some(spending) = limits.spending.as_ref()
+            {
                 cards.push(
                     spending_card(
                         spending,
@@ -211,14 +226,6 @@ pub(super) fn provider_cards(
                     )),
                 );
             }
-        }
-        if popup_visibility.is_visible(&usage_brick_id(provider), surface, show_provider_tabs)
-            && limits.usage.has_data()
-        {
-            cards.push(
-                usage_statistics_card(provider, limits)
-                    .with_key(format!("{}-usage-statistics", provider.display_name())),
-            );
         }
         return cards;
     }
@@ -639,6 +646,15 @@ pub(super) fn openrouter_accounts_strip_key(limits: &RateLimits) -> String {
         key.push_str(&account.id);
         key.push('\u{1f}');
         key.push_str(&account.name);
+        let usage = limits.usage.accounts.get(&account.id);
+        key.push(if usage.is_some_and(|s| !s.daily.is_empty()) {
+            'u'
+        } else {
+            '-'
+        });
+        if let Some(error) = usage.and_then(|s| s.error.as_deref()) {
+            key.push_str(error);
+        }
         for api_key in &account.api_keys {
             key.push('\u{1e}');
             key.push_str(&api_key.id);
@@ -1511,7 +1527,33 @@ pub(super) fn reset_credits_card(limits: &RateLimits) -> Element {
 }
 
 pub(super) fn usage_statistics_card(provider: ProviderKind, limits: &RateLimits) -> Element {
-    let statistics = &limits.usage;
+    usage_statistics_content(provider, &limits.usage)
+}
+
+fn openrouter_account_usage(limits: &RateLimits, account: &str) -> Element {
+    let statistics = limits.usage.accounts.get(account);
+    let mut contents = Vec::new();
+    if let Some(statistics) = statistics.filter(|s| !s.daily.is_empty()) {
+        contents.push(usage_statistics_content(ProviderKind::OpenRouter, statistics));
+    }
+    if let Some(error) = statistics.and_then(|s| s.error.as_deref()) {
+        contents.push(
+            caption(format!("Usage statistics: {error}"))
+                .foreground(ThemeRef::TertiaryText)
+                .wrap()
+                .into(),
+        );
+    } else if contents.is_empty() {
+        contents.push(caption("Loading usage statistics…")
+            .foreground(ThemeRef::TertiaryText).wrap().into());
+    }
+    vstack(contents).spacing(6.0).into()
+}
+
+fn usage_statistics_content(
+    provider: ProviderKind,
+    statistics: &crate::usage::UsageStatistics,
+) -> Element {
     if provider == ProviderKind::Cursor && !statistics.has_data() {
         return border(
             vstack((

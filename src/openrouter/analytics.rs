@@ -8,6 +8,7 @@ use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashSet},
     sync::{
@@ -17,28 +18,37 @@ use std::{
     time::{Duration as StdDuration, Instant},
 };
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct Cache {
     revision: u64,
     accounts: Vec<String>,
     days: BTreeMap<NaiveDate, CachedDay>,
     #[serde(default)]
     hourly: Option<HourlyCache>,
+    #[serde(default)]
+    account_data: BTreeMap<String, AccountCache>,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct AccountCache {
+    identity: String,
+    days: BTreeMap<NaiveDate, CachedDay>,
+    hourly: Option<HourlyCache>,
+    error: Option<String>,
+}
+#[derive(Clone, Serialize, Deserialize)]
 struct CachedDay {
     start: DateTime<Utc>,
     end: DateTime<Utc>,
     fetched_at: DateTime<Utc>,
     models: BTreeMap<String, TokenUsage>,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct HourlyCache {
     fetched_at: DateTime<Utc>,
     granularity: String,
     rows: Vec<HourlyRow>,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct HourlyRow {
     at: DateTime<Utc>,
     model: String,
@@ -85,27 +95,122 @@ pub(crate) fn cached_hourly_rows(
         .map(|((model, at), usage)| (model, at, usage))
         .collect())
 }
+fn credential_identity(key: Option<&str>) -> String {
+    key.map(|key| format!("{:x}", Sha256::digest(key.as_bytes())))
+        .unwrap_or_default()
+}
+
+fn sync_accounts(cache: &mut Cache, revision: u64, accounts: &[(String, String)]) {
+    // Only a single-account legacy aggregate has an unambiguous owner. Never
+    // assign a combined legacy history to the last account in the settings UI.
+    if cache.account_data.is_empty()
+        && cache.revision == revision
+        && accounts.len() == 1
+        && cache.accounts == vec![accounts[0].0.clone()]
+        && !accounts[0].1.is_empty()
+    {
+        cache.account_data.insert(
+            accounts[0].0.clone(),
+            AccountCache {
+                identity: accounts[0].1.clone(),
+                days: cache.days.clone(),
+                hourly: cache.hourly.clone(),
+                error: None,
+            },
+        );
+    }
+    cache
+        .account_data
+        .retain(|id, _| accounts.iter().any(|(current, _)| current == id));
+    let mut reusable = BTreeMap::<String, AccountCache>::new();
+    for account in cache
+        .account_data
+        .values()
+        .filter(|a| !a.identity.is_empty())
+    {
+        let entry = reusable
+            .entry(account.identity.clone())
+            .or_insert_with(|| account.clone());
+        if account.days.len() > entry.days.len() {
+            *entry = account.clone();
+        }
+    }
+    for (id, identity) in accounts {
+        let entry = cache.account_data.entry(id.clone()).or_default();
+        if let Some(cached) = reusable.get(identity) {
+            *entry = cached.clone();
+        } else if entry.identity != *identity {
+            *entry = AccountCache {
+                identity: identity.clone(),
+                ..Default::default()
+            };
+        }
+        if identity.is_empty() {
+            entry.error = Some("Add a management key to load usage statistics.".into());
+        }
+    }
+    cache.revision = revision;
+    cache.accounts = accounts.iter().map(|(id, _)| id.clone()).collect();
+    cache.accounts.sort();
+    combine_accounts(cache);
+}
+
+fn combine_accounts(cache: &mut Cache) {
+    cache.days.clear();
+    cache.hourly = None;
+    let mut seen = HashSet::new();
+    for account in cache.account_data.values() {
+        // The same management key can be entered twice. Display it under both
+        // account labels but include its usage only once in provider totals.
+        if account.identity.is_empty() || !seen.insert(&account.identity) {
+            continue;
+        }
+        for (&date, day) in &account.days {
+            let combined = cache.days.entry(date).or_insert_with(|| CachedDay {
+                start: day.start,
+                end: day.end,
+                fetched_at: day.fetched_at,
+                models: BTreeMap::new(),
+            });
+            combined.fetched_at = combined.fetched_at.min(day.fetched_at);
+            for (model, usage) in &day.models {
+                combined.models.entry(model.clone()).or_default().add(usage);
+            }
+        }
+        if let Some(hourly) = &account.hourly {
+            let combined = cache.hourly.get_or_insert_with(|| HourlyCache {
+                fetched_at: hourly.fetched_at,
+                granularity: hourly.granularity.clone(),
+                rows: Vec::new(),
+            });
+            combined.fetched_at = combined.fetched_at.min(hourly.fetched_at);
+            combined.rows.extend(hourly.rows.clone());
+        }
+    }
+}
+
 fn cache(client: &OpenRouterClient) -> Result<Cache> {
     let raw = store::with_store(|s| s.load_openrouter_analytics())?;
     let mut cached: Cache = raw
         .map(|s| serde_json::from_str(&s))
         .transpose()?
         .unwrap_or_default();
-    let mut accounts: Vec<_> = client.accounts.iter().map(|a| a.id.clone()).collect();
-    accounts.sort();
-    if cached.revision != client.credentials_revision || cached.accounts != accounts {
-        cached = Cache {
-            revision: client.credentials_revision,
-            accounts,
-            ..Default::default()
-        };
-    }
+    let accounts: Vec<_> = client
+        .accounts
+        .iter()
+        .map(|a| {
+            (
+                a.id.clone(),
+                credential_identity(a.management_key.as_deref()),
+            )
+        })
+        .collect();
+    sync_accounts(&mut cached, client.credentials_revision, &accounts);
     Ok(cached)
 }
-fn daily(cache: &Cache) -> Vec<DailyTokenUsage> {
-    cache
-        .days
-        .iter()
+
+fn daily_rows(days: &BTreeMap<NaiveDate, CachedDay>) -> Vec<DailyTokenUsage> {
+    days.iter()
         .map(|(&date, day)| {
             let mut usage = TokenUsage::default();
             for model in day.models.values() {
@@ -115,8 +220,37 @@ fn daily(cache: &Cache) -> Vec<DailyTokenUsage> {
         })
         .collect()
 }
+fn daily(cache: &Cache) -> Vec<DailyTokenUsage> {
+    daily_rows(&cache.days)
+}
+fn statistics(cache: &Cache, history_days: u16) -> UsageStatistics {
+    let mut combined = statistics_from_daily(&daily(cache), history_days);
+    for (id, account) in &cache.account_data {
+        let mut usage = statistics_from_daily(&daily_rows(&account.days), history_days);
+        usage.error = account.error.clone();
+        combined.accounts.insert(id.clone(), usage);
+    }
+    combined
+}
+fn persist(cache: &Cache, at: DateTime<Utc>) -> Result<()> {
+    let models: Vec<_> = cache
+        .days
+        .iter()
+        .flat_map(|(&date, day)| {
+            day.models
+                .iter()
+                .map(move |(model, usage)| (model.clone(), date, usage.clone()))
+        })
+        .collect();
+    let encoded = serde_json::to_string(cache)?;
+    store::with_store(|s| s.save_openrouter_analytics(&encoded, &daily(cache), &models, at))
+}
+
 pub(super) fn load(client: &OpenRouterClient, history_days: u16) -> Result<UsageStatistics> {
-    Ok(statistics_from_daily(&daily(&cache(client)?), history_days))
+    let cached = cache(client)?;
+    // Keep overview totals consistent with account removal/key replacement too.
+    persist(&cached, Utc::now())?;
+    Ok(statistics(&cached, history_days))
 }
 fn boundaries(date: NaiveDate) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
     let midnight = |date: NaiveDate| {
@@ -189,6 +323,10 @@ fn query(
                 .map_err(|_| anyhow::anyhow!("OpenRouter request limiter unavailable"))?;
             reserve_request(&mut next, Instant::now())
         };
+        ensure!(
+            wait <= StdDuration::from_secs(61),
+            "OpenRouter analytics rate limited; waiting for the server cooldown before retrying"
+        );
         wait_for_request(&client.cancelled, wait)?;
         match client
             .agent
@@ -202,20 +340,22 @@ fn query(
                     .into_string()
                     .context("read OpenRouter analytics response");
             }
-            Err(ureq::Error::Status(429, response)) if attempt < 2 => {
+            Err(ureq::Error::Status(429, response)) => {
                 let delay = response
                     .header("Retry-After")
                     .and_then(|s| s.parse::<u64>().ok())
-                    .unwrap_or(5 * (attempt + 1));
-                ensure!(
-                    delay <= 60,
-                    "OpenRouter analytics rate limited; retry on the next refresh"
-                );
+                    .unwrap_or(60);
                 let mut next = NEXT_REQUEST
                     .lock()
                     .map_err(|_| anyhow::anyhow!("OpenRouter request limiter unavailable"))?;
-                let retry = Instant::now() + StdDuration::from_secs(delay.max(1));
+                let retry = Instant::now()
+                    .checked_add(StdDuration::from_secs(delay.max(1)))
+                    .context("OpenRouter returned an invalid retry delay")?;
                 *next = Some(next.unwrap_or(retry).max(retry));
+                ensure!(
+                    attempt < 2 && delay <= 60,
+                    "OpenRouter analytics rate limited; retrying after the server cooldown on the next refresh"
+                );
             }
             Err(ureq::Error::Status(401 | 403, _)) => anyhow::bail!(
                 "OpenRouter usage stats: save a valid management key in Providers / OpenRouter"
@@ -238,43 +378,34 @@ fn first_fetch_day(today: NaiveDate, history_days: u16) -> NaiveDate {
     today - Duration::days(i64::from(days - 1))
 }
 
-pub(super) fn refresh(client: &OpenRouterClient, history_days: u16) -> Result<UsageStatistics> {
-    let mut cache = cache(client)?;
-    let mut seen = HashSet::new();
-    let mut keys = Vec::new();
-    for account in &client.accounts {
-        let key = account
-            .management_key
-            .as_deref()
-            .context("OpenRouter usage stats require a management key for each account")?;
-        if seen.insert(key) {
-            keys.push(key);
-        }
-    }
-    ensure!(
-        !keys.is_empty(),
-        "OpenRouter usage stats require a management key"
-    );
-    let now = Utc::now();
+fn refresh_account(
+    account: &mut AccountCache,
+    history_days: u16,
+    now: DateTime<Utc>,
+    mut fetch: impl FnMut(DateTime<Utc>, DateTime<Utc>, Option<&str>) -> Result<String>,
+) -> Result<()> {
     let today = now.with_timezone(&Local).date_naive();
     let first = first_fetch_day(today, history_days);
-    let mut changed = false;
-    for date in first.iter_days().take_while(|d| *d <= today) {
+    // Newest days first: any saved progress contains the useful current usage.
+    let dates: Vec<_> = first
+        .iter_days()
+        .take_while(|date| *date <= today)
+        .collect();
+    for date in dates.into_iter().rev() {
         let (start, end) = boundaries(date)?;
-        if cache
+        if account
             .days
             .get(&date)
             .is_some_and(|day| fresh(day, start, end, now))
         {
             continue;
         }
-        let mut models: BTreeMap<String, TokenUsage> = BTreeMap::new();
-        for key in &keys {
-            for (model, usage) in parse(&query(client, key, start, end.min(now), None)?)? {
-                models.entry(model).or_default().add(&usage);
-            }
-        }
-        cache.days.insert(
+        let models = if start < now {
+            parse(&fetch(start, end.min(now), None)?)?
+        } else {
+            BTreeMap::new()
+        };
+        account.days.insert(
             date,
             CachedDay {
                 start,
@@ -283,11 +414,9 @@ pub(super) fn refresh(client: &OpenRouterClient, history_days: u16) -> Result<Us
                 models,
             },
         );
-        changed = true;
     }
     let current_hour = hour_start(now.with_timezone(&Local));
     let start = (current_hour - Duration::hours(47)).with_timezone(&Utc);
-    // Minute data is necessary when UTC hour boundaries don't match local hours.
     let granularity = if (0..48).all(|i| {
         (current_hour - Duration::hours(i))
             .offset()
@@ -299,47 +428,62 @@ pub(super) fn refresh(client: &OpenRouterClient, history_days: u16) -> Result<Us
     } else {
         "minute"
     };
-    if !cache.hourly.as_ref().is_some_and(|h| {
+    if !account.hourly.as_ref().is_some_and(|h| {
         h.granularity == granularity
             && now >= h.fetched_at
             && now - h.fetched_at < Duration::minutes(5)
     }) {
-        let mut rows = Vec::new();
-        for key in &keys {
-            rows.extend(parse_hourly(
-                &query(client, key, start, now, Some(granularity))?,
-                granularity,
-                start,
-                now,
-            )?);
-        }
-        // Replace the whole snapshot, including rows corrected to zero. No accumulation across refreshes.
-        cache.hourly = Some(HourlyCache {
+        let rows = parse_hourly(
+            &fetch(start, now, Some(granularity))?,
+            granularity,
+            start,
+            now,
+        )?;
+        account.hourly = Some(HourlyCache {
             fetched_at: now,
             granularity: granularity.into(),
             rows,
         });
-        changed = true;
     }
-    cache
+    account
         .days
         .retain(|date, _| *date >= today - Duration::days(364) && *date <= today);
-    let days = daily(&cache);
-    if changed {
+    Ok(())
+}
+
+pub(super) fn refresh(client: &OpenRouterClient, history_days: u16) -> Result<UsageStatistics> {
+    let mut cache = cache(client)?;
+    let mut completed = BTreeMap::<String, AccountCache>::new();
+    for credentials in &client.accounts {
         wait_for_request(&client.cancelled, StdDuration::ZERO)?;
-        let models: Vec<_> = cache
-            .days
-            .iter()
-            .flat_map(|(&date, day)| {
-                day.models
-                    .iter()
-                    .map(move |(model, usage)| (model.clone(), date, usage.clone()))
-            })
-            .collect();
-        let encoded = serde_json::to_string(&cache)?;
-        store::with_store(|s| s.save_openrouter_analytics(&encoded, &days, &models, now))?;
+        let account = cache
+            .account_data
+            .get_mut(&credentials.id)
+            .context("OpenRouter account cache missing")?;
+        if let Some(cached) = completed.get(&account.identity) {
+            *account = cached.clone();
+        } else if let Some(key) = credentials.management_key.as_deref() {
+            let result = refresh_account(
+                account,
+                history_days,
+                Utc::now(),
+                |start, end, granularity| query(client, key, start, end, granularity),
+            );
+            if client.cancelled.load(Ordering::Acquire) {
+                combine_accounts(&mut cache);
+                persist(&cache, Utc::now())?;
+                anyhow::bail!("OpenRouter analytics refresh cancelled");
+            }
+            account.error = result.err().map(|error| error.to_string());
+            completed.insert(account.identity.clone(), account.clone());
+        }
+        // Persist completed days even after a failed request. Retrying resumes
+        // from that point instead of repeating the entire 90-day recovery.
+        wait_for_request(&client.cancelled, StdDuration::ZERO)?;
+        combine_accounts(&mut cache);
+        persist(&cache, Utc::now())?;
     }
-    Ok(statistics_from_daily(&days, history_days))
+    Ok(statistics(&cache, history_days))
 }
 fn count(row: &Value, field: &str) -> Result<u64> {
     let v = row
@@ -682,6 +826,173 @@ mod tests {
         cancelled.store(true, Ordering::Release);
         assert!(done_rx.recv_timeout(StdDuration::from_secs(2)).unwrap());
         worker.join().unwrap();
+    }
+
+    fn account_fixture(identity: &str, requests: u64) -> AccountCache {
+        let date = Local::now().date_naive();
+        let (start, end) = boundaries(date).unwrap();
+        AccountCache {
+            identity: identity.into(),
+            days: BTreeMap::from([(
+                date,
+                CachedDay {
+                    start,
+                    end,
+                    fetched_at: Utc::now(),
+                    models: BTreeMap::from([(
+                        "test/model".into(),
+                        TokenUsage {
+                            requests,
+                            input_tokens: requests * 10,
+                            ..Default::default()
+                        },
+                    )]),
+                },
+            )]),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn account_changes_keep_other_histories_and_aggregate_without_duplicates() {
+        let mut cache = Cache {
+            account_data: BTreeMap::from([("first".into(), account_fixture("key-a", 2))]),
+            ..Default::default()
+        };
+        sync_accounts(
+            &mut cache,
+            2,
+            &[
+                ("first".into(), "key-a".into()),
+                ("second".into(), "key-b".into()),
+            ],
+        );
+        assert_eq!(statistics(&cache, 30).accounts["first"].history.requests, 2);
+        assert!(cache.account_data["second"].days.is_empty());
+        cache
+            .account_data
+            .insert("second".into(), account_fixture("key-b", 7));
+        sync_accounts(
+            &mut cache,
+            3,
+            &[
+                ("second".into(), "key-b".into()),
+                ("first".into(), "key-a".into()),
+            ],
+        );
+        let stats = statistics(&cache, 30);
+        assert_eq!(stats.history.requests, 9);
+        assert_eq!(stats.accounts["second"].history.requests, 7);
+        sync_accounts(
+            &mut cache,
+            4,
+            &[
+                ("first".into(), "key-a".into()),
+                ("duplicate".into(), "key-a".into()),
+            ],
+        );
+        assert_eq!(statistics(&cache, 30).history.requests, 2);
+        assert_eq!(
+            statistics(&cache, 30).accounts["duplicate"]
+                .history
+                .requests,
+            2
+        );
+        sync_accounts(
+            &mut cache,
+            5,
+            &[
+                ("first".into(), "key-a".into()),
+                ("duplicate".into(), "replacement".into()),
+            ],
+        );
+        assert_eq!(statistics(&cache, 30).accounts["first"].history.requests, 2);
+        assert!(cache.account_data["duplicate"].days.is_empty());
+    }
+
+    #[test]
+    fn legacy_single_account_is_preserved_but_combined_history_is_never_misattributed() {
+        let mut single = Cache {
+            revision: 1,
+            accounts: vec!["a".into()],
+            days: account_fixture("key", 12).days,
+            ..Default::default()
+        };
+        sync_accounts(&mut single, 1, &[("a".into(), "key".into())]);
+        assert_eq!(statistics(&single, 30).accounts["a"].history.requests, 12);
+        let mut combined = Cache {
+            revision: 1,
+            accounts: vec!["a".into(), "b".into()],
+            days: account_fixture("key", 12).days,
+            ..Default::default()
+        };
+        sync_accounts(
+            &mut combined,
+            1,
+            &[("a".into(), "key-a".into()), ("b".into(), "key-b".into())],
+        );
+        assert!(
+            statistics(&combined, 30)
+                .accounts
+                .values()
+                .all(|s| s.history.requests == 0)
+        );
+    }
+
+    #[test]
+    fn errors_do_not_hide_a_healthy_account_and_cache_round_trips() {
+        let mut failed = account_fixture("key-b", 7);
+        failed.error = Some("Server rate limited this account".into());
+        let mut cache = Cache {
+            account_data: BTreeMap::from([
+                ("a".into(), account_fixture("key-a", 2)),
+                ("b".into(), failed),
+            ]),
+            ..Default::default()
+        };
+        combine_accounts(&mut cache);
+        let stats = statistics(&cache, 30);
+        assert!(stats.accounts["a"].error.is_none());
+        assert!(stats.accounts["b"].error.is_some());
+        assert_eq!(stats.accounts["a"].history.requests, 2);
+        assert_eq!(stats.accounts["b"].history.requests, 7);
+        let raw = serde_json::to_string(&cache).unwrap();
+        let round_trip: Cache = serde_json::from_str(&raw).unwrap();
+        assert_eq!(statistics(&round_trip, 30), stats);
+    }
+
+    #[test]
+    fn interrupted_recovery_resumes_completed_days_and_fresh_accounts_make_no_requests() {
+        let now = boundaries(Local::now().date_naive()).unwrap().0 + Duration::hours(12);
+        let mut account = AccountCache::default();
+        let mut requests = 0;
+        let result = refresh_account(&mut account, 30, now, |_, _, _| {
+            requests += 1;
+            if requests == 3 {
+                anyhow::bail!("429");
+            }
+            Ok(envelope(vec![fixture("unused", "unused")]))
+        });
+        assert!(result.is_err());
+        assert_eq!(account.days.len(), 2);
+        let encoded = serde_json::to_string(&account).unwrap();
+        let mut restored: AccountCache = serde_json::from_str(&encoded).unwrap();
+        let mut resumed = 0;
+        refresh_account(&mut restored, 30, now, |_, _, granularity| {
+            resumed += 1;
+            Ok(if granularity.is_some() {
+                envelope(vec![])
+            } else {
+                envelope(vec![fixture("unused", "unused")])
+            })
+        })
+        .unwrap();
+        assert_eq!(resumed, 89); // 88 remaining daily queries + hourly snapshot.
+        assert_eq!(restored.days.len(), 90);
+        refresh_account(&mut restored, 30, now, |_, _, _| {
+            panic!("fresh account must reuse its cache")
+        })
+        .unwrap();
     }
 
     #[test]
