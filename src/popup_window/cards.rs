@@ -1,9 +1,31 @@
 use super::*;
 
+fn card_metadata(value: impl Into<String>, alignment: HorizontalAlignment) -> Element {
+    caption(value)
+        .foreground(ThemeRef::TertiaryText)
+        .horizontal_alignment(alignment)
+        .vertical_alignment(VerticalAlignment::Center)
+        .into()
+}
+
+fn card_status_row(label: &str, value: impl Into<String>) -> Element {
+    hstack((
+        text_block(label)
+            .foreground(ThemeRef::TertiaryText)
+            .vertical_alignment(VerticalAlignment::Center),
+        text_block(value).vertical_alignment(VerticalAlignment::Center),
+    ))
+    .spacing(6.0)
+    .horizontal_alignment(HorizontalAlignment::Right)
+    .vertical_alignment(VerticalAlignment::Center)
+    .into()
+}
+
 pub(super) fn provider_cards(
     provider: ProviderKind,
     is_first: bool,
     limits: &RateLimits,
+    forced_resets: &[crate::reset_feed::ForcedReset],
     show_used_percentage: bool,
     show_usage_pace: bool,
     compact_usage_cards: bool,
@@ -15,6 +37,8 @@ pub(super) fn provider_cards(
     drag_handle: Option<Element>,
     openrouter_actions: Option<OpenRouterPopupActions>,
     provider_error: Option<(&str, Callback<()>)>,
+    forced_reset_hovered: bool,
+    set_forced_reset_hovered: Option<SetState<bool>>,
 ) -> Vec<Element> {
     let (monthly_label, primary_label, secondary_label) = match provider {
         ProviderKind::Cursor => (
@@ -303,6 +327,15 @@ pub(super) fn provider_cards(
         )
     });
     cards.extend(additional_limits);
+    if provider == ProviderKind::Codex
+        && let Some(card) = forced_reset_card(
+            forced_resets,
+            forced_reset_hovered,
+            set_forced_reset_hovered,
+        )
+    {
+        cards.push(card.with_key("codex-tibo-resets"));
+    }
     // Local statistics remain after every rate-limit window.
     if popup_visibility.is_visible(&resets_brick_id(provider), surface, show_provider_tabs)
         && limits.available_reset_count() > 0
@@ -439,38 +472,13 @@ pub(super) fn spending_card_with_title(
         if reset_at.is_some() || expires_soon.is_some() {
             let mut meta: Vec<Element> = Vec::new();
             if let Some(reset) = reset_at {
-                meta.push(
-                    text_block("Resets in")
-                        .foreground(ThemeRef::TertiaryText)
-                        .vertical_alignment(VerticalAlignment::Center)
-                        .into(),
-                );
-                meta.push(
-                    text_block(format_reset_in(Some(reset)))
-                        .vertical_alignment(VerticalAlignment::Center)
-                        .into(),
-                );
+                meta.push(card_status_row("Resets in", format_reset_in(Some(reset))));
             }
             if let Some(expires) = expires_soon {
                 if reset_at.is_some() {
-                    meta.push(
-                        text_block("•")
-                            .foreground(ThemeRef::TertiaryText)
-                            .vertical_alignment(VerticalAlignment::Center)
-                            .into(),
-                    );
+                    meta.push(card_metadata("•", HorizontalAlignment::Right));
                 }
-                meta.push(
-                    text_block("Expires in")
-                        .foreground(ThemeRef::TertiaryText)
-                        .vertical_alignment(VerticalAlignment::Center)
-                        .into(),
-                );
-                meta.push(
-                    text_block(format_reset_in(Some(expires)))
-                        .vertical_alignment(VerticalAlignment::Center)
-                        .into(),
-                );
+                meta.push(card_status_row("Expires in", format_reset_in(Some(expires))));
             }
             right_side.push(
                 hstack(meta)
@@ -1083,21 +1091,8 @@ fn limit_card_base(
     let reset = window.resets_at.map(|at| format_reset_in(Some(at)));
 
     let reset_status: Element = match reset {
-        Some(reset) => hstack((
-            text_block("Resets in")
-                .foreground(ThemeRef::TertiaryText)
-                .vertical_alignment(VerticalAlignment::Center),
-            text_block(reset).vertical_alignment(VerticalAlignment::Center),
-        ))
-        .spacing(6.0)
-        .horizontal_alignment(HorizontalAlignment::Right)
-        .vertical_alignment(VerticalAlignment::Center)
-        .into(),
-        None => text_block("Session not started")
-            .foreground(ThemeRef::TertiaryText)
-            .horizontal_alignment(HorizontalAlignment::Right)
-            .vertical_alignment(VerticalAlignment::Center)
-            .into(),
+        Some(reset) => card_status_row("Resets in", reset),
+        None => card_metadata("Session not started", HorizontalAlignment::Right),
     };
 
     if compact {
@@ -1142,11 +1137,7 @@ fn limit_card_base(
             caption(title.to_uppercase())
                 .foreground(ThemeRef::SecondaryText)
                 .vertical_alignment(VerticalAlignment::Center),
-            caption(pace.summary())
-                .foreground(ThemeRef::SecondaryText)
-                .horizontal_alignment(HorizontalAlignment::Right)
-                .vertical_alignment(VerticalAlignment::Center)
-                .grid_column(1),
+            card_metadata(pace.summary(), HorizontalAlignment::Right).grid_column(1),
         ))
         .columns([GridLength::Star(1.0), GridLength::Auto])
         .rows([GridLength::Auto])
@@ -1275,21 +1266,8 @@ fn limit_card_compact(
         limit_card_presentation(window, show_used_percentage, disabled);
     let reset = window.resets_at.map(|at| format_reset_in(Some(at)));
     let reset_status: Element = match reset {
-        Some(reset) => hstack((
-            text_block("Resets in")
-                .foreground(ThemeRef::TertiaryText)
-                .vertical_alignment(VerticalAlignment::Center),
-            text_block(reset).vertical_alignment(VerticalAlignment::Center),
-        ))
-        .spacing(6.0)
-        .horizontal_alignment(HorizontalAlignment::Right)
-        .vertical_alignment(VerticalAlignment::Center)
-        .into(),
-        None => text_block("Session not started")
-            .foreground(ThemeRef::TertiaryText)
-            .horizontal_alignment(HorizontalAlignment::Right)
-            .vertical_alignment(VerticalAlignment::Center)
-            .into(),
+        Some(reset) => card_status_row("Resets in", reset),
+        None => card_metadata("Session not started", HorizontalAlignment::Right),
     };
     let pace = (!compact && show_usage_pace)
         .then(|| window.pace_tip(show_used_percentage, Utc::now()))
@@ -1300,11 +1278,7 @@ fn limit_card_compact(
             caption(title.to_uppercase())
                 .foreground(ThemeRef::SecondaryText)
                 .vertical_alignment(VerticalAlignment::Center),
-            caption(pace.summary())
-                .foreground(ThemeRef::SecondaryText)
-                .horizontal_alignment(HorizontalAlignment::Right)
-                .vertical_alignment(VerticalAlignment::Center)
-                .grid_column(1),
+            card_metadata(pace.summary(), HorizontalAlignment::Right).grid_column(1),
         ))
         .columns([GridLength::Star(1.0), GridLength::Auto])
         .rows([GridLength::Auto])
@@ -1454,9 +1428,6 @@ pub(super) fn reset_credits_card(limits: &RateLimits) -> Element {
         format!("{count} Banked Resets")
     };
     let expiration = limits.next_reset_credit_expiration();
-    let expiration_label = expiration
-        .map(|expires_at| format!("Expires in {}", format_reset_in(Some(expires_at))))
-        .unwrap_or_else(|| "No expiration date".into());
     let expiration_date = expiration
         .map(|expires_at| {
             let local = expires_at.with_timezone(&Local);
@@ -1468,6 +1439,11 @@ pub(super) fn reset_credits_card(limits: &RateLimits) -> Element {
         })
         .unwrap_or_else(|| "Available to use".into());
 
+    let expiration_status = expiration.map_or_else(
+        || card_metadata("No expiration date", HorizontalAlignment::Right),
+        |expires_at| card_status_row("Expires in", format_reset_in(Some(expires_at))),
+    );
+
     border(
         grid((
             text_block(count_label)
@@ -1475,14 +1451,12 @@ pub(super) fn reset_credits_card(limits: &RateLimits) -> Element {
                 .foreground(ThemeRef::Accent)
                 .vertical_alignment(VerticalAlignment::Center),
             vstack((
-                text_block(expiration_label),
-                caption(expiration_date)
-                    .foreground(ThemeRef::TertiaryText)
-                    .horizontal_alignment(HorizontalAlignment::Right),
+                card_metadata(expiration_date, HorizontalAlignment::Right),
+                expiration_status,
             ))
             .spacing(1.0)
             .horizontal_alignment(HorizontalAlignment::Right)
-            .vertical_alignment(VerticalAlignment::Center)
+            .vertical_alignment(VerticalAlignment::Bottom)
             .grid_column(1),
         ))
         .columns([GridLength::Star(1.0), GridLength::Auto])
@@ -1502,19 +1476,21 @@ pub(super) fn reset_credits_card(limits: &RateLimits) -> Element {
     .into()
 }
 
-/// Shows the nearest confirmed Codex forced resets from the public feed.
+/// Shows the nearest announced Codex forced resets from the public feed.
 ///
 /// This is deliberately a separate card from provider-reported banked reset
 /// credits. The feed parser already discards banked entries; rows without an
 /// optional source still render, but remain non-interactive.
 pub(super) fn forced_reset_card(
     resets: &[crate::reset_feed::ForcedReset],
+    hovered: bool,
+    set_hovered: Option<SetState<bool>>,
 ) -> Option<Element> {
     let now = Utc::now();
     let upcoming = resets
         .iter()
         .filter(|reset| reset.reset_at > now)
-        .take(3)
+        .take(2)
         .collect::<Vec<_>>();
     if upcoming.is_empty() {
         return None;
@@ -1535,28 +1511,26 @@ pub(super) fn forced_reset_card(
                 .as_deref()
                 .filter(|label| !label.trim().is_empty())
                 .unwrap_or("Codex limits");
+            let reset_name = text_block(label)
+                .font_weight(600)
+                .foreground(ThemeRef::Accent)
+                .wrap()
+                .vertical_alignment(VerticalAlignment::Center);
+            let reset_status = card_status_row("Resets in", format_reset_in(Some(reset.reset_at)));
             let row = grid((
                 vstack((
-                    text_block(label)
-                        .font_weight(600)
-                        .wrap()
-                        .vertical_alignment(VerticalAlignment::Center),
-                    caption(date).foreground(ThemeRef::TertiaryText),
+                    caption("Tibo Reset™").foreground(ThemeRef::SecondaryText),
+                    reset_name,
                 ))
-                .spacing(2.0)
+                .spacing(1.0)
                 .vertical_alignment(VerticalAlignment::Center),
                 vstack((
-                    caption("Resets in")
-                        .foreground(ThemeRef::TertiaryText)
-                        .horizontal_alignment(HorizontalAlignment::Right),
-                    text_block(format_reset_in(Some(reset.reset_at)))
-                        .font_weight(600)
-                        .foreground(ThemeRef::Accent)
-                        .horizontal_alignment(HorizontalAlignment::Right),
+                    card_metadata(date, HorizontalAlignment::Right),
+                    reset_status,
                 ))
                 .spacing(1.0)
                 .horizontal_alignment(HorizontalAlignment::Right)
-                .vertical_alignment(VerticalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Bottom)
                 .grid_column(1),
             ))
             .columns([GridLength::Star(1.0), GridLength::Auto])
@@ -1578,21 +1552,47 @@ pub(super) fn forced_reset_card(
         })
         .collect::<Vec<Element>>();
 
-    Some(
-        border(
-            vstack((
-                caption("CODEX FORCED RESETS").foreground(ThemeRef::SecondaryText),
-                vstack(rows).spacing(8.0),
-            ))
-            .spacing(8.0),
-        )
-        .corner_radius(f64::from(popup::CARD_CORNER_RADIUS_DIP))
-        .padding(Thickness::uniform(12.0))
-        .background(ThemeRef::CardBackground)
-        .border_thickness(Thickness::uniform(1.0))
-        .border_brush(ThemeRef::CardStroke)
-        .into(),
-    )
+    let radius = f64::from(popup::CARD_CORNER_RADIUS_DIP);
+    let hover_anim = crate::theme::duration(crate::theme::CONTROL_FASTER_ANIMATION);
+    let content = vstack(rows).spacing(8.0);
+    let mut card = relative_panel::<Vec<Element>>(vec![
+        border(Element::Empty)
+            .background(ThemeRef::CardBackground)
+            .corner_radius(radius)
+            .border_thickness(Thickness::uniform(1.0))
+            .border_brush(ThemeRef::CardStroke)
+            .relative_align_left()
+            .relative_align_right()
+            .relative_align_top()
+            .relative_align_bottom()
+            .into(),
+        border(Element::Empty)
+            .background(ThemeRef::SubtleFill)
+            .opacity(if hovered { 1.0 } else { 0.0 })
+            .with_opacity_transition(hover_anim)
+            .corner_radius(radius)
+            .relative_align_left()
+            .relative_align_right()
+            .relative_align_top()
+            .relative_align_bottom()
+            .into(),
+        border(content)
+            .padding(Thickness::uniform(12.0))
+            .background(Color::transparent())
+            .relative_align_left()
+            .relative_align_right()
+            .relative_align_top()
+            .relative_align_bottom()
+            .into(),
+    ]);
+    if let Some(set_hovered) = set_hovered {
+        let set_on_enter = set_hovered.clone();
+        let set_on_exit = set_hovered;
+        card = card
+            .on_pointer_entered(move |_| set_on_enter.call(true))
+            .on_pointer_exited(move || set_on_exit.call(false));
+    }
+    Some(card.horizontal_alignment(HorizontalAlignment::Stretch).into())
 }
 
 pub(super) fn usage_statistics_card(provider: ProviderKind, limits: &RateLimits) -> Element {

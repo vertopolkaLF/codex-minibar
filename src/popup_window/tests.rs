@@ -176,6 +176,7 @@ fn usage_statistics_section_respects_its_live_toggle() {
         ProviderKind::OpenCodeZen,
         true,
         &limits,
+        &[],
         false,
         true,
         false,
@@ -186,6 +187,8 @@ fn usage_statistics_section_respects_its_live_toggle() {
         ColorScheme::Dark,
         None,
         None,
+        None,
+        false,
         None,
     );
     assert_eq!(cards.len(), 1);
@@ -306,6 +309,7 @@ fn popup_visibility_hides_codex_resets_on_all_but_shows_on_provider_tab() {
         ProviderKind::Codex,
         true,
         &limits,
+        &[],
         false,
         true,
         false,
@@ -317,11 +321,14 @@ fn popup_visibility_hides_codex_resets_on_all_but_shows_on_provider_tab() {
         None,
         None,
         None,
+        false,
+        None,
     );
     let tab_cards = provider_cards(
         ProviderKind::Codex,
         true,
         &limits,
+        &[],
         false,
         true,
         false,
@@ -332,6 +339,8 @@ fn popup_visibility_hides_codex_resets_on_all_but_shows_on_provider_tab() {
         ColorScheme::Dark,
         None,
         None,
+        None,
+        false,
         None,
     );
     assert_eq!(all_cards.len(), 3);
@@ -365,6 +374,7 @@ fn popup_section_all_off_drops_provider_from_home_tab() {
         ProviderKind::Codex,
         true,
         &limits,
+        &[],
         false,
         true,
         false,
@@ -375,6 +385,8 @@ fn popup_section_all_off_drops_provider_from_home_tab() {
         ColorScheme::Dark,
         None,
         None,
+        None,
+        false,
         None,
     );
     assert!(!tab_cards.is_empty());
@@ -473,6 +485,7 @@ fn provider_cards_include_each_additional_limit() {
         ProviderKind::Claude,
         true,
         &limits,
+        &[],
         false,
         true,
         false,
@@ -483,6 +496,8 @@ fn provider_cards_include_each_additional_limit() {
         ColorScheme::Dark,
         None,
         None,
+        None,
+        false,
         None,
     );
     // Heading + 5h + weekly + Fable (no separate plan metadata row).

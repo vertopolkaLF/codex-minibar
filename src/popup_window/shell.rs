@@ -76,6 +76,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     // Rendering observes the same snapshot that the tray consumes; UiState
     // deliberately contains only view metadata, never a second copy of limits.
     let limits = state.current_limits();
+    let forced_resets = state.current_forced_resets();
     let commands = state.worker_commands();
     let ui_dispatcher = cx.use_ui_marshaller();
     let settings_tx = state.settings_tx.clone();
@@ -91,6 +92,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         cx.use_state(None::<TotalSpendPeriod>);
     let (hovered_usage_stats, set_hovered_usage_stats) =
         cx.use_state(None::<UsageStatsHover>);
+    let (hovered_forced_reset_home, set_hovered_forced_reset_home) = cx.use_state(false);
+    let (hovered_forced_reset_provider, set_hovered_forced_reset_provider) = cx.use_state(false);
     // Relative timestamps need an occasional render tick while the popup is
     // visible. `prepare_show_on_ui_thread` requests an immediate render on
     // every open, so there is no reason to reconcile the entire hidden WinUI
@@ -298,10 +301,6 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         }
 
         if view == PopupView::Home {
-            if let Some(card) = forced_reset_card(&state.current_forced_resets()) {
-                body.push(card.with_key("forced-reset-announcements"));
-                has_preceding_section = true;
-            }
             let widgets = visible_popup_widgets(
                 &ui.popup_order,
                 show_total_spend,
@@ -396,6 +395,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                             provider,
                             is_first,
                             limits_for_provider,
+                            &forced_resets,
                             ui.show_used_percentage,
                             ui.show_usage_pace,
                             ui.compact_usage_cards,
@@ -414,6 +414,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                                 }
                             }),
                             provider_error,
+                            hovered_forced_reset_home,
+                            Some(set_hovered_forced_reset_home.clone()),
                         ))
                         .spacing(6.0)
                         .with_key(format!(
@@ -514,6 +516,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                         provider,
                         !has_preceding_section,
                         limits_for_provider,
+                        &forced_resets,
                         ui.show_used_percentage,
                         ui.show_usage_pace,
                         ui.compact_usage_cards,
@@ -530,6 +533,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                             now: Utc::now(),
                         }),
                         provider_error,
+                        hovered_forced_reset_provider,
+                        Some(set_hovered_forced_reset_provider.clone()),
                     ))
                     .spacing(6.0)
                     .with_key(format!(
@@ -570,7 +575,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         .current_forced_resets()
         .iter()
         .filter(|reset| reset.reset_at > Utc::now())
-        .take(3)
+        .take(2)
         .count();
 
     let footer_background = match color_scheme {
