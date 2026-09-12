@@ -12,6 +12,7 @@ export type Presentation =
   | "solid"
   | "progress_horizontal"
   | "progress_vertical"
+  | "progress_rail"
   | "reset_time"
   | "reset_countdown";
 export type WidgetKind = "single_limit" | "dual_limit";
@@ -63,6 +64,7 @@ function normalizePresentation(value: unknown): Presentation {
     case "solid":
     case "progress_horizontal":
     case "progress_vertical":
+    case "progress_rail":
     case "reset_time":
     case "reset_countdown":
       return value;
@@ -363,24 +365,25 @@ function fittedFontSize(text: string, base: number): number {
   return base;
 }
 
-function formatCountdown(reset: string | null): string | null {
-  const totalMinutes = remainingResetMinutes(reset);
-  if (totalMinutes === null || totalMinutes <= 0) return null;
-  const days = Math.floor(totalMinutes / 1_440);
-  const hours = Math.floor((totalMinutes % 1_440) / 60);
-  const minutes = totalMinutes % 60;
-  if (days > 0) return `${days}d ${hours}h`;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  return `${minutes}m`;
-}
-
-function countdownParts(reset: string | null): { hours: string; minutes: string } | null {
+function countdownParts(reset: string | null): { days: string; hours: string; minutes: string } | null {
   const totalMinutes = remainingResetMinutes(reset);
   if (totalMinutes === null || totalMinutes <= 0) return null;
   return {
-    hours: String(Math.floor(totalMinutes / 60)),
+    days: String(Math.floor(totalMinutes / 1_440)),
+    hours: String(Math.floor((totalMinutes % 1_440) / 60)).padStart(2, "0"),
     minutes: String(totalMinutes % 60).padStart(2, "0"),
   };
+}
+
+function formatCountdownClock(reset: string | null): string | null {
+  const parts = countdownParts(reset);
+  if (!parts) return null;
+  if (parts.days === "0") return `${Number(parts.hours)}:${parts.minutes}`;
+  return `${parts.days}:${parts.hours}:${parts.minutes}`;
+}
+
+function formatCountdown(reset: string | null): string | null {
+  return formatCountdownClock(reset);
 }
 
 function remainingResetMinutes(reset: string | null): number | null {
@@ -401,9 +404,9 @@ function resetCopy(window: WindowSnapshot, display: ResetDisplay): { label: stri
   if (display === "time") {
     return { label: "reset time", value: formatResetTime(window.resets_at) };
   }
-  const parts = countdownParts(window.resets_at);
-  if (!parts) return null;
-  return { label: "reset in", value: `${parts.hours}:${parts.minutes}` };
+  const value = formatCountdownClock(window.resets_at);
+  if (!value) return null;
+  return { label: "reset in", value };
 }
 
 function formatResetTime(reset: string | null): string {
@@ -586,6 +589,54 @@ function renderProgress(rows: MetricRow[], settings: ActionSettings, provider: P
   return svg(`${body}${watermark}`);
 }
 
+function renderProgressRail(rows: MetricRow[], settings: ActionSettings, provider: ProviderSnapshot): string {
+  const font = fontFamily(settings);
+  const mark = resolvedProviderMark(settings);
+  const watermark = mark === "logo" ? providerLogo(provider, 101, settings) : "";
+  const railWidth = Math.round(144 * 0.10);
+  const textX = railWidth + 8;
+  const textMax = (144 - textX - 8) * 0.9;
+
+  if (rows.length === 1) {
+    const row = rows[0];
+    const color = statusColor(row.window.remaining_percent);
+    const value = displayedValue(row, settings);
+    const percent = formatPercent(value, settings);
+    const reset = resetCopy(row.window, settings.resetDisplay);
+    const percentSize = fillFittedSize(percent, reset ? 40 : 46, textMax);
+    const percentY = Math.round(72 + percentSize * 0.36);
+    const nameColor = settings.coloredProviderMark ? brandHex(provider) : "#c8c8c8";
+    const name = mark === "text"
+      ? `<text x="${textX}" y="30" text-anchor="start" font-family="${font}" font-size="${provider.name.length > 10 ? 14 : 17}" font-weight="700" fill="${nameColor}">${escapeXml(provider.name)}</text>`
+      : "";
+    const resetMarkup = reset
+      ? `<text x="${textX}" y="128" text-anchor="start" font-family="${font}" font-size="22" font-weight="600" fill="#ececec">${escapeXml(reset.value)}</text>`
+      : "";
+    const track = `<rect x="0" y="0" width="${railWidth}" height="144" fill="${darkenStatusColor(color)}"/>`;
+    const fill = progressFill(value, color, "vertical", 0, 0, railWidth, 144);
+    return svg(`<rect width="144" height="144" fill="#000"/>${track}${fill}${watermark}${name}<text x="${textX}" y="${percentY}" text-anchor="start" font-family="${font}" font-size="${percentSize}" font-weight="700" fill="${color}">${escapeXml(percent)}</text>${resetMarkup}`);
+  }
+
+  const bandHeight = 144 / rows.length;
+  const body = rows.map((row, index) => {
+    const color = statusColor(row.window.remaining_percent);
+    const value = displayedValue(row, settings);
+    const percent = formatPercent(value, settings);
+    const reset = resetCopy(row.window, settings.resetDisplay);
+    const showReset = reset !== null && rows.length === 2;
+    const fontSize = fillFittedSize(percent, showReset ? 24 : rows.length === 2 ? 30 : 22, textMax);
+    const y = bandHeight * index;
+    const textY = showReset
+      ? y + bandHeight / 2 + fontSize * 0.18
+      : y + bandHeight / 2 + fontSize * 0.36;
+    const resetMarkup = showReset && reset
+      ? `<text x="${textX}" y="${(y + bandHeight - 10).toFixed(1)}" text-anchor="start" font-family="${font}" font-size="16" font-weight="600" fill="#ececec">${escapeXml(reset.value)}</text>`
+      : "";
+    return `<rect x="0" y="${y}" width="${railWidth}" height="${bandHeight}" fill="${darkenStatusColor(color)}"/>${progressFill(value, color, "vertical", 0, y, railWidth, bandHeight)}<text x="${textX}" y="${textY.toFixed(1)}" text-anchor="start" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="${color}">${escapeXml(percent)}</text>${resetMarkup}`;
+  }).join("");
+  return svg(`<rect width="144" height="144" fill="#000"/>${watermark}${body}`);
+}
+
 function renderRings(rows: MetricRow[], settings: ActionSettings, provider: ProviderSnapshot): string {
   if (rows.length === 1) return renderSingleRing(rows[0], settings, provider);
   return renderDualRings(rows, settings, provider);
@@ -698,17 +749,18 @@ function renderResetTime(rows: MetricRow[], settings: ActionSettings): string {
 function renderResetCountdown(rows: MetricRow[], settings: ActionSettings): string {
   const font = fontFamily(settings);
   if (rows.length === 1) {
-    const parts = countdownParts(rows[0].window.resets_at);
-    if (!parts) return renderNoData(settings);
+    const clock = formatCountdownClock(rows[0].window.resets_at);
+    if (!clock) return renderNoData(settings);
     const color = statusColor(rows[0].window.remaining_percent);
-    return svg(`<text x="72" y="64" text-anchor="middle" font-family="${font}" font-size="52" font-weight="700" fill="${color}">${escapeXml(parts.hours)}</text><text x="72" y="116" text-anchor="middle" font-family="${font}" font-size="52" font-weight="700" fill="${color}">${escapeXml(parts.minutes)}</text>`);
+    const fontSize = fillFittedSize(clock, 44);
+    return svg(`<text x="72" y="88" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="${color}">${escapeXml(clock)}</text>`);
   }
-  const fontSize = rows.length === 2 ? 38 : 28;
   const positions = rows.length === 2 ? [66, 108] : [48, 84, 120];
   const times = rows.map((row, index) => {
-    const parts = countdownParts(row.window.resets_at);
-    if (!parts) return "";
-    return `<text x="72" y="${positions[index]}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="${statusColor(row.window.remaining_percent)}">${escapeXml(`${parts.hours}:${parts.minutes}`)}</text>`;
+    const clock = formatCountdownClock(row.window.resets_at);
+    if (!clock) return "";
+    const fontSize = fillFittedSize(clock, rows.length === 2 ? 28 : 22);
+    return `<text x="72" y="${positions[index]}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="${statusColor(row.window.remaining_percent)}">${escapeXml(clock)}</text>`;
   }).join("");
   return svg(times);
 }
@@ -729,6 +781,8 @@ function renderSvg(provider: ProviderSnapshot | null, settings: ActionSettings, 
       return renderProgress(rows, settings, provider, "horizontal");
     case "progress_vertical":
       return renderProgress(rows, settings, provider, "vertical");
+    case "progress_rail":
+      return renderProgressRail(rows, settings, provider);
     case "reset_time":
       return renderResetTime(rows, settings);
     case "reset_countdown":

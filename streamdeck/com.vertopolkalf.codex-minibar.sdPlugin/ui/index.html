@@ -35,6 +35,7 @@
     <option value="solid">Solid status color</option>
     <option value="progress_horizontal">Horizontal progress bar</option>
     <option value="progress_vertical">Vertical progress bar</option>
+    <option value="progress_rail">Left rail + info</option>
     <option value="numbers">Stacked numbers</option>
     <option value="bars">Stacked bars</option>
     <option value="reset_time">Reset time</option>
@@ -43,7 +44,7 @@
 
   <label for="resetDisplay">Reset display</label>
   <select id="resetDisplay">
-    <option value="countdown">Countdown (1:42)</option>
+    <option value="countdown">Countdown (3:13:02)</option>
     <option value="time">Clock time (17:40)</option>
     <option value="hidden">Hidden</option>
   </select>
@@ -154,7 +155,7 @@
       const singleMetricId = input?.singleMetricId ?? incomingMetrics[0] ?? metrics[0]?.[0] ?? defaultSettings.singleMetricId;
       const reset = input?.resetDisplay
         ?? (input?.presentation === "reset_time" ? "time" : input?.showCountdown === false ? "hidden" : defaultSettings.resetDisplay);
-      const presentationKind = ["numbers", "bars", "rings", "solid", "progress_horizontal", "progress_vertical", "reset_time", "reset_countdown"].includes(input?.presentation)
+      const presentationKind = ["numbers", "bars", "rings", "solid", "progress_horizontal", "progress_vertical", "progress_rail", "reset_time", "reset_countdown"].includes(input?.presentation)
         ? input.presentation
         : defaultSettings.presentation;
       return {
