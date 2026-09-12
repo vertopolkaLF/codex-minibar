@@ -1015,7 +1015,9 @@ pub struct PopupVisibility {
 
 impl PopupVisibility {
     pub fn default_brick_visibility(brick_id: &str) -> PopupSurfaceVisibility {
-        if brick_id.ends_with(".usage") {
+        if brick_id == "cursor.allModels" {
+            PopupSurfaceVisibility::both(false)
+        } else if brick_id.ends_with(".usage") {
             PopupSurfaceVisibility::split(false, true)
         } else {
             PopupSurfaceVisibility::both(true)
@@ -2813,7 +2815,8 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                         } else if brick_id.ends_with(".resets") {
                             (show_banked_resets, show_banked_resets)
                         } else {
-                            (true, true)
+                            let default = PopupVisibility::default_brick_visibility(&brick_id);
+                            (default.all_tab, default.provider_tab)
                         };
                         let mut entry = toml::map::Map::new();
                         entry.insert("all_tab".into(), toml::Value::Boolean(all_tab));
@@ -2970,6 +2973,16 @@ mod tests {
             PopupSurface::HomeTab,
             true
         ));
+        assert!(!value.popup_visibility.is_visible(
+            "cursor.allModels",
+            PopupSurface::HomeTab,
+            true
+        ));
+        assert!(!value.popup_visibility.is_visible(
+            "cursor.allModels",
+            PopupSurface::ProviderTab,
+            true
+        ));
         assert!(value.popup_visibility.provider_shown_on_all(ProviderKind::Codex));
         assert!(value.show_total_spend_on_all_tab);
         assert_eq!(
@@ -3103,6 +3116,16 @@ show_usage_stats = false
         ));
         assert!(!loaded.popup_visibility.is_visible(
             "codex.usage",
+            PopupSurface::ProviderTab,
+            true
+        ));
+        assert!(!loaded.popup_visibility.is_visible(
+            "cursor.allModels",
+            PopupSurface::HomeTab,
+            true
+        ));
+        assert!(!loaded.popup_visibility.is_visible(
+            "cursor.allModels",
             PopupSurface::ProviderTab,
             true
         ));

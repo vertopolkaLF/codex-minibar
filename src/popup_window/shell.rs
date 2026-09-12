@@ -88,6 +88,18 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let (overview_breakdown, set_overview_breakdown) = cx.use_state(BreakdownMode::default());
     let (overview_chart_hover, set_overview_chart_hover) = cx.use_state(None::<usize>);
     let (pager, pager_dispatch) = cx.use_reducer_fn(reduce_pager, PagerState::default());
+    cx.use_effect((), {
+        let pager_dispatch = pager_dispatch.clone();
+        move || {
+            if let Some(request) = take_popup_view_request() {
+                let view = match request {
+                    PendingPopupView::Home => PopupView::Home,
+                    PendingPopupView::Provider(provider) => PopupView::from_provider(provider),
+                };
+                pager_dispatch.call(PagerAction::Select(view));
+            }
+        }
+    });
     let (hovered_combined_usage_period, set_hovered_combined_usage_period) =
         cx.use_state(None::<TotalSpendPeriod>);
     let (hovered_usage_stats, set_hovered_usage_stats) =
@@ -267,6 +279,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         ui.openrouter_enabled,
     );
     let can_reorder_widgets = selected_view == PopupView::Home && all_tab_widgets.len() > 1;
+    let forced_reset_count = upcoming_forced_reset_count(&forced_resets);
     let build_body = |view: PopupView, retain_disabled_detail: bool| {
         let surface = if view == PopupView::Home {
             PopupSurface::HomeTab
@@ -571,13 +584,6 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
 
     let body = build_body(selected_view, false);
     let outgoing_body = pager.outgoing.map(|view| build_body(view, true));
-    let forced_reset_count = state
-        .current_forced_resets()
-        .iter()
-        .filter(|reset| reset.reset_at > Utc::now())
-        .take(2)
-        .count();
-
     let footer_background = match color_scheme {
         // Low-alpha overlay keeps the selected material visible beneath chrome.
         ColorScheme::Dark => Color {
@@ -919,7 +925,13 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             ui.cursor_enabled,
             ui.openrouter_enabled,
             popup_order_key(&ui.popup_order),
-            popup_body_height_key(&limits, view, ui.show_used_percentage, ui.show_usage_pace),
+            popup_body_height_key(
+                &limits,
+                view,
+                ui.show_used_percentage,
+                ui.show_usage_pace,
+                forced_reset_count,
+            ),
             ui.compact_usage_cards,
             ui.usage_stats_enabled,
             ui.settings_revision,

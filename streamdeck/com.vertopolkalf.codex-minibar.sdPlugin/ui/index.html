@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Codex Minibar Quota Indicator</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; padding: 12px; background: #202124; color: #f1f3f5; font: 13px system-ui, sans-serif; }
+    label { display: block; margin: 0 0 6px; color: #bfc5ce; font-size: 11px; }
+    select { box-sizing: border-box; width: 100%; margin: 0 0 12px; padding: 6px; border: 1px solid #4b525c; border-radius: 4px; background: #30343b; color: #f1f3f5; }
+    fieldset { margin: 0 0 12px; padding: 8px; border: 1px solid #4b525c; border-radius: 4px; }
+    legend { padding: 0 4px; color: #bfc5ce; font-size: 11px; }
+    .check { display: flex; gap: 7px; align-items: center; margin: 6px 0; color: #f1f3f5; }
+    .check input { margin: 0; }
+    .hint { color: #8d96a4; font-size: 11px; line-height: 1.35; }
+  </style>
+</head>
+<body>
+  <label for="provider">Provider</label>
+  <select id="provider"></select>
+
+  <label for="widget">Widget</label>
+  <select id="widget">
+    <option value="single_limit">Single limit</option>
+    <option value="dual_limit">5h + Weekly</option>
+  </select>
+
+  <label for="singleMetric">Limit</label>
+  <select id="singleMetric"></select>
+  <p id="dualHint" class="hint" hidden></p>
+
+  <label for="resetDisplay">Reset display</label>
+  <select id="resetDisplay">
+    <option value="countdown">Countdown (1:42)</option>
+    <option value="time">Clock time (17:40)</option>
+    <option value="hidden">Hidden</option>
+  </select>
+
+  <label for="valueMode">Value</label>
+  <select id="valueMode">
+    <option value="remaining">Remaining</option>
+    <option value="used">Used</option>
+  </select>
+
+  <label for="clickAction">On key press</label>
+  <select id="clickAction">
+    <option value="open_popup">Open Minibar popup</option>
+    <option value="open_provider">Open this provider</option>
+    <option value="cycle_provider">Cycle providers</option>
+  </select>
+
+  <fieldset id="cycleOptions" hidden>
+    <legend>Cycle through</legend>
+    <div id="cycleProviders"></div>
+  </fieldset>
+  <p class="hint">The button reads sanitized data from the local Codex Minibar bridge. If Minibar is closed, pressing the key starts it.</p>
+
+  <script>
+    const providers = {
+      codex: { name: "Codex", metrics: [["codex.session", "5h session"], ["codex.weekly", "Weekly"]] },
+      claude: { name: "Claude", metrics: [["claude.session", "5h session"], ["claude.weekly", "Weekly"]] },
+      cursor: { name: "Cursor", metrics: [["cursor.auto", "Cursor Models"], ["cursor.api", "Other Models"], ["cursor.allModels", "All Models"], ["cursor.grokBot", "Grok Bot"]] },
+      opencode: { name: "OpenCode Zen", metrics: [] },
+      "opencode-go": { name: "OpenCode Go", metrics: [["opencode-go.session", "5h session"], ["opencode-go.weekly", "Weekly"], ["opencode-go.monthly", "Monthly"]] },
+      openrouter: { name: "OpenRouter", metrics: [["openrouter.limit", "Spending limit"]] }
+    };
+    const defaultSettings = { provider: "codex", widget: "single_limit", singleMetricId: "codex.session", metricIds: ["codex.session"], presentation: "rings", resetDisplay: "countdown", valueMode: "remaining", showCountdown: true, clickAction: "open_popup", cycleProviders: ["codex", "claude", "cursor"], cycleIndex: 0 };
+    let settings = { ...defaultSettings };
+    let websocket;
+    let context;
+    const providerSelect = document.querySelector("#provider");
+    const widget = document.querySelector("#widget");
+    const singleMetric = document.querySelector("#singleMetric");
+    const dualHint = document.querySelector("#dualHint");
+    const resetDisplay = document.querySelector("#resetDisplay");
+    const valueMode = document.querySelector("#valueMode");
+    const clickAction = document.querySelector("#clickAction");
+    const cycleOptions = document.querySelector("#cycleOptions");
+    const cycleProviders = document.querySelector("#cycleProviders");
+
+    for (const [id, provider] of Object.entries(providers)) {
+      const option = document.createElement("option");
+      option.value = id;
+      option.textContent = provider.name;
+      providerSelect.append(option);
+    }
+
+    function sendSettings() {
+      if (!websocket || websocket.readyState !== WebSocket.OPEN || !context) return;
+      websocket.send(JSON.stringify({ event: "setSettings", context, payload: settings }));
+    }
+    function providerMetrics(provider = providers[providerSelect.value] ?? providers.codex) {
+      return provider?.metrics ?? [];
+    }
+    function normalizeSettings(input) {
+      const incomingMetrics = Array.isArray(input?.metricIds) ? input.metricIds.filter(Boolean) : [];
+      const provider = providers[input?.provider] ? input.provider : defaultSettings.provider;
+      const metrics = providerMetrics(providers[provider]);
+      const widgetKind = input?.widget ?? (incomingMetrics.length > 1 ? "dual_limit" : defaultSettings.widget);
+      const singleMetricId = input?.singleMetricId ?? incomingMetrics[0] ?? metrics[0]?.[0] ?? defaultSettings.singleMetricId;
+      const reset = input?.resetDisplay
+        ?? (input?.presentation === "reset_time" ? "time" : input?.showCountdown === false ? "hidden" : defaultSettings.resetDisplay);
+      return {
+        ...defaultSettings,
+        ...(input ?? {}),
+        provider,
+        widget: widgetKind === "dual_limit" ? "dual_limit" : "single_limit",
+        singleMetricId,
+        metricIds: incomingMetrics.length ? incomingMetrics : [singleMetricId],
+        resetDisplay: ["countdown", "time", "hidden"].includes(reset) ? reset : defaultSettings.resetDisplay,
+      };
+    }
+    function renderMetrics() {
+      const provider = providers[providerSelect.value] ?? providers.codex;
+      const metrics = providerMetrics(provider);
+      singleMetric.replaceChildren();
+      for (const [id, label] of metrics) {
+        const option = document.createElement("option");
+        option.value = id;
+        option.textContent = label;
+        singleMetric.append(option);
+      }
+      singleMetric.value = settings.singleMetricId;
+      singleMetric.disabled = settings.widget !== "single_limit" || metrics.length === 0;
+      widget.querySelector('[value="dual_limit"]').textContent = metrics.length >= 2
+        ? `${metrics[0][1]} + ${metrics[1][1]}`
+        : "Two limits (unavailable)";
+      widget.querySelector('[value="dual_limit"]').disabled = metrics.length < 2;
+      dualHint.hidden = settings.widget !== "dual_limit";
+      dualHint.textContent = settings.widget === "dual_limit"
+        ? `Uses ${metrics.slice(0, 2).map(metric => metric[1]).join(" + ")} on this provider.`
+        : "";
+    }
+    function renderCycleProviders() {
+      cycleProviders.replaceChildren();
+      for (const [id, provider] of Object.entries(providers)) {
+        const wrapper = document.createElement("label");
+        wrapper.className = "check";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = settings.cycleProviders.includes(id);
+        checkbox.addEventListener("change", () => {
+          settings.cycleProviders = [...cycleProviders.querySelectorAll("input:checked")].map(input => input.dataset.provider);
+          settings.cycleIndex = 0;
+          sendSettings();
+        });
+        checkbox.dataset.provider = id;
+        wrapper.append(checkbox, document.createTextNode(provider.name));
+        cycleProviders.append(wrapper);
+      }
+    }
+    function render() {
+      providerSelect.value = settings.provider;
+      widget.value = settings.widget;
+      singleMetric.value = settings.singleMetricId;
+      resetDisplay.value = settings.resetDisplay;
+      valueMode.value = settings.valueMode;
+      clickAction.value = settings.clickAction;
+      cycleOptions.hidden = settings.clickAction !== "cycle_provider";
+      renderMetrics();
+      renderCycleProviders();
+    }
+    providerSelect.addEventListener("change", () => {
+      settings.provider = providerSelect.value;
+      const metrics = providerMetrics(providers[settings.provider]);
+      settings.singleMetricId = metrics[0]?.[0] ?? "";
+      settings.metricIds = metrics.slice(0, 2).map(metric => metric[0]);
+      if (metrics.length < 2 && settings.widget === "dual_limit") settings.widget = "single_limit";
+      render();
+      sendSettings();
+    });
+    widget.addEventListener("change", () => {
+      settings.widget = widget.value;
+      const metrics = providerMetrics(providers[settings.provider]);
+      settings.metricIds = metrics.slice(0, settings.widget === "dual_limit" ? 2 : 1).map(metric => metric[0]);
+      if (settings.widget === "single_limit" && !metrics.some(metric => metric[0] === settings.singleMetricId)) {
+        settings.singleMetricId = metrics[0]?.[0] ?? "";
+      }
+      render();
+      sendSettings();
+    });
+    singleMetric.addEventListener("change", () => {
+      settings.singleMetricId = singleMetric.value;
+      settings.metricIds = [settings.singleMetricId];
+      sendSettings();
+    });
+    resetDisplay.addEventListener("change", () => {
+      settings.resetDisplay = resetDisplay.value;
+      settings.showCountdown = settings.resetDisplay !== "hidden";
+      sendSettings();
+    });
+    valueMode.addEventListener("change", () => { settings.valueMode = valueMode.value; sendSettings(); });
+    clickAction.addEventListener("change", () => { settings.clickAction = clickAction.value; render(); sendSettings(); });
+    window.connectElgatoStreamDeckSocket = (port, uuid, registerEvent, info, actionInfo) => {
+      const parsed = JSON.parse(actionInfo);
+      context = parsed.context;
+      settings = normalizeSettings(parsed.payload?.settings ?? parsed.settings ?? {});
+      websocket = new WebSocket(`ws://127.0.0.1:${port}`);
+      websocket.addEventListener("open", () => websocket.send(JSON.stringify({ event: registerEvent, uuid })));
+      render();
+    };
+    render();
+  </script>
+</body>
+</html>

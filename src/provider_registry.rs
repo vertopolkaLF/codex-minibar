@@ -75,6 +75,11 @@ const CURSOR_METRICS: &[MetricDescriptor] = &[
         source: MetricSource::Additional("cursor-api"),
     },
     MetricDescriptor {
+        id: "cursor.allModels",
+        label: "All Models",
+        source: MetricSource::Additional("cursor-all-models"),
+    },
+    MetricDescriptor {
         id: "cursor.grokBot",
         label: "Grok Bot",
         source: MetricSource::Additional("cursor-grok-bot"),
@@ -534,6 +539,19 @@ mod tests {
             )
             .len(),
             0
+        );
+    }
+
+    #[test]
+    fn cursor_all_models_maps_to_the_catalog_brick() {
+        assert_eq!(
+            additional_limit_brick_id(ProviderKind::Cursor, "cursor-all-models"),
+            "cursor.allModels"
+        );
+        assert!(
+            catalog_brick_ids(ProviderKind::Cursor)
+                .iter()
+                .any(|id| id == "cursor.allModels")
         );
     }
 

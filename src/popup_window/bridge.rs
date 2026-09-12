@@ -77,6 +77,7 @@ pub(super) fn start_background_bridge(
     let mut notify_on_update = state.settings.notifications.update_available;
 
     thread::spawn(move || {
+        let streamdeck_rx = crate::streamdeck::start_server(Arc::clone(&state));
         let mut tray = TrayManager::new();
         let fallback_attempt = state.last_activation_at;
         let mut notification_settings = state.settings.notifications.clone();
@@ -400,11 +401,32 @@ pub(super) fn start_background_bridge(
             }
         };
 
+        let drain_streamdeck = || {
+            while let Ok(command) = streamdeck_rx.try_recv() {
+                match command {
+                    crate::streamdeck::Command::OpenPopup { provider } => {
+                        let ui_dispatcher = ui_dispatcher.clone();
+                        ui_dispatcher.dispatch(move || {
+                            match provider {
+                                Some(provider) =>
+                                    crate::popup_window::request_provider_view(provider),
+                                None => crate::popup_window::request_home_view(),
+                            }
+                            if popup::prepare_show_on_ui_thread() {
+                                popup::show_near_cursor();
+                            }
+                        });
+                    }
+                }
+            }
+        };
+
         let Some(events) = events else {
             publish_popup_ui(&set_ui, &ui);
             loop {
                 popup::pump_messages();
                 drain_toast_update();
+                drain_streamdeck();
                 drain_usage_actions(
                     &mut ui,
                     &set_ui,
@@ -445,6 +467,7 @@ pub(super) fn start_background_bridge(
         loop {
             popup::pump_messages();
             drain_toast_update();
+            drain_streamdeck();
             drain_usage_actions(
                 &mut ui,
                 &set_ui,

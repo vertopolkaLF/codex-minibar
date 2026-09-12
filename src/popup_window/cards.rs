@@ -672,6 +672,7 @@ pub(super) fn popup_body_height_key(
     view: PopupView,
     show_used_percentage: bool,
     show_usage_pace: bool,
+    forced_reset_count: usize,
 ) -> String {
     let mut key = String::new();
     let providers: Vec<ProviderKind> = match view {
@@ -737,6 +738,9 @@ pub(super) fn popup_body_height_key(
                 ));
             }
         }
+    }
+    if matches!(view, PopupView::Home | PopupView::Codex) {
+        key.push_str(&format!("|tibo-resets:{forced_reset_count}"));
     }
     key
 }
@@ -1593,6 +1597,17 @@ pub(super) fn forced_reset_card(
             .on_pointer_exited(move || set_on_exit.call(false));
     }
     Some(card.horizontal_alignment(HorizontalAlignment::Stretch).into())
+}
+
+pub(super) fn upcoming_forced_reset_count(
+    resets: &[crate::reset_feed::ForcedReset],
+) -> usize {
+    let now = Utc::now();
+    resets
+        .iter()
+        .filter(|reset| reset.reset_at > now)
+        .take(2)
+        .count()
 }
 
 pub(super) fn usage_statistics_card(provider: ProviderKind, limits: &RateLimits) -> Element {
