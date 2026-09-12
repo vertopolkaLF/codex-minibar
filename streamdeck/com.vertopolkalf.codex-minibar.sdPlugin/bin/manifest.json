@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "UUID": "com.vertopolkalf.codex-minibar",
+  "Name": "Codex Minibar",
+  "Version": "0.1.0.2",
+  "Author": "vertopolkalf",
+  "Description": "Live Codex, Claude, Cursor, OpenCode, and OpenRouter quota indicators.",
+  "Icon": "imgs/plugin",
+  "CategoryIcon": "imgs/plugin",
+  "Category": "Codex Minibar",
+  "CodePath": "bin/plugin.js",
+  "SDKVersion": 3,
+  "Nodejs": {
+    "Version": "20"
+  },
+  "Software": {
+    "MinimumVersion": "6.9"
+  },
+  "OS": [
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    }
+  ],
+  "Actions": [
+    {
+      "UUID": "com.vertopolkalf.codex-minibar.quota-indicator",
+      "Name": "Quota Indicator",
+      "Tooltip": "Show provider quota and reset countdown",
+      "Icon": "imgs/actions/quota-indicator",
+      "States": [
+        {
+          "Image": "imgs/actions/quota-indicator"
+        },
+        {
+          "Image": "imgs/actions/quota-indicator-on"
+        }
+      ],
+      "PropertyInspectorPath": "ui/index.html"
+    }
+  ]
+}

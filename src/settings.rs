@@ -10,7 +10,7 @@ use chrono::{DateTime, Local, Timelike};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 35;
+pub const SETTINGS_VERSION: u32 = 36;
 
 /// 255 until `TimeFormat::apply` runs so first paint can still follow Windows.
 static TIME_FORMAT: AtomicU8 = AtomicU8::new(u8::MAX);
@@ -197,13 +197,6 @@ impl BottomBarSize {
         match self {
             Self::Comfortable => 24.0,
             Self::Compact => 18.0,
-        }
-    }
-
-    pub const fn update_button_padding(self) -> f64 {
-        match self {
-            Self::Comfortable => 12.0,
-            Self::Compact => 10.0,
         }
     }
 }
@@ -526,6 +519,61 @@ pub enum UsageRefreshInterval {
     Minutes30,
     Minutes45,
     Minutes60,
+}
+
+/// How often the app checks the public Codex forced-reset feed.
+///
+/// The feed is deliberately slower than provider quota polling: it is backed
+/// by a GitHub file that changes only when Tibo announces a reset.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResetAnnouncementRefreshInterval {
+    Minutes15,
+    Minutes30,
+    #[default]
+    Hour1,
+    Hours3,
+    Hours6,
+    Hours12,
+    Daily,
+}
+
+impl ResetAnnouncementRefreshInterval {
+    pub const fn seconds(self) -> u64 {
+        match self {
+            Self::Minutes15 => 15 * 60,
+            Self::Minutes30 => 30 * 60,
+            Self::Hour1 => 60 * 60,
+            Self::Hours3 => 3 * 60 * 60,
+            Self::Hours6 => 6 * 60 * 60,
+            Self::Hours12 => 12 * 60 * 60,
+            Self::Daily => 24 * 60 * 60,
+        }
+    }
+
+    pub const fn index(self) -> i32 {
+        match self {
+            Self::Minutes15 => 0,
+            Self::Minutes30 => 1,
+            Self::Hour1 => 2,
+            Self::Hours3 => 3,
+            Self::Hours6 => 4,
+            Self::Hours12 => 5,
+            Self::Daily => 6,
+        }
+    }
+
+    pub const fn from_index(index: i32) -> Self {
+        match index {
+            0 => Self::Minutes15,
+            1 => Self::Minutes30,
+            3 => Self::Hours3,
+            4 => Self::Hours6,
+            5 => Self::Hours12,
+            6 => Self::Daily,
+            _ => Self::Hour1,
+        }
+    }
 }
 
 impl UsageRefreshInterval {
@@ -960,7 +1008,9 @@ pub struct PopupVisibility {
 
 impl PopupVisibility {
     pub fn default_brick_visibility(brick_id: &str) -> PopupSurfaceVisibility {
-        if brick_id.ends_with(".usage") {
+        if brick_id == "cursor.allModels" {
+            PopupSurfaceVisibility::both(false)
+        } else if brick_id.ends_with(".usage") {
             PopupSurfaceVisibility::split(false, true)
         } else {
             PopupSurfaceVisibility::both(true)
@@ -1501,7 +1551,8 @@ pub struct NotificationSettings {
     pub activation_failure: bool,
     pub codex_unavailable: bool,
     pub approaching_reset: bool,
-    /// Notify when a rate-limit window resets (`resets_at` changes).
+    /// Notify when the provider API reports that a rate-limit window reset
+    /// (`resets_at` changes). This is never driven by the public reset feed.
     pub limits_changed: bool,
     /// Notify when remaining session usage drops to [`Self::low_usage_threshold_percent`].
     pub low_usage_enabled: bool,
@@ -1514,6 +1565,11 @@ pub struct NotificationSettings {
     pub weekly_low_usage_threshold_percent: u8,
     /// Toast when a newer application release is discovered.
     pub update_available: bool,
+    /// Read the public GitHub feed containing announced Codex forced resets.
+    pub forced_reset_feed_enabled: bool,
+    /// Show a Windows toast when new forced-reset information arrives. This is
+    /// not the API-driven notification that confirms an actual reset.
+    pub forced_reset_notifications: bool,
 }
 
 impl Default for NotificationSettings {
@@ -1529,6 +1585,8 @@ impl Default for NotificationSettings {
             weekly_low_usage_enabled: false,
             weekly_low_usage_threshold_percent: 20,
             update_available: true,
+            forced_reset_feed_enabled: true,
+            forced_reset_notifications: true,
         }
     }
 }
@@ -1571,6 +1629,7 @@ pub struct Settings {
     pub usage_stats_enabled: bool,
     pub limit_refresh_interval: LimitRefreshInterval,
     pub usage_refresh_interval: UsageRefreshInterval,
+    pub reset_announcement_refresh_interval: ResetAnnouncementRefreshInterval,
     pub start_at_login: bool,
     pub show_used_percentage: bool,
     pub show_usage_pace: bool,
@@ -1639,6 +1698,7 @@ impl Default for Settings {
             usage_stats_enabled: true,
             limit_refresh_interval: LimitRefreshInterval::default(),
             usage_refresh_interval: UsageRefreshInterval::default(),
+            reset_announcement_refresh_interval: ResetAnnouncementRefreshInterval::default(),
             start_at_login: true,
             show_used_percentage: false,
             show_usage_pace: true,
@@ -2748,7 +2808,8 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                         } else if brick_id.ends_with(".resets") {
                             (show_banked_resets, show_banked_resets)
                         } else {
-                            (true, true)
+                            let default = PopupVisibility::default_brick_visibility(&brick_id);
+                            (default.all_tab, default.provider_tab)
                         };
                         let mut entry = toml::map::Map::new();
                         entry.insert("all_tab".into(), toml::Value::Boolean(all_tab));
@@ -2827,6 +2888,26 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.insert("version".into(), toml::Value::Integer(35));
                 version = 35;
             }
+            35 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("reset_announcement_refresh_interval")
+                    .or_insert_with(|| toml::Value::String("hour1".into()));
+                let notifications = root
+                    .entry("notifications")
+                    .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+                if let Some(table) = notifications.as_table_mut() {
+                    table
+                        .entry("forced_reset_feed_enabled")
+                        .or_insert(toml::Value::Boolean(true));
+                    table
+                        .entry("forced_reset_notifications")
+                        .or_insert(toml::Value::Boolean(true));
+                }
+                root.insert("version".into(), toml::Value::Integer(36));
+                version = 36;
+            }
             // Unknown future/gap versions: stamp current and keep decoding with
             // serde defaults rather than refusing to start.
             _ => {
@@ -2885,6 +2966,16 @@ mod tests {
             PopupSurface::HomeTab,
             true
         ));
+        assert!(!value.popup_visibility.is_visible(
+            "cursor.allModels",
+            PopupSurface::HomeTab,
+            true
+        ));
+        assert!(!value.popup_visibility.is_visible(
+            "cursor.allModels",
+            PopupSurface::ProviderTab,
+            true
+        ));
         assert!(value.popup_visibility.provider_shown_on_all(ProviderKind::Codex));
         assert!(value.show_total_spend_on_all_tab);
         assert_eq!(
@@ -2895,6 +2986,10 @@ mod tests {
         assert_eq!(value.history_retention_days, 30);
         assert!(value.tray_widgets.is_empty());
         assert_eq!(value.popup_order, PopupWidgetKind::default_order());
+        assert_eq!(
+            value.reset_announcement_refresh_interval,
+            ResetAnnouncementRefreshInterval::Hour1
+        );
         assert!(!value.notifications.activation_success);
         assert!(!value.notifications.activation_failure);
         assert!(!value.notifications.codex_unavailable);
@@ -2905,6 +3000,8 @@ mod tests {
         assert!(!value.notifications.weekly_low_usage_enabled);
         assert_eq!(value.notifications.weekly_low_usage_threshold_percent, 20);
         assert!(value.notifications.update_available);
+        assert!(value.notifications.forced_reset_feed_enabled);
+        assert!(value.notifications.forced_reset_notifications);
     }
 
     #[test]
@@ -3012,6 +3109,16 @@ show_usage_stats = false
         ));
         assert!(!loaded.popup_visibility.is_visible(
             "codex.usage",
+            PopupSurface::ProviderTab,
+            true
+        ));
+        assert!(!loaded.popup_visibility.is_visible(
+            "cursor.allModels",
+            PopupSurface::HomeTab,
+            true
+        ));
+        assert!(!loaded.popup_visibility.is_visible(
+            "cursor.allModels",
             PopupSurface::ProviderTab,
             true
         ));
@@ -3187,6 +3294,23 @@ tray_widgets = []
         let migrated = Settings::load_or_create(&path).unwrap();
         assert_eq!(migrated.version, SETTINGS_VERSION);
         assert_eq!(migrated.history_retention_days, 30);
+    }
+
+    #[test]
+    fn migrates_v35_settings_to_forced_reset_defaults() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(&path, "version = 35\n").unwrap();
+
+        let migrated = Settings::load_or_create(&path).unwrap();
+
+        assert_eq!(migrated.version, SETTINGS_VERSION);
+        assert_eq!(
+            migrated.reset_announcement_refresh_interval,
+            ResetAnnouncementRefreshInterval::Hour1
+        );
+        assert!(migrated.notifications.forced_reset_feed_enabled);
+        assert!(migrated.notifications.forced_reset_notifications);
     }
 
     #[test]

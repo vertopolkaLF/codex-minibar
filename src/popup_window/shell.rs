@@ -76,6 +76,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     // Rendering observes the same snapshot that the tray consumes; UiState
     // deliberately contains only view metadata, never a second copy of limits.
     let limits = state.current_limits();
+    let forced_resets = state.current_forced_resets();
     let commands = state.worker_commands();
     let ui_dispatcher = cx.use_ui_marshaller();
     let settings_tx = state.settings_tx.clone();
@@ -87,10 +88,24 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let (overview_breakdown, set_overview_breakdown) = cx.use_state(BreakdownMode::default());
     let (overview_chart_hover, set_overview_chart_hover) = cx.use_state(None::<usize>);
     let (pager, pager_dispatch) = cx.use_reducer_fn(reduce_pager, PagerState::default());
+    cx.use_effect((), {
+        let pager_dispatch = pager_dispatch.clone();
+        move || {
+            if let Some(request) = take_popup_view_request() {
+                let view = match request {
+                    PendingPopupView::Home => PopupView::Home,
+                    PendingPopupView::Provider(provider) => PopupView::from_provider(provider),
+                };
+                pager_dispatch.call(PagerAction::Select(view));
+            }
+        }
+    });
     let (hovered_combined_usage_period, set_hovered_combined_usage_period) =
         cx.use_state(None::<TotalSpendPeriod>);
     let (hovered_usage_stats, set_hovered_usage_stats) =
         cx.use_state(None::<UsageStatsHover>);
+    let (hovered_forced_reset_home, set_hovered_forced_reset_home) = cx.use_state(false);
+    let (hovered_forced_reset_provider, set_hovered_forced_reset_provider) = cx.use_state(false);
     // Relative timestamps need an occasional render tick while the popup is
     // visible. `prepare_show_on_ui_thread` requests an immediate render on
     // every open, so there is no reason to reconcile the entire hidden WinUI
@@ -275,8 +290,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         })
         .collect::<Vec<_>>();
     let snapshot_inputs = usage_snapshots::Inputs {
-        limits: limits.clone(),
-        revision: ui.limits_revision,
+        revision: ui.usage_revision,
         enabled: enabled_spend.clone(),
         hour: crate::usage::truncate_local_hour(Local::now()),
     };
@@ -296,6 +310,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         build_overview_snapshot(&limits, &enabled_spend, overview_metric, overview_range)
     });
     let can_reorder_widgets = selected_view == PopupView::Home && all_tab_widgets.len() > 1;
+    let forced_reset_count = upcoming_forced_reset_count(&forced_resets);
     let build_body = |view: PopupView, retain_disabled_detail: bool| {
         let surface = if view == PopupView::Home {
             PopupSurface::HomeTab
@@ -418,6 +433,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                             provider,
                             is_first,
                             limits_for_provider,
+                            &forced_resets,
                             ui.show_used_percentage,
                             ui.show_usage_pace,
                             ui.compact_usage_cards,
@@ -436,6 +452,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                                 }
                             }),
                             provider_error,
+                            hovered_forced_reset_home,
+                            Some(set_hovered_forced_reset_home.clone()),
                         ))
                         .spacing(6.0)
                         .with_key(format!(
@@ -523,6 +541,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                         provider,
                         !has_preceding_section,
                         limits_for_provider,
+                        &forced_resets,
                         ui.show_used_percentage,
                         ui.show_usage_pace,
                         ui.compact_usage_cards,
@@ -539,6 +558,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                             now: Utc::now(),
                         }),
                         provider_error,
+                        hovered_forced_reset_provider,
+                        Some(set_hovered_forced_reset_provider.clone()),
                     ))
                     .spacing(6.0)
                     .with_key(format!(
@@ -575,7 +596,6 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
 
     let body = build_body(selected_view, false);
     let outgoing_body = pager.outgoing.map(|view| build_body(view, true));
-
     let footer_background = match color_scheme {
         // Low-alpha overlay keeps the selected material visible beneath chrome.
         ColorScheme::Dark => Color {
@@ -605,7 +625,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             provider_tab_count,
             ui.usage_stats_enabled,
         );
-        let tab_viewport_width = provider_tab_strip_viewport_width();
+        let tab_viewport_width =
+            provider_tab_strip_viewport_width(ui.update_version.is_some());
         let tab_max_offset = (tab_content_width - tab_viewport_width).max(0.0);
         let tab_scroll_x = tab_scroll_x.clamp(0.0, tab_max_offset);
         let on_tab_wheel = Callback::new({
@@ -821,24 +842,20 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 ];
                 if ui.update_version.is_some() {
                     actions.push(
-                        update_accent_button("Update", || {
-                            if let Err(error) = crate::updater::apply_pending_update() {
-                                eprintln!("failed to apply update: {error:#}");
-                                notifications::show("Update failed", &format!("{error:#}"));
-                            }
-                        })
-                        .height(bottom_bar_size.icon_button_size())
-                        .min_height(bottom_bar_size.icon_button_size())
-                        .max_height(bottom_bar_size.icon_button_size())
-                        .padding(Thickness {
-                            left: bottom_bar_size.update_button_padding(),
-                            top: 0.0,
-                            right: bottom_bar_size.update_button_padding(),
-                            bottom: 0.0,
-                        })
-                        .vertical_alignment(VerticalAlignment::Center)
-                        .with_key("footer-update")
-                        .into(),
+                        accent_icon_button(
+                            "update",
+                            "fluent-arrow-download",
+                            "Install update",
+                            color_scheme,
+                            &hovered_action,
+                            set_hovered_action.clone(),
+                            || {
+                                if let Err(error) = crate::updater::apply_pending_update() {
+                                    eprintln!("failed to apply update: {error:#}");
+                                    notifications::show("Update failed", &format!("{error:#}"));
+                                }
+                            },
+                        ),
                     );
                 }
                 actions
@@ -903,7 +920,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         // SizeChanged. Remounting the page is what tab switches already do so
         // the queued on_resize measure can shrink the HWND.
         let body_layout_key = format!(
-            "popup-page-{role}-{}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
+            "popup-page-{role}-{}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
             ui.error.is_some(),
             view.provider()
                 .is_some_and(|provider| ui.has_provider_error(provider)),
@@ -917,10 +934,17 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             ui.cursor_enabled,
             ui.openrouter_enabled,
             popup_order_key(&ui.popup_order),
-            popup_body_height_key(&limits, view, ui.show_used_percentage, ui.show_usage_pace),
+            popup_body_height_key(
+                &limits,
+                view,
+                ui.show_used_percentage,
+                ui.show_usage_pace,
+                forced_reset_count,
+            ),
             ui.compact_usage_cards,
             ui.usage_stats_enabled,
             ui.settings_revision,
+            forced_reset_count,
             color_scheme as i32,
             view,
         );

@@ -501,7 +501,7 @@ fn escape_ps_single_quoted_str(value: &str) -> String {
     value.replace('\'', "''")
 }
 
-fn download_file(url: &str, destination: &Path) -> Result<()> {
+pub(crate) fn download_file(url: &str, destination: &Path) -> Result<()> {
     let response = http_agent()
         .get(url)
         .set("User-Agent", USER_AGENT)
@@ -559,6 +559,15 @@ fn payload_root_from_extracted(destination: &Path) -> Result<PathBuf> {
 }
 
 pub fn open_url(url: &str) -> Result<()> {
+    open_shell_target(std::ffi::OsStr::new(url), url)
+}
+
+pub fn open_path(path: &Path) -> Result<()> {
+    let description = path.display().to_string();
+    open_shell_target(path.as_os_str(), &description)
+}
+
+fn open_shell_target(target: &std::ffi::OsStr, description: &str) -> Result<()> {
     #[cfg(windows)]
     {
         use std::ffi::OsStr;
@@ -569,7 +578,7 @@ pub fn open_url(url: &str) -> Result<()> {
             .encode_wide()
             .chain(std::iter::once(0))
             .collect();
-        let target: Vec<u16> = OsStr::new(url)
+        let target: Vec<u16> = target
             .encode_wide()
             .chain(std::iter::once(0))
             .collect();
@@ -584,13 +593,14 @@ pub fn open_url(url: &str) -> Result<()> {
             )
         };
         if result as isize <= 32 {
-            bail!("ShellExecuteW failed for {url}");
+            bail!("ShellExecuteW failed for {description}");
         }
         Ok(())
     }
     #[cfg(not(windows))]
     {
-        let _ = url;
+        let _ = target;
+        let _ = description;
         bail!("opening URLs is only supported on Windows")
     }
 }

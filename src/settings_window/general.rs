@@ -7,10 +7,17 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let limit_refresh_interval = ctx.limit_refresh_interval;
     let usage_stats_enabled = ctx.usage_stats_enabled;
     let usage_refresh_interval = ctx.usage_refresh_interval;
+    let forced_reset_feed_enabled = ctx.forced_reset_feed_enabled;
+    let forced_reset_notifications = ctx.forced_reset_notifications;
+    let reset_announcement_refresh_interval = ctx.reset_announcement_refresh_interval;
     let set_start_at_login = ctx.set_start_at_login.clone();
     let set_usage_stats_enabled = ctx.set_usage_stats_enabled.clone();
     let set_limit_refresh_interval = ctx.set_limit_refresh_interval.clone();
     let set_usage_refresh_interval = ctx.set_usage_refresh_interval.clone();
+    let set_forced_reset_feed_enabled = ctx.set_forced_reset_feed_enabled.clone();
+    let set_forced_reset_notifications = ctx.set_forced_reset_notifications.clone();
+    let set_reset_announcement_refresh_interval =
+        ctx.set_reset_announcement_refresh_interval.clone();
     let hovered_card_id = ctx.hovered_card_id;
     let set_hovered_card_id = ctx.set_hovered_card_id.clone();
     let settings_tx = ctx.settings_tx.clone();
@@ -18,6 +25,9 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let apply_usage_stats_enabled = settings_tx.clone();
     let apply_limit_refresh_interval = settings_tx.clone();
     let apply_usage_refresh_interval = settings_tx.clone();
+    let apply_forced_reset_feed_enabled = settings_tx.clone();
+    let apply_forced_reset_notifications = settings_tx.clone();
+    let apply_reset_announcement_refresh_interval = settings_tx.clone();
     (
         "General",
         vec![
@@ -107,6 +117,74 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
                 set_hovered_card_id.clone(),
             )
             .with_key("general-usage-refresh-interval"),
+            settings_section_heading("Tibo Resets™").with_key("general-tibo-resets-heading"),
+            settings_toggle_card_with_description(
+                "Check for confirmed Tibo resets",
+                Some("Reads the app's public GitHub feed and keeps the latest announcement cached."),
+                forced_reset_feed_enabled,
+                move |value| {
+                    persist_bool(
+                        set_forced_reset_feed_enabled.clone(),
+                        apply_forced_reset_feed_enabled.clone(),
+                        value,
+                        |settings, value| {
+                            settings.notifications.forced_reset_feed_enabled = value;
+                        },
+                    );
+                },
+                "general-tibo-reset-feed",
+                hovered_card_id,
+                set_hovered_card_id.clone(),
+            )
+            .with_key("general-tibo-reset-feed"),
+            settings_toggle_card_with_description(
+                "Notify when new reset info arrives",
+                Some("Shows a notification when the feed reports a possible reset, never at the reset time."),
+                forced_reset_notifications,
+                move |value| {
+                    persist_bool(
+                        set_forced_reset_notifications.clone(),
+                        apply_forced_reset_notifications.clone(),
+                        value,
+                        |settings, value| {
+                            settings.notifications.forced_reset_notifications = value;
+                        },
+                    );
+                },
+                "general-tibo-reset-toast",
+                hovered_card_id,
+                set_hovered_card_id.clone(),
+            )
+            .with_key("general-tibo-reset-toast"),
+            settings_control_card(
+                "Check every",
+                Some("The feed is also checked immediately when the app starts or this option is enabled."),
+                ComboBox::new([
+                    "15 minutes",
+                    "30 minutes",
+                    "1 hour",
+                    "3 hours",
+                    "6 hours",
+                    "12 hours",
+                    "24 hours",
+                ])
+                .selected_index(reset_announcement_refresh_interval.index())
+                .enabled(forced_reset_feed_enabled)
+                .on_selection_changed(move |choice: i32| {
+                    let value = ResetAnnouncementRefreshInterval::from_index(choice);
+                    set_reset_announcement_refresh_interval.call(value);
+                    persist_update(
+                        apply_reset_announcement_refresh_interval.clone(),
+                        move |settings| {
+                            settings.reset_announcement_refresh_interval = value;
+                        },
+                    );
+                }),
+                "general-tibo-reset-interval",
+                hovered_card_id,
+                set_hovered_card_id.clone(),
+            )
+            .with_key("general-tibo-reset-interval"),
         ],
     )
 }

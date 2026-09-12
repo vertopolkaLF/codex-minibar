@@ -15,6 +15,9 @@ pub fn geom(name: &str) -> IconGeom {
         "fluent-refresh" | "arrows-clockwise" | "popup-refresh" => {
             include_str!("../assets/icons/fluent-arrow-sync-24-filled.svg")
         }
+        "fluent-arrow-download" => {
+            include_str!("../assets/icons/fluent-arrow-download-24-filled.svg")
+        }
         "fluent-settings" | "sliders" | "popup-settings" => {
             include_str!("../assets/icons/fluent-settings-20-filled.svg")
         }
@@ -88,6 +91,7 @@ pub fn sidebar_mono_icon(name: &str) -> &'static str {
         "appearance" => "paint-brush",
         "advanced" => "sliders",
         "log" => "scroll",
+        "integrations" => "package",
         "about" => "info",
         _ => panic!("unknown Settings sidebar icon: {name}"),
     }
@@ -109,6 +113,7 @@ pub fn fluent_color_uri(name: &str) -> String {
         "appearance" => "fluent-color-paint-brush-24.svg",
         "advanced" => "fluent-color-settings-24.svg",
         "log" => "fluent-color-history-24.svg",
+        "integrations" => "fluent-color-puzzle-piece-24.svg",
         "about" => "fluent-color-book-open-24.svg",
         _ => panic!("unknown Fluent Color navigation icon: {name}"),
     };

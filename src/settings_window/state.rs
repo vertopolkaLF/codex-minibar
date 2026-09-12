@@ -29,6 +29,7 @@ pub(super) struct SettingsWindowState {
     pub(super) usage_stats_enabled: SetState<bool>,
     pub(super) limit_refresh_interval: SetState<LimitRefreshInterval>,
     pub(super) usage_refresh_interval: SetState<UsageRefreshInterval>,
+    pub(super) reset_announcement_refresh_interval: SetState<ResetAnnouncementRefreshInterval>,
     pub(super) start_at_login: SetState<bool>,
     pub(super) show_used_percentage: SetState<bool>,
     pub(super) show_usage_pace: SetState<bool>,
@@ -48,6 +49,8 @@ pub(super) struct SettingsWindowState {
     pub(super) tray_widgets: SetState<Vec<TrayWidget>>,
     pub(super) check_for_updates: SetState<bool>,
     pub(super) notify_on_update: SetState<bool>,
+    pub(super) forced_reset_feed_enabled: SetState<bool>,
+    pub(super) forced_reset_notifications: SetState<bool>,
 }
 
 impl SettingsWindowState {
@@ -110,6 +113,8 @@ impl SettingsWindowState {
             .call(settings.limit_refresh_interval);
         self.usage_refresh_interval
             .call(settings.usage_refresh_interval);
+        self.reset_announcement_refresh_interval
+            .call(settings.reset_announcement_refresh_interval);
         self.start_at_login.call(settings.start_at_login);
         self.show_used_percentage
             .call(settings.show_used_percentage);
@@ -140,6 +145,10 @@ impl SettingsWindowState {
         self.check_for_updates.call(settings.check_for_updates);
         self.notify_on_update
             .call(settings.notifications.update_available);
+        self.forced_reset_feed_enabled
+            .call(settings.notifications.forced_reset_feed_enabled);
+        self.forced_reset_notifications
+            .call(settings.notifications.forced_reset_notifications);
     }
 }
 
@@ -186,6 +195,7 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) usage_stats_enabled: bool,
     pub(super) limit_refresh_interval: LimitRefreshInterval,
     pub(super) usage_refresh_interval: UsageRefreshInterval,
+    pub(super) reset_announcement_refresh_interval: ResetAnnouncementRefreshInterval,
     pub(super) start_at_login: bool,
     pub(super) show_used_percentage: bool,
     pub(super) show_usage_pace: bool,
@@ -214,8 +224,11 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) expanded_popup_provider: &'a Option<String>,
     pub(super) check_for_updates: bool,
     pub(super) notify_on_update: bool,
+    pub(super) forced_reset_feed_enabled: bool,
+    pub(super) forced_reset_notifications: bool,
     pub(super) update_phase: &'a UpdatePhase,
     pub(super) log_content: &'a str,
+    pub(super) streamdeck_install_phase: &'a crate::streamdeck::InstallPhase,
     pub(super) set_codex_enabled: SetState<bool>,
     pub(super) set_theme: SetState<AppTheme>,
     pub(super) set_accent_color: SetState<AccentColor>,
@@ -249,6 +262,7 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) set_usage_stats_enabled: SetState<bool>,
     pub(super) set_limit_refresh_interval: SetState<LimitRefreshInterval>,
     pub(super) set_usage_refresh_interval: SetState<UsageRefreshInterval>,
+    pub(super) set_reset_announcement_refresh_interval: SetState<ResetAnnouncementRefreshInterval>,
     pub(super) set_start_at_login: SetState<bool>,
     pub(super) set_show_used_percentage: SetState<bool>,
     pub(super) set_show_usage_pace: SetState<bool>,
@@ -278,6 +292,10 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) set_hovered_card_id: SetState<Option<String>>,
     pub(super) set_check_for_updates: SetState<bool>,
     pub(super) set_notify_on_update: SetState<bool>,
+    pub(super) set_forced_reset_feed_enabled: SetState<bool>,
+    pub(super) set_forced_reset_notifications: SetState<bool>,
+    pub(super) set_streamdeck_install_phase:
+        AsyncSetState<crate::streamdeck::InstallPhase>,
     pub(super) theme_navigation_guard: HookRef<bool>,
     pub(super) theme_navigation_guard_timer: HookRef<Option<DispatcherTimer>>,
     pub(super) settings_tx: Sender<Settings>,

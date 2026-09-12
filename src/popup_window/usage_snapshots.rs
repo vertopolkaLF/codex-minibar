@@ -3,7 +3,6 @@ use crate::usage_overview::OverviewSnapshot;
 
 #[derive(Clone, PartialEq)]
 pub(super) struct Inputs {
-    pub limits: ProviderLimits,
     pub revision: u64,
     pub enabled: Vec<ProviderKind>,
     pub hour: DateTime<Local>,
@@ -40,7 +39,6 @@ mod tests {
         let mut cx = RenderCx::new(Rc::new(|| {}));
         let builds = Cell::new(0);
         let mut inputs = Inputs {
-            limits: ProviderLimits::default(),
             revision: 0,
             enabled: vec![ProviderKind::Codex],
             hour: crate::usage::truncate_local_hour(Local::now()),

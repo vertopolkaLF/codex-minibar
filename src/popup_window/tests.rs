@@ -170,6 +170,7 @@ fn usage_statistics_section_respects_its_live_toggle() {
         ProviderKind::OpenCodeZen,
         true,
         &limits,
+        &[],
         false,
         true,
         false,
@@ -180,6 +181,8 @@ fn usage_statistics_section_respects_its_live_toggle() {
         ColorScheme::Dark,
         None,
         None,
+        None,
+        false,
         None,
     );
     assert_eq!(cards.len(), 1);
@@ -236,15 +239,33 @@ fn popup_body_key_changes_when_pace_label_appears_or_hides() {
         PopupView::Codex,
         false,
         true,
+        0,
     );
     let hidden_key = popup_body_height_key(
         &ProviderLimits::from_entries([(ProviderKind::Codex, hidden)]),
         PopupView::Codex,
         false,
         true,
+        0,
     );
 
     assert_ne!(visible_key, hidden_key);
+
+    let no_tibo_key = popup_body_height_key(
+        &ProviderLimits::default(),
+        PopupView::Codex,
+        false,
+        true,
+        0,
+    );
+    let two_tibo_key = popup_body_height_key(
+        &ProviderLimits::default(),
+        PopupView::Codex,
+        false,
+        true,
+        2,
+    );
+    assert_ne!(no_tibo_key, two_tibo_key);
 }
 
 #[test]
@@ -286,6 +307,14 @@ fn swap_chain_strip_keys_include_identity_inputs_without_hover_state() {
         footer_actions_key(false, ColorScheme::Dark),
         footer_actions_key(false, ColorScheme::Light)
     );
+
+    let without_update = provider_tab_strip_viewport_width(false);
+    let with_update = provider_tab_strip_viewport_width(true);
+    let size = popup::bottom_bar_size();
+    assert_eq!(
+        without_update - with_update,
+        size.icon_button_size() + size.action_spacing()
+    );
 }
 
 #[test]
@@ -300,6 +329,7 @@ fn popup_visibility_hides_codex_resets_on_all_but_shows_on_provider_tab() {
         ProviderKind::Codex,
         true,
         &limits,
+        &[],
         false,
         true,
         false,
@@ -311,11 +341,14 @@ fn popup_visibility_hides_codex_resets_on_all_but_shows_on_provider_tab() {
         None,
         None,
         None,
+        false,
+        None,
     );
     let tab_cards = provider_cards(
         ProviderKind::Codex,
         true,
         &limits,
+        &[],
         false,
         true,
         false,
@@ -326,6 +359,8 @@ fn popup_visibility_hides_codex_resets_on_all_but_shows_on_provider_tab() {
         ColorScheme::Dark,
         None,
         None,
+        None,
+        false,
         None,
     );
     assert_eq!(all_cards.len(), 3);
@@ -359,6 +394,7 @@ fn popup_section_all_off_drops_provider_from_home_tab() {
         ProviderKind::Codex,
         true,
         &limits,
+        &[],
         false,
         true,
         false,
@@ -369,6 +405,8 @@ fn popup_section_all_off_drops_provider_from_home_tab() {
         ColorScheme::Dark,
         None,
         None,
+        None,
+        false,
         None,
     );
     assert!(!tab_cards.is_empty());
@@ -467,6 +505,7 @@ fn provider_cards_include_each_additional_limit() {
         ProviderKind::Claude,
         true,
         &limits,
+        &[],
         false,
         true,
         false,
@@ -477,6 +516,8 @@ fn provider_cards_include_each_additional_limit() {
         ColorScheme::Dark,
         None,
         None,
+        None,
+        false,
         None,
     );
     // Heading + 5h + weekly + Fable (no separate plan metadata row).
@@ -523,14 +564,19 @@ fn every_limits_sample_forces_a_reactive_state_change() {
     ui.observe_limits_update();
     assert_ne!(ui, initial);
     assert_eq!(ui.limits_revision, 1);
+    assert_eq!(ui.usage_revision, 0);
 
     // A Plus sample can have the same footer metadata as the preceding
     // Free sample; the revision still guarantees a rerender of the shared
     // snapshot.
     ui.observe_limits_update();
     assert_eq!(ui.limits_revision, 2);
+    assert_eq!(ui.usage_revision, 0);
     assert_eq!(ui.last_activation, initial.last_activation);
     assert_eq!(ui.error, initial.error);
+
+    ui.observe_usage_update();
+    assert_eq!(ui.usage_revision, 1);
 }
 
 #[test]

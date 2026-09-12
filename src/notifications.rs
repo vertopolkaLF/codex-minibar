@@ -125,7 +125,8 @@ pub fn show_activation_succeeded(provider: ProviderKind) {
     show("5-hour limit started", provider.display_name());
 }
 
-/// Tracks previous limit snapshots so reset / low-usage toasts fire once.
+/// Tracks previous API limit snapshots so actual reset / low-usage toasts fire
+/// once. Public reset-feed announcements use a separate info-only path.
 #[derive(Debug, Default)]
 pub struct LimitNotificationTracker {
     primed: bool,

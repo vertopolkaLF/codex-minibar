@@ -106,6 +106,10 @@ pub enum WorkerEvent {
     ProviderActivationSucceeded(crate::settings::ProviderKind),
     ProviderActivationFailed(crate::settings::ProviderKind, String),
     ProviderPollFailed(crate::settings::ProviderKind, String),
+    /// Snapshot from the public Codex forced-reset announcement feed.
+    ForcedResetsUpdated(crate::reset_feed::ResetFeedSnapshot),
+    /// The feed refresh failed; cached forced resets remain usable.
+    ForcedResetsRefreshFailed(String),
 }
 
 pub struct WorkerHandle {
