@@ -29,7 +29,8 @@ use windows_sys::Win32::{
         },
         Gdi::{
             CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, GetMonitorInfoW, HMONITOR,
-            MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, RGN_AND, SetWindowRgn,
+            MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint,
+            RGN_AND, SetWindowRgn,
         },
     },
     UI::{
@@ -1447,6 +1448,45 @@ pub fn show_near_cursor() {
         GetCursorPos(&mut cursor);
     }
     show_near(cursor.x, cursor.y);
+}
+
+/// Show the popup on the primary monitor's tray corner.
+///
+/// Stream Deck keys have no display of their own; following the cursor would
+/// drop the flyout on whichever screen the mouse happens to occupy.
+pub fn show_on_primary() {
+    let (x, y) = unsafe {
+        let monitor = MonitorFromPoint(
+            POINT {
+                x: i32::MIN,
+                y: i32::MIN,
+            },
+            MONITOR_DEFAULTTOPRIMARY,
+        );
+        let mut info = MONITORINFO {
+            cbSize: size_of::<MONITORINFO>() as u32,
+            rcMonitor: RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            },
+            rcWork: RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            },
+            dwFlags: 0,
+        };
+        GetMonitorInfoW(monitor, &mut info);
+        let bounds = info.rcMonitor;
+        (
+            bounds.left + (bounds.right - bounds.left) / 2,
+            bounds.top + (bounds.bottom - bounds.top) / 2,
+        )
+    };
+    show_near(x, y);
 }
 
 pub fn toggle_near(anchor_x: i32, anchor_y: i32) {

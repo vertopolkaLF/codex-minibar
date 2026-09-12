@@ -245,15 +245,33 @@ fn popup_body_key_changes_when_pace_label_appears_or_hides() {
         PopupView::Codex,
         false,
         true,
+        0,
     );
     let hidden_key = popup_body_height_key(
         &ProviderLimits::from_entries([(ProviderKind::Codex, hidden)]),
         PopupView::Codex,
         false,
         true,
+        0,
     );
 
     assert_ne!(visible_key, hidden_key);
+
+    let no_tibo_key = popup_body_height_key(
+        &ProviderLimits::default(),
+        PopupView::Codex,
+        false,
+        true,
+        0,
+    );
+    let two_tibo_key = popup_body_height_key(
+        &ProviderLimits::default(),
+        PopupView::Codex,
+        false,
+        true,
+        2,
+    );
+    assert_ne!(no_tibo_key, two_tibo_key);
 }
 
 #[test]

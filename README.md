@@ -45,6 +45,9 @@ Codex Minibar reads the usage data exposed by a locally authenticated Codex CLI/
 - Optionally start Codex automatically to activate a fresh five-hour window.
 - Configure planned limit activations and provider-specific quiet periods for
   automatic activation, such as keeping a work Claude session inactive on weekends.
+- Use the optional Stream Deck companion to place independently configured quota
+  indicators on hardware keys, open the popup or a provider tab, and launch Minibar
+  on click when it is not running.
 - Start with Windows, update in place from GitHub Releases, and retain history locally.
 - Detect Codex installations automatically, with an override for a custom executable path.
 - Enable Codex, Claude, Cursor, OpenCode Zen, OpenCode Go, and OpenRouter independently in **Settings → Providers**. Providers refresh at the same time; OpenCode usage is read from its local SQLite history, Go quota is read from the account API, and OpenRouter usage is read from the configured API key.
@@ -102,8 +105,44 @@ The UI uses [windows-reactor](https://github.com/microsoft/windows-rs/pull/4479)
 the Windows App SDK runtime is bundled through `windows-reactor-setup` self-contained deployment.
 CI checks formatting, lints, tests, and a release build on Windows.
 
+### Stream Deck companion
+
+The optional companion lives in [`streamdeck/`](streamdeck/). It stores each key's
+configuration in Stream Deck and reads sanitized quota snapshots from the running
+Minibar process over loopback. With Node.js 24+ installed, build and package it with:
+
+Each key can be configured as a single-limit ring for 5h or Weekly, with a
+custom reset display, or as a combined 5h + Weekly widget.
+
+```powershell
+cd streamdeck
+npm install
+npm run build
+npx @elgato/cli@latest validate .\com.vertopolkalf.codex-minibar.sdPlugin
+npx @elgato/cli@latest pack .\com.vertopolkalf.codex-minibar.sdPlugin
+```
+
+The resulting `.streamDeckPlugin` file can be opened with Stream Deck Desktop.
+
 Bug reports and focused pull requests are welcome. Please include your Windows version,
 Codex installation type, and clear reproduction steps when reporting a problem.
+
+## Contributing
+
+We especially need help supporting the many different providers people use. Provider APIs,
+local data formats, authentication flows, and quota semantics all vary, so testing integrations
+with real provider accounts and keeping them working over time is particularly valuable.
+
+To contribute:
+
+1. Fork the repository and create a focused branch.
+2. Make the smallest change that solves the problem.
+3. Run the relevant checks from [Build from source](#build-from-source).
+4. Open a pull request with a clear description, reproduction steps, and provider-specific
+   setup details when applicable.
+
+For provider changes, include sanitized sample data or fixtures when possible. Never commit
+credentials, tokens, or personal usage history.
 
 ## License
 

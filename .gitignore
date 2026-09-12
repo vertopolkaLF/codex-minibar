@@ -3,3 +3,13 @@
 /dist
 /.tools
 /.vscode
+/logs/
+
+# Stream Deck companion build and install artifacts
+/streamdeck/node_modules/
+/streamdeck/*.streamDeckPlugin
+/streamdeck/com.vertopolkalf.codex-minibar.sdPlugin/*.js
+/streamdeck/com.vertopolkalf.codex-minibar.sdPlugin/*.js.map
+/streamdeck/com.vertopolkalf.codex-minibar.sdPlugin/bin/plugin.js
+/streamdeck/com.vertopolkalf.codex-minibar.sdPlugin/bin/*.js.map
+/streamdeck/**/logs/
