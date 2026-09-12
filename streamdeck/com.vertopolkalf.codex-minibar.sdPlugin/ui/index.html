@@ -41,6 +41,10 @@
     <option value="remaining">Remaining</option>
     <option value="used">Used</option>
   </select>
+  <label class="check" for="showPercentSymbol">
+    <input id="showPercentSymbol" type="checkbox" checked>
+    Show % symbol
+  </label>
 
   <label for="clickAction">On key press</label>
   <select id="clickAction">
@@ -64,16 +68,18 @@
       "opencode-go": { name: "OpenCode Go", metrics: [["opencode-go.session", "5h session"], ["opencode-go.weekly", "Weekly"], ["opencode-go.monthly", "Monthly"]] },
       openrouter: { name: "OpenRouter", metrics: [["openrouter.limit", "Spending limit"]] }
     };
-    const defaultSettings = { provider: "codex", widget: "single_limit", singleMetricId: "codex.session", metricIds: ["codex.session"], presentation: "rings", resetDisplay: "countdown", valueMode: "remaining", showCountdown: true, clickAction: "open_popup", cycleProviders: ["codex", "claude", "cursor"], cycleIndex: 0 };
+    const defaultSettings = { provider: "codex", widget: "single_limit", singleMetricId: "codex.session", metricIds: ["codex.session"], presentation: "rings", resetDisplay: "countdown", valueMode: "remaining", showPercentSymbol: true, showCountdown: true, clickAction: "open_popup", cycleProviders: ["codex", "claude", "cursor"], cycleIndex: 0 };
     let settings = { ...defaultSettings };
     let websocket;
     let context;
+    let settingsPending = false;
     const providerSelect = document.querySelector("#provider");
     const widget = document.querySelector("#widget");
     const singleMetric = document.querySelector("#singleMetric");
     const dualHint = document.querySelector("#dualHint");
     const resetDisplay = document.querySelector("#resetDisplay");
     const valueMode = document.querySelector("#valueMode");
+    const showPercentSymbol = document.querySelector("#showPercentSymbol");
     const clickAction = document.querySelector("#clickAction");
     const cycleOptions = document.querySelector("#cycleOptions");
     const cycleProviders = document.querySelector("#cycleProviders");
@@ -86,8 +92,16 @@
     }
 
     function sendSettings() {
-      if (!websocket || websocket.readyState !== WebSocket.OPEN || !context) return;
+      if (!websocket || !context || websocket.readyState !== WebSocket.OPEN) {
+        settingsPending = true;
+        return;
+      }
       websocket.send(JSON.stringify({ event: "setSettings", context, payload: settings }));
+      settingsPending = false;
+    }
+    function requestSettings() {
+      if (!websocket || !context || websocket.readyState !== WebSocket.OPEN) return;
+      websocket.send(JSON.stringify({ event: "getSettings", context }));
     }
     function providerMetrics(provider = providers[providerSelect.value] ?? providers.codex) {
       return provider?.metrics ?? [];
@@ -108,6 +122,7 @@
         singleMetricId,
         metricIds: incomingMetrics.length ? incomingMetrics : [singleMetricId],
         resetDisplay: ["countdown", "time", "hidden"].includes(reset) ? reset : defaultSettings.resetDisplay,
+        showPercentSymbol: input?.showPercentSymbol !== false,
       };
     }
     function renderMetrics() {
@@ -155,6 +170,7 @@
       singleMetric.value = settings.singleMetricId;
       resetDisplay.value = settings.resetDisplay;
       valueMode.value = settings.valueMode;
+      showPercentSymbol.checked = settings.showPercentSymbol !== false;
       clickAction.value = settings.clickAction;
       cycleOptions.hidden = settings.clickAction !== "cycle_provider";
       renderMetrics();
@@ -190,13 +206,30 @@
       sendSettings();
     });
     valueMode.addEventListener("change", () => { settings.valueMode = valueMode.value; sendSettings(); });
+    showPercentSymbol.addEventListener("change", () => { settings.showPercentSymbol = showPercentSymbol.checked; sendSettings(); });
     clickAction.addEventListener("change", () => { settings.clickAction = clickAction.value; render(); sendSettings(); });
     window.connectElgatoStreamDeckSocket = (port, uuid, registerEvent, info, actionInfo) => {
       const parsed = JSON.parse(actionInfo);
-      context = parsed.context;
+      // `uuid` is the Property Inspector context required by setSettings.
+      // `parsed.context` is the action instance context and Stream Deck rejects
+      // it when sent from the inspector connection.
+      context = uuid;
       settings = normalizeSettings(parsed.payload?.settings ?? parsed.settings ?? {});
       websocket = new WebSocket(`ws://127.0.0.1:${port}`);
-      websocket.addEventListener("open", () => websocket.send(JSON.stringify({ event: registerEvent, uuid })));
+      websocket.addEventListener("open", () => {
+        websocket.send(JSON.stringify({ event: registerEvent, uuid }));
+        if (settingsPending) {
+          sendSettings();
+        } else {
+          requestSettings();
+        }
+      });
+      websocket.addEventListener("message", event => {
+        const message = JSON.parse(event.data);
+        if (message.event !== "didReceiveSettings" || !message.payload?.settings) return;
+        settings = normalizeSettings(message.payload.settings);
+        render();
+      });
       render();
     };
     render();

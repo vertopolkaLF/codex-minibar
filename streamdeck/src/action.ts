@@ -75,6 +75,7 @@ export class QuotaIndicator extends SingletonAction<ActionSettings> {
     const binding = bindings.get(ev.action.id);
     if (!binding) return;
     binding.settings = startSettings(ev.payload.settings);
+    streamDeck.logger.info(`Quota Indicator settings updated: ${ev.action.id} provider=${binding.settings.provider} widget=${binding.settings.widget}`);
     void paint(binding, latestSnapshot !== null);
   }
 

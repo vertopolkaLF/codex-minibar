@@ -16,6 +16,7 @@ export interface ActionSettings extends JsonObject {
   presentation: Presentation;
   resetDisplay: ResetDisplay;
   valueMode: ValueMode;
+  showPercentSymbol: boolean;
   showCountdown: boolean;
   clickAction: ClickAction;
   cycleProviders: string[];
@@ -30,6 +31,7 @@ export const DEFAULT_SETTINGS: ActionSettings = {
   presentation: "rings",
   resetDisplay: "countdown",
   valueMode: "remaining",
+  showPercentSymbol: true,
   showCountdown: true,
   clickAction: "open_popup",
   cycleProviders: ["codex", "claude", "cursor"],
@@ -80,6 +82,7 @@ export function normalizeSettings(settings: Partial<ActionSettings> | undefined)
     singleMetricId: settings?.singleMetricId ?? legacyMetricIds[0] ?? DEFAULT_SETTINGS.singleMetricId,
     presentation: normalizePresentation(settings?.presentation),
     resetDisplay,
+    showPercentSymbol: settings?.showPercentSymbol !== false,
     metricIds: legacyMetricIds.length ? legacyMetricIds : DEFAULT_SETTINGS.metricIds,
     cycleProviders: settings?.cycleProviders?.length ? settings.cycleProviders : DEFAULT_SETTINGS.cycleProviders,
     cycleIndex: Math.max(0, settings?.cycleIndex ?? 0),
@@ -153,6 +156,17 @@ function displayedValue(row: MetricRow, settings: ActionSettings): number | null
   return settings.valueMode === "used" ? row.window.used_percent : row.window.remaining_percent;
 }
 
+function formatPercent(value: number | null, settings: ActionSettings): string {
+  if (value === null) return "?";
+  return settings.showPercentSymbol ? `${value}%` : String(value);
+}
+
+function fittedFontSize(text: string, base: number): number {
+  if (text.length >= 4) return Math.max(18, base - 6);
+  if (text.length >= 3) return Math.max(20, base - 2);
+  return base;
+}
+
 function formatCountdown(reset: string | null): string | null {
   if (!reset) return null;
   const seconds = Math.max(0, Math.round((Date.parse(reset) - Date.now()) / 1000));
@@ -215,7 +229,7 @@ function renderNumbers(rows: MetricRow[], settings: ActionSettings): string {
   const positions = rows.length === 1 ? [86] : rows.length === 2 ? [63, 108] : [48, 84, 120];
   const numbers = rows.map((row, index) => {
     const value = displayedValue(row, settings);
-    const text = value === null ? "?" : `${value}%`;
+    const text = formatPercent(value, settings);
     return `<text x="72" y="${positions[index]}" text-anchor="middle" font-family="Segoe UI,Arial" font-size="${fontSize}" font-weight="700" fill="${statusColor(row.window.remaining_percent)}">${text}</text>`;
   }).join("");
   const reset = settings.showCountdown ? formatCountdown(nearestReset(rows)) : null;
@@ -242,12 +256,6 @@ function renderBars(rows: MetricRow[], settings: ActionSettings): string {
 function renderRings(rows: MetricRow[], settings: ActionSettings): string {
   if (rows.length === 1) return renderSingleRing(rows[0], settings);
   return renderDualRings(rows, settings);
-}
-
-function ringArc(cx: number, cy: number, radius: number, value: number, color: string, strokeWidth: number, trackColor = "#101817"): string {
-  const circumference = 2 * Math.PI * radius;
-  const progress = circumference * value / 100;
-  return `<circle cx="${cx}" cy="${cy}" r="${radius}" fill="none" stroke="${trackColor}" stroke-width="${strokeWidth}"/><circle cx="${cx}" cy="${cy}" r="${radius}" fill="none" stroke="${color}" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-dasharray="${progress} ${circumference}" transform="rotate(-90 ${cx} ${cy})"/>`;
 }
 
 /** Progress ring matching the Stream Deck key look: flat 12-o'clock start, no track, soft fade at the trailing tip. */
@@ -288,40 +296,40 @@ function fadedRingArc(cx: number, cy: number, radius: number, value: number, col
 function renderSingleRing(row: MetricRow, settings: ActionSettings): string {
   const rawValue = displayedValue(row, settings);
   const value = Math.max(0, Math.min(100, rawValue ?? 0));
-  const percent = rawValue === null ? "?" : `${rawValue}%`;
+  const percent = formatPercent(rawValue, settings);
+  const fontSize = fittedFontSize(percent, 36);
   const color = statusColor(row.window.remaining_percent);
   const reset = resetCopy(row.window.resets_at, settings.resetDisplay);
   const textMarkup = reset
-    ? `<text x="72" y="68" text-anchor="middle" font-family="Segoe UI,Arial" font-size="36" font-weight="700" fill="#ffffff">${escapeXml(percent)}</text><text x="72" y="84" text-anchor="middle" font-family="Segoe UI,Arial" font-size="10" fill="#9a9a9a">${reset.label}</text><text x="72" y="104" text-anchor="middle" font-family="Segoe UI,Arial" font-size="18" fill="#ececec">${escapeXml(reset.value)}</text>`
-    : `<text x="72" y="84" text-anchor="middle" font-family="Segoe UI,Arial" font-size="36" font-weight="700" fill="#ffffff">${escapeXml(percent)}</text>`;
+    ? `<text x="72" y="68" text-anchor="middle" font-family="Segoe UI,Arial" font-size="${fontSize}" font-weight="700" fill="#ffffff">${escapeXml(percent)}</text><text x="72" y="84" text-anchor="middle" font-family="Segoe UI,Arial" font-size="10" fill="#9a9a9a">${reset.label}</text><text x="72" y="104" text-anchor="middle" font-family="Segoe UI,Arial" font-size="18" fill="#ececec">${escapeXml(reset.value)}</text>`
+    : `<text x="72" y="84" text-anchor="middle" font-family="Segoe UI,Arial" font-size="${fontSize}" font-weight="700" fill="#ffffff">${escapeXml(percent)}</text>`;
   // Stream Deck key canvas is 144x144. Stroke sits 4px in from the edge.
   const strokeWidth = 11;
   const radius = 72 - 4 - strokeWidth / 2;
   return svg(`<rect width="144" height="144" fill="#000"/>${fadedRingArc(72, 72, radius, value, color, strokeWidth)}${textMarkup}`);
 }
 
-function dualRingLabel(row: MetricRow): string {
-  if (row.label === "5h session") return "5h";
-  if (row.label === "Weekly") return "weekly";
-  return row.label;
+function ringValue(row: MetricRow, settings: ActionSettings): { value: number; percent: string; color: string } {
+  const rawValue = displayedValue(row, settings);
+  return {
+    value: Math.max(0, Math.min(100, rawValue ?? 0)),
+    percent: formatPercent(rawValue, settings),
+    color: statusColor(row.window.remaining_percent),
+  };
 }
 
 function renderDualRings(rows: MetricRow[], settings: ActionSettings): string {
   if (rows.length === 1) return renderSingleRing(rows[0], settings);
-  const visibleRows = rows.slice(0, 2);
-  const centers = [40, 104];
-  const markup = visibleRows.map((row, index) => {
-    const cx = centers[index];
-    const rawValue = displayedValue(row, settings);
-    const value = Math.max(0, Math.min(100, rawValue ?? 0));
-    const percent = rawValue === null ? "?" : `${rawValue}%`;
-    const reset = resetCopy(row.window.resets_at, settings.resetDisplay);
-    const resetMarkup = reset
-      ? `<text x="${cx}" y="137" text-anchor="middle" font-family="Segoe UI,Arial" font-size="9" fill="#8490a3">${escapeXml(reset.value)}</text>`
-      : "";
-    return `${ringArc(cx, 52, 27, value, statusColor(row.window.remaining_percent), 8)}<text x="${cx}" y="58" text-anchor="middle" font-family="Segoe UI,Arial" font-size="18" font-weight="700" fill="#f1f3f5">${escapeXml(percent)}</text><text x="${cx}" y="101" text-anchor="middle" font-family="Segoe UI,Arial" font-size="10" fill="#8490a3">${escapeXml(dualRingLabel(row))}</text>${resetMarkup}`;
-  }).join("");
-  return svg(`<rect width="144" height="144" fill="#000"/>${markup}`);
+  const outer = ringValue(rows[0], settings);
+  const inner = ringValue(rows[1], settings);
+  // Same edge inset and stroke as the single-limit key; inner ring sits one stroke + gap inside.
+  const strokeWidth = 11;
+  const outerRadius = 72 - 4 - strokeWidth / 2;
+  const innerRadius = outerRadius - strokeWidth - 6;
+  const outerSize = fittedFontSize(outer.percent, 26);
+  const innerSize = fittedFontSize(inner.percent, 20);
+  const labels = `<text x="72" y="66" text-anchor="middle" font-family="Segoe UI,Arial" font-size="${outerSize}" font-weight="700" fill="${outer.color}">${escapeXml(outer.percent)}</text><text x="72" y="94" text-anchor="middle" font-family="Segoe UI,Arial" font-size="${innerSize}" font-weight="700" fill="${inner.color}">${escapeXml(inner.percent)}</text>`;
+  return svg(`<rect width="144" height="144" fill="#000"/>${fadedRingArc(72, 72, outerRadius, outer.value, outer.color, strokeWidth)}${fadedRingArc(72, 72, innerRadius, inner.value, inner.color, strokeWidth)}${labels}`);
 }
 
 function renderResetTime(rows: MetricRow[]): string {
