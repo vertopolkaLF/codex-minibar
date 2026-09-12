@@ -11,7 +11,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, mpsc},
     thread,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use chrono::{DateTime, Utc};
@@ -23,6 +23,54 @@ use crate::{
     provider_registry,
     settings::{ProviderKind, Settings},
 };
+
+const PLUGIN_ASSET_SUFFIX: &str = ".streamDeckPlugin";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InstallPhase {
+    Idle,
+    Downloading,
+    Launching,
+    Launched,
+    Failed(String),
+}
+
+/// Downloads the latest packaged plugin and hands it to the registered
+/// Stream Deck installer without blocking the settings UI.
+pub fn install_latest_plugin_async(on_phase: impl Fn(InstallPhase) + Send + 'static) {
+    on_phase(InstallPhase::Downloading);
+    thread::spawn(move || {
+        let result = (|| -> anyhow::Result<()> {
+            let plugin_path = download_latest_plugin()?;
+            on_phase(InstallPhase::Launching);
+            crate::updater::open_path(&plugin_path)
+        })();
+
+        match result {
+            Ok(()) => on_phase(InstallPhase::Launched),
+            Err(error) => {
+                let message = error.to_string();
+                crate::notifications::show("Stream Deck plugin", &message);
+                on_phase(InstallPhase::Failed(message));
+            }
+        }
+    });
+}
+
+fn download_latest_plugin() -> anyhow::Result<PathBuf> {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let directory = std::env::temp_dir().join("Codex Minibar");
+    fs::create_dir_all(&directory)?;
+    let path = directory.join(format!(
+        "codex-minibar-streamdeck-{}-{stamp}{PLUGIN_ASSET_SUFFIX}",
+        std::process::id()
+    ));
+    crate::updater::download_latest_release_asset(PLUGIN_ASSET_SUFFIX, &path)?;
+    Ok(path)
+}
 
 pub const PROTOCOL_VERSION: u32 = 1;
 const ENDPOINT_FILE_NAME: &str = "streamdeck-bridge.json";

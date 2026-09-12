@@ -13,6 +13,7 @@ pub(super) enum Tab {
     Notifications,
     Advanced,
     Log,
+    Integrations,
     About,
 }
 
@@ -28,6 +29,7 @@ impl Tab {
             Self::Notifications => "notifications",
             Self::Advanced => "advanced",
             Self::Log => "log",
+            Self::Integrations => "integrations",
             Self::About => "about",
         }
     }
@@ -42,6 +44,7 @@ impl Tab {
             "notifications" => Self::Notifications,
             "advanced" => Self::Advanced,
             "log" => Self::Log,
+            "integrations" => Self::Integrations,
             "about" => Self::About,
             _ => Self::General,
         }
@@ -110,7 +113,7 @@ pub(super) fn fade_to_rendered_page(
     });
 }
 
-pub(super) fn root_nav_items(nav_icon_color: &str, use_colored: bool) -> [NavViewItem; 10] {
+pub(super) fn root_nav_items(nav_icon_color: &str, use_colored: bool) -> [NavViewItem; 11] {
     let item = |label: &str, tag: &str| {
         let mut nav = NavViewItem::new(label).tag(tag);
         if use_colored {
@@ -134,6 +137,7 @@ pub(super) fn root_nav_items(nav_icon_color: &str, use_colored: bool) -> [NavVie
         item("Appearance", "appearance"),
         item("Advanced", "advanced"),
         item("Log", "log"),
+        item("Integrations", "integrations"),
         item("About & Updates", "about"),
     ]
 }

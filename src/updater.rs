@@ -559,6 +559,34 @@ fn payload_root_from_extracted(destination: &Path) -> Result<PathBuf> {
 }
 
 pub fn open_url(url: &str) -> Result<()> {
+    open_shell_target(std::ffi::OsStr::new(url), url)
+}
+
+pub fn open_path(path: &Path) -> Result<()> {
+    let description = path.display().to_string();
+    open_shell_target(path.as_os_str(), &description)
+}
+
+pub(crate) fn download_latest_release_asset(
+    name_suffix: &str,
+    destination: &Path,
+) -> Result<String> {
+    let release: GhRelease = github_get(LATEST_RELEASE_API)?;
+    let asset = release
+        .assets
+        .iter()
+        .find(|asset| asset.name.ends_with(name_suffix))
+        .with_context(|| {
+            format!(
+                "release {} has no asset ending with {name_suffix:?}",
+                release.tag_name
+            )
+        })?;
+    download_file(&asset.browser_download_url, destination)?;
+    Ok(asset.name.clone())
+}
+
+fn open_shell_target(target: &std::ffi::OsStr, description: &str) -> Result<()> {
     #[cfg(windows)]
     {
         use std::ffi::OsStr;
@@ -569,7 +597,7 @@ pub fn open_url(url: &str) -> Result<()> {
             .encode_wide()
             .chain(std::iter::once(0))
             .collect();
-        let target: Vec<u16> = OsStr::new(url)
+        let target: Vec<u16> = target
             .encode_wide()
             .chain(std::iter::once(0))
             .collect();
@@ -584,13 +612,14 @@ pub fn open_url(url: &str) -> Result<()> {
             )
         };
         if result as isize <= 32 {
-            bail!("ShellExecuteW failed for {url}");
+            bail!("ShellExecuteW failed for {description}");
         }
         Ok(())
     }
     #[cfg(not(windows))]
     {
-        let _ = url;
+        let _ = target;
+        let _ = description;
         bail!("opening URLs is only supported on Windows")
     }
 }

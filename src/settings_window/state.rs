@@ -228,6 +228,7 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) forced_reset_notifications: bool,
     pub(super) update_phase: &'a UpdatePhase,
     pub(super) log_content: &'a str,
+    pub(super) streamdeck_install_phase: &'a crate::streamdeck::InstallPhase,
     pub(super) set_codex_enabled: SetState<bool>,
     pub(super) set_theme: SetState<AppTheme>,
     pub(super) set_accent_color: SetState<AccentColor>,
@@ -293,6 +294,8 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) set_notify_on_update: SetState<bool>,
     pub(super) set_forced_reset_feed_enabled: SetState<bool>,
     pub(super) set_forced_reset_notifications: SetState<bool>,
+    pub(super) set_streamdeck_install_phase:
+        AsyncSetState<crate::streamdeck::InstallPhase>,
     pub(super) theme_navigation_guard: HookRef<bool>,
     pub(super) theme_navigation_guard_timer: HookRef<Option<DispatcherTimer>>,
     pub(super) settings_tx: Sender<Settings>,

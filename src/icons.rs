@@ -88,6 +88,7 @@ pub fn sidebar_mono_icon(name: &str) -> &'static str {
         "appearance" => "paint-brush",
         "advanced" => "sliders",
         "log" => "scroll",
+        "integrations" => "package",
         "about" => "info",
         _ => panic!("unknown Settings sidebar icon: {name}"),
     }
@@ -109,6 +110,7 @@ pub fn fluent_color_uri(name: &str) -> String {
         "appearance" => "fluent-color-paint-brush-24.svg",
         "advanced" => "fluent-color-settings-24.svg",
         "log" => "fluent-color-history-24.svg",
+        "integrations" => "fluent-color-apps-24.svg",
         "about" => "fluent-color-book-open-24.svg",
         _ => panic!("unknown Fluent Color navigation icon: {name}"),
     };

@@ -7,6 +7,7 @@ fn tab_tags_keep_legacy_aliases() {
     assert_eq!(Tab::from_tag("schedule"), Tab::Schedule);
     assert_eq!(Tab::from_tag("limit-activation"), Tab::Schedule);
     assert_eq!(Tab::Appearance.tag(), "appearance");
+    assert_eq!(Tab::from_tag("integrations"), Tab::Integrations);
 }
 
 #[test]

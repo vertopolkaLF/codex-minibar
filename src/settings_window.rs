@@ -45,6 +45,7 @@ mod advanced;
 mod appearance;
 mod customize;
 mod general;
+mod integrations;
 mod log;
 mod navigation;
 mod notifications;
@@ -255,6 +256,8 @@ pub fn render(
         sync_settings_caption_button_theme(color_scheme);
     });
     let (update_phase, set_update_phase) = cx.use_async_state(updates.snapshot());
+    let (streamdeck_install_phase, set_streamdeck_install_phase) =
+        cx.use_async_state(crate::streamdeck::InstallPhase::Idle);
     let updates_for_poll = updates.clone();
     cx.use_effect((), move || {
         let updates = updates_for_poll.clone();
@@ -721,6 +724,7 @@ pub fn render(
         forced_reset_notifications: forced_reset_notifications,
         update_phase: &update_phase,
         log_content: &log_content,
+        streamdeck_install_phase: &streamdeck_install_phase,
         set_codex_enabled: set_codex_enabled.clone(),
         set_theme: set_theme.clone(),
         set_accent_color: set_accent_color.clone(),
@@ -786,6 +790,7 @@ pub fn render(
         set_notify_on_update: set_notify_on_update.clone(),
         set_forced_reset_feed_enabled: set_forced_reset_feed_enabled.clone(),
         set_forced_reset_notifications: set_forced_reset_notifications.clone(),
+        set_streamdeck_install_phase: set_streamdeck_install_phase.clone(),
         theme_navigation_guard: theme_navigation_guard.clone(),
         theme_navigation_guard_timer: theme_navigation_guard_timer.clone(),
         settings_tx: settings_tx.clone(),
