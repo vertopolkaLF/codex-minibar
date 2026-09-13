@@ -89,12 +89,28 @@ pub(super) fn provider_install_status(
             let detail = detected.then(|| "OpenRouter account credentials are configured".into());
             (detail, None, detected.then_some(ProviderInstallSource::App))
         }
+        ProviderKind::Antigravity => {
+            let detected = crate::antigravity::is_installed();
+            let detail = detected.then(|| "Official agy Windows sign-in".into());
+            (None, detail, detected.then_some(ProviderInstallSource::Cli))
+        }
+        ProviderKind::Grok => {
+            let detected = crate::grok::is_installed();
+            let detail = detected.then(|| "Official Grok CLI sign-in".into());
+            (None, detail, detected.then_some(ProviderInstallSource::Cli))
+        }
     };
     ProviderInstallStatus {
         app,
         cli,
         used,
-        cli_applicable: matches!(provider, ProviderKind::Codex | ProviderKind::Claude),
+        cli_applicable: matches!(
+            provider,
+            ProviderKind::Codex
+                | ProviderKind::Claude
+                | ProviderKind::Antigravity
+                | ProviderKind::Grok
+        ),
         checking: false,
     }
 }
@@ -725,7 +741,11 @@ fn persist_provider_folder(provider: ProviderKind, value: String, settings_tx: S
         ProviderKind::Codex => &CODEX_PATH_SAVE_GEN,
         ProviderKind::Claude => &CLAUDE_PATH_SAVE_GEN,
         ProviderKind::Cursor => &CURSOR_PATH_SAVE_GEN,
-        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo | ProviderKind::OpenRouter => return,
+        ProviderKind::OpenCodeZen
+        | ProviderKind::OpenCodeGo
+        | ProviderKind::OpenRouter
+        | ProviderKind::Antigravity
+        | ProviderKind::Grok => return,
     };
     let revision = generation.fetch_add(1, Ordering::Relaxed) + 1;
     thread::spawn(move || {
@@ -734,7 +754,11 @@ fn persist_provider_folder(provider: ProviderKind, value: String, settings_tx: S
             ProviderKind::Codex => &CODEX_PATH_SAVE_GEN,
             ProviderKind::Claude => &CLAUDE_PATH_SAVE_GEN,
             ProviderKind::Cursor => &CURSOR_PATH_SAVE_GEN,
-            ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo | ProviderKind::OpenRouter => {
+            ProviderKind::OpenCodeZen
+            | ProviderKind::OpenCodeGo
+            | ProviderKind::OpenRouter
+            | ProviderKind::Antigravity
+            | ProviderKind::Grok => {
                 return;
             }
         };
@@ -746,7 +770,11 @@ fn persist_provider_folder(provider: ProviderKind, value: String, settings_tx: S
             ProviderKind::Codex => settings.codex_path = folder,
             ProviderKind::Claude => settings.claude_path = folder,
             ProviderKind::Cursor => settings.cursor_path = folder,
-            ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo | ProviderKind::OpenRouter => {}
+            ProviderKind::OpenCodeZen
+            | ProviderKind::OpenCodeGo
+            | ProviderKind::OpenRouter
+            | ProviderKind::Antigravity
+            | ProviderKind::Grok => {}
         });
     });
 }
@@ -798,6 +826,8 @@ pub(super) fn provider_page_content(
     let opencode_zen_enabled = ctx.opencode_zen_enabled;
     let opencode_go_enabled = ctx.opencode_go_enabled;
     let openrouter_enabled = ctx.openrouter_enabled;
+    let antigravity_enabled = ctx.antigravity_enabled;
+    let grok_enabled = ctx.grok_enabled;
     let codex_path = ctx.codex_path;
     let claude_path = ctx.claude_path;
     let cursor_path = ctx.cursor_path;
@@ -807,6 +837,8 @@ pub(super) fn provider_page_content(
     let opencode_zen_install_status = ctx.opencode_zen_install_status;
     let opencode_go_install_status = ctx.opencode_go_install_status;
     let openrouter_install_status = ctx.openrouter_install_status;
+    let antigravity_install_status = ctx.antigravity_install_status;
+    let grok_install_status = ctx.grok_install_status;
     let opencode_zen_key_input = ctx.opencode_zen_key_input;
     let opencode_go_key_input = ctx.opencode_go_key_input;
     let openrouter_accounts = ctx.openrouter_accounts;
@@ -820,6 +852,8 @@ pub(super) fn provider_page_content(
     let set_opencode_zen_enabled = ctx.set_opencode_zen_enabled.clone();
     let set_opencode_go_enabled = ctx.set_opencode_go_enabled.clone();
     let set_openrouter_enabled = ctx.set_openrouter_enabled.clone();
+    let set_antigravity_enabled = ctx.set_antigravity_enabled.clone();
+    let set_grok_enabled = ctx.set_grok_enabled.clone();
     let set_opencode_zen_key_input = ctx.set_opencode_zen_key_input.clone();
     let set_opencode_go_key_input = ctx.set_opencode_go_key_input.clone();
     let set_openrouter_accounts = ctx.set_openrouter_accounts.clone();
@@ -848,6 +882,8 @@ pub(super) fn provider_page_content(
     let apply_opencode_zen_enabled = settings_tx.clone();
     let apply_opencode_go_enabled = settings_tx.clone();
     let apply_openrouter_enabled = settings_tx.clone();
+    let apply_antigravity_enabled = settings_tx.clone();
+    let apply_grok_enabled = settings_tx.clone();
     let settings_tx_for_details = settings_tx.clone();
 
     let enable_card = match provider {
@@ -972,6 +1008,48 @@ pub(super) fn provider_page_content(
             hovered_card_id,
             set_hovered_card_id.clone(),
         ),
+        ProviderKind::Antigravity => settings_toggle_card_with_description(
+            "Enabled",
+            Some("Reads subscription quota from your existing official agy Windows sign-in."),
+            antigravity_enabled,
+            move |value| {
+                persist_provider_enabled(
+                    set_antigravity_enabled.clone(),
+                    tray_widget_setter_for_opencode_toggle.clone(),
+                    apply_antigravity_enabled.clone(),
+                    ProviderKind::Antigravity,
+                    value,
+                    false,
+                    false,
+                    tray_widgets_for_opencode_toggle.clone(),
+                )
+            },
+            "provider-antigravity-enabled",
+            hovered_card_id,
+            set_hovered_card_id.clone(),
+        ),
+        ProviderKind::Grok => settings_toggle_card_with_description(
+            "Enabled",
+            Some(
+                "Reads SuperGrok subscription credits from your existing official Grok CLI sign-in.",
+            ),
+            grok_enabled,
+            move |value| {
+                persist_provider_enabled(
+                    set_grok_enabled.clone(),
+                    tray_widget_setter_for_opencode_toggle.clone(),
+                    apply_grok_enabled.clone(),
+                    ProviderKind::Grok,
+                    value,
+                    false,
+                    false,
+                    tray_widgets_for_opencode_toggle.clone(),
+                )
+            },
+            "provider-grok-enabled",
+            hovered_card_id,
+            set_hovered_card_id.clone(),
+        ),
     };
 
     let install_status = match provider {
@@ -981,6 +1059,8 @@ pub(super) fn provider_page_content(
         ProviderKind::OpenCodeZen => opencode_zen_install_status,
         ProviderKind::OpenCodeGo => opencode_go_install_status,
         ProviderKind::OpenRouter => openrouter_install_status,
+        ProviderKind::Antigravity => antigravity_install_status,
+        ProviderKind::Grok => grok_install_status,
     };
 
     let (path, path_label, path_description, placeholder) = match provider {
@@ -1002,9 +1082,11 @@ pub(super) fn provider_page_content(
             "Folder with Cursor.exe. Leave empty to find it automatically. Usage still comes from the signed-in profile.",
             r"C:\\Users\\you\\AppData\\Local\\Programs\\Cursor",
         ),
-        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo | ProviderKind::OpenRouter => {
-            ("", "", "", "")
-        }
+        ProviderKind::OpenCodeZen
+        | ProviderKind::OpenCodeGo
+        | ProviderKind::OpenRouter
+        | ProviderKind::Antigravity
+        | ProviderKind::Grok => ("", "", "", ""),
     };
 
     let codex_path_setter = set_codex_path.clone();
@@ -1119,9 +1201,11 @@ pub(super) fn provider_page_content(
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .into()
         }
-        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo | ProviderKind::OpenRouter => {
-            Element::Empty
-        }
+        ProviderKind::OpenCodeZen
+        | ProviderKind::OpenCodeGo
+        | ProviderKind::OpenRouter
+        | ProviderKind::Antigravity
+        | ProviderKind::Grok => Element::Empty,
     };
 
     let details: Element = if matches!(
@@ -1172,6 +1256,8 @@ pub(super) fn provider_page_content(
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .vertical_alignment(VerticalAlignment::Top)
         .into()
+    } else if matches!(provider, ProviderKind::Antigravity | ProviderKind::Grok) {
+        provider_install_status_card(install_status)
     } else {
         vstack((
             provider_install_status_card(install_status),

@@ -320,6 +320,10 @@ pub fn render(
         cx.use_state(settings.providers.is_enabled(ProviderKind::OpenCodeGo));
     let (openrouter_enabled, set_openrouter_enabled) =
         cx.use_state(settings.providers.is_enabled(ProviderKind::OpenRouter));
+    let (antigravity_enabled, set_antigravity_enabled) =
+        cx.use_state(settings.providers.is_enabled(ProviderKind::Antigravity));
+    let (grok_enabled, set_grok_enabled) =
+        cx.use_state(settings.providers.is_enabled(ProviderKind::Grok));
     let (opencode_zen_key_input, set_opencode_zen_key_input) = cx.use_state(String::new());
     let (opencode_go_key_input, set_opencode_go_key_input) = cx.use_state(String::new());
     let (openrouter_accounts, set_openrouter_accounts) =
@@ -487,6 +491,10 @@ pub fn render(
         cx.use_async_state(ProviderInstallStatus::checking());
     let (openrouter_install_status, set_openrouter_install_status) =
         cx.use_async_state(ProviderInstallStatus::checking());
+    let (antigravity_install_status, set_antigravity_install_status) =
+        cx.use_async_state(ProviderInstallStatus::checking());
+    let (grok_install_status, set_grok_install_status) =
+        cx.use_async_state(ProviderInstallStatus::checking());
     let status_codex_path = codex_path.clone();
     let status_claude_path = claude_path.clone();
     let status_cursor_path = cursor_path.clone();
@@ -500,12 +508,16 @@ pub fn render(
             set_opencode_zen_install_status.call(ProviderInstallStatus::checking());
             set_opencode_go_install_status.call(ProviderInstallStatus::checking());
             set_openrouter_install_status.call(ProviderInstallStatus::checking());
+            set_antigravity_install_status.call(ProviderInstallStatus::checking());
+            set_grok_install_status.call(ProviderInstallStatus::checking());
             let codex_status = set_codex_install_status.clone();
             let claude_status = set_claude_install_status.clone();
             let cursor_status = set_cursor_install_status.clone();
             let opencode_zen_status = set_opencode_zen_install_status.clone();
             let opencode_go_status = set_opencode_go_install_status.clone();
             let openrouter_status = set_openrouter_install_status.clone();
+            let antigravity_status = set_antigravity_install_status.clone();
+            let grok_status = set_grok_install_status.clone();
             thread::spawn(move || {
                 thread::sleep(Duration::from_millis(250));
                 if PROVIDER_STATUS_GEN.load(Ordering::Relaxed) != generation {
@@ -517,6 +529,8 @@ pub fn render(
                 let opencode_zen = provider_install_status(ProviderKind::OpenCodeZen, "");
                 let opencode_go = provider_install_status(ProviderKind::OpenCodeGo, "");
                 let openrouter = provider_install_status(ProviderKind::OpenRouter, "");
+                let antigravity = provider_install_status(ProviderKind::Antigravity, "");
+                let grok = provider_install_status(ProviderKind::Grok, "");
                 if PROVIDER_STATUS_GEN.load(Ordering::Relaxed) == generation {
                     codex_status.call(codex);
                     claude_status.call(claude);
@@ -524,6 +538,8 @@ pub fn render(
                     opencode_zen_status.call(opencode_zen);
                     opencode_go_status.call(opencode_go);
                     openrouter_status.call(openrouter);
+                    antigravity_status.call(antigravity);
+                    grok_status.call(grok);
                 }
             });
         },
@@ -614,6 +630,8 @@ pub fn render(
             opencode_zen_enabled: set_opencode_zen_enabled.clone(),
             opencode_go_enabled: set_opencode_go_enabled.clone(),
             openrouter_enabled: set_openrouter_enabled.clone(),
+            antigravity_enabled: set_antigravity_enabled.clone(),
+            grok_enabled: set_grok_enabled.clone(),
             openrouter_accounts: set_openrouter_accounts.clone(),
             codex_path: set_codex_path.clone(),
             claude_path: set_claude_path.clone(),
@@ -668,6 +686,8 @@ pub fn render(
         opencode_zen_enabled: opencode_zen_enabled,
         opencode_go_enabled: opencode_go_enabled,
         openrouter_enabled: openrouter_enabled,
+        antigravity_enabled: antigravity_enabled,
+        grok_enabled: grok_enabled,
         codex_path: &codex_path,
         claude_path: &claude_path,
         cursor_path: &cursor_path,
@@ -677,6 +697,8 @@ pub fn render(
         opencode_zen_install_status: &opencode_zen_install_status,
         opencode_go_install_status: &opencode_go_install_status,
         openrouter_install_status: &openrouter_install_status,
+        antigravity_install_status: &antigravity_install_status,
+        grok_install_status: &grok_install_status,
         opencode_zen_key_input: &opencode_zen_key_input,
         opencode_go_key_input: &opencode_go_key_input,
         openrouter_accounts: &openrouter_accounts,
@@ -742,6 +764,8 @@ pub fn render(
         set_opencode_zen_enabled: set_opencode_zen_enabled.clone(),
         set_opencode_go_enabled: set_opencode_go_enabled.clone(),
         set_openrouter_enabled: set_openrouter_enabled.clone(),
+        set_antigravity_enabled: set_antigravity_enabled.clone(),
+        set_grok_enabled: set_grok_enabled.clone(),
         set_opencode_zen_key_input: set_opencode_zen_key_input.clone(),
         set_opencode_go_key_input: set_opencode_go_key_input.clone(),
         set_openrouter_accounts: set_openrouter_accounts.clone(),
@@ -937,6 +961,8 @@ pub fn render(
         opencode_zen_enabled,
         opencode_go_enabled,
         openrouter_enabled,
+        antigravity_enabled,
+        grok_enabled,
     );
     let window_body: Element = if let Some(editing) = editing_tray_indicator.as_ref() {
         let overlay = tray_indicator_edit_overlay(

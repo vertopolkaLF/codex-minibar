@@ -79,6 +79,8 @@ pub(super) fn commit_widget_drag(
                     ProviderKind::OpenCodeZen => ui.opencode_zen_enabled,
                     ProviderKind::OpenCodeGo => ui.opencode_go_enabled,
                     ProviderKind::OpenRouter => ui.openrouter_enabled,
+                    ProviderKind::Antigravity => ui.antigravity_enabled,
+                    ProviderKind::Grok => ui.grok_enabled,
                 })
                 .map(|descriptor| descriptor.kind),
         ),

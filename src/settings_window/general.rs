@@ -16,6 +16,7 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
             ProviderKind::OpenCodeZen => ctx.opencode_zen_enabled,
             ProviderKind::OpenCodeGo => ctx.opencode_go_enabled,
             ProviderKind::OpenRouter => ctx.openrouter_enabled,
+            ProviderKind::Antigravity | ProviderKind::Grok => false,
         })
         .map(|descriptor| descriptor.kind)
         .collect::<Vec<_>>();

@@ -3,7 +3,7 @@ use super::platform::{close_open_window, is_open};
 use super::shared::settings_section_heading;
 use super::*;
 
-pub(super) fn detected_providers(settings: &Settings) -> [bool; 6] {
+pub(super) fn detected_providers(settings: &Settings) -> [bool; 8] {
     [
         crate::codex::is_installed(settings.codex_path.as_deref()),
         crate::claude::is_installed(settings.claude_path.as_deref()),
@@ -13,6 +13,8 @@ pub(super) fn detected_providers(settings: &Settings) -> [bool; 6] {
         crate::openrouter::is_installed_for_accounts(&crate::openrouter::accounts_for_settings(
             settings,
         )),
+        crate::antigravity::is_installed(),
+        crate::grok::is_installed(),
     ]
 }
 
@@ -28,7 +30,7 @@ enum OnboardingStep {
 pub(super) fn onboarding_render(
     cx: &mut RenderCx,
     settings: Arc<Settings>,
-    detected: [bool; 6],
+    detected: [bool; 8],
     settings_tx: Sender<Settings>,
 ) -> Element {
     let color_scheme = cx.use_color_scheme();
@@ -42,6 +44,8 @@ pub(super) fn onboarding_render(
     let (opencode_zen_enabled, set_opencode_zen_enabled) = cx.use_state(detected[3]);
     let (opencode_go_enabled, set_opencode_go_enabled) = cx.use_state(detected[4]);
     let (openrouter_enabled, set_openrouter_enabled) = cx.use_state(detected[5]);
+    let (antigravity_enabled, set_antigravity_enabled) = cx.use_state(detected[6]);
+    let (grok_enabled, set_grok_enabled) = cx.use_state(detected[7]);
     let (start_at_login, set_start_at_login) = cx.use_state(settings.start_at_login);
     let (automatic_activation, set_automatic_activation) =
         cx.use_state(settings.automatic_activation);
@@ -144,6 +148,34 @@ pub(super) fn onboarding_render(
                     set_hovered_card_id.clone(),
                 )
                 .with_key("onboarding-openrouter"),
+                settings_toggle_card_with_description(
+                    "Antigravity",
+                    Some(if detected[6] {
+                        "Found an official agy sign-in on this PC."
+                    } else {
+                        "Not found. Sign in with agy before enabling it."
+                    }),
+                    antigravity_enabled,
+                    move |value| set_antigravity_enabled.call(value),
+                    "onboarding-antigravity",
+                    &hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("onboarding-antigravity"),
+                settings_toggle_card_with_description(
+                    "Grok",
+                    Some(if detected[7] {
+                        "Found an official Grok CLI sign-in on this PC."
+                    } else {
+                        "Not found. Run grok login before enabling it."
+                    }),
+                    grok_enabled,
+                    move |value| set_grok_enabled.call(value),
+                    "onboarding-grok",
+                    &hovered_card_id,
+                    set_hovered_card_id.clone(),
+                )
+                .with_key("onboarding-grok"),
             ],
         ),
         OnboardingStep::General => (
@@ -281,6 +313,8 @@ pub(super) fn onboarding_render(
                                 ProviderKind::OpenCodeZen => opencode_zen_enabled,
                                 ProviderKind::OpenCodeGo => opencode_go_enabled,
                                 ProviderKind::OpenRouter => openrouter_enabled,
+                                ProviderKind::Antigravity => antigravity_enabled,
+                                ProviderKind::Grok => grok_enabled,
                             })
                             .map(|provider| provider.kind),
                     );
