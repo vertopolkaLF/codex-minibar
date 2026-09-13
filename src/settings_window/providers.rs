@@ -491,9 +491,9 @@ fn openrouter_accounts_card(
                         })
                         .height(32.0),
                     text_block(if management_saved {
-                        "Used for the account credit balance."
+                        "Used for account-wide usage history and credit balance."
                     } else {
-                        "Needed to show the credit balance."
+                        "Needed for usage history and the credit balance."
                     })
                     .font_size(11.0)
                     .opacity(0.72)
@@ -588,7 +588,7 @@ fn openrouter_accounts_card(
         vstack((
             text_block("OpenRouter accounts").font_size(12.0).bold(),
             text_block(
-                "API keys show per-key usage. A management key shows the shared credit balance.",
+                "API keys show per-key usage. A management key enables account-wide usage history and credit balance.",
             )
             .font_size(11.0)
             .opacity(0.72)
@@ -953,7 +953,7 @@ pub(super) fn provider_page_content(
         ProviderKind::OpenRouter => settings_toggle_card_with_description(
             "Enabled",
             Some(
-                "Reads API-key usage and spend limits. A management key also shows credit balance.",
+                "Reads API-key usage and spend limits. A management key also enables usage history and credit balance.",
             ),
             openrouter_enabled,
             move |value| {

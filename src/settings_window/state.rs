@@ -27,6 +27,7 @@ pub(super) struct SettingsWindowState {
     pub(super) scheduled_activations: SetState<Vec<ScheduledActivation>>,
     pub(super) auto_activation_pauses: SetState<Vec<AutoActivationPause>>,
     pub(super) usage_stats_enabled: SetState<bool>,
+    pub(super) usage_stats_excluded_providers: SetState<Vec<String>>,
     pub(super) limit_refresh_interval: SetState<LimitRefreshInterval>,
     pub(super) usage_refresh_interval: SetState<UsageRefreshInterval>,
     pub(super) reset_announcement_refresh_interval: SetState<ResetAnnouncementRefreshInterval>,
@@ -109,6 +110,8 @@ impl SettingsWindowState {
         self.auto_activation_pauses
             .call(settings.auto_activation_pauses.clone());
         self.usage_stats_enabled.call(settings.usage_stats_enabled);
+        self.usage_stats_excluded_providers
+            .call(settings.usage_stats_excluded_providers.clone());
         self.limit_refresh_interval
             .call(settings.limit_refresh_interval);
         self.usage_refresh_interval
@@ -193,6 +196,7 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) expanded_scheduled_activation: &'a Option<String>,
     pub(super) expanded_auto_activation_pause: &'a Option<String>,
     pub(super) usage_stats_enabled: bool,
+    pub(super) usage_stats_excluded_providers: &'a [String],
     pub(super) limit_refresh_interval: LimitRefreshInterval,
     pub(super) usage_refresh_interval: UsageRefreshInterval,
     pub(super) reset_announcement_refresh_interval: ResetAnnouncementRefreshInterval,
@@ -260,6 +264,7 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) set_expanded_scheduled_activation: SetState<Option<String>>,
     pub(super) set_expanded_auto_activation_pause: SetState<Option<String>>,
     pub(super) set_usage_stats_enabled: SetState<bool>,
+    pub(super) set_usage_stats_excluded_providers: SetState<Vec<String>>,
     pub(super) set_limit_refresh_interval: SetState<LimitRefreshInterval>,
     pub(super) set_usage_refresh_interval: SetState<UsageRefreshInterval>,
     pub(super) set_reset_announcement_refresh_interval: SetState<ResetAnnouncementRefreshInterval>,

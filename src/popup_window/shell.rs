@@ -29,6 +29,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         compact_usage_cards: state.settings.compact_usage_cards,
         popup_visibility: state.settings.popup_visibility.clone(),
         usage_stats_enabled: state.settings.usage_stats_enabled,
+        usage_stats_excluded_providers: state.settings.usage_stats_excluded_providers.clone(),
         show_total_spend_on_all_tab: state.settings.show_total_spend_on_all_tab,
         total_spend_presentation: state.settings.total_spend_presentation,
         total_spend_period: state.settings.total_spend_period,
@@ -271,6 +272,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             ui.cursor_enabled,
             ui.opencode_zen_enabled,
             ui.opencode_go_enabled,
+            ui.openrouter_enabled,
+            &ui.usage_stats_excluded_providers,
         ) > 1;
     let all_tab_widgets = visible_popup_widgets(
         &ui.popup_order,
@@ -289,9 +292,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         .iter()
         .copied()
         .filter(|provider| {
-            crate::provider_registry::PROVIDERS
-                .iter()
-                .any(|descriptor| descriptor.kind == *provider && descriptor.include_in_total_spend)
+            ui.usage_stats_provider_enabled(*provider)
+                && crate::provider_registry::descriptor(*provider).include_in_total_spend
         })
         .collect::<Vec<_>>();
     let snapshot_inputs = usage_snapshots::Inputs {
@@ -445,6 +447,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                             &ui.popup_visibility,
                             PopupSurface::HomeTab,
                             show_provider_tabs,
+                            ui.usage_stats_provider_enabled(provider),
                             ui.show_account_name,
                             color_scheme,
                             handle,
@@ -553,6 +556,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                         &ui.popup_visibility,
                         surface,
                         show_provider_tabs,
+                        true,
                         ui.show_account_name,
                         color_scheme,
                         None,

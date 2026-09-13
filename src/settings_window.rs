@@ -15,7 +15,7 @@ use crate::settings_controls::{
     SETTINGS_CARD_PADDING, settings_action_card, settings_brick_body_height, settings_brick_row,
     settings_brick_table_header, settings_card_padding, settings_checkbox_expander,
     settings_content_expander, settings_content_expander_with_trailing, settings_control_card,
-    settings_info_card, settings_slider_content, settings_toggle_card,
+    settings_info_card, settings_labeled_checkbox, settings_slider_content, settings_toggle_card,
     settings_toggle_card_with_description, settings_toggle_expander, update_available_nav_card,
 };
 use crate::theme::{CONTROL_FAST_ANIMATION, CONTROL_NORMAL_ANIMATION, duration};
@@ -545,6 +545,8 @@ pub fn render(
         cx.use_state(None::<String>);
     let (usage_stats_enabled, set_usage_stats_enabled) =
         cx.use_state(settings.usage_stats_enabled);
+    let (usage_stats_excluded_providers, set_usage_stats_excluded_providers) =
+        cx.use_state(settings.usage_stats_excluded_providers.clone());
     let (limit_refresh_interval, set_limit_refresh_interval) =
         cx.use_state(settings.limit_refresh_interval);
     let (usage_refresh_interval, set_usage_refresh_interval) =
@@ -624,6 +626,7 @@ pub fn render(
             scheduled_activations: set_scheduled_activations.clone(),
             auto_activation_pauses: set_auto_activation_pauses.clone(),
             usage_stats_enabled: set_usage_stats_enabled.clone(),
+            usage_stats_excluded_providers: set_usage_stats_excluded_providers.clone(),
             limit_refresh_interval: set_limit_refresh_interval.clone(),
             usage_refresh_interval: set_usage_refresh_interval.clone(),
             reset_announcement_refresh_interval: set_reset_announcement_refresh_interval.clone(),
@@ -689,6 +692,7 @@ pub fn render(
         expanded_scheduled_activation: &expanded_scheduled_activation,
         expanded_auto_activation_pause: &expanded_auto_activation_pause,
         usage_stats_enabled: usage_stats_enabled,
+        usage_stats_excluded_providers: &usage_stats_excluded_providers,
         limit_refresh_interval: limit_refresh_interval,
         usage_refresh_interval: usage_refresh_interval,
         reset_announcement_refresh_interval: reset_announcement_refresh_interval,
@@ -756,6 +760,7 @@ pub fn render(
         set_expanded_scheduled_activation: set_expanded_scheduled_activation.clone(),
         set_expanded_auto_activation_pause: set_expanded_auto_activation_pause.clone(),
         set_usage_stats_enabled: set_usage_stats_enabled.clone(),
+        set_usage_stats_excluded_providers: set_usage_stats_excluded_providers.clone(),
         set_limit_refresh_interval: set_limit_refresh_interval.clone(),
         set_usage_refresh_interval: set_usage_refresh_interval.clone(),
         set_reset_announcement_refresh_interval: set_reset_announcement_refresh_interval.clone(),

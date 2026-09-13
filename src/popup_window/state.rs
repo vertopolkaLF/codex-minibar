@@ -290,6 +290,7 @@ pub(super) struct UiState {
     pub(super) compact_usage_cards: bool,
     pub(super) popup_visibility: PopupVisibility,
     pub(super) usage_stats_enabled: bool,
+    pub(super) usage_stats_excluded_providers: Vec<String>,
     pub(super) show_total_spend_on_all_tab: bool,
     pub(super) total_spend_presentation: TotalSpendPresentation,
     pub(super) total_spend_period: TotalSpendPeriod,
@@ -335,6 +336,7 @@ impl Default for UiState {
             compact_usage_cards: false,
             popup_visibility: PopupVisibility::build_defaults(),
             usage_stats_enabled: true,
+            usage_stats_excluded_providers: Vec::new(),
             show_total_spend_on_all_tab: true,
             total_spend_presentation: TotalSpendPresentation::default(),
             total_spend_period: TotalSpendPeriod::default(),
@@ -430,6 +432,13 @@ impl UiState {
 
     pub(super) fn usage_error(&self, provider: ProviderKind) -> Option<&str> {
         self.usage_errors.get(&provider).map(String::as_str)
+    }
+
+    pub(super) fn usage_stats_provider_enabled(&self, provider: ProviderKind) -> bool {
+        !self
+            .usage_stats_excluded_providers
+            .iter()
+            .any(|id| id == provider.id())
     }
 
     pub(super) fn request_started(&mut self, provider: ProviderKind, kind: RequestKind) {

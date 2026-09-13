@@ -98,6 +98,7 @@ pub(super) fn start_background_bridge(
             compact_usage_cards: state.settings.compact_usage_cards,
             popup_visibility: state.settings.popup_visibility.clone(),
             usage_stats_enabled: state.settings.usage_stats_enabled,
+            usage_stats_excluded_providers: state.settings.usage_stats_excluded_providers.clone(),
             show_total_spend_on_all_tab: state.settings.show_total_spend_on_all_tab,
             total_spend_presentation: state.settings.total_spend_presentation,
             total_spend_period: state.settings.total_spend_period,
@@ -184,6 +185,7 @@ pub(super) fn start_background_bridge(
             ui.compact_usage_cards = settings.compact_usage_cards;
             ui.popup_visibility = settings.popup_visibility.clone();
             ui.usage_stats_enabled = settings.usage_stats_enabled;
+            ui.usage_stats_excluded_providers = settings.usage_stats_excluded_providers.clone();
             ui.show_total_spend_on_all_tab = settings.show_total_spend_on_all_tab;
             ui.total_spend_presentation = settings.total_spend_presentation;
             ui.total_spend_period = settings.total_spend_period;
@@ -292,7 +294,8 @@ pub(super) fn start_background_bridge(
                     settings.history_retention_days,
                 ));
                 let _ = commands.send(WorkerCommand::SetUsageCollectionEnabled(
-                    settings.usage_stats_enabled,
+                    settings.usage_stats_enabled
+                        && settings.usage_stats_provider_enabled(provider),
                 ));
                 if (provider == ProviderKind::OpenCodeZen && opencode_zen_credentials_changed)
                     || (provider == ProviderKind::OpenCodeGo && opencode_go_credentials_changed)

@@ -36,7 +36,7 @@ pub fn overview_page(
     if snapshot.providers.is_empty() {
         return vstack((
             usage_title_row(None, usage_recalculating, usage_error),
-            caption("Turn on a provider in Settings to see local API usage.")
+            caption("Enable a provider in Settings and include it in Usage Stats to see local API usage.")
                 .foreground(ThemeRef::TertiaryText)
                 .wrap(),
         ))
@@ -653,7 +653,7 @@ fn provider_row(
     );
 
     vstack((
-        grid((
+        hstack((
             crate::icons::element(icon_name, 16.0, color)
                 .vertical_alignment(VerticalAlignment::Center)
                 .with_key(format!(
@@ -665,12 +665,10 @@ fn provider_row(
                     color.b
                 )),
             body_strong(descriptor.display_name)
-                .vertical_alignment(VerticalAlignment::Center)
-                .grid_column(1),
+                .vertical_alignment(VerticalAlignment::Center),
         ))
-        .columns([GridLength::Auto, GridLength::Star(1.0)])
-        .column_spacing(8.0)
-        .rows([GridLength::Auto]),
+        .spacing(8.0)
+        .vertical_alignment(VerticalAlignment::Center),
         vstack((
             hstack((
                 caption(value)
@@ -685,6 +683,7 @@ fn provider_row(
         .spacing(1.0),
     ))
     .spacing(4.0)
+    .vertical_alignment(VerticalAlignment::Top)
     .with_key(format!("usage-hero-provider-{}", entry.provider.id()))
     .into()
 }

@@ -670,7 +670,7 @@ fn spend_provider_tile(
     let descriptor = crate::provider_registry::descriptor(provider);
     let color = spend_provider_icon_color(provider, color_scheme, use_colored_provider_icons);
     vstack((
-        grid((
+        hstack((
             crate::icons::element(descriptor.icon, 16.0, color)
                 .vertical_alignment(VerticalAlignment::Center)
                 .with_key(format!(
@@ -682,17 +682,19 @@ fn spend_provider_tile(
                     color.b
                 )),
             body_strong(descriptor.display_name)
-                .vertical_alignment(VerticalAlignment::Center)
-                .grid_column(1),
+                .vertical_alignment(VerticalAlignment::Center),
         ))
-        .columns([GridLength::Auto, GridLength::Star(1.0)])
-        .column_spacing(8.0)
-        .rows([GridLength::Auto]),
+        .spacing(8.0)
+        .vertical_alignment(VerticalAlignment::Center),
         caption(format_spend_full(spend))
             .font_weight(600)
             .foreground(ThemeRef::PrimaryText),
     ))
     .spacing(4.0)
+    // A lone item in the final Grid row must keep its intrinsic stack height;
+    // the default stretch alignment otherwise pushes its amount away from the
+    // icon/name row when the provider set has four entries.
+    .vertical_alignment(VerticalAlignment::Top)
     .with_key(format!("spend-hero-provider-{}", provider.id()))
     .into()
 }
