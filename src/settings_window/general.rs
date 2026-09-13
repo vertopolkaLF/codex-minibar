@@ -150,10 +150,11 @@ fn usage_stats_provider_selection_card(
         let current = excluded_providers.to_vec();
         let set_excluded_providers = set_excluded_providers.clone();
         let settings_tx = settings_tx.clone();
-        let checkbox: Element = CheckBox::new(checked)
-            .content(descriptor.display_name)
-            .enabled(usage_stats_enabled)
-            .on_checked(move |checked| {
+        let checkbox: Element = settings_labeled_checkbox(
+            checked,
+            descriptor.display_name,
+            usage_stats_enabled,
+            move |checked| {
                 let mut optimistic = current.clone();
                 if checked {
                     optimistic.retain(|id| id != provider.id());
@@ -164,12 +165,9 @@ fn usage_stats_provider_selection_card(
                 persist_update(settings_tx.clone(), move |settings| {
                     settings.set_usage_stats_provider_enabled(provider, checked);
                 });
-            })
-            .min_width(0.0)
-            .padding(Thickness::uniform(0.0))
-            .horizontal_alignment(HorizontalAlignment::Left)
-            .vertical_alignment(VerticalAlignment::Center)
-            .into();
+            },
+        )
+        .into();
         provider_checks.push(
             checkbox
                 .with_key(format!("general-usage-provider-{}", provider.id()))

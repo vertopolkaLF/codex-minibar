@@ -15,7 +15,7 @@ use crate::settings_controls::{
     SETTINGS_CARD_PADDING, settings_action_card, settings_brick_body_height, settings_brick_row,
     settings_brick_table_header, settings_card_padding, settings_checkbox_expander,
     settings_content_expander, settings_content_expander_with_trailing, settings_control_card,
-    settings_info_card, settings_slider_content, settings_toggle_card,
+    settings_info_card, settings_labeled_checkbox, settings_slider_content, settings_toggle_card,
     settings_toggle_card_with_description, settings_toggle_expander, update_available_nav_card,
 };
 use crate::theme::{CONTROL_FAST_ANIMATION, CONTROL_NORMAL_ANIMATION, duration};
