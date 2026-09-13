@@ -434,6 +434,10 @@ impl UsageProvider for OpenRouterClient {
         self.cancelled = cancelled;
     }
 
+    fn load_cached_usage_when_disabled(&self) -> bool {
+        true
+    }
+
     fn load_cached_usage_statistics(&mut self, history_days: u16) -> Result<UsageStatistics> {
         analytics::load(self, history_days)
     }

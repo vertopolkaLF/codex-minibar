@@ -542,6 +542,8 @@ pub fn render(
         cx.use_state(None::<String>);
     let (usage_stats_enabled, set_usage_stats_enabled) =
         cx.use_state(settings.usage_stats_enabled);
+    let (usage_stats_excluded_providers, set_usage_stats_excluded_providers) =
+        cx.use_state(settings.usage_stats_excluded_providers.clone());
     let (limit_refresh_interval, set_limit_refresh_interval) =
         cx.use_state(settings.limit_refresh_interval);
     let (usage_refresh_interval, set_usage_refresh_interval) =
@@ -615,6 +617,7 @@ pub fn render(
             scheduled_activations: set_scheduled_activations.clone(),
             auto_activation_pauses: set_auto_activation_pauses.clone(),
             usage_stats_enabled: set_usage_stats_enabled.clone(),
+            usage_stats_excluded_providers: set_usage_stats_excluded_providers.clone(),
             limit_refresh_interval: set_limit_refresh_interval.clone(),
             usage_refresh_interval: set_usage_refresh_interval.clone(),
             start_at_login: set_start_at_login.clone(),
@@ -677,6 +680,7 @@ pub fn render(
         expanded_scheduled_activation: &expanded_scheduled_activation,
         expanded_auto_activation_pause: &expanded_auto_activation_pause,
         usage_stats_enabled: usage_stats_enabled,
+        usage_stats_excluded_providers: &usage_stats_excluded_providers,
         limit_refresh_interval: limit_refresh_interval,
         usage_refresh_interval: usage_refresh_interval,
         start_at_login: start_at_login,
@@ -740,6 +744,7 @@ pub fn render(
         set_expanded_scheduled_activation: set_expanded_scheduled_activation.clone(),
         set_expanded_auto_activation_pause: set_expanded_auto_activation_pause.clone(),
         set_usage_stats_enabled: set_usage_stats_enabled.clone(),
+        set_usage_stats_excluded_providers: set_usage_stats_excluded_providers.clone(),
         set_limit_refresh_interval: set_limit_refresh_interval.clone(),
         set_usage_refresh_interval: set_usage_refresh_interval.clone(),
         set_start_at_login: set_start_at_login.clone(),

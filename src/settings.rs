@@ -10,7 +10,7 @@ use chrono::{DateTime, Local, Timelike};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 35;
+pub const SETTINGS_VERSION: u32 = 36;
 
 /// 255 until `TimeFormat::apply` runs so first paint can still follow Windows.
 static TIME_FORMAT: AtomicU8 = AtomicU8::new(u8::MAX);
@@ -1569,6 +1569,11 @@ pub struct Settings {
     pub auto_activation_pauses: Vec<AutoActivationPause>,
     /// Enables the Usage tab, Usage Stats home card, and background usage collection.
     pub usage_stats_enabled: bool,
+    /// Providers excluded from the Usage tab, Usage Stats home card, and
+    /// background usage collection. Missing provider ids remain enabled so
+    /// newly added providers opt in by default.
+    #[serde(default)]
+    pub usage_stats_excluded_providers: Vec<String>,
     pub limit_refresh_interval: LimitRefreshInterval,
     pub usage_refresh_interval: UsageRefreshInterval,
     pub start_at_login: bool,
@@ -1637,6 +1642,7 @@ impl Default for Settings {
             scheduled_activations: Vec::new(),
             auto_activation_pauses: Vec::new(),
             usage_stats_enabled: true,
+            usage_stats_excluded_providers: Vec::new(),
             limit_refresh_interval: LimitRefreshInterval::default(),
             usage_refresh_interval: UsageRefreshInterval::default(),
             start_at_login: true,
@@ -1918,6 +1924,27 @@ impl Settings {
 
     pub fn normalize_popup_visibility(&mut self) -> bool {
         self.popup_visibility.normalize()
+    }
+
+    pub fn usage_stats_provider_enabled(&self, provider: ProviderKind) -> bool {
+        !self
+            .usage_stats_excluded_providers
+            .iter()
+            .any(|id| id == provider.id())
+    }
+
+    pub fn set_usage_stats_provider_enabled(&mut self, provider: ProviderKind, enabled: bool) {
+        if enabled {
+            self.usage_stats_excluded_providers
+                .retain(|id| id != provider.id());
+        } else if !self
+            .usage_stats_excluded_providers
+            .iter()
+            .any(|id| id == provider.id())
+        {
+            self.usage_stats_excluded_providers
+                .push(provider.id().into());
+        }
     }
 
     pub fn absorb_discovered_popup_bricks(
@@ -2827,6 +2854,15 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                 root.insert("version".into(), toml::Value::Integer(35));
                 version = 35;
             }
+            35 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("usage_stats_excluded_providers")
+                    .or_insert_with(|| toml::Value::Array(Vec::new()));
+                root.insert("version".into(), toml::Value::Integer(36));
+                version = 36;
+            }
             // Unknown future/gap versions: stamp current and keep decoding with
             // serde defaults rather than refusing to start.
             _ => {
@@ -2869,6 +2905,10 @@ mod tests {
         assert!(!value.automatic_activation);
         assert!(value.auto_activation_pauses.is_empty());
         assert!(value.usage_stats_enabled);
+        assert!(value.usage_stats_excluded_providers.is_empty());
+        for provider in ProviderKind::ALL {
+            assert!(value.usage_stats_provider_enabled(provider));
+        }
         assert_eq!(value.limit_refresh_interval, LimitRefreshInterval::Minute1);
         assert_eq!(value.usage_refresh_interval, UsageRefreshInterval::Minutes15);
         assert!(value.start_at_login);
@@ -2965,6 +3005,45 @@ mod tests {
         assert!(rewritten.contains("popup_background_material = \"acrylic\""));
         assert!(rewritten.contains("usage_refresh_interval = \"minutes15\""));
         assert!(rewritten.contains("usage_stats_enabled = true"));
+    }
+
+    #[test]
+    fn usage_stats_provider_selection_defaults_enabled_and_round_trips() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        let mut settings = Settings::default();
+        settings.set_usage_stats_provider_enabled(ProviderKind::OpenRouter, false);
+        assert!(!settings.usage_stats_provider_enabled(ProviderKind::OpenRouter));
+        assert!(settings.usage_stats_provider_enabled(ProviderKind::Codex));
+        settings.save(&path).unwrap();
+
+        let loaded = Settings::load_or_create(&path).unwrap();
+        assert!(!loaded.usage_stats_provider_enabled(ProviderKind::OpenRouter));
+        assert!(loaded.usage_stats_provider_enabled(ProviderKind::Claude));
+
+        let mut reenabled = loaded;
+        reenabled.set_usage_stats_provider_enabled(ProviderKind::OpenRouter, true);
+        assert!(reenabled.usage_stats_provider_enabled(ProviderKind::OpenRouter));
+        assert!(!reenabled
+            .usage_stats_excluded_providers
+            .iter()
+            .any(|id| id == ProviderKind::OpenRouter.id()));
+    }
+
+    #[test]
+    fn migrates_v35_settings_with_usage_provider_selection_defaults() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(&path, "version = 35\n").unwrap();
+
+        let loaded = Settings::load_or_create(&path).unwrap();
+
+        assert_eq!(loaded.version, SETTINGS_VERSION);
+        assert!(loaded.usage_stats_excluded_providers.is_empty());
+        assert!(loaded.usage_stats_provider_enabled(ProviderKind::OpenRouter));
+        assert!(fs::read_to_string(path)
+            .unwrap()
+            .contains("usage_stats_excluded_providers = []"));
     }
 
     #[test]

@@ -29,6 +29,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         compact_usage_cards: state.settings.compact_usage_cards,
         popup_visibility: state.settings.popup_visibility.clone(),
         usage_stats_enabled: state.settings.usage_stats_enabled,
+        usage_stats_excluded_providers: state.settings.usage_stats_excluded_providers.clone(),
         show_total_spend_on_all_tab: state.settings.show_total_spend_on_all_tab,
         total_spend_presentation: state.settings.total_spend_presentation,
         total_spend_period: state.settings.total_spend_period,
@@ -238,6 +239,15 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         })
         .collect::<Vec<_>>();
 
+    let included_usage_providers = enabled_provider_order
+        .iter()
+        .copied()
+        .filter(|provider| {
+            ui.usage_stats_provider_enabled(*provider)
+                && crate::provider_registry::descriptor(*provider).include_in_total_spend
+        })
+        .collect::<Vec<_>>();
+
     let enabled_provider_count = enabled_provider_order.len();
     let show_provider_icon_tabs = enabled_provider_count > 1;
     let show_provider_tabs = show_provider_icon_tabs;
@@ -251,6 +261,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             ui.cursor_enabled,
             ui.opencode_zen_enabled,
             ui.opencode_go_enabled,
+            ui.openrouter_enabled,
+            &ui.usage_stats_excluded_providers,
         ) > 1;
     let all_tab_widgets = visible_popup_widgets(
         &ui.popup_order,
@@ -329,12 +341,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                         combined_usage_card(
                             &limits,
                             is_first,
-                            ui.codex_enabled,
-                            ui.claude_enabled,
-                            ui.cursor_enabled,
-                            ui.opencode_zen_enabled,
-                            ui.opencode_go_enabled,
-                            ui.openrouter_enabled,
+                            &included_usage_providers,
                             ui.total_spend_period,
                             on_period,
                             hovered_combined_usage_period,
@@ -398,6 +405,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                             &ui.popup_visibility,
                             PopupSurface::HomeTab,
                             show_provider_tabs,
+                            ui.usage_stats_provider_enabled(provider),
                             ui.show_account_name,
                             color_scheme,
                             handle,
@@ -442,17 +450,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 has_preceding_section = true;
             }
         } else if view == PopupView::Usage {
-            let enabled_spend: Vec<ProviderKind> = enabled_provider_order
-                .iter()
-                .copied()
-                .filter(|provider| {
-                    crate::provider_registry::PROVIDERS
-                        .iter()
-                        .any(|descriptor| {
-                            descriptor.kind == *provider && descriptor.include_in_total_spend
-                        })
-                })
-                .collect();
+            let enabled_spend = included_usage_providers.clone();
             let snapshot =
                 build_overview_snapshot(&limits, &enabled_spend, overview_metric, overview_range);
             let usage_recalculating = ui
@@ -516,6 +514,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                         &ui.popup_visibility,
                         surface,
                         show_provider_tabs,
+                        true,
                         ui.show_account_name,
                         color_scheme,
                         None,

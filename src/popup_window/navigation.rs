@@ -138,12 +138,24 @@ pub(super) fn total_spend_provider_count(
     cursor: bool,
     opencode_zen: bool,
     opencode_go: bool,
+    openrouter: bool,
+    excluded_providers: &[String],
 ) -> usize {
-    usize::from(codex)
-        + usize::from(claude)
-        + usize::from(cursor)
-        + usize::from(opencode_zen)
-        + usize::from(opencode_go)
+    [
+        (ProviderKind::Codex, codex),
+        (ProviderKind::Claude, claude),
+        (ProviderKind::Cursor, cursor),
+        (ProviderKind::OpenCodeZen, opencode_zen),
+        (ProviderKind::OpenCodeGo, opencode_go),
+        (ProviderKind::OpenRouter, openrouter),
+    ]
+    .into_iter()
+    .filter(|(provider, enabled)| {
+        *enabled
+            && !excluded_providers.iter().any(|id| id == provider.id())
+            && crate::provider_registry::descriptor(*provider).include_in_total_spend
+    })
+    .count()
 }
 
 pub(super) fn visible_popup_widgets(

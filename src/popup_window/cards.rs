@@ -10,6 +10,7 @@ pub(super) fn provider_cards(
     popup_visibility: &PopupVisibility,
     surface: PopupSurface,
     show_provider_tabs: bool,
+    include_usage_stats: bool,
     show_account_name: bool,
     color_scheme: ColorScheme,
     drag_handle: Option<Element>,
@@ -102,8 +103,8 @@ pub(super) fn provider_cards(
     if provider == ProviderKind::OpenRouter {
         let spending_visible =
             popup_visibility.is_visible(&spending_brick_id(provider), surface, show_provider_tabs);
-        let usage_visible =
-            popup_visibility.is_visible(&usage_brick_id(provider), surface, show_provider_tabs);
+        let usage_visible = include_usage_stats
+            && popup_visibility.is_visible(&usage_brick_id(provider), surface, show_provider_tabs);
         if spending_visible || usage_visible {
             if !limits.openrouter_accounts.is_empty() {
                 // Nest each account as its own keyed strip. A flat list of headings
@@ -234,8 +235,9 @@ pub(super) fn provider_cards(
     // still empty or delayed, so the feature does not look like it vanished.
     let usage_brick = usage_brick_id(provider);
     let show_usage_stats = popup_visibility.is_visible(&usage_brick, surface, show_provider_tabs);
-    let has_usage_statistics =
-        show_usage_stats && (limits.usage.has_data() || provider == ProviderKind::Cursor);
+    let has_usage_statistics = include_usage_stats
+        && show_usage_stats
+        && (limits.usage.has_data() || provider == ProviderKind::Cursor);
     cards.extend(
         popup_sections(limits, false)
             .into_iter()

@@ -36,7 +36,7 @@ pub fn overview_page(
     if snapshot.providers.is_empty() {
         return vstack((
             usage_title_row(None, usage_recalculating, usage_error),
-            caption("Turn on a provider in Settings to see local API usage.")
+            caption("Enable a provider in Settings and include it in Usage Stats to see local API usage.")
                 .foreground(ThemeRef::TertiaryText)
                 .wrap(),
         ))

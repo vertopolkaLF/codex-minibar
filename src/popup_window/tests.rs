@@ -170,6 +170,45 @@ fn usage_statistics_section_respects_its_live_toggle() {
     };
 
     assert!(popup_sections(&limits, false).contains(&PopupSection::UsageStatistics));
+    let excluded_from_home = all_visible();
+    let home_cards = provider_cards(
+        ProviderKind::OpenCodeZen,
+        true,
+        &limits,
+        false,
+        true,
+        false,
+        &excluded_from_home,
+        PopupSurface::HomeTab,
+        true,
+        false,
+        false,
+        ColorScheme::Dark,
+        None,
+        None,
+        None,
+    );
+    assert_eq!(home_cards.len(), 1);
+
+    let provider_page_cards = provider_cards(
+        ProviderKind::OpenCodeZen,
+        true,
+        &limits,
+        false,
+        true,
+        false,
+        &excluded_from_home,
+        PopupSurface::ProviderTab,
+        true,
+        true,
+        false,
+        ColorScheme::Dark,
+        None,
+        None,
+        None,
+    );
+    assert_eq!(provider_page_cards.len(), 2);
+
     let mut hidden_usage = all_visible();
     hidden_usage.set_brick("opencode.usage", false, false);
     let cards = provider_cards(
@@ -182,6 +221,7 @@ fn usage_statistics_section_respects_its_live_toggle() {
         &hidden_usage,
         PopupSurface::ProviderTab,
         true,
+        true,
         false,
         ColorScheme::Dark,
         None,
@@ -189,6 +229,26 @@ fn usage_statistics_section_respects_its_live_toggle() {
         None,
     );
     assert_eq!(cards.len(), 1);
+}
+
+#[test]
+fn total_spend_provider_count_respects_usage_provider_selection() {
+    assert_eq!(
+        total_spend_provider_count(true, true, false, false, false, false, &[]),
+        2
+    );
+    assert_eq!(
+        total_spend_provider_count(
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            &[ProviderKind::Codex.id().into()],
+        ),
+        1
+    );
 }
 
 #[test]
@@ -312,6 +372,7 @@ fn popup_visibility_hides_codex_resets_on_all_but_shows_on_provider_tab() {
         &visibility,
         PopupSurface::HomeTab,
         true,
+        true,
         false,
         ColorScheme::Dark,
         None,
@@ -327,6 +388,7 @@ fn popup_visibility_hides_codex_resets_on_all_but_shows_on_provider_tab() {
         false,
         &visibility,
         PopupSurface::ProviderTab,
+        true,
         true,
         false,
         ColorScheme::Dark,
@@ -370,6 +432,7 @@ fn popup_section_all_off_drops_provider_from_home_tab() {
         false,
         &visibility,
         PopupSurface::ProviderTab,
+        true,
         true,
         false,
         ColorScheme::Dark,
@@ -478,6 +541,7 @@ fn provider_cards_include_each_additional_limit() {
         false,
         &all_visible(),
         PopupSurface::ProviderTab,
+        true,
         true,
         false,
         ColorScheme::Dark,
@@ -790,6 +854,7 @@ fn openrouter_places_each_chart_inside_its_own_account_on_both_surfaces() {
                     false,
                     &visibility,
                     surface,
+                    true,
                     true,
                     false,
                     scheme,

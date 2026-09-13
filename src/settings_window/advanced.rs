@@ -29,6 +29,7 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let set_scheduled_activations = ctx.set_scheduled_activations.clone();
     let set_auto_activation_pauses = ctx.set_auto_activation_pauses.clone();
     let set_usage_stats_enabled = ctx.set_usage_stats_enabled.clone();
+    let set_usage_stats_excluded_providers = ctx.set_usage_stats_excluded_providers.clone();
     let set_limit_refresh_interval = ctx.set_limit_refresh_interval.clone();
     let set_usage_refresh_interval = ctx.set_usage_refresh_interval.clone();
     let set_start_at_login = ctx.set_start_at_login.clone();
@@ -83,6 +84,7 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
         scheduled_activations: set_scheduled_activations.clone(),
         auto_activation_pauses: set_auto_activation_pauses.clone(),
         usage_stats_enabled: set_usage_stats_enabled,
+        usage_stats_excluded_providers: set_usage_stats_excluded_providers,
         limit_refresh_interval: set_limit_refresh_interval,
         usage_refresh_interval: set_usage_refresh_interval,
         start_at_login: set_start_at_login,
