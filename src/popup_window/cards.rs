@@ -48,6 +48,8 @@ pub(super) fn provider_cards(
             "Cursor Models",
         ),
         ProviderKind::OpenRouter => ("Spending", "Spending", "Spending"),
+        ProviderKind::Antigravity => ("Gemini", "Gemini", "Claude + GPT"),
+        ProviderKind::Grok => ("Credits", "Credits", "Credits"),
         _ => ("Monthly", "5h Session", "Weekly"),
     };
     let mut trailing: Vec<Element> = Vec::new();

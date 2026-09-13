@@ -15,6 +15,8 @@ pub(super) struct SettingsWindowState {
     pub(super) opencode_zen_enabled: SetState<bool>,
     pub(super) opencode_go_enabled: SetState<bool>,
     pub(super) openrouter_enabled: SetState<bool>,
+    pub(super) antigravity_enabled: SetState<bool>,
+    pub(super) grok_enabled: SetState<bool>,
     pub(super) openrouter_accounts: SetState<Vec<OpenRouterAccount>>,
     pub(super) codex_path: SetState<String>,
     pub(super) claude_path: SetState<String>,
@@ -76,6 +78,10 @@ impl SettingsWindowState {
             .call(settings.providers.is_enabled(ProviderKind::OpenCodeGo));
         self.openrouter_enabled
             .call(settings.providers.is_enabled(ProviderKind::OpenRouter));
+        self.antigravity_enabled
+            .call(settings.providers.is_enabled(ProviderKind::Antigravity));
+        self.grok_enabled
+            .call(settings.providers.is_enabled(ProviderKind::Grok));
         self.openrouter_accounts
             .call(crate::openrouter::accounts_for_settings(settings));
         self.codex_path.call(
@@ -172,6 +178,8 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) opencode_zen_enabled: bool,
     pub(super) opencode_go_enabled: bool,
     pub(super) openrouter_enabled: bool,
+    pub(super) antigravity_enabled: bool,
+    pub(super) grok_enabled: bool,
     pub(super) codex_path: &'a str,
     pub(super) claude_path: &'a str,
     pub(super) cursor_path: &'a str,
@@ -181,6 +189,8 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) opencode_zen_install_status: &'a ProviderInstallStatus,
     pub(super) opencode_go_install_status: &'a ProviderInstallStatus,
     pub(super) openrouter_install_status: &'a ProviderInstallStatus,
+    pub(super) antigravity_install_status: &'a ProviderInstallStatus,
+    pub(super) grok_install_status: &'a ProviderInstallStatus,
     pub(super) opencode_zen_key_input: &'a str,
     pub(super) opencode_go_key_input: &'a str,
     pub(super) openrouter_accounts: &'a [OpenRouterAccount],
@@ -246,6 +256,8 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) set_opencode_zen_enabled: SetState<bool>,
     pub(super) set_opencode_go_enabled: SetState<bool>,
     pub(super) set_openrouter_enabled: SetState<bool>,
+    pub(super) set_antigravity_enabled: SetState<bool>,
+    pub(super) set_grok_enabled: SetState<bool>,
     pub(super) set_opencode_zen_key_input: SetState<String>,
     pub(super) set_opencode_go_key_input: SetState<String>,
     pub(super) set_openrouter_accounts: SetState<Vec<OpenRouterAccount>>,

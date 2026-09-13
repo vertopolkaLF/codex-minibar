@@ -1,10 +1,12 @@
 pub mod acrylic;
+pub mod antigravity;
 pub mod app;
 pub mod claude;
 pub mod claude_desktop;
 pub mod codex;
 pub mod cursor;
 pub mod discovery;
+pub mod grok;
 pub mod icons;
 pub mod limits;
 pub mod logger;

@@ -1,5 +1,20 @@
 //! Process-wide single-instance ownership and activation for Windows.
 
+/// Distinguishes an interactive Start/Search launch from Windows logon startup.
+pub fn launched_in_background() -> bool {
+    std::env::args_os()
+        .skip(1)
+        .any(|arg| arg.to_string_lossy().eq_ignore_ascii_case("--background"))
+}
+
+pub fn initial_launch_should_show_popup(
+    onboarding_needed: bool,
+    background_launch: bool,
+    toast_update_launch: bool,
+) -> bool {
+    !onboarding_needed && !background_launch && !toast_update_launch
+}
+
 #[cfg(windows)]
 mod platform {
     use std::ptr;
@@ -162,3 +177,16 @@ impl SingleInstance {
 
 #[cfg(not(windows))]
 pub fn release_for_update() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interactive_launch_shows_popup_but_background_launch_stays_parked() {
+        assert!(initial_launch_should_show_popup(false, false, false));
+        assert!(!initial_launch_should_show_popup(false, true, false));
+        assert!(!initial_launch_should_show_popup(false, false, true));
+        assert!(!initial_launch_should_show_popup(true, false, false));
+    }
+}

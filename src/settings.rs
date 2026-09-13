@@ -625,6 +625,8 @@ pub enum ProviderKind {
     OpenCodeGo,
     #[serde(rename = "openrouter")]
     OpenRouter,
+    Antigravity,
+    Grok,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -755,13 +757,15 @@ fn new_openrouter_id(prefix: &str) -> String {
 }
 
 impl ProviderKind {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::Codex,
         Self::Claude,
         Self::Cursor,
         Self::OpenCodeZen,
         Self::OpenCodeGo,
         Self::OpenRouter,
+        Self::Antigravity,
+        Self::Grok,
     ];
 
     pub const fn id(self) -> &'static str {
@@ -772,6 +776,8 @@ impl ProviderKind {
             Self::OpenCodeZen => "opencode",
             Self::OpenCodeGo => "opencode-go",
             Self::OpenRouter => "openrouter",
+            Self::Antigravity => "antigravity",
+            Self::Grok => "grok",
         }
     }
 
@@ -783,6 +789,8 @@ impl ProviderKind {
             "opencode" => Some(Self::OpenCodeZen),
             "opencode-go" => Some(Self::OpenCodeGo),
             "openrouter" => Some(Self::OpenRouter),
+            "antigravity" => Some(Self::Antigravity),
+            "grok" => Some(Self::Grok),
             _ => None,
         }
     }
@@ -795,6 +803,8 @@ impl ProviderKind {
             Self::OpenCodeZen => "OpenCode Zen",
             Self::OpenCodeGo => "OpenCode Go",
             Self::OpenRouter => "OpenRouter",
+            Self::Antigravity => "Antigravity",
+            Self::Grok => "Grok",
         }
     }
 
@@ -1191,10 +1201,12 @@ pub enum PopupWidgetKind {
     OpenCodeGo,
     #[serde(rename = "openrouter")]
     OpenRouter,
+    Antigravity,
+    Grok,
 }
 
 impl PopupWidgetKind {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 9] = [
         Self::TotalSpend,
         Self::Codex,
         Self::Claude,
@@ -1202,6 +1214,8 @@ impl PopupWidgetKind {
         Self::OpenCodeZen,
         Self::OpenCodeGo,
         Self::OpenRouter,
+        Self::Antigravity,
+        Self::Grok,
     ];
 
     pub fn default_order() -> Vec<Self> {
@@ -1217,6 +1231,8 @@ impl PopupWidgetKind {
             Self::OpenCodeZen => "open_code_zen",
             Self::OpenCodeGo => "open_code_go",
             Self::OpenRouter => "openrouter",
+            Self::Antigravity => "antigravity",
+            Self::Grok => "grok",
         }
     }
 
@@ -1229,6 +1245,8 @@ impl PopupWidgetKind {
             Self::OpenCodeZen => Some(ProviderKind::OpenCodeZen),
             Self::OpenCodeGo => Some(ProviderKind::OpenCodeGo),
             Self::OpenRouter => Some(ProviderKind::OpenRouter),
+            Self::Antigravity => Some(ProviderKind::Antigravity),
+            Self::Grok => Some(ProviderKind::Grok),
         }
     }
 
@@ -1240,6 +1258,8 @@ impl PopupWidgetKind {
             ProviderKind::OpenCodeZen => Self::OpenCodeZen,
             ProviderKind::OpenCodeGo => Self::OpenCodeGo,
             ProviderKind::OpenRouter => Self::OpenRouter,
+            ProviderKind::Antigravity => Self::Antigravity,
+            ProviderKind::Grok => Self::Grok,
         }
     }
 }
@@ -2240,7 +2260,7 @@ fn apply_startup_registration(enabled: bool) -> Result<()> {
     let result = if enabled {
         let executable =
             std::env::current_exe().context("resolve current executable for startup")?;
-        let command = format!("\"{}\"", executable.display());
+        let command = format!("\"{}\" --background", executable.display());
         let data: Vec<u16> = command.encode_utf16().chain(std::iter::once(0)).collect();
         unsafe {
             RegSetValueExW(
@@ -3610,6 +3630,8 @@ enabled = ["codex", "claude"]
                 PopupWidgetKind::OpenCodeZen,
                 PopupWidgetKind::OpenCodeGo,
                 PopupWidgetKind::OpenRouter,
+                PopupWidgetKind::Antigravity,
+                PopupWidgetKind::Grok,
             ]
         );
         assert!(settings.move_popup_widget(

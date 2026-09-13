@@ -24,7 +24,7 @@ use codex_minibar::{
 };
 use windows_reactor::*;
 
-fn run() -> Result<()> {
+fn run(background_launch: bool, toast_update_launch: bool) -> Result<()> {
     notifications::initialize();
     sync_installed_display_version();
     show_post_update_success_if_needed();
@@ -76,6 +76,11 @@ fn run() -> Result<()> {
         updates.check_async(true, settings.notifications.update_available);
     }
     let onboarding_needed = !settings.onboarding_completed;
+    let show_initial_popup = single_instance::initial_launch_should_show_popup(
+        onboarding_needed,
+        background_launch,
+        toast_update_launch,
+    );
     // The host stays parked until Auto content reports its natural size. Never
     // expose an intentionally oversized first client area: that was the black
     // strip visible below the top-aligned XAML chrome.
@@ -138,6 +143,8 @@ fn run() -> Result<()> {
                 // First launch configures providers before any worker has a
                 // chance to poll. The regular popup stays parked until Done.
                 codex_minibar::settings_window::open_onboarding(state.settings_tx.clone())?;
+            } else if show_initial_popup && popup::prepare_show_on_ui_thread() {
+                popup::show_near_cursor();
             }
             let _host = Box::leak(Box::new(host));
             Ok(())
@@ -176,6 +183,8 @@ fn show_error(message: &str) {
 }
 
 fn main() {
+    let background_launch = single_instance::launched_in_background();
+    let toast_update_launch = notifications::launched_via_toast_update();
     let instance = match SingleInstance::acquire_or_activate_existing() {
         Ok(Some(instance)) => instance,
         Ok(None) => return,
@@ -187,10 +196,10 @@ fn main() {
         }
     };
     single_instance::SingleInstance::hold(instance);
-    if notifications::launched_via_toast_update() {
+    if toast_update_launch {
         let _ = notifications::publish_toast_update_request();
     }
-    if let Err(error) = run() {
+    if let Err(error) = run(background_launch, toast_update_launch) {
         show_error(&format!("Codex Minibar failed: {error:#}"));
     }
     single_instance::release_for_update();

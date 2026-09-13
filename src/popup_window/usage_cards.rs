@@ -712,6 +712,11 @@ pub(super) fn combined_usage_color(provider: ProviderKind, color_scheme: ColorSc
             ColorScheme::Dark => Color::rgb(205, 205, 205),
         },
         ProviderKind::OpenRouter => Color::rgb(200, 255, 0),
+        ProviderKind::Antigravity => Color::rgb(66, 133, 244),
+        ProviderKind::Grok => match color_scheme {
+            ColorScheme::Light => Color::rgb(51, 51, 51),
+            ColorScheme::Dark => Color::rgb(220, 220, 220),
+        },
     }
 }
 

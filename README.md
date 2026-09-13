@@ -5,7 +5,7 @@
 <h1 align="center">Codex Minibar</h1>
 
 <p align="center">
-  <b>Free, open-source Windows tray companion for Codex and Claude usage limits with configurable tray widgets, a compact usage popup, notifications, auto-start, in-place updates, and local history.</b>
+  <b>Free, open-source Windows tray companion for AI subscription usage limits with configurable tray widgets, a compact usage popup, notifications, auto-start, in-place updates, and local history.</b>
 </p>
 
 <p align="center">
@@ -27,7 +27,7 @@
 
 ## Overview
 
-Codex Minibar reads the usage data exposed by a locally authenticated Codex CLI/Desktop installation or Claude Code session and keeps your five-hour and weekly limits visible in the notification area. It is a native WinUI 3 application written in Rust.
+Codex Minibar reads quota data from locally authenticated provider sessions and keeps subscription limits and reset times visible in the notification area. It is a native WinUI 3 application written in Rust.
 
 > Codex Minibar is an independent project. It is not affiliated with, endorsed by, or sponsored by OpenAI.
 
@@ -50,18 +50,23 @@ Codex Minibar reads the usage data exposed by a locally authenticated Codex CLI/
   on click when it is not running.
 - Start with Windows, update in place from GitHub Releases, and retain history locally.
 - Detect Codex installations automatically, with an override for a custom executable path.
-- Enable Codex, Claude, Cursor, OpenCode Zen, OpenCode Go, and OpenRouter independently in **Settings → Providers**. Providers refresh at the same time; OpenCode usage is read from its local SQLite history, Go quota is read from the account API, and OpenRouter usage is read from the configured API key.
+- Enable Codex, Claude, Cursor, OpenCode Zen, OpenCode Go, OpenRouter, Antigravity, and Grok independently in **Settings → Providers**. Providers refresh independently; Antigravity and Grok show subscription quota rather than unrelated API billing.
 
 ## Requirements
 
 - Windows 10 or Windows 11 (64-bit ARM or x64).
-- A locally installed and authenticated Codex CLI/Desktop app, Claude Code, Cursor, or OpenCode, or an OpenRouter API key.
+- A locally installed and authenticated supported provider, or an OpenRouter API key.
 
 The app does not copy provider credentials into its ordinary settings file. It talks to the local
 Codex app server, reads Claude Code's existing local OAuth session, reads OpenCode's local
-configuration/history, or requests OpenRouter key usage. Optional OpenCode and OpenRouter manual
+configuration/history, reuses the official Antigravity or Grok CLI sign-in, or requests OpenRouter key usage. Optional OpenCode and OpenRouter manual
 API keys are protected with Windows user-scoped DPAPI storage. The app stores its own settings and
 usage history in your Windows user profile.
+
+For Antigravity, run `agy` and complete its normal sign-in once; Minibar reads that existing
+Windows Credential Manager session and never stores it in app settings. For Grok, run `grok login`;
+Minibar reads the official CLI auth cache. If either session expires, refresh it in the official CLI.
+Browser-session access is not used.
 
 ## Install
 

@@ -112,7 +112,7 @@ FunctionEnd
 Function SyncStartAtLogin
   ${If} $R0 == "true"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" \
-      "Codex Minibar" '"$INSTDIR\codex-minibar.exe"'
+      "Codex Minibar" '"$INSTDIR\codex-minibar.exe" --background'
   ${Else}
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Codex Minibar"
   ${EndIf}
