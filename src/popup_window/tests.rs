@@ -169,6 +169,7 @@ fn usage_statistics_section_respects_its_live_toggle() {
         ProviderKind::OpenCodeZen,
         true,
         &limits,
+        &[],
         false,
         true,
         false,
@@ -181,6 +182,8 @@ fn usage_statistics_section_respects_its_live_toggle() {
         None,
         None,
         None,
+        false,
+        None,
     );
     assert_eq!(home_cards.len(), 1);
 
@@ -188,6 +191,7 @@ fn usage_statistics_section_respects_its_live_toggle() {
         ProviderKind::OpenCodeZen,
         true,
         &limits,
+        &[],
         false,
         true,
         false,
@@ -199,6 +203,8 @@ fn usage_statistics_section_respects_its_live_toggle() {
         ColorScheme::Dark,
         None,
         None,
+        None,
+        false,
         None,
     );
     assert_eq!(provider_page_cards.len(), 2);
@@ -916,6 +922,7 @@ fn openrouter_places_each_chart_inside_its_own_account_on_both_surfaces() {
                     ProviderKind::OpenRouter,
                     true,
                     &limits,
+                    &[],
                     false,
                     true,
                     false,
@@ -927,6 +934,8 @@ fn openrouter_places_each_chart_inside_its_own_account_on_both_surfaces() {
                     scheme,
                     None,
                     None,
+                    None,
+                    false,
                     None,
                 );
                 assert_eq!(cards.len(), 3); // provider heading and two account strips; no combined card.
