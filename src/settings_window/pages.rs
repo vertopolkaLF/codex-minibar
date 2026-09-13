@@ -11,6 +11,7 @@ pub(super) fn render(tab: Tab, ctx: &SettingsPageContext<'_>) -> Element {
         Tab::Notifications => super::notifications::render(ctx),
         Tab::Advanced => super::advanced::render(ctx),
         Tab::Log => super::log::render(ctx),
+        Tab::Integrations => super::integrations::render(ctx),
         Tab::About => super::about::render(ctx),
     };
 

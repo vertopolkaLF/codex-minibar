@@ -15861,6 +15861,41 @@ impl windows_core::RuntimeType for IToolTip {
 #[repr(C)]
 pub struct IToolTip_Vtbl {
     pub base__: windows_core::IInspectable_Vtbl,
+    HorizontalOffset: usize,
+    SetHorizontalOffset: usize,
+    IsOpen: usize,
+    pub SetIsOpen: unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_core::HRESULT,
+    Placement: usize,
+    pub SetPlacement:
+        unsafe extern "system" fn(*mut core::ffi::c_void, PlacementMode) -> windows_core::HRESULT,
+    PlacementTarget: usize,
+    pub SetPlacementTarget: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+}
+impl IToolTip {
+    pub(crate) fn SetIsOpen(&self, value: bool) -> windows_core::Result<()> {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetIsOpen)(
+                windows_core::Interface::as_raw(self), value,
+            ).ok()
+        }
+    }
+    pub(crate) fn SetPlacement(&self, value: PlacementMode) -> windows_core::Result<()> {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetPlacement)(
+                windows_core::Interface::as_raw(self), value,
+            ).ok()
+        }
+    }
+    pub(crate) fn SetPlacementTarget(&self, value: &UIElement) -> windows_core::Result<()> {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetPlacementTarget)(
+                windows_core::Interface::as_raw(self), windows_core::Interface::as_raw(value),
+            ).ok()
+        }
+    }
 }
 windows_core::imp::define_interface!(
     IToolTipFactory,

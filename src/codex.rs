@@ -23,6 +23,7 @@ use crate::usage;
 use crate::worker::{Activator, LimitProvider, UsageProvider};
 
 pub const ACTIVATION_PROMPT: &str = "Reply exactly: a";
+pub const ACTIVATION_MODEL: &str = "gpt-5.6-luna";
 
 pub struct CodexClient {
     executable: PathBuf,
@@ -66,13 +67,11 @@ impl CodexActivator {
         // `--ephemeral` previously returned exit 0 without opening quota.
         let workspace = activation_workspace_dir()?;
         let last_message_path = workspace.join("last-message.txt");
-        let config = load_activation_cli_config();
         crate::logger::info(format!(
-            "Codex activation exec model={} service_tier={}",
-            config.model.as_deref().unwrap_or("cli-default"),
-            config.service_tier.as_deref().unwrap_or("cli-default")
+            "Codex activation exec model={} reasoning_effort=low",
+            ACTIVATION_MODEL
         ));
-        let args = activation_args(&workspace, &last_message_path, &config);
+        let args = activation_args(&workspace, &last_message_path);
         let mut child = command_for_codex(&self.executable, &args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -426,18 +425,6 @@ fn parse_timestamp(value: Option<&Value>) -> Option<chrono::DateTime<Utc>> {
         .and_then(|timestamp| Utc.timestamp_opt(timestamp, 0).single())
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct ActivationCliConfig {
-    model: Option<String>,
-    service_tier: Option<String>,
-}
-
-#[derive(Deserialize, Default)]
-struct CodexUserConfigFile {
-    model: Option<String>,
-    service_tier: Option<String>,
-}
-
 fn activation_workspace_dir() -> Result<PathBuf> {
     let dir = BaseDirs::new()
         .context("resolve home directory")?
@@ -448,38 +435,15 @@ fn activation_workspace_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
-fn load_activation_cli_config() -> ActivationCliConfig {
-    let Some(path) = BaseDirs::new().map(|dirs| dirs.home_dir().join(".codex").join("config.toml"))
-    else {
-        return ActivationCliConfig::default();
-    };
-    let Ok(raw) = fs::read_to_string(&path) else {
-        return ActivationCliConfig::default();
-    };
-    let parsed: CodexUserConfigFile = toml::from_str(&raw).unwrap_or_default();
-    ActivationCliConfig {
-        model: non_empty(parsed.model),
-        service_tier: non_empty(parsed.service_tier),
-    }
-}
-
-fn activation_args(
-    workspace: &Path,
-    last_message: &Path,
-    config: &ActivationCliConfig,
-) -> Vec<String> {
-    // Force the user's interactive model/tier. `gpt-5.4-mini` answers "a"
-    // without ever opening the ChatGPT 5-hour window (session logs keep
-    // `used_percent: 0` and a sliding `resets_at`).
-    let mut args = vec!["exec".into(), ACTIVATION_PROMPT.into()];
-    if let Some(model) = &config.model {
-        args.push("--model".into());
-        args.push(model.clone());
-    }
-    if let Some(tier) = &config.service_tier {
-        args.push("--config".into());
-        args.push(format!("service_tier=\"{tier}\""));
-    }
+fn activation_args(workspace: &Path, last_message: &Path) -> Vec<String> {
+    // Keep quota activation deterministic and cheap. Do not inherit the
+    // user's interactive model or service tier from ~/.codex/config.toml.
+    let mut args = vec![
+        "exec".into(),
+        ACTIVATION_PROMPT.into(),
+        "--model".into(),
+        ACTIVATION_MODEL.into(),
+    ];
     args.extend([
         "--config".into(),
         "model_reasoning_effort=\"low\"".into(),
@@ -725,25 +689,14 @@ mod tests {
         let args = activation_args(
             Path::new("C:\\tmp\\act"),
             Path::new("C:\\tmp\\act\\out.txt"),
-            &ActivationCliConfig::default(),
         );
         assert!(args.contains(&"--output-last-message".into()));
         assert!(args.contains(&"--cd".into()));
         assert!(!args.iter().any(|arg| arg == "--ephemeral"));
         assert!(!args.iter().any(|arg| arg == "--ignore-user-config"));
-        assert!(!args.iter().any(|arg| arg == "--model"));
-
-        let args = activation_args(
-            Path::new("C:\\tmp\\act"),
-            Path::new("C:\\tmp\\act\\out.txt"),
-            &ActivationCliConfig {
-                model: Some("gpt-5.6-sol".into()),
-                service_tier: Some("priority".into()),
-            },
-        );
         assert!(args.contains(&"--model".into()));
-        assert!(args.contains(&"gpt-5.6-sol".into()));
-        assert!(args.contains(&"service_tier=\"priority\"".into()));
-        assert!(!args.iter().any(|arg| arg == "gpt-5.4-mini"));
+        assert!(args.contains(&ACTIVATION_MODEL.into()));
+        assert!(args.contains(&"model_reasoning_effort=\"low\"".into()));
+        assert!(!args.iter().any(|arg| arg == "service_tier=\"priority\""));
     }
 }

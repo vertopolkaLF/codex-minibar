@@ -12,6 +12,7 @@ use codex_minibar::{
     notifications,
     popup::{self, FALLBACK_CLIENT_HEIGHT_LIMIT, POPUP_WIDTH},
     provider::start_enabled_workers,
+    reset_feed,
     scheduler::ActivationState,
     settings::Settings,
     single_instance::{self, SingleInstance},
@@ -46,6 +47,11 @@ fn run() -> Result<()> {
             .and_then(|state| state.last_attempt_at);
 
     let (worker_events_tx, worker_events_rx) = mpsc::channel::<WorkerEvent>();
+    let reset_feed_worker = reset_feed::start_worker(
+        &settings,
+        reset_feed::cache_path(&path),
+        worker_events_tx.clone(),
+    );
     let hydrated_limits = store::shared()
         .and_then(|shared| {
             shared
@@ -78,10 +84,12 @@ fn run() -> Result<()> {
     let state = Arc::new(AppState {
         settings,
         limits: Mutex::new(hydrated_limits),
+        forced_resets: Mutex::new(Vec::new()),
         commands: Mutex::new(commands),
         workers: Mutex::new(workers),
         worker_events_rx: Mutex::new(Some(worker_events_rx)),
         worker_events_tx,
+        reset_feed_worker: Mutex::new(Some(reset_feed_worker)),
         activation_path,
         startup_provider_errors,
         last_activation_at,

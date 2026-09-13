@@ -697,11 +697,13 @@ impl AccessibilityModifiers {
 // --- Tooltip ---
 
 /// Tooltip configuration applied via WinUI `ToolTipService`. Build from
-/// a plain string or `Tooltip::rich(element)` for templated content.
+/// a plain string, `Tooltip::rich(element)`, or static `Tooltip::xaml(content)`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Tooltip {
     pub content: TooltipContent,
     pub placement: Option<TooltipPlacement>,
+    /// Explicit visibility for pointer-driven charts; None keeps native timing.
+    pub is_open: Option<bool>,
 }
 
 impl Tooltip {
@@ -711,6 +713,7 @@ impl Tooltip {
         Self {
             content: TooltipContent::Text(s.into()),
             placement: None,
+            is_open: None,
         }
     }
 
@@ -720,7 +723,23 @@ impl Tooltip {
         Self {
             content: TooltipContent::Rich(Box::new(element.into())),
             placement: None,
+            is_open: None,
         }
+    }
+
+    /// Static XAML content. Escape interpolated values as XML attributes.
+    pub fn xaml(content: impl Into<String>) -> Self {
+        Self {
+            content: TooltipContent::Xaml(content.into()),
+            placement: None,
+            is_open: None,
+        }
+    }
+
+    /// Show or hide immediately instead of waiting for the native hover timer.
+    pub fn open(mut self, value: bool) -> Self {
+        self.is_open = Some(value);
+        self
     }
 
     pub fn placement(mut self, p: TooltipPlacement) -> Self {
@@ -735,11 +754,12 @@ impl<S: Into<String>> From<S> for Tooltip {
     }
 }
 
-/// Tooltip payload: a plain string or a templated child element.
+/// Tooltip payload: plain text, a templated element, or static XAML.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TooltipContent {
     Text(String),
     Rich(Box<Element>),
+    Xaml(String),
 }
 
 /// Rust mirror of `Microsoft.UI.Xaml.Controls.Primitives.PlacementMode`.

@@ -3,8 +3,8 @@
 //! Cursor persists its OAuth session in the application's VS Code state DB.
 //! We open that database read-only, refresh an expired access token only in
 //! memory, and query the same dashboard endpoints used by Cursor itself.
-//! The UI deliberately exposes its Cursor Models, Other Models, and Grok Bot
-//! lanes, not blended Total Usage.
+//! The UI exposes Cursor Models, Other Models, the opt-in All Models aggregate,
+//! and Grok Bot as separate lanes.
 
 use std::{
     collections::BTreeMap,
@@ -587,6 +587,8 @@ fn map_usage(
         .or_else(|| number(plan.and_then(|plan| plan.get("autoPercentUsed"))));
     let api_percent = number(summary_plan.and_then(|plan| plan.get("apiPercentUsed")))
         .or_else(|| number(plan.and_then(|plan| plan.get("apiPercentUsed"))));
+    let all_models_percent = number(summary_plan.and_then(|plan| plan.get("totalPercentUsed")))
+        .or_else(|| number(plan.and_then(|plan| plan.get("totalPercentUsed"))));
     let secondary_limit_name = auto_percent
         .is_some()
         .then(|| "Cursor Models".to_owned());
@@ -598,12 +600,20 @@ fn map_usage(
             window: make_window(percent),
         });
     }
+    if let Some(percent) = all_models_percent {
+        additional_limits.push(AdditionalLimit {
+            id: "cursor-all-models".into(),
+            title: "All Models".into(),
+            window: make_window(percent),
+        });
+    }
     if let Some(limit) = grok_bot_limit(sand) {
         additional_limits.push(limit);
     }
 
     Ok(RateLimits {
-        // Total Usage blends separate allowances and is intentionally hidden.
+        // Keep the aggregate as an opt-in additional lane instead of blending
+        // it into the independent Cursor Models and Other Models allowances.
         primary: LimitWindow::default(),
         secondary: auto_percent.map(make_window).unwrap_or_default(),
         sampled_at: now,
@@ -715,6 +725,8 @@ mod tests {
             Some("Cursor Models")
         );
         assert_eq!(limits.additional_limits[0].title, "Other Models");
+        assert_eq!(limits.additional_limits[1].title, "All Models");
+        assert_eq!(limits.additional_limits[1].window.used_percent, Some(25));
         assert_eq!(limits.secondary.duration_minutes, Some(31 * 24 * 60));
     }
 
@@ -790,6 +802,8 @@ mod tests {
         assert!(limits.primary.is_empty());
         assert_eq!(limits.secondary.used_percent, Some(10));
         assert_eq!(limits.additional_limits[0].window.used_percent, Some(5));
+        assert_eq!(limits.additional_limits[1].title, "All Models");
+        assert_eq!(limits.additional_limits[1].window.used_percent, Some(25));
     }
 
     #[test]

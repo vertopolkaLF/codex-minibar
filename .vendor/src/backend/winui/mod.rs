@@ -131,7 +131,7 @@ pub struct WinUIBackend {
     controls: RefCell<FxHashMap<ControlId, Handle>>,
     /// One stable `ToolTip` host per control. Updating the attached property
     /// replaces an open tooltip in WinUI, so update this host's content instead.
-    tooltips: RefCell<FxHashMap<ControlId, bindings::ToolTip>>,
+    tooltips: RefCell<FxHashMap<ControlId, (bindings::ToolTip, Tooltip)>>,
     event_revokers: RefCell<FxHashMap<(ControlId, Event), Vec<windows_core::EventRevoker>>>,
     templated_selection_revokers: RefCell<FxHashMap<ControlId, windows_core::EventRevoker>>,
     /// Pointer-handler revokers (separate from `event_revokers` because
@@ -557,6 +557,7 @@ fn style_target_for_handle(handle: &Handle) -> Option<(&'static str, bindings::I
         Handle::StackPanel(s) => s.cast().ok().map(|fe| ("StackPanel", fe)),
         Handle::Grid(g) => g.cast().ok().map(|fe| ("Grid", fe)),
         Handle::Button(b) => b.cast().ok().map(|fe| ("Button", fe)),
+        Handle::HyperlinkButton(b) => b.cast().ok().map(|fe| ("HyperlinkButton", fe)),
         Handle::TextBox(t) => t.cast().ok().map(|fe| ("TextBox", fe)),
         Handle::TextBlock(t) => t.cast().ok().map(|fe| ("TextBlock", fe)),
         Handle::Canvas(c) => c.cast().ok().map(|fe| ("Canvas", fe)),
@@ -2242,7 +2243,9 @@ impl Backend for WinUIBackend {
         self.templated_selection_revokers.borrow_mut().remove(&id);
         self.pointer_revokers.borrow_mut().remove(&id);
         self.drag_revokers.borrow_mut().remove(&id);
-        self.tooltips.borrow_mut().remove(&id);
+        if let Some((tip, _)) = self.tooltips.borrow_mut().remove(&id) {
+            diag::dropped(tip.SetIsOpen(false));
+        }
         self.controls.borrow_mut().remove(&id);
         self.event_revokers
             .borrow_mut()
@@ -2926,7 +2929,9 @@ impl Backend for WinUIBackend {
         };
 
         let Some(tooltip) = tooltip else {
-            self.tooltips.borrow_mut().remove(&id);
+            if let Some((tip, _)) = self.tooltips.borrow_mut().remove(&id) {
+                diag::dropped(tip.SetIsOpen(false));
+            }
             diag::dropped(bindings::ToolTipService::SetToolTip(&dep, None));
             diag::dropped(bindings::ToolTipService::SetPlacement(
                 &dep,
@@ -2939,7 +2944,18 @@ impl Backend for WinUIBackend {
         // stable ToolTip host and replace only its content so live strings
         // (such as a relative "last updated" timestamp) remain visible.
         let (host, is_new) = match self.tooltips.borrow().get(&id).cloned() {
-            Some(host) => (host, false),
+            Some((host, previous)) => {
+                if previous == *tooltip {
+                    if tooltip.is_open.is_some() {
+                        diag::dropped((|| -> Result<()> {
+                            host.cast::<bindings::IFrameworkElement>()?
+                                .SetRequestedTheme(fe.ActualTheme()?)
+                        })());
+                    }
+                    return;
+                }
+                (host, false)
+            }
             None => match bindings::ToolTip::new() {
                 Ok(host) => (host, true),
                 Err(e) => {
@@ -2954,6 +2970,13 @@ impl Backend for WinUIBackend {
                 Some(ui) => ui.into(),
                 None => return,
             },
+            TooltipContent::Xaml(xaml) => match bindings::XamlReader::Load(xaml) {
+                Ok(content) => content,
+                Err(error) => {
+                    diag::warn(format_args!("Tooltip XAML failed: {error:?}"));
+                    return;
+                }
+            },
         };
         let Ok(content_control) = host.cast::<bindings::IContentControl>() else {
             return;
@@ -2966,7 +2989,6 @@ impl Backend for WinUIBackend {
                 &dep,
                 Some(&inspectable),
             ));
-            self.tooltips.borrow_mut().insert(id, host);
         }
 
         // Fall back to Top so cleared placements actually reset the slot.
@@ -2974,6 +2996,25 @@ impl Backend for WinUIBackend {
             .placement
             .map_or(bindings::PlacementMode::Top, map_placement);
         diag::dropped(bindings::ToolTipService::SetPlacement(&dep, placement));
+        if let Some(open) = tooltip.is_open {
+            let anchor = handle.as_ui_element();
+            // Explicit placement/root also works when the pointer entered before
+            // reconciliation attached ToolTipService to this control.
+            let result = (|| -> Result<()> {
+                let tip_ui = host.cast::<bindings::UIElement>()?;
+                tip_ui.SetIsHitTestVisible(false)?;
+                if is_new {
+                    tip_ui.SetXamlRoot(&anchor.XamlRoot()?)?;
+                }
+                host.cast::<bindings::IFrameworkElement>()?
+                    .SetRequestedTheme(fe.ActualTheme()?)?;
+                host.SetPlacementTarget(&anchor)?;
+                host.SetPlacement(placement)?;
+                host.SetIsOpen(open)
+            })();
+            diag::dropped(result);
+        }
+        self.tooltips.borrow_mut().insert(id, (host, tooltip.clone()));
     }
 
     fn set_pointer_handlers(&mut self, id: ControlId, handlers: Option<&PointerHandlers>) {
