@@ -68,8 +68,7 @@ pub fn start_provider_worker(
                 auto_activation_pauses_for(provider, settings),
                 settings.history_retention_days,
                 Duration::from_secs(settings.usage_refresh_interval.seconds()),
-                settings.usage_stats_enabled
-                    && settings.usage_stats_provider_enabled(provider),
+                settings.usage_stats_enabled && settings.usage_stats_provider_enabled(provider),
                 Duration::from_secs(settings.limit_refresh_interval.seconds()),
             )
         }
@@ -87,8 +86,7 @@ pub fn start_provider_worker(
                 auto_activation_pauses_for(provider, settings),
                 settings.history_retention_days,
                 Duration::from_secs(settings.usage_refresh_interval.seconds()),
-                settings.usage_stats_enabled
-                    && settings.usage_stats_provider_enabled(provider),
+                settings.usage_stats_enabled && settings.usage_stats_provider_enabled(provider),
                 Duration::from_secs(settings.limit_refresh_interval.seconds()),
             )
         }
@@ -106,8 +104,7 @@ pub fn start_provider_worker(
                 Vec::new(),
                 settings.history_retention_days,
                 Duration::from_secs(settings.usage_refresh_interval.seconds()),
-                settings.usage_stats_enabled
-                    && settings.usage_stats_provider_enabled(provider),
+                settings.usage_stats_enabled && settings.usage_stats_provider_enabled(provider),
                 Duration::from_secs(settings.limit_refresh_interval.seconds()),
             )
         }
@@ -121,8 +118,7 @@ pub fn start_provider_worker(
             Vec::new(),
             settings.history_retention_days,
             Duration::from_secs(settings.usage_refresh_interval.seconds()),
-            settings.usage_stats_enabled
-                && settings.usage_stats_provider_enabled(provider),
+            settings.usage_stats_enabled && settings.usage_stats_provider_enabled(provider),
             Duration::from_secs(settings.limit_refresh_interval.seconds()),
         ),
         ProviderKind::OpenRouter => worker::start_worker(
@@ -135,28 +131,28 @@ pub fn start_provider_worker(
             Vec::new(),
             settings.history_retention_days,
             Duration::from_secs(settings.usage_refresh_interval.seconds()),
-            settings.usage_stats_enabled
-                && settings.usage_stats_provider_enabled(provider),
+            settings.usage_stats_enabled && settings.usage_stats_provider_enabled(provider),
             Duration::from_secs(settings.limit_refresh_interval.seconds()),
         ),
         ProviderKind::Antigravity => {
-            let executable = crate::antigravity::cli_available(settings.antigravity_path.as_deref());
+            let executable =
+                crate::antigravity::cli_available(settings.antigravity_path.as_deref());
             if let Some(executable) = &executable {
                 crate::logger::info(format!("Antigravity executable: {}", executable.display()));
             }
             worker::start_worker(
-            crate::antigravity::AntigravityClient::new(settings.antigravity_path.clone()),
-            crate::antigravity::AntigravityClient::new(settings.antigravity_path.clone()),
-            crate::antigravity::AntigravityActivator,
-            activation_path,
-            false,
-            Vec::new(),
-            Vec::new(),
-            settings.history_retention_days,
-            Duration::from_secs(settings.usage_refresh_interval.seconds()),
-            false,
-            Duration::from_secs(settings.limit_refresh_interval.seconds()),
-        )
+                crate::antigravity::AntigravityClient::new(settings.antigravity_path.clone()),
+                crate::antigravity::AntigravityClient::new(settings.antigravity_path.clone()),
+                crate::antigravity::AntigravityActivator,
+                activation_path,
+                false,
+                Vec::new(),
+                Vec::new(),
+                settings.history_retention_days,
+                Duration::from_secs(settings.usage_refresh_interval.seconds()),
+                false,
+                Duration::from_secs(settings.limit_refresh_interval.seconds()),
+            )
         }
         ProviderKind::Grok => {
             let executable = crate::grok::cli_available(settings.grok_path.as_deref());
@@ -164,18 +160,18 @@ pub fn start_provider_worker(
                 crate::logger::info(format!("Grok executable: {}", executable.display()));
             }
             worker::start_worker(
-            crate::grok::GrokClient::new(settings.grok_path.clone()),
-            crate::grok::GrokClient::new(settings.grok_path.clone()),
-            crate::grok::GrokActivator,
-            activation_path,
-            false,
-            Vec::new(),
-            Vec::new(),
-            settings.history_retention_days,
-            Duration::from_secs(settings.usage_refresh_interval.seconds()),
-            false,
-            Duration::from_secs(settings.limit_refresh_interval.seconds()),
-        )
+                crate::grok::GrokClient::new(settings.grok_path.clone()),
+                crate::grok::GrokClient::new(settings.grok_path.clone()),
+                crate::grok::GrokActivator,
+                activation_path,
+                false,
+                Vec::new(),
+                Vec::new(),
+                settings.history_retention_days,
+                Duration::from_secs(settings.usage_refresh_interval.seconds()),
+                false,
+                Duration::from_secs(settings.limit_refresh_interval.seconds()),
+            )
         }
     };
     let source_events = worker

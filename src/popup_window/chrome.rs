@@ -5,10 +5,7 @@ pub(super) const REORDER_BUTTON_SIZE: f64 = 28.0;
 pub(super) const TAB_STRIP_SPACING: f64 = 2.0;
 pub(super) const FOOTER_BASE_ACTION_COUNT: f64 = 2.0;
 
-pub(super) fn provider_tab_strip_content_width(
-    provider_count: usize,
-    usage_enabled: bool,
-) -> f64 {
+pub(super) fn provider_tab_strip_content_width(provider_count: usize, usage_enabled: bool) -> f64 {
     let size = popup::bottom_bar_size();
     (size.icon_button_size() * (1.0 + f64::from(usage_enabled)))
         + TAB_STRIP_SPACING

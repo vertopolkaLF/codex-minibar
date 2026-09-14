@@ -4,21 +4,21 @@
 //! without a complete rate entry remains unpriced instead of borrowing a rate
 //! from an unrelated model.
 
-use std::{
-    collections::HashMap,
-    sync::{OnceLock, RwLock},
-};
 #[cfg(not(test))]
 use std::sync::Mutex;
 #[cfg(not(test))]
 use std::time::Duration as StdDuration;
+use std::{
+    collections::HashMap,
+    sync::{OnceLock, RwLock},
+};
 
-use anyhow::{Context, Result};
 #[cfg(not(test))]
 use anyhow::bail;
-use chrono::{DateTime, Utc};
+use anyhow::{Context, Result};
 #[cfg(not(test))]
 use chrono::Duration;
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::{settings::ProviderKind, store};
@@ -118,15 +118,10 @@ pub(crate) fn refresh_if_stale() -> Result<bool> {
             bail!("LiteLLM pricing table contains no complete model rates");
         }
         let fetched_at = Utc::now();
-        store::with_store(|store| {
-            store.save_pricing_catalog(RATES_SOURCE, fetched_at, &payload)
-        })?;
+        store::with_store(|store| store.save_pricing_catalog(RATES_SOURCE, fetched_at, &payload))?;
         *catalog_slot()
             .write()
-            .expect("pricing catalog lock poisoned") = Some(PricingCatalog {
-            fetched_at,
-            rates,
-        });
+            .expect("pricing catalog lock poisoned") = Some(PricingCatalog { fetched_at, rates });
         Ok(true)
     }
 }
@@ -165,13 +160,13 @@ pub(crate) fn cache_savings_microusd(
     let catalog = catalog_slot()
         .read()
         .expect("pricing catalog lock poisoned");
-    let Some(rate) = catalog.as_ref().and_then(|catalog| lookup_rate(catalog, provider, model))
+    let Some(rate) = catalog
+        .as_ref()
+        .and_then(|catalog| lookup_rate(catalog, provider, model))
     else {
         return 0;
     };
-    (cache_read_tokens as f64
-        * (rate.input_per_token - rate.cache_read_per_token)
-        * 1_000_000.0)
+    (cache_read_tokens as f64 * (rate.input_per_token - rate.cache_read_per_token) * 1_000_000.0)
         .round()
         .clamp(0.0, u64::MAX as f64) as u64
 }
@@ -223,9 +218,10 @@ fn parse_rate_table(document: &Value) -> HashMap<String, ModelRate> {
                 output_per_token: output,
                 cache_read_per_token: finite_number(entry.get("cache_read_input_token_cost"))
                     .unwrap_or(input),
-                cache_creation_per_token:
-                    finite_number(entry.get("cache_creation_input_token_cost"))
-                        .unwrap_or(input),
+                cache_creation_per_token: finite_number(
+                    entry.get("cache_creation_input_token_cost"),
+                )
+                .unwrap_or(input),
             },
         );
     }
@@ -407,7 +403,15 @@ mod tests {
         }));
         for model in ["auto", "composer-2.5"] {
             assert_eq!(
-                cost_for_catalog(&catalog, ProviderKind::Cursor, Some(model), 0, 1_000, 0, 100),
+                cost_for_catalog(
+                    &catalog,
+                    ProviderKind::Cursor,
+                    Some(model),
+                    0,
+                    1_000,
+                    0,
+                    100
+                ),
                 Some(2_600)
             );
         }

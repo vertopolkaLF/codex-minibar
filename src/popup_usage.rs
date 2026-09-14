@@ -104,10 +104,12 @@ pub fn overview_page(
             let clear_hover = clear_hover.clone();
             move |_| dismiss_chart_hover(&clear_hover)
         }),
-        usage_hero(snapshot, metric, color_scheme, use_colored_provider_icons).on_pointer_entered({
-            let clear_hover = clear_hover.clone();
-            move |_| dismiss_chart_hover(&clear_hover)
-        }),
+        usage_hero(snapshot, metric, color_scheme, use_colored_provider_icons).on_pointer_entered(
+            {
+                let clear_hover = clear_hover.clone();
+                move |_| dismiss_chart_hover(&clear_hover)
+            },
+        ),
         usage_chart_card(
             &filled,
             snapshot.hourly,
@@ -164,8 +166,7 @@ fn usage_header(
     let clear_hover = set_chart_hover.clone();
     vstack((
         grid((
-            usage_title_row(Some(range_label), usage_recalculating, usage_error)
-                .grid_column(0),
+            usage_title_row(Some(range_label), usage_recalculating, usage_error).grid_column(0),
             segmented_control(
                 "usage-metric",
                 vec![
@@ -222,18 +223,12 @@ fn usage_refresh_indicator(recalculating: bool, error: Option<&str>) -> Element 
         .height(16.0)
         .foreground(ThemeRef::Accent)
         .opacity(if recalculating { 1.0 } else { 0.0 })
-        .with_opacity_transition(crate::theme::duration(
-            crate::theme::CONTROL_FAST_ANIMATION,
-        ))
+        .with_opacity_transition(crate::theme::duration(crate::theme::CONTROL_FAST_ANIMATION))
         .with_key("usage-refresh-spinner")
         .into()
 }
 
-fn usage_title_row(
-    range_label: Option<&str>,
-    recalculating: bool,
-    error: Option<&str>,
-) -> Element {
+fn usage_title_row(range_label: Option<&str>, recalculating: bool, error: Option<&str>) -> Element {
     let mut title_parts: Vec<Element> = vec![
         body_strong("Usage")
             .vertical_alignment(VerticalAlignment::Top)
@@ -263,9 +258,7 @@ fn usage_title_row(
             bottom: 0.0,
         })
         .translation_x(title_offset)
-        .with_translation_transition(crate::theme::duration(
-            crate::theme::CONTROL_FAST_ANIMATION,
-        ));
+        .with_translation_transition(crate::theme::duration(crate::theme::CONTROL_FAST_ANIMATION));
     let indicator = usage_refresh_indicator(recalculating, error)
         .relative_align_left()
         .relative_align_v_center();
@@ -669,8 +662,7 @@ fn provider_row(
                     color.g,
                     color.b
                 )),
-            body_strong(descriptor.display_name)
-                .vertical_alignment(VerticalAlignment::Center),
+            body_strong(descriptor.display_name).vertical_alignment(VerticalAlignment::Center),
         ))
         .spacing(8.0)
         .vertical_alignment(VerticalAlignment::Center),
@@ -719,9 +711,7 @@ fn usage_chart_card(
         providers.len(),
     );
 
-    usage_card(
-        vstack((body_strong(title), chart.with_key("usage-chart-plot"))).spacing(6.0),
-    )
+    usage_card(vstack((body_strong(title), chart.with_key("usage-chart-plot"))).spacing(6.0))
 }
 
 const CHART_PLOT_HEIGHT: f64 = 132.0;
@@ -773,13 +763,7 @@ fn usage_area_chart(
     let xaml = usage_area_chart_xaml(series, providers, max_value, plot_width, color_scheme);
     let plot = usage_area_chart_host(&xaml, series, providers, metric, color_scheme, plot_width);
     let count = series.len();
-    let hits = usage_chart_hit_target(
-        count,
-        plot_width,
-        provider_count,
-        hover,
-        set_hover,
-    );
+    let hits = usage_chart_hit_target(count, plot_width, provider_count, hover, set_hover);
     let y_axis = usage_y_axis(max_value, metric);
     let x_axis = usage_x_axis(series, hourly);
 
@@ -921,14 +905,7 @@ fn usage_chart_hit_target(
             let set_hover = set_hover.clone();
             move |info: PointerEventInfo| {
                 apply_chart_pointer(
-                    info.x,
-                    info.y,
-                    plot_width,
-                    count,
-                    plot_left,
-                    plot_top,
-                    hover,
-                    &set_hover,
+                    info.x, info.y, plot_width, count, plot_left, plot_top, hover, &set_hover,
                 );
             }
         })
@@ -1338,7 +1315,8 @@ fn tooltip_offset_x(cursor_x: f64, tip_width: f64, area_width: f64) -> f64 {
 fn tooltip_offset_y(cursor_y: f64, tip_height: f64, area_height: f64) -> f64 {
     let min_y = TOOLTIP_EDGE_INSET;
     let max_y = (area_height - TOOLTIP_EDGE_INSET - tip_height).max(min_y);
-    let prefer_below = cursor_y + TOOLTIP_CURSOR_GAP + tip_height <= area_height - TOOLTIP_EDGE_INSET;
+    let prefer_below =
+        cursor_y + TOOLTIP_CURSOR_GAP + tip_height <= area_height - TOOLTIP_EDGE_INSET;
     let raw = if prefer_below {
         cursor_y + TOOLTIP_CURSOR_GAP
     } else {
@@ -1447,7 +1425,8 @@ fn usage_page_tooltip(
     color_scheme: ColorScheme,
     _provider_count: usize,
 ) -> Element {
-    let (tip, tip_width, tip_height) = chart_tooltip(point, providers, metric, hourly, color_scheme);
+    let (tip, tip_width, tip_height) =
+        chart_tooltip(point, providers, metric, hourly, color_scheme);
     CHART_TOOLTIP_TRACK.with(|track| {
         let mut track = track.borrow_mut();
         track.tip_width = tip_width;
@@ -1503,11 +1482,7 @@ fn chart_tooltip(
     let mut visible_count = 0_usize;
     let mut rows: Vec<Element> = Vec::new();
     for entry in providers {
-        let value = point
-            .by_provider
-            .get(&entry.provider)
-            .copied()
-            .unwrap_or(0);
+        let value = point.by_provider.get(&entry.provider).copied().unwrap_or(0);
         let amount = match metric {
             OverviewMetric::Cost => {
                 total_cents = total_cents.saturating_add(spend_display_cents(value));
@@ -1700,12 +1675,9 @@ fn usage_breakdown_card(
             color_scheme,
             use_colored_provider_icons,
         ),
-        BreakdownMode::Day => day_breakdown_table(
-            snapshot,
-            metric,
-            color_scheme,
-            use_colored_provider_icons,
-        ),
+        BreakdownMode::Day => {
+            day_breakdown_table(snapshot, metric, color_scheme, use_colored_provider_icons)
+        }
     };
     usage_card(
         vstack((
@@ -1752,9 +1724,7 @@ fn model_breakdown_table(
         breakdown_header(),
         vstack(
             rows.iter()
-                .map(|row| {
-                    breakdown_row(row, color_scheme, use_colored_provider_icons)
-                })
+                .map(|row| breakdown_row(row, color_scheme, use_colored_provider_icons))
                 .collect::<Vec<_>>(),
         )
         .spacing(6.0)
@@ -1837,9 +1807,11 @@ fn day_breakdown_header(
     color_scheme: ColorScheme,
     use_colored_provider_icons: bool,
 ) -> Element {
-    let mut cells: Vec<Element> = vec![caption(if hourly { "Hour" } else { "Day" })
-        .foreground(ThemeRef::TertiaryText)
-        .into()];
+    let mut cells: Vec<Element> = vec![
+        caption(if hourly { "Hour" } else { "Day" })
+            .foreground(ThemeRef::TertiaryText)
+            .into(),
+    ];
     for (index, provider) in providers.iter().enumerate() {
         let icon_name = provider_registry::descriptor(*provider).icon;
         let color = provider_brand_color(*provider, color_scheme, use_colored_provider_icons);
@@ -1868,18 +1840,14 @@ fn day_breakdown_header(
         .grid_column(providers.len() as i32 + 1)
         .into(),
     );
-    border(
-        grid(cells)
-            .columns(columns)
-            .rows([GridLength::Auto]),
-    )
-    .padding(Thickness {
-        left: 0.0,
-        top: 2.0,
-        right: 0.0,
-        bottom: 2.0,
-    })
-    .into()
+    border(grid(cells).columns(columns).rows([GridLength::Auto]))
+        .padding(Thickness {
+            left: 0.0,
+            top: 2.0,
+            right: 0.0,
+            bottom: 2.0,
+        })
+        .into()
 }
 
 fn day_breakdown_row(
@@ -1908,9 +1876,9 @@ fn day_breakdown_row(
             OverviewMetric::Cost => value
                 .map(format_usage_day_cost)
                 .unwrap_or_else(|| "$0".into()),
-            OverviewMetric::Tokens => format_token_count(
-                value.map(TokenUsage::total_tokens).unwrap_or(0),
-            ),
+            OverviewMetric::Tokens => {
+                format_token_count(value.map(TokenUsage::total_tokens).unwrap_or(0))
+            }
         };
         cells.push(
             caption(cell)
@@ -1929,19 +1897,15 @@ fn day_breakdown_row(
             .grid_column(providers.len() as i32 + 1)
             .into(),
     );
-    border(
-        grid(cells)
-            .columns(columns)
-            .rows([GridLength::Auto]),
-    )
-    .padding(Thickness {
-        left: 0.0,
-        top: 2.0,
-        right: 0.0,
-        bottom: 2.0,
-    })
-    .with_key(format!("usage-day-row-{}", row.label))
-    .into()
+    border(grid(cells).columns(columns).rows([GridLength::Auto]))
+        .padding(Thickness {
+            left: 0.0,
+            top: 2.0,
+            right: 0.0,
+            bottom: 2.0,
+        })
+        .with_key(format!("usage-day-row-{}", row.label))
+        .into()
 }
 
 fn breakdown_rule() -> Element {
@@ -1999,11 +1963,7 @@ fn breakdown_row(
             crate::icons::element(icon_name, 14.0, color)
                 .with_key(format!(
                     "usage-bd-icon-{}-{}-{:02X}{:02X}{:02X}",
-                    row_id,
-                    icon_name,
-                    color.r,
-                    color.g,
-                    color.b
+                    row_id, icon_name, color.r, color.g, color.b
                 ))
                 .into(),
         );

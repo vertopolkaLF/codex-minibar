@@ -329,8 +329,7 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) set_notify_on_update: SetState<bool>,
     pub(super) set_forced_reset_feed_enabled: SetState<bool>,
     pub(super) set_forced_reset_notifications: SetState<bool>,
-    pub(super) set_streamdeck_install_phase:
-        AsyncSetState<crate::streamdeck::InstallPhase>,
+    pub(super) set_streamdeck_install_phase: AsyncSetState<crate::streamdeck::InstallPhase>,
     pub(super) theme_navigation_guard: HookRef<bool>,
     pub(super) theme_navigation_guard_timer: HookRef<Option<DispatcherTimer>>,
     pub(super) settings_tx: Sender<Settings>,

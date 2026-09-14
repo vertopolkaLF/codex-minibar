@@ -115,7 +115,10 @@ fn combined_spend_uses_usage_tab_windows() {
     );
     assert_eq!(
         crate::usage_overview::dates_for_total_spend(TotalSpendPeriod::Yesterday),
-        (today - ChronoDuration::days(1), today - ChronoDuration::days(1))
+        (
+            today - ChronoDuration::days(1),
+            today - ChronoDuration::days(1)
+        )
     );
     assert_eq!(
         crate::usage_overview::dates_for_total_spend(TotalSpendPeriod::ThirtyDays),
@@ -317,20 +320,10 @@ fn popup_body_key_changes_when_pace_label_appears_or_hides() {
 
     assert_ne!(visible_key, hidden_key);
 
-    let no_tibo_key = popup_body_height_key(
-        &ProviderLimits::default(),
-        PopupView::Codex,
-        false,
-        true,
-        0,
-    );
-    let two_tibo_key = popup_body_height_key(
-        &ProviderLimits::default(),
-        PopupView::Codex,
-        false,
-        true,
-        2,
-    );
+    let no_tibo_key =
+        popup_body_height_key(&ProviderLimits::default(), PopupView::Codex, false, true, 0);
+    let two_tibo_key =
+        popup_body_height_key(&ProviderLimits::default(), PopupView::Codex, false, true, 2);
     assert_ne!(no_tibo_key, two_tibo_key);
 }
 
@@ -681,7 +674,10 @@ fn forbidden_provider_error_is_shortened_for_ui() {
         "codex stderr: unexpected status 403 Forbidden: <html>the full response</html>",
     );
 
-    assert_eq!(ui.provider_error(ProviderKind::Codex), Some("403 Forbidden"));
+    assert_eq!(
+        ui.provider_error(ProviderKind::Codex),
+        Some("403 Forbidden")
+    );
 }
 
 #[test]

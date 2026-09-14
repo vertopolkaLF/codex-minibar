@@ -42,11 +42,7 @@ pub(super) fn provider_cards(
     set_forced_reset_hovered: Option<SetState<bool>>,
 ) -> Vec<Element> {
     let (monthly_label, primary_label, secondary_label) = match provider {
-        ProviderKind::Cursor => (
-            "Cursor Models",
-            "Cursor Models",
-            "Cursor Models",
-        ),
+        ProviderKind::Cursor => ("Cursor Models", "Cursor Models", "Cursor Models"),
         ProviderKind::OpenRouter => ("Spending", "Spending", "Spending"),
         ProviderKind::Antigravity => ("Gemini", "Gemini", "Claude + GPT"),
         ProviderKind::Grok => ("Credits", "Credits", "Credits"),
@@ -236,9 +232,7 @@ pub(super) fn provider_cards(
                             .into(),
                     );
                 }
-            } else if spending_visible
-                && let Some(spending) = limits.spending.as_ref()
-            {
+            } else if spending_visible && let Some(spending) = limits.spending.as_ref() {
                 cards.push(
                     spending_card(
                         spending,
@@ -497,7 +491,10 @@ pub(super) fn spending_card_with_title(
                 if reset_at.is_some() {
                     meta.push(card_metadata("•", HorizontalAlignment::Right));
                 }
-                meta.push(card_status_row("Expires in", format_reset_in(Some(expires))));
+                meta.push(card_status_row(
+                    "Expires in",
+                    format_reset_in(Some(expires)),
+                ));
             }
             right_side.push(
                 hstack(meta)
@@ -1624,12 +1621,13 @@ pub(super) fn forced_reset_card(
             .on_pointer_entered(move |_| set_on_enter.call(true))
             .on_pointer_exited(move || set_on_exit.call(false));
     }
-    Some(card.horizontal_alignment(HorizontalAlignment::Stretch).into())
+    Some(
+        card.horizontal_alignment(HorizontalAlignment::Stretch)
+            .into(),
+    )
 }
 
-pub(super) fn upcoming_forced_reset_count(
-    resets: &[crate::reset_feed::ForcedReset],
-) -> usize {
+pub(super) fn upcoming_forced_reset_count(resets: &[crate::reset_feed::ForcedReset]) -> usize {
     let now = Utc::now();
     resets
         .iter()
@@ -1646,7 +1644,10 @@ fn openrouter_account_usage(limits: &RateLimits, account: &str) -> Element {
     let statistics = limits.usage.accounts.get(account);
     let mut contents = Vec::new();
     if let Some(statistics) = statistics.filter(|s| !s.daily.is_empty()) {
-        contents.push(usage_statistics_content(ProviderKind::OpenRouter, statistics));
+        contents.push(usage_statistics_content(
+            ProviderKind::OpenRouter,
+            statistics,
+        ));
     }
     if let Some(error) = statistics.and_then(|s| s.error.as_deref()) {
         contents.push(
@@ -1656,8 +1657,12 @@ fn openrouter_account_usage(limits: &RateLimits, account: &str) -> Element {
                 .into(),
         );
     } else if contents.is_empty() {
-        contents.push(caption("Loading usage statistics…")
-            .foreground(ThemeRef::TertiaryText).wrap().into());
+        contents.push(
+            caption("Loading usage statistics…")
+                .foreground(ThemeRef::TertiaryText)
+                .wrap()
+                .into(),
+        );
     }
     vstack(contents).spacing(6.0).into()
 }
@@ -1670,11 +1675,9 @@ fn usage_statistics_content(
         return border(
             vstack((
                 body_strong("Usage activity"),
-                caption(
-                    "Waiting for Cursor's usage export. Refresh to retry.",
-                )
-                .foreground(ThemeRef::TertiaryText)
-                .wrap(),
+                caption("Waiting for Cursor's usage export. Refresh to retry.")
+                    .foreground(ThemeRef::TertiaryText)
+                    .wrap(),
             ))
             .spacing(6.0),
         )

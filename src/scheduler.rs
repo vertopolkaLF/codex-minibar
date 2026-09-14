@@ -587,9 +587,10 @@ mod tests {
             sampled_at,
         );
         state.record_attempt(sampled_at);
-        assert!(state.recently_attempted(
-            sampled_at + UNACTIVATED_RETRY_COOLDOWN - Duration::minutes(1)
-        ));
+        assert!(
+            state
+                .recently_attempted(sampled_at + UNACTIVATED_RETRY_COOLDOWN - Duration::minutes(1))
+        );
         assert!(!state.recently_attempted(sampled_at + UNACTIVATED_RETRY_COOLDOWN));
     }
 
@@ -791,7 +792,10 @@ mod tests {
             enabled: true,
         };
 
-        assert!(auto_activation_paused(&[pause.clone()], local.with_timezone(&Utc)));
+        assert!(auto_activation_paused(
+            &[pause.clone()],
+            local.with_timezone(&Utc)
+        ));
         assert!(!auto_activation_paused(
             &[pause],
             (local + Duration::days(2)).with_timezone(&Utc),
@@ -817,7 +821,13 @@ mod tests {
             .single()
             .unwrap();
 
-        assert!(auto_activation_paused(&[pause.clone()], late.with_timezone(&Utc)));
-        assert!(auto_activation_paused(&[pause], morning.with_timezone(&Utc)));
+        assert!(auto_activation_paused(
+            &[pause.clone()],
+            late.with_timezone(&Utc)
+        ));
+        assert!(auto_activation_paused(
+            &[pause],
+            morning.with_timezone(&Utc)
+        ));
     }
 }

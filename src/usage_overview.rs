@@ -113,7 +113,9 @@ pub fn dates_for_total_spend(period: TotalSpendPeriod) -> (NaiveDate, NaiveDate)
         }
         TotalSpendPeriod::ThirtyDays => {
             let start = today
-                - Duration::days(i64::from(OverviewRange::ThirtyDays.days().saturating_sub(1)));
+                - Duration::days(i64::from(
+                    OverviewRange::ThirtyDays.days().saturating_sub(1),
+                ));
             (start, today)
         }
     }
@@ -135,9 +137,12 @@ pub fn total_spend_snapshot(
     period: TotalSpendPeriod,
 ) -> OverviewSnapshot {
     match period {
-        TotalSpendPeriod::ThirtyDays => {
-            build_overview_snapshot(limits, enabled, OverviewMetric::Cost, OverviewRange::ThirtyDays)
-        }
+        TotalSpendPeriod::ThirtyDays => build_overview_snapshot(
+            limits,
+            enabled,
+            OverviewMetric::Cost,
+            OverviewRange::ThirtyDays,
+        ),
         TotalSpendPeriod::Today | TotalSpendPeriod::Yesterday => {
             let (start_date, end_date) = dates_for_total_spend(period);
             build_overview_snapshot_for_dates(
@@ -270,18 +275,25 @@ fn assemble_overview_snapshot(
                     .add(&usage);
             }
         }
-        Ok((provider_daily, provider_hourly, provider_sessions, model_rows))
+        Ok((
+            provider_daily,
+            provider_hourly,
+            provider_sessions,
+            model_rows,
+        ))
     })
     .unwrap_or_default();
 
     let (provider_daily, mut provider_hourly, provider_sessions, mut model_rows) = store_data;
-    let codex_has_usage = provider_daily.get(&ProviderKind::Codex).is_some_and(|days| {
-        days.iter().any(|entry| {
-            entry.date >= start_date
-                && entry.date <= end_date
-                && (entry.usage.requests > 0 || entry.usage.total_tokens() > 0)
-        })
-    });
+    let codex_has_usage = provider_daily
+        .get(&ProviderKind::Codex)
+        .is_some_and(|days| {
+            days.iter().any(|entry| {
+                entry.date >= start_date
+                    && entry.date <= end_date
+                    && (entry.usage.requests > 0 || entry.usage.total_tokens() > 0)
+            })
+        });
     let codex_missing_models = !model_rows
         .keys()
         .any(|(provider, _)| *provider == ProviderKind::Codex);
@@ -307,13 +319,12 @@ fn assemble_overview_snapshot(
             .get(&ProviderKind::Codex)
             .is_none_or(|hours| hours.is_empty())
     {
-        if let Ok(rows) =
-            crate::usage::collect_codex_hourly_since(start_hour.with_timezone(&Utc) - Duration::hours(1))
-        {
+        if let Ok(rows) = crate::usage::collect_codex_hourly_since(
+            start_hour.with_timezone(&Utc) - Duration::hours(1),
+        ) {
             let mapped = rows.iter().cloned().collect::<BTreeMap<_, _>>();
-            let _ = store::with_store(|store| {
-                store.replace_usage_hourly(ProviderKind::Codex, &rows)
-            });
+            let _ =
+                store::with_store(|store| store.replace_usage_hourly(ProviderKind::Codex, &rows));
             provider_hourly.insert(ProviderKind::Codex, mapped);
         }
     }
@@ -364,11 +375,7 @@ fn assemble_overview_snapshot(
         // Codex/Claude have real session files or event paths. Cursor (and
         // anyone else with only a daily rollup) never writes those tables —
         // its CSV rows already live in `requests`. A stored 0 is not "unknown".
-        let sessions = if tracked > 0 {
-            tracked
-        } else {
-            usage.requests
-        };
+        let sessions = if tracked > 0 { tracked } else { usage.requests };
         snapshot.totals.add(&usage);
         snapshot.total_sessions = snapshot.total_sessions.saturating_add(sessions);
         providers.push(ProviderOverview {
@@ -467,10 +474,12 @@ fn assemble_overview_snapshot(
             .iter()
             .rev()
             .map(|(date, providers)| {
-                let usage = providers.values().fold(TokenUsage::default(), |mut total, usage| {
-                    total.add(usage);
-                    total
-                });
+                let usage = providers
+                    .values()
+                    .fold(TokenUsage::default(), |mut total, usage| {
+                        total.add(usage);
+                        total
+                    });
                 let cost = usage.estimated_cost_microusd;
                 let tokens = usage.total_tokens();
                 let metric_value = match metric {
@@ -525,7 +534,9 @@ fn assemble_overview_snapshot(
             requests: usage.requests,
             priced_requests: usage.priced_requests,
             share: match metric {
-                OverviewMetric::Cost => usage.estimated_cost_microusd as f64 / total_metric as f64 * 100.0,
+                OverviewMetric::Cost => {
+                    usage.estimated_cost_microusd as f64 / total_metric as f64 * 100.0
+                }
                 OverviewMetric::Tokens => usage.total_tokens() as f64 / total_metric as f64 * 100.0,
             },
             by_provider: BTreeMap::new(),
@@ -555,7 +566,8 @@ fn assemble_overview_snapshot(
         let total_cost = snapshot.totals.estimated_cost_microusd.max(1);
         let total_tokens = snapshot.totals.total_tokens().max(1);
         for entry in &mut snapshot.providers {
-            entry.share_cost = entry.usage.estimated_cost_microusd as f64 / total_cost as f64 * 100.0;
+            entry.share_cost =
+                entry.usage.estimated_cost_microusd as f64 / total_cost as f64 * 100.0;
             entry.share_tokens = entry.usage.total_tokens() as f64 / total_tokens as f64 * 100.0;
         }
         snapshot.providers.sort_by(|left, right| {
@@ -612,7 +624,10 @@ mod tests {
         assert_eq!(end, today);
         assert_eq!(
             start,
-            today - Duration::days(i64::from(OverviewRange::ThirtyDays.days().saturating_sub(1)))
+            today
+                - Duration::days(i64::from(
+                    OverviewRange::ThirtyDays.days().saturating_sub(1)
+                ))
         );
     }
 

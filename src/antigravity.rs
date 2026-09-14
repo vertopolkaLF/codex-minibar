@@ -129,7 +129,9 @@ fn recover_stale_session(
 }
 
 fn session_is_stale(expires_at: Option<DateTime<Utc>>) -> bool {
-    expires_at.map_or(true, |expires| expires <= Utc::now() + chrono::Duration::minutes(1))
+    expires_at.map_or(true, |expires| {
+        expires <= Utc::now() + chrono::Duration::minutes(1)
+    })
 }
 
 fn signed_in() -> bool {
@@ -633,6 +635,9 @@ mod tests {
             cli_available(Some(directory.path())),
             Some(std::fs::canonicalize(&cli).unwrap())
         );
-        assert_eq!(desktop_app(Some(directory.path())).as_deref(), Some(app.as_path()));
+        assert_eq!(
+            desktop_app(Some(directory.path())).as_deref(),
+            Some(app.as_path())
+        );
     }
 }

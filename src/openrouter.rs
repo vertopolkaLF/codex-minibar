@@ -210,7 +210,9 @@ fn fetch_openrouter_account(
         let live_results: Vec<Result<KeyReadOutcome>> = keys
             .into_iter()
             .map(|handle| {
-                handle.join().unwrap_or_else(|_| bail!("OpenRouter API-key worker panicked"))
+                handle
+                    .join()
+                    .unwrap_or_else(|_| bail!("OpenRouter API-key worker panicked"))
             })
             .collect();
         let balance = credits.and_then(|handle| handle.join().ok()).flatten();
@@ -222,8 +224,7 @@ fn fetch_openrouter_account(
     for (api_key, live) in account.api_keys.iter().zip(live_results) {
         let cache_id = key_cache_id(&account.id, &api_key.id);
         let cached = key_cache.get(&cache_id).cloned().unwrap_or_default();
-        let masked_key =
-            collapse_api_key(&api_key.value).or_else(|| cached.masked_key.clone());
+        let masked_key = collapse_api_key(&api_key.value).or_else(|| cached.masked_key.clone());
         // OpenRouter's own label mask (sk-or-v1-abc...xyz) often uses a
         // different head/tail length than our local collapse — match the
         // full secret against directory labels instead of exact strings.
@@ -251,10 +252,11 @@ fn fetch_openrouter_account(
                 // Prefer the directory name for this key's own mask when
                 // /key only returned a masked label. Never borrow another
                 // key's cached title — cache is already account+key keyed.
-                let label = resolve_key_display_name(parsed.account_name.as_deref(), &key_directory)
-                    .or_else(|| directory.as_ref().and_then(|info| info.name.clone()))
-                    .or_else(|| resolve_key_display_name(masked_key.as_deref(), &key_directory))
-                    .or_else(|| cached.label.clone());
+                let label =
+                    resolve_key_display_name(parsed.account_name.as_deref(), &key_directory)
+                        .or_else(|| directory.as_ref().and_then(|info| info.name.clone()))
+                        .or_else(|| resolve_key_display_name(masked_key.as_deref(), &key_directory))
+                        .or_else(|| cached.label.clone());
                 let expires_at = parsed
                     .expires_at
                     .or_else(|| directory.as_ref().and_then(|info| info.expires_at))
@@ -336,15 +338,13 @@ impl LimitProvider for OpenRouterClient {
                     })
                 })
                 .map(|handle| {
-                    handle
-                        .join()
-                        .unwrap_or_else(|_| AccountFetchResult {
-                            id: String::new(),
-                            name: String::new(),
-                            api_keys: Vec::new(),
-                            balance_microusd: None,
-                            cache_updates: Vec::new(),
-                        })
+                    handle.join().unwrap_or_else(|_| AccountFetchResult {
+                        id: String::new(),
+                        name: String::new(),
+                        api_keys: Vec::new(),
+                        balance_microusd: None,
+                        cache_updates: Vec::new(),
+                    })
                 })
                 .collect()
         });
@@ -699,9 +699,9 @@ fn parse_credits_response(raw: &str) -> Result<u64> {
 }
 
 fn load_key_cache_from_store() -> HashMap<String, CachedOpenRouterKey> {
-    let Ok(Some(previous)) =
-        crate::store::with_store(|store| store.load_limits(crate::settings::ProviderKind::OpenRouter))
-    else {
+    let Ok(Some(previous)) = crate::store::with_store(|store| {
+        store.load_limits(crate::settings::ProviderKind::OpenRouter)
+    }) else {
         return HashMap::new();
     };
     let mut cache = HashMap::new();

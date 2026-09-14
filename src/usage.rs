@@ -280,7 +280,8 @@ pub(crate) fn collect_codex_hourly_since(
 
 pub(crate) fn truncate_local_hour(timestamp: DateTime<Local>) -> DateTime<Local> {
     // Preserve the UTC offset during repeated local hours at the DST transition.
-    timestamp - Duration::minutes(i64::from(timestamp.minute()))
+    timestamp
+        - Duration::minutes(i64::from(timestamp.minute()))
         - Duration::seconds(i64::from(timestamp.second()))
         - Duration::nanoseconds(i64::from(timestamp.nanosecond()))
 }
@@ -442,7 +443,11 @@ fn might_carry_codex_line(line: &str) -> bool {
 const FORK_COPY_MAX_GAP_MS: i64 = 1000;
 
 fn is_forked_session_meta(payload: &Value) -> bool {
-    if payload.get("forked_from_id").and_then(Value::as_str).is_some() {
+    if payload
+        .get("forked_from_id")
+        .and_then(Value::as_str)
+        .is_some()
+    {
         return true;
     }
     payload
@@ -676,10 +681,7 @@ pub(crate) fn aggregate_claude_model_daily(
 ) -> Vec<(NaiveDate, String, TokenUsage)> {
     let mut merged = BTreeMap::<(String, NaiveDate), TokenUsage>::new();
     for entry in deduplicate_claude_entries(cache) {
-        let model = entry
-            .model
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
+        let model = entry.model.clone().unwrap_or_else(|| "unknown".to_string());
         let date = entry.timestamp.with_timezone(&Local).date_naive();
         merged.entry((model, date)).or_default().add(&entry.usage);
     }
@@ -1098,7 +1100,10 @@ mod tests {
     #[test]
     fn skips_token_count_before_model_is_known() {
         let mut cached = CachedSessionFile::default();
-        assert!(ingest_codex_line(&token_count(10, 1, "2026-08-01T05:00:00.000Z"), &mut cached).is_none());
+        assert!(
+            ingest_codex_line(&token_count(10, 1, "2026-08-01T05:00:00.000Z"), &mut cached)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1107,8 +1112,14 @@ mod tests {
             current_model: Some("gpt-5.4".into()),
             ..Default::default()
         };
-        assert!(ingest_codex_line(&token_count(10, 1, "2026-08-01T05:00:00.000Z"), &mut cached).is_some());
-        assert!(ingest_codex_line(&token_count(10, 1, "2026-08-01T05:00:00.100Z"), &mut cached).is_none());
+        assert!(
+            ingest_codex_line(&token_count(10, 1, "2026-08-01T05:00:00.000Z"), &mut cached)
+                .is_some()
+        );
+        assert!(
+            ingest_codex_line(&token_count(10, 1, "2026-08-01T05:00:00.100Z"), &mut cached)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1122,11 +1133,13 @@ mod tests {
             r#"{"type":"turn_context","payload":{"model":"gpt-5.4"}}"#,
             &mut cached,
         );
-        assert!(ingest_codex_line(
-            &token_count(100, 10, "2026-08-01T05:00:00.001Z"),
-            &mut cached,
-        )
-        .is_none());
+        assert!(
+            ingest_codex_line(
+                &token_count(100, 10, "2026-08-01T05:00:00.001Z"),
+                &mut cached,
+            )
+            .is_none()
+        );
         let real = ingest_codex_line(
             &token_count(300, 30, "2026-08-01T05:00:06.000Z"),
             &mut cached,

@@ -93,11 +93,7 @@ impl CodexActivator {
             }
             if Instant::now() >= deadline {
                 terminate(&mut child);
-                let stderr = stderr_reader
-                    .join()
-                    .unwrap_or_default()
-                    .trim()
-                    .to_owned();
+                let stderr = stderr_reader.join().unwrap_or_default().trim().to_owned();
                 if stderr.is_empty() {
                     bail!("Codex activation timed out after {:?}", self.timeout);
                 }

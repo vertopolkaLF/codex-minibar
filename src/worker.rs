@@ -562,8 +562,7 @@ fn run_usage_task(
                     usage_refresh_interval = interval.max(Duration::from_secs(60));
                 }
                 Ok(WorkerCommand::ClearUsageData(generation)) => {
-                    if let Err(error) = crate::store::with_store(|store| store.clear_usage_data())
-                    {
+                    if let Err(error) = crate::store::with_store(|store| store.clear_usage_data()) {
                         eprintln!("failed to clear usage data: {error:#}");
                     }
                     let _ = events.send(WorkerEvent::UsageUpdated(
@@ -694,11 +693,7 @@ fn tick(
                 if confirmed {
                     // Treat the window as established so the next poll cannot
                     // spend another exec against the same 5-hour session.
-                    state.observe_with_unactivated(
-                        &limits.primary,
-                        false,
-                        limits.sampled_at,
-                    );
+                    state.observe_with_unactivated(&limits.primary, false, limits.sampled_at);
                     if let Some((rule, occurrence)) = scheduled_due {
                         state.record_scheduled_activation(&rule.id, occurrence);
                     }
@@ -738,10 +733,7 @@ fn activation_confirm_gap() -> Duration {
 
 /// A just-started Codex window still looks unactivated on one sample. Wait,
 /// read again, and only then decide whether the deadline froze.
-fn confirm_unactivated_session(
-    provider: &mut impl LimitProvider,
-    limits: &mut RateLimits,
-) -> bool {
+fn confirm_unactivated_session(provider: &mut impl LimitProvider, limits: &mut RateLimits) -> bool {
     let first = limits.clone();
     let gap = activation_confirm_gap();
     if !gap.is_zero() {
@@ -1055,9 +1047,11 @@ mod tests {
             WorkerEvent::ActivationFailed(message)
                 if message.contains("still inactive")
         )));
-        assert!(!events
-            .iter()
-            .any(|event| matches!(event, WorkerEvent::ActivationSucceeded)));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, WorkerEvent::ActivationSucceeded))
+        );
     }
 
     #[test]

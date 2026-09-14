@@ -110,8 +110,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     });
     let (hovered_combined_usage_period, set_hovered_combined_usage_period) =
         cx.use_state(None::<TotalSpendPeriod>);
-    let (hovered_usage_stats, set_hovered_usage_stats) =
-        cx.use_state(None::<UsageStatsHover>);
+    let (hovered_usage_stats, set_hovered_usage_stats) = cx.use_state(None::<UsageStatsHover>);
     let (hovered_forced_reset_home, set_hovered_forced_reset_home) = cx.use_state(false);
     let (hovered_forced_reset_provider, set_hovered_forced_reset_provider) = cx.use_state(false);
     // Relative timestamps need an occasional render tick while the popup is
@@ -649,12 +648,9 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         } else {
             0
         };
-        let tab_content_width = provider_tab_strip_content_width(
-            provider_tab_count,
-            ui.usage_stats_enabled,
-        );
-        let tab_viewport_width =
-            provider_tab_strip_viewport_width(ui.update_version.is_some());
+        let tab_content_width =
+            provider_tab_strip_content_width(provider_tab_count, ui.usage_stats_enabled);
+        let tab_viewport_width = provider_tab_strip_viewport_width(ui.update_version.is_some());
         let tab_max_offset = (tab_content_width - tab_viewport_width).max(0.0);
         let tab_scroll_x = tab_scroll_x.clamp(0.0, tab_max_offset);
         let on_tab_wheel = Callback::new({
@@ -876,22 +872,20 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     ),
                 ];
                 if ui.update_version.is_some() {
-                    actions.push(
-                        accent_icon_button(
-                            "update",
-                            "fluent-arrow-download",
-                            "Install update",
-                            color_scheme,
-                            &hovered_action,
-                            set_hovered_action.clone(),
-                            || {
-                                if let Err(error) = crate::updater::apply_pending_update() {
-                                    eprintln!("failed to apply update: {error:#}");
-                                    notifications::show("Update failed", &format!("{error:#}"));
-                                }
-                            },
-                        ),
-                    );
+                    actions.push(accent_icon_button(
+                        "update",
+                        "fluent-arrow-download",
+                        "Install update",
+                        color_scheme,
+                        &hovered_action,
+                        set_hovered_action.clone(),
+                        || {
+                            if let Err(error) = crate::updater::apply_pending_update() {
+                                eprintln!("failed to apply update: {error:#}");
+                                notifications::show("Update failed", &format!("{error:#}"));
+                            }
+                        },
+                    ));
                 }
                 actions
             })
@@ -1032,12 +1026,14 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         let page: Element = if view == PopupView::Usage {
             content.with_key(body_layout_key).into()
         } else {
-            let mut page_layers = vec![content
-                .relative_align_left()
-                .relative_align_right()
-                .relative_align_top()
-                .with_key("popup-page-body")
-                .into()];
+            let mut page_layers = vec![
+                content
+                    .relative_align_left()
+                    .relative_align_right()
+                    .relative_align_top()
+                    .with_key("popup-page-body")
+                    .into(),
+            ];
             if let Some(tip) = activity_page_tip.as_ref() {
                 page_layers.push(activity_page_tooltip(tip, color_scheme));
             }

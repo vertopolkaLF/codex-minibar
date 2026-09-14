@@ -80,11 +80,7 @@ pub(super) fn provider_install_status(
                 crate::discovery::CandidateSource::DesktopApp => ProviderInstallSource::App,
                 _ => ProviderInstallSource::Cli,
             });
-            (
-                app.map(display_fs_path),
-                cli.map(display_fs_path),
-                used,
-            )
+            (app.map(display_fs_path), cli.map(display_fs_path), used)
         }
         ProviderKind::Claude => {
             let app = crate::claude_desktop::bundled_cli();
@@ -817,9 +813,9 @@ fn path_save_generation(provider: ProviderKind) -> Option<&'static AtomicU64> {
         ProviderKind::Cursor => &CURSOR_PATH_SAVE_GEN,
         ProviderKind::Antigravity => &ANTIGRAVITY_PATH_SAVE_GEN,
         ProviderKind::Grok => &GROK_PATH_SAVE_GEN,
-        ProviderKind::OpenCodeZen
-        | ProviderKind::OpenCodeGo
-        | ProviderKind::OpenRouter => return None,
+        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo | ProviderKind::OpenRouter => {
+            return None;
+        }
     })
 }
 

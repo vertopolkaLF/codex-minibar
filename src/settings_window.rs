@@ -6,10 +6,9 @@
 use crate::settings::{
     AccentColor, AppTheme, AutoActivationPause, BottomBarSize, LimitRefreshInterval, LimitValue,
     OpenRouterAccount, PopupBackgroundMaterial, PopupCornerRadius, PopupVisibility,
-    PopupWidgetKind, ProviderKind,
-    ScheduledActivation, Settings, TimeFormat, TotalSpendPresentation, TrayColorMode,
-    TrayFixedColor, TrayIndicator, TrayPresentation, TrayWidget, TrayWidgetKind,
-    ResetAnnouncementRefreshInterval, UsageRefreshInterval,
+    PopupWidgetKind, ProviderKind, ResetAnnouncementRefreshInterval, ScheduledActivation, Settings,
+    TimeFormat, TotalSpendPresentation, TrayColorMode, TrayFixedColor, TrayIndicator,
+    TrayPresentation, TrayWidget, TrayWidgetKind, UsageRefreshInterval,
 };
 use crate::settings_controls::{
     SETTINGS_CARD_PADDING, settings_action_card, settings_brick_body_height, settings_brick_row,
@@ -297,8 +296,7 @@ pub fn render(
     let (accent_color, set_accent_color) = cx.use_state(settings.accent_color);
     let (animations_enabled, set_animations_enabled) = cx.use_state(settings.animations_enabled);
     let (bottom_bar_size, set_bottom_bar_size) = cx.use_state(settings.bottom_bar_size);
-    let (popup_corner_radius, set_popup_corner_radius) =
-        cx.use_state(settings.popup_corner_radius);
+    let (popup_corner_radius, set_popup_corner_radius) = cx.use_state(settings.popup_corner_radius);
     let (popup_background_material, set_popup_background_material) =
         cx.use_state(settings.popup_background_material);
     let (time_format, set_time_format) = cx.use_state(settings.time_format);
@@ -580,8 +578,7 @@ pub fn render(
         cx.use_state(None::<String>);
     let (expanded_auto_activation_pause, set_expanded_auto_activation_pause) =
         cx.use_state(None::<String>);
-    let (usage_stats_enabled, set_usage_stats_enabled) =
-        cx.use_state(settings.usage_stats_enabled);
+    let (usage_stats_enabled, set_usage_stats_enabled) = cx.use_state(settings.usage_stats_enabled);
     let (usage_stats_excluded_providers, set_usage_stats_excluded_providers) =
         cx.use_state(settings.usage_stats_excluded_providers.clone());
     let (limit_refresh_interval, set_limit_refresh_interval) =
@@ -901,9 +898,7 @@ pub fn render(
             // A low-opacity Mica layer keeps the material visible while
             // lifting the content plane slightly above the normal window bg.
             border(Element::Empty)
-                .background(ThemeRef::custom(
-                    "LayerOnMicaBaseAltFillColorDefaultBrush",
-                ))
+                .background(ThemeRef::custom("LayerOnMicaBaseAltFillColorDefaultBrush"))
                 .opacity(0.3)
                 .corner_radii(CornerRadii {
                     top_left: 12.0,
@@ -924,12 +919,12 @@ pub fn render(
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .vertical_alignment(VerticalAlignment::Stretch),
     )
-        .corner_radii(CornerRadii {
-            top_left: 12.0,
-            ..Default::default()
-        })
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .vertical_alignment(VerticalAlignment::Stretch);
+    .corner_radii(CornerRadii {
+        top_left: 12.0,
+        ..Default::default()
+    })
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .vertical_alignment(VerticalAlignment::Stretch);
 
     // Match NavigationView item icons: 16px glyph centered in the 48px leading column.
     let title_bar_icon = hstack((Image::new_with_uri(settings_title_icon_uri())

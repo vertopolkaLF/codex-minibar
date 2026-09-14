@@ -280,9 +280,9 @@ pub fn provider_for_metric(id: &str) -> Option<ProviderKind> {
 
 /// Maps any popup brick id — catalog, extras, or discovered — onto its provider.
 pub fn provider_for_brick_id(brick_id: &str) -> Option<ProviderKind> {
-    ProviderKind::ALL.into_iter().find(|provider| {
-        brick_id.starts_with(&format!("{}.", descriptor(*provider).id))
-    })
+    ProviderKind::ALL
+        .into_iter()
+        .find(|provider| brick_id.starts_with(&format!("{}.", descriptor(*provider).id)))
 }
 
 pub fn dynamic_metric_id(provider: ProviderKind, source_id: &str) -> String {
@@ -377,7 +377,11 @@ pub fn brick_label(provider: ProviderKind, brick_id: &str) -> String {
     if let Some(source_id) = brick_id.strip_prefix(&format!("{provider_id}.additional.")) {
         return source_id.replace('-', " ").replace('_', " ");
     }
-    brick_id.rsplit('.').next().unwrap_or(brick_id).replace('-', " ")
+    brick_id
+        .rsplit('.')
+        .next()
+        .unwrap_or(brick_id)
+        .replace('-', " ")
 }
 
 /// Catalog bricks plus runtime-discovered additional windows for Settings.
@@ -474,9 +478,7 @@ pub fn additional_limit_brick_id(provider: ProviderKind, source_id: &str) -> Str
     descriptor(provider)
         .metrics
         .iter()
-        .find(|metric| {
-            matches!(metric.source, MetricSource::Additional(id) if id == source_id)
-        })
+        .find(|metric| matches!(metric.source, MetricSource::Additional(id) if id == source_id))
         .map(|metric| metric.id.to_string())
         .unwrap_or_else(|| dynamic_metric_id(provider, source_id))
 }
@@ -734,16 +736,10 @@ mod tests {
     #[test]
     fn settings_bricks_include_live_additional_windows_without_catalog_duplicates() {
         let extra_id = additional_limit_brick_id(ProviderKind::Claude, "seven_day_runtime_lane");
-        let ids = settings_brick_ids(
-            ProviderKind::Claude,
-            [extra_id.as_str(), "claude.session"],
-        );
+        let ids = settings_brick_ids(ProviderKind::Claude, [extra_id.as_str(), "claude.session"]);
         assert!(ids.contains(&"claude.session".into()));
         assert!(ids.contains(&extra_id));
-        assert_eq!(
-            ids.iter().filter(|id| *id == &extra_id).count(),
-            1
-        );
+        assert_eq!(ids.iter().filter(|id| *id == &extra_id).count(), 1);
 
         let mut labels = std::collections::BTreeMap::new();
         labels.insert(extra_id.clone(), "Runtime Lane".into());
