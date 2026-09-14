@@ -129,7 +129,7 @@ fn recover_stale_session(
 }
 
 fn session_is_stale(expires_at: Option<DateTime<Utc>>) -> bool {
-    expires_at.is_some_and(|expires| expires <= Utc::now() + chrono::Duration::minutes(1))
+    expires_at.map_or(true, |expires| expires <= Utc::now() + chrono::Duration::minutes(1))
 }
 
 fn signed_in() -> bool {
