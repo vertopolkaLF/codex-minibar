@@ -117,7 +117,11 @@ fn format_reset(reset: Option<DateTime<Utc>>) -> String {
     reset
         .map(|value| {
             let local = value.with_timezone(&Local);
-            format!("{} {}", TimeFormat::current().format_hm(local), local.format("%d.%m"))
+            format!(
+                "{} {}",
+                TimeFormat::current().format_hm(local),
+                local.format("%d.%m")
+            )
         })
         .unwrap_or_else(|| "?".into())
 }

@@ -202,11 +202,8 @@ pub fn info_bar_error_element(name: &'static str, size: f64) -> Element {
     let mut host = swap_chain_panel().width(size).height(size);
     host.mounted = Some(Callback::new(move |native: Option<_>| {
         if let Some(native) = native
-            && let Err(error) = crate::acrylic::install_info_bar_error_icon_into(
-                native,
-                icon.path,
-                icon.canvas,
-            )
+            && let Err(error) =
+                crate::acrylic::install_info_bar_error_icon_into(native, icon.path, icon.canvas)
         {
             eprintln!("Could not install InfoBar error icon: {error:?}");
         }

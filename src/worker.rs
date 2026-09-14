@@ -540,9 +540,12 @@ fn run_usage_task(
     let mut paused_after_clear = None::<u64>;
     let mut usage_identity = provider.account_identity();
     loop {
-        let identity = provider.account_identity();
-        if identity != usage_identity {
-            usage_identity = identity;
+        // `None` is an unreadable identity sample, not a logout. Ignore it so a
+        // torn auth.json rewrite cannot clear the visible account.
+        if let Some(identity) = provider.account_identity()
+            && usage_identity.as_deref() != Some(identity.as_str())
+        {
+            usage_identity = Some(identity);
             let _ = events.send(WorkerEvent::UsageUpdated(UsageStatistics::default()));
             if usage_collection_enabled && paused_after_clear.is_none() {
                 if let Ok(usage) = provider.load_cached_usage_statistics(history_retention_days) {
@@ -576,8 +579,7 @@ fn run_usage_task(
                     usage_refresh_interval = interval.max(Duration::from_secs(60));
                 }
                 Ok(WorkerCommand::ClearUsageData(generation)) => {
-                    if let Err(error) = crate::store::with_store(|store| store.clear_usage_data())
-                    {
+                    if let Err(error) = crate::store::with_store(|store| store.clear_usage_data()) {
                         eprintln!("failed to clear usage data: {error:#}");
                     }
                     let _ = events.send(WorkerEvent::UsageUpdated(
@@ -713,11 +715,7 @@ fn tick(
                 if confirmed {
                     // Treat the window as established so the next poll cannot
                     // spend another exec against the same 5-hour session.
-                    state.observe_with_unactivated(
-                        &limits.primary,
-                        false,
-                        limits.sampled_at,
-                    );
+                    state.observe_with_unactivated(&limits.primary, false, limits.sampled_at);
                     if let Some((rule, occurrence)) = scheduled_due {
                         state.record_scheduled_activation(&rule.id, occurrence);
                     }
@@ -757,10 +755,7 @@ fn activation_confirm_gap() -> Duration {
 
 /// A just-started Codex window still looks unactivated on one sample. Wait,
 /// read again, and only then decide whether the deadline froze.
-fn confirm_unactivated_session(
-    provider: &mut impl LimitProvider,
-    limits: &mut RateLimits,
-) -> bool {
+fn confirm_unactivated_session(provider: &mut impl LimitProvider, limits: &mut RateLimits) -> bool {
     let first = limits.clone();
     let gap = activation_confirm_gap();
     if !gap.is_zero() {
@@ -1074,9 +1069,11 @@ mod tests {
             WorkerEvent::ActivationFailed(message)
                 if message.contains("still inactive")
         )));
-        assert!(!events
-            .iter()
-            .any(|event| matches!(event, WorkerEvent::ActivationSucceeded)));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, WorkerEvent::ActivationSucceeded))
+        );
     }
 
     #[test]
@@ -1585,5 +1582,68 @@ mod tests {
         tx.send(WorkerCommand::Shutdown).unwrap();
         thread.join().unwrap();
         assert_eq!(scans.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn uncertain_identity_samples_do_not_count_as_account_switches() {
+        use std::sync::atomic::AtomicUsize;
+        struct Flicker {
+            ticks: Arc<AtomicUsize>,
+            scans: Arc<AtomicUsize>,
+        }
+        impl UsageProvider for Flicker {
+            fn account_identity(&self) -> Option<String> {
+                if self.ticks.fetch_add(1, Ordering::SeqCst).is_multiple_of(2) {
+                    Some("acct".into())
+                } else {
+                    None
+                }
+            }
+            fn identity_poll_interval(&self) -> Duration {
+                Duration::from_millis(10)
+            }
+            fn load_cached_usage_statistics(&mut self, _: u16) -> Result<UsageStatistics> {
+                Ok(UsageStatistics {
+                    account_id: Some("acct".into()),
+                    ..Default::default()
+                })
+            }
+            fn refresh_usage_statistics(&mut self, days: u16) -> Result<UsageStatistics> {
+                self.scans.fetch_add(1, Ordering::SeqCst);
+                self.load_cached_usage_statistics(days)
+            }
+        }
+        let scans = Arc::new(AtomicUsize::new(0));
+        let provider = Flicker {
+            ticks: Arc::new(AtomicUsize::new(0)),
+            scans: scans.clone(),
+        };
+        let (tx, rx) = mpsc::channel();
+        let (events, received) = mpsc::channel();
+        let thread = thread::spawn(move || {
+            run_usage_task(
+                provider,
+                30,
+                Duration::from_secs(600),
+                true,
+                rx,
+                events,
+                Arc::new(AtomicBool::new(true)),
+            )
+        });
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if matches!(
+                received.recv_timeout(Duration::from_millis(50)),
+                Ok(WorkerEvent::RequestFinished(RequestKind::Usage))
+            ) && scans.load(Ordering::SeqCst) >= 1
+            {
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(80));
+        tx.send(WorkerCommand::Shutdown).unwrap();
+        thread.join().unwrap();
+        assert_eq!(scans.load(Ordering::SeqCst), 1);
     }
 }

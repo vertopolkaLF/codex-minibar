@@ -740,22 +740,28 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
         .columns([GridLength::Star(1.0), GridLength::Auto])
         .rows([GridLength::Auto]);
     let tip = active_hover.and_then(|date| {
-        data.iter().find(|bucket| bucket.first == date).and_then(|bucket| {
-            if by_model {
-                model_data.map(|models| {
-                    activity_tip_from_models(
+        data.iter()
+            .find(|bucket| bucket.first == date)
+            .and_then(|bucket| {
+                if by_model {
+                    model_data.map(|models| {
+                        activity_tip_from_models(
+                            bucket,
+                            models,
+                            cost_mode,
+                            props.provider,
+                            props.scheme,
+                            model_page,
+                        )
+                    })
+                } else {
+                    Some(activity_tip_from_bucket(
                         bucket,
-                        models,
-                        cost_mode,
                         props.provider,
                         props.scheme,
-                        model_page,
-                    )
-                })
-            } else {
-                Some(activity_tip_from_bucket(bucket, props.provider, props.scheme))
-            }
-        })
+                    ))
+                }
+            })
     });
     publish_activity_page_tip(tip);
 
@@ -958,7 +964,8 @@ fn activity_tooltip_offset_x(cursor_x: f64, tip_width: f64, area_width: f64) -> 
 fn activity_tooltip_offset_y(cursor_y: f64, tip_height: f64, area_height: f64) -> f64 {
     let min_y = TOOLTIP_EDGE_INSET;
     let max_y = (area_height - TOOLTIP_EDGE_INSET - tip_height).max(min_y);
-    let prefer_below = cursor_y + TOOLTIP_CURSOR_GAP + tip_height <= area_height - TOOLTIP_EDGE_INSET;
+    let prefer_below =
+        cursor_y + TOOLTIP_CURSOR_GAP + tip_height <= area_height - TOOLTIP_EDGE_INSET;
     let raw = if prefer_below {
         cursor_y + TOOLTIP_CURSOR_GAP
     } else {
@@ -1159,7 +1166,8 @@ fn activity_usage_tooltip(
     scheme: ColorScheme,
 ) -> Element {
     let mut name_width = 16.0 * TOOLTIP_CHAR_CAPTION;
-    let mut amount_width = total.chars().count().max(cost.chars().count()) as f64 * TOOLTIP_CHAR_CAPTION;
+    let mut amount_width =
+        total.chars().count().max(cost.chars().count()) as f64 * TOOLTIP_CHAR_CAPTION;
     let mut rows: Vec<Element> = vec![
         grid((
             vstack((
@@ -1214,7 +1222,8 @@ fn activity_usage_tooltip(
         let Some(series) = Series::ALL.get(*index as usize).copied() else {
             continue;
         };
-        name_width = name_width.max(series.menu_label().chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
+        name_width =
+            name_width.max(series.menu_label().chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
         amount_width = amount_width.max(amount.chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
         let label = hstack((
             border(Element::Empty)
@@ -1231,10 +1240,10 @@ fn activity_usage_tooltip(
         .spacing(TOOLTIP_ROW_GAP)
         .with_key(format!("activity-tip-label-{}", series.label()));
         rows.push(
-            border(activity_tooltip_row(label, amount.clone()).with_key(format!(
-                "activity-tip-row-{}",
-                series.label()
-            )))
+            border(
+                activity_tooltip_row(label, amount.clone())
+                    .with_key(format!("activity-tip-row-{}", series.label())),
+            )
             .padding(Thickness {
                 left: 0.0,
                 top: 0.0,
@@ -1290,9 +1299,10 @@ fn activity_models_tooltip(
     ];
     for slot in 0..models::PAGE_SIZE {
         let hidden = slot >= entries.len();
-        let (name, amount, color) = entries.get(slot).cloned().unwrap_or_else(|| {
-            (String::new(), String::new(), Color::transparent())
-        });
+        let (name, amount, color) = entries
+            .get(slot)
+            .cloned()
+            .unwrap_or_else(|| (String::new(), String::new(), Color::transparent()));
         if !hidden {
             name_width = name_width.max(name.chars().count().min(28) as f64 * TOOLTIP_CHAR_CAPTION);
             amount_width = amount_width.max(amount.chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
@@ -1341,22 +1351,14 @@ fn activity_models_tooltip(
     let inner_width = 6.0 + TOOLTIP_ROW_GAP + name_width + TOOLTIP_VALUE_GAP + amount_width;
     let tip_width =
         (title.chars().count() as f64 * TOOLTIP_CHAR_TITLE).max(inner_width) + TOOLTIP_PAD_X * 2.0;
-    let tip_height = TOOLTIP_PAD_Y * 2.0
-        + 20.0
-        + 10.0
-        + 22.0
-        + visible as f64 * 26.0
-        + paging as f64 * 16.0;
+    let tip_height =
+        TOOLTIP_PAD_Y * 2.0 + 20.0 + 10.0 + 22.0 + visible as f64 * 26.0 + paging as f64 * 16.0;
     activity_tooltip_shell(
         title,
         rows,
         tip_width,
         tip_height,
-        format!(
-            "activity-tip-models-{}-{}",
-            provider.id(),
-            scheme as i32
-        ),
+        format!("activity-tip-models-{}-{}", provider.id(), scheme as i32),
     )
 }
 

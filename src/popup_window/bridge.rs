@@ -284,9 +284,9 @@ pub(super) fn start_background_bridge(
                 let _ = commands.send(WorkerCommand::SetLimitRefreshInterval(Duration::from_secs(
                     settings.limit_refresh_interval.seconds(),
                 )));
-                let _ = commands.send(WorkerCommand::SetUsageRefreshInterval(
-                    Duration::from_secs(settings.usage_refresh_interval.seconds()),
-                ));
+                let _ = commands.send(WorkerCommand::SetUsageRefreshInterval(Duration::from_secs(
+                    settings.usage_refresh_interval.seconds(),
+                )));
                 // The worker reloads the selected history range immediately,
                 // so changes are reflected in the open popup without asking the
                 // user to restart the application.
@@ -294,8 +294,7 @@ pub(super) fn start_background_bridge(
                     settings.history_retention_days,
                 ));
                 let _ = commands.send(WorkerCommand::SetUsageCollectionEnabled(
-                    settings.usage_stats_enabled
-                        && settings.usage_stats_provider_enabled(provider),
+                    settings.usage_stats_enabled && settings.usage_stats_provider_enabled(provider),
                 ));
                 if (provider == ProviderKind::OpenCodeZen && opencode_zen_credentials_changed)
                     || (provider == ProviderKind::OpenCodeGo && opencode_go_credentials_changed)
@@ -307,72 +306,76 @@ pub(super) fn start_background_bridge(
             flush_popup_ui(set_ui, ui);
         };
 
-        let drain_settings = |ui: &mut UiState,
-                              set_ui: &AsyncSetState<UiState>,
-                              notification_settings: &mut NotificationSettings,
-                              widgets: &mut Vec<TrayWidget>,
-                              tray: &mut TrayManager,
-                              check_for_updates: &mut bool,
-                              notify_on_update: &mut bool,
-                              forced_reset_notified_ids: &mut HashSet<String>| {
-            let Some(settings_rx) = settings_rx.as_ref() else {
-                return;
-            };
-            while let Ok(settings) = settings_rx.try_recv() {
-                if settings.check_for_updates && !*check_for_updates {
-                    updates.check_async(false, settings.notifications.update_available);
-                }
-                *check_for_updates = settings.check_for_updates;
-                *notify_on_update = settings.notifications.update_available;
-                apply_settings(ui, set_ui, notification_settings, widgets, tray, settings);
-                notify_new_forced_reset_info(
-                    &state.current_forced_resets(),
-                    forced_reset_notified_ids,
-                    notification_settings,
-                    &state,
-                );
-            }
-        };
-
-        let drain_usage_actions = |ui: &mut UiState,
-                                   set_ui: &AsyncSetState<UiState>,
-                                   generation: &mut u64,
-                                   pending: &mut Option<(u64, Vec<ProviderKind>)>| {
-            let Some(actions) = usage_actions_rx.as_ref() else {
-                return;
-            };
-            while let Ok(UsageAction::ClearData) = actions.try_recv() {
-                // One clear operation is enough. The button remains safe to
-                // click while a previous provider barrier is draining.
-                if pending.is_some() {
-                    continue;
-                }
-                *generation = generation.wrapping_add(1);
-                let clear_generation = *generation;
-                let targets = state
-                    .worker_commands()
-                    .into_iter()
-                    .filter_map(|(provider, commands)| {
-                        commands
-                            .send(WorkerCommand::ClearUsageData(clear_generation))
-                            .is_ok()
-                            .then_some(provider)
-                    })
-                    .collect::<Vec<_>>();
-                state.clear_usage_snapshot();
-                ui.observe_usage_update();
-                publish_popup_ui(set_ui, ui);
-
-                if targets.is_empty() {
-                    if let Err(error) = crate::store::with_store(|store| store.clear_usage_data()) {
-                        ui.set_popup_error(format!("Could not clear usage data: {error:#}"));
-                        publish_popup_ui(set_ui, ui);
+        let drain_settings =
+            |ui: &mut UiState,
+             set_ui: &AsyncSetState<UiState>,
+             notification_settings: &mut NotificationSettings,
+             widgets: &mut Vec<TrayWidget>,
+             tray: &mut TrayManager,
+             check_for_updates: &mut bool,
+             notify_on_update: &mut bool,
+             forced_reset_notified_ids: &mut HashSet<String>| {
+                let Some(settings_rx) = settings_rx.as_ref() else {
+                    return;
+                };
+                while let Ok(settings) = settings_rx.try_recv() {
+                    if settings.check_for_updates && !*check_for_updates {
+                        updates.check_async(false, settings.notifications.update_available);
                     }
-                } else {
-                    *pending = Some((clear_generation, targets));
+                    *check_for_updates = settings.check_for_updates;
+                    *notify_on_update = settings.notifications.update_available;
+                    apply_settings(ui, set_ui, notification_settings, widgets, tray, settings);
+                    notify_new_forced_reset_info(
+                        &state.current_forced_resets(),
+                        forced_reset_notified_ids,
+                        notification_settings,
+                        &state,
+                    );
                 }
-            }
-        };
+            };
+
+        let drain_usage_actions =
+            |ui: &mut UiState,
+             set_ui: &AsyncSetState<UiState>,
+             generation: &mut u64,
+             pending: &mut Option<(u64, Vec<ProviderKind>)>| {
+                let Some(actions) = usage_actions_rx.as_ref() else {
+                    return;
+                };
+                while let Ok(UsageAction::ClearData) = actions.try_recv() {
+                    // One clear operation is enough. The button remains safe to
+                    // click while a previous provider barrier is draining.
+                    if pending.is_some() {
+                        continue;
+                    }
+                    *generation = generation.wrapping_add(1);
+                    let clear_generation = *generation;
+                    let targets = state
+                        .worker_commands()
+                        .into_iter()
+                        .filter_map(|(provider, commands)| {
+                            commands
+                                .send(WorkerCommand::ClearUsageData(clear_generation))
+                                .is_ok()
+                                .then_some(provider)
+                        })
+                        .collect::<Vec<_>>();
+                    state.clear_usage_snapshot();
+                    ui.observe_usage_update();
+                    publish_popup_ui(set_ui, ui);
+
+                    if targets.is_empty() {
+                        if let Err(error) =
+                            crate::store::with_store(|store| store.clear_usage_data())
+                        {
+                            ui.set_popup_error(format!("Could not clear usage data: {error:#}"));
+                            publish_popup_ui(set_ui, ui);
+                        }
+                    } else {
+                        *pending = Some((clear_generation, targets));
+                    }
+                }
+            };
 
         let drain_updates = |ui: &mut UiState,
                              set_ui: &AsyncSetState<UiState>,
@@ -420,8 +423,9 @@ pub(super) fn start_background_bridge(
                                 return;
                             }
                             match provider {
-                                Some(provider) =>
-                                    crate::popup_window::request_provider_view(provider),
+                                Some(provider) => {
+                                    crate::popup_window::request_provider_view(provider)
+                                }
                                 None => crate::popup_window::request_home_view(),
                             }
                             if popup::prepare_show_on_ui_thread() {
@@ -787,11 +791,9 @@ pub(super) fn pump_tray_and_dismiss(
                     if !popup::is_visible() && popup::prepare_show_on_ui_thread() {
                         popup::show_near_cursor();
                     }
-                    if let Err(error) = crate::settings_window::open(
-                        settings_tx,
-                        usage_actions_tx,
-                        updates,
-                    ) {
+                    if let Err(error) =
+                        crate::settings_window::open(settings_tx, usage_actions_tx, updates)
+                    {
                         eprintln!("Could not open settings window: {error:?}");
                     }
                 });

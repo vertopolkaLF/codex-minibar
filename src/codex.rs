@@ -38,7 +38,7 @@ impl LimitProvider for CodexClient {
 
 impl UsageProvider for CodexClient {
     fn account_identity(&self) -> Option<String> {
-        Some(crate::store::codex_accounts::current_id())
+        crate::store::codex_accounts::poll_identity()
     }
     fn identity_poll_interval(&self) -> StdDuration {
         StdDuration::from_secs(1)
@@ -100,11 +100,7 @@ impl CodexActivator {
             }
             if Instant::now() >= deadline {
                 terminate(&mut child);
-                let stderr = stderr_reader
-                    .join()
-                    .unwrap_or_default()
-                    .trim()
-                    .to_owned();
+                let stderr = stderr_reader.join().unwrap_or_default().trim().to_owned();
                 if stderr.is_empty() {
                     bail!("Codex activation timed out after {:?}", self.timeout);
                 }

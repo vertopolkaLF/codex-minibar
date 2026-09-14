@@ -111,10 +111,7 @@ impl CursorClient {
             });
             let summary = scope.spawn(|| self.usage_summary(&token));
             let sand = scope.spawn(|| {
-                self.connect_post(
-                    "/aiserver.v1.DashboardService/GetSandUsageStatus",
-                    &token,
-                )
+                self.connect_post("/aiserver.v1.DashboardService/GetSandUsageStatus", &token)
             });
             (
                 usage
@@ -209,7 +206,10 @@ impl CursorClient {
             }
             let start = crate::usage::truncate_local_hour(Local::now() - ChronoDuration::hours(47));
             let end = crate::usage::truncate_local_hour(Local::now());
-            if store.load_usage_hourly(ProviderKind::Cursor, start, end)?.is_empty() {
+            if store
+                .load_usage_hourly(ProviderKind::Cursor, start, end)?
+                .is_empty()
+            {
                 return Ok(None);
             }
             store
@@ -354,13 +354,8 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
         // row count so the common usage card can still report activity.
         usage.requests = usage.requests.saturating_add(1);
         let model_key = normalize_cursor_model_name(model);
-        let row_cost = cursor_estimated_cost_microusd(
-            &model_key,
-            cache_write,
-            input,
-            cache_read,
-            output,
-        );
+        let row_cost =
+            cursor_estimated_cost_microusd(&model_key, cache_write, input, cache_read, output);
         usage.estimated_cost_microusd = usage
             .estimated_cost_microusd
             .saturating_add(row_cost.unwrap_or_default());
@@ -369,9 +364,7 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
             .saturating_add(u64::from(row_cost.is_some()));
 
         let row_usage = TokenUsage {
-            input_tokens: input
-                .saturating_add(cache_write)
-                .saturating_add(cache_read),
+            input_tokens: input.saturating_add(cache_write).saturating_add(cache_read),
             cached_input_tokens: cache_read,
             output_tokens: output,
             requests: 1,
@@ -420,7 +413,11 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
 /// suffixes (`cursor-grok-4.6-high-fast`, `4.6-medium`). Those are the same
 /// model for usage rollup, so they become `grok-4.6`.
 pub(crate) fn normalize_cursor_model_name(model: &str) -> String {
-    let mut name = model.trim().to_ascii_lowercase().trim_end_matches('-').to_owned();
+    let mut name = model
+        .trim()
+        .to_ascii_lowercase()
+        .trim_end_matches('-')
+        .to_owned();
     if name.is_empty() {
         return "unknown".into();
     }
@@ -477,7 +474,11 @@ fn cursor_export_timestamp(value: &str) -> Option<(NaiveDate, Option<DateTime<Lo
         let local = parsed.with_timezone(&Local);
         return Some((local.date_naive(), Some(local)));
     }
-    for format in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S%.f"] {
+    for format in [
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S%.f",
+    ] {
         if let Ok(naive) = NaiveDateTime::parse_from_str(value, format) {
             let local = naive.and_local_timezone(Local).single()?;
             return Some((local.date_naive(), Some(local)));
@@ -589,9 +590,7 @@ fn map_usage(
         .or_else(|| number(plan.and_then(|plan| plan.get("apiPercentUsed"))));
     let all_models_percent = number(summary_plan.and_then(|plan| plan.get("totalPercentUsed")))
         .or_else(|| number(plan.and_then(|plan| plan.get("totalPercentUsed"))));
-    let secondary_limit_name = auto_percent
-        .is_some()
-        .then(|| "Cursor Models".to_owned());
+    let secondary_limit_name = auto_percent.is_some().then(|| "Cursor Models".to_owned());
     let mut additional_limits = Vec::new();
     if let Some(percent) = api_percent {
         additional_limits.push(AdditionalLimit {
@@ -671,10 +670,7 @@ fn grok_bot_limit(sand: Option<&Value>) -> Option<AdditionalLimit> {
         .and_then(Value::as_bool)
         == Some(true)
         || sand.get("includedLimitZero").and_then(Value::as_bool) == Some(true)
-        || sand
-            .get("hasNonZeroIncludedLimit")
-            .and_then(Value::as_bool)
-            != Some(true)
+        || sand.get("hasNonZeroIncludedLimit").and_then(Value::as_bool) != Some(true)
     {
         return None;
     }

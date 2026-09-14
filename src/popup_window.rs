@@ -26,8 +26,7 @@ use crate::{
     },
     settings::{
         AccentColor, AppTheme, NotificationSettings, PopupBackgroundMaterial, PopupSurface,
-        PopupVisibility,
-        PopupWidgetKind, ProviderKind, Settings, TimeFormat, TotalSpendPeriod,
+        PopupVisibility, PopupWidgetKind, ProviderKind, Settings, TimeFormat, TotalSpendPeriod,
         TotalSpendPresentation, TrayWidget,
     },
     tray::{TrayManager, TrayMenuAction},

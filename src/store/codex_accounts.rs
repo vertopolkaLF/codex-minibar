@@ -52,29 +52,116 @@ fn login_session(value: &serde_json::Value) -> Option<String> {
         .map(|at| format!("auth:{at}"))
 }
 
-pub(crate) fn identity() -> Option<Identity> {
-    let path = codex_home().join("auth.json");
-    let before = fs::metadata(&path).ok()?.modified().ok()?;
-    let value: serde_json::Value = serde_json::from_slice(&fs::read(&path).ok()?).ok()?;
-    let after = fs::metadata(&path).ok()?.modified().ok()?;
+#[derive(Debug, PartialEq, Eq)]
+enum Observation {
+    Account(Identity),
+    LoggedOut,
+    Uncertain,
+}
+
+static LAST_ID: Mutex<Option<String>> = Mutex::new(None);
+
+fn remember(id: Option<String>) {
+    if let Ok(mut last) = LAST_ID.lock() {
+        *last = id;
+    }
+}
+
+fn last_id() -> Option<String> {
+    LAST_ID.lock().ok().and_then(|last| last.clone())
+}
+
+fn observe_auth(path: &Path) -> Observation {
+    let before = match fs::metadata(path).and_then(|meta| meta.modified()) {
+        Ok(modified) => modified,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Observation::LoggedOut;
+        }
+        Err(_) => return Observation::Uncertain,
+    };
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Observation::LoggedOut;
+        }
+        Err(_) => return Observation::Uncertain,
+    };
+    let after = match fs::metadata(path).and_then(|meta| meta.modified()) {
+        Ok(modified) => modified,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Observation::LoggedOut;
+        }
+        Err(_) => return Observation::Uncertain,
+    };
     if before != after {
-        return None;
+        return Observation::Uncertain;
     }
-    let id = value.pointer("/tokens/account_id")?.as_str()?.trim();
-    if id.is_empty() {
-        return None;
-    }
-    Some(Identity {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return Observation::Uncertain;
+    };
+    let Some(id) = value
+        .pointer("/tokens/account_id")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    else {
+        return Observation::LoggedOut;
+    };
+    let Some(stamp) = after.duration_since(std::time::UNIX_EPOCH).ok() else {
+        return Observation::Uncertain;
+    };
+    Observation::Account(Identity {
         id: id.to_owned(),
-        stamp: after.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos(),
+        stamp: stamp.as_nanos(),
         session: login_session(&value),
     })
 }
 
+/// Raw observation for attribution. `None` is both logged-out and a torn
+/// `auth.json` read; callers must not treat that as a new account.
+pub(crate) fn identity() -> Option<Identity> {
+    match observe_auth(&codex_home().join("auth.json")) {
+        Observation::Account(identity) => Some(identity),
+        Observation::LoggedOut | Observation::Uncertain => None,
+    }
+}
+
 pub(crate) fn current_id() -> String {
-    identity()
-        .map(|identity| identity.id)
-        .unwrap_or_else(|| UNKNOWN.into())
+    id_from_observation(observe_auth(&codex_home().join("auth.json")))
+}
+
+/// Stable identity for the usage worker. `None` means the file was unreadably
+/// mid-update; keep the previous account instead of flashing logged-out.
+pub(crate) fn poll_identity() -> Option<String> {
+    poll_from_observation(observe_auth(&codex_home().join("auth.json")))
+}
+
+fn id_from_observation(observed: Observation) -> String {
+    match observed {
+        Observation::Account(identity) => {
+            remember(Some(identity.id.clone()));
+            identity.id
+        }
+        Observation::LoggedOut => {
+            remember(None);
+            UNKNOWN.into()
+        }
+        Observation::Uncertain => last_id().unwrap_or_else(|| UNKNOWN.into()),
+    }
+}
+
+fn poll_from_observation(observed: Observation) -> Option<String> {
+    match observed {
+        Observation::Account(identity) => {
+            remember(Some(identity.id.clone()));
+            Some(identity.id)
+        }
+        Observation::LoggedOut => {
+            remember(None);
+            Some(UNKNOWN.into())
+        }
+        Observation::Uncertain => None,
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -777,6 +864,41 @@ mod tests {
             login_session(&json!({"tokens":{"id_token":"malformed"}})),
             None
         );
+    }
+
+    #[test]
+    fn missing_or_empty_auth_is_logout_but_invalid_json_is_uncertain() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth.json");
+        assert_eq!(observe_auth(&path), Observation::LoggedOut);
+        fs::write(&path, json!({"tokens":{"account_id":"acct-a"}}).to_string()).unwrap();
+        match observe_auth(&path) {
+            Observation::Account(identity) => assert_eq!(identity.id, "acct-a"),
+            other => panic!("expected account, got {other:?}"),
+        }
+        fs::write(&path, json!({"tokens":{"account_id":"  "}}).to_string()).unwrap();
+        assert_eq!(observe_auth(&path), Observation::LoggedOut);
+        fs::write(&path, "{").unwrap();
+        assert_eq!(observe_auth(&path), Observation::Uncertain);
+    }
+
+    #[test]
+    fn sticky_id_survives_uncertain_reads_and_clears_on_logout() {
+        let account = Observation::Account(Identity {
+            id: "acct-a".into(),
+            stamp: 1,
+            session: None,
+        });
+        remember(None);
+        assert_eq!(id_from_observation(account), "acct-a");
+        assert_eq!(id_from_observation(Observation::Uncertain), "acct-a");
+        assert_eq!(poll_from_observation(Observation::Uncertain), None);
+        assert_eq!(
+            poll_from_observation(Observation::LoggedOut).as_deref(),
+            Some(UNKNOWN)
+        );
+        assert_eq!(id_from_observation(Observation::LoggedOut), UNKNOWN);
+        remember(None);
     }
 
     #[test]

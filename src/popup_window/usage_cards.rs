@@ -209,12 +209,7 @@ pub(super) fn combined_usage_donut_content(
         entries
             .iter()
             .map(|(provider, spend)| {
-                combined_usage_row(
-                    *provider,
-                    *spend,
-                    color_scheme,
-                    use_colored_provider_icons,
-                )
+                combined_usage_row(*provider, *spend, color_scheme, use_colored_provider_icons)
             })
             .collect::<Vec<_>>(),
     )
@@ -613,11 +608,7 @@ fn combined_usage_row(
             .vertical_alignment(VerticalAlignment::Center)
             .grid_column(2),
     ))
-    .columns([
-        GridLength::Auto,
-        GridLength::Star(1.0),
-        GridLength::Auto,
-    ])
+    .columns([GridLength::Auto, GridLength::Star(1.0), GridLength::Auto])
     .column_spacing(8.0)
     .rows([GridLength::Auto])
     .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -637,14 +628,9 @@ fn spend_provider_tiles(
         .iter()
         .enumerate()
         .map(|(index, (provider, spend))| {
-            spend_provider_tile(
-                *provider,
-                *spend,
-                color_scheme,
-                use_colored_provider_icons,
-            )
-            .grid_row((index / COLUMNS) as i32)
-            .grid_column((index % COLUMNS) as i32)
+            spend_provider_tile(*provider, *spend, color_scheme, use_colored_provider_icons)
+                .grid_row((index / COLUMNS) as i32)
+                .grid_column((index % COLUMNS) as i32)
         })
         .collect::<Vec<_>>();
 
@@ -681,8 +667,7 @@ fn spend_provider_tile(
                     color.g,
                     color.b
                 )),
-            body_strong(descriptor.display_name)
-                .vertical_alignment(VerticalAlignment::Center),
+            body_strong(descriptor.display_name).vertical_alignment(VerticalAlignment::Center),
         ))
         .spacing(8.0)
         .vertical_alignment(VerticalAlignment::Center),

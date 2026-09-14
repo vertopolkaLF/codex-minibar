@@ -220,9 +220,7 @@ impl ProviderStore {
     }
 
     fn ensure_column(&self, table: &str, column: &str, definition: &str) -> Result<()> {
-        let mut statement = self
-            .conn
-            .prepare(&format!("PRAGMA table_info({table})"))?;
+        let mut statement = self.conn.prepare(&format!("PRAGMA table_info({table})"))?;
         let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
         for name in rows {
             if name? == column {
@@ -248,10 +246,7 @@ impl ProviderStore {
         Ok(limits)
     }
 
-    pub(crate) fn load_pricing_catalog(
-        &self,
-        source: &str,
-    ) -> Result<Option<(String, String)>> {
+    pub(crate) fn load_pricing_catalog(&self, source: &str) -> Result<Option<(String, String)>> {
         self.conn
             .query_row(
                 "SELECT fetched_at, payload_json FROM pricing_catalog WHERE source = ?1",
@@ -844,10 +839,7 @@ impl ProviderStore {
             ProviderKind::Codex,
             &aggregate_codex_daily(cache, CACHE_RETENTION_DAYS as u16),
         )?;
-        self.replace_usage_model_daily(
-            ProviderKind::Codex,
-            &aggregate_codex_model_daily(cache),
-        )?;
+        self.replace_usage_model_daily(ProviderKind::Codex, &aggregate_codex_model_daily(cache))?;
         Ok(())
     }
 
@@ -1123,9 +1115,7 @@ impl ProviderStore {
         // Claude (and any other event-scanned provider) never writes
         // usage_file_daily — only usage_events + rolled-up usage_daily.
         // Counting files there always returned 0 while spend was real.
-        let start_ts = start_of_local_day(start)
-            .with_timezone(&Utc)
-            .to_rfc3339();
+        let start_ts = start_of_local_day(start).with_timezone(&Utc).to_rfc3339();
         let end_ts = start_of_local_day(end + Duration::days(1))
             .with_timezone(&Utc)
             .to_rfc3339();
@@ -1426,9 +1416,8 @@ fn delete_stale_file_rows(
     }
 
     let existing_models = {
-        let mut statement = tx.prepare(
-            "SELECT path, date, model FROM usage_file_model_daily WHERE provider = ?1",
-        )?;
+        let mut statement =
+            tx.prepare("SELECT path, date, model FROM usage_file_model_daily WHERE provider = ?1")?;
         let rows = statement.query_map(params![provider], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -1551,10 +1540,7 @@ fn aggregate_codex_model_daily(cache: &UsageCache) -> Vec<(String, NaiveDate, To
 fn aggregate_claude_model_daily(cache: &ClaudeUsageCache) -> Vec<(String, NaiveDate, TokenUsage)> {
     let mut merged = BTreeMap::<(String, NaiveDate), TokenUsage>::new();
     for entry in crate::usage::deduplicate_claude_entries(cache) {
-        let model = entry
-            .model
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
+        let model = entry.model.clone().unwrap_or_else(|| "unknown".to_string());
         let date = entry.timestamp.with_timezone(&Local).date_naive();
         merged.entry((model, date)).or_default().add(&entry.usage);
     }
@@ -1793,12 +1779,19 @@ mod tests {
 
         store.clear_usage_data().unwrap();
 
-        assert!(store
-            .load_usage_daily(ProviderKind::Cursor, 30)
-            .unwrap()
-            .daily
-            .is_empty());
-        assert!(store.usage_fetched_at(ProviderKind::Cursor).unwrap().is_none());
+        assert!(
+            store
+                .load_usage_daily(ProviderKind::Cursor, 30)
+                .unwrap()
+                .daily
+                .is_empty()
+        );
+        assert!(
+            store
+                .usage_fetched_at(ProviderKind::Cursor)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

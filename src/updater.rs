@@ -85,10 +85,9 @@ pub fn open_release_notes() -> Result<()> {
 /// Shows a one-shot success toast after an in-place update relaunch.
 pub fn show_post_update_success_if_needed() {
     match take_post_update_success_marker() {
-        Ok(Some(version)) => notifications::show(
-            "Update complete",
-            &format!("Now running {version}."),
-        ),
+        Ok(Some(version)) => {
+            notifications::show("Update complete", &format!("Now running {version}."))
+        }
         Ok(None) => {}
         Err(error) => eprintln!("failed to read post-update marker: {error:#}"),
     }
@@ -578,10 +577,7 @@ fn open_shell_target(target: &std::ffi::OsStr, description: &str) -> Result<()> 
             .encode_wide()
             .chain(std::iter::once(0))
             .collect();
-        let target: Vec<u16> = target
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
+        let target: Vec<u16> = target.encode_wide().chain(std::iter::once(0)).collect();
         let result = unsafe {
             ShellExecuteW(
                 std::ptr::null_mut(),

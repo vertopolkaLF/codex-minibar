@@ -132,10 +132,7 @@ impl AppState {
             .unwrap_or_default()
     }
 
-    pub(super) fn replace_forced_resets(
-        &self,
-        resets: Vec<crate::reset_feed::ForcedReset>,
-    ) {
+    pub(super) fn replace_forced_resets(&self, resets: Vec<crate::reset_feed::ForcedReset>) {
         if let Ok(mut current) = self.forced_resets.lock() {
             *current = resets;
         }
@@ -148,14 +145,16 @@ impl AppState {
         let Some(worker) = worker.as_ref() else {
             return;
         };
-        let _ = worker.commands.send(crate::reset_feed::ResetFeedCommand::SetEnabled(
-            settings.notifications.forced_reset_feed_enabled,
-        ));
-        let _ = worker.commands.send(
-            crate::reset_feed::ResetFeedCommand::SetRefreshInterval(Duration::from_secs(
-                settings.reset_announcement_refresh_interval.seconds(),
-            )),
-        );
+        let _ = worker
+            .commands
+            .send(crate::reset_feed::ResetFeedCommand::SetEnabled(
+                settings.notifications.forced_reset_feed_enabled,
+            ));
+        let _ = worker
+            .commands
+            .send(crate::reset_feed::ResetFeedCommand::SetRefreshInterval(
+                Duration::from_secs(settings.reset_announcement_refresh_interval.seconds()),
+            ));
     }
 
     pub(super) fn mark_forced_reset_info_notified(&self, id: String) {

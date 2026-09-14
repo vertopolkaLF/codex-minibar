@@ -576,11 +576,7 @@ pub fn height_for(error: Option<&str>) -> i32 {
 }
 
 fn minimum_popup_height_dip() -> i32 {
-    BODY_PAD_Y
-        + LIMIT_CARD_HEIGHT * 2
-        + BODY_SPACING
-        + footer_height_dip()
-        + CHROME_HEIGHT
+    BODY_PAD_Y + LIMIT_CARD_HEIGHT * 2 + BODY_SPACING + footer_height_dip() + CHROME_HEIGHT
 }
 
 fn info_bar_height(message: &str) -> i32 {

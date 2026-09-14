@@ -25,8 +25,7 @@ use crate::{
 };
 
 const PLUGIN_FILE_NAME: &str = "com.vertopolkalf.codex-minibar.streamDeckPlugin";
-const PLUGIN_DOWNLOAD_URL: &str =
-    "https://raw.githubusercontent.com/vertopolkaLF/codex-minibar/main/data/com.vertopolkalf.codex-minibar.streamDeckPlugin";
+const PLUGIN_DOWNLOAD_URL: &str = "https://raw.githubusercontent.com/vertopolkaLF/codex-minibar/main/data/com.vertopolkalf.codex-minibar.streamDeckPlugin";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InstallPhase {
@@ -338,7 +337,8 @@ fn build_catalog(state: &AppState) -> Vec<ProviderInfo> {
                 })
                 .collect::<Vec<_>>();
             for additional in &live_limits.additional_limits {
-                let metric_id = provider_registry::additional_limit_brick_id(provider, &additional.id);
+                let metric_id =
+                    provider_registry::additional_limit_brick_id(provider, &additional.id);
                 if metrics.iter().all(|metric| metric.id != metric_id) {
                     metrics.push(MetricInfo {
                         id: metric_id,

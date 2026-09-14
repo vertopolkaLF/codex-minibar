@@ -62,10 +62,7 @@ fn acrylic_xaml() -> String {
 /// radius on this element is important: the popup HWND is region-clipped and
 /// must not reveal square Mica corners while it slides in.
 fn mica_xaml() -> String {
-    mica_xaml_with_radius_and_overlay(
-        SETTINGS_MICA_CORNER_RADIUS_DIP,
-        mica_dimming_color(),
-    )
+    mica_xaml_with_radius_and_overlay(SETTINGS_MICA_CORNER_RADIUS_DIP, mica_dimming_color())
 }
 
 fn mica_xaml_with_radius(radius_dip: i32) -> String {

@@ -366,9 +366,7 @@ mod tests {
     #[test]
     fn named_secondary_limit_is_used_in_low_usage_label() {
         let limits = RateLimits {
-            secondary_limit_name: Some(
-                "Cursor Models".into(),
-            ),
+            secondary_limit_name: Some("Cursor Models".into()),
             ..Default::default()
         };
 

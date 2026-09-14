@@ -936,19 +936,23 @@ fn try_universal_prop(handle: &Handle, prop: Prop, value: &PropValue) -> Result<
             Ok(true)
         }
         (Prop::TranslationX, PropValue::F64(v)) => {
-            handle.as_ui_element().SetTranslation(windows_numerics::Vector3 {
-                x: *v as f32,
-                y: 0.0,
-                z: 0.0,
-            })?;
+            handle
+                .as_ui_element()
+                .SetTranslation(windows_numerics::Vector3 {
+                    x: *v as f32,
+                    y: 0.0,
+                    z: 0.0,
+                })?;
             Ok(true)
         }
         (Prop::TranslationX, PropValue::Unset) => {
-            handle.as_ui_element().SetTranslation(windows_numerics::Vector3 {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
-            })?;
+            handle
+                .as_ui_element()
+                .SetTranslation(windows_numerics::Vector3 {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                })?;
             Ok(true)
         }
         (Prop::AllowDrop, PropValue::Bool(v)) => {
@@ -3014,7 +3018,9 @@ impl Backend for WinUIBackend {
             })();
             diag::dropped(result);
         }
-        self.tooltips.borrow_mut().insert(id, (host, tooltip.clone()));
+        self.tooltips
+            .borrow_mut()
+            .insert(id, (host, tooltip.clone()));
     }
 
     fn set_pointer_handlers(&mut self, id: ControlId, handlers: Option<&PointerHandlers>) {
@@ -3578,10 +3584,10 @@ fn mount_static_tooltip_element(el: &Element) -> Option<bindings::UIElement> {
             let i = bindings::Image::new().ok()?;
             match &img.source {
                 ImageSource::Uri(uri_str) => {
-                    if let Ok(uri) = bindings::Uri::CreateUri(uri_str.as_str())
-                    {
+                    if let Ok(uri) = bindings::Uri::CreateUri(uri_str.as_str()) {
                         if is_svg_uri(uri_str) {
-                            if let Ok(svg) = bindings::SvgImageSource::CreateInstanceWithUriSource(&uri)
+                            if let Ok(svg) =
+                                bindings::SvgImageSource::CreateInstanceWithUriSource(&uri)
                                 && let Ok(src) = svg.cast::<bindings::ImageSource>()
                             {
                                 diag::dropped(i.SetSource(&src));
