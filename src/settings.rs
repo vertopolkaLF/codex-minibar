@@ -3487,10 +3487,10 @@ tray_widgets = []
             let parsed: TimeFormat = toml::Value::String(raw.into()).try_into().unwrap();
             assert_eq!(parsed, expected);
         }
-        assert_eq!(
-            toml::to_string(&TimeFormat::Hour24).unwrap().trim(),
-            "\"hour_24\""
-        );
+        // toml 0.9 refuses to emit a bare value as a document; round-trip the
+        // rename through Value instead of toml::to_string(&enum).
+        let encoded = toml::Value::try_from(TimeFormat::Hour24).unwrap();
+        assert_eq!(encoded.as_str(), Some("hour_24"));
     }
 
     #[test]

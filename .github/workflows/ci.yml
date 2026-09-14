@@ -11,7 +11,10 @@ jobs:
   quality:
     name: Format, lint, and test
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
+    env:
+      # Large git dep (windows-rs); CLI fetch is less likely to sit silent for minutes.
+      CARGO_NET_GIT_FETCH_WITH_CLI: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -19,9 +22,14 @@ jobs:
           toolchain: 1.95.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Previous runs failed and skipped cache, so every CI recloned windows-rs.
+          cache-on-failure: true
       - name: Check formatting
         # Skip path crate `.vendor` (upstream windows-reactor). `--all` formats local path deps.
         run: cargo fmt --package codex-minibar --check
+      - name: Fetch dependencies
+        run: cargo fetch --locked
       - name: Lint
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - name: Test

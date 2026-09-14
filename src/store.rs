@@ -1166,7 +1166,14 @@ impl ProviderStore {
                     requests=excluded.requests,
                     estimated_cost_microusd=excluded.estimated_cost_microusd,
                     priced_requests=excluded.priced_requests,
-                    cache_savings_microusd=excluded.cache_savings_microusd",
+                    cache_savings_microusd=excluded.cache_savings_microusd
+                 WHERE input_tokens IS NOT excluded.input_tokens
+                    OR cached_input_tokens IS NOT excluded.cached_input_tokens
+                    OR output_tokens IS NOT excluded.output_tokens
+                    OR requests IS NOT excluded.requests
+                    OR estimated_cost_microusd IS NOT excluded.estimated_cost_microusd
+                    OR priced_requests IS NOT excluded.priced_requests
+                    OR cache_savings_microusd IS NOT excluded.cache_savings_microusd",
             )?;
             for (model, date, usage) in rows {
                 retained.insert((date.to_string(), model.clone()));

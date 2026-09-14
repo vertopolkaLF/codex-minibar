@@ -896,8 +896,13 @@ mod tests {
         ];
         assert!(cache.needs_refresh(&changed_schedule));
 
-        cache.checked_at = Some(Instant::now() - PROFILE_REFRESH_INTERVAL);
-        assert!(cache.needs_refresh(&schedule));
+        // Instant::now() - 30min panics on Windows when uptime is shorter
+        // (GitHub Actions runners). Skip the elapsed path in that case; the
+        // reset-schedule change above already covers needs_refresh == true.
+        if let Some(stale) = Instant::now().checked_sub(PROFILE_REFRESH_INTERVAL) {
+            cache.checked_at = Some(stale);
+            assert!(cache.needs_refresh(&schedule));
+        }
     }
 
     #[test]
