@@ -16,7 +16,7 @@ jobs:
       # Large git dep (windows-rs); CLI fetch is less likely to sit silent for minutes.
       CARGO_NET_GIT_FETCH_WITH_CLI: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.95.0
