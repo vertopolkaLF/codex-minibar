@@ -494,7 +494,7 @@ pub fn render(
     let (antigravity_install_status, set_antigravity_install_status) =
         cx.use_async_state(ProviderInstallStatus::checking());
     let (grok_install_status, set_grok_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking());
+        cx.use_async_state(ProviderInstallStatus::checking_cli());
     let status_codex_path = codex_path.clone();
     let status_claude_path = claude_path.clone();
     let status_cursor_path = cursor_path.clone();
@@ -509,7 +509,7 @@ pub fn render(
             set_opencode_go_install_status.call(ProviderInstallStatus::checking());
             set_openrouter_install_status.call(ProviderInstallStatus::checking());
             set_antigravity_install_status.call(ProviderInstallStatus::checking());
-            set_grok_install_status.call(ProviderInstallStatus::checking());
+            set_grok_install_status.call(ProviderInstallStatus::checking_cli());
             let codex_status = set_codex_install_status.clone();
             let claude_status = set_claude_install_status.clone();
             let cursor_status = set_cursor_install_status.clone();

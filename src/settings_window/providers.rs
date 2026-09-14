@@ -11,6 +11,7 @@ pub(super) struct ProviderInstallStatus {
     app: Option<String>,
     cli: Option<String>,
     used: Option<ProviderInstallSource>,
+    app_applicable: bool,
     cli_applicable: bool,
     checking: bool,
 }
@@ -27,6 +28,18 @@ impl ProviderInstallStatus {
             app: None,
             cli: None,
             used: None,
+            app_applicable: true,
+            cli_applicable: true,
+            checking: true,
+        }
+    }
+
+    pub(super) fn checking_cli() -> Self {
+        Self {
+            app: None,
+            cli: None,
+            used: None,
+            app_applicable: false,
             cli_applicable: true,
             checking: true,
         }
@@ -104,6 +117,7 @@ pub(super) fn provider_install_status(
         app,
         cli,
         used,
+        app_applicable: provider != ProviderKind::Grok,
         cli_applicable: matches!(
             provider,
             ProviderKind::Codex
@@ -117,16 +131,19 @@ pub(super) fn provider_install_status(
 
 fn provider_install_status_card(status: &ProviderInstallStatus) -> Element {
     if status.checking {
-        return border(
-            text_block("Checking installed app and CLI…")
-                .font_size(12.0)
-                .opacity(0.72),
-        )
-        .padding(settings_card_padding())
-        .background(ThemeRef::SubtleFill)
-        .corner_radius(6.0)
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .into();
+        let message = if status.app_applicable && status.cli_applicable {
+            "Checking installed app and CLI…"
+        } else if status.cli_applicable {
+            "Checking CLI…"
+        } else {
+            "Checking installed app…"
+        };
+        return border(text_block(message).font_size(12.0).opacity(0.72))
+            .padding(settings_card_padding())
+            .background(ThemeRef::SubtleFill)
+            .corner_radius(6.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .into();
     }
     let status_line =
         |label: &str, path: Option<&String>, used: bool, unavailable: bool| -> Element {
@@ -156,23 +173,25 @@ fn provider_install_status_card(status: &ProviderInstallStatus) -> Element {
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .into()
         };
+    let mut lines = Vec::<Element>::new();
+    if status.app_applicable {
+        lines.push(status_line(
+            "Desktop App",
+            status.app.as_ref(),
+            status.used == Some(ProviderInstallSource::App),
+            false,
+        ));
+    }
+    lines.push(status_line(
+        "CLI",
+        status.cli.as_ref(),
+        status.used == Some(ProviderInstallSource::Cli),
+        !status.cli_applicable,
+    ));
     border(
-        vstack((
-            status_line(
-                "Desktop App",
-                status.app.as_ref(),
-                status.used == Some(ProviderInstallSource::App),
-                false,
-            ),
-            status_line(
-                "CLI",
-                status.cli.as_ref(),
-                status.used == Some(ProviderInstallSource::Cli),
-                !status.cli_applicable,
-            ),
-        ))
-        .spacing(8.0)
-        .horizontal_alignment(HorizontalAlignment::Stretch),
+        vstack(lines)
+            .spacing(8.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch),
     )
     .padding(settings_card_padding())
     .background(ThemeRef::SubtleFill)
