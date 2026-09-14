@@ -47,6 +47,8 @@ pub(super) fn enabled_providers(
     opencode_zen_enabled: bool,
     opencode_go_enabled: bool,
     openrouter_enabled: bool,
+    antigravity_enabled: bool,
+    grok_enabled: bool,
 ) -> Vec<ProviderKind> {
     order
         .iter()
@@ -58,6 +60,8 @@ pub(super) fn enabled_providers(
             ProviderKind::OpenCodeZen => opencode_zen_enabled,
             ProviderKind::OpenCodeGo => opencode_go_enabled,
             ProviderKind::OpenRouter => openrouter_enabled,
+            ProviderKind::Antigravity => antigravity_enabled,
+            ProviderKind::Grok => grok_enabled,
         })
         .filter(|provider| {
             !crate::provider_registry::descriptor(*provider)

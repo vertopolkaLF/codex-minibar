@@ -86,6 +86,8 @@ pub(super) fn popup_tab_button(
         Some("cursor") => popup_provider_icon_color(ProviderKind::Cursor, color_scheme),
         Some("opencode") => popup_provider_icon_color(ProviderKind::OpenCodeZen, color_scheme),
         Some("openrouter") => popup_provider_icon_color(ProviderKind::OpenRouter, color_scheme),
+        Some("antigravity") => popup_provider_icon_color(ProviderKind::Antigravity, color_scheme),
+        Some("grok") => popup_provider_icon_color(ProviderKind::Grok, color_scheme),
         Some("fluent-chart") | Some("fluent-home") => popup_chrome_icon_color(color_scheme, false),
         _ => idle_icon_color,
     };
@@ -386,7 +388,7 @@ pub(super) fn popup_chrome_icon_color(color_scheme: ColorScheme, emphasized: boo
 fn popup_provider_icon_color(provider: ProviderKind, color_scheme: ColorScheme) -> Color {
     let (r, g, b) = match color_scheme {
         ColorScheme::Light => crate::provider_registry::light_surface_brand_rgb(provider),
-        ColorScheme::Dark => crate::provider_registry::descriptor(provider).brand_rgb,
+        ColorScheme::Dark => crate::provider_registry::dark_surface_brand_rgb(provider),
     };
     Color::rgb(r, g, b)
 }

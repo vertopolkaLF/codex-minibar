@@ -120,6 +120,11 @@ pub(super) fn start_background_bridge(
                 .settings
                 .providers
                 .is_enabled(ProviderKind::OpenRouter),
+            antigravity_enabled: state
+                .settings
+                .providers
+                .is_enabled(ProviderKind::Antigravity),
+            grok_enabled: state.settings.providers.is_enabled(ProviderKind::Grok),
             openrouter_credentials_revision: state.settings.openrouter_credentials_revision,
             popup_order: state.settings.popup_order.clone(),
             use_colored_provider_icons: state.settings.use_colored_provider_icons,
@@ -127,6 +132,8 @@ pub(super) fn start_background_bridge(
             codex_path: state.settings.codex_path.clone(),
             claude_path: state.settings.claude_path.clone(),
             cursor_path: state.settings.cursor_path.clone(),
+            antigravity_path: state.settings.antigravity_path.clone(),
+            grok_path: state.settings.grok_path.clone(),
             update_version: update_version_from_phase(&update_phase),
             ..UiState::default()
         };
@@ -168,7 +175,10 @@ pub(super) fn start_background_bridge(
                     != settings.providers.is_enabled(ProviderKind::OpenCodeZen)
                 || ui.opencode_go_enabled
                     != settings.providers.is_enabled(ProviderKind::OpenCodeGo)
-                || ui.openrouter_enabled != settings.providers.is_enabled(ProviderKind::OpenRouter);
+                || ui.openrouter_enabled != settings.providers.is_enabled(ProviderKind::OpenRouter)
+                || ui.antigravity_enabled
+                    != settings.providers.is_enabled(ProviderKind::Antigravity)
+                || ui.grok_enabled != settings.providers.is_enabled(ProviderKind::Grok);
             let opencode_zen_credentials_changed =
                 ui.opencode_zen_credentials_revision != settings.opencode_zen_credentials_revision;
             let opencode_go_credentials_changed =
@@ -198,6 +208,8 @@ pub(super) fn start_background_bridge(
             ui.opencode_zen_credentials_revision = settings.opencode_zen_credentials_revision;
             ui.opencode_go_credentials_revision = settings.opencode_go_credentials_revision;
             ui.openrouter_enabled = settings.providers.is_enabled(ProviderKind::OpenRouter);
+            ui.antigravity_enabled = settings.providers.is_enabled(ProviderKind::Antigravity);
+            ui.grok_enabled = settings.providers.is_enabled(ProviderKind::Grok);
             ui.openrouter_credentials_revision = settings.openrouter_credentials_revision;
             // Keep the previous OpenRouter snapshot visible while the worker
             // restarts. Wiping to Default made the tab go blank for the full
@@ -226,6 +238,11 @@ pub(super) fn start_background_bridge(
                 (ProviderKind::Codex, settings.codex_path != ui.codex_path),
                 (ProviderKind::Claude, settings.claude_path != ui.claude_path),
                 (ProviderKind::Cursor, settings.cursor_path != ui.cursor_path),
+                (
+                    ProviderKind::Antigravity,
+                    settings.antigravity_path != ui.antigravity_path,
+                ),
+                (ProviderKind::Grok, settings.grok_path != ui.grok_path),
                 (ProviderKind::OpenRouter, openrouter_credentials_changed),
             ]
             .into_iter()
@@ -234,6 +251,8 @@ pub(super) fn start_background_bridge(
             ui.codex_path = settings.codex_path.clone();
             ui.claude_path = settings.claude_path.clone();
             ui.cursor_path = settings.cursor_path.clone();
+            ui.antigravity_path = settings.antigravity_path.clone();
+            ui.grok_path = settings.grok_path.clone();
             if providers_changed || !restart.is_empty() {
                 let provider_errors = state.sync_provider_workers(&settings, &restart);
                 for (provider, error) in provider_errors {
@@ -295,6 +314,7 @@ pub(super) fn start_background_bridge(
                 ));
                 let _ = commands.send(WorkerCommand::SetUsageCollectionEnabled(
                     settings.usage_stats_enabled
+                        && crate::provider_registry::supports_usage_stats(provider)
                         && settings.usage_stats_provider_enabled(provider),
                 ));
                 if (provider == ProviderKind::OpenCodeZen && opencode_zen_credentials_changed)
@@ -548,6 +568,8 @@ pub(super) fn start_background_bridge(
                         || (provider == ProviderKind::OpenCodeZen && !ui.opencode_zen_enabled)
                         || (provider == ProviderKind::OpenCodeGo && !ui.opencode_go_enabled)
                         || (provider == ProviderKind::OpenRouter && !ui.openrouter_enabled)
+                        || (provider == ProviderKind::Antigravity && !ui.antigravity_enabled)
+                        || (provider == ProviderKind::Grok && !ui.grok_enabled)
                     {
                         continue;
                     }
@@ -605,6 +627,8 @@ pub(super) fn start_background_bridge(
                         || (provider == ProviderKind::OpenCodeZen && !ui.opencode_zen_enabled)
                         || (provider == ProviderKind::OpenCodeGo && !ui.opencode_go_enabled)
                         || (provider == ProviderKind::OpenRouter && !ui.openrouter_enabled)
+                        || (provider == ProviderKind::Antigravity && !ui.antigravity_enabled)
+                        || (provider == ProviderKind::Grok && !ui.grok_enabled)
                     {
                         continue;
                     }

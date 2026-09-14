@@ -139,6 +139,44 @@ pub fn start_provider_worker(
                 && settings.usage_stats_provider_enabled(provider),
             Duration::from_secs(settings.limit_refresh_interval.seconds()),
         ),
+        ProviderKind::Antigravity => {
+            let executable = crate::antigravity::cli_available(settings.antigravity_path.as_deref());
+            if let Some(executable) = &executable {
+                crate::logger::info(format!("Antigravity executable: {}", executable.display()));
+            }
+            worker::start_worker(
+            crate::antigravity::AntigravityClient::new(settings.antigravity_path.clone()),
+            crate::antigravity::AntigravityClient::new(settings.antigravity_path.clone()),
+            crate::antigravity::AntigravityActivator,
+            activation_path,
+            false,
+            Vec::new(),
+            Vec::new(),
+            settings.history_retention_days,
+            Duration::from_secs(settings.usage_refresh_interval.seconds()),
+            false,
+            Duration::from_secs(settings.limit_refresh_interval.seconds()),
+        )
+        }
+        ProviderKind::Grok => {
+            let executable = crate::grok::cli_available(settings.grok_path.as_deref());
+            if let Some(executable) = &executable {
+                crate::logger::info(format!("Grok executable: {}", executable.display()));
+            }
+            worker::start_worker(
+            crate::grok::GrokClient::new(settings.grok_path.clone()),
+            crate::grok::GrokClient::new(settings.grok_path.clone()),
+            crate::grok::GrokActivator,
+            activation_path,
+            false,
+            Vec::new(),
+            Vec::new(),
+            settings.history_retention_days,
+            Duration::from_secs(settings.usage_refresh_interval.seconds()),
+            false,
+            Duration::from_secs(settings.limit_refresh_interval.seconds()),
+        )
+        }
     };
     let source_events = worker
         .take_events()
@@ -234,5 +272,7 @@ fn provider_activation_path(provider: ProviderKind, base_path: PathBuf) -> PathB
         ProviderKind::OpenCodeZen => base_path.with_file_name("activation-opencode-zen.toml"),
         ProviderKind::OpenCodeGo => base_path.with_file_name("activation-opencode-go.toml"),
         ProviderKind::OpenRouter => base_path.with_file_name("activation-openrouter.toml"),
+        ProviderKind::Antigravity => base_path.with_file_name("activation-antigravity.toml"),
+        ProviderKind::Grok => base_path.with_file_name("activation-grok.toml"),
     }
 }

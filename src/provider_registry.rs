@@ -115,6 +115,25 @@ const OPENROUTER_METRICS: &[MetricDescriptor] = &[MetricDescriptor {
     source: MetricSource::Primary,
 }];
 
+const ANTIGRAVITY_METRICS: &[MetricDescriptor] = &[
+    MetricDescriptor {
+        id: "antigravity.gemini",
+        label: "Gemini",
+        source: MetricSource::Primary,
+    },
+    MetricDescriptor {
+        id: "antigravity.thirdParty",
+        label: "Claude + GPT",
+        source: MetricSource::Secondary,
+    },
+];
+
+const GROK_METRICS: &[MetricDescriptor] = &[MetricDescriptor {
+    id: "grok.credits",
+    label: "Credits",
+    source: MetricSource::Primary,
+}];
+
 pub const PROVIDERS: &[ProviderDescriptor] = &[
     ProviderDescriptor {
         kind: ProviderKind::Codex,
@@ -186,6 +205,28 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         metrics: OPENROUTER_METRICS,
         default_tray_metrics: &["openrouter.limit"],
     },
+    ProviderDescriptor {
+        kind: ProviderKind::Antigravity,
+        id: "antigravity",
+        display_name: "Antigravity",
+        icon: "antigravity",
+        brand_rgb: (66, 133, 244),
+        supports_activation: false,
+        include_in_total_spend: false,
+        metrics: ANTIGRAVITY_METRICS,
+        default_tray_metrics: &["antigravity.gemini", "antigravity.thirdParty"],
+    },
+    ProviderDescriptor {
+        kind: ProviderKind::Grok,
+        id: "grok",
+        display_name: "Grok",
+        icon: "grok",
+        brand_rgb: (92, 92, 92),
+        supports_activation: false,
+        include_in_total_spend: false,
+        metrics: GROK_METRICS,
+        default_tray_metrics: &["grok.credits"],
+    },
 ];
 
 pub fn descriptor(provider: ProviderKind) -> &'static ProviderDescriptor {
@@ -207,6 +248,19 @@ pub fn light_surface_brand_rgb(provider: ProviderKind) -> (u8, u8, u8) {
         ProviderKind::Cursor => (51, 51, 51),
         ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => (77, 77, 77),
         ProviderKind::OpenRouter => (118, 36, 244),
+        ProviderKind::Antigravity => (32, 96, 205),
+        ProviderKind::Grok => (51, 51, 51),
+    }
+}
+
+/// Brand colors used by small provider icons on the dark popup cards.
+///
+/// Cursor and Grok marks are monochrome: full white on dark chrome, near-black
+/// on light cards via [`light_surface_brand_rgb`].
+pub fn dark_surface_brand_rgb(provider: ProviderKind) -> (u8, u8, u8) {
+    match provider {
+        ProviderKind::Cursor | ProviderKind::Grok => (255, 255, 255),
+        _ => descriptor(provider).brand_rgb,
     }
 }
 
@@ -253,17 +307,26 @@ pub fn spending_brick_id(provider: ProviderKind) -> String {
 
 /// Whether this provider can expose banked reset credits in the popup.
 pub fn supports_banked_resets(provider: ProviderKind) -> bool {
-    !matches!(provider, ProviderKind::Cursor | ProviderKind::OpenRouter)
+    !matches!(
+        provider,
+        ProviderKind::Cursor
+            | ProviderKind::OpenRouter
+            | ProviderKind::Antigravity
+            | ProviderKind::Grok
+    )
 }
 
 /// Whether this provider can expose a credits card in the popup.
 pub fn supports_credits(provider: ProviderKind) -> bool {
-    !matches!(provider, ProviderKind::OpenRouter)
+    !matches!(
+        provider,
+        ProviderKind::OpenRouter | ProviderKind::Antigravity | ProviderKind::Grok
+    )
 }
 
 /// Whether this provider can expose local usage statistics in the popup.
-pub fn supports_usage_stats(_provider: ProviderKind) -> bool {
-    true
+pub fn supports_usage_stats(provider: ProviderKind) -> bool {
+    !matches!(provider, ProviderKind::Antigravity | ProviderKind::Grok)
 }
 
 /// Whether this provider exposes OpenRouter-style spending strips.
@@ -639,6 +702,12 @@ mod tests {
         assert!(!descriptor(ProviderKind::OpenCodeGo).supports_activation);
         assert!(!descriptor(ProviderKind::OpenRouter).supports_activation);
         assert!(descriptor(ProviderKind::OpenRouter).include_in_total_spend);
+        assert!(!descriptor(ProviderKind::Antigravity).supports_activation);
+        assert!(!descriptor(ProviderKind::Grok).supports_activation);
+        assert!(!descriptor(ProviderKind::Antigravity).include_in_total_spend);
+        assert!(!descriptor(ProviderKind::Grok).include_in_total_spend);
+        assert!(!supports_usage_stats(ProviderKind::Antigravity));
+        assert!(!supports_usage_stats(ProviderKind::Grok));
     }
 
     #[test]

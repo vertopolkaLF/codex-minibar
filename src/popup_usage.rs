@@ -573,13 +573,18 @@ fn usage_share_color(provider: ProviderKind, color_scheme: ColorScheme) -> Color
         ProviderKind::Claude => Color::rgb(217, 119, 87),
         ProviderKind::Cursor => match color_scheme {
             ColorScheme::Light => Color::rgb(18, 18, 18),
-            ColorScheme::Dark => Color::rgb(230, 230, 230),
+            ColorScheme::Dark => Color::rgb(255, 255, 255),
         },
         ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => match color_scheme {
             ColorScheme::Light => Color::rgb(75, 75, 75),
             ColorScheme::Dark => Color::rgb(205, 205, 205),
         },
         ProviderKind::OpenRouter => Color::rgb(200, 255, 0),
+        ProviderKind::Antigravity => Color::rgb(66, 133, 244),
+        ProviderKind::Grok => match color_scheme {
+            ColorScheme::Light => Color::rgb(51, 51, 51),
+            ColorScheme::Dark => Color::rgb(255, 255, 255),
+        },
     }
 }
 
@@ -1265,7 +1270,7 @@ fn start_of_local_day(date: NaiveDate) -> DateTime<Local> {
 fn series_color(provider: ProviderKind, color_scheme: ColorScheme) -> Color {
     match provider {
         ProviderKind::Cursor => match color_scheme {
-            ColorScheme::Dark => Color::rgb(236, 236, 236),
+            ColorScheme::Dark => Color::rgb(255, 255, 255),
             ColorScheme::Light => Color::rgb(28, 28, 28),
         },
         ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => match color_scheme {
@@ -2058,7 +2063,7 @@ fn provider_brand_color(
     }
     let (r, g, b) = match color_scheme {
         ColorScheme::Light => provider_registry::light_surface_brand_rgb(provider),
-        ColorScheme::Dark => provider_registry::descriptor(provider).brand_rgb,
+        ColorScheme::Dark => provider_registry::dark_surface_brand_rgb(provider),
     };
     Color::rgb(r, g, b)
 }

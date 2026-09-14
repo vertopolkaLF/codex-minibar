@@ -478,7 +478,12 @@ fn run_usage_task(
     }
     let mut next_refresh = Instant::now();
     while !limits_ready.load(Ordering::Acquire) || !usage_collection_enabled {
-        match commands.recv_timeout(Duration::from_millis(100)) {
+        let command = if usage_collection_enabled {
+            commands.recv_timeout(Duration::from_millis(100))
+        } else {
+            commands.recv().map_err(|_| RecvTimeoutError::Disconnected)
+        };
+        match command {
             Ok(WorkerCommand::Shutdown) | Err(RecvTimeoutError::Disconnected) => return,
             Ok(WorkerCommand::SetUsageCollectionEnabled(enabled)) => {
                 if enabled && !usage_collection_enabled {
@@ -533,8 +538,8 @@ fn run_usage_task(
     let mut paused_after_clear = None::<u64>;
     loop {
         if !usage_collection_enabled {
-            match commands.recv_timeout(Duration::from_millis(100)) {
-                Ok(WorkerCommand::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
+            match commands.recv() {
+                Ok(WorkerCommand::Shutdown) | Err(_) => break,
                 Ok(WorkerCommand::SetUsageCollectionEnabled(true)) => {
                     usage_collection_enabled = true;
                     if let Ok(usage) = provider.load_cached_usage_statistics(history_retention_days)
@@ -566,7 +571,7 @@ fn run_usage_task(
                     ));
                     let _ = events.send(WorkerEvent::UsageDataCleared(generation));
                 }
-                Ok(_) | Err(RecvTimeoutError::Timeout) => {}
+                Ok(_) => {}
             }
             continue;
         }
