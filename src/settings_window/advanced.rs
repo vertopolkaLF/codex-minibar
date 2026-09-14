@@ -23,6 +23,8 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let set_codex_path = ctx.set_codex_path.clone();
     let set_claude_path = ctx.set_claude_path.clone();
     let set_cursor_path = ctx.set_cursor_path.clone();
+    let set_antigravity_path = ctx.set_antigravity_path.clone();
+    let set_grok_path = ctx.set_grok_path.clone();
     let set_popup_order = ctx.set_popup_order.clone();
     let set_use_colored_provider_icons = ctx.set_use_colored_provider_icons.clone();
     let set_use_colored_sidebar_icons = ctx.set_use_colored_sidebar_icons.clone();
@@ -84,6 +86,8 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
         codex_path: set_codex_path,
         claude_path: set_claude_path,
         cursor_path: set_cursor_path,
+        antigravity_path: set_antigravity_path,
+        grok_path: set_grok_path,
         popup_order: set_popup_order,
         use_colored_provider_icons: set_use_colored_provider_icons,
         use_colored_sidebar_icons: set_use_colored_sidebar_icons,

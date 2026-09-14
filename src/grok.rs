@@ -1,6 +1,10 @@
 //! SuperGrok subscription quota from the official Grok CLI login.
 
-use std::{env, fs, path::PathBuf, time::Duration};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
@@ -19,30 +23,46 @@ const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=cre
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const OIDC_SCOPE_PREFIX: &str = "https://auth.x.ai::";
 const LEGACY_SCOPE: &str = "https://accounts.x.ai/sign-in";
+const CLI_NAMES: &[&str] = &["grok.exe", "grok.cmd", "grok.ps1", "grok.bat"];
 
 pub struct GrokClient {
     agent: ureq::Agent,
+    cli_folder: Option<PathBuf>,
 }
 
 pub struct GrokActivator;
 
 impl GrokClient {
-    pub fn new() -> Self {
+    pub fn new(cli_folder: Option<PathBuf>) -> Self {
         Self {
             agent: ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build(),
+            cli_folder,
         }
+    }
+
+    fn fresh_credentials(&self) -> Result<GrokCredentials> {
+        recover_stale_credentials(load_credentials()?, || {
+            provider_cli::refresh_session(
+                "Grok",
+                &cli_candidates(self.cli_folder.as_deref()),
+                &["models"],
+                REQUEST_TIMEOUT,
+            )
+            .map_err(|_| anyhow::anyhow!("Grok session expired; run `grok login` to refresh it"))?;
+            load_credentials()
+        })
     }
 }
 
 impl Default for GrokClient {
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }
 
 impl LimitProvider for GrokClient {
     fn read_limits(&mut self) -> Result<RateLimits> {
-        let credentials = fresh_credentials()?;
+        let credentials = self.fresh_credentials()?;
         if credentials.is_team {
             bail!("Grok team subscription usage is not available")
         }
@@ -105,10 +125,14 @@ impl Activator for GrokActivator {
     }
 }
 
-pub fn is_installed() -> bool {
-    auth_path()
-        .and_then(|path| fs::read_to_string(path).ok())
-        .is_some_and(|raw| parse_credentials(&raw).is_ok())
+pub fn is_installed(explicit: Option<&Path>) -> bool {
+    signed_in() || cli_available(explicit).is_some()
+}
+
+/// Resolves a Grok CLI launcher. An explicit folder is searched first; a file
+/// path remains supported so a copied binary still counts.
+pub fn cli_available(explicit: Option<&Path>) -> Option<PathBuf> {
+    cli_candidates(explicit).into_iter().next()
 }
 
 fn auth_path() -> Option<PathBuf> {
@@ -118,19 +142,29 @@ fn auth_path() -> Option<PathBuf> {
     BaseDirs::new().map(|dirs| dirs.home_dir().join(".grok/auth.json"))
 }
 
+fn signed_in() -> bool {
+    auth_path()
+        .and_then(|path| fs::read_to_string(path).ok())
+        .is_some_and(|raw| parse_credentials(&raw).is_ok())
+}
+
+fn grok_home_cli() -> Option<PathBuf> {
+    if let Some(root) = env::var_os("GROK_HOME") {
+        Some(PathBuf::from(root).join("bin/grok.exe"))
+    } else {
+        BaseDirs::new().map(|dirs| dirs.home_dir().join(".grok/bin/grok.exe"))
+    }
+}
+
+fn cli_candidates(explicit: Option<&Path>) -> Vec<PathBuf> {
+    provider_cli::candidates_from(explicit, grok_home_cli(), CLI_NAMES)
+}
+
 struct GrokCredentials {
     access_token: String,
     expires_at: Option<DateTime<Utc>>,
     email: Option<String>,
     is_team: bool,
-}
-
-fn fresh_credentials() -> Result<GrokCredentials> {
-    recover_stale_credentials(load_credentials()?, || {
-        provider_cli::refresh_session("Grok", &grok_cli_candidates(), &["models"], REQUEST_TIMEOUT)
-            .map_err(|_| anyhow::anyhow!("Grok session expired; run `grok login` to refresh it"))?;
-        load_credentials()
-    })
 }
 
 fn recover_stale_credentials(
@@ -149,16 +183,6 @@ fn recover_stale_credentials(
 
 fn session_is_stale(expires_at: Option<DateTime<Utc>>) -> bool {
     expires_at.is_some_and(|expires| expires <= Utc::now() + chrono::Duration::minutes(1))
-}
-
-fn grok_cli_candidates() -> Vec<PathBuf> {
-    let mut known = Vec::new();
-    if let Some(root) = env::var_os("GROK_HOME") {
-        known.push(PathBuf::from(root).join("bin/grok.exe"));
-    } else if let Some(dirs) = BaseDirs::new() {
-        known.push(dirs.home_dir().join(".grok/bin/grok.exe"));
-    }
-    provider_cli::executable_candidates(&known, &["grok.exe"])
 }
 
 fn load_credentials() -> Result<GrokCredentials> {
@@ -410,5 +434,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed.resets_at, parse_timestamp("2026-10-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn prefers_an_explicit_cli_folder() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("grok.exe");
+        fs::write(&executable, b"fixture").unwrap();
+
+        assert_eq!(
+            cli_available(Some(directory.path())),
+            Some(fs::canonicalize(executable).unwrap())
+        );
     }
 }

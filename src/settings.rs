@@ -10,7 +10,7 @@ use chrono::{DateTime, Local, Timelike};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 37;
+pub const SETTINGS_VERSION: u32 = 38;
 
 /// 255 until `TimeFormat::apply` runs so first paint can still follow Windows.
 static TIME_FORMAT: AtomicU8 = AtomicU8::new(u8::MAX);
@@ -1679,6 +1679,12 @@ pub struct Settings {
     /// Optional explicit Cursor desktop-app launcher. When unset, discovery
     /// continues to inspect the normal installation and profile locations.
     pub cursor_path: Option<PathBuf>,
+    /// Optional explicit agy CLI folder. When unset, discovery continues to
+    /// search PATH and the normal Antigravity install locations.
+    pub antigravity_path: Option<PathBuf>,
+    /// Optional explicit Grok CLI folder. When unset, discovery continues to
+    /// search PATH and the normal Grok home locations.
+    pub grok_path: Option<PathBuf>,
     /// Non-secret revisions used to make manual OpenCode key changes refresh
     /// already-running workers immediately. The key material lives in the
     /// protected secrets store, never in this file.
@@ -1737,6 +1743,8 @@ impl Default for Settings {
             codex_path: None,
             claude_path: None,
             cursor_path: None,
+            antigravity_path: None,
+            grok_path: None,
             opencode_zen_credentials_revision: 0,
             opencode_go_credentials_revision: 0,
             openrouter_credentials_revision: 0,
@@ -2963,6 +2971,15 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     .or_insert_with(|| toml::Value::Array(Vec::new()));
                 root.insert("version".into(), toml::Value::Integer(37));
                 version = 37;
+            }
+            37 => {
+                // Antigravity and Grok CLI folders are optional. Missing values
+                // retain automatic discovery for existing installations.
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .insert("version".into(), toml::Value::Integer(38));
+                version = 38;
             }
             // Unknown future/gap versions: stamp current and keep decoding with
             // serde defaults rather than refusing to start.

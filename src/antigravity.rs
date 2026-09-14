@@ -1,6 +1,11 @@
 //! Antigravity subscription quota using the official `agy` Windows session.
 
-use std::{collections::HashMap, env, path::PathBuf, time::Duration};
+use std::{
+    collections::HashMap,
+    env,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -17,30 +22,48 @@ use crate::{
 const CREDENTIAL_TARGET: &str = "gemini:antigravity";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const API_BASE: &str = "https://cloudcode-pa.googleapis.com";
+const CLI_NAMES: &[&str] = &["agy.exe", "agy.cmd", "agy.ps1", "agy.bat"];
 
 pub struct AntigravityClient {
     agent: ureq::Agent,
+    cli_folder: Option<PathBuf>,
 }
 
 pub struct AntigravityActivator;
 
 impl AntigravityClient {
-    pub fn new() -> Self {
+    pub fn new(cli_folder: Option<PathBuf>) -> Self {
         Self {
             agent: ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build(),
+            cli_folder,
         }
+    }
+
+    fn fresh_session(&self) -> Result<AntigravitySession> {
+        recover_stale_session(parse_credential_blob(&credential_blob()?)?, || {
+            provider_cli::refresh_session(
+                "Antigravity",
+                &cli_candidates(self.cli_folder.as_deref()),
+                &["models"],
+                REQUEST_TIMEOUT,
+            )
+            .map_err(|_| {
+                anyhow::anyhow!("Antigravity session expired; run `agy` and sign in again")
+            })?;
+            parse_credential_blob(&credential_blob()?)
+        })
     }
 }
 
 impl Default for AntigravityClient {
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }
 
 impl LimitProvider for AntigravityClient {
     fn read_limits(&mut self) -> Result<RateLimits> {
-        let session = fresh_session()?;
+        let session = self.fresh_session()?;
         read_remote_limits(&self.agent, API_BASE, &session.access_token)
     }
 }
@@ -62,28 +85,33 @@ impl Activator for AntigravityActivator {
     }
 }
 
-pub fn is_installed() -> bool {
-    credential_blob()
-        .and_then(|blob| parse_credential_blob(&blob))
-        .is_ok()
+pub fn is_installed(explicit: Option<&Path>) -> bool {
+    signed_in() || cli_available(explicit).is_some() || desktop_app(explicit).is_some()
+}
+
+/// Resolves a standalone `agy` launcher. An explicit folder is searched first;
+/// a file path remains supported so a copied binary still counts.
+pub fn cli_available(explicit: Option<&Path>) -> Option<PathBuf> {
+    cli_candidates(explicit).into_iter().next()
+}
+
+/// Resolves the Antigravity desktop app without launching it. An explicit
+/// folder is searched first; a file path remains supported for upgrades.
+pub fn desktop_app(explicit: Option<&Path>) -> Option<PathBuf> {
+    explicit
+        .and_then(|path| {
+            if path.is_file() {
+                is_desktop_app_name(path).then(|| path.to_path_buf())
+            } else {
+                desktop_app_in(path)
+            }
+        })
+        .or_else(known_desktop_app)
 }
 
 struct AntigravitySession {
     access_token: String,
     expires_at: Option<DateTime<Utc>>,
-}
-
-fn fresh_session() -> Result<AntigravitySession> {
-    recover_stale_session(parse_credential_blob(&credential_blob()?)?, || {
-        provider_cli::refresh_session(
-            "Antigravity",
-            &antigravity_cli_candidates(),
-            &["models"],
-            REQUEST_TIMEOUT,
-        )
-        .map_err(|_| anyhow::anyhow!("Antigravity session expired; run `agy` and sign in again"))?;
-        parse_credential_blob(&credential_blob()?)
-    })
 }
 
 fn recover_stale_session(
@@ -104,12 +132,50 @@ fn session_is_stale(expires_at: Option<DateTime<Utc>>) -> bool {
     expires_at.is_some_and(|expires| expires <= Utc::now() + chrono::Duration::minutes(1))
 }
 
-fn antigravity_cli_candidates() -> Vec<PathBuf> {
+fn signed_in() -> bool {
+    credential_blob()
+        .and_then(|blob| parse_credential_blob(&blob))
+        .is_ok()
+}
+
+fn cli_candidates(explicit: Option<&Path>) -> Vec<PathBuf> {
+    let explicit = explicit.filter(|path| !(path.is_file() && is_desktop_app_name(path)));
     let mut known = Vec::new();
     if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
         known.push(PathBuf::from(local_app_data).join("agy/bin/agy.exe"));
     }
-    provider_cli::executable_candidates(&known, &["agy.exe"])
+    provider_cli::candidates_from(explicit, known, CLI_NAMES)
+}
+
+fn is_desktop_app_name(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name.eq_ignore_ascii_case("Antigravity.exe")
+                || name.eq_ignore_ascii_case("Antigravity IDE.exe")
+        })
+}
+
+fn desktop_app_in(directory: &Path) -> Option<PathBuf> {
+    [
+        directory.join("Antigravity.exe"),
+        directory.join("Antigravity IDE.exe"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
+}
+
+fn known_desktop_app() -> Option<PathBuf> {
+    let local_app_data = env::var_os("LOCALAPPDATA").map(PathBuf::from)?;
+    let programs = local_app_data.join("Programs");
+    [
+        programs.join("antigravity/Antigravity.exe"),
+        programs.join("Antigravity/Antigravity.exe"),
+        programs.join("Antigravity IDE/Antigravity IDE.exe"),
+        programs.join("Antigravity/Antigravity IDE.exe"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
 }
 
 fn parse_credential_blob(blob: &[u8]) -> Result<AntigravitySession> {
@@ -553,5 +619,20 @@ mod tests {
             }
         }));
         assert!(choose_observations(Vec::new(), observations).is_err());
+    }
+
+    #[test]
+    fn prefers_an_explicit_cli_folder_over_desktop_app_names() {
+        let directory = tempfile::tempdir().unwrap();
+        let cli = directory.path().join("agy.exe");
+        let app = directory.path().join("Antigravity.exe");
+        std::fs::write(&cli, b"cli").unwrap();
+        std::fs::write(&app, b"app").unwrap();
+
+        assert_eq!(
+            cli_available(Some(directory.path())),
+            Some(std::fs::canonicalize(&cli).unwrap())
+        );
+        assert_eq!(desktop_app(Some(directory.path())).as_deref(), Some(app.as_path()));
     }
 }

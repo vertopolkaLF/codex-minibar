@@ -13,8 +13,8 @@ pub(super) fn detected_providers(settings: &Settings) -> [bool; 8] {
         crate::openrouter::is_installed_for_accounts(&crate::openrouter::accounts_for_settings(
             settings,
         )),
-        crate::antigravity::is_installed(),
-        crate::grok::is_installed(),
+        crate::antigravity::is_installed(settings.antigravity_path.as_deref()),
+        crate::grok::is_installed(settings.grok_path.as_deref()),
     ]
 }
 

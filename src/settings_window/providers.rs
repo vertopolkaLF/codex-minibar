@@ -5,6 +5,8 @@ use super::*;
 static CODEX_PATH_SAVE_GEN: AtomicU64 = AtomicU64::new(0);
 static CLAUDE_PATH_SAVE_GEN: AtomicU64 = AtomicU64::new(0);
 static CURSOR_PATH_SAVE_GEN: AtomicU64 = AtomicU64::new(0);
+static ANTIGRAVITY_PATH_SAVE_GEN: AtomicU64 = AtomicU64::new(0);
+static GROK_PATH_SAVE_GEN: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, PartialEq)]
 pub(super) struct ProviderInstallStatus {
@@ -30,6 +32,17 @@ impl ProviderInstallStatus {
             used: None,
             app_applicable: true,
             cli_applicable: true,
+            checking: true,
+        }
+    }
+
+    pub(super) fn checking_app() -> Self {
+        Self {
+            app: None,
+            cli: None,
+            used: None,
+            app_applicable: true,
+            cli_applicable: false,
             checking: true,
         }
     }
@@ -68,8 +81,8 @@ pub(super) fn provider_install_status(
                 _ => ProviderInstallSource::Cli,
             });
             (
-                app.map(|path| path.display().to_string()),
-                cli.map(|path| path.display().to_string()),
+                app.map(display_fs_path),
+                cli.map(display_fs_path),
                 used,
             )
         }
@@ -82,15 +95,15 @@ pub(super) fn provider_install_status(
                 cli.as_ref().map(|_| ProviderInstallSource::Cli)
             };
             (
-                app.map(|path| path.display().to_string()),
-                cli.map(|path| path.display().to_string()),
+                app.as_deref().map(display_fs_path),
+                cli.as_deref().map(display_fs_path),
                 used,
             )
         }
         ProviderKind::Cursor => {
             let app = crate::cursor::installation_path(configured_folder);
             let used = app.as_ref().map(|_| ProviderInstallSource::App);
-            (app.map(|path| path.display().to_string()), None, used)
+            (app.as_deref().map(display_fs_path), None, used)
         }
         ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
             let detected = crate::opencode::is_installed(provider);
@@ -103,14 +116,26 @@ pub(super) fn provider_install_status(
             (detail, None, detected.then_some(ProviderInstallSource::App))
         }
         ProviderKind::Antigravity => {
-            let detected = crate::antigravity::is_installed();
-            let detail = detected.then(|| "Official agy Windows sign-in".into());
-            (None, detail, detected.then_some(ProviderInstallSource::Cli))
+            let app = crate::antigravity::desktop_app(configured_folder);
+            let cli = crate::antigravity::cli_available(configured_folder);
+            let used = if cli.is_some() {
+                Some(ProviderInstallSource::Cli)
+            } else {
+                app.as_ref().map(|_| ProviderInstallSource::App)
+            };
+            (
+                app.as_deref().map(display_fs_path),
+                cli.as_deref().map(display_fs_path),
+                used,
+            )
         }
         ProviderKind::Grok => {
-            let detected = crate::grok::is_installed();
-            let detail = detected.then(|| "Official Grok CLI sign-in".into());
-            (None, detail, detected.then_some(ProviderInstallSource::Cli))
+            let cli = crate::grok::cli_available(configured_folder);
+            (
+                None,
+                cli.as_deref().map(display_fs_path),
+                cli.as_ref().map(|_| ProviderInstallSource::Cli),
+            )
         }
     };
     ProviderInstallStatus {
@@ -126,6 +151,19 @@ pub(super) fn provider_install_status(
                 | ProviderKind::Grok
         ),
         checking: false,
+    }
+}
+
+/// `fs::canonicalize` on Windows prefixes `\\?\`. Keep the Settings UI on the
+/// ordinary drive-letter form the rest of the app already shows.
+fn display_fs_path(path: &std::path::Path) -> String {
+    let raw = path.display().to_string();
+    if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
+        rest.to_owned()
+    } else {
+        raw
     }
 }
 
@@ -145,49 +183,46 @@ fn provider_install_status_card(status: &ProviderInstallStatus) -> Element {
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .into();
     }
-    let status_line =
-        |label: &str, path: Option<&String>, used: bool, unavailable: bool| -> Element {
-            let mut title = Vec::<Element>::new();
-            if used {
-                title.push(
-                    crate::icons::element("check-circle-fill", 15.0, Color::rgb(65, 184, 131))
-                        .vertical_alignment(VerticalAlignment::Center),
-                );
-            }
+    let status_line = |label: &str, path: Option<&String>, used: bool| -> Element {
+        let mut title = Vec::<Element>::new();
+        if used {
             title.push(
-                text_block(format!("{label}:"))
-                    .font_size(12.0)
-                    .bold()
-                    .into(),
+                crate::icons::element("check-circle-fill", 15.0, Color::rgb(65, 184, 131))
+                    .vertical_alignment(VerticalAlignment::Center),
             );
-            let detail = if unavailable {
-                "Not applicable".into()
-            } else {
-                path.cloned().unwrap_or_else(|| "Not found".into())
-            };
-            vstack((
-                hstack(title).spacing(5.0),
-                text_block(detail).font_size(12.0).opacity(0.72).wrap(),
-            ))
-            .spacing(2.0)
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .into()
-        };
+        }
+        title.push(
+            text_block(format!("{label}:"))
+                .font_size(12.0)
+                .bold()
+                .into(),
+        );
+        vstack((
+            hstack(title).spacing(5.0),
+            text_block(path.cloned().unwrap_or_else(|| "Not found".into()))
+                .font_size(12.0)
+                .opacity(0.72)
+                .wrap(),
+        ))
+        .spacing(2.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .into()
+    };
     let mut lines = Vec::<Element>::new();
     if status.app_applicable {
         lines.push(status_line(
             "Desktop App",
             status.app.as_ref(),
             status.used == Some(ProviderInstallSource::App),
-            false,
         ));
     }
-    lines.push(status_line(
-        "CLI",
-        status.cli.as_ref(),
-        status.used == Some(ProviderInstallSource::Cli),
-        !status.cli_applicable,
-    ));
+    if status.cli_applicable {
+        lines.push(status_line(
+            "CLI",
+            status.cli.as_ref(),
+            status.used == Some(ProviderInstallSource::Cli),
+        ));
+    }
     border(
         vstack(lines)
             .spacing(8.0)
@@ -756,46 +791,93 @@ fn persist_opencode_manual_key(
 }
 
 fn persist_provider_folder(provider: ProviderKind, value: String, settings_tx: Sender<Settings>) {
-    let generation = match provider {
-        ProviderKind::Codex => &CODEX_PATH_SAVE_GEN,
-        ProviderKind::Claude => &CLAUDE_PATH_SAVE_GEN,
-        ProviderKind::Cursor => &CURSOR_PATH_SAVE_GEN,
-        ProviderKind::OpenCodeZen
-        | ProviderKind::OpenCodeGo
-        | ProviderKind::OpenRouter
-        | ProviderKind::Antigravity
-        | ProviderKind::Grok => return,
+    let Some(generation) = path_save_generation(provider) else {
+        return;
     };
     let revision = generation.fetch_add(1, Ordering::Relaxed) + 1;
     thread::spawn(move || {
         thread::sleep(Duration::from_millis(300));
-        let generation = match provider {
-            ProviderKind::Codex => &CODEX_PATH_SAVE_GEN,
-            ProviderKind::Claude => &CLAUDE_PATH_SAVE_GEN,
-            ProviderKind::Cursor => &CURSOR_PATH_SAVE_GEN,
-            ProviderKind::OpenCodeZen
-            | ProviderKind::OpenCodeGo
-            | ProviderKind::OpenRouter
-            | ProviderKind::Antigravity
-            | ProviderKind::Grok => {
-                return;
-            }
+        let Some(generation) = path_save_generation(provider) else {
+            return;
         };
         if generation.load(Ordering::Relaxed) != revision {
             return;
         }
         let folder = (!value.trim().is_empty()).then(|| PathBuf::from(value.trim()));
-        persist_update(settings_tx, move |settings| match provider {
-            ProviderKind::Codex => settings.codex_path = folder,
-            ProviderKind::Claude => settings.claude_path = folder,
-            ProviderKind::Cursor => settings.cursor_path = folder,
-            ProviderKind::OpenCodeZen
-            | ProviderKind::OpenCodeGo
-            | ProviderKind::OpenRouter
-            | ProviderKind::Antigravity
-            | ProviderKind::Grok => {}
+        persist_update(settings_tx, move |settings| {
+            assign_provider_folder(settings, provider, folder);
         });
     });
+}
+
+fn path_save_generation(provider: ProviderKind) -> Option<&'static AtomicU64> {
+    Some(match provider {
+        ProviderKind::Codex => &CODEX_PATH_SAVE_GEN,
+        ProviderKind::Claude => &CLAUDE_PATH_SAVE_GEN,
+        ProviderKind::Cursor => &CURSOR_PATH_SAVE_GEN,
+        ProviderKind::Antigravity => &ANTIGRAVITY_PATH_SAVE_GEN,
+        ProviderKind::Grok => &GROK_PATH_SAVE_GEN,
+        ProviderKind::OpenCodeZen
+        | ProviderKind::OpenCodeGo
+        | ProviderKind::OpenRouter => return None,
+    })
+}
+
+fn assign_provider_folder(
+    settings: &mut Settings,
+    provider: ProviderKind,
+    folder: Option<PathBuf>,
+) {
+    match provider {
+        ProviderKind::Codex => settings.codex_path = folder,
+        ProviderKind::Claude => settings.claude_path = folder,
+        ProviderKind::Cursor => settings.cursor_path = folder,
+        ProviderKind::Antigravity => settings.antigravity_path = folder,
+        ProviderKind::Grok => settings.grok_path = folder,
+        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo | ProviderKind::OpenRouter => {}
+    }
+}
+
+fn provider_folder_picker(
+    provider: ProviderKind,
+    path: &str,
+    placeholder: &str,
+    setter: SetState<String>,
+    settings_tx: Sender<Settings>,
+) -> Element {
+    let picker_setter = setter.clone();
+    let picker_tx = settings_tx.clone();
+    grid((
+        text_box(path)
+            .placeholder_text(placeholder)
+            .on_commit(move |value: String| {
+                setter.call(value.clone());
+                persist_provider_folder(provider, value, settings_tx.clone());
+            })
+            .height(32.0)
+            .grid_column(0),
+        Button::new("")
+            .icon_path(crate::icons::data("fluent-folder"), "#E6E6E6")
+            .width(44.0)
+            .height(32.0)
+            .on_click(move || match choose_provider_folder() {
+                Ok(Some(folder)) => {
+                    let value = folder.display().to_string();
+                    picker_setter.call(value.clone());
+                    persist_provider_folder(provider, value, picker_tx.clone());
+                }
+                Ok(None) => {}
+                Err(error) => eprintln!(
+                    "failed to choose {} folder: {error:#}",
+                    provider.display_name()
+                ),
+            })
+            .grid_column(1),
+    ))
+    .columns([GridLength::Star(1.0), GridLength::Auto])
+    .column_spacing(8.0)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .into()
 }
 
 fn persist_provider_enabled(
@@ -850,6 +932,8 @@ pub(super) fn provider_page_content(
     let codex_path = ctx.codex_path;
     let claude_path = ctx.claude_path;
     let cursor_path = ctx.cursor_path;
+    let antigravity_path = ctx.antigravity_path;
+    let grok_path = ctx.grok_path;
     let codex_install_status = ctx.codex_install_status;
     let claude_install_status = ctx.claude_install_status;
     let cursor_install_status = ctx.cursor_install_status;
@@ -881,6 +965,8 @@ pub(super) fn provider_page_content(
     let set_codex_path = ctx.set_codex_path.clone();
     let set_claude_path = ctx.set_claude_path.clone();
     let set_cursor_path = ctx.set_cursor_path.clone();
+    let set_antigravity_path = ctx.set_antigravity_path.clone();
+    let set_grok_path = ctx.set_grok_path.clone();
     let set_tray_widgets = ctx.set_tray_widgets.clone();
     let set_hovered_card_id = ctx.set_hovered_card_id.clone();
     let settings_tx = ctx.settings_tx.clone();
@@ -890,6 +976,8 @@ pub(super) fn provider_page_content(
     let apply_codex_path = settings_tx.clone();
     let apply_claude_path = settings_tx.clone();
     let apply_cursor_path = settings_tx.clone();
+    let apply_antigravity_path = settings_tx.clone();
+    let apply_grok_path = settings_tx.clone();
     let tray_widgets_for_codex_toggle = tray_widgets.to_vec();
     let tray_widgets_for_claude_toggle = tray_widgets.to_vec();
     let tray_widgets_for_cursor_toggle = tray_widgets.to_vec();
@@ -1101,130 +1189,62 @@ pub(super) fn provider_page_content(
             "Folder with Cursor.exe. Leave empty to find it automatically. Usage still comes from the signed-in profile.",
             r"C:\\Users\\you\\AppData\\Local\\Programs\\Cursor",
         ),
-        ProviderKind::OpenCodeZen
-        | ProviderKind::OpenCodeGo
-        | ProviderKind::OpenRouter
-        | ProviderKind::Antigravity
-        | ProviderKind::Grok => ("", "", "", ""),
+        ProviderKind::Antigravity => (
+            antigravity_path,
+            "agy CLI folder (optional)",
+            "Folder with agy.exe, agy.cmd, or agy.ps1. Leave empty to find it automatically.",
+            r"C:\\Users\\you\\AppData\\Local\\agy\\bin",
+        ),
+        ProviderKind::Grok => (
+            grok_path,
+            "Grok CLI folder (optional)",
+            "Folder with grok.exe, grok.cmd, or grok.ps1. Leave empty to find it automatically.",
+            r"C:\\Users\\you\\.grok\\bin",
+        ),
+        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo | ProviderKind::OpenRouter => {
+            ("", "", "", "")
+        }
     };
 
-    let codex_path_setter = set_codex_path.clone();
-    let claude_path_setter = set_claude_path.clone();
-    let cursor_path_setter = set_cursor_path.clone();
-    let codex_path_tx = apply_codex_path.clone();
-    let claude_path_tx = apply_claude_path.clone();
-    let cursor_path_tx = apply_cursor_path.clone();
-
     let path_input: Element = match provider {
-        ProviderKind::Codex => {
-            let picker_setter = set_codex_path.clone();
-            let picker_tx = apply_codex_path.clone();
-            grid((
-                text_box(path)
-                    .placeholder_text(placeholder)
-                    .on_commit(move |value: String| {
-                        codex_path_setter.call(value.clone());
-                        persist_provider_folder(ProviderKind::Codex, value, codex_path_tx.clone());
-                    })
-                    .height(32.0)
-                    .grid_column(0),
-                Button::new("")
-                    .icon_path(crate::icons::data("fluent-folder"), "#E6E6E6")
-                    .width(44.0)
-                    .height(32.0)
-                    .on_click(move || match choose_provider_folder() {
-                        Ok(Some(folder)) => {
-                            let value = folder.display().to_string();
-                            picker_setter.call(value.clone());
-                            persist_provider_folder(ProviderKind::Codex, value, picker_tx.clone());
-                        }
-                        Ok(None) => {}
-                        Err(error) => eprintln!("failed to choose Codex folder: {error:#}"),
-                    })
-                    .grid_column(1),
-            ))
-            .columns([GridLength::Star(1.0), GridLength::Auto])
-            .column_spacing(8.0)
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .into()
+        ProviderKind::Codex => provider_folder_picker(
+            provider,
+            path,
+            placeholder,
+            set_codex_path.clone(),
+            apply_codex_path.clone(),
+        ),
+        ProviderKind::Claude => provider_folder_picker(
+            provider,
+            path,
+            placeholder,
+            set_claude_path.clone(),
+            apply_claude_path.clone(),
+        ),
+        ProviderKind::Cursor => provider_folder_picker(
+            provider,
+            path,
+            placeholder,
+            set_cursor_path.clone(),
+            apply_cursor_path.clone(),
+        ),
+        ProviderKind::Antigravity => provider_folder_picker(
+            provider,
+            path,
+            placeholder,
+            set_antigravity_path.clone(),
+            apply_antigravity_path.clone(),
+        ),
+        ProviderKind::Grok => provider_folder_picker(
+            provider,
+            path,
+            placeholder,
+            set_grok_path.clone(),
+            apply_grok_path.clone(),
+        ),
+        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo | ProviderKind::OpenRouter => {
+            Element::Empty
         }
-        ProviderKind::Claude => {
-            let picker_setter = set_claude_path.clone();
-            let picker_tx = apply_claude_path.clone();
-            grid((
-                text_box(path)
-                    .placeholder_text(placeholder)
-                    .on_commit(move |value: String| {
-                        claude_path_setter.call(value.clone());
-                        persist_provider_folder(
-                            ProviderKind::Claude,
-                            value,
-                            claude_path_tx.clone(),
-                        );
-                    })
-                    .height(32.0)
-                    .grid_column(0),
-                Button::new("")
-                    .icon_path(crate::icons::data("fluent-folder"), "#E6E6E6")
-                    .width(44.0)
-                    .height(32.0)
-                    .on_click(move || match choose_provider_folder() {
-                        Ok(Some(folder)) => {
-                            let value = folder.display().to_string();
-                            picker_setter.call(value.clone());
-                            persist_provider_folder(ProviderKind::Claude, value, picker_tx.clone());
-                        }
-                        Ok(None) => {}
-                        Err(error) => eprintln!("failed to choose Claude folder: {error:#}"),
-                    })
-                    .grid_column(1),
-            ))
-            .columns([GridLength::Star(1.0), GridLength::Auto])
-            .column_spacing(8.0)
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .into()
-        }
-        ProviderKind::Cursor => {
-            let picker_setter = set_cursor_path.clone();
-            let picker_tx = apply_cursor_path.clone();
-            grid((
-                text_box(path)
-                    .placeholder_text(placeholder)
-                    .on_commit(move |value: String| {
-                        cursor_path_setter.call(value.clone());
-                        persist_provider_folder(
-                            ProviderKind::Cursor,
-                            value,
-                            cursor_path_tx.clone(),
-                        );
-                    })
-                    .height(32.0)
-                    .grid_column(0),
-                Button::new("")
-                    .icon_path(crate::icons::data("fluent-folder"), "#E6E6E6")
-                    .width(44.0)
-                    .height(32.0)
-                    .on_click(move || match choose_provider_folder() {
-                        Ok(Some(folder)) => {
-                            let value = folder.display().to_string();
-                            picker_setter.call(value.clone());
-                            persist_provider_folder(ProviderKind::Cursor, value, picker_tx.clone());
-                        }
-                        Ok(None) => {}
-                        Err(error) => eprintln!("failed to choose Cursor folder: {error:#}"),
-                    })
-                    .grid_column(1),
-            ))
-            .columns([GridLength::Star(1.0), GridLength::Auto])
-            .column_spacing(8.0)
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .into()
-        }
-        ProviderKind::OpenCodeZen
-        | ProviderKind::OpenCodeGo
-        | ProviderKind::OpenRouter
-        | ProviderKind::Antigravity
-        | ProviderKind::Grok => Element::Empty,
     };
 
     let details: Element = if matches!(
@@ -1275,8 +1295,6 @@ pub(super) fn provider_page_content(
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .vertical_alignment(VerticalAlignment::Top)
         .into()
-    } else if matches!(provider, ProviderKind::Antigravity | ProviderKind::Grok) {
-        provider_install_status_card(install_status)
     } else {
         vstack((
             provider_install_status_card(install_status),

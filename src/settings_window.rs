@@ -350,6 +350,18 @@ pub fn render(
             .as_ref()
             .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
     );
+    let (antigravity_path, set_antigravity_path) = cx.use_state(
+        settings
+            .antigravity_path
+            .as_ref()
+            .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
+    );
+    let (grok_path, set_grok_path) = cx.use_state(
+        settings
+            .grok_path
+            .as_ref()
+            .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
+    );
     let (popup_order, set_popup_order) = cx.use_state(settings.popup_order.clone());
     let (use_colored_sidebar_icons, set_use_colored_sidebar_icons) =
         cx.use_state(settings.use_colored_sidebar_icons);
@@ -484,13 +496,13 @@ pub fn render(
     let (claude_install_status, set_claude_install_status) =
         cx.use_async_state(ProviderInstallStatus::checking());
     let (cursor_install_status, set_cursor_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking());
+        cx.use_async_state(ProviderInstallStatus::checking_app());
     let (opencode_zen_install_status, set_opencode_zen_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking());
+        cx.use_async_state(ProviderInstallStatus::checking_app());
     let (opencode_go_install_status, set_opencode_go_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking());
+        cx.use_async_state(ProviderInstallStatus::checking_app());
     let (openrouter_install_status, set_openrouter_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking());
+        cx.use_async_state(ProviderInstallStatus::checking_app());
     let (antigravity_install_status, set_antigravity_install_status) =
         cx.use_async_state(ProviderInstallStatus::checking());
     let (grok_install_status, set_grok_install_status) =
@@ -498,16 +510,24 @@ pub fn render(
     let status_codex_path = codex_path.clone();
     let status_claude_path = claude_path.clone();
     let status_cursor_path = cursor_path.clone();
+    let status_antigravity_path = antigravity_path.clone();
+    let status_grok_path = grok_path.clone();
     cx.use_effect(
-        (codex_path.clone(), claude_path.clone(), cursor_path.clone()),
+        (
+            codex_path.clone(),
+            claude_path.clone(),
+            cursor_path.clone(),
+            antigravity_path.clone(),
+            grok_path.clone(),
+        ),
         move || {
             let generation = PROVIDER_STATUS_GEN.fetch_add(1, Ordering::Relaxed) + 1;
             set_codex_install_status.call(ProviderInstallStatus::checking());
             set_claude_install_status.call(ProviderInstallStatus::checking());
-            set_cursor_install_status.call(ProviderInstallStatus::checking());
-            set_opencode_zen_install_status.call(ProviderInstallStatus::checking());
-            set_opencode_go_install_status.call(ProviderInstallStatus::checking());
-            set_openrouter_install_status.call(ProviderInstallStatus::checking());
+            set_cursor_install_status.call(ProviderInstallStatus::checking_app());
+            set_opencode_zen_install_status.call(ProviderInstallStatus::checking_app());
+            set_opencode_go_install_status.call(ProviderInstallStatus::checking_app());
+            set_openrouter_install_status.call(ProviderInstallStatus::checking_app());
             set_antigravity_install_status.call(ProviderInstallStatus::checking());
             set_grok_install_status.call(ProviderInstallStatus::checking_cli());
             let codex_status = set_codex_install_status.clone();
@@ -529,8 +549,9 @@ pub fn render(
                 let opencode_zen = provider_install_status(ProviderKind::OpenCodeZen, "");
                 let opencode_go = provider_install_status(ProviderKind::OpenCodeGo, "");
                 let openrouter = provider_install_status(ProviderKind::OpenRouter, "");
-                let antigravity = provider_install_status(ProviderKind::Antigravity, "");
-                let grok = provider_install_status(ProviderKind::Grok, "");
+                let antigravity =
+                    provider_install_status(ProviderKind::Antigravity, &status_antigravity_path);
+                let grok = provider_install_status(ProviderKind::Grok, &status_grok_path);
                 if PROVIDER_STATUS_GEN.load(Ordering::Relaxed) == generation {
                     codex_status.call(codex);
                     claude_status.call(claude);
@@ -636,6 +657,8 @@ pub fn render(
             codex_path: set_codex_path.clone(),
             claude_path: set_claude_path.clone(),
             cursor_path: set_cursor_path.clone(),
+            antigravity_path: set_antigravity_path.clone(),
+            grok_path: set_grok_path.clone(),
             popup_order: set_popup_order.clone(),
             use_colored_provider_icons: set_use_colored_provider_icons.clone(),
             use_colored_sidebar_icons: set_use_colored_sidebar_icons.clone(),
@@ -691,6 +714,8 @@ pub fn render(
         codex_path: &codex_path,
         claude_path: &claude_path,
         cursor_path: &cursor_path,
+        antigravity_path: &antigravity_path,
+        grok_path: &grok_path,
         codex_install_status: &codex_install_status,
         claude_install_status: &claude_install_status,
         cursor_install_status: &cursor_install_status,
@@ -774,6 +799,8 @@ pub fn render(
         set_codex_path: set_codex_path.clone(),
         set_claude_path: set_claude_path.clone(),
         set_cursor_path: set_cursor_path.clone(),
+        set_antigravity_path: set_antigravity_path.clone(),
+        set_grok_path: set_grok_path.clone(),
         set_popup_order: set_popup_order.clone(),
         set_use_colored_provider_icons: set_use_colored_provider_icons.clone(),
         set_use_colored_sidebar_icons: set_use_colored_sidebar_icons.clone(),

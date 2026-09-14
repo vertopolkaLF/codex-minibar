@@ -312,6 +312,8 @@ pub(super) struct UiState {
     pub(super) codex_path: Option<std::path::PathBuf>,
     pub(super) claude_path: Option<std::path::PathBuf>,
     pub(super) cursor_path: Option<std::path::PathBuf>,
+    pub(super) antigravity_path: Option<std::path::PathBuf>,
+    pub(super) grok_path: Option<std::path::PathBuf>,
     pub(super) update_version: Option<String>,
 }
 
@@ -360,6 +362,8 @@ impl Default for UiState {
             codex_path: None,
             claude_path: None,
             cursor_path: None,
+            antigravity_path: None,
+            grok_path: None,
             update_version: None,
         }
     }

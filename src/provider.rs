@@ -139,9 +139,14 @@ pub fn start_provider_worker(
                 && settings.usage_stats_provider_enabled(provider),
             Duration::from_secs(settings.limit_refresh_interval.seconds()),
         ),
-        ProviderKind::Antigravity => worker::start_worker(
-            crate::antigravity::AntigravityClient::new(),
-            crate::antigravity::AntigravityClient::new(),
+        ProviderKind::Antigravity => {
+            let executable = crate::antigravity::cli_available(settings.antigravity_path.as_deref());
+            if let Some(executable) = &executable {
+                crate::logger::info(format!("Antigravity executable: {}", executable.display()));
+            }
+            worker::start_worker(
+            crate::antigravity::AntigravityClient::new(settings.antigravity_path.clone()),
+            crate::antigravity::AntigravityClient::new(settings.antigravity_path.clone()),
             crate::antigravity::AntigravityActivator,
             activation_path,
             false,
@@ -151,10 +156,16 @@ pub fn start_provider_worker(
             Duration::from_secs(settings.usage_refresh_interval.seconds()),
             false,
             Duration::from_secs(settings.limit_refresh_interval.seconds()),
-        ),
-        ProviderKind::Grok => worker::start_worker(
-            crate::grok::GrokClient::new(),
-            crate::grok::GrokClient::new(),
+        )
+        }
+        ProviderKind::Grok => {
+            let executable = crate::grok::cli_available(settings.grok_path.as_deref());
+            if let Some(executable) = &executable {
+                crate::logger::info(format!("Grok executable: {}", executable.display()));
+            }
+            worker::start_worker(
+            crate::grok::GrokClient::new(settings.grok_path.clone()),
+            crate::grok::GrokClient::new(settings.grok_path.clone()),
             crate::grok::GrokActivator,
             activation_path,
             false,
@@ -164,7 +175,8 @@ pub fn start_provider_worker(
             Duration::from_secs(settings.usage_refresh_interval.seconds()),
             false,
             Duration::from_secs(settings.limit_refresh_interval.seconds()),
-        ),
+        )
+        }
     };
     let source_events = worker
         .take_events()

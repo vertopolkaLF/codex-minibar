@@ -21,6 +21,8 @@ pub(super) struct SettingsWindowState {
     pub(super) codex_path: SetState<String>,
     pub(super) claude_path: SetState<String>,
     pub(super) cursor_path: SetState<String>,
+    pub(super) antigravity_path: SetState<String>,
+    pub(super) grok_path: SetState<String>,
     pub(super) popup_order: SetState<Vec<PopupWidgetKind>>,
     pub(super) use_colored_provider_icons: SetState<bool>,
     pub(super) use_colored_sidebar_icons: SetState<bool>,
@@ -99,6 +101,18 @@ impl SettingsWindowState {
         self.cursor_path.call(
             settings
                 .cursor_path
+                .as_ref()
+                .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
+        );
+        self.antigravity_path.call(
+            settings
+                .antigravity_path
+                .as_ref()
+                .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
+        );
+        self.grok_path.call(
+            settings
+                .grok_path
                 .as_ref()
                 .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
         );
@@ -183,6 +197,8 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) codex_path: &'a str,
     pub(super) claude_path: &'a str,
     pub(super) cursor_path: &'a str,
+    pub(super) antigravity_path: &'a str,
+    pub(super) grok_path: &'a str,
     pub(super) codex_install_status: &'a ProviderInstallStatus,
     pub(super) claude_install_status: &'a ProviderInstallStatus,
     pub(super) cursor_install_status: &'a ProviderInstallStatus,
@@ -266,6 +282,8 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) set_codex_path: SetState<String>,
     pub(super) set_claude_path: SetState<String>,
     pub(super) set_cursor_path: SetState<String>,
+    pub(super) set_antigravity_path: SetState<String>,
+    pub(super) set_grok_path: SetState<String>,
     pub(super) set_popup_order: SetState<Vec<PopupWidgetKind>>,
     pub(super) set_use_colored_provider_icons: SetState<bool>,
     pub(super) set_use_colored_sidebar_icons: SetState<bool>,

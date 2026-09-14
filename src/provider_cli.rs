@@ -4,13 +4,33 @@ use std::{
     collections::HashSet,
     env, fs,
     io::ErrorKind,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
 
 use anyhow::{Result, bail};
+
+pub(crate) fn candidates_from(
+    explicit: Option<&Path>,
+    known: impl IntoIterator<Item = PathBuf>,
+    names: &[&str],
+) -> Vec<PathBuf> {
+    let mut preferred = Vec::new();
+    if let Some(path) = explicit {
+        if path.is_file() {
+            preferred.push(path.to_path_buf());
+        } else {
+            for name in names {
+                preferred.push(path.join(name));
+                preferred.push(path.join("bin").join(name));
+            }
+        }
+    }
+    preferred.extend(known);
+    executable_candidates(&preferred, names)
+}
 
 pub(crate) fn executable_candidates(known: &[PathBuf], names: &[&str]) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
@@ -111,5 +131,19 @@ mod tests {
         assert_eq!(candidates.len(), 1);
         assert!(candidates[0].is_absolute());
         assert!(candidates[0].is_file());
+    }
+
+    #[test]
+    fn explicit_folder_is_searched_before_known_locations() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("agy.exe");
+        fs::write(&executable, b"fixture").unwrap();
+
+        let candidates = candidates_from(Some(directory.path()), [], &["agy.exe"]);
+
+        assert_eq!(
+            candidates.first(),
+            Some(&fs::canonicalize(executable).unwrap())
+        );
     }
 }
