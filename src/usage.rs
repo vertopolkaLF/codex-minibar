@@ -211,19 +211,16 @@ pub fn refresh_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
     let attribution = store::with_store(|store| store.initialize_codex_attribution())?;
     let codex_root = codex_home();
     let mut cache = store::with_store(|store| store.load_codex_cache())?;
-    let mut reset_sources = BTreeMap::<String, String>::new();
+    let mut reset_sources = BTreeSet::<String>::new();
     let rebuild_cache = !attribution.ready
         || cache.pricing_rebuild_needed
         || cache.version != CODEX_CACHE_VERSION;
+    let rebuild_cached_sources = rebuild_cache.then(|| {
+        cache.files.keys().cloned().collect::<BTreeSet<_>>()
+    });
     if rebuild_cache {
         // The initial account snapshot owns the old aggregate. Replaying the
         // source files below rebuilds event-level attribution from zero.
-        reset_sources.extend(
-            cache
-                .files
-                .iter()
-                .map(|(source, file)| (source.clone(), file.session_id.clone())),
-        );
         cache.files.clear();
     }
     if cache.pricing_rebuild_needed {
@@ -237,6 +234,15 @@ pub fn refresh_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
     }
     let files = collect_codex_session_files(&codex_root)?;
     let known_paths: BTreeSet<String> = files.iter().map(|(_, key)| key.clone()).collect();
+    if let Some(cached_sources) = rebuild_cached_sources {
+        // Missing logs have no replacement events. Reset only sources that
+        // this scan will actually rebuild, or their attributed history is
+        // deleted on a cache-version or pricing rebuild.
+        reset_sources.extend(account_resets_for_scanned_sources(
+            &cached_sources,
+            &known_paths,
+        ));
+    }
     cache.files.retain(|path, _| known_paths.contains(path));
 
     let oldest = Local::now().date_naive() - Duration::days(CACHE_RETENTION_DAYS - 1);
@@ -244,7 +250,6 @@ pub fn refresh_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
     for (path, key) in files {
         let source = key.clone();
         let cached = cache.files.entry(key).or_default();
-        let previous_session = cached.session_id.clone();
         let mut reset_source = false;
         // Older caches kept daily totals but dropped per-model rows on load.
         // Rescanning from zero rebuilds the breakdown without double-counting.
@@ -254,9 +259,7 @@ pub fn refresh_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
         }
         let (events, truncated) = scan_file_delta(&path, &source, cached)?;
         if reset_source || truncated {
-            reset_sources
-                .entry(source)
-                .or_insert(previous_session);
+            reset_sources.insert(source);
         }
         account_events.extend(
             events
@@ -273,12 +276,7 @@ pub fn refresh_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
     store::with_store(|store| {
         let reset_sources = reset_sources
             .into_iter()
-            .map(
-                |(source, session)| store::codex_accounts::AccountSourceReset {
-                    source,
-                    session,
-                },
-            )
+            .map(|source| store::codex_accounts::AccountSourceReset { source })
             .collect::<Vec<_>>();
         store.save_account_events_with_resets(
             &account_events,
@@ -367,6 +365,19 @@ pub(crate) fn statistics_from_daily(
         }
     }
     stats
+}
+
+/// Cache-version and pricing rebuilds rescan surviving logs from zero. Sources
+/// whose files are gone have no replacement events, so they must not be queued
+/// for deletion.
+fn account_resets_for_scanned_sources(
+    cached_sources: &BTreeSet<String>,
+    scanned: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    cached_sources
+        .intersection(scanned)
+        .cloned()
+        .collect()
 }
 
 pub(crate) fn scan_file_delta(
@@ -979,6 +990,19 @@ fn collect_claude_session_files() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_rebuild_resets_only_sources_that_are_still_scanned() {
+        let cached = BTreeSet::from([
+            "sessions/live.jsonl".into(),
+            "sessions/gone.jsonl".into(),
+        ]);
+        let scanned = BTreeSet::from(["sessions/live.jsonl".into()]);
+        assert_eq!(
+            account_resets_for_scanned_sources(&cached, &scanned),
+            BTreeSet::from(["sessions/live.jsonl".into()])
+        );
+    }
 
     #[test]
     fn reads_per_request_token_usage() {

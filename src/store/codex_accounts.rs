@@ -166,7 +166,6 @@ pub(crate) struct AccountEvent {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AccountSourceReset {
     pub source: String,
-    pub session: String,
 }
 
 const VALUES: &str = "input_tokens,cached_input_tokens,output_tokens,requests,estimated_cost_microusd,priced_requests,cache_savings_microusd";
@@ -400,21 +399,14 @@ impl ProviderStore {
         end: DateTime<Utc>,
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
+        // Delete only this file's rows. Pre-`source` leftovers share a session
+        // across rollouts, so a session-wide fallback would drop sibling files
+        // that this reset is not rebuilding.
         for reset in reset_sources {
-            if reset.session.is_empty() {
-                tx.execute(
-                    "DELETE FROM codex_account_events WHERE source=?1",
-                    [&reset.source],
-                )?;
-            } else {
-                // `source` was added after the first account-attribution build.
-                // The session fallback removes rows written by that build too.
-                tx.execute(
-                    "DELETE FROM codex_account_events
-                     WHERE source=?1 OR (source='' AND session=?2)",
-                    params![reset.source, reset.session],
-                )?;
-            }
+            tx.execute(
+                "DELETE FROM codex_account_events WHERE source=?1",
+                [&reset.source],
+            )?;
         }
         {
             let mut query = tx.prepare("SELECT source,offset FROM codex_legacy_cursors")?;
@@ -945,7 +937,6 @@ mod tests {
         let mut second = event(116, 20);
         second.source = first.source.clone();
         let source = first.source.clone();
-        let session = first.session.clone();
         db.save_account_events(
             &[first, second],
             &initial,
@@ -960,10 +951,7 @@ mod tests {
         replacement.source = source.clone();
         db.save_account_events_with_resets(
             &[replacement],
-            &[AccountSourceReset {
-                source,
-                session,
-            }],
+            &[AccountSourceReset { source }],
             &state,
             &account,
             &account,
@@ -983,6 +971,58 @@ mod tests {
                 })
                 .unwrap(),
             1
+        );
+    }
+
+    #[test]
+    fn source_reset_keeps_empty_source_rows_from_other_files() {
+        let db = store();
+        let initial = state();
+        let account = initial.observed.clone();
+        let mut current = event(115, 10);
+        current.source = "sessions/2026/09/child.jsonl".into();
+        current.session = "shared".into();
+        let mut legacy = event(116, 20);
+        legacy.source = String::new();
+        legacy.session = "shared".into();
+        legacy.signature = "legacy-sibling".into();
+        db.save_account_events(
+            &[current, legacy],
+            &initial,
+            &account,
+            &account,
+            at(120),
+        )
+        .unwrap();
+
+        let state = db.codex_attribution().unwrap().unwrap();
+        let mut replacement = event(125, 7);
+        replacement.source = "sessions/2026/09/child.jsonl".into();
+        replacement.session = "shared".into();
+        db.save_account_events_with_resets(
+            &[replacement],
+            &[AccountSourceReset {
+                source: "sessions/2026/09/child.jsonl".into(),
+            }],
+            &state,
+            &account,
+            &account,
+            at(130),
+        )
+        .unwrap();
+
+        let rows = db
+            .account_daily_for("new", at(0).date_naive(), at(200).date_naive())
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].2.input_tokens, 27);
+        assert_eq!(
+            db.conn
+                .query_row("SELECT COUNT(*) FROM codex_account_events", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            2
         );
     }
 
