@@ -1,0 +1,85 @@
+name: Feature Request
+description: Suggest an enhancement or new capability.
+title: "[Feature]: "
+type: feature
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem first, then the idea. Feature requests that explain *why* are much easier to judge.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is painful or missing today?
+      placeholder: I have to open Settings every time I want to check weekly usage for Claude and Codex at once.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What should Codex Minibar do instead?
+      placeholder: Add a tray widget that can show two providers side by side.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you tried or would accept.
+      placeholder: Using two tray icons works, but they take too much space in the notification area.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where would this live?
+      multiple: true
+      options:
+        - Tray icon
+        - Popup
+        - Settings
+        - Notifications
+        - Auto-start / activation
+        - Updater
+        - Stream Deck
+        - Provider support
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: providers
+    attributes:
+      label: Related providers
+      description: Select providers this would affect, if any.
+      multiple: true
+      options:
+        - Codex
+        - Claude
+        - Cursor
+        - OpenCode Zen
+        - OpenCode Go
+        - OpenRouter
+        - Antigravity
+        - Grok
+        - All providers
+        - None / not provider-specific
+
+  - type: textarea
+    id: extras
+    attributes:
+      label: Extra context
+      description: Mockups, examples from other apps, or links to related issues.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and did not find the same request.
+          required: true
