@@ -1,0 +1,99 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  packages:
+    name: Build packages and draft release
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: true
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+          targets: i686-pc-windows-msvc, x86_64-pc-windows-msvc, aarch64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $match = Select-String -LiteralPath Cargo.toml -Pattern '^\s*version\s*=\s*"([^"]+)"' |
+            Select-Object -First 1
+          if (-not $match) {
+            throw "Could not read package version from Cargo.toml"
+          }
+          $version = $match.Matches[0].Groups[1].Value
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "version $version"
+
+      - name: Fetch dependencies
+        run: cargo fetch --locked
+
+      - name: Build portable zips and NSIS installers
+        shell: pwsh
+        run: .\build.ps1
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-minibar-${{ steps.version.outputs.version }}
+          path: dist/${{ steps.version.outputs.version }}/*
+          if-no-files-found: error
+
+      - name: Create draft GitHub release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+          $version = "${{ steps.version.outputs.version }}"
+          $tag = "v$version"
+          $assetDir = Join-Path "dist" $version
+          $assets = @(Get-ChildItem -LiteralPath $assetDir -File | ForEach-Object { $_.FullName })
+          if ($assets.Count -eq 0) {
+            throw "No release assets found in $assetDir"
+          }
+
+          if ($env:GITHUB_REF_TYPE -eq "tag" -and $env:GITHUB_REF_NAME -ne $tag) {
+            throw "Git tag '$($env:GITHUB_REF_NAME)' does not match Cargo.toml version '$tag'."
+          }
+
+          $existing = gh release view $tag --json isDraft 2>$null
+          if ($LASTEXITCODE -eq 0 -and $existing) {
+            $release = $existing | ConvertFrom-Json
+            if (-not $release.isDraft) {
+              throw "Release $tag already exists and is published. Refusing to overwrite."
+            }
+            Write-Host "Updating draft $tag"
+            gh release upload $tag @assets --clobber
+            if ($LASTEXITCODE -ne 0) {
+              throw "gh release upload failed with exit code $LASTEXITCODE"
+            }
+          } else {
+            Write-Host "Creating draft $tag"
+            gh release create $tag @assets --draft --title "Codex Minibar $version" --generate-notes --target $env:GITHUB_SHA
+            if ($LASTEXITCODE -ne 0) {
+              throw "gh release create failed with exit code $LASTEXITCODE"
+            }
+          }
