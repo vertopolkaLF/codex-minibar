@@ -152,14 +152,13 @@ fn session_is_stale(expires_at: Option<DateTime<Utc>>) -> bool {
 }
 
 fn grok_cli_candidates() -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
+    let mut known = Vec::new();
     if let Some(root) = env::var_os("GROK_HOME") {
-        candidates.push(PathBuf::from(root).join("bin/grok.exe"));
+        known.push(PathBuf::from(root).join("bin/grok.exe"));
     } else if let Some(dirs) = BaseDirs::new() {
-        candidates.push(dirs.home_dir().join(".grok/bin/grok.exe"));
+        known.push(dirs.home_dir().join(".grok/bin/grok.exe"));
     }
-    candidates.push(PathBuf::from("grok.exe"));
-    candidates
+    provider_cli::executable_candidates(&known, &["grok.exe"])
 }
 
 fn load_credentials() -> Result<GrokCredentials> {
