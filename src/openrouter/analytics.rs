@@ -227,6 +227,7 @@ fn statistics(cache: &Cache, history_days: u16) -> UsageStatistics {
     let mut combined = statistics_from_daily(&daily(cache), history_days);
     for (id, account) in &cache.account_data {
         let mut usage = statistics_from_daily(&daily_rows(&account.days), history_days);
+        usage.account_id = Some(id.clone());
         usage.error = account.error.clone();
         combined.accounts.insert(id.clone(), usage);
     }
@@ -244,6 +245,26 @@ fn persist(cache: &Cache, at: DateTime<Utc>) -> Result<()> {
         .collect();
     let encoded = serde_json::to_string(cache)?;
     store::with_store(|s| s.save_openrouter_analytics(&encoded, &daily(cache), &models, at))
+}
+
+pub(crate) fn cached_account_models(
+    raw: &str,
+    id: &str,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> Result<Vec<(String, NaiveDate, TokenUsage)>> {
+    let cache: Cache = serde_json::from_str(raw)?;
+    Ok(cache
+        .account_data
+        .get(id)
+        .into_iter()
+        .flat_map(|account| account.days.range(start..=end))
+        .flat_map(|(&date, day)| {
+            day.models
+                .iter()
+                .map(move |(model, usage)| (model.clone(), date, usage.clone()))
+        })
+        .collect())
 }
 
 pub(super) fn load(client: &OpenRouterClient, history_days: u16) -> Result<UsageStatistics> {
@@ -883,6 +904,7 @@ mod tests {
         let stats = statistics(&cache, 30);
         assert_eq!(stats.history.requests, 9);
         assert_eq!(stats.accounts["second"].history.requests, 7);
+        assert_eq!(stats.accounts["first"].account_id.as_deref(), Some("first"));
         sync_accounts(
             &mut cache,
             4,
@@ -940,7 +962,7 @@ mod tests {
     }
 
     #[test]
-    fn errors_do_not_hide_a_healthy_account_and_cache_round_trips() {
+    fn model_queries_are_scoped_and_errors_do_not_hide_a_healthy_account() {
         let mut failed = account_fixture("key-b", 7);
         failed.error = Some("Server rate limited this account".into());
         let mut cache = Cache {
@@ -954,9 +976,25 @@ mod tests {
         let stats = statistics(&cache, 30);
         assert!(stats.accounts["a"].error.is_none());
         assert!(stats.accounts["b"].error.is_some());
-        assert_eq!(stats.accounts["a"].history.requests, 2);
-        assert_eq!(stats.accounts["b"].history.requests, 7);
+        let date = Local::now().date_naive();
         let raw = serde_json::to_string(&cache).unwrap();
+        assert_eq!(
+            cached_account_models(&raw, "a", date, date).unwrap()[0]
+                .2
+                .requests,
+            2
+        );
+        assert_eq!(
+            cached_account_models(&raw, "b", date, date).unwrap()[0]
+                .2
+                .requests,
+            7
+        );
+        assert!(
+            cached_account_models(&raw, "missing", date, date)
+                .unwrap()
+                .is_empty()
+        );
         let round_trip: Cache = serde_json::from_str(&raw).unwrap();
         assert_eq!(statistics(&round_trip, 30), stats);
     }

@@ -869,7 +869,7 @@ fn openrouter_places_each_chart_inside_its_own_account_on_both_surfaces() {
     fn chart_keys(element: &Element, keys: &mut Vec<String>) {
         if let Some(key) = element
             .key()
-            .filter(|key| key.starts_with("openrouter-account-usage-"))
+            .filter(|key| key.starts_with("activity-chart-"))
         {
             keys.push(key.into());
         }
@@ -896,7 +896,7 @@ fn openrouter_places_each_chart_inside_its_own_account_on_both_surfaces() {
             name: id.into(),
             ..Default::default()
         });
-        let stats = crate::usage::statistics_from_daily(
+        let mut stats = crate::usage::statistics_from_daily(
             &[crate::usage::DailyTokenUsage {
                 date,
                 usage: crate::usage::TokenUsage {
@@ -906,6 +906,7 @@ fn openrouter_places_each_chart_inside_its_own_account_on_both_surfaces() {
             }],
             30,
         );
+        stats.account_id = Some(id.into());
         limits.usage.accounts.insert(id.into(), stats);
     }
     for scheme in [ColorScheme::Dark, ColorScheme::Light] {
@@ -938,7 +939,7 @@ fn openrouter_places_each_chart_inside_its_own_account_on_both_surfaces() {
                 for (index, id) in ["first", "second"].iter().enumerate() {
                     let mut keys = Vec::new();
                     chart_keys(&cards[index + 1], &mut keys);
-                    assert_eq!(keys, vec![format!("openrouter-account-usage-{id}")]);
+                    assert_eq!(keys, vec![format!("activity-chart-openrouter-{id}")]);
                 }
             }
         }

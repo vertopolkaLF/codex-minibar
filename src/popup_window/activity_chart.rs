@@ -286,7 +286,11 @@ pub(super) fn usage_activity_chart(
             transition: crate::theme::duration(crate::theme::CONTROL_FAST_ANIMATION),
         },
     )
-    .with_key(format!("activity-chart-{}", provider.id()))
+    .with_key(format!(
+        "activity-chart-{}-{}",
+        provider.id(),
+        statistics.account_id.as_deref().unwrap_or("all")
+    ))
 }
 
 fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
@@ -302,7 +306,17 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
         |(provider, statistics, today): (ProviderKind, UsageStatistics, NaiveDate)| {
             let bounds = buckets(&statistics, today);
             crate::store::with_store(|store| {
-                store.load_model_daily(provider, bounds[0].first, today)
+                if provider == ProviderKind::Codex
+                    && let Some(account) = statistics.account_id.as_deref()
+                {
+                    store.account_daily_for(account, bounds[0].first, today)
+                } else if provider == ProviderKind::OpenRouter
+                    && let Some(account) = statistics.account_id.as_deref()
+                {
+                    store.load_openrouter_account_models(account, bounds[0].first, today)
+                } else {
+                    store.load_model_daily(provider, bounds[0].first, today)
+                }
             })
             .map(|rows| Arc::new(models::group(rows, &bounds, provider)))
             .map_err(|error| format!("Could not load model data: {error:#}"))

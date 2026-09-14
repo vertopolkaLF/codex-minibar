@@ -299,7 +299,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         ui.grok_enabled,
     );
     // Child hover changes rebuild this root. Keep store aggregation outside
-    // that hot path: only data, provider, time-window or query changes invalidate it.
+    // that hot path: only data, account, time-window or query changes invalidate it.
     let enabled_spend = enabled_provider_order
         .iter()
         .copied()
@@ -311,6 +311,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let snapshot_inputs = usage_snapshots::Inputs {
         revision: ui.usage_revision,
         enabled: enabled_spend.clone(),
+        account: crate::store::codex_accounts::current_id(),
         hour: crate::usage::truncate_local_hour(Local::now()),
     };
     let home_visible = selected_view == PopupView::Home || pager.outgoing == Some(PopupView::Home);

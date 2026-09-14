@@ -374,7 +374,9 @@ pub fn dispatch(handle: &Handle, prop: Prop, value: &PropValue) -> Result<bool> 
             h.SetMinuteIncrement(*v)?;
         }
         (Prop::Time, PropValue::I32(v), Handle::TimePicker(h)) => {
-            h.SetTime(windows_time::TimeSpan::from_ticks(i64::from(*v) * 60 * 10_000_000))?;
+            h.SetTime(windows_time::TimeSpan::from_ticks(
+                i64::from(*v) * 60 * 10_000_000,
+            ))?;
         }
         (Prop::MonthVisible, PropValue::Bool(v), Handle::DatePicker(h)) => {
             h.SetMonthVisible(*v)?;

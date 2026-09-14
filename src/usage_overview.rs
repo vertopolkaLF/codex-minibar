@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Utc, Weekday};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Weekday};
 
 use crate::{
     limits::ProviderLimits,
@@ -284,7 +284,7 @@ fn assemble_overview_snapshot(
     })
     .unwrap_or_default();
 
-    let (provider_daily, mut provider_hourly, provider_sessions, mut model_rows) = store_data;
+    let (provider_daily, provider_hourly, provider_sessions, mut model_rows) = store_data;
     let codex_has_usage = provider_daily
         .get(&ProviderKind::Codex)
         .is_some_and(|days| {
@@ -313,19 +313,10 @@ fn assemble_overview_snapshot(
             }
         }
     }
-    if hourly
-        && spend_providers.contains(&ProviderKind::Codex)
-        && provider_hourly
-            .get(&ProviderKind::Codex)
-            .is_none_or(|hours| hours.is_empty())
-        && let Ok(rows) = crate::usage::collect_codex_hourly_since(
-            start_hour.with_timezone(&Utc) - Duration::hours(1),
-        )
-    {
-        let mapped = rows.iter().cloned().collect::<BTreeMap<_, _>>();
-        let _ = store::with_store(|store| store.replace_usage_hourly(ProviderKind::Codex, &rows));
-        provider_hourly.insert(ProviderKind::Codex, mapped);
-    }
+    // Codex hourly data is populated by the account-aware usage worker at
+    // startup. Its UsageUpdated event invalidates the overview snapshot once
+    // the scan completes. Never bypass attribution with a raw-log scan here:
+    // an empty active-account history may coexist with another account's logs.
 
     let mut daily_by_date: BTreeMap<NaiveDate, BTreeMap<ProviderKind, TokenUsage>> =
         BTreeMap::new();

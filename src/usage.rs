@@ -3,7 +3,6 @@ use std::{
     fs::{self, File},
     io::{BufRead, BufReader, Seek, SeekFrom},
     path::{Path, PathBuf},
-    time::SystemTime,
 };
 
 use anyhow::{Context, Result};
@@ -13,11 +12,13 @@ use serde_json::Value;
 
 use crate::{pricing, settings::ProviderKind, store};
 
-// Version 7 matches T3/ccusage Codex transcript rules and the current pricing
+// Version 9 upgrades attributed event identity to include the record offset.
+// Version 8 rebuilt event source links after the account-source migration.
+// Version 7 matched T3/ccusage Codex transcript rules and the current pricing
 // table: first session_meta
 // wins, fork/subagent copied history is dropped, and unchanged token_count
 // re-emits are ignored. Older daily totals must be rebuilt from the logs.
-pub(crate) const CODEX_CACHE_VERSION: u8 = 7;
+pub(crate) const CODEX_CACHE_VERSION: u8 = 9;
 // Version 4 only accepts Claude `assistant` usage lines, matching T3 and the
 // current model pricing table.
 pub(crate) const CLAUDE_CACHE_VERSION: u8 = 4;
@@ -85,6 +86,9 @@ pub struct UsageStatistics {
     pub accounts: BTreeMap<String, UsageStatistics>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Account scope for memoization and stale-response rejection.
+    #[serde(default)]
+    pub account_id: Option<String>,
     pub today: TokenUsage,
     pub history: TokenUsage,
     pub history_days: u16,
@@ -204,8 +208,18 @@ pub fn load_cached_usage_statistics(history_days: u16) -> Result<UsageStatistics
 /// cache, and returns the refreshed aggregate. Truncated/replaced files are
 /// safely rebuilt from their beginning.
 pub fn refresh_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
+    // Overview repair and the background worker may both request a scan.
+    static SCAN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _scan = SCAN
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Codex scan lock poisoned"))?;
+    let before = store::codex_accounts::identity();
+    let attribution = store::with_store(|store| store.initialize_codex_attribution())?;
     let codex_root = codex_home();
     let mut cache = store::with_store(|store| store.load_codex_cache())?;
+    if !attribution.ready {
+        cache.files.clear();
+    }
     if cache.pricing_rebuild_needed {
         // The old aggregate has already been published. Start a clean cache
         // now so re-reading the log cannot double-count it.
@@ -222,60 +236,44 @@ pub fn refresh_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
     cache.files.retain(|path, _| known_paths.contains(path));
 
     let oldest = Local::now().date_naive() - Duration::days(CACHE_RETENTION_DAYS - 1);
+    let mut account_events = Vec::new();
+    let mut rebuilt_sources = Vec::new();
     for (path, key) in files {
-        let cached = cache.files.entry(key).or_default();
+        let cached = cache.files.entry(key.clone()).or_default();
         // Older caches kept daily totals but dropped per-model rows on load.
         // Rescanning from zero rebuilds the breakdown without double-counting.
         if cached.model_daily.is_empty() && !cached.daily.is_empty() {
             cached.reset_scan_state();
         }
-        scan_file_delta(&path, cached)?;
+        let delta = scan_file_delta(&path, &key, cached)?;
+        if delta.rebuilt {
+            rebuilt_sources.push(key);
+        }
+        account_events.extend(
+            delta
+                .events
+                .into_iter()
+                .filter(|event| event.timestamp.with_timezone(&Local).date_naive() >= oldest),
+        );
         cached.prune_before(oldest);
     }
     cache.version = CODEX_CACHE_VERSION;
+    let end = Utc::now();
+    let after = store::codex_accounts::identity();
+    // Commit attribution before offsets: a failed subsequent cache save can
+    // replay these events safely, but can never skip an uncommitted event.
+    store::with_store(|store| {
+        store.save_account_scan(
+            &account_events,
+            &rebuilt_sources,
+            &attribution,
+            &before,
+            &after,
+            end,
+        )
+    })?;
     store::with_store(|store| store.save_codex_cache(&cache))?;
-    if let Ok(hourly) = collect_codex_hourly_since(Utc::now() - Duration::hours(48)) {
-        let _ = store::with_store(|store| store.replace_usage_hourly(ProviderKind::Codex, &hourly));
-    }
-    Ok(statistics_from_cache(&cache, history_days))
-}
-
-/// Walks recently touched session logs and buckets token events by local hour.
-/// Daily aggregates stay incremental; this pass exists so Past 24h can use
-/// the timestamps that were previously thrown away after daily rollup.
-pub(crate) fn collect_codex_hourly_since(
-    since: DateTime<Utc>,
-) -> Result<Vec<(DateTime<Local>, TokenUsage)>> {
-    let files = collect_codex_session_files(&codex_home())?;
-    let modified_floor = SystemTime::now()
-        .checked_sub(std::time::Duration::from_secs(48 * 60 * 60))
-        .unwrap_or(SystemTime::UNIX_EPOCH);
-    let mut hourly = BTreeMap::<DateTime<Local>, TokenUsage>::new();
-    for (path, _) in files {
-        let modified = fs::metadata(&path).and_then(|meta| meta.modified()).ok();
-        if modified.is_some_and(|time| time < modified_floor) {
-            continue;
-        }
-        let file = File::open(&path).with_context(|| format!("open {}", path.display()))?;
-        let reader = BufReader::new(file);
-        let mut context = CachedSessionFile::default();
-        for line in reader.lines() {
-            let Ok(line) = line else {
-                continue;
-            };
-            let Some((timestamp, usage, _)) = ingest_codex_line(&line, &mut context) else {
-                continue;
-            };
-            if timestamp < since {
-                continue;
-            }
-            hourly
-                .entry(truncate_local_hour(timestamp.with_timezone(&Local)))
-                .or_default()
-                .add(&usage);
-        }
-    }
-    Ok(hourly.into_iter().collect())
+    load_cached_usage_statistics(history_days)
 }
 
 pub(crate) fn truncate_local_hour(timestamp: DateTime<Local>) -> DateTime<Local> {
@@ -284,15 +282,6 @@ pub(crate) fn truncate_local_hour(timestamp: DateTime<Local>) -> DateTime<Local>
         - Duration::minutes(i64::from(timestamp.minute()))
         - Duration::seconds(i64::from(timestamp.second()))
         - Duration::nanoseconds(i64::from(timestamp.nanosecond()))
-}
-
-fn statistics_from_cache(cache: &UsageCache, history_days: u16) -> UsageStatistics {
-    let days: Vec<DailyTokenUsage> = cache
-        .files
-        .values()
-        .flat_map(|file| file.daily.iter().cloned())
-        .collect();
-    statistics_from_daily(&days, history_days)
 }
 
 /// Merges same-day rows and builds today/history totals for the requested window.
@@ -326,16 +315,27 @@ pub(crate) fn statistics_from_daily(
     stats
 }
 
-fn scan_file_delta(path: &Path, cached: &mut CachedSessionFile) -> Result<()> {
+pub(crate) struct FileDelta {
+    pub events: Vec<store::codex_accounts::AccountEvent>,
+    pub rebuilt: bool,
+}
+
+pub(crate) fn scan_file_delta(
+    path: &Path,
+    source: &str,
+    cached: &mut CachedSessionFile,
+) -> Result<FileDelta> {
+    let mut events = Vec::new();
     let file_size = fs::metadata(path)
         .with_context(|| format!("read metadata for {}", path.display()))?
         .len();
+    let rebuilt = cached.offset == 0 || file_size < cached.offset;
     if file_size < cached.offset {
         // Codex rewrote/truncated a session log. Its old aggregate is invalid.
         cached.reset_scan_state();
     }
     if file_size == cached.offset {
-        return Ok(());
+        return Ok(FileDelta { events, rebuilt });
     }
 
     let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
@@ -362,17 +362,30 @@ fn scan_file_delta(path: &Path, cached: &mut CachedSessionFile) -> Result<()> {
             continue;
         };
         if let Some((timestamp, usage, model)) = ingest_codex_line(line, cached) {
+            events.push(store::codex_accounts::AccountEvent {
+                source: source.to_owned(),
+                offset,
+                session: if cached.session_id.is_empty() {
+                    source.to_owned()
+                } else {
+                    cached.session_id.clone()
+                },
+                timestamp,
+                signature: cached.last_usage_signature.clone().unwrap_or_default(),
+                model: model.clone().unwrap_or_default(),
+                usage: usage.clone(),
+            });
             cached.add(timestamp, usage, model.as_deref());
         }
     }
     cached.offset = offset;
-    Ok(())
+    Ok(FileDelta { events, rebuilt })
 }
 
 /// Returns active rollouts plus archived ones. An active path wins when an
 /// archive contains the same relative rollout, matching Codex's move/copy
 /// behaviour and avoiding duplicate history after archival.
-fn collect_codex_session_files(root: &Path) -> Result<Vec<(PathBuf, String)>> {
+pub(crate) fn collect_codex_session_files(root: &Path) -> Result<Vec<(PathBuf, String)>> {
     let mut active = Vec::new();
     let sessions = root.join("sessions");
     collect_session_files(&sessions, &mut active)?;
@@ -422,7 +435,7 @@ fn collect_session_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-fn codex_home() -> PathBuf {
+pub(crate) fn codex_home() -> PathBuf {
     std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
         .or_else(|| directories::BaseDirs::new().map(|dirs| dirs.home_dir().join(".codex")))
@@ -1072,13 +1085,23 @@ mod tests {
         fs::write(&path, format!("{context}\n{first}\n{second}")).unwrap();
 
         let mut cached = CachedSessionFile::default();
-        scan_file_delta(&path, &mut cached).unwrap();
+        let delta = scan_file_delta(&path, "sessions/session.jsonl", &mut cached).unwrap();
+        assert!(delta.rebuilt);
         assert_eq!(cached.daily[0].usage.total_tokens(), 10);
 
         fs::write(&path, format!("{context}\n{first}\n{second}\n")).unwrap();
-        scan_file_delta(&path, &mut cached).unwrap();
+        let delta = scan_file_delta(&path, "sessions/session.jsonl", &mut cached).unwrap();
+        assert!(!delta.rebuilt);
+        assert_eq!(delta.events[0].source, "sessions/session.jsonl");
         assert_eq!(cached.daily[0].usage.total_tokens(), 15);
         assert_eq!(cached.daily[0].usage.requests, 2);
+
+        fs::write(&path, format!("{context}\n{first}\n")).unwrap();
+        let delta = scan_file_delta(&path, "sessions/session.jsonl", &mut cached).unwrap();
+        assert!(delta.rebuilt);
+        assert_eq!(delta.events.len(), 1);
+        assert_eq!(cached.daily[0].usage.total_tokens(), 10);
+        assert_eq!(cached.daily[0].usage.requests, 1);
     }
 
     fn token_count(input: u64, output: u64, timestamp: &str) -> String {

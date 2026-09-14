@@ -5,6 +5,7 @@ use crate::usage_overview::OverviewSnapshot;
 pub(super) struct Inputs {
     pub revision: u64,
     pub enabled: Vec<ProviderKind>,
+    pub account: String,
     pub hour: DateTime<Local>,
 }
 
@@ -35,12 +36,13 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     #[test]
-    fn hover_reuses_snapshot_but_data_period_and_clock_changes_recompute() {
+    fn hover_reuses_snapshot_but_data_account_period_and_clock_changes_recompute() {
         let mut cx = RenderCx::new(Rc::new(|| {}));
         let builds = Cell::new(0);
         let mut inputs = Inputs {
             revision: 0,
             enabled: vec![ProviderKind::Codex],
+            account: "account-a".into(),
             hour: crate::usage::truncate_local_hour(Local::now()),
         };
         let render = |cx: &mut RenderCx, inputs: Inputs, query: Option<Query>| {
@@ -63,18 +65,21 @@ mod tests {
         inputs.revision += 1;
         render(&mut cx, inputs.clone(), spend);
         assert_eq!(builds.get(), 2);
-        inputs.enabled.push(ProviderKind::Claude);
+        inputs.account = "account-b".into();
         render(&mut cx, inputs.clone(), spend);
         assert_eq!(builds.get(), 3);
-        inputs.hour += ChronoDuration::hours(1);
+        inputs.enabled.push(ProviderKind::Claude);
         render(&mut cx, inputs.clone(), spend);
         assert_eq!(builds.get(), 4);
+        inputs.hour += ChronoDuration::hours(1);
+        render(&mut cx, inputs.clone(), spend);
+        assert_eq!(builds.get(), 5);
         render(
             &mut cx,
             inputs.clone(),
             Some(Query::Spend(TotalSpendPeriod::Today)),
         );
-        assert_eq!(builds.get(), 5);
+        assert_eq!(builds.get(), 6);
         render(
             &mut cx,
             inputs.clone(),
@@ -83,8 +88,8 @@ mod tests {
                 OverviewRange::NinetyDays,
             )),
         );
-        assert_eq!(builds.get(), 6);
+        assert_eq!(builds.get(), 7);
         render(&mut cx, inputs, None);
-        assert_eq!(builds.get(), 6, "hidden summaries must not query the store");
+        assert_eq!(builds.get(), 7, "hidden summaries must not query the store");
     }
 }

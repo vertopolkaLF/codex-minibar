@@ -42,6 +42,13 @@ pub trait UsageProvider: Send + 'static {
     /// Allows long remote history refreshes to stop when this worker is replaced.
     fn set_cancellation(&mut self, _cancelled: Arc<AtomicBool>) {}
 
+    fn account_identity(&self) -> Option<String> {
+        None
+    }
+    fn identity_poll_interval(&self) -> Duration {
+        Duration::MAX
+    }
+
     /// Some providers expose a provider-page usage card even when background
     /// collection is disabled. Load its existing cache without refreshing it.
     fn load_cached_usage_when_disabled(&self) -> bool {
@@ -535,7 +542,22 @@ fn run_usage_task(
     // limit task. Otherwise every settings update wakes this task and turns a
     // ten-minute maintenance scan into a tight loop.
     let mut paused_after_clear = None::<u64>;
+    let mut usage_identity = provider.account_identity();
     loop {
+        // `None` is an unreadable identity sample, not a logout. Ignore it so a
+        // torn auth.json rewrite cannot clear the visible account.
+        if let Some(identity) = provider.account_identity()
+            && usage_identity.as_deref() != Some(identity.as_str())
+        {
+            usage_identity = Some(identity);
+            let _ = events.send(WorkerEvent::UsageUpdated(UsageStatistics::default()));
+            if usage_collection_enabled && paused_after_clear.is_none() {
+                if let Ok(usage) = provider.load_cached_usage_statistics(history_retention_days) {
+                    let _ = events.send(WorkerEvent::UsageUpdated(usage));
+                }
+                next_refresh = Instant::now();
+            }
+        }
         if !usage_collection_enabled {
             match commands.recv() {
                 Ok(WorkerCommand::Shutdown) | Err(_) => break,
@@ -589,7 +611,11 @@ fn run_usage_task(
             continue;
         }
 
-        match commands.recv_timeout(next_refresh.saturating_duration_since(Instant::now())) {
+        match commands.recv_timeout(
+            next_refresh
+                .saturating_duration_since(Instant::now())
+                .min(provider.identity_poll_interval()),
+        ) {
             Ok(WorkerCommand::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
             Ok(WorkerCommand::SetHistoryRetentionDays(days)) => {
                 let days = days.clamp(1, 365);
@@ -613,7 +639,8 @@ fn run_usage_task(
                 paused_after_clear = None;
                 next_refresh = Instant::now();
             }
-            Ok(WorkerCommand::Refresh) | Err(RecvTimeoutError::Timeout) => {
+            Err(RecvTimeoutError::Timeout) => {}
+            Ok(WorkerCommand::Refresh) => {
                 if paused_after_clear.is_none() {
                     next_refresh = Instant::now();
                 }
@@ -1490,5 +1517,136 @@ mod tests {
 
         commands_tx.send(WorkerCommand::Shutdown).unwrap();
         task.join().unwrap();
+    }
+    #[test]
+    fn account_switch_refreshes_without_turning_identity_polling_into_scans() {
+        use std::sync::atomic::AtomicUsize;
+        struct Switching {
+            account: Arc<AtomicUsize>,
+            scans: Arc<AtomicUsize>,
+        }
+        impl UsageProvider for Switching {
+            fn account_identity(&self) -> Option<String> {
+                Some(self.account.load(Ordering::SeqCst).to_string())
+            }
+            fn identity_poll_interval(&self) -> Duration {
+                Duration::from_millis(10)
+            }
+            fn load_cached_usage_statistics(&mut self, _: u16) -> Result<UsageStatistics> {
+                Ok(UsageStatistics {
+                    account_id: self.account_identity(),
+                    ..Default::default()
+                })
+            }
+            fn refresh_usage_statistics(&mut self, days: u16) -> Result<UsageStatistics> {
+                self.scans.fetch_add(1, Ordering::SeqCst);
+                self.load_cached_usage_statistics(days)
+            }
+        }
+        let account = Arc::new(AtomicUsize::new(0));
+        let scans = Arc::new(AtomicUsize::new(0));
+        let provider = Switching {
+            account: account.clone(),
+            scans: scans.clone(),
+        };
+        let (tx, rx) = mpsc::channel();
+        let (events, received) = mpsc::channel();
+        let thread = thread::spawn(move || {
+            run_usage_task(
+                provider,
+                30,
+                Duration::from_secs(600),
+                true,
+                rx,
+                events,
+                Arc::new(AtomicBool::new(true)),
+            )
+        });
+        let wait_for_scan = |expected| {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < deadline {
+                if matches!(
+                    received.recv_timeout(Duration::from_millis(50)),
+                    Ok(WorkerEvent::RequestFinished(RequestKind::Usage))
+                ) && scans.load(Ordering::SeqCst) >= expected
+                {
+                    return;
+                }
+            }
+            panic!("account scan did not complete");
+        };
+        wait_for_scan(1);
+        thread::sleep(Duration::from_millis(80));
+        assert_eq!(scans.load(Ordering::SeqCst), 1);
+        account.store(1, Ordering::SeqCst);
+        wait_for_scan(2);
+        account.store(0, Ordering::SeqCst);
+        wait_for_scan(3);
+        tx.send(WorkerCommand::Shutdown).unwrap();
+        thread.join().unwrap();
+        assert_eq!(scans.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn uncertain_identity_samples_do_not_count_as_account_switches() {
+        use std::sync::atomic::AtomicUsize;
+        struct Flicker {
+            ticks: Arc<AtomicUsize>,
+            scans: Arc<AtomicUsize>,
+        }
+        impl UsageProvider for Flicker {
+            fn account_identity(&self) -> Option<String> {
+                if self.ticks.fetch_add(1, Ordering::SeqCst).is_multiple_of(2) {
+                    Some("acct".into())
+                } else {
+                    None
+                }
+            }
+            fn identity_poll_interval(&self) -> Duration {
+                Duration::from_millis(10)
+            }
+            fn load_cached_usage_statistics(&mut self, _: u16) -> Result<UsageStatistics> {
+                Ok(UsageStatistics {
+                    account_id: Some("acct".into()),
+                    ..Default::default()
+                })
+            }
+            fn refresh_usage_statistics(&mut self, days: u16) -> Result<UsageStatistics> {
+                self.scans.fetch_add(1, Ordering::SeqCst);
+                self.load_cached_usage_statistics(days)
+            }
+        }
+        let scans = Arc::new(AtomicUsize::new(0));
+        let provider = Flicker {
+            ticks: Arc::new(AtomicUsize::new(0)),
+            scans: scans.clone(),
+        };
+        let (tx, rx) = mpsc::channel();
+        let (events, received) = mpsc::channel();
+        let thread = thread::spawn(move || {
+            run_usage_task(
+                provider,
+                30,
+                Duration::from_secs(600),
+                true,
+                rx,
+                events,
+                Arc::new(AtomicBool::new(true)),
+            )
+        });
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if matches!(
+                received.recv_timeout(Duration::from_millis(50)),
+                Ok(WorkerEvent::RequestFinished(RequestKind::Usage))
+            ) && scans.load(Ordering::SeqCst) >= 1
+            {
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(80));
+        tx.send(WorkerCommand::Shutdown).unwrap();
+        thread.join().unwrap();
+        assert_eq!(scans.load(Ordering::SeqCst), 1);
     }
 }

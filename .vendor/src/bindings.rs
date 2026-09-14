@@ -15878,22 +15878,28 @@ impl IToolTip {
     pub(crate) fn SetIsOpen(&self, value: bool) -> windows_core::Result<()> {
         unsafe {
             (windows_core::Interface::vtable(self).SetIsOpen)(
-                windows_core::Interface::as_raw(self), value,
-            ).ok()
+                windows_core::Interface::as_raw(self),
+                value,
+            )
+            .ok()
         }
     }
     pub(crate) fn SetPlacement(&self, value: PlacementMode) -> windows_core::Result<()> {
         unsafe {
             (windows_core::Interface::vtable(self).SetPlacement)(
-                windows_core::Interface::as_raw(self), value,
-            ).ok()
+                windows_core::Interface::as_raw(self),
+                value,
+            )
+            .ok()
         }
     }
     pub(crate) fn SetPlacementTarget(&self, value: &UIElement) -> windows_core::Result<()> {
         unsafe {
             (windows_core::Interface::vtable(self).SetPlacementTarget)(
-                windows_core::Interface::as_raw(self), windows_core::Interface::as_raw(value),
-            ).ok()
+                windows_core::Interface::as_raw(self),
+                windows_core::Interface::as_raw(value),
+            )
+            .ok()
         }
     }
 }
@@ -16286,11 +16292,7 @@ impl IUIElement {
             let set: Set = core::mem::transmute(
                 windows_core::Interface::vtable(self).SetTranslationTransition,
             );
-            set(
-                windows_core::Interface::as_raw(self),
-                value.param().abi(),
-            )
-            .ok()
+            set(windows_core::Interface::as_raw(self), value.param().abi()).ok()
         }
     }
     pub(crate) fn KeyboardAccelerators(
@@ -16340,7 +16342,11 @@ impl IUIElement {
                 &mut result__,
             )
             .map(|| result__)?;
-            Ok(windows_core::EventRevoker::new(self.clone(), token__, remove))
+            Ok(windows_core::EventRevoker::new(
+                self.clone(),
+                token__,
+                remove,
+            ))
         }
     }
     pub(crate) fn SetKeyboardAcceleratorPlacementMode(
@@ -17133,10 +17139,7 @@ impl IVisual {
             .map(|| result__)
         }
     }
-    pub(crate) fn SetOffset(
-        &self,
-        value: windows_numerics::Vector3,
-    ) -> windows_core::Result<()> {
+    pub(crate) fn SetOffset(&self, value: windows_numerics::Vector3) -> windows_core::Result<()> {
         unsafe {
             type Set = unsafe extern "system" fn(
                 *mut core::ffi::c_void,

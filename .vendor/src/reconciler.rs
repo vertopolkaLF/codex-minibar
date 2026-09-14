@@ -485,7 +485,8 @@ impl<B: Backend + 'static> Reconciler<B> {
             self.backend.set_prop(id, Prop::Opacity, &PropValue::F64(v));
         }
         if let Some(v) = mods.rotation {
-            self.backend.set_prop(id, Prop::Rotation, &PropValue::F64(v));
+            self.backend
+                .set_prop(id, Prop::Rotation, &PropValue::F64(v));
         }
         if let Some(v) = mods.translation_x {
             self.backend

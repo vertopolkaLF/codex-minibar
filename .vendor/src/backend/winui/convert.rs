@@ -73,19 +73,12 @@ pub(super) fn image_icon(uri: &str) -> Result<bindings::IconElement> {
     }
 }
 
-fn enlarge_nav_item_icon_box(
-    nv_item: &bindings::NavigationViewItem,
-    size: f64,
-) -> Result<()> {
-    let rd = nv_item
-        .cast::<bindings::IFrameworkElement>()?
-        .Resources()?;
-    let imap = rd.cast::<windows_collections::IMap<
-        windows_core::IInspectable,
-        windows_core::IInspectable,
-    >>()?;
-    let key =
-        windows_reference::IReference::from("NavigationViewItemOnLeftIconBoxHeight");
+fn enlarge_nav_item_icon_box(nv_item: &bindings::NavigationViewItem, size: f64) -> Result<()> {
+    let rd = nv_item.cast::<bindings::IFrameworkElement>()?.Resources()?;
+    let imap = rd
+        .cast::<windows_collections::IMap<windows_core::IInspectable, windows_core::IInspectable>>(
+        )?;
+    let key = windows_reference::IReference::from("NavigationViewItemOnLeftIconBoxHeight");
     let val = windows_reference::IReference::from(size);
     imap.Insert(&key, &val)?;
     Ok(())
@@ -177,8 +170,7 @@ fn nav_item_content(item: &NavViewItem) -> Result<bindings::UIElement> {
                 &mut result,
             )
             .and_then(|| {
-                let inspectable: windows_core::IInspectable =
-                    windows_core::Type::from_abi(result)?;
+                let inspectable: windows_core::IInspectable = windows_core::Type::from_abi(result)?;
                 inspectable.cast()
             })
         }
