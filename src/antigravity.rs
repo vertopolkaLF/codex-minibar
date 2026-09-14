@@ -105,12 +105,11 @@ fn session_is_stale(expires_at: Option<DateTime<Utc>>) -> bool {
 }
 
 fn antigravity_cli_candidates() -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
+    let mut known = Vec::new();
     if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
-        candidates.push(PathBuf::from(local_app_data).join("agy/bin/agy.exe"));
+        known.push(PathBuf::from(local_app_data).join("agy/bin/agy.exe"));
     }
-    candidates.push(PathBuf::from("agy.exe"));
-    candidates
+    provider_cli::executable_candidates(&known, &["agy.exe"])
 }
 
 fn parse_credential_blob(blob: &[u8]) -> Result<AntigravitySession> {
