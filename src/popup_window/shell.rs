@@ -51,6 +51,11 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             .settings
             .providers
             .is_enabled(ProviderKind::OpenRouter),
+        antigravity_enabled: state
+            .settings
+            .providers
+            .is_enabled(ProviderKind::Antigravity),
+        grok_enabled: state.settings.providers.is_enabled(ProviderKind::Grok),
         openrouter_credentials_revision: state.settings.openrouter_credentials_revision,
         popup_order: state.settings.popup_order.clone(),
         use_colored_provider_icons: state.settings.use_colored_provider_icons,
@@ -170,6 +175,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             ui.opencode_zen_enabled,
             ui.opencode_go_enabled,
             ui.openrouter_enabled,
+            ui.antigravity_enabled,
+            ui.grok_enabled,
             ui.usage_stats_enabled,
             popup_order_key(&ui.popup_order),
         ),
@@ -187,6 +194,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     PopupView::OpenCodeZen => ui.opencode_zen_enabled,
                     PopupView::OpenCodeGo => ui.opencode_go_enabled,
                     PopupView::OpenRouter => ui.openrouter_enabled,
+                    PopupView::Antigravity => ui.antigravity_enabled,
+                    PopupView::Grok => ui.grok_enabled,
                 };
                 if !available {
                     pager_dispatch.call(PagerAction::Select(PopupView::Home));
@@ -251,6 +260,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 ui.opencode_zen_enabled,
                 ui.opencode_go_enabled,
                 ui.openrouter_enabled,
+                ui.antigravity_enabled,
+                ui.grok_enabled,
             )
         })
         .collect::<Vec<_>>();
@@ -284,6 +295,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         ui.opencode_zen_enabled,
         ui.opencode_go_enabled,
         ui.openrouter_enabled,
+        ui.antigravity_enabled,
+        ui.grok_enabled,
     );
     // Child hover changes rebuild this root. Keep store aggregation outside
     // that hot path: only data, account, time-window or query changes invalidate it.
@@ -362,6 +375,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 ui.opencode_zen_enabled,
                 ui.opencode_go_enabled,
                 ui.openrouter_enabled,
+                ui.antigravity_enabled,
+                ui.grok_enabled,
             );
             for (index, widget) in widgets.into_iter().enumerate() {
                 let is_first = index == 0 && !has_preceding_section;
@@ -528,6 +543,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                         ui.opencode_zen_enabled,
                         ui.opencode_go_enabled,
                         ui.openrouter_enabled,
+                        ui.antigravity_enabled,
+                        ui.grok_enabled,
                     ) || retain_disabled_detail
                 })
                 .into_iter()
@@ -591,6 +608,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             && !ui.opencode_zen_enabled
             && !ui.opencode_go_enabled
             && !ui.openrouter_enabled
+            && !ui.antigravity_enabled
+            && !ui.grok_enabled
         {
             body.push(
                 InfoBar::new("No providers enabled")
@@ -726,6 +745,13 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                         "OpenRouter",
                         PopupView::OpenRouter,
                     ),
+                    ProviderKind::Antigravity => (
+                        "provider-tab-antigravity",
+                        "antigravity",
+                        "Antigravity",
+                        PopupView::Antigravity,
+                    ),
+                    ProviderKind::Grok => ("provider-tab-grok", "grok", "Grok", PopupView::Grok),
                 };
                 provider_tabs.push(popup_tab_button(
                     tab_id,
@@ -924,7 +950,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         // SizeChanged. Remounting the page is what tab switches already do so
         // the queued on_resize measure can shrink the HWND.
         let body_layout_key = format!(
-            "popup-page-{role}-{}-{}-{}-{}-{:?}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{:?}-{:?}",
+            "popup-page-{role}-error={}-provider-error={}-visibility={}-total={}-presentation={:?}-period={}-account={}-providers={}-order={}-height={}-compact={}-usage={}-rev={}-resets={}-scheme={:?}-view={:?}",
             ui.error.is_some(),
             view.provider()
                 .is_some_and(|provider| ui.has_provider_error(provider)),
@@ -933,10 +959,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             ui.total_spend_presentation,
             ui.total_spend_period.key(),
             ui.show_account_name,
-            ui.codex_enabled,
-            ui.claude_enabled,
-            ui.cursor_enabled,
-            ui.openrouter_enabled,
+            provider_order_key(&enabled_provider_order),
             popup_order_key(&ui.popup_order),
             popup_body_height_key(
                 &limits,

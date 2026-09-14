@@ -10,7 +10,7 @@ use chrono::{DateTime, Local, Timelike};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 37;
+pub const SETTINGS_VERSION: u32 = 38;
 
 /// 255 until `TimeFormat::apply` runs so first paint can still follow Windows.
 static TIME_FORMAT: AtomicU8 = AtomicU8::new(u8::MAX);
@@ -627,22 +627,16 @@ pub enum ProviderKind {
     OpenCodeGo,
     #[serde(rename = "openrouter")]
     OpenRouter,
+    Antigravity,
+    Grok,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct ProviderSettings {
     /// Enabled providers in the user's preferred popup/tab order.
     pub enabled: Vec<String>,
-}
-
-impl Default for ProviderSettings {
-    fn default() -> Self {
-        Self {
-            // A new installation chooses providers during onboarding.
-            enabled: Vec::new(),
-        }
-    }
 }
 
 impl ProviderSettings {
@@ -757,13 +751,15 @@ fn new_openrouter_id(prefix: &str) -> String {
 }
 
 impl ProviderKind {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::Codex,
         Self::Claude,
         Self::Cursor,
         Self::OpenCodeZen,
         Self::OpenCodeGo,
         Self::OpenRouter,
+        Self::Antigravity,
+        Self::Grok,
     ];
 
     pub const fn id(self) -> &'static str {
@@ -774,6 +770,8 @@ impl ProviderKind {
             Self::OpenCodeZen => "opencode",
             Self::OpenCodeGo => "opencode-go",
             Self::OpenRouter => "openrouter",
+            Self::Antigravity => "antigravity",
+            Self::Grok => "grok",
         }
     }
 
@@ -785,6 +783,8 @@ impl ProviderKind {
             "opencode" => Some(Self::OpenCodeZen),
             "opencode-go" => Some(Self::OpenCodeGo),
             "openrouter" => Some(Self::OpenRouter),
+            "antigravity" => Some(Self::Antigravity),
+            "grok" => Some(Self::Grok),
             _ => None,
         }
     }
@@ -797,6 +797,8 @@ impl ProviderKind {
             Self::OpenCodeZen => "OpenCode Zen",
             Self::OpenCodeGo => "OpenCode Go",
             Self::OpenRouter => "OpenRouter",
+            Self::Antigravity => "Antigravity",
+            Self::Grok => "Grok",
         }
     }
 
@@ -1178,10 +1180,12 @@ pub enum PopupWidgetKind {
     OpenCodeGo,
     #[serde(rename = "openrouter")]
     OpenRouter,
+    Antigravity,
+    Grok,
 }
 
 impl PopupWidgetKind {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 9] = [
         Self::TotalSpend,
         Self::Codex,
         Self::Claude,
@@ -1189,6 +1193,8 @@ impl PopupWidgetKind {
         Self::OpenCodeZen,
         Self::OpenCodeGo,
         Self::OpenRouter,
+        Self::Antigravity,
+        Self::Grok,
     ];
 
     pub fn default_order() -> Vec<Self> {
@@ -1204,6 +1210,8 @@ impl PopupWidgetKind {
             Self::OpenCodeZen => "open_code_zen",
             Self::OpenCodeGo => "open_code_go",
             Self::OpenRouter => "openrouter",
+            Self::Antigravity => "antigravity",
+            Self::Grok => "grok",
         }
     }
 
@@ -1216,6 +1224,8 @@ impl PopupWidgetKind {
             Self::OpenCodeZen => Some(ProviderKind::OpenCodeZen),
             Self::OpenCodeGo => Some(ProviderKind::OpenCodeGo),
             Self::OpenRouter => Some(ProviderKind::OpenRouter),
+            Self::Antigravity => Some(ProviderKind::Antigravity),
+            Self::Grok => Some(ProviderKind::Grok),
         }
     }
 
@@ -1227,6 +1237,8 @@ impl PopupWidgetKind {
             ProviderKind::OpenCodeZen => Self::OpenCodeZen,
             ProviderKind::OpenCodeGo => Self::OpenCodeGo,
             ProviderKind::OpenRouter => Self::OpenRouter,
+            ProviderKind::Antigravity => Self::Antigravity,
+            ProviderKind::Grok => Self::Grok,
         }
     }
 }
@@ -1646,6 +1658,12 @@ pub struct Settings {
     /// Optional explicit Cursor desktop-app launcher. When unset, discovery
     /// continues to inspect the normal installation and profile locations.
     pub cursor_path: Option<PathBuf>,
+    /// Optional explicit agy CLI folder. When unset, discovery continues to
+    /// search PATH and the normal Antigravity install locations.
+    pub antigravity_path: Option<PathBuf>,
+    /// Optional explicit Grok CLI folder. When unset, discovery continues to
+    /// search PATH and the normal Grok home locations.
+    pub grok_path: Option<PathBuf>,
     /// Non-secret revisions used to make manual OpenCode key changes refresh
     /// already-running workers immediately. The key material lives in the
     /// protected secrets store, never in this file.
@@ -1704,6 +1722,8 @@ impl Default for Settings {
             codex_path: None,
             claude_path: None,
             cursor_path: None,
+            antigravity_path: None,
+            grok_path: None,
             opencode_zen_credentials_revision: 0,
             opencode_go_credentials_revision: 0,
             openrouter_credentials_revision: 0,
@@ -1823,9 +1843,7 @@ impl Settings {
     /// to decode. Returns `None` only when the file is not usable TOML at all.
     fn salvage_raw(raw: &str) -> Option<Self> {
         let mut document: toml::Value = toml::from_str(raw).ok()?;
-        let Some(root) = document.as_table_mut() else {
-            return None;
-        };
+        let root = document.as_table_mut()?;
         root.insert("tray_widgets".into(), toml::Value::Array(Vec::new()));
         root.insert(
             "scheduled_activations".into(),
@@ -2411,7 +2429,7 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                             Some("secondary_remaining") => ("secondary", "number"),
                             Some("primary_reset") => ("primary_reset", "reset_time"),
                             Some("secondary_reset") => ("primary_reset", "reset_time"),
-                            Some("combined") | _ => ("combined", "stacked_numbers"),
+                            _ => ("combined", "stacked_numbers"),
                         };
                         widget.insert("source".into(), toml::Value::String(source.into()));
                         widget.insert(
@@ -2633,10 +2651,10 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     });
                 let mut popup_order = vec![toml::Value::String("total_spend".into())];
                 for provider in providers {
-                    if let Some(id) = provider.as_str() {
-                        if matches!(id, "codex" | "claude" | "cursor" | "openrouter") {
-                            popup_order.push(toml::Value::String(id.into()));
-                        }
+                    if let Some(id) = provider.as_str()
+                        && matches!(id, "codex" | "claude" | "cursor" | "openrouter")
+                    {
+                        popup_order.push(toml::Value::String(id.into()));
                     }
                 }
                 for provider in ProviderKind::ALL {
@@ -2933,6 +2951,15 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     .or_insert_with(|| toml::Value::Array(Vec::new()));
                 root.insert("version".into(), toml::Value::Integer(37));
                 version = 37;
+            }
+            37 => {
+                // Antigravity and Grok CLI folders are optional. Missing values
+                // retain automatic discovery for existing installations.
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .insert("version".into(), toml::Value::Integer(38));
+                version = 38;
             }
             // Unknown future/gap versions: stamp current and keep decoding with
             // serde defaults rather than refusing to start.
@@ -3304,8 +3331,10 @@ show_usage_stats = false
     fn round_trips_through_disk() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.toml");
-        let mut expected = Settings::default();
-        expected.compact_usage_cards = true;
+        let expected = Settings {
+            compact_usage_cards: true,
+            ..Default::default()
+        };
         expected.save(&path).unwrap();
         assert_eq!(Settings::load_or_create(&path).unwrap(), expected);
     }
@@ -3458,10 +3487,10 @@ tray_widgets = []
             let parsed: TimeFormat = toml::Value::String(raw.into()).try_into().unwrap();
             assert_eq!(parsed, expected);
         }
-        assert_eq!(
-            toml::to_string(&TimeFormat::Hour24).unwrap().trim(),
-            "\"hour_24\""
-        );
+        // toml 0.9 refuses to emit a bare value as a document; round-trip the
+        // rename through Value instead of toml::to_string(&enum).
+        let encoded = toml::Value::try_from(TimeFormat::Hour24).unwrap();
+        assert_eq!(encoded.as_str(), Some("hour_24"));
     }
 
     #[test]
@@ -3630,6 +3659,8 @@ enabled = ["codex", "claude"]
                 PopupWidgetKind::OpenCodeZen,
                 PopupWidgetKind::OpenCodeGo,
                 PopupWidgetKind::OpenRouter,
+                PopupWidgetKind::Antigravity,
+                PopupWidgetKind::Grok,
             ]
         );
         assert!(settings.move_popup_widget(
@@ -3695,8 +3726,10 @@ enabled = ["codex", "claude"]
     fn unknown_provider_and_metric_ids_round_trip_without_data_loss() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.toml");
-        let mut settings = Settings::default();
-        settings.version = SETTINGS_VERSION;
+        let mut settings = Settings {
+            version: SETTINGS_VERSION,
+            ..Default::default()
+        };
         settings.providers.enabled.push("future-provider".into());
         let mut widget = TrayWidget::custom_for_provider(ProviderKind::Codex);
         widget.indicators[0].provider_id = "future-provider".into();

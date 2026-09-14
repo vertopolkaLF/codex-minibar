@@ -80,7 +80,7 @@ pub fn initialize() -> Result<()> {
 pub(crate) fn refresh_if_stale() -> Result<bool> {
     #[cfg(test)]
     {
-        return Ok(false);
+        Ok(false)
     }
 
     #[cfg(not(test))]
@@ -139,7 +139,7 @@ pub(crate) fn request_cost_microusd(
         .expect("pricing catalog lock poisoned");
     let catalog = catalog.as_ref()?;
     cost_for_catalog(
-        &catalog,
+        catalog,
         provider,
         model,
         cache_creation_tokens,

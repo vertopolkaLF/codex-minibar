@@ -17,10 +17,14 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let set_opencode_zen_enabled = ctx.set_opencode_zen_enabled.clone();
     let set_opencode_go_enabled = ctx.set_opencode_go_enabled.clone();
     let set_openrouter_enabled = ctx.set_openrouter_enabled.clone();
+    let set_antigravity_enabled = ctx.set_antigravity_enabled.clone();
+    let set_grok_enabled = ctx.set_grok_enabled.clone();
     let set_openrouter_accounts = ctx.set_openrouter_accounts.clone();
     let set_codex_path = ctx.set_codex_path.clone();
     let set_claude_path = ctx.set_claude_path.clone();
     let set_cursor_path = ctx.set_cursor_path.clone();
+    let set_antigravity_path = ctx.set_antigravity_path.clone();
+    let set_grok_path = ctx.set_grok_path.clone();
     let set_popup_order = ctx.set_popup_order.clone();
     let set_use_colored_provider_icons = ctx.set_use_colored_provider_icons.clone();
     let set_use_colored_sidebar_icons = ctx.set_use_colored_sidebar_icons.clone();
@@ -76,10 +80,14 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
         opencode_zen_enabled: set_opencode_zen_enabled,
         opencode_go_enabled: set_opencode_go_enabled,
         openrouter_enabled: set_openrouter_enabled,
+        antigravity_enabled: set_antigravity_enabled,
+        grok_enabled: set_grok_enabled,
         openrouter_accounts: set_openrouter_accounts,
         codex_path: set_codex_path,
         claude_path: set_claude_path,
         cursor_path: set_cursor_path,
+        antigravity_path: set_antigravity_path,
+        grok_path: set_grok_path,
         popup_order: set_popup_order,
         use_colored_provider_icons: set_use_colored_provider_icons,
         use_colored_sidebar_icons: set_use_colored_sidebar_icons,

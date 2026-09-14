@@ -566,13 +566,18 @@ fn usage_share_color(provider: ProviderKind, color_scheme: ColorScheme) -> Color
         ProviderKind::Claude => Color::rgb(217, 119, 87),
         ProviderKind::Cursor => match color_scheme {
             ColorScheme::Light => Color::rgb(18, 18, 18),
-            ColorScheme::Dark => Color::rgb(230, 230, 230),
+            ColorScheme::Dark => Color::rgb(255, 255, 255),
         },
         ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => match color_scheme {
             ColorScheme::Light => Color::rgb(75, 75, 75),
             ColorScheme::Dark => Color::rgb(205, 205, 205),
         },
         ProviderKind::OpenRouter => Color::rgb(200, 255, 0),
+        ProviderKind::Antigravity => Color::rgb(66, 133, 244),
+        ProviderKind::Grok => match color_scheme {
+            ColorScheme::Light => Color::rgb(51, 51, 51),
+            ColorScheme::Dark => Color::rgb(255, 255, 255),
+        },
     }
 }
 
@@ -1242,7 +1247,7 @@ fn start_of_local_day(date: NaiveDate) -> DateTime<Local> {
 fn series_color(provider: ProviderKind, color_scheme: ColorScheme) -> Color {
     match provider {
         ProviderKind::Cursor => match color_scheme {
-            ColorScheme::Dark => Color::rgb(236, 236, 236),
+            ColorScheme::Dark => Color::rgb(255, 255, 255),
             ColorScheme::Light => Color::rgb(28, 28, 28),
         },
         ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => match color_scheme {
@@ -1328,12 +1333,12 @@ struct ChartTooltipTrack {
 }
 
 thread_local! {
-    static CHART_TOOLTIP_TRACK: RefCell<ChartTooltipTrack> = RefCell::new(ChartTooltipTrack {
+    static CHART_TOOLTIP_TRACK: RefCell<ChartTooltipTrack> = const { RefCell::new(ChartTooltipTrack {
         host: None,
         cursor: None,
         tip_width: 0.0,
         tip_height: 0.0,
-    });
+    }) };
     static CHART_TOOLTIP_MOUNTED: Callback<Option<windows_core::IInspectable>> =
         Callback::new(|native: Option<windows_core::IInspectable>| {
             if let Some(host) = native.clone() {
@@ -1955,12 +1960,10 @@ fn breakdown_row(
         let icon_name = provider_registry::descriptor(provider).icon;
         let color = provider_brand_color(provider, color_scheme, use_colored_provider_icons);
         title.push(
-            crate::icons::element(icon_name, 14.0, color)
-                .with_key(format!(
-                    "usage-bd-icon-{}-{}-{:02X}{:02X}{:02X}",
-                    row_id, icon_name, color.r, color.g, color.b
-                ))
-                .into(),
+            crate::icons::element(icon_name, 14.0, color).with_key(format!(
+                "usage-bd-icon-{}-{}-{:02X}{:02X}{:02X}",
+                row_id, icon_name, color.r, color.g, color.b
+            )),
         );
     }
     title.push(
@@ -2018,7 +2021,7 @@ fn provider_brand_color(
     }
     let (r, g, b) = match color_scheme {
         ColorScheme::Light => provider_registry::light_surface_brand_rgb(provider),
-        ColorScheme::Dark => provider_registry::descriptor(provider).brand_rgb,
+        ColorScheme::Dark => provider_registry::dark_surface_brand_rgb(provider),
     };
     Color::rgb(r, g, b)
 }

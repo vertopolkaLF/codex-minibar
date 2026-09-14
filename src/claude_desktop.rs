@@ -10,7 +10,10 @@
 //! `api.anthropic.com` OAuth requests the CLI session already performs, and
 //! DPAPI keeps the envelope readable only under the signed-in Windows account.
 
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use anyhow::{Context, Result, anyhow, bail};
@@ -55,22 +58,21 @@ fn config_roots() -> Vec<PathBuf> {
     if let Some(packages) = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .map(|local| local.join("Packages"))
+        && let Ok(entries) = fs::read_dir(packages)
     {
-        if let Ok(entries) = fs::read_dir(packages) {
-            for entry in entries.flatten() {
-                let package_name = entry.file_name();
-                let Some(package_name) = package_name.to_str() else {
-                    continue;
-                };
-                if is_store_package_name(package_name) {
-                    roots.push(
-                        entry
-                            .path()
-                            .join("LocalCache")
-                            .join("Roaming")
-                            .join("Claude"),
-                    );
-                }
+        for entry in entries.flatten() {
+            let package_name = entry.file_name();
+            let Some(package_name) = package_name.to_str() else {
+                continue;
+            };
+            if is_store_package_name(package_name) {
+                roots.push(
+                    entry
+                        .path()
+                        .join("LocalCache")
+                        .join("Roaming")
+                        .join("Claude"),
+                );
             }
         }
     }
@@ -239,7 +241,7 @@ impl CachedToken {
     }
 }
 
-fn read_config(root: &PathBuf) -> Result<DesktopConfig> {
+fn read_config(root: &Path) -> Result<DesktopConfig> {
     let path = root.join("config.json");
     let contents = fs::read(&path).with_context(|| {
         format!(
@@ -260,7 +262,7 @@ struct OsCrypt {
     encrypted_key: Option<String>,
 }
 
-fn master_key(root: &PathBuf) -> Result<Vec<u8>> {
+fn master_key(root: &Path) -> Result<Vec<u8>> {
     let path = root.join("Local State");
     let contents = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
     let state: LocalState =
@@ -331,7 +333,7 @@ fn unprotect(data: &[u8]) -> Result<Vec<u8>> {
         Security::Cryptography::{CRYPT_INTEGER_BLOB, CryptUnprotectData},
     };
 
-    let mut input = CRYPT_INTEGER_BLOB {
+    let input = CRYPT_INTEGER_BLOB {
         cbData: u32::try_from(data.len()).context("DPAPI blob is too large")?,
         pbData: data.as_ptr().cast_mut(),
     };
@@ -343,7 +345,7 @@ fn unprotect(data: &[u8]) -> Result<Vec<u8>> {
     // out-blob is only read after a success return.
     let succeeded = unsafe {
         CryptUnprotectData(
-            &mut input,
+            &input,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),

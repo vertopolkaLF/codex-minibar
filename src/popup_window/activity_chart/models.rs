@@ -73,6 +73,7 @@ fn color(model: &str, scheme: ColorScheme) -> Color {
     )
 }
 
+#[cfg(test)]
 fn xml(text: &str) -> String {
     text.chars()
         .filter(|c| matches!(*c, '\t' | '\n' | '\r' | '\u{20}'..='\u{d7ff}' | '\u{e000}'..='\u{fffd}' | '\u{10000}'..='\u{10ffff}'))
@@ -199,6 +200,7 @@ impl ModelData {
         result
     }
 
+    #[cfg(test)]
     pub(super) fn tooltip(
         &self,
         bucket: &Bucket,
@@ -414,7 +416,7 @@ mod tests {
                     )
                 })
                 .collect(),
-            &[bucket.clone()],
+            std::slice::from_ref(&bucket),
             ProviderKind::OpenRouter,
         );
         for provider in crate::provider_registry::PROVIDERS {

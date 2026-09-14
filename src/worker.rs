@@ -478,14 +478,19 @@ fn run_usage_task(
     // a provider's first quota request completes. Keep the potentially
     // expensive refresh scan behind `limits_ready` so it does not compete with
     // that first network request.
-    if usage_collection_enabled || load_cached_usage_when_disabled {
-        if let Ok(usage) = provider.load_cached_usage_statistics(history_retention_days) {
-            let _ = events.send(WorkerEvent::UsageUpdated(usage));
-        }
+    if (usage_collection_enabled || load_cached_usage_when_disabled)
+        && let Ok(usage) = provider.load_cached_usage_statistics(history_retention_days)
+    {
+        let _ = events.send(WorkerEvent::UsageUpdated(usage));
     }
     let mut next_refresh = Instant::now();
     while !limits_ready.load(Ordering::Acquire) || !usage_collection_enabled {
-        match commands.recv_timeout(Duration::from_millis(100)) {
+        let command = if usage_collection_enabled {
+            commands.recv_timeout(Duration::from_millis(100))
+        } else {
+            commands.recv().map_err(|_| RecvTimeoutError::Disconnected)
+        };
+        match command {
             Ok(WorkerCommand::Shutdown) | Err(RecvTimeoutError::Disconnected) => return,
             Ok(WorkerCommand::SetUsageCollectionEnabled(enabled)) => {
                 if enabled && !usage_collection_enabled {
@@ -503,12 +508,11 @@ fn run_usage_task(
                 let days = days.clamp(1, 365);
                 if days != history_retention_days {
                     history_retention_days = days;
-                    if usage_collection_enabled || load_cached_usage_when_disabled {
-                        if let Ok(usage) =
+                    if (usage_collection_enabled || load_cached_usage_when_disabled)
+                        && let Ok(usage) =
                             provider.load_cached_usage_statistics(history_retention_days)
-                        {
-                            let _ = events.send(WorkerEvent::UsageUpdated(usage));
-                        }
+                    {
+                        let _ = events.send(WorkerEvent::UsageUpdated(usage));
                     }
                 }
             }
@@ -555,8 +559,8 @@ fn run_usage_task(
             }
         }
         if !usage_collection_enabled {
-            match commands.recv_timeout(Duration::from_millis(100)) {
-                Ok(WorkerCommand::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
+            match commands.recv() {
+                Ok(WorkerCommand::Shutdown) | Err(_) => break,
                 Ok(WorkerCommand::SetUsageCollectionEnabled(true)) => {
                     usage_collection_enabled = true;
                     if let Ok(usage) = provider.load_cached_usage_statistics(history_retention_days)
@@ -567,12 +571,11 @@ fn run_usage_task(
                 }
                 Ok(WorkerCommand::SetHistoryRetentionDays(days)) => {
                     history_retention_days = days.clamp(1, 365);
-                    if load_cached_usage_when_disabled {
-                        if let Ok(usage) =
+                    if load_cached_usage_when_disabled
+                        && let Ok(usage) =
                             provider.load_cached_usage_statistics(history_retention_days)
-                        {
-                            let _ = events.send(WorkerEvent::UsageUpdated(usage));
-                        }
+                    {
+                        let _ = events.send(WorkerEvent::UsageUpdated(usage));
                     }
                 }
                 Ok(WorkerCommand::SetUsageRefreshInterval(interval)) => {
@@ -587,7 +590,7 @@ fn run_usage_task(
                     ));
                     let _ = events.send(WorkerEvent::UsageDataCleared(generation));
                 }
-                Ok(_) | Err(RecvTimeoutError::Timeout) => {}
+                Ok(_) => {}
             }
             continue;
         }

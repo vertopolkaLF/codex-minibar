@@ -698,7 +698,14 @@ mod tests {
         state.observe(&window_at(at(15, 0)));
         state.record_attempt(at(10, 0));
         state.save(&path).unwrap();
-        assert_eq!(ActivationState::load_or_default(&path).unwrap(), state);
+        let restored = ActivationState::load_or_default(&path).unwrap();
+        assert!(
+            !restored.attempted_this_process,
+            "cooldown is process-local and must not survive restart"
+        );
+        let mut persisted = state.clone();
+        persisted.attempted_this_process = false;
+        assert_eq!(restored, persisted);
     }
 
     #[test]
@@ -793,7 +800,7 @@ mod tests {
         };
 
         assert!(auto_activation_paused(
-            &[pause.clone()],
+            std::slice::from_ref(&pause),
             local.with_timezone(&Utc)
         ));
         assert!(!auto_activation_paused(
@@ -822,7 +829,7 @@ mod tests {
             .unwrap();
 
         assert!(auto_activation_paused(
-            &[pause.clone()],
+            std::slice::from_ref(&pause),
             late.with_timezone(&Utc)
         ));
         assert!(auto_activation_paused(

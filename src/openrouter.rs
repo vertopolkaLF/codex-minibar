@@ -633,7 +633,7 @@ fn aggregate_spending(accounts: &[OpenRouterAccountSnapshot]) -> Option<Spending
         .reduce(|total, balance| total.saturating_add(balance));
     let resets_at = common_value(spendings.iter().map(|spending| spending.resets_at));
     let reset_kind = common_value(spendings.iter().map(|spending| spending.reset_kind.clone()));
-    (spendings.len() > 0 || balance_microusd.is_some()).then_some(SpendingSummary {
+    (!spendings.is_empty() || balance_microusd.is_some()).then_some(SpendingSummary {
         used_microusd,
         limit_microusd,
         remaining_microusd,
@@ -1149,7 +1149,7 @@ mod tests {
         // Local collapse uses a shorter head than OpenRouter's label.
         let local_mask = collapse_api_key(secret);
         assert_eq!(local_mask.as_deref(), Some("sk-or-v1-c...ef0"));
-        assert!(directory.get("sk-or-v1-c...ef0").is_none());
+        assert!(!directory.contains_key("sk-or-v1-c...ef0"));
 
         let matched = find_directory_entry(secret, local_mask.as_deref(), &directory).unwrap();
         assert_eq!(matched.name.as_deref(), Some("TEST"));

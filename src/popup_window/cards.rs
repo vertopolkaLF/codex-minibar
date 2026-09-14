@@ -44,19 +44,19 @@ pub(super) fn provider_cards(
     let (monthly_label, primary_label, secondary_label) = match provider {
         ProviderKind::Cursor => ("Cursor Models", "Cursor Models", "Cursor Models"),
         ProviderKind::OpenRouter => ("Spending", "Spending", "Spending"),
+        ProviderKind::Antigravity => ("Gemini", "Gemini", "Claude + GPT"),
+        ProviderKind::Grok => ("Credits", "Credits", "Credits"),
         _ => ("Monthly", "5h Session", "Weekly"),
     };
     let mut trailing: Vec<Element> = Vec::new();
-    if show_account_name {
-        if let Some(name) = limits.account_name.as_ref() {
-            trailing.push(
-                caption(name.clone())
-                    .foreground(ThemeRef::TertiaryText)
-                    .horizontal_alignment(HorizontalAlignment::Right)
-                    .vertical_alignment(VerticalAlignment::Center)
-                    .into(),
-            );
-        }
+    if show_account_name && let Some(name) = limits.account_name.as_ref() {
+        trailing.push(
+            caption(name.clone())
+                .foreground(ThemeRef::TertiaryText)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .vertical_alignment(VerticalAlignment::Center)
+                .into(),
+        );
     }
     if let Some(handle) = drag_handle {
         trailing.push(handle);
@@ -630,14 +630,12 @@ pub(super) fn openrouter_account_heading(account: &OpenRouterAccountSnapshot) ->
         .into(),
         None => name.into(),
     };
-    content
-        .margin(Thickness {
-            left: 4.0,
-            top: 8.0,
-            right: 4.0,
-            bottom: 0.0,
-        })
-        .into()
+    content.margin(Thickness {
+        left: 4.0,
+        top: 8.0,
+        right: 4.0,
+        bottom: 0.0,
+    })
 }
 
 /// Stable membership fingerprint for OpenRouter popup chrome. Include account
@@ -1395,7 +1393,7 @@ fn limit_card_compact(
             .vertical_alignment(VerticalAlignment::Stretch)
             .into()
     };
-    layers.push(content.grid_column(0).grid_row(0).into());
+    layers.push(content.grid_column(0).grid_row(0));
     border(
         grid(layers)
             .columns([GridLength::Star(1.0)])

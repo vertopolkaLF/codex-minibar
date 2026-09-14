@@ -300,6 +300,8 @@ pub(super) struct UiState {
     pub(super) opencode_zen_enabled: bool,
     pub(super) opencode_go_enabled: bool,
     pub(super) openrouter_enabled: bool,
+    pub(super) antigravity_enabled: bool,
+    pub(super) grok_enabled: bool,
     pub(super) opencode_zen_credentials_revision: u64,
     pub(super) opencode_go_credentials_revision: u64,
     pub(super) openrouter_credentials_revision: u64,
@@ -309,6 +311,8 @@ pub(super) struct UiState {
     pub(super) codex_path: Option<std::path::PathBuf>,
     pub(super) claude_path: Option<std::path::PathBuf>,
     pub(super) cursor_path: Option<std::path::PathBuf>,
+    pub(super) antigravity_path: Option<std::path::PathBuf>,
+    pub(super) grok_path: Option<std::path::PathBuf>,
     pub(super) update_version: Option<String>,
 }
 
@@ -348,6 +352,8 @@ impl Default for UiState {
             opencode_zen_credentials_revision: 0,
             opencode_go_credentials_revision: 0,
             openrouter_enabled: false,
+            antigravity_enabled: false,
+            grok_enabled: false,
             openrouter_credentials_revision: 0,
             popup_order: PopupWidgetKind::default_order(),
             use_colored_provider_icons: false,
@@ -355,6 +361,8 @@ impl Default for UiState {
             codex_path: None,
             claude_path: None,
             cursor_path: None,
+            antigravity_path: None,
+            grok_path: None,
             update_version: None,
         }
     }

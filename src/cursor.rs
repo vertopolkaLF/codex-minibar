@@ -83,6 +83,12 @@ pub struct CursorClient {
 
 pub struct CursorActivator;
 
+impl Default for CursorClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CursorClient {
     pub fn new() -> Self {
         Self {
@@ -424,20 +430,17 @@ pub(crate) fn normalize_cursor_model_name(model: &str) -> String {
     if let Some(rest) = name.strip_prefix("cursor-") {
         name = rest.to_string();
     }
-    loop {
-        let Some(stripped) = name
-            .strip_suffix("-fast")
-            .or_else(|| name.strip_suffix("-thinking"))
-            .or_else(|| name.strip_suffix("-reasoning"))
-            .or_else(|| name.strip_suffix("-throwaway"))
-            .or_else(|| name.strip_suffix("-xhigh"))
-            .or_else(|| name.strip_suffix("-high"))
-            .or_else(|| name.strip_suffix("-medium"))
-            .or_else(|| name.strip_suffix("-low"))
-            .or_else(|| name.strip_suffix("-none"))
-        else {
-            break;
-        };
+    while let Some(stripped) = name
+        .strip_suffix("-fast")
+        .or_else(|| name.strip_suffix("-thinking"))
+        .or_else(|| name.strip_suffix("-reasoning"))
+        .or_else(|| name.strip_suffix("-throwaway"))
+        .or_else(|| name.strip_suffix("-xhigh"))
+        .or_else(|| name.strip_suffix("-high"))
+        .or_else(|| name.strip_suffix("-medium"))
+        .or_else(|| name.strip_suffix("-low"))
+        .or_else(|| name.strip_suffix("-none"))
+    {
         if stripped.is_empty() {
             break;
         }

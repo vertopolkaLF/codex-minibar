@@ -15,6 +15,8 @@ pub(super) enum PopupView {
     OpenCodeZen,
     OpenCodeGo,
     OpenRouter,
+    Antigravity,
+    Grok,
 }
 
 impl PopupView {
@@ -26,6 +28,8 @@ impl PopupView {
             ProviderKind::OpenCodeZen => Self::OpenCodeZen,
             ProviderKind::OpenCodeGo => Self::OpenCodeGo,
             ProviderKind::OpenRouter => Self::OpenRouter,
+            ProviderKind::Antigravity => Self::Antigravity,
+            ProviderKind::Grok => Self::Grok,
         }
     }
 
@@ -38,6 +42,8 @@ impl PopupView {
             Self::OpenCodeZen => Some(ProviderKind::OpenCodeZen),
             Self::OpenCodeGo => Some(ProviderKind::OpenCodeGo),
             Self::OpenRouter => Some(ProviderKind::OpenRouter),
+            Self::Antigravity => Some(ProviderKind::Antigravity),
+            Self::Grok => Some(ProviderKind::Grok),
         }
     }
 
@@ -66,6 +72,8 @@ pub(super) fn enabled_popup_views(
     opencode_zen: bool,
     opencode_go: bool,
     openrouter: bool,
+    antigravity: bool,
+    grok: bool,
 ) -> Vec<PopupView> {
     let mut views = vec![PopupView::Home];
     if usage_enabled {
@@ -82,6 +90,8 @@ pub(super) fn enabled_popup_views(
             ProviderKind::OpenCodeZen => opencode_zen,
             ProviderKind::OpenCodeGo => opencode_go,
             ProviderKind::OpenRouter => openrouter,
+            ProviderKind::Antigravity => antigravity,
+            ProviderKind::Grok => grok,
         };
         if enabled {
             views.push(PopupView::from_provider(provider));
@@ -121,6 +131,8 @@ pub(super) fn provider_is_enabled(
     opencode_zen: bool,
     opencode_go: bool,
     openrouter: bool,
+    antigravity: bool,
+    grok: bool,
 ) -> bool {
     match provider {
         ProviderKind::Codex => codex,
@@ -129,6 +141,8 @@ pub(super) fn provider_is_enabled(
         ProviderKind::OpenCodeZen => opencode_zen,
         ProviderKind::OpenCodeGo => opencode_go,
         ProviderKind::OpenRouter => openrouter,
+        ProviderKind::Antigravity => antigravity,
+        ProviderKind::Grok => grok,
     }
 }
 
@@ -168,6 +182,8 @@ pub(super) fn visible_popup_widgets(
     opencode_zen: bool,
     opencode_go: bool,
     openrouter: bool,
+    antigravity: bool,
+    grok: bool,
 ) -> Vec<PopupWidgetKind> {
     popup_order
         .iter()
@@ -183,6 +199,8 @@ pub(super) fn visible_popup_widgets(
                     opencode_zen,
                     opencode_go,
                     openrouter,
+                    antigravity,
+                    grok,
                 ) && popup_visibility.provider_visible_on_all(provider)
             }),
         })

@@ -448,6 +448,8 @@ fn popup_section_all_off_drops_provider_from_home_tab() {
         false,
         false,
         false,
+        false,
+        false,
     );
     assert!(!widgets.contains(&PopupWidgetKind::Codex));
     let limits = plan_limits("plus");
@@ -753,13 +755,15 @@ fn pager_uses_reverse_motion_for_an_earlier_tab() {
 #[test]
 fn every_provider_membership_has_the_expected_tab_order() {
     let default_order = PopupWidgetKind::default_order();
-    for mask in 0_u8..64 {
+    for mask in 0_u16..256 {
         let codex = mask & 0b001 != 0;
         let claude = mask & 0b010 != 0;
         let cursor = mask & 0b100 != 0;
         let opencode_zen = mask & 0b01000 != 0;
         let opencode_go = mask & 0b10000 != 0;
         let openrouter = mask & 0b100000 != 0;
+        let antigravity = mask & 0b1000000 != 0;
+        let grok = mask & 0b10000000 != 0;
         let views = enabled_popup_views(
             &default_order,
             true,
@@ -769,6 +773,8 @@ fn every_provider_membership_has_the_expected_tab_order() {
             opencode_zen,
             opencode_go,
             openrouter,
+            antigravity,
+            grok,
         );
         let providers = provider_order_from_popup(&default_order);
 
@@ -780,6 +786,8 @@ fn every_provider_membership_has_the_expected_tab_order() {
         assert_eq!(views.contains(&PopupView::OpenCodeZen), opencode_zen);
         assert_eq!(views.contains(&PopupView::OpenCodeGo), opencode_go);
         assert_eq!(views.contains(&PopupView::OpenRouter), openrouter);
+        assert_eq!(views.contains(&PopupView::Antigravity), antigravity);
+        assert_eq!(views.contains(&PopupView::Grok), grok);
         assert!(
             views
                 .windows(2)
@@ -793,6 +801,8 @@ fn every_provider_membership_has_the_expected_tab_order() {
                 + usize::from(opencode_zen)
                 + usize::from(opencode_go)
                 + usize::from(openrouter)
+                + usize::from(antigravity)
+                + usize::from(grok)
         );
     }
 
@@ -804,8 +814,12 @@ fn every_provider_membership_has_the_expected_tab_order() {
         PopupWidgetKind::OpenCodeZen,
         PopupWidgetKind::OpenCodeGo,
         PopupWidgetKind::OpenRouter,
+        PopupWidgetKind::Antigravity,
+        PopupWidgetKind::Grok,
     ];
-    let views = enabled_popup_views(&reversed, true, true, true, true, true, true, true);
+    let views = enabled_popup_views(
+        &reversed, true, true, true, true, true, true, true, true, true,
+    );
     assert_eq!(
         views,
         vec![
@@ -817,6 +831,8 @@ fn every_provider_membership_has_the_expected_tab_order() {
             PopupView::OpenCodeZen,
             PopupView::OpenCodeGo,
             PopupView::OpenRouter,
+            PopupView::Antigravity,
+            PopupView::Grok,
         ]
     );
 }
@@ -827,6 +843,8 @@ fn usage_stats_toggle_removes_only_the_usage_view() {
         &PopupWidgetKind::default_order(),
         false,
         true,
+        false,
+        false,
         false,
         false,
         false,

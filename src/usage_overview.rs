@@ -300,16 +300,16 @@ fn assemble_overview_snapshot(
     if spend_providers.contains(&ProviderKind::Codex) && codex_has_usage && codex_missing_models {
         // Incremental Codex saves used to wipe usage_model_daily. Rebuild
         // from session logs instead of asking the user to delete the store.
-        if crate::usage::refresh_usage_statistics(load_days).is_ok() {
-            if let Ok(rows) = store::with_store(|store| {
+        if crate::usage::refresh_usage_statistics(load_days).is_ok()
+            && let Ok(rows) = store::with_store(|store| {
                 store.load_model_breakdown(ProviderKind::Codex, start_date, end_date)
-            }) {
-                for (model, usage) in rows {
-                    model_rows
-                        .entry((ProviderKind::Codex, model))
-                        .or_default()
-                        .add(&usage);
-                }
+            })
+        {
+            for (model, usage) in rows {
+                model_rows
+                    .entry((ProviderKind::Codex, model))
+                    .or_default()
+                    .add(&usage);
             }
         }
     }
@@ -344,12 +344,13 @@ fn assemble_overview_snapshot(
                 }
             }
             // Cursor (and anyone else without timestamps) still has daily rows.
-            if usage.requests == 0 && *provider != ProviderKind::OpenRouter {
-                if let Some(days) = provider_daily.get(provider) {
-                    for entry in days {
-                        if entry.date >= start_date && entry.date <= end_date {
-                            usage.add(&entry.usage);
-                        }
+            if usage.requests == 0
+                && *provider != ProviderKind::OpenRouter
+                && let Some(days) = provider_daily.get(provider)
+            {
+                for entry in days {
+                    if entry.date >= start_date && entry.date <= end_date {
+                        usage.add(&entry.usage);
                     }
                 }
             }

@@ -153,10 +153,10 @@ pub fn open(
     updates: Arc<UpdateController>,
 ) -> windows_core::Result<()> {
     HOST.with(|slot| {
-        if is_open() {
-            if let Some(host) = slot.borrow().as_ref() {
-                return host.activate();
-            }
+        if is_open()
+            && let Some(host) = slot.borrow().as_ref()
+        {
+            return host.activate();
         }
 
         // A user can close the settings window using the title-bar button.
@@ -208,10 +208,10 @@ pub fn open(
 /// dismissed onboarding window never half-configures provider workers.
 pub fn open_onboarding(settings_tx: Sender<Settings>) -> windows_core::Result<()> {
     HOST.with(|slot| {
-        if is_open() {
-            if let Some(host) = slot.borrow().as_ref() {
-                return host.activate();
-            }
+        if is_open()
+            && let Some(host) = slot.borrow().as_ref()
+        {
+            return host.activate();
         }
         slot.borrow_mut().take();
 
@@ -318,6 +318,10 @@ pub fn render(
         cx.use_state(settings.providers.is_enabled(ProviderKind::OpenCodeGo));
     let (openrouter_enabled, set_openrouter_enabled) =
         cx.use_state(settings.providers.is_enabled(ProviderKind::OpenRouter));
+    let (antigravity_enabled, set_antigravity_enabled) =
+        cx.use_state(settings.providers.is_enabled(ProviderKind::Antigravity));
+    let (grok_enabled, set_grok_enabled) =
+        cx.use_state(settings.providers.is_enabled(ProviderKind::Grok));
     let (opencode_zen_key_input, set_opencode_zen_key_input) = cx.use_state(String::new());
     let (opencode_go_key_input, set_opencode_go_key_input) = cx.use_state(String::new());
     let (openrouter_accounts, set_openrouter_accounts) =
@@ -341,6 +345,18 @@ pub fn render(
     let (cursor_path, set_cursor_path) = cx.use_state(
         settings
             .cursor_path
+            .as_ref()
+            .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
+    );
+    let (antigravity_path, set_antigravity_path) = cx.use_state(
+        settings
+            .antigravity_path
+            .as_ref()
+            .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
+    );
+    let (grok_path, set_grok_path) = cx.use_state(
+        settings
+            .grok_path
             .as_ref()
             .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
     );
@@ -478,32 +494,48 @@ pub fn render(
     let (claude_install_status, set_claude_install_status) =
         cx.use_async_state(ProviderInstallStatus::checking());
     let (cursor_install_status, set_cursor_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking());
+        cx.use_async_state(ProviderInstallStatus::checking_app());
     let (opencode_zen_install_status, set_opencode_zen_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking());
+        cx.use_async_state(ProviderInstallStatus::checking_app());
     let (opencode_go_install_status, set_opencode_go_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking());
+        cx.use_async_state(ProviderInstallStatus::checking_app());
     let (openrouter_install_status, set_openrouter_install_status) =
+        cx.use_async_state(ProviderInstallStatus::checking_app());
+    let (antigravity_install_status, set_antigravity_install_status) =
         cx.use_async_state(ProviderInstallStatus::checking());
+    let (grok_install_status, set_grok_install_status) =
+        cx.use_async_state(ProviderInstallStatus::checking_cli());
     let status_codex_path = codex_path.clone();
     let status_claude_path = claude_path.clone();
     let status_cursor_path = cursor_path.clone();
+    let status_antigravity_path = antigravity_path.clone();
+    let status_grok_path = grok_path.clone();
     cx.use_effect(
-        (codex_path.clone(), claude_path.clone(), cursor_path.clone()),
+        (
+            codex_path.clone(),
+            claude_path.clone(),
+            cursor_path.clone(),
+            antigravity_path.clone(),
+            grok_path.clone(),
+        ),
         move || {
             let generation = PROVIDER_STATUS_GEN.fetch_add(1, Ordering::Relaxed) + 1;
             set_codex_install_status.call(ProviderInstallStatus::checking());
             set_claude_install_status.call(ProviderInstallStatus::checking());
-            set_cursor_install_status.call(ProviderInstallStatus::checking());
-            set_opencode_zen_install_status.call(ProviderInstallStatus::checking());
-            set_opencode_go_install_status.call(ProviderInstallStatus::checking());
-            set_openrouter_install_status.call(ProviderInstallStatus::checking());
+            set_cursor_install_status.call(ProviderInstallStatus::checking_app());
+            set_opencode_zen_install_status.call(ProviderInstallStatus::checking_app());
+            set_opencode_go_install_status.call(ProviderInstallStatus::checking_app());
+            set_openrouter_install_status.call(ProviderInstallStatus::checking_app());
+            set_antigravity_install_status.call(ProviderInstallStatus::checking());
+            set_grok_install_status.call(ProviderInstallStatus::checking_cli());
             let codex_status = set_codex_install_status.clone();
             let claude_status = set_claude_install_status.clone();
             let cursor_status = set_cursor_install_status.clone();
             let opencode_zen_status = set_opencode_zen_install_status.clone();
             let opencode_go_status = set_opencode_go_install_status.clone();
             let openrouter_status = set_openrouter_install_status.clone();
+            let antigravity_status = set_antigravity_install_status.clone();
+            let grok_status = set_grok_install_status.clone();
             thread::spawn(move || {
                 thread::sleep(Duration::from_millis(250));
                 if PROVIDER_STATUS_GEN.load(Ordering::Relaxed) != generation {
@@ -515,6 +547,9 @@ pub fn render(
                 let opencode_zen = provider_install_status(ProviderKind::OpenCodeZen, "");
                 let opencode_go = provider_install_status(ProviderKind::OpenCodeGo, "");
                 let openrouter = provider_install_status(ProviderKind::OpenRouter, "");
+                let antigravity =
+                    provider_install_status(ProviderKind::Antigravity, &status_antigravity_path);
+                let grok = provider_install_status(ProviderKind::Grok, &status_grok_path);
                 if PROVIDER_STATUS_GEN.load(Ordering::Relaxed) == generation {
                     codex_status.call(codex);
                     claude_status.call(claude);
@@ -522,6 +557,8 @@ pub fn render(
                     opencode_zen_status.call(opencode_zen);
                     opencode_go_status.call(opencode_go);
                     openrouter_status.call(openrouter);
+                    antigravity_status.call(antigravity);
+                    grok_status.call(grok);
                 }
             });
         },
@@ -611,10 +648,14 @@ pub fn render(
             opencode_zen_enabled: set_opencode_zen_enabled.clone(),
             opencode_go_enabled: set_opencode_go_enabled.clone(),
             openrouter_enabled: set_openrouter_enabled.clone(),
+            antigravity_enabled: set_antigravity_enabled.clone(),
+            grok_enabled: set_grok_enabled.clone(),
             openrouter_accounts: set_openrouter_accounts.clone(),
             codex_path: set_codex_path.clone(),
             claude_path: set_claude_path.clone(),
             cursor_path: set_cursor_path.clone(),
+            antigravity_path: set_antigravity_path.clone(),
+            grok_path: set_grok_path.clone(),
             popup_order: set_popup_order.clone(),
             use_colored_provider_icons: set_use_colored_provider_icons.clone(),
             use_colored_sidebar_icons: set_use_colored_sidebar_icons.clone(),
@@ -652,77 +693,83 @@ pub fn render(
     });
 
     let page_context = SettingsPageContext {
-        theme: theme,
-        accent_color: accent_color,
-        animations_enabled: animations_enabled,
-        bottom_bar_size: bottom_bar_size,
-        popup_corner_radius: popup_corner_radius,
-        popup_background_material: popup_background_material,
-        time_format: time_format,
-        codex_enabled: codex_enabled,
-        claude_enabled: claude_enabled,
-        cursor_enabled: cursor_enabled,
-        opencode_zen_enabled: opencode_zen_enabled,
-        opencode_go_enabled: opencode_go_enabled,
-        openrouter_enabled: openrouter_enabled,
+        theme,
+        accent_color,
+        animations_enabled,
+        bottom_bar_size,
+        popup_corner_radius,
+        popup_background_material,
+        time_format,
+        codex_enabled,
+        claude_enabled,
+        cursor_enabled,
+        opencode_zen_enabled,
+        opencode_go_enabled,
+        openrouter_enabled,
+        antigravity_enabled,
+        grok_enabled,
         codex_path: &codex_path,
         claude_path: &claude_path,
         cursor_path: &cursor_path,
+        antigravity_path: &antigravity_path,
+        grok_path: &grok_path,
         codex_install_status: &codex_install_status,
         claude_install_status: &claude_install_status,
         cursor_install_status: &cursor_install_status,
         opencode_zen_install_status: &opencode_zen_install_status,
         opencode_go_install_status: &opencode_go_install_status,
         openrouter_install_status: &openrouter_install_status,
+        antigravity_install_status: &antigravity_install_status,
+        grok_install_status: &grok_install_status,
         opencode_zen_key_input: &opencode_zen_key_input,
         opencode_go_key_input: &opencode_go_key_input,
         openrouter_accounts: &openrouter_accounts,
         openrouter_key_inputs: &openrouter_key_inputs,
         openrouter_management_inputs: &openrouter_management_inputs,
         popup_order: &popup_order,
-        use_colored_provider_icons: use_colored_provider_icons,
-        use_colored_sidebar_icons: use_colored_sidebar_icons,
-        replace_chatgpt_logo_with_codex: replace_chatgpt_logo_with_codex,
-        automatic_activation: automatic_activation,
+        use_colored_provider_icons,
+        use_colored_sidebar_icons,
+        replace_chatgpt_logo_with_codex,
+        automatic_activation,
         scheduled_activations: &scheduled_activations,
         auto_activation_pauses: &auto_activation_pauses,
         expanded_scheduled_activation: &expanded_scheduled_activation,
         expanded_auto_activation_pause: &expanded_auto_activation_pause,
-        usage_stats_enabled: usage_stats_enabled,
+        usage_stats_enabled,
         usage_stats_excluded_providers: &usage_stats_excluded_providers,
-        limit_refresh_interval: limit_refresh_interval,
-        usage_refresh_interval: usage_refresh_interval,
-        reset_announcement_refresh_interval: reset_announcement_refresh_interval,
-        start_at_login: start_at_login,
-        show_used_percentage: show_used_percentage,
-        show_usage_pace: show_usage_pace,
-        compact_usage_cards: compact_usage_cards,
+        limit_refresh_interval,
+        usage_refresh_interval,
+        reset_announcement_refresh_interval,
+        start_at_login,
+        show_used_percentage,
+        show_usage_pace,
+        compact_usage_cards,
         popup_visibility: &popup_visibility,
         discovered_popup_bricks: &discovered_popup_bricks,
-        show_total_spend_on_all_tab: show_total_spend_on_all_tab,
-        total_spend_presentation: total_spend_presentation,
-        show_account_name: show_account_name,
-        activation_success: activation_success,
-        activation_failure: activation_failure,
-        limits_reset: limits_reset,
-        low_usage_enabled: low_usage_enabled,
-        low_usage_threshold: low_usage_threshold,
-        low_usage_expanded: low_usage_expanded,
-        low_usage_expand_progress: low_usage_expand_progress,
-        weekly_low_usage_enabled: weekly_low_usage_enabled,
-        weekly_low_usage_threshold: weekly_low_usage_threshold,
-        weekly_low_usage_expanded: weekly_low_usage_expanded,
-        weekly_low_usage_expand_progress: weekly_low_usage_expand_progress,
+        show_total_spend_on_all_tab,
+        total_spend_presentation,
+        show_account_name,
+        activation_success,
+        activation_failure,
+        limits_reset,
+        low_usage_enabled,
+        low_usage_threshold,
+        low_usage_expanded,
+        low_usage_expand_progress,
+        weekly_low_usage_enabled,
+        weekly_low_usage_threshold,
+        weekly_low_usage_expanded,
+        weekly_low_usage_expand_progress,
         tray_widgets: &tray_widgets,
         expanded_tray_widget: &expanded_tray_widget,
         editing_tray_indicator: &editing_tray_indicator,
         removed_tray_widget: &removed_tray_widget,
         hovered_card_id: &hovered_card_id,
         expanded_popup_provider: &expanded_popup_provider,
-        check_for_updates: check_for_updates,
-        notify_on_update: notify_on_update,
-        forced_reset_feed_enabled: forced_reset_feed_enabled,
-        forced_reset_notifications: forced_reset_notifications,
+        check_for_updates,
+        notify_on_update,
+        forced_reset_feed_enabled,
+        forced_reset_notifications,
         update_phase: &update_phase,
         log_content: &log_content,
         streamdeck_install_phase: &streamdeck_install_phase,
@@ -739,6 +786,8 @@ pub fn render(
         set_opencode_zen_enabled: set_opencode_zen_enabled.clone(),
         set_opencode_go_enabled: set_opencode_go_enabled.clone(),
         set_openrouter_enabled: set_openrouter_enabled.clone(),
+        set_antigravity_enabled: set_antigravity_enabled.clone(),
+        set_grok_enabled: set_grok_enabled.clone(),
         set_opencode_zen_key_input: set_opencode_zen_key_input.clone(),
         set_opencode_go_key_input: set_opencode_go_key_input.clone(),
         set_openrouter_accounts: set_openrouter_accounts.clone(),
@@ -747,6 +796,8 @@ pub fn render(
         set_codex_path: set_codex_path.clone(),
         set_claude_path: set_claude_path.clone(),
         set_cursor_path: set_cursor_path.clone(),
+        set_antigravity_path: set_antigravity_path.clone(),
+        set_grok_path: set_grok_path.clone(),
         set_popup_order: set_popup_order.clone(),
         set_use_colored_provider_icons: set_use_colored_provider_icons.clone(),
         set_use_colored_sidebar_icons: set_use_colored_sidebar_icons.clone(),
@@ -932,6 +983,8 @@ pub fn render(
         opencode_zen_enabled,
         opencode_go_enabled,
         openrouter_enabled,
+        antigravity_enabled,
+        grok_enabled,
     );
     let window_body: Element = if let Some(editing) = editing_tray_indicator.as_ref() {
         let overlay = tray_indicator_edit_overlay(
@@ -986,8 +1039,7 @@ pub fn render(
         mica.relative_align_left()
             .relative_align_right()
             .relative_align_top()
-            .relative_align_bottom()
-            .into(),
+            .relative_align_bottom(),
         window_body
             .relative_align_left()
             .relative_align_right()

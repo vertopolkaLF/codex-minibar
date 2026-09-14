@@ -161,22 +161,12 @@ pub struct ClaudeClient {
     account_cache: ClaudeAccountCache,
 }
 
+#[derive(Default)]
 struct ClaudeAccountCache {
     account_name: Option<String>,
     plan_type: Option<String>,
     checked_at: Option<Instant>,
     reset_schedule: Vec<(String, Option<DateTime<Utc>>)>,
-}
-
-impl Default for ClaudeAccountCache {
-    fn default() -> Self {
-        Self {
-            account_name: None,
-            plan_type: None,
-            checked_at: None,
-            reset_schedule: Vec::new(),
-        }
-    }
 }
 
 impl ClaudeAccountCache {
@@ -433,7 +423,7 @@ fn load_cli_credentials() -> Result<Credentials> {
     );
     let expires_at = oauth
         .expires_at_millis
-        .and_then(|milliseconds| DateTime::from_timestamp_millis(milliseconds));
+        .and_then(DateTime::from_timestamp_millis);
     Ok(Credentials {
         access_token,
         expires_at,
@@ -906,8 +896,13 @@ mod tests {
         ];
         assert!(cache.needs_refresh(&changed_schedule));
 
-        cache.checked_at = Some(Instant::now() - PROFILE_REFRESH_INTERVAL);
-        assert!(cache.needs_refresh(&schedule));
+        // Instant::now() - 30min panics on Windows when uptime is shorter
+        // (GitHub Actions runners). Skip the elapsed path in that case; the
+        // reset-schedule change above already covers needs_refresh == true.
+        if let Some(stale) = Instant::now().checked_sub(PROFILE_REFRESH_INTERVAL) {
+            cache.checked_at = Some(stale);
+            assert!(cache.needs_refresh(&schedule));
+        }
     }
 
     #[test]

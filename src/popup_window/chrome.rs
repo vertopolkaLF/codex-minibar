@@ -83,6 +83,8 @@ pub(super) fn popup_tab_button(
         Some("cursor") => popup_provider_icon_color(ProviderKind::Cursor, color_scheme),
         Some("opencode") => popup_provider_icon_color(ProviderKind::OpenCodeZen, color_scheme),
         Some("openrouter") => popup_provider_icon_color(ProviderKind::OpenRouter, color_scheme),
+        Some("antigravity") => popup_provider_icon_color(ProviderKind::Antigravity, color_scheme),
+        Some("grok") => popup_provider_icon_color(ProviderKind::Grok, color_scheme),
         Some("fluent-chart") | Some("fluent-home") => popup_chrome_icon_color(color_scheme, false),
         _ => idle_icon_color,
     };
@@ -136,8 +138,7 @@ pub(super) fn popup_tab_button(
             layers.push(
                 crate::icons::element(icon_name, glyph_size, brand_icon_color)
                     .relative_align_h_center()
-                    .relative_align_v_center()
-                    .into(),
+                    .relative_align_v_center(),
             );
         } else {
             // Crossfade idle/emphasized hosts instead of remounting on hover.
@@ -145,15 +146,13 @@ pub(super) fn popup_tab_button(
                 crate::icons::element(icon_name, glyph_size, idle_icon_color)
                     .opacity(if hovered { 0.0 } else { 1.0 })
                     .relative_align_h_center()
-                    .relative_align_v_center()
-                    .into(),
+                    .relative_align_v_center(),
             );
             layers.push(
                 crate::icons::element(icon_name, glyph_size, hover_icon_color)
                     .opacity(if hovered { 1.0 } else { 0.0 })
                     .relative_align_h_center()
-                    .relative_align_v_center()
-                    .into(),
+                    .relative_align_v_center(),
             );
         }
     }
@@ -316,8 +315,7 @@ pub(super) fn chrome_icon_button(
             crate::icons::accent_element(normal_icon, glyph_size)
                 .rotation(rotation)
                 .relative_align_h_center()
-                .relative_align_v_center()
-                .into(),
+                .relative_align_v_center(),
         ]
     } else {
         vec![
@@ -328,8 +326,7 @@ pub(super) fn chrome_icon_button(
                     crate::theme::CONTROL_FAST_ANIMATION,
                 ))
                 .relative_align_h_center()
-                .relative_align_v_center()
-                .into(),
+                .relative_align_v_center(),
             crate::icons::accent_element(hover_icon, glyph_size)
                 .rotation(rotation)
                 .opacity(if hovered || is_refreshing { 1.0 } else { 0.0 })
@@ -337,8 +334,7 @@ pub(super) fn chrome_icon_button(
                     crate::theme::CONTROL_FAST_ANIMATION,
                 ))
                 .relative_align_h_center()
-                .relative_align_v_center()
-                .into(),
+                .relative_align_v_center(),
         ]
     };
     let mut layers = vec![hover_background];
@@ -383,7 +379,7 @@ pub(super) fn popup_chrome_icon_color(color_scheme: ColorScheme, emphasized: boo
 fn popup_provider_icon_color(provider: ProviderKind, color_scheme: ColorScheme) -> Color {
     let (r, g, b) = match color_scheme {
         ColorScheme::Light => crate::provider_registry::light_surface_brand_rgb(provider),
-        ColorScheme::Dark => crate::provider_registry::descriptor(provider).brand_rgb,
+        ColorScheme::Dark => crate::provider_registry::dark_surface_brand_rgb(provider),
     };
     Color::rgb(r, g, b)
 }

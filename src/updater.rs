@@ -293,7 +293,7 @@ pub fn current_version() -> Version {
 pub fn host_arch() -> &'static str {
     #[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
     {
-        return "x64";
+        "x64"
     }
     #[cfg(all(target_arch = "x86", target_pointer_width = "32"))]
     {
