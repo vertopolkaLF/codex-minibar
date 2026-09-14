@@ -163,6 +163,12 @@ pub(crate) struct AccountEvent {
     pub usage: TokenUsage,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AccountSourceReset {
+    pub source: String,
+    pub session: String,
+}
+
 const VALUES: &str = "input_tokens,cached_input_tokens,output_tokens,requests,estimated_cost_microusd,priced_requests,cache_savings_microusd";
 const SUMS: &str = "SUM(input_tokens), SUM(cached_input_tokens), SUM(output_tokens), SUM(requests), SUM(estimated_cost_microusd), SUM(priced_requests), SUM(cache_savings_microusd)";
 
@@ -170,20 +176,29 @@ impl ProviderStore {
     pub(super) fn migrate_codex_accounts(&self) -> Result<()> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS codex_account_events (
-            account TEXT NOT NULL, session TEXT NOT NULL, ts INTEGER NOT NULL,
+            account TEXT NOT NULL, source TEXT NOT NULL DEFAULT '',
+            session TEXT NOT NULL, ts INTEGER NOT NULL,
             signature TEXT NOT NULL, date TEXT NOT NULL, model TEXT NOT NULL,
             input_tokens INTEGER NOT NULL, cached_input_tokens INTEGER NOT NULL,
             output_tokens INTEGER NOT NULL, requests INTEGER NOT NULL,
             estimated_cost_microusd INTEGER NOT NULL, priced_requests INTEGER NOT NULL,
             cache_savings_microusd INTEGER NOT NULL,
-            PRIMARY KEY(session, ts, signature));
-            CREATE INDEX IF NOT EXISTS codex_account_date ON codex_account_events(account,date);
-            CREATE INDEX IF NOT EXISTS codex_account_time ON codex_account_events(account,ts);",
+            PRIMARY KEY(session, ts, signature));",
+        )?;
+        self.ensure_column(
+            "codex_account_events",
+            "source",
+            "TEXT NOT NULL DEFAULT ''",
         )?;
         self.ensure_column(
             "codex_account_events",
             "covered",
             "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS codex_account_date ON codex_account_events(account,date);
+            CREATE INDEX IF NOT EXISTS codex_account_time ON codex_account_events(account,ts);
+            CREATE INDEX IF NOT EXISTS codex_account_source ON codex_account_events(source);",
         )?;
         for (kind, columns) in [
             ("daily", "date"),
@@ -325,7 +340,7 @@ impl ProviderStore {
             })?;
             for file in files {
                 let (path, offset, meta) = file?;
-                let source = Path::new(&path)
+                let fallback_session = Path::new(&path)
                     .file_name()
                     .unwrap_or_default()
                     .to_string_lossy()
@@ -336,9 +351,13 @@ impl ProviderStore {
                     .get("session_id")
                     .and_then(|id| id.as_str())
                     .filter(|id| !id.is_empty())
-                    .unwrap_or(&source)
+                    .unwrap_or(&fallback_session)
                     .to_owned();
-                tx.execute("INSERT INTO codex_legacy_cursors VALUES(?1,?2) ON CONFLICT(source) DO UPDATE SET offset=MAX(offset,excluded.offset)", params![source,offset])?;
+                tx.execute(
+                    "INSERT INTO codex_legacy_cursors VALUES(?1,?2)
+                     ON CONFLICT(source) DO UPDATE SET offset=MAX(offset,excluded.offset)",
+                    params![path, offset],
+                )?;
                 paths.insert(path, session);
             }
             let mut query =
@@ -359,6 +378,7 @@ impl ProviderStore {
         Ok(state)
     }
 
+    #[cfg(test)]
     pub(crate) fn save_account_events(
         &self,
         events: &[AccountEvent],
@@ -367,7 +387,35 @@ impl ProviderStore {
         after: &Option<Identity>,
         end: DateTime<Utc>,
     ) -> Result<()> {
+        self.save_account_events_with_resets(events, &[], state, before, after, end)
+    }
+
+    pub(crate) fn save_account_events_with_resets(
+        &self,
+        events: &[AccountEvent],
+        reset_sources: &[AccountSourceReset],
+        state: &Attribution,
+        before: &Option<Identity>,
+        after: &Option<Identity>,
+        end: DateTime<Utc>,
+    ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
+        for reset in reset_sources {
+            if reset.session.is_empty() {
+                tx.execute(
+                    "DELETE FROM codex_account_events WHERE source=?1",
+                    [&reset.source],
+                )?;
+            } else {
+                // `source` was added after the first account-attribution build.
+                // The session fallback removes rows written by that build too.
+                tx.execute(
+                    "DELETE FROM codex_account_events
+                     WHERE source=?1 OR (source='' AND session=?2)",
+                    params![reset.source, reset.session],
+                )?;
+            }
+        }
         {
             let mut query = tx.prepare("SELECT source,offset FROM codex_legacy_cursors")?;
             let cursors = query
@@ -375,18 +423,23 @@ impl ProviderStore {
                     Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
                 })?
                 .collect::<rusqlite::Result<BTreeMap<_, _>>>()?;
-            let mut insert = tx.prepare("INSERT INTO codex_account_events VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+            let mut insert = tx.prepare("INSERT INTO codex_account_events(
+                    account,source,session,ts,signature,date,model,input_tokens,
+                    cached_input_tokens,output_tokens,requests,estimated_cost_microusd,
+                    priced_requests,cache_savings_microusd,covered)
+                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
                 ON CONFLICT(session,ts,signature) DO UPDATE SET
-                    model=excluded.model,input_tokens=excluded.input_tokens,cached_input_tokens=excluded.cached_input_tokens,
+                    source=excluded.source,model=excluded.model,input_tokens=excluded.input_tokens,cached_input_tokens=excluded.cached_input_tokens,
                     output_tokens=excluded.output_tokens,requests=excluded.requests,estimated_cost_microusd=excluded.estimated_cost_microusd,
                     priced_requests=excluded.priced_requests,cache_savings_microusd=excluded.cache_savings_microusd
-                WHERE model IS NOT excluded.model OR input_tokens IS NOT excluded.input_tokens OR cached_input_tokens IS NOT excluded.cached_input_tokens
+                WHERE source IS NOT excluded.source OR model IS NOT excluded.model OR input_tokens IS NOT excluded.input_tokens OR cached_input_tokens IS NOT excluded.cached_input_tokens
                     OR output_tokens IS NOT excluded.output_tokens OR requests IS NOT excluded.requests OR estimated_cost_microusd IS NOT excluded.estimated_cost_microusd
                     OR priced_requests IS NOT excluded.priced_requests OR cache_savings_microusd IS NOT excluded.cache_savings_microusd")?;
             for e in events {
                 let u = &e.usage;
                 insert.execute(params![
                     state.owner(e.timestamp, before, after, end),
+                    e.source,
                     e.session,
                     e.timestamp.timestamp_millis(),
                     e.signature,
@@ -741,6 +794,44 @@ mod tests {
     }
 
     #[test]
+    fn migration_keeps_same_basename_cursors_separate() {
+        let db = store();
+        for (path, offset) in [
+            ("sessions/2026/09/one/shared.jsonl", 100_i64),
+            ("sessions/2026/09/two/shared.jsonl", 300_i64),
+        ] {
+            db.conn
+                .execute(
+                    "INSERT INTO scan_files(provider,path,offset,meta_json)
+                     VALUES('codex',?1,?2,'{}')",
+                    params![path, offset],
+                )
+                .unwrap();
+        }
+
+        db.initialize_codex_attribution_at(identity_for("only-account", 1), at(100))
+            .unwrap();
+        let mut query = db
+            .conn
+            .prepare("SELECT source,offset FROM codex_legacy_cursors ORDER BY source")
+            .unwrap();
+        let cursors = query
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(
+            cursors,
+            vec![
+                ("sessions/2026/09/one/shared.jsonl".into(), 100),
+                ("sessions/2026/09/two/shared.jsonl".into(), 300),
+            ]
+        );
+    }
+
+    #[test]
     fn logged_out_upgrade_binds_only_legacy_history_at_first_login() {
         let db = store();
         let initial = db.initialize_codex_attribution_at(None, at(100)).unwrap();
@@ -845,6 +936,57 @@ mod tests {
     }
 
     #[test]
+    fn source_reset_replaces_obsolete_account_events() {
+        let db = store();
+        let initial = state();
+        let account = initial.observed.clone();
+        let mut first = event(115, 10);
+        first.source = "sessions/2026/09/session.jsonl".into();
+        let mut second = event(116, 20);
+        second.source = first.source.clone();
+        let source = first.source.clone();
+        let session = first.session.clone();
+        db.save_account_events(
+            &[first, second],
+            &initial,
+            &account,
+            &account,
+            at(120),
+        )
+        .unwrap();
+
+        let state = db.codex_attribution().unwrap().unwrap();
+        let mut replacement = event(125, 7);
+        replacement.source = source.clone();
+        db.save_account_events_with_resets(
+            &[replacement],
+            &[AccountSourceReset {
+                source,
+                session,
+            }],
+            &state,
+            &account,
+            &account,
+            at(130),
+        )
+        .unwrap();
+
+        let rows = db
+            .account_daily_for("new", at(0).date_naive(), at(200).date_naive())
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].2.input_tokens, 7);
+        assert_eq!(
+            db.conn
+                .query_row("SELECT COUNT(*) FROM codex_account_events", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
     fn clearing_and_replaying_preserves_observed_account_ownership() {
         let db = store();
         let state = state();
@@ -921,9 +1063,11 @@ mod tests {
         let mut expected = TokenUsage::default();
         let from = Local::now().date_naive() - Duration::days(364);
         let to = Local::now().date_naive() - Duration::days(1);
-        for (path, _) in crate::usage::collect_codex_session_files(&codex_home()).unwrap() {
+        for (path, source) in crate::usage::collect_codex_session_files(&codex_home()).unwrap() {
             let mut file = crate::usage::CachedSessionFile::default();
-            events.extend(crate::usage::scan_file_delta(&path, &mut file).unwrap());
+            let (source_events, _) =
+                crate::usage::scan_file_delta(&path, &source, &mut file).unwrap();
+            events.extend(source_events);
             for day in file.daily {
                 if day.date >= from && day.date <= to {
                     expected.add(&day.usage);
