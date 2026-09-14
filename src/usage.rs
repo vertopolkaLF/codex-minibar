@@ -13,12 +13,13 @@ use serde_json::Value;
 
 use crate::{pricing, settings::ProviderKind, store};
 
-// Version 8 rebuilds event source links after the account-source migration.
+// Version 9 upgrades attributed event identity to include the record offset.
+// Version 8 rebuilt event source links after the account-source migration.
 // Version 7 matched T3/ccusage Codex transcript rules and the current pricing
 // table: first session_meta
 // wins, fork/subagent copied history is dropped, and unchanged token_count
 // re-emits are ignored. Older daily totals must be rebuilt from the logs.
-pub(crate) const CODEX_CACHE_VERSION: u8 = 8;
+pub(crate) const CODEX_CACHE_VERSION: u8 = 9;
 // Version 4 only accepts Claude `assistant` usage lines, matching T3 and the
 // current model pricing table.
 pub(crate) const CLAUDE_CACHE_VERSION: u8 = 4;

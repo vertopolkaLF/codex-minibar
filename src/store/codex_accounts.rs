@@ -495,19 +495,51 @@ impl ProviderStore {
                     OR priced_requests IS NOT excluded.priced_requests OR cache_savings_microusd IS NOT excluded.cache_savings_microusd")?;
             let mut link =
                 tx.prepare("INSERT OR IGNORE INTO codex_event_sources VALUES(?1,?2,?3,?4)")?;
+            // Older previews keyed only by timestamp + usage. Promote their
+            // existing row and every source link before inserting a record key,
+            // retaining ownership/coverage instead of counting the old row twice.
+            let mut legacy = tx.prepare("SELECT EXISTS(SELECT 1 FROM codex_account_events WHERE session=?1 AND ts=?2 AND signature=?3)")?;
+            let mut promote = tx.prepare(&format!("INSERT OR IGNORE INTO codex_account_events(account,source,session,ts,signature,date,model,{VALUES},covered)
+                SELECT account,source,session,ts,?4,date,model,{VALUES},covered FROM codex_account_events
+                WHERE session=?1 AND ts=?2 AND signature=?3"))?;
+            let mut promote_links = tx.prepare("INSERT OR IGNORE INTO codex_event_sources
+                SELECT source,session,ts,?4 FROM codex_event_sources WHERE session=?1 AND ts=?2 AND signature=?3")?;
+            let mut remove_legacy_links = tx.prepare(
+                "DELETE FROM codex_event_sources WHERE session=?1 AND ts=?2 AND signature=?3",
+            )?;
+            let mut remove_legacy = tx.prepare(
+                "DELETE FROM codex_account_events WHERE session=?1 AND ts=?2 AND signature=?3",
+            )?;
             for e in events {
+                // Byte offsets distinguish repeated A/B/A records even when
+                // timestamps collide. Moving a rollout to the archive preserves
+                // its record offsets and therefore its persisted event identity.
+                let record = format!("record:{}:{}", e.offset, e.signature);
+                let old_key = params![e.session, e.timestamp.timestamp_millis(), e.signature];
+                if legacy.query_row(old_key, |r| r.get::<_, bool>(0))? {
+                    let keys = params![
+                        e.session,
+                        e.timestamp.timestamp_millis(),
+                        e.signature,
+                        record
+                    ];
+                    promote.execute(keys)?;
+                    promote_links.execute(keys)?;
+                    remove_legacy_links.execute(old_key)?;
+                    remove_legacy.execute(old_key)?;
+                }
                 link.execute(params![
                     e.source,
                     e.session,
                     e.timestamp.timestamp_millis(),
-                    e.signature
+                    record
                 ])?;
                 let u = &e.usage;
                 insert.execute(params![
                     state.owner(e.timestamp, before, after, end),
                     e.session,
                     e.timestamp.timestamp_millis(),
-                    e.signature,
+                    record,
                     e.timestamp.with_timezone(&Local).date_naive().to_string(),
                     e.model,
                     u.input_tokens as i64,
@@ -1708,6 +1740,137 @@ mod tests {
                 .2
                 .input_tokens,
             20
+        );
+    }
+    #[test]
+    fn equal_timestamp_nonconsecutive_usage_records_survive_incremental_scan_and_replay() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout.jsonl");
+        let source = "sessions/day/rollout.jsonl";
+        let line = |tokens| {
+            json!({
+                "timestamp": at(115).to_rfc3339(), "type":"event_msg",
+                "payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":tokens}}}
+            })
+            .to_string()
+        };
+        let prefix = format!(
+            "{}\n{}\n",
+            json!({"type":"session_meta","payload":{"id":"conversation"}}),
+            json!({"type":"turn_context","payload":{"model":"gpt-5.4"}})
+        );
+        fs::write(&path, format!("{prefix}{}\n", line(10))).unwrap();
+        let db = store();
+        let s = state();
+        let mut cached = crate::usage::CachedSessionFile::default();
+        let first = crate::usage::scan_file_delta(&path, source, &mut cached).unwrap();
+        db.save_account_scan(
+            &first.events,
+            &[source.into()],
+            &s,
+            &s.observed,
+            &s.observed,
+            at(120),
+        )
+        .unwrap();
+        fs::write(
+            &path,
+            format!("{prefix}{}\n{}\n{}\n", line(10), line(20), line(10)),
+        )
+        .unwrap();
+        let tail = crate::usage::scan_file_delta(&path, source, &mut cached).unwrap();
+        assert!(!tail.rebuilt);
+        db.save_account_scan(&tail.events, &[], &s, &s.observed, &s.observed, at(120))
+            .unwrap();
+        assert_eq!(cached.daily[0].usage.input_tokens, 40);
+        assert_eq!(
+            db.account_daily_for("new", at(0).date_naive(), at(200).date_naive())
+                .unwrap()[0]
+                .2
+                .input_tokens,
+            40
+        );
+        let archived = "archived_sessions/day/rollout.jsonl";
+        let replay =
+            crate::usage::scan_file_delta(&path, archived, &mut Default::default()).unwrap();
+        db.save_account_scan(
+            &replay.events,
+            &[archived.into()],
+            &s,
+            &None,
+            &None,
+            at(130),
+        )
+        .unwrap();
+        let rows = db
+            .account_daily_for("new", at(0).date_naive(), at(200).date_naive())
+            .unwrap();
+        assert_eq!(rows[0].2.input_tokens, 40);
+        assert_eq!(rows[0].2.requests, 3);
+    }
+    #[test]
+    fn record_identity_upgrade_keeps_legacy_owner_coverage_and_other_sources() {
+        let db = store();
+        let s = state();
+        let mut first = event(115, 10);
+        first.source = "sessions/a.jsonl".into();
+        let mut second = event(115, 10);
+        second.source = "sessions/b.jsonl".into();
+        db.save_account_events(&[first, second], &s, &s.observed, &s.observed, at(120))
+            .unwrap();
+        // Simulate a preview's old key, retained by a second unavailable file.
+        db.conn
+            .execute_batch(
+                "UPDATE codex_account_events SET signature='usage-10', covered=1;
+            UPDATE codex_event_sources SET signature='usage-10';",
+            )
+            .unwrap();
+        let mut replay = event(115, 10);
+        replay.source = "sessions/a.jsonl".into();
+        db.save_account_scan(
+            &[replay],
+            &["sessions/a.jsonl".into()],
+            &s,
+            &None,
+            &None,
+            at(130),
+        )
+        .unwrap();
+        let (owner, covered, signature): (String, bool, String) = db
+            .conn
+            .query_row(
+                "SELECT account,covered,signature FROM codex_account_events",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(owner, "new");
+        assert!(covered);
+        assert!(signature.starts_with("record:"));
+        assert_eq!(
+            db.conn
+                .query_row("SELECT COUNT(*) FROM codex_account_events", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        db.save_account_scan(&[], &["sessions/a.jsonl".into()], &s, &None, &None, at(140))
+            .unwrap();
+        assert_eq!(
+            db.conn
+                .query_row("SELECT COUNT(*) FROM codex_account_events", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        db.save_account_scan(&[], &["sessions/b.jsonl".into()], &s, &None, &None, at(150))
+            .unwrap();
+        assert_eq!(
+            db.conn
+                .query_row("SELECT COUNT(*) FROM codex_account_events", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
         );
     }
 }
