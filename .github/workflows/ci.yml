@@ -20,7 +20,8 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: Check formatting
-        run: cargo fmt --all --check
+        # Skip path crate `.vendor` (upstream windows-reactor). `--all` formats local path deps.
+        run: cargo fmt --package codex-minibar --check
       - name: Lint
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - name: Test
