@@ -19,6 +19,7 @@ pub mod popup_window;
 pub mod pricing;
 pub mod usage_overview;
 pub mod provider;
+mod provider_cli;
 pub mod provider_registry;
 pub mod reset_feed;
 pub mod scheduler;

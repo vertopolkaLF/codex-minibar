@@ -1,6 +1,6 @@
 //! Antigravity subscription quota using the official `agy` Windows session.
 
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, env, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use crate::{
     limits::{LimitWindow, RateLimits},
+    provider_cli,
     usage::UsageStatistics,
     worker::{Activator, LimitProvider, UsageProvider},
 };
@@ -73,14 +74,43 @@ struct AntigravitySession {
 }
 
 fn fresh_session() -> Result<AntigravitySession> {
-    let initial = parse_credential_blob(&credential_blob()?)?;
-    if initial
-        .expires_at
-        .is_some_and(|expires| expires <= Utc::now() + chrono::Duration::minutes(1))
-    {
+    recover_stale_session(parse_credential_blob(&credential_blob()?)?, || {
+        provider_cli::refresh_session(
+            "Antigravity",
+            &antigravity_cli_candidates(),
+            &["models"],
+            REQUEST_TIMEOUT,
+        )
+        .map_err(|_| anyhow::anyhow!("Antigravity session expired; run `agy` and sign in again"))?;
+        parse_credential_blob(&credential_blob()?)
+    })
+}
+
+fn recover_stale_session(
+    initial: AntigravitySession,
+    refresh: impl FnOnce() -> Result<AntigravitySession>,
+) -> Result<AntigravitySession> {
+    if !session_is_stale(initial.expires_at) {
+        return Ok(initial);
+    }
+    let refreshed = refresh()?;
+    if session_is_stale(refreshed.expires_at) {
         bail!("Antigravity session expired; run `agy` and sign in again")
     }
-    Ok(initial)
+    Ok(refreshed)
+}
+
+fn session_is_stale(expires_at: Option<DateTime<Utc>>) -> bool {
+    expires_at.is_some_and(|expires| expires <= Utc::now() + chrono::Duration::minutes(1))
+}
+
+fn antigravity_cli_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+        candidates.push(PathBuf::from(local_app_data).join("agy/bin/agy.exe"));
+    }
+    candidates.push(PathBuf::from("agy.exe"));
+    candidates
 }
 
 fn parse_credential_blob(blob: &[u8]) -> Result<AntigravitySession> {
@@ -432,6 +462,51 @@ mod tests {
         let parsed = parse_credential_blob(wrapped.as_bytes()).unwrap();
         assert_eq!(parsed.access_token, "secret");
         assert!(parsed.expires_at.is_some());
+    }
+
+    #[test]
+    fn expired_session_uses_the_owner_cli_result_once() {
+        let initial = test_session("2000-01-01T00:00:00Z");
+        let mut calls = 0;
+        let refreshed = recover_stale_session(initial, || {
+            calls += 1;
+            Ok(test_session("2099-01-01T00:00:00Z"))
+        })
+        .unwrap();
+        assert_eq!(calls, 1);
+        assert!(!session_is_stale(refreshed.expires_at));
+    }
+
+    #[test]
+    fn fresh_session_does_not_start_the_owner_cli() {
+        let initial = test_session("2099-01-01T00:00:00Z");
+        let mut calls = 0;
+        recover_stale_session(initial, || {
+            calls += 1;
+            Ok(test_session("2099-01-01T00:00:00Z"))
+        })
+        .unwrap();
+        assert_eq!(calls, 0);
+    }
+
+    #[test]
+    fn still_expired_owner_result_keeps_the_manual_login_message() {
+        let error = recover_stale_session(test_session("2000-01-01T00:00:00Z"), || {
+            Ok(test_session("2000-01-01T00:00:00Z"))
+        })
+        .err()
+        .expect("stale refreshed session should fail");
+        assert_eq!(
+            error.to_string(),
+            "Antigravity session expired; run `agy` and sign in again"
+        );
+    }
+
+    fn test_session(expiry: &str) -> AntigravitySession {
+        AntigravitySession {
+            access_token: "secret".into(),
+            expires_at: parse_timestamp(expiry),
+        }
     }
 
     #[test]

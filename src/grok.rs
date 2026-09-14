@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use crate::{
     limits::{LimitWindow, RateLimits},
+    provider_cli,
     usage::UsageStatistics,
     worker::{Activator, LimitProvider, UsageProvider},
 };
@@ -41,13 +42,7 @@ impl Default for GrokClient {
 
 impl LimitProvider for GrokClient {
     fn read_limits(&mut self) -> Result<RateLimits> {
-        let credentials = load_credentials()?;
-        if credentials
-            .expires_at
-            .is_some_and(|expires| expires <= Utc::now())
-        {
-            bail!("Grok session expired; run `grok login` to refresh it")
-        }
+        let credentials = fresh_credentials()?;
         if credentials.is_team {
             bail!("Grok team subscription usage is not available")
         }
@@ -128,6 +123,43 @@ struct GrokCredentials {
     expires_at: Option<DateTime<Utc>>,
     email: Option<String>,
     is_team: bool,
+}
+
+fn fresh_credentials() -> Result<GrokCredentials> {
+    recover_stale_credentials(load_credentials()?, || {
+        provider_cli::refresh_session("Grok", &grok_cli_candidates(), &["models"], REQUEST_TIMEOUT)
+            .map_err(|_| anyhow::anyhow!("Grok session expired; run `grok login` to refresh it"))?;
+        load_credentials()
+    })
+}
+
+fn recover_stale_credentials(
+    initial: GrokCredentials,
+    refresh: impl FnOnce() -> Result<GrokCredentials>,
+) -> Result<GrokCredentials> {
+    if !session_is_stale(initial.expires_at) {
+        return Ok(initial);
+    }
+    let refreshed = refresh()?;
+    if session_is_stale(refreshed.expires_at) {
+        bail!("Grok session expired; run `grok login` to refresh it")
+    }
+    Ok(refreshed)
+}
+
+fn session_is_stale(expires_at: Option<DateTime<Utc>>) -> bool {
+    expires_at.is_some_and(|expires| expires <= Utc::now() + chrono::Duration::minutes(1))
+}
+
+fn grok_cli_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(root) = env::var_os("GROK_HOME") {
+        candidates.push(PathBuf::from(root).join("bin/grok.exe"));
+    } else if let Some(dirs) = BaseDirs::new() {
+        candidates.push(dirs.home_dir().join(".grok/bin/grok.exe"));
+    }
+    candidates.push(PathBuf::from("grok.exe"));
+    candidates
 }
 
 fn load_credentials() -> Result<GrokCredentials> {
@@ -303,6 +335,53 @@ mod tests {
         .unwrap();
         assert_eq!(credentials.access_token, "secret");
         assert_eq!(credentials.email.as_deref(), Some("user@example.com"));
+    }
+
+    #[test]
+    fn expired_session_uses_the_owner_cli_result_once() {
+        let initial = test_credentials("2000-01-01T00:00:00Z");
+        let mut calls = 0;
+        let refreshed = recover_stale_credentials(initial, || {
+            calls += 1;
+            Ok(test_credentials("2099-01-01T00:00:00Z"))
+        })
+        .unwrap();
+        assert_eq!(calls, 1);
+        assert!(!session_is_stale(refreshed.expires_at));
+    }
+
+    #[test]
+    fn fresh_session_does_not_start_the_owner_cli() {
+        let initial = test_credentials("2099-01-01T00:00:00Z");
+        let mut calls = 0;
+        recover_stale_credentials(initial, || {
+            calls += 1;
+            Ok(test_credentials("2099-01-01T00:00:00Z"))
+        })
+        .unwrap();
+        assert_eq!(calls, 0);
+    }
+
+    #[test]
+    fn still_expired_owner_result_keeps_the_manual_login_message() {
+        let error = recover_stale_credentials(test_credentials("2000-01-01T00:00:00Z"), || {
+            Ok(test_credentials("2000-01-01T00:00:00Z"))
+        })
+        .err()
+        .expect("stale refreshed credentials should fail");
+        assert_eq!(
+            error.to_string(),
+            "Grok session expired; run `grok login` to refresh it"
+        );
+    }
+
+    fn test_credentials(expiry: &str) -> GrokCredentials {
+        GrokCredentials {
+            access_token: "secret".into(),
+            expires_at: parse_timestamp(expiry),
+            email: None,
+            is_team: false,
+        }
     }
 
     #[test]
