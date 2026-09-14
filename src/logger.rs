@@ -17,14 +17,23 @@ const MAX_ARCHIVED_LOGS: usize = 10;
 /// Archives the preceding `log.txt`, creates a clean one, and starts a new session.
 pub fn initialize(settings_path: &Path) -> Result<PathBuf> {
     let path = settings_path.with_file_name("log.txt");
+    // Logging starts before Settings::load_or_create on a fresh install.
+    // Rotation enumerates the directory, so it must already exist here.
+    if let Some(directory) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(directory)
+            .with_context(|| format!("create log directory {}", directory.display()))?;
+    }
     rotate_log(&path)?;
-    let _ = LOG_PATH.set(path.clone());
     OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
         .open(&path)
         .with_context(|| format!("open {}", path.display()))?;
+    let _ = LOG_PATH.set(path.clone());
     info("Codex Minibar started");
     info(format!("Log file: {}", path.display()));
     Ok(path)
@@ -139,6 +148,46 @@ pub fn open_folder() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fresh_install_creates_log_directory_before_settings_exist() {
+        let directory = tempfile::tempdir().unwrap();
+        let settings = directory
+            .path()
+            .join("nested")
+            .join("config")
+            .join("settings.toml");
+        assert!(!settings.parent().unwrap().exists());
+
+        let log = initialize(&settings).unwrap();
+
+        assert!(log.is_file());
+        assert!(!settings.exists());
+        assert!(
+            fs::read_to_string(&log)
+                .unwrap()
+                .contains("Codex Minibar started")
+        );
+        // A subsequent launch still archives its predecessor and preserves settings.
+        fs::write(&settings, "version = 36\n").unwrap();
+        initialize(&settings).unwrap();
+        assert_eq!(fs::read_to_string(&settings).unwrap(), "version = 36\n");
+        let archives = fs::read_dir(log.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| is_archive_name(&entry.file_name().to_string_lossy()))
+            .count();
+        assert_eq!(archives, 1);
+    }
+
+    #[test]
+    fn startup_reports_an_unusable_log_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let blocked = directory.path().join("config");
+        fs::write(&blocked, "existing file").unwrap();
+        assert!(initialize(&blocked.join("settings.toml")).is_err());
+        assert_eq!(fs::read_to_string(blocked).unwrap(), "existing file");
+    }
 
     #[test]
     fn startup_archives_the_previous_log_and_keeps_ten_archives() {

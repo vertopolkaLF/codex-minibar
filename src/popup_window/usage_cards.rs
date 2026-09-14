@@ -1,14 +1,8 @@
 use super::*;
 
 pub(super) fn combined_usage_card(
-    limits: &ProviderLimits,
+    snapshot: &crate::usage_overview::OverviewSnapshot,
     is_first: bool,
-    codex_enabled: bool,
-    claude_enabled: bool,
-    cursor_enabled: bool,
-    opencode_zen_enabled: bool,
-    opencode_go_enabled: bool,
-    openrouter_enabled: bool,
     period: TotalSpendPeriod,
     on_period: impl Fn(TotalSpendPeriod) + Clone + 'static,
     hovered_period: Option<TotalSpendPeriod>,
@@ -21,25 +15,7 @@ pub(super) fn combined_usage_card(
     hovered_chrome: Option<UsageStatsHover>,
     set_hovered_chrome: SetState<Option<UsageStatsHover>>,
 ) -> Element {
-    let enabled: Vec<_> = crate::provider_registry::PROVIDERS
-        .iter()
-        .filter_map(|descriptor| {
-            if !descriptor.include_in_total_spend {
-                return None;
-            }
-            let enabled = match descriptor.kind {
-                ProviderKind::Codex => codex_enabled,
-                ProviderKind::Claude => claude_enabled,
-                ProviderKind::Cursor => cursor_enabled,
-                ProviderKind::OpenCodeZen => opencode_zen_enabled,
-                ProviderKind::OpenCodeGo => opencode_go_enabled,
-                ProviderKind::OpenRouter => openrouter_enabled,
-            };
-            enabled.then_some(descriptor.kind)
-        })
-        .collect();
-    let snapshot = crate::usage_overview::total_spend_snapshot(limits, &enabled, period);
-    let entries = crate::usage_overview::spend_entries(&snapshot);
+    let entries = crate::usage_overview::spend_entries(snapshot);
     let total_spend = entries
         .iter()
         .fold(0_u64, |total, (_, spend)| total.saturating_add(*spend));
@@ -694,7 +670,7 @@ fn spend_provider_tile(
     let descriptor = crate::provider_registry::descriptor(provider);
     let color = spend_provider_icon_color(provider, color_scheme, use_colored_provider_icons);
     vstack((
-        grid((
+        hstack((
             crate::icons::element(descriptor.icon, 16.0, color)
                 .vertical_alignment(VerticalAlignment::Center)
                 .with_key(format!(
@@ -706,17 +682,19 @@ fn spend_provider_tile(
                     color.b
                 )),
             body_strong(descriptor.display_name)
-                .vertical_alignment(VerticalAlignment::Center)
-                .grid_column(1),
+                .vertical_alignment(VerticalAlignment::Center),
         ))
-        .columns([GridLength::Auto, GridLength::Star(1.0)])
-        .column_spacing(8.0)
-        .rows([GridLength::Auto]),
+        .spacing(8.0)
+        .vertical_alignment(VerticalAlignment::Center),
         caption(format_spend_full(spend))
             .font_weight(600)
             .foreground(ThemeRef::PrimaryText),
     ))
     .spacing(4.0)
+    // A lone item in the final Grid row must keep its intrinsic stack height;
+    // the default stretch alignment otherwise pushes its amount away from the
+    // icon/name row when the provider set has four entries.
+    .vertical_alignment(VerticalAlignment::Top)
     .with_key(format!("spend-hero-provider-{}", provider.id()))
     .into()
 }

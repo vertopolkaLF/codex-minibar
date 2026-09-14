@@ -39,11 +39,20 @@ pub trait LimitProvider: Send + 'static {
 }
 
 pub trait UsageProvider: Send + 'static {
+    /// Allows long remote history refreshes to stop when this worker is replaced.
+    fn set_cancellation(&mut self, _cancelled: Arc<AtomicBool>) {}
+
     fn account_identity(&self) -> Option<String> {
         None
     }
     fn identity_poll_interval(&self) -> Duration {
         Duration::MAX
+    }
+
+    /// Some providers expose a provider-page usage card even when background
+    /// collection is disabled. Load its existing cache without refreshing it.
+    fn load_cached_usage_when_disabled(&self) -> bool {
+        false
     }
 
     fn load_cached_usage_statistics(&mut self, history_days: u16) -> Result<UsageStatistics>;
@@ -113,6 +122,10 @@ pub enum WorkerEvent {
     ProviderActivationSucceeded(crate::settings::ProviderKind),
     ProviderActivationFailed(crate::settings::ProviderKind, String),
     ProviderPollFailed(crate::settings::ProviderKind, String),
+    /// Snapshot from the public Codex forced-reset announcement feed.
+    ForcedResetsUpdated(crate::reset_feed::ResetFeedSnapshot),
+    /// The feed refresh failed; cached forced resets remain usable.
+    ForcedResetsRefreshFailed(String),
 }
 
 pub struct WorkerHandle {
@@ -244,6 +257,9 @@ fn start_worker_with_channels(
     event_sender: Sender<WorkerEvent>,
     publish_stopped: bool,
 ) -> WorkerHandle {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let mut usage_provider = usage_provider;
+    usage_provider.set_cancellation(Arc::clone(&cancelled));
     let (limit_commands, limit_commands_rx) = mpsc::channel();
     let (usage_commands, usage_commands_rx) = mpsc::channel();
     let limits_ready = Arc::new(AtomicBool::new(usage_provider.refresh_without_limits()));
@@ -286,6 +302,7 @@ fn start_worker_with_channels(
         while let Ok(command) = command_receiver.recv() {
             match command {
                 WorkerCommand::Shutdown => {
+                    cancelled.store(true, Ordering::Release);
                     let _ = limit_commands.send(WorkerCommand::Shutdown);
                     let _ = usage_commands.send(WorkerCommand::Shutdown);
                     break;
@@ -323,6 +340,7 @@ fn start_worker_with_channels(
                 }
             }
         }
+        cancelled.store(true, Ordering::Release);
         let _ = limit_commands.send(WorkerCommand::Shutdown);
         let _ = usage_commands.send(WorkerCommand::Shutdown);
         let _ = limit_join.join();
@@ -455,11 +473,12 @@ fn run_usage_task(
     events: Sender<WorkerEvent>,
     limits_ready: Arc<AtomicBool>,
 ) {
+    let load_cached_usage_when_disabled = provider.load_cached_usage_when_disabled();
     // Cached aggregates are a fast local read and make the popup useful before
     // a provider's first quota request completes. Keep the potentially
     // expensive refresh scan behind `limits_ready` so it does not compete with
     // that first network request.
-    if usage_collection_enabled {
+    if usage_collection_enabled || load_cached_usage_when_disabled {
         if let Ok(usage) = provider.load_cached_usage_statistics(history_retention_days) {
             let _ = events.send(WorkerEvent::UsageUpdated(usage));
         }
@@ -484,7 +503,7 @@ fn run_usage_task(
                 let days = days.clamp(1, 365);
                 if days != history_retention_days {
                     history_retention_days = days;
-                    if usage_collection_enabled {
+                    if usage_collection_enabled || load_cached_usage_when_disabled {
                         if let Ok(usage) =
                             provider.load_cached_usage_statistics(history_retention_days)
                         {
@@ -545,6 +564,13 @@ fn run_usage_task(
                 }
                 Ok(WorkerCommand::SetHistoryRetentionDays(days)) => {
                     history_retention_days = days.clamp(1, 365);
+                    if load_cached_usage_when_disabled {
+                        if let Ok(usage) =
+                            provider.load_cached_usage_statistics(history_retention_days)
+                        {
+                            let _ = events.send(WorkerEvent::UsageUpdated(usage));
+                        }
+                    }
                 }
                 Ok(WorkerCommand::SetUsageRefreshInterval(interval)) => {
                     usage_refresh_interval = interval.max(Duration::from_secs(60));

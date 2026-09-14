@@ -9,13 +9,13 @@ use crate::settings::{
     PopupWidgetKind, ProviderKind,
     ScheduledActivation, Settings, TimeFormat, TotalSpendPresentation, TrayColorMode,
     TrayFixedColor, TrayIndicator, TrayPresentation, TrayWidget, TrayWidgetKind,
-    UsageRefreshInterval,
+    ResetAnnouncementRefreshInterval, UsageRefreshInterval,
 };
 use crate::settings_controls::{
     SETTINGS_CARD_PADDING, settings_action_card, settings_brick_body_height, settings_brick_row,
     settings_brick_table_header, settings_card_padding, settings_checkbox_expander,
     settings_content_expander, settings_content_expander_with_trailing, settings_control_card,
-    settings_info_card, settings_slider_content, settings_toggle_card,
+    settings_info_card, settings_labeled_checkbox, settings_slider_content, settings_toggle_card,
     settings_toggle_card_with_description, settings_toggle_expander, update_available_nav_card,
 };
 use crate::theme::{CONTROL_FAST_ANIMATION, CONTROL_NORMAL_ANIMATION, duration};
@@ -45,6 +45,7 @@ mod advanced;
 mod appearance;
 mod customize;
 mod general;
+mod integrations;
 mod log;
 mod navigation;
 mod notifications;
@@ -255,6 +256,8 @@ pub fn render(
         sync_settings_caption_button_theme(color_scheme);
     });
     let (update_phase, set_update_phase) = cx.use_async_state(updates.snapshot());
+    let (streamdeck_install_phase, set_streamdeck_install_phase) =
+        cx.use_async_state(crate::streamdeck::InstallPhase::Idle);
     let updates_for_poll = updates.clone();
     cx.use_effect((), move || {
         let updates = updates_for_poll.clone();
@@ -542,10 +545,14 @@ pub fn render(
         cx.use_state(None::<String>);
     let (usage_stats_enabled, set_usage_stats_enabled) =
         cx.use_state(settings.usage_stats_enabled);
+    let (usage_stats_excluded_providers, set_usage_stats_excluded_providers) =
+        cx.use_state(settings.usage_stats_excluded_providers.clone());
     let (limit_refresh_interval, set_limit_refresh_interval) =
         cx.use_state(settings.limit_refresh_interval);
     let (usage_refresh_interval, set_usage_refresh_interval) =
         cx.use_state(settings.usage_refresh_interval);
+    let (reset_announcement_refresh_interval, set_reset_announcement_refresh_interval) =
+        cx.use_state(settings.reset_announcement_refresh_interval);
     let (show_used_percentage, set_show_used_percentage) =
         cx.use_state(settings.show_used_percentage);
     let (show_usage_pace, set_show_usage_pace) = cx.use_state(settings.show_usage_pace);
@@ -587,6 +594,10 @@ pub fn render(
     let (check_for_updates, set_check_for_updates) = cx.use_state(settings.check_for_updates);
     let (notify_on_update, set_notify_on_update) =
         cx.use_state(settings.notifications.update_available);
+    let (forced_reset_feed_enabled, set_forced_reset_feed_enabled) =
+        cx.use_state(settings.notifications.forced_reset_feed_enabled);
+    let (forced_reset_notifications, set_forced_reset_notifications) =
+        cx.use_state(settings.notifications.forced_reset_notifications);
 
     LIVE_SETTINGS_STATE.with(|state| {
         *state.borrow_mut() = Some(SettingsWindowState {
@@ -615,8 +626,10 @@ pub fn render(
             scheduled_activations: set_scheduled_activations.clone(),
             auto_activation_pauses: set_auto_activation_pauses.clone(),
             usage_stats_enabled: set_usage_stats_enabled.clone(),
+            usage_stats_excluded_providers: set_usage_stats_excluded_providers.clone(),
             limit_refresh_interval: set_limit_refresh_interval.clone(),
             usage_refresh_interval: set_usage_refresh_interval.clone(),
+            reset_announcement_refresh_interval: set_reset_announcement_refresh_interval.clone(),
             start_at_login: set_start_at_login.clone(),
             show_used_percentage: set_show_used_percentage.clone(),
             show_usage_pace: set_show_usage_pace.clone(),
@@ -636,6 +649,8 @@ pub fn render(
             tray_widgets: set_tray_widgets.clone(),
             check_for_updates: set_check_for_updates.clone(),
             notify_on_update: set_notify_on_update.clone(),
+            forced_reset_feed_enabled: set_forced_reset_feed_enabled.clone(),
+            forced_reset_notifications: set_forced_reset_notifications.clone(),
         });
     });
 
@@ -677,8 +692,10 @@ pub fn render(
         expanded_scheduled_activation: &expanded_scheduled_activation,
         expanded_auto_activation_pause: &expanded_auto_activation_pause,
         usage_stats_enabled: usage_stats_enabled,
+        usage_stats_excluded_providers: &usage_stats_excluded_providers,
         limit_refresh_interval: limit_refresh_interval,
         usage_refresh_interval: usage_refresh_interval,
+        reset_announcement_refresh_interval: reset_announcement_refresh_interval,
         start_at_login: start_at_login,
         show_used_percentage: show_used_percentage,
         show_usage_pace: show_usage_pace,
@@ -707,8 +724,11 @@ pub fn render(
         expanded_popup_provider: &expanded_popup_provider,
         check_for_updates: check_for_updates,
         notify_on_update: notify_on_update,
+        forced_reset_feed_enabled: forced_reset_feed_enabled,
+        forced_reset_notifications: forced_reset_notifications,
         update_phase: &update_phase,
         log_content: &log_content,
+        streamdeck_install_phase: &streamdeck_install_phase,
         set_codex_enabled: set_codex_enabled.clone(),
         set_theme: set_theme.clone(),
         set_accent_color: set_accent_color.clone(),
@@ -740,8 +760,10 @@ pub fn render(
         set_expanded_scheduled_activation: set_expanded_scheduled_activation.clone(),
         set_expanded_auto_activation_pause: set_expanded_auto_activation_pause.clone(),
         set_usage_stats_enabled: set_usage_stats_enabled.clone(),
+        set_usage_stats_excluded_providers: set_usage_stats_excluded_providers.clone(),
         set_limit_refresh_interval: set_limit_refresh_interval.clone(),
         set_usage_refresh_interval: set_usage_refresh_interval.clone(),
+        set_reset_announcement_refresh_interval: set_reset_announcement_refresh_interval.clone(),
         set_start_at_login: set_start_at_login.clone(),
         set_show_used_percentage: set_show_used_percentage.clone(),
         set_show_usage_pace: set_show_usage_pace.clone(),
@@ -771,6 +793,9 @@ pub fn render(
         set_hovered_card_id: set_hovered_card_id.clone(),
         set_check_for_updates: set_check_for_updates.clone(),
         set_notify_on_update: set_notify_on_update.clone(),
+        set_forced_reset_feed_enabled: set_forced_reset_feed_enabled.clone(),
+        set_forced_reset_notifications: set_forced_reset_notifications.clone(),
+        set_streamdeck_install_phase: set_streamdeck_install_phase.clone(),
         theme_navigation_guard: theme_navigation_guard.clone(),
         theme_navigation_guard_timer: theme_navigation_guard_timer.clone(),
         settings_tx: settings_tx.clone(),

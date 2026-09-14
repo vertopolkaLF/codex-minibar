@@ -1,6 +1,6 @@
 [package]
 name = "codex-minibar"
-version = "0.4.5"
+version = "0.4.8"
 edition = "2024"
 description = "Windows tray companion for monitoring AI tools usage"
 license = "Apache-2.0"
@@ -23,6 +23,7 @@ png = "0.17"
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 toml = "0.9"
 tempfile = "3"
 ureq = { version = "2", default-features = false, features = ["tls", "native-tls"] }

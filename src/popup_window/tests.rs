@@ -164,25 +164,94 @@ fn usage_statistics_section_respects_its_live_toggle() {
     };
 
     assert!(popup_sections(&limits, false).contains(&PopupSection::UsageStatistics));
-    let mut hidden_usage = all_visible();
-    hidden_usage.set_brick("opencode.usage", false, false);
-    let cards = provider_cards(
+    let excluded_from_home = all_visible();
+    let home_cards = provider_cards(
         ProviderKind::OpenCodeZen,
         true,
         &limits,
+        &[],
         false,
         true,
         false,
-        &hidden_usage,
+        &excluded_from_home,
+        PopupSurface::HomeTab,
+        true,
+        false,
+        false,
+        ColorScheme::Dark,
+        None,
+        None,
+        None,
+        false,
+        None,
+    );
+    assert_eq!(home_cards.len(), 1);
+
+    let provider_page_cards = provider_cards(
+        ProviderKind::OpenCodeZen,
+        true,
+        &limits,
+        &[],
+        false,
+        true,
+        false,
+        &excluded_from_home,
         PopupSurface::ProviderTab,
+        true,
         true,
         false,
         ColorScheme::Dark,
         None,
         None,
         None,
+        false,
+        None,
+    );
+    assert_eq!(provider_page_cards.len(), 2);
+
+    let mut hidden_usage = all_visible();
+    hidden_usage.set_brick("opencode.usage", false, false);
+    let cards = provider_cards(
+        ProviderKind::OpenCodeZen,
+        true,
+        &limits,
+        &[],
+        false,
+        true,
+        false,
+        &hidden_usage,
+        PopupSurface::ProviderTab,
+        true,
+        true,
+        false,
+        ColorScheme::Dark,
+        None,
+        None,
+        None,
+        false,
+        None,
     );
     assert_eq!(cards.len(), 1);
+}
+
+#[test]
+fn total_spend_provider_count_respects_usage_provider_selection() {
+    assert_eq!(
+        total_spend_provider_count(true, true, false, false, false, false, &[]),
+        2
+    );
+    assert_eq!(
+        total_spend_provider_count(
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            &[ProviderKind::Codex.id().into()],
+        ),
+        1
+    );
 }
 
 #[test]
@@ -236,15 +305,33 @@ fn popup_body_key_changes_when_pace_label_appears_or_hides() {
         PopupView::Codex,
         false,
         true,
+        0,
     );
     let hidden_key = popup_body_height_key(
         &ProviderLimits::from_entries([(ProviderKind::Codex, hidden)]),
         PopupView::Codex,
         false,
         true,
+        0,
     );
 
     assert_ne!(visible_key, hidden_key);
+
+    let no_tibo_key = popup_body_height_key(
+        &ProviderLimits::default(),
+        PopupView::Codex,
+        false,
+        true,
+        0,
+    );
+    let two_tibo_key = popup_body_height_key(
+        &ProviderLimits::default(),
+        PopupView::Codex,
+        false,
+        true,
+        2,
+    );
+    assert_ne!(no_tibo_key, two_tibo_key);
 }
 
 #[test]
@@ -286,6 +373,14 @@ fn swap_chain_strip_keys_include_identity_inputs_without_hover_state() {
         footer_actions_key(false, ColorScheme::Dark),
         footer_actions_key(false, ColorScheme::Light)
     );
+
+    let without_update = provider_tab_strip_viewport_width(false);
+    let with_update = provider_tab_strip_viewport_width(true);
+    let size = popup::bottom_bar_size();
+    assert_eq!(
+        without_update - with_update,
+        size.icon_button_size() + size.action_spacing()
+    );
 }
 
 #[test]
@@ -300,32 +395,40 @@ fn popup_visibility_hides_codex_resets_on_all_but_shows_on_provider_tab() {
         ProviderKind::Codex,
         true,
         &limits,
+        &[],
         false,
         true,
         false,
         &visibility,
         PopupSurface::HomeTab,
         true,
+        true,
         false,
         ColorScheme::Dark,
         None,
         None,
+        None,
+        false,
         None,
     );
     let tab_cards = provider_cards(
         ProviderKind::Codex,
         true,
         &limits,
+        &[],
         false,
         true,
         false,
         &visibility,
         PopupSurface::ProviderTab,
         true,
+        true,
         false,
         ColorScheme::Dark,
         None,
         None,
+        None,
+        false,
         None,
     );
     assert_eq!(all_cards.len(), 3);
@@ -359,16 +462,20 @@ fn popup_section_all_off_drops_provider_from_home_tab() {
         ProviderKind::Codex,
         true,
         &limits,
+        &[],
         false,
         true,
         false,
         &visibility,
         PopupSurface::ProviderTab,
         true,
+        true,
         false,
         ColorScheme::Dark,
         None,
         None,
+        None,
+        false,
         None,
     );
     assert!(!tab_cards.is_empty());
@@ -467,16 +574,20 @@ fn provider_cards_include_each_additional_limit() {
         ProviderKind::Claude,
         true,
         &limits,
+        &[],
         false,
         true,
         false,
         &all_visible(),
         PopupSurface::ProviderTab,
         true,
+        true,
         false,
         ColorScheme::Dark,
         None,
         None,
+        None,
+        false,
         None,
     );
     // Heading + 5h + weekly + Fable (no separate plan metadata row).
@@ -523,14 +634,19 @@ fn every_limits_sample_forces_a_reactive_state_change() {
     ui.observe_limits_update();
     assert_ne!(ui, initial);
     assert_eq!(ui.limits_revision, 1);
+    assert_eq!(ui.usage_revision, 0);
 
     // A Plus sample can have the same footer metadata as the preceding
     // Free sample; the revision still guarantees a rerender of the shared
     // snapshot.
     ui.observe_limits_update();
     assert_eq!(ui.limits_revision, 2);
+    assert_eq!(ui.usage_revision, 0);
     assert_eq!(ui.last_activation, initial.last_activation);
     assert_eq!(ui.error, initial.error);
+
+    ui.observe_usage_update();
+    assert_eq!(ui.usage_revision, 1);
 }
 
 #[test]
@@ -723,4 +839,95 @@ fn stale_pager_completion_cannot_end_a_newer_transition() {
         PagerAction::AnimationFinished(state.animation_id.wrapping_sub(1)),
     );
     assert_eq!(unchanged, state);
+}
+
+#[test]
+fn openrouter_places_each_chart_inside_its_own_account_on_both_surfaces() {
+    fn chart_keys(element: &Element, keys: &mut Vec<String>) {
+        if let Some(key) = element
+            .key()
+            .filter(|key| key.starts_with("activity-chart-"))
+        {
+            keys.push(key.into());
+        }
+        match element {
+            Element::StackPanel(panel) => {
+                for child in &panel.children {
+                    chart_keys(child, keys);
+                }
+            }
+            Element::Grid(grid) => {
+                for child in &grid.children {
+                    chart_keys(child, keys);
+                }
+            }
+            Element::Border(border) => chart_keys(&border.child, keys),
+            _ => {}
+        }
+    }
+    let date = Local::now().date_naive();
+    let mut limits = RateLimits::default();
+    for (id, requests) in [("first", 2), ("second", 7)] {
+        limits.openrouter_accounts.push(OpenRouterAccountSnapshot {
+            id: id.into(),
+            name: id.into(),
+            ..Default::default()
+        });
+        let mut stats = crate::usage::statistics_from_daily(
+            &[crate::usage::DailyTokenUsage {
+                date,
+                usage: crate::usage::TokenUsage {
+                    requests,
+                    ..Default::default()
+                },
+            }],
+            30,
+        );
+        stats.account_id = Some(id.into());
+        limits.usage.accounts.insert(id.into(), stats);
+    }
+    for scheme in [ColorScheme::Dark, ColorScheme::Light] {
+        for surface in [PopupSurface::HomeTab, PopupSurface::ProviderTab] {
+            for spending in [true, false] {
+                let mut visibility = all_visible();
+                visibility.set_brick("openrouter.spending", spending, spending);
+                visibility.set_brick("openrouter.usage", true, true);
+                let cards = provider_cards(
+                    ProviderKind::OpenRouter,
+                    true,
+                    &limits,
+                    &[],
+                    false,
+                    true,
+                    false,
+                    &visibility,
+                    surface,
+                    true,
+                    true,
+                    false,
+                    scheme,
+                    None,
+                    None,
+                    None,
+                    false,
+                    None,
+                );
+                assert_eq!(cards.len(), 3); // provider heading and two account strips; no combined card.
+                for (index, id) in ["first", "second"].iter().enumerate() {
+                    let mut keys = Vec::new();
+                    chart_keys(&cards[index + 1], &mut keys);
+                    assert_eq!(keys, vec![format!("activity-chart-openrouter-{id}")]);
+                }
+            }
+        }
+    }
+    let before = openrouter_accounts_strip_key(&limits);
+    limits
+        .usage
+        .accounts
+        .get_mut("first")
+        .unwrap()
+        .daily
+        .clear();
+    assert_ne!(before, openrouter_accounts_strip_key(&limits));
 }

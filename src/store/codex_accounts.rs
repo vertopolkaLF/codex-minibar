@@ -115,24 +115,24 @@ impl Attribution {
         {
             return &span.account;
         }
-        if at >= self.observed_at
+        if let Some(observed) = &self.observed
+            && at >= self.observed_at
             && at <= end
-            && self.observed.is_some()
             && &self.observed == before
             && before == after
         {
-            return &self.observed.as_ref().unwrap().id;
+            return &observed.id;
         }
         UNKNOWN
     }
 
     fn advance(&mut self, before: &Option<Identity>, after: &Option<Identity>, end: DateTime<Utc>) {
-        if self.observed.is_some()
+        if let Some(observed) = &self.observed
             && &self.observed == before
             && before == after
             && end >= self.observed_at
         {
-            let account = self.observed.as_ref().unwrap().id.clone();
+            let account = observed.id.clone();
             if let Some(last) = self
                 .spans
                 .last_mut()
@@ -163,9 +163,17 @@ pub(crate) struct AccountEvent {
     pub usage: TokenUsage,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct AccountSourceReset {
-    pub source: String,
+// The collector treats identical relative paths in sessions and archived_sessions
+// as the same rollout, preferring the active copy. Keep this identity on moves.
+fn archive_alias(source: &str) -> Option<String> {
+    source
+        .strip_prefix("sessions/")
+        .map(|tail| format!("archived_sessions/{tail}"))
+        .or_else(|| {
+            source
+                .strip_prefix("archived_sessions/")
+                .map(|tail| format!("sessions/{tail}"))
+        })
 }
 
 const VALUES: &str = "input_tokens,cached_input_tokens,output_tokens,requests,estimated_cost_microusd,priced_requests,cache_savings_microusd";
@@ -184,11 +192,7 @@ impl ProviderStore {
             cache_savings_microusd INTEGER NOT NULL,
             PRIMARY KEY(session, ts, signature));",
         )?;
-        self.ensure_column(
-            "codex_account_events",
-            "source",
-            "TEXT NOT NULL DEFAULT ''",
-        )?;
+        self.ensure_column("codex_account_events", "source", "TEXT NOT NULL DEFAULT ''")?;
         self.ensure_column(
             "codex_account_events",
             "covered",
@@ -208,6 +212,66 @@ impl ProviderStore {
         }
         self.conn.execute_batch("CREATE TABLE IF NOT EXISTS codex_legacy_cursors(source TEXT PRIMARY KEY, offset INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS codex_legacy_sessions(account TEXT NOT NULL,session TEXT NOT NULL,date TEXT NOT NULL,PRIMARY KEY(account,session,date));")?;
+        self.conn.execute_batch("CREATE TABLE IF NOT EXISTS codex_event_sources (
+            source TEXT NOT NULL, session TEXT NOT NULL, ts INTEGER NOT NULL,
+            signature TEXT NOT NULL, PRIMARY KEY(source,session,ts,signature));
+            CREATE INDEX IF NOT EXISTS codex_event_sources_event ON codex_event_sources(session,ts,signature);")?;
+        // Existing preview databases did not persist sources. Recover links from
+        // the still-present scanner metadata before the version-8 full replay.
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        let migrated: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM meta WHERE key='codex.event_sources.v1')",
+            [],
+            |r| r.get(0),
+        )?;
+        if !migrated {
+            tx.execute(
+                "INSERT OR IGNORE INTO codex_event_sources
+                 SELECT source,session,ts,signature FROM codex_account_events WHERE source<>''",
+                [],
+            )?;
+            let files = {
+                let mut query =
+                    tx.prepare("SELECT path,meta_json FROM scan_files WHERE provider='codex'")?;
+                query
+                    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?
+            };
+            let mut basename_counts = BTreeMap::new();
+            for (path, _) in &files {
+                *basename_counts
+                    .entry(Path::new(path).file_name().unwrap_or_default().to_owned())
+                    .or_insert(0) += 1;
+            }
+            for (path, raw) in files {
+                let meta: serde_json::Value = serde_json::from_str(&raw)?;
+                let basename = Path::new(&path).file_name().unwrap_or_default();
+                let old_name = basename.to_string_lossy();
+                let session = meta
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                    .filter(|v| !v.is_empty())
+                    .unwrap_or(&old_name);
+                tx.execute(
+                    "INSERT OR IGNORE INTO codex_event_sources
+                    SELECT ?1,session,ts,signature FROM codex_account_events WHERE session=?2 AND source=''",
+                    params![path, session],
+                )?;
+                // Older preview cursors cannot be split if their basenames
+                // collide. Never guess their offsets or change frozen totals.
+                if basename_counts.get(basename) == Some(&1) {
+                    tx.execute("INSERT OR IGNORE INTO codex_legacy_cursors SELECT ?1,offset FROM codex_legacy_cursors WHERE source=?2",params![path,old_name.as_ref()])?;
+                }
+            }
+            tx.execute(
+                "INSERT INTO meta(key,value) VALUES('codex.event_sources.v1','1')",
+                [],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -339,24 +403,16 @@ impl ProviderStore {
             })?;
             for file in files {
                 let (path, offset, meta) = file?;
-                let fallback_session = Path::new(&path)
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned();
+                let source = path.clone();
                 let meta: serde_json::Value =
                     serde_json::from_str(&meta).context("read legacy Codex file metadata")?;
                 let session = meta
                     .get("session_id")
                     .and_then(|id| id.as_str())
                     .filter(|id| !id.is_empty())
-                    .unwrap_or(&fallback_session)
+                    .unwrap_or(&source)
                     .to_owned();
-                tx.execute(
-                    "INSERT INTO codex_legacy_cursors VALUES(?1,?2)
-                     ON CONFLICT(source) DO UPDATE SET offset=MAX(offset,excluded.offset)",
-                    params![path, offset],
-                )?;
+                tx.execute("INSERT INTO codex_legacy_cursors VALUES(?1,?2) ON CONFLICT(source) DO UPDATE SET offset=MAX(offset,excluded.offset)", params![source,offset])?;
                 paths.insert(path, session);
             }
             let mut query =
@@ -378,7 +434,7 @@ impl ProviderStore {
     }
 
     #[cfg(test)]
-    pub(crate) fn save_account_events(
+    fn save_account_events(
         &self,
         events: &[AccountEvent],
         state: &Attribution,
@@ -386,28 +442,39 @@ impl ProviderStore {
         after: &Option<Identity>,
         end: DateTime<Utc>,
     ) -> Result<()> {
-        self.save_account_events_with_resets(events, &[], state, before, after, end)
+        self.save_account_scan(events, &[], state, before, after, end)
     }
 
-    pub(crate) fn save_account_events_with_resets(
+    pub(crate) fn save_account_scan(
         &self,
         events: &[AccountEvent],
-        reset_sources: &[AccountSourceReset],
+        rebuilt_sources: &[String],
         state: &Attribution,
         before: &Option<Identity>,
         after: &Option<Identity>,
         end: DateTime<Utc>,
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
-        // Delete only this file's rows. Pre-`source` leftovers share a session
-        // across rollouts, so a session-wide fallback would drop sibling files
-        // that this reset is not rebuilding.
-        for reset in reset_sources {
-            tx.execute(
-                "DELETE FROM codex_account_events WHERE source=?1",
-                [&reset.source],
-            )?;
+        let mut previous = std::collections::BTreeSet::new();
+        for source in rebuilt_sources {
+            if let Some(alias) = archive_alias(source) {
+                tx.execute("INSERT OR IGNORE INTO codex_event_sources SELECT ?1,session,ts,signature FROM codex_event_sources WHERE source=?2",params![source,alias])?;
+                tx.execute("DELETE FROM codex_event_sources WHERE source=?1", [alias])?;
+            }
+            let mut query =
+                tx.prepare("SELECT session,ts,signature FROM codex_event_sources WHERE source=?1")?;
+            for row in query.query_map([source], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })? {
+                previous.insert(row?);
+            }
+            tx.execute("DELETE FROM codex_event_sources WHERE source=?1", [source])?;
         }
+
         {
             let mut query = tx.prepare("SELECT source,offset FROM codex_legacy_cursors")?;
             let cursors = query
@@ -416,22 +483,28 @@ impl ProviderStore {
                 })?
                 .collect::<rusqlite::Result<BTreeMap<_, _>>>()?;
             let mut insert = tx.prepare("INSERT INTO codex_account_events(
-                    account,source,session,ts,signature,date,model,input_tokens,
-                    cached_input_tokens,output_tokens,requests,estimated_cost_microusd,
-                    priced_requests,cache_savings_microusd,covered)
-                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+                    account,session,ts,signature,date,model,input_tokens,cached_input_tokens,
+                    output_tokens,requests,estimated_cost_microusd,priced_requests,cache_savings_microusd,covered)
+                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
                 ON CONFLICT(session,ts,signature) DO UPDATE SET
-                    source=excluded.source,model=excluded.model,input_tokens=excluded.input_tokens,cached_input_tokens=excluded.cached_input_tokens,
+                    model=excluded.model,input_tokens=excluded.input_tokens,cached_input_tokens=excluded.cached_input_tokens,
                     output_tokens=excluded.output_tokens,requests=excluded.requests,estimated_cost_microusd=excluded.estimated_cost_microusd,
                     priced_requests=excluded.priced_requests,cache_savings_microusd=excluded.cache_savings_microusd
-                WHERE source IS NOT excluded.source OR model IS NOT excluded.model OR input_tokens IS NOT excluded.input_tokens OR cached_input_tokens IS NOT excluded.cached_input_tokens
+                WHERE model IS NOT excluded.model OR input_tokens IS NOT excluded.input_tokens OR cached_input_tokens IS NOT excluded.cached_input_tokens
                     OR output_tokens IS NOT excluded.output_tokens OR requests IS NOT excluded.requests OR estimated_cost_microusd IS NOT excluded.estimated_cost_microusd
                     OR priced_requests IS NOT excluded.priced_requests OR cache_savings_microusd IS NOT excluded.cache_savings_microusd")?;
+            let mut link =
+                tx.prepare("INSERT OR IGNORE INTO codex_event_sources VALUES(?1,?2,?3,?4)")?;
             for e in events {
+                link.execute(params![
+                    e.source,
+                    e.session,
+                    e.timestamp.timestamp_millis(),
+                    e.signature
+                ])?;
                 let u = &e.usage;
                 insert.execute(params![
                     state.owner(e.timestamp, before, after, end),
-                    e.source,
                     e.session,
                     e.timestamp.timestamp_millis(),
                     e.signature,
@@ -447,9 +520,19 @@ impl ProviderStore {
                     e.timestamp <= state.initialized_at
                         && cursors
                             .get(&e.source)
+                            .or_else(
+                                || archive_alias(&e.source).and_then(|alias| cursors.get(&alias))
+                            )
                             .is_some_and(|offset| e.offset <= *offset)
                 ])?;
             }
+        }
+        // Delete only obsolete events after replay, preserving both ownership
+        // of surviving events and copies still present in another rollout.
+        for (session, at, signature) in previous {
+            tx.execute("DELETE FROM codex_account_events WHERE session=?1 AND ts=?2 AND signature=?3
+                AND NOT EXISTS(SELECT 1 FROM codex_event_sources WHERE session=?1 AND ts=?2 AND signature=?3)",
+                params![session,at,signature])?;
         }
         let mut updated = state.clone();
         updated.advance(before, after, end);
@@ -786,44 +869,6 @@ mod tests {
     }
 
     #[test]
-    fn migration_keeps_same_basename_cursors_separate() {
-        let db = store();
-        for (path, offset) in [
-            ("sessions/2026/09/one/shared.jsonl", 100_i64),
-            ("sessions/2026/09/two/shared.jsonl", 300_i64),
-        ] {
-            db.conn
-                .execute(
-                    "INSERT INTO scan_files(provider,path,offset,meta_json)
-                     VALUES('codex',?1,?2,'{}')",
-                    params![path, offset],
-                )
-                .unwrap();
-        }
-
-        db.initialize_codex_attribution_at(identity_for("only-account", 1), at(100))
-            .unwrap();
-        let mut query = db
-            .conn
-            .prepare("SELECT source,offset FROM codex_legacy_cursors ORDER BY source")
-            .unwrap();
-        let cursors = query
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-            })
-            .unwrap()
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .unwrap();
-        assert_eq!(
-            cursors,
-            vec![
-                ("sessions/2026/09/one/shared.jsonl".into(), 100),
-                ("sessions/2026/09/two/shared.jsonl".into(), 300),
-            ]
-        );
-    }
-
-    #[test]
     fn logged_out_upgrade_binds_only_legacy_history_at_first_login() {
         let db = store();
         let initial = db.initialize_codex_attribution_at(None, at(100)).unwrap();
@@ -928,105 +973,6 @@ mod tests {
     }
 
     #[test]
-    fn source_reset_replaces_obsolete_account_events() {
-        let db = store();
-        let initial = state();
-        let account = initial.observed.clone();
-        let mut first = event(115, 10);
-        first.source = "sessions/2026/09/session.jsonl".into();
-        let mut second = event(116, 20);
-        second.source = first.source.clone();
-        let source = first.source.clone();
-        db.save_account_events(
-            &[first, second],
-            &initial,
-            &account,
-            &account,
-            at(120),
-        )
-        .unwrap();
-
-        let state = db.codex_attribution().unwrap().unwrap();
-        let mut replacement = event(125, 7);
-        replacement.source = source.clone();
-        db.save_account_events_with_resets(
-            &[replacement],
-            &[AccountSourceReset { source }],
-            &state,
-            &account,
-            &account,
-            at(130),
-        )
-        .unwrap();
-
-        let rows = db
-            .account_daily_for("new", at(0).date_naive(), at(200).date_naive())
-            .unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].2.input_tokens, 7);
-        assert_eq!(
-            db.conn
-                .query_row("SELECT COUNT(*) FROM codex_account_events", [], |row| {
-                    row.get::<_, i64>(0)
-                })
-                .unwrap(),
-            1
-        );
-    }
-
-    #[test]
-    fn source_reset_keeps_empty_source_rows_from_other_files() {
-        let db = store();
-        let initial = state();
-        let account = initial.observed.clone();
-        let mut current = event(115, 10);
-        current.source = "sessions/2026/09/child.jsonl".into();
-        current.session = "shared".into();
-        let mut legacy = event(116, 20);
-        legacy.source = String::new();
-        legacy.session = "shared".into();
-        legacy.signature = "legacy-sibling".into();
-        db.save_account_events(
-            &[current, legacy],
-            &initial,
-            &account,
-            &account,
-            at(120),
-        )
-        .unwrap();
-
-        let state = db.codex_attribution().unwrap().unwrap();
-        let mut replacement = event(125, 7);
-        replacement.source = "sessions/2026/09/child.jsonl".into();
-        replacement.session = "shared".into();
-        db.save_account_events_with_resets(
-            &[replacement],
-            &[AccountSourceReset {
-                source: "sessions/2026/09/child.jsonl".into(),
-            }],
-            &state,
-            &account,
-            &account,
-            at(130),
-        )
-        .unwrap();
-
-        let rows = db
-            .account_daily_for("new", at(0).date_naive(), at(200).date_naive())
-            .unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].2.input_tokens, 27);
-        assert_eq!(
-            db.conn
-                .query_row("SELECT COUNT(*) FROM codex_account_events", [], |row| {
-                    row.get::<_, i64>(0)
-                })
-                .unwrap(),
-            2
-        );
-    }
-
-    #[test]
     fn clearing_and_replaying_preserves_observed_account_ownership() {
         let db = store();
         let state = state();
@@ -1105,9 +1051,11 @@ mod tests {
         let to = Local::now().date_naive() - Duration::days(1);
         for (path, source) in crate::usage::collect_codex_session_files(&codex_home()).unwrap() {
             let mut file = crate::usage::CachedSessionFile::default();
-            let (source_events, _) =
-                crate::usage::scan_file_delta(&path, &source, &mut file).unwrap();
-            events.extend(source_events);
+            events.extend(
+                crate::usage::scan_file_delta(&path, &source, &mut file)
+                    .unwrap()
+                    .events,
+            );
             for day in file.daily {
                 if day.date >= from && day.date <= to {
                     expected.add(&day.usage);
@@ -1266,5 +1214,500 @@ mod tests {
         let restored = db.initialize_codex_attribution().unwrap();
         assert_eq!(restored.historical_owner, "previous-account");
         assert_eq!(restored.initialized_at, initial.initialized_at);
+    }
+
+    #[test]
+    fn truncated_rollout_replaces_events_and_empty_rewrite_clears_them() {
+        let db = store();
+        let s = state();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout.jsonl");
+        let source = "sessions/2026/01/rollout.jsonl";
+        let record = |tokens| {
+            format!(
+                "{}\n{}\n",
+                json!({"type":"turn_context","payload":{"model":"gpt-5.4"}}),
+                json!({"timestamp":"1970-01-01T00:01:55Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":tokens}}}})
+            )
+        };
+        let mut file = crate::usage::CachedSessionFile::default();
+        let save = |delta: crate::usage::FileDelta| {
+            let rebuilt = if delta.rebuilt {
+                vec![source.to_owned()]
+            } else {
+                vec![]
+            };
+            db.save_account_scan(
+                &delta.events,
+                &rebuilt,
+                &s,
+                &s.observed,
+                &s.observed,
+                at(120),
+            )
+            .unwrap();
+        };
+        fs::write(&path, record(1000)).unwrap();
+        save(crate::usage::scan_file_delta(&path, source, &mut file).unwrap());
+        fs::write(&path, record(2)).unwrap();
+        save(crate::usage::scan_file_delta(&path, source, &mut file).unwrap());
+        assert_eq!(
+            db.account_daily_for("new", at(0).date_naive(), at(200).date_naive())
+                .unwrap()[0]
+                .2
+                .input_tokens,
+            2
+        );
+        // Replaying the same rebuild is idempotent and leaves the other account alone.
+        file = crate::usage::CachedSessionFile::default();
+        save(crate::usage::scan_file_delta(&path, source, &mut file).unwrap());
+        assert_eq!(
+            db.conn
+                .query_row("SELECT COUNT(*) FROM codex_account_events", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        fs::write(&path, "").unwrap();
+        save(crate::usage::scan_file_delta(&path, source, &mut file).unwrap());
+        assert!(
+            db.account_daily_for("new", at(0).date_naive(), at(200).date_naive())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn resetting_one_copy_keeps_other_sources_and_surviving_ownership() {
+        let db = store();
+        let s = state();
+        let a = event(115, 10);
+        let mut b = event(115, 10);
+        b.source = "archived_sessions/copy.jsonl".into();
+        let mut unrelated = event(115, 20);
+        unrelated.source = "sessions/unrelated.jsonl".into();
+        unrelated.session = "other-session".into();
+        db.save_account_events(&[a, b, unrelated], &s, &s.observed, &s.observed, at(120))
+            .unwrap();
+        db.save_account_scan(
+            &[],
+            &["same-conversation.jsonl".into()],
+            &s,
+            &None,
+            &None,
+            at(125),
+        )
+        .unwrap();
+        assert_eq!(
+            db.account_daily_for("new", at(0).date_naive(), at(200).date_naive())
+                .unwrap()[0]
+                .2
+                .input_tokens,
+            30
+        );
+        let mut replay = event(115, 10);
+        replay.source = "archived_sessions/copy.jsonl".into();
+        db.save_account_scan(
+            &[replay],
+            &["archived_sessions/copy.jsonl".into()],
+            &s,
+            &None,
+            &None,
+            at(130),
+        )
+        .unwrap();
+        assert!(
+            db.account_daily_for(UNKNOWN, at(0).date_naive(), at(200).date_naive())
+                .unwrap()
+                .is_empty()
+        );
+        db.save_account_scan(
+            &[],
+            &["archived_sessions/copy.jsonl".into()],
+            &s,
+            &None,
+            &None,
+            at(135),
+        )
+        .unwrap();
+        assert_eq!(
+            db.account_daily_for("new", at(0).date_naive(), at(200).date_naive())
+                .unwrap()[0]
+                .2
+                .input_tokens,
+            20
+        );
+    }
+
+    #[test]
+    fn failed_replacement_rolls_back_deleted_sources_and_events() {
+        let db = store();
+        let s = state();
+        db.save_account_events(&[event(115, 10)], &s, &s.observed, &s.observed, at(120))
+            .unwrap();
+        db.conn.execute_batch("CREATE TRIGGER reject_checkpoint BEFORE UPDATE ON meta BEGIN SELECT RAISE(ABORT,'test'); END;").unwrap();
+        assert!(
+            db.save_account_scan(
+                &[event(115, 2)],
+                &["same-conversation.jsonl".into()],
+                &s,
+                &None,
+                &None,
+                at(125)
+            )
+            .is_err()
+        );
+        assert_eq!(
+            db.account_daily_for("new", at(0).date_naive(), at(200).date_naive())
+                .unwrap()[0]
+                .2
+                .input_tokens,
+            10
+        );
+        assert_eq!(
+            db.conn
+                .query_row("SELECT COUNT(*) FROM codex_event_sources", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn migration_keeps_distinct_full_path_cursors_for_identical_basenames() {
+        let db = store();
+        let now = Utc::now();
+        let day = now.with_timezone(&Local).date_naive();
+        let mut old_a = event(90, 100);
+        old_a.source = "sessions/first/same.jsonl".into();
+        old_a.session = "first".into();
+        old_a.offset = 100;
+        old_a.timestamp = now - Duration::seconds(20);
+        let mut old_b = event(90, 50);
+        old_b.source = "sessions/second/same.jsonl".into();
+        old_b.session = "second".into();
+        old_b.offset = 500;
+        old_b.timestamp = now - Duration::seconds(20);
+        let mut frozen = old_a.usage.clone();
+        frozen.add(&old_b.usage);
+        db.replace_usage_daily(
+            ProviderKind::Codex,
+            &[DailyTokenUsage {
+                date: day,
+                usage: frozen.clone(),
+            }],
+        )
+        .unwrap();
+        db.replace_usage_model_daily(ProviderKind::Codex, &[("model-a".into(), day, frozen)])
+            .unwrap();
+        for e in [&old_a, &old_b] {
+            db.conn
+                .execute(
+                    "INSERT INTO scan_files VALUES('codex',?1,?2,?3)",
+                    params![
+                        e.source,
+                        e.offset,
+                        json!({"session_id":e.session}).to_string()
+                    ],
+                )
+                .unwrap();
+        }
+        let state = db
+            .initialize_codex_attribution_at(identity_for("only", 1), now)
+            .unwrap();
+        let mut tail = event(95, 7);
+        tail.source = old_a.source.clone();
+        tail.session = old_a.session.clone();
+        tail.offset = 200;
+        tail.timestamp = now - Duration::seconds(10);
+        db.save_account_events(
+            &[old_a, old_b, tail],
+            &state,
+            &state.observed,
+            &state.observed,
+            now,
+        )
+        .unwrap();
+        assert_eq!(
+            db.account_statistics_for("only", 30)
+                .unwrap()
+                .today
+                .input_tokens,
+            157
+        );
+        assert_eq!(
+            db.account_daily_for("only", day, day).unwrap()[0]
+                .2
+                .input_tokens,
+            157
+        );
+        assert_eq!(
+            db.conn
+                .query_row("SELECT COUNT(*) FROM codex_legacy_cursors", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn upgrading_preview_recovers_source_links_without_reassigning_history() {
+        let db = store();
+        let s = state();
+        db.save_account_events(&[event(115, 10)], &s, &s.observed, &s.observed, at(120))
+            .unwrap();
+        db.conn.execute("INSERT INTO scan_files VALUES('codex','sessions/path/same-conversation.jsonl',200,?1)",[json!({"session_id":"same-conversation"}).to_string()]).unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO codex_legacy_cursors VALUES('same-conversation.jsonl',100)",
+                [],
+            )
+            .unwrap();
+        db.conn.execute_batch("DROP TABLE codex_event_sources; DELETE FROM meta WHERE key='codex.event_sources.v1';").unwrap();
+        db.migrate_codex_accounts().unwrap();
+        db.migrate_codex_accounts().unwrap();
+        assert_eq!(db.conn.query_row("SELECT offset FROM codex_legacy_cursors WHERE source='sessions/path/same-conversation.jsonl'",[],|r|r.get::<_,i64>(0)).unwrap(),100);
+        assert_eq!(
+            db.codex_attribution().unwrap().unwrap().historical_owner,
+            "old"
+        );
+        db.save_account_scan(
+            &[],
+            &["sessions/path/same-conversation.jsonl".into()],
+            &s,
+            &None,
+            &None,
+            at(130),
+        )
+        .unwrap();
+        assert!(
+            db.account_daily_for("new", at(0).date_naive(), at(200).date_naive())
+                .unwrap()
+                .is_empty()
+        );
+    }
+    #[test]
+    fn archival_preserves_migration_coverage_and_later_rewrites_remove_old_links() {
+        let db = store();
+        let s = state();
+        let mut old = event(90, 100);
+        old.source = "sessions/day/same.jsonl".into();
+        old.offset = 100;
+        db.conn
+            .execute(
+                "INSERT INTO codex_legacy_cursors VALUES(?1,100)",
+                [&old.source],
+            )
+            .unwrap();
+        old.source = "archived_sessions/day/same.jsonl".into();
+        db.save_account_events(&[old], &s, &s.observed, &s.observed, at(120))
+            .unwrap();
+        assert!(
+            db.conn
+                .query_row("SELECT covered FROM codex_account_events", [], |r| r
+                    .get::<_, bool>(0))
+                .unwrap()
+        );
+        let mut live = event(115, 10);
+        live.source = "sessions/day/same.jsonl".into();
+        db.save_account_events(&[live], &s, &s.observed, &s.observed, at(120))
+            .unwrap();
+        let mut archived = event(115, 10);
+        archived.source = "archived_sessions/day/same.jsonl".into();
+        db.save_account_scan(
+            &[archived],
+            &["archived_sessions/day/same.jsonl".into()],
+            &s,
+            &s.observed,
+            &s.observed,
+            at(125),
+        )
+        .unwrap();
+        db.save_account_scan(
+            &[],
+            &["archived_sessions/day/same.jsonl".into()],
+            &s,
+            &s.observed,
+            &s.observed,
+            at(130),
+        )
+        .unwrap();
+        assert_eq!(
+            db.conn
+                .query_row("SELECT COUNT(*) FROM codex_account_events", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+    #[test]
+    fn migration_keeps_same_basename_cursors_separate() {
+        let db = store();
+        for (path, offset) in [
+            ("sessions/2026/09/one/shared.jsonl", 100_i64),
+            ("sessions/2026/09/two/shared.jsonl", 300_i64),
+        ] {
+            db.conn
+                .execute(
+                    "INSERT INTO scan_files(provider,path,offset,meta_json)
+                     VALUES('codex',?1,?2,'{}')",
+                    params![path, offset],
+                )
+                .unwrap();
+        }
+
+        db.initialize_codex_attribution_at(identity_for("only-account", 1), at(100))
+            .unwrap();
+        let mut query = db
+            .conn
+            .prepare("SELECT source,offset FROM codex_legacy_cursors ORDER BY source")
+            .unwrap();
+        let cursors = query
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(
+            cursors,
+            vec![
+                ("sessions/2026/09/one/shared.jsonl".into(), 100),
+                ("sessions/2026/09/two/shared.jsonl".into(), 300),
+            ]
+        );
+    }
+
+    #[test]
+    fn source_reset_replaces_obsolete_account_events() {
+        let db = store();
+        let initial = state();
+        let account = initial.observed.clone();
+        let mut first = event(115, 10);
+        first.source = "sessions/2026/09/session.jsonl".into();
+        let mut second = event(116, 20);
+        second.source = first.source.clone();
+        let source = first.source.clone();
+        db.save_account_events(&[first, second], &initial, &account, &account, at(120))
+            .unwrap();
+
+        let state = db.codex_attribution().unwrap().unwrap();
+        let mut replacement = event(125, 7);
+        replacement.source = source.clone();
+        db.save_account_scan(
+            &[replacement],
+            &[source],
+            &state,
+            &account,
+            &account,
+            at(130),
+        )
+        .unwrap();
+
+        let rows = db
+            .account_daily_for("new", at(0).date_naive(), at(200).date_naive())
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].2.input_tokens, 7);
+        assert_eq!(
+            db.conn
+                .query_row("SELECT COUNT(*) FROM codex_account_events", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            1
+        );
+    }
+    #[test]
+    fn upgrading_single_source_preview_recovers_explicit_links() {
+        let db = store();
+        let s = state();
+        db.save_account_events(&[event(115, 10)], &s, &s.observed, &s.observed, at(120))
+            .unwrap();
+        // The maintainer's preview persisted a source directly on each event.
+        // Its scanner metadata may already have been cleared for a rebuild.
+        db.conn
+            .execute_batch(
+                "UPDATE codex_account_events SET source='sessions/old/rollout.jsonl';
+            DROP TABLE codex_event_sources;
+            DELETE FROM meta WHERE key='codex.event_sources.v1';",
+            )
+            .unwrap();
+        db.migrate_codex_accounts().unwrap();
+        db.migrate_codex_accounts().unwrap();
+        assert_eq!(db.conn.query_row("SELECT COUNT(*) FROM codex_event_sources WHERE source='sessions/old/rollout.jsonl'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(
+            db.account_daily_for("new", at(0).date_naive(), at(200).date_naive())
+                .unwrap()[0]
+                .2
+                .input_tokens,
+            10
+        );
+        db.save_account_scan(
+            &[],
+            &["sessions/old/rollout.jsonl".into()],
+            &s,
+            &None,
+            &None,
+            at(130),
+        )
+        .unwrap();
+        assert!(
+            db.account_daily_for("new", at(0).date_naive(), at(200).date_naive())
+                .unwrap()
+                .is_empty()
+        );
+    }
+    #[test]
+    fn legacy_shared_session_rows_survive_rebuilding_only_one_source() {
+        let db = store();
+        let s = state();
+        db.save_account_events(
+            &[event(115, 10), event(116, 20)],
+            &s,
+            &s.observed,
+            &s.observed,
+            at(120),
+        )
+        .unwrap();
+        for path in ["sessions/a.jsonl", "sessions/b.jsonl"] {
+            db.conn
+                .execute(
+                    "INSERT INTO scan_files VALUES('codex',?1,200,?2)",
+                    params![path, json!({"session_id":"same-conversation"}).to_string()],
+                )
+                .unwrap();
+        }
+        db.conn.execute_batch("DROP TABLE codex_event_sources; DELETE FROM meta WHERE key='codex.event_sources.v1';").unwrap();
+        db.migrate_codex_accounts().unwrap();
+        // Before both old sources have been observed again, do not guess which
+        // file contributed an event or erase another file's conversation rows.
+        db.save_account_scan(&[], &["sessions/a.jsonl".into()], &s, &None, &None, at(130))
+            .unwrap();
+        assert_eq!(
+            db.account_daily_for("new", at(0).date_naive(), at(200).date_naive())
+                .unwrap()[0]
+                .2
+                .input_tokens,
+            30
+        );
+        let mut remaining = event(116, 20);
+        remaining.source = "sessions/b.jsonl".into();
+        db.save_account_scan(
+            &[remaining],
+            &["sessions/b.jsonl".into()],
+            &s,
+            &None,
+            &None,
+            at(140),
+        )
+        .unwrap();
+        assert_eq!(
+            db.account_daily_for("new", at(0).date_naive(), at(200).date_naive())
+                .unwrap()[0]
+                .2
+                .input_tokens,
+            20
+        );
     }
 }
