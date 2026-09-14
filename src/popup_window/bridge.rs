@@ -600,7 +600,10 @@ pub(super) fn start_background_bridge(
                 }
                 Ok(WorkerEvent::ProviderUsageUpdated(provider, usage)) => {
                     if provider == ProviderKind::Codex
-                        && usage.account_id.as_deref().is_some_and(|id| id != crate::store::codex_accounts::current_id())
+                        && usage
+                            .account_id
+                            .as_deref()
+                            .is_some_and(|id| id != crate::store::codex_accounts::current_id())
                     {
                         continue;
                     }

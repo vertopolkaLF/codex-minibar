@@ -13,11 +13,12 @@ use serde_json::Value;
 
 use crate::{pricing, settings::ProviderKind, store};
 
-// Version 7 matches T3/ccusage Codex transcript rules and the current pricing
+// Version 8 rebuilds event source links after the account-source migration.
+// Version 7 matched T3/ccusage Codex transcript rules and the current pricing
 // table: first session_meta
 // wins, fork/subagent copied history is dropped, and unchanged token_count
 // re-emits are ignored. Older daily totals must be rebuilt from the logs.
-pub(crate) const CODEX_CACHE_VERSION: u8 = 7;
+pub(crate) const CODEX_CACHE_VERSION: u8 = 8;
 // Version 4 only accepts Claude `assistant` usage lines, matching T3 and the
 // current model pricing table.
 pub(crate) const CLAUDE_CACHE_VERSION: u8 = 4;
@@ -236,15 +237,21 @@ pub fn refresh_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
 
     let oldest = Local::now().date_naive() - Duration::days(CACHE_RETENTION_DAYS - 1);
     let mut account_events = Vec::new();
+    let mut rebuilt_sources = Vec::new();
     for (path, key) in files {
-        let cached = cache.files.entry(key).or_default();
+        let cached = cache.files.entry(key.clone()).or_default();
         // Older caches kept daily totals but dropped per-model rows on load.
         // Rescanning from zero rebuilds the breakdown without double-counting.
         if cached.model_daily.is_empty() && !cached.daily.is_empty() {
             cached.reset_scan_state();
         }
+        let delta = scan_file_delta(&path, &key, cached)?;
+        if delta.rebuilt {
+            rebuilt_sources.push(key);
+        }
         account_events.extend(
-            scan_file_delta(&path, cached)?
+            delta
+                .events
                 .into_iter()
                 .filter(|event| event.timestamp.with_timezone(&Local).date_naive() >= oldest),
         );
@@ -256,7 +263,14 @@ pub fn refresh_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
     // Commit attribution before offsets: a failed subsequent cache save can
     // replay these events safely, but can never skip an uncommitted event.
     store::with_store(|store| {
-        store.save_account_events(&account_events, &attribution, &before, &after, end)
+        store.save_account_scan(
+            &account_events,
+            &rebuilt_sources,
+            &attribution,
+            &before,
+            &after,
+            end,
+        )
     })?;
     store::with_store(|store| store.save_codex_cache(&cache))?;
     load_cached_usage_statistics(history_days)
@@ -338,20 +352,27 @@ pub(crate) fn statistics_from_daily(
     stats
 }
 
+pub(crate) struct FileDelta {
+    pub events: Vec<store::codex_accounts::AccountEvent>,
+    pub rebuilt: bool,
+}
+
 pub(crate) fn scan_file_delta(
     path: &Path,
+    source: &str,
     cached: &mut CachedSessionFile,
-) -> Result<Vec<store::codex_accounts::AccountEvent>> {
+) -> Result<FileDelta> {
     let mut events = Vec::new();
     let file_size = fs::metadata(path)
         .with_context(|| format!("read metadata for {}", path.display()))?
         .len();
+    let rebuilt = cached.offset == 0 || file_size < cached.offset;
     if file_size < cached.offset {
         // Codex rewrote/truncated a session log. Its old aggregate is invalid.
         cached.reset_scan_state();
     }
     if file_size == cached.offset {
-        return Ok(events);
+        return Ok(FileDelta { events, rebuilt });
     }
 
     let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
@@ -379,17 +400,10 @@ pub(crate) fn scan_file_delta(
         };
         if let Some((timestamp, usage, model)) = ingest_codex_line(line, cached) {
             events.push(store::codex_accounts::AccountEvent {
-                source: path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned(),
+                source: source.to_owned(),
                 offset,
                 session: if cached.session_id.is_empty() {
-                    path.file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned()
+                    source.to_owned()
                 } else {
                     cached.session_id.clone()
                 },
@@ -402,7 +416,7 @@ pub(crate) fn scan_file_delta(
         }
     }
     cached.offset = offset;
-    Ok(events)
+    Ok(FileDelta { events, rebuilt })
 }
 
 /// Returns active rollouts plus archived ones. An active path wins when an
@@ -1107,11 +1121,11 @@ mod tests {
         fs::write(&path, format!("{context}\n{first}\n{second}")).unwrap();
 
         let mut cached = CachedSessionFile::default();
-        scan_file_delta(&path, &mut cached).unwrap();
+        scan_file_delta(&path, "sessions/test.jsonl", &mut cached).unwrap();
         assert_eq!(cached.daily[0].usage.total_tokens(), 10);
 
         fs::write(&path, format!("{context}\n{first}\n{second}\n")).unwrap();
-        scan_file_delta(&path, &mut cached).unwrap();
+        scan_file_delta(&path, "sessions/test.jsonl", &mut cached).unwrap();
         assert_eq!(cached.daily[0].usage.total_tokens(), 15);
         assert_eq!(cached.daily[0].usage.requests, 2);
     }

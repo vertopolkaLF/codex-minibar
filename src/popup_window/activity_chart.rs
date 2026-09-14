@@ -284,7 +284,11 @@ pub(super) fn usage_activity_chart(
             transition: crate::theme::duration(crate::theme::CONTROL_FAST_ANIMATION),
         },
     )
-    .with_key(format!("activity-chart-{}-{}", provider.id(), statistics.account_id.as_deref().unwrap_or("all")))
+    .with_key(format!(
+        "activity-chart-{}-{}",
+        provider.id(),
+        statistics.account_id.as_deref().unwrap_or("all")
+    ))
 }
 
 fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {

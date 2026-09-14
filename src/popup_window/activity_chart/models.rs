@@ -218,6 +218,12 @@ impl ModelData {
         for (name, usage) in all.iter().skip(page * PAGE_SIZE).take(PAGE_SIZE) {
             let brush = xaml_color(color(name, scheme));
             let name = xml(name);
+            // XAML interprets a leading brace in an attribute as markup.
+            let name = if name.starts_with('{') {
+                format!("{{}}{name}")
+            } else {
+                name
+            };
             let amount = if cost {
                 cost_label(usage)
             } else {
@@ -392,7 +398,7 @@ mod tests {
             (0..10)
                 .map(|i| {
                     (
-                        format!("model-{i}<\"&"),
+                        format!("{{model-{i}<\"&"),
                         date,
                         TokenUsage {
                             input_tokens: i + 1,
@@ -416,6 +422,7 @@ mod tests {
                         if page == 0 { 8 } else { 2 }
                     );
                     assert!(markup.contains("&lt;&quot;&amp;"));
+                    assert!(markup.contains("Text=\"{}{model-"));
                 }
             }
         }

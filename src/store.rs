@@ -27,7 +27,7 @@ use crate::usage::{
 pub(crate) mod codex_accounts;
 
 const SCHEMA_VERSION: i64 = 1;
-const CODEX_CACHE_VERSION: u8 = 7;
+const CODEX_CACHE_VERSION: u8 = crate::usage::CODEX_CACHE_VERSION;
 const CLAUDE_CACHE_VERSION: u8 = 4;
 const CURSOR_USAGE_VERSION: u8 = 8;
 const CACHE_RETENTION_DAYS: i64 = 365;
@@ -40,7 +40,9 @@ pub fn shared() -> Result<Arc<Mutex<ProviderStore>>> {
         return Ok(Arc::clone(store));
     }
     static OPEN: Mutex<()> = Mutex::new(());
-    let _open = OPEN.lock().map_err(|_| anyhow!("provider store initialization lock poisoned"))?;
+    let _open = OPEN
+        .lock()
+        .map_err(|_| anyhow!("provider store initialization lock poisoned"))?;
     if let Some(store) = SHARED.get() {
         return Ok(Arc::clone(store));
     }
@@ -353,6 +355,7 @@ impl ProviderStore {
             "usage_events",
             "scan_files",
             "codex_account_events",
+            "codex_event_sources",
             "codex_legacy_daily",
             "codex_legacy_model_daily",
             "codex_legacy_hourly",
@@ -1048,10 +1051,15 @@ impl ProviderStore {
     }
 
     pub(crate) fn load_openrouter_account_models(
-        &self, account: &str, start: NaiveDate, end: NaiveDate,
+        &self,
+        account: &str,
+        start: NaiveDate,
+        end: NaiveDate,
     ) -> Result<Vec<(String, NaiveDate, TokenUsage)>> {
         match self.load_openrouter_analytics()? {
-            Some(raw) => crate::openrouter::analytics::cached_account_models(&raw, account, start, end),
+            Some(raw) => {
+                crate::openrouter::analytics::cached_account_models(&raw, account, start, end)
+            }
             None => Ok(Vec::new()),
         }
     }
