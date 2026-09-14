@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike, Utc, Weekday};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Weekday};
 
 use crate::{
     limits::ProviderLimits,

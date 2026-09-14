@@ -84,15 +84,6 @@ fn xml(text: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-fn xaml_text_attribute(text: &str) -> String {
-    let text = xml(text);
-    if text.starts_with('{') {
-        format!("{{}}{text}")
-    } else {
-        text
-    }
-}
-
 pub(super) fn next_page(current: usize, pages: usize, wheel: i32) -> usize {
     let last = pages.saturating_sub(1);
     if wheel < 0 {
@@ -216,6 +207,15 @@ impl ModelData {
         scheme: ColorScheme,
         page: usize,
     ) -> String {
+        fn xaml_text_attribute(text: &str) -> String {
+            let text = xml(text);
+            if text.starts_with('{') {
+                format!("{{}}{text}")
+            } else {
+                text
+            }
+        }
+
         let all = self.sorted(bucket.first, cost);
         let page = page.min(self.pages(bucket.first).saturating_sub(1));
         let descriptor = crate::provider_registry::descriptor(provider);

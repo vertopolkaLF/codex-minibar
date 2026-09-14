@@ -3,7 +3,6 @@ use std::{
     fs::{self, File},
     io::{BufRead, BufReader, Seek, SeekFrom},
     path::{Path, PathBuf},
-    time::SystemTime,
 };
 
 use anyhow::{Context, Result};
@@ -275,44 +274,6 @@ pub fn refresh_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
     })?;
     store::with_store(|store| store.save_codex_cache(&cache))?;
     load_cached_usage_statistics(history_days)
-}
-
-/// Walks recently touched session logs and buckets token events by local hour.
-/// Daily aggregates stay incremental; this pass exists so Past 24h can use
-/// the timestamps that were previously thrown away after daily rollup.
-pub(crate) fn collect_codex_hourly_since(
-    since: DateTime<Utc>,
-) -> Result<Vec<(DateTime<Local>, TokenUsage)>> {
-    let files = collect_codex_session_files(&codex_home())?;
-    let modified_floor = SystemTime::now()
-        .checked_sub(std::time::Duration::from_secs(48 * 60 * 60))
-        .unwrap_or(SystemTime::UNIX_EPOCH);
-    let mut hourly = BTreeMap::<DateTime<Local>, TokenUsage>::new();
-    for (path, _) in files {
-        let modified = fs::metadata(&path).and_then(|meta| meta.modified()).ok();
-        if modified.is_some_and(|time| time < modified_floor) {
-            continue;
-        }
-        let file = File::open(&path).with_context(|| format!("open {}", path.display()))?;
-        let reader = BufReader::new(file);
-        let mut context = CachedSessionFile::default();
-        for line in reader.lines() {
-            let Ok(line) = line else {
-                continue;
-            };
-            let Some((timestamp, usage, _)) = ingest_codex_line(&line, &mut context) else {
-                continue;
-            };
-            if timestamp < since {
-                continue;
-            }
-            hourly
-                .entry(truncate_local_hour(timestamp.with_timezone(&Local)))
-                .or_default()
-                .add(&usage);
-        }
-    }
-    Ok(hourly.into_iter().collect())
 }
 
 pub(crate) fn truncate_local_hour(timestamp: DateTime<Local>) -> DateTime<Local> {
