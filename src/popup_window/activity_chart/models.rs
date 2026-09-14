@@ -84,6 +84,15 @@ fn xml(text: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+fn xaml_text_attribute(text: &str) -> String {
+    let text = xml(text);
+    if text.starts_with('{') {
+        format!("{{}}{text}")
+    } else {
+        text
+    }
+}
+
 pub(super) fn next_page(current: usize, pages: usize, wheel: i32) -> usize {
     let last = pages.saturating_sub(1);
     if wheel < 0 {
@@ -217,13 +226,7 @@ impl ModelData {
         let mut rows = String::new();
         for (name, usage) in all.iter().skip(page * PAGE_SIZE).take(PAGE_SIZE) {
             let brush = xaml_color(color(name, scheme));
-            let name = xml(name);
-            // XAML interprets a leading brace in an attribute as markup.
-            let name = if name.starts_with('{') {
-                format!("{{}}{name}")
-            } else {
-                name
-            };
+            let name = xaml_text_attribute(name);
             let amount = if cost {
                 cost_label(usage)
             } else {
@@ -398,7 +401,11 @@ mod tests {
             (0..10)
                 .map(|i| {
                     (
-                        format!("{{model-{i}<\"&"),
+                        if i == 0 {
+                            "{model-0}<\"&".into()
+                        } else {
+                            format!("model-{i}<\"&")
+                        },
                         date,
                         TokenUsage {
                             input_tokens: i + 1,
@@ -422,7 +429,9 @@ mod tests {
                         if page == 0 { 8 } else { 2 }
                     );
                     assert!(markup.contains("&lt;&quot;&amp;"));
-                    assert!(markup.contains("Text=\"{}{model-"));
+                    if page == 1 {
+                        assert!(markup.contains("Text=\"{}{model-0}&lt;&quot;&amp;\""));
+                    }
                 }
             }
         }

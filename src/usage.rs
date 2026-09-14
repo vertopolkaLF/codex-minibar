@@ -1121,13 +1121,23 @@ mod tests {
         fs::write(&path, format!("{context}\n{first}\n{second}")).unwrap();
 
         let mut cached = CachedSessionFile::default();
-        scan_file_delta(&path, "sessions/test.jsonl", &mut cached).unwrap();
+        let delta = scan_file_delta(&path, "sessions/session.jsonl", &mut cached).unwrap();
+        assert!(delta.rebuilt);
         assert_eq!(cached.daily[0].usage.total_tokens(), 10);
 
         fs::write(&path, format!("{context}\n{first}\n{second}\n")).unwrap();
-        scan_file_delta(&path, "sessions/test.jsonl", &mut cached).unwrap();
+        let delta = scan_file_delta(&path, "sessions/session.jsonl", &mut cached).unwrap();
+        assert!(!delta.rebuilt);
+        assert_eq!(delta.events[0].source, "sessions/session.jsonl");
         assert_eq!(cached.daily[0].usage.total_tokens(), 15);
         assert_eq!(cached.daily[0].usage.requests, 2);
+
+        fs::write(&path, format!("{context}\n{first}\n")).unwrap();
+        let delta = scan_file_delta(&path, "sessions/session.jsonl", &mut cached).unwrap();
+        assert!(delta.rebuilt);
+        assert_eq!(delta.events.len(), 1);
+        assert_eq!(cached.daily[0].usage.total_tokens(), 10);
+        assert_eq!(cached.daily[0].usage.requests, 1);
     }
 
     fn token_count(input: u64, output: u64, timestamp: &str) -> String {
