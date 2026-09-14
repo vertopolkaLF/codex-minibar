@@ -30,6 +30,7 @@ export interface ActionSettings extends JsonObject {
   resetDisplay: ResetDisplay;
   valueMode: ValueMode;
   showPercentSymbol: boolean;
+  showPace: boolean;
   font: KeyFont;
   providerMark: ProviderMark;
   coloredProviderMark: boolean;
@@ -48,6 +49,7 @@ export const DEFAULT_SETTINGS: ActionSettings = {
   resetDisplay: "countdown",
   valueMode: "remaining",
   showPercentSymbol: true,
+  showPace: true,
   font: "inter",
   providerMark: "hidden",
   coloredProviderMark: false,
@@ -194,6 +196,7 @@ export function normalizeSettings(settings: Partial<ActionSettings> | undefined)
     presentation: normalizePresentation(settings?.presentation),
     resetDisplay,
     showPercentSymbol: settings?.showPercentSymbol !== false,
+    showPace: settings?.showPace !== false,
     font: normalizeFont(settings?.font),
     providerMark: normalizeProviderMark(settings?.providerMark, widget),
     coloredProviderMark: settings?.coloredProviderMark === true,
@@ -354,6 +357,27 @@ function displayedValue(row: MetricRow, settings: ActionSettings): number | null
   return settings.valueMode === "used" ? row.window.used_percent : row.window.remaining_percent;
 }
 
+/** Even-burn marker, matching Minibar's `LimitWindow::pace_tip`. Indicator only — no copy. */
+function pacePercent(window: WindowSnapshot, showUsed: boolean, now = Date.now()): number | null {
+  const durationMinutes = window.duration_minutes;
+  if (durationMinutes == null || durationMinutes <= 0) return null;
+  if (!window.resets_at || window.used_percent == null) return null;
+  const resetAt = Date.parse(window.resets_at);
+  if (Number.isNaN(resetAt)) return null;
+  const durationSecs = durationMinutes * 60;
+  const timeUntilReset = (resetAt - now) / 1000;
+  if (timeUntilReset <= 0 || timeUntilReset > durationSecs) return null;
+  const elapsed = Math.min(durationSecs, Math.max(0, durationSecs - timeUntilReset));
+  const expectedUsed = Math.min(100, Math.max(0, (elapsed / durationSecs) * 100));
+  if (expectedUsed < 3) return null;
+  return showUsed ? expectedUsed : 100 - expectedUsed;
+}
+
+function rowPacePercent(row: MetricRow, settings: ActionSettings): number | null {
+  if (!settings.showPace) return null;
+  return pacePercent(row.window, settings.valueMode === "used");
+}
+
 function formatPercent(value: number | null, settings: ActionSettings): string {
   if (value === null) return "?";
   return settings.showPercentSymbol ? `${value}%` : String(value);
@@ -482,7 +506,8 @@ function renderBars(rows: MetricRow[], settings: ActionSettings): string {
     const value = Math.max(0, Math.min(100, displayedValue(row, settings) ?? 0));
     const y = firstY + index * (barHeight + gap);
     const color = statusColor(row.window.remaining_percent);
-    return `<rect x="12" y="${y}" width="120" height="${barHeight}" rx="${barHeight / 2}" fill="#35404e"/><rect x="12" y="${y}" width="${1.2 * value}" height="${barHeight}" rx="${barHeight / 2}" fill="${color}"/>`;
+    const pace = rowPaceMarkup(row, settings, percent => horizontalFillPace(12, y, 120, barHeight, percent, "full"));
+    return `<rect x="12" y="${y}" width="120" height="${barHeight}" rx="${barHeight / 2}" fill="#35404e"/><rect x="12" y="${y}" width="${1.2 * value}" height="${barHeight}" rx="${barHeight / 2}" fill="${color}"/>${pace}`;
   }).join("");
   const reset = settings.showCountdown ? formatCountdown(nearestReset(rows)) : null;
   const footer = reset ? `<text x="72" y="137" text-anchor="middle" font-family="${fontFamily(settings)}" font-size="12" fill="#8490a3">${escapeXml(reset)}</text>` : "";
@@ -497,6 +522,67 @@ function progressFill(value: number | null, color: string, orientation: "horizon
   }
   const filledHeight = height * clamped / 100;
   return `<rect x="${x}" y="${(y + height - filledHeight).toFixed(2)}" width="${width}" height="${filledHeight.toFixed(2)}" fill="${color}"/>`;
+}
+
+const PACE_STROKE = 2;
+const PACE_COLOR = "#ffffff";
+/** Short tick on full-key fills so the marker does not become a full-canvas stripe. */
+const PACE_TICK_LARGE = 16;
+
+function paceLine(x1: number, y1: number, x2: number, y2: number): string {
+  return `<line x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}" stroke="${PACE_COLOR}" stroke-width="${PACE_STROKE}" stroke-linecap="round"/>`;
+}
+
+/** Vertical tick on a left-to-right fill. `full` spans the track; `small` is a centered stub. */
+function horizontalFillPace(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  percent: number,
+  span: "full" | "small",
+): string {
+  const px = x + width * Math.max(0, Math.min(100, percent)) / 100;
+  if (span === "full") return paceLine(px, y, px, y + height);
+  const tick = Math.min(PACE_TICK_LARGE, height);
+  const mid = y + height / 2;
+  return paceLine(px, mid - tick / 2, px, mid + tick / 2);
+}
+
+/** Horizontal tick on a bottom-to-top fill. `full` spans the track; `small` is a centered stub. */
+function verticalFillPace(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  percent: number,
+  span: "full" | "small",
+): string {
+  const py = y + height * (1 - Math.max(0, Math.min(100, percent)) / 100);
+  if (span === "full") return paceLine(x, py, x + width, py);
+  const tick = Math.min(PACE_TICK_LARGE, width);
+  const mid = x + width / 2;
+  return paceLine(mid - tick / 2, py, mid + tick / 2, py);
+}
+
+/** Radial tick through a ring stroke — same length as the stroke width. */
+function ringPaceTick(cx: number, cy: number, radius: number, percent: number, strokeWidth: number): string {
+  const theta = -Math.PI / 2 + (Math.max(0, Math.min(100, percent)) / 100) * 2 * Math.PI;
+  const half = strokeWidth / 2;
+  const inner = radius - half;
+  const outer = radius + half;
+  const cos = Math.cos(theta);
+  const sin = Math.sin(theta);
+  return paceLine(cx + inner * cos, cy + inner * sin, cx + outer * cos, cy + outer * sin);
+}
+
+function rowPaceMarkup(
+  row: MetricRow,
+  settings: ActionSettings,
+  draw: (percent: number) => string,
+): string {
+  const percent = rowPacePercent(row, settings);
+  return percent === null ? "" : draw(percent);
 }
 
 function progressTextColor(value: number | null, color: string, orientation: "horizontal" | "vertical"): string {
@@ -555,7 +641,10 @@ function renderProgress(rows: MetricRow[], settings: ActionSettings, provider: P
     const overlay = fillCanvasOverlay(settings, provider, percent, reset, textColor, mark === "text");
     const track = `<rect width="144" height="144" fill="${darkenStatusColor(color)}"/>`;
     const fill = progressFill(value, color, orientation);
-    return svg(`${track}${fill}${watermark}${overlay}`);
+    const pace = rowPaceMarkup(row, settings, p => orientation === "horizontal"
+      ? horizontalFillPace(0, 0, 144, 144, p, "small")
+      : verticalFillPace(0, 0, 144, 144, p, "small"));
+    return svg(`${track}${fill}${watermark}${pace}${overlay}`);
   }
 
   const segmentSize = 144 / rows.length;
@@ -579,12 +668,14 @@ function renderProgress(rows: MetricRow[], settings: ActionSettings, provider: P
       const resetMarkup = showReset && reset
         ? `<text x="72" y="${(y + segmentSize - 10).toFixed(1)}" text-anchor="middle" font-family="${font}" font-size="15" font-weight="600" fill="${progressTextColor(value, color, orientation)}">${escapeXml(reset.value)}</text>`
         : "";
-      return `<rect x="0" y="${y}" width="144" height="${segmentSize}" fill="${darkenStatusColor(color)}"/>${progressFill(value, color, orientation, 0, y, 144, segmentSize)}<text x="72" y="${textY.toFixed(1)}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="${progressTextColor(value, color, orientation)}">${escapeXml(percent)}</text>${resetMarkup}`;
+      const pace = rowPaceMarkup(row, settings, p => horizontalFillPace(0, y, 144, segmentSize, p, "small"));
+      return `<rect x="0" y="${y}" width="144" height="${segmentSize}" fill="${darkenStatusColor(color)}"/>${progressFill(value, color, orientation, 0, y, 144, segmentSize)}${pace}<text x="72" y="${textY.toFixed(1)}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="${progressTextColor(value, color, orientation)}">${escapeXml(percent)}</text>${resetMarkup}`;
     }
     const x = segmentSize * index;
     const textX = x + segmentSize / 2;
     const textY = 72 + fontSize * 0.36;
-    return `<rect x="${x}" y="0" width="${segmentSize}" height="144" fill="${darkenStatusColor(color)}"/>${progressFill(value, color, orientation, x, 0, segmentSize, 144)}<text x="${textX}" y="${textY}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="${progressTextColor(value, color, orientation)}">${escapeXml(percent)}</text>`;
+    const pace = rowPaceMarkup(row, settings, p => verticalFillPace(x, 0, segmentSize, 144, p, "small"));
+    return `<rect x="${x}" y="0" width="${segmentSize}" height="144" fill="${darkenStatusColor(color)}"/>${progressFill(value, color, orientation, x, 0, segmentSize, 144)}${pace}<text x="${textX}" y="${textY}" text-anchor="middle" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="${progressTextColor(value, color, orientation)}">${escapeXml(percent)}</text>`;
   }).join("");
   return svg(`${body}${watermark}`);
 }
@@ -614,7 +705,8 @@ function renderProgressRail(rows: MetricRow[], settings: ActionSettings, provide
       : "";
     const track = `<rect x="0" y="0" width="${railWidth}" height="144" fill="${darkenStatusColor(color)}"/>`;
     const fill = progressFill(value, color, "vertical", 0, 0, railWidth, 144);
-    return svg(`<rect width="144" height="144" fill="#000"/>${track}${fill}${watermark}${name}<text x="${textX}" y="${percentY}" text-anchor="start" font-family="${font}" font-size="${percentSize}" font-weight="700" fill="${color}">${escapeXml(percent)}</text>${resetMarkup}`);
+    const pace = rowPaceMarkup(row, settings, p => verticalFillPace(0, 0, railWidth, 144, p, "full"));
+    return svg(`<rect width="144" height="144" fill="#000"/>${track}${fill}${pace}${watermark}${name}<text x="${textX}" y="${percentY}" text-anchor="start" font-family="${font}" font-size="${percentSize}" font-weight="700" fill="${color}">${escapeXml(percent)}</text>${resetMarkup}`);
   }
 
   const bandHeight = 144 / rows.length;
@@ -632,7 +724,8 @@ function renderProgressRail(rows: MetricRow[], settings: ActionSettings, provide
     const resetMarkup = showReset && reset
       ? `<text x="${textX}" y="${(y + bandHeight - 10).toFixed(1)}" text-anchor="start" font-family="${font}" font-size="16" font-weight="600" fill="#ececec">${escapeXml(reset.value)}</text>`
       : "";
-    return `<rect x="0" y="${y}" width="${railWidth}" height="${bandHeight}" fill="${darkenStatusColor(color)}"/>${progressFill(value, color, "vertical", 0, y, railWidth, bandHeight)}<text x="${textX}" y="${textY.toFixed(1)}" text-anchor="start" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="${color}">${escapeXml(percent)}</text>${resetMarkup}`;
+    const pace = rowPaceMarkup(row, settings, p => verticalFillPace(0, y, railWidth, bandHeight, p, "full"));
+    return `<rect x="0" y="${y}" width="${railWidth}" height="${bandHeight}" fill="${darkenStatusColor(color)}"/>${progressFill(value, color, "vertical", 0, y, railWidth, bandHeight)}${pace}<text x="${textX}" y="${textY.toFixed(1)}" text-anchor="start" font-family="${font}" font-size="${fontSize}" font-weight="700" fill="${color}">${escapeXml(percent)}</text>${resetMarkup}`;
   }).join("");
   return svg(`<rect width="144" height="144" fill="#000"/>${watermark}${body}`);
 }
@@ -710,7 +803,8 @@ function renderSingleRing(row: MetricRow, settings: ActionSettings, provider: Pr
   const resetMarkup = reset
     ? `<text x="72" y="${resetY}" text-anchor="middle" font-family="${font}" font-size="21" fill="#ececec">${escapeXml(reset.value)}</text>`
     : "";
-  return svg(`<rect width="144" height="144" fill="#000"/>${watermark}${fadedRingArc(72, 72, radius, value, color, strokeWidth)}${nameMarkup}${percentMarkup}${resetMarkup}`);
+  const pace = rowPaceMarkup(row, settings, p => ringPaceTick(72, 72, radius, p, strokeWidth));
+  return svg(`<rect width="144" height="144" fill="#000"/>${watermark}${fadedRingArc(72, 72, radius, value, color, strokeWidth)}${pace}${nameMarkup}${percentMarkup}${resetMarkup}`);
 }
 
 function ringValue(row: MetricRow, settings: ActionSettings): { value: number; percent: string; color: string } {
@@ -735,7 +829,9 @@ function renderDualRings(rows: MetricRow[], settings: ActionSettings, provider: 
   const font = fontFamily(settings);
   const watermark = resolvedProviderMark(settings) === "logo" ? providerLogo(provider, 101, settings) : "";
   const labels = `<text x="72" y="66" text-anchor="middle" font-family="${font}" font-size="${outerSize}" font-weight="700" fill="${outer.color}">${escapeXml(outer.percent)}</text><text x="72" y="94" text-anchor="middle" font-family="${font}" font-size="${innerSize}" font-weight="700" fill="${inner.color}">${escapeXml(inner.percent)}</text>`;
-  return svg(`<rect width="144" height="144" fill="#000"/>${watermark}${fadedRingArc(72, 72, outerRadius, outer.value, outer.color, strokeWidth)}${fadedRingArc(72, 72, innerRadius, inner.value, inner.color, strokeWidth)}${labels}`);
+  const outerPace = rowPaceMarkup(rows[0], settings, p => ringPaceTick(72, 72, outerRadius, p, strokeWidth));
+  const innerPace = rowPaceMarkup(rows[1], settings, p => ringPaceTick(72, 72, innerRadius, p, strokeWidth));
+  return svg(`<rect width="144" height="144" fill="#000"/>${watermark}${fadedRingArc(72, 72, outerRadius, outer.value, outer.color, strokeWidth)}${fadedRingArc(72, 72, innerRadius, inner.value, inner.color, strokeWidth)}${outerPace}${innerPace}${labels}`);
 }
 
 function renderResetTime(rows: MetricRow[], settings: ActionSettings): string {

@@ -58,6 +58,10 @@
     <input id="showPercentSymbol" type="checkbox" checked>
     Show % symbol
   </label>
+  <label class="check" for="showPace">
+    <input id="showPace" type="checkbox" checked>
+    Show usage pace
+  </label>
 
   <label for="font">Font</label>
   <select id="font">
@@ -100,7 +104,7 @@
       "opencode-go": { name: "OpenCode Go", metrics: [["opencode-go.session", "5h session"], ["opencode-go.weekly", "Weekly"], ["opencode-go.monthly", "Monthly"]] },
       openrouter: { name: "OpenRouter", metrics: [["openrouter.limit", "Spending limit"]] }
     };
-    const defaultSettings = { provider: "codex", widget: "single_limit", singleMetricId: "codex.session", metricIds: ["codex.session"], presentation: "rings", resetDisplay: "countdown", valueMode: "remaining", showPercentSymbol: true, font: "inter", providerMark: "hidden", coloredProviderMark: false, showCountdown: true, clickAction: "open_popup", cycleProviders: ["codex", "claude", "cursor"], cycleIndex: 0 };
+    const defaultSettings = { provider: "codex", widget: "single_limit", singleMetricId: "codex.session", metricIds: ["codex.session"], presentation: "rings", resetDisplay: "countdown", valueMode: "remaining", showPercentSymbol: true, showPace: true, font: "inter", providerMark: "hidden", coloredProviderMark: false, showCountdown: true, clickAction: "open_popup", cycleProviders: ["codex", "claude", "cursor"], cycleIndex: 0 };
     let settings = { ...defaultSettings };
     let websocket;
     let context;
@@ -113,6 +117,7 @@
     const resetDisplay = document.querySelector("#resetDisplay");
     const valueMode = document.querySelector("#valueMode");
     const showPercentSymbol = document.querySelector("#showPercentSymbol");
+    const showPace = document.querySelector("#showPace");
     const fontSelect = document.querySelector("#font");
     const providerMark = document.querySelector("#providerMark");
     const coloredProviderMark = document.querySelector("#coloredProviderMark");
@@ -168,6 +173,7 @@
         presentation: presentationKind,
         resetDisplay: ["countdown", "time", "hidden"].includes(reset) ? reset : defaultSettings.resetDisplay,
         showPercentSymbol: input?.showPercentSymbol !== false,
+        showPace: input?.showPace !== false,
         font: ["inter", "segoe", "arial", "consolas"].includes(input?.font) ? input.font : defaultSettings.font,
         providerMark: normalizeProviderMark(input?.providerMark, widgetKind === "dual_limit" ? "dual_limit" : "single_limit"),
         coloredProviderMark: input?.coloredProviderMark === true,
@@ -220,6 +226,8 @@
       resetDisplay.value = settings.resetDisplay;
       valueMode.value = settings.valueMode;
       showPercentSymbol.checked = settings.showPercentSymbol !== false;
+      showPace.checked = settings.showPace !== false;
+      showPace.disabled = !["rings", "bars", "progress_horizontal", "progress_vertical", "progress_rail"].includes(settings.presentation);
       fontSelect.value = settings.font;
       providerMark.value = settings.providerMark ?? "hidden";
       providerMark.querySelector('[value="text"]').disabled = settings.widget === "dual_limit";
@@ -255,7 +263,7 @@
       settings.metricIds = [settings.singleMetricId];
       sendSettings();
     });
-    presentation.addEventListener("change", () => { settings.presentation = presentation.value; sendSettings(); });
+    presentation.addEventListener("change", () => { settings.presentation = presentation.value; render(); sendSettings(); });
     resetDisplay.addEventListener("change", () => {
       settings.resetDisplay = resetDisplay.value;
       settings.showCountdown = settings.resetDisplay !== "hidden";
@@ -263,6 +271,7 @@
     });
     valueMode.addEventListener("change", () => { settings.valueMode = valueMode.value; sendSettings(); });
     showPercentSymbol.addEventListener("change", () => { settings.showPercentSymbol = showPercentSymbol.checked; sendSettings(); });
+    showPace.addEventListener("change", () => { settings.showPace = showPace.checked; sendSettings(); });
     fontSelect.addEventListener("change", () => { settings.font = fontSelect.value; sendSettings(); });
     providerMark.addEventListener("change", () => { settings.providerMark = providerMark.value; render(); sendSettings(); });
     coloredProviderMark.addEventListener("change", () => { settings.coloredProviderMark = coloredProviderMark.checked; sendSettings(); });
