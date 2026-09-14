@@ -117,7 +117,7 @@ function Clear-WasMsixExtractCache {
     # suffix. Clear it before each target so cross-arch builds do not reuse the
     # wrong native DLLs.
     $candidates = @(
-        (Join-Path $env:LOCALAPPDATA "windows-reactor-setup\temp\Microsoft.WindowsAppSDK.Runtime-2.1.3\.msix_extract")
+        (Join-Path $env:LOCALAPPDATA "windows-reactor-setup\temp\Microsoft.WindowsAppSDK.Runtime-2.4.0\.msix_extract")
     )
     foreach ($path in $candidates) {
         if (Test-Path -LiteralPath $path) {

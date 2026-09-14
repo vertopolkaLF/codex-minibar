@@ -26,7 +26,7 @@ jobs:
           # Previous runs failed and skipped cache, so every CI recloned windows-rs.
           cache-on-failure: true
       - name: Check formatting
-        # Skip path crate `.vendor` (upstream windows-reactor). `--all` formats local path deps.
+        # Skip path crates `.vendor` and `.vendor-setup`. `--all` formats local path deps.
         run: cargo fmt --package codex-minibar --check
       - name: Fetch dependencies
         run: cargo fetch --locked

@@ -28,7 +28,7 @@ fn invalidate_stale_was_extract() {
     let extract = PathBuf::from(local)
         .join("windows-reactor-setup")
         .join("temp")
-        .join("Microsoft.WindowsAppSDK.Runtime-2.1.3")
+        .join("Microsoft.WindowsAppSDK.Runtime-2.4.0")
         .join(".msix_extract");
     let dll = extract.join("Microsoft.WindowsAppRuntime.dll");
     if !dll.is_file() {

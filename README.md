@@ -107,7 +107,7 @@ This produces architecture-specific portable ZIP files and NSIS installers under
 ## Development
 
 The UI uses [windows-reactor](https://github.com/microsoft/windows-rs/pull/4479) with WinUI 3;
-the Windows App SDK runtime is bundled through `windows-reactor-setup` self-contained deployment.
+the Windows App SDK 2.4.0 runtime is bundled through `windows-reactor-setup` self-contained deployment.
 CI checks formatting, lints, and tests on Windows.
 
 ### Stream Deck companion
