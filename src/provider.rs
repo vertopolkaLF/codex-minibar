@@ -68,7 +68,8 @@ pub fn start_provider_worker(
                 auto_activation_pauses_for(provider, settings),
                 settings.history_retention_days,
                 Duration::from_secs(settings.usage_refresh_interval.seconds()),
-                settings.usage_stats_enabled,
+                settings.usage_stats_enabled
+                    && settings.usage_stats_provider_enabled(provider),
                 Duration::from_secs(settings.limit_refresh_interval.seconds()),
             )
         }
@@ -86,7 +87,8 @@ pub fn start_provider_worker(
                 auto_activation_pauses_for(provider, settings),
                 settings.history_retention_days,
                 Duration::from_secs(settings.usage_refresh_interval.seconds()),
-                settings.usage_stats_enabled,
+                settings.usage_stats_enabled
+                    && settings.usage_stats_provider_enabled(provider),
                 Duration::from_secs(settings.limit_refresh_interval.seconds()),
             )
         }
@@ -104,7 +106,8 @@ pub fn start_provider_worker(
                 Vec::new(),
                 settings.history_retention_days,
                 Duration::from_secs(settings.usage_refresh_interval.seconds()),
-                settings.usage_stats_enabled,
+                settings.usage_stats_enabled
+                    && settings.usage_stats_provider_enabled(provider),
                 Duration::from_secs(settings.limit_refresh_interval.seconds()),
             )
         }
@@ -118,7 +121,8 @@ pub fn start_provider_worker(
             Vec::new(),
             settings.history_retention_days,
             Duration::from_secs(settings.usage_refresh_interval.seconds()),
-            settings.usage_stats_enabled,
+            settings.usage_stats_enabled
+                && settings.usage_stats_provider_enabled(provider),
             Duration::from_secs(settings.limit_refresh_interval.seconds()),
         ),
         ProviderKind::OpenRouter => worker::start_worker(
@@ -131,7 +135,8 @@ pub fn start_provider_worker(
             Vec::new(),
             settings.history_retention_days,
             Duration::from_secs(settings.usage_refresh_interval.seconds()),
-            settings.usage_stats_enabled,
+            settings.usage_stats_enabled
+                && settings.usage_stats_provider_enabled(provider),
             Duration::from_secs(settings.limit_refresh_interval.seconds()),
         ),
     };

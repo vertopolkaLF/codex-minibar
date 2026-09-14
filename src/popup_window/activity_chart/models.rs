@@ -1,6 +1,6 @@
 use super::*;
 
-const PAGE_SIZE: usize = 8;
+pub(super) const PAGE_SIZE: usize = 8;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct ModelData {
@@ -139,6 +139,32 @@ impl ModelData {
             .map_or(1, |models| models.len().div_ceil(PAGE_SIZE).max(1))
     }
 
+    pub(super) fn page_rows(
+        &self,
+        date: NaiveDate,
+        cost: bool,
+        scheme: ColorScheme,
+        page: usize,
+    ) -> (Vec<(String, String, Color)>, usize) {
+        let all = self.sorted(date, cost);
+        let page = page.min(self.pages(date).saturating_sub(1));
+        let total = all.len();
+        let rows = all
+            .iter()
+            .skip(page * PAGE_SIZE)
+            .take(PAGE_SIZE)
+            .map(|(name, usage)| {
+                let amount = if cost {
+                    cost_label(usage)
+                } else {
+                    format_token_count(usage.total_tokens())
+                };
+                ((*name).to_string(), amount, color(name, scheme))
+            })
+            .collect();
+        (rows, total)
+    }
+
     fn sorted(&self, date: NaiveDate, cost: bool) -> Vec<(&str, &TokenUsage)> {
         let mut rows: Vec<_> = self
             .days
@@ -238,6 +264,7 @@ pub(super) fn bar(
     date: NaiveDate,
     cost: bool,
     scheme: ColorScheme,
+    width: f64,
     height: f64,
     transition: Duration,
 ) -> Element {
@@ -263,7 +290,7 @@ pub(super) fn bar(
         })
         .collect();
     border(grid(segments).rows(rows).columns([GridLength::Star(1.0)]))
-        .max_width(12.0)
+        .width(width)
         .height(height)
         .corner_radius(1.5)
         .background(Color::transparent())

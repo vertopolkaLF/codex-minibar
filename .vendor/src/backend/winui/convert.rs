@@ -121,6 +121,18 @@ pub(super) fn string_as_textblock(s: &str) -> Result<bindings::TextBlock> {
     Ok(tb)
 }
 
+pub(super) fn string_as_checkbox_content(s: &str) -> Result<bindings::TextBlock> {
+    let tb = string_as_textblock(s)?;
+    tb.cast::<bindings::IFrameworkElement>()?
+        .SetMargin(bindings::Thickness {
+            left: 8.0,
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
+        })?;
+    Ok(tb)
+}
+
 fn xml_escape_attr(value: &str) -> String {
     value
         .replace('&', "&amp;")

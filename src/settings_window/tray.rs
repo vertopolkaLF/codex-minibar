@@ -96,9 +96,11 @@ fn tray_indicator_summary(indicator: &TrayIndicator) -> String {
     let Some(provider) = indicator.provider() else {
         return format!("Unsupported {}", indicator.provider_id);
     };
-    let metric = crate::provider_registry::metric(provider, &indicator.metric_id)
-        .map(|metric| metric.label.to_owned())
-        .unwrap_or_else(|| indicator.metric_id.clone());
+    let metric = crate::provider_registry::settings_brick_label(
+        provider,
+        &indicator.metric_id,
+        &cached_discovered_popup_bricks(),
+    );
     let value = match indicator.limit_value {
         LimitValue::Used => "Used",
         LimitValue::Remaining => "Remaining",
@@ -851,14 +853,17 @@ fn tray_time_parameter_fields(
             provider_labels.len() - 1
         }) as i32;
     let metric_provider = known_provider.unwrap_or(ProviderKind::Codex);
-    let metrics = crate::provider_registry::descriptor(metric_provider).metrics;
+    let metrics = crate::provider_registry::tray_metric_options(
+        metric_provider,
+        &cached_discovered_popup_bricks(),
+    );
     let mut metric_labels = metrics
         .iter()
-        .map(|metric| metric.label.to_owned())
+        .map(|(_, label)| label.clone())
         .collect::<Vec<_>>();
     let metric_index = metrics
         .iter()
-        .position(|metric| metric.id == indicator.metric_id)
+        .position(|(id, _)| id == &indicator.metric_id)
         .unwrap_or_else(|| {
             metric_labels.push(format!("Unavailable ({})", indicator.metric_id));
             metric_labels.len() - 1
@@ -911,14 +916,17 @@ fn tray_time_parameter_fields(
             widget.id, indicator.provider_id
         ))
         .on_selection_changed(move |choice: i32| {
-            let Some(metric) = metrics.get(choice.max(0) as usize) else {
+            let Some(metric) = usize::try_from(choice)
+                .ok()
+                .and_then(|index| metrics.get(index))
+            else {
                 return;
             };
             let mut next = widgets_for_metric.clone();
             if next[widget_index].indicators.is_empty() {
                 return;
             }
-            next[widget_index].indicators[indicator_index].metric_id = metric.id.into();
+            next[widget_index].indicators[indicator_index].metric_id = metric.0.clone();
             persist_tray_widgets(
                 metric_setter.clone(),
                 metric_tx.clone(),
@@ -1301,14 +1309,17 @@ fn tray_indicator_edit_form(
             provider_labels.len() - 1
         }) as i32;
     let metric_provider = known_provider.unwrap_or(ProviderKind::Codex);
-    let metrics = crate::provider_registry::descriptor(metric_provider).metrics;
+    let metrics = crate::provider_registry::tray_metric_options(
+        metric_provider,
+        &cached_discovered_popup_bricks(),
+    );
     let mut metric_labels = metrics
         .iter()
-        .map(|metric| metric.label.to_owned())
+        .map(|(_, label)| label.clone())
         .collect::<Vec<_>>();
     let metric_index = metrics
         .iter()
-        .position(|metric| metric.id == indicator.metric_id)
+        .position(|(id, _)| id == &indicator.metric_id)
         .unwrap_or_else(|| {
             metric_labels.push(format!("Unavailable ({})", indicator.metric_id));
             metric_labels.len() - 1
@@ -1392,11 +1403,14 @@ fn tray_indicator_edit_form(
             widget.id, indicator.provider_id
         ))
         .on_selection_changed(move |choice: i32| {
-            let Some(metric) = metrics.get(choice.max(0) as usize) else {
+            let Some(metric) = usize::try_from(choice)
+                .ok()
+                .and_then(|index| metrics.get(index))
+            else {
                 return;
             };
             let mut next = widgets_for_metric.clone();
-            next[widget_index].indicators[indicator_index].metric_id = metric.id.into();
+            next[widget_index].indicators[indicator_index].metric_id = metric.0.clone();
             persist_tray_widgets(
                 metric_setter.clone(),
                 metric_tx.clone(),

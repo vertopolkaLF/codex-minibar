@@ -80,6 +80,11 @@ impl TokenUsage {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageStatistics {
+    /// Independently cached account histories for providers with multiple accounts.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub accounts: BTreeMap<String, UsageStatistics>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
     /// Account scope for memoization and stale-response rejection.
     #[serde(default)]
     pub account_id: Option<String>,

@@ -3,7 +3,7 @@ use super::*;
 pub(super) const POPUP_ACTION_SIZE: f64 = 32.0;
 pub(super) const REORDER_BUTTON_SIZE: f64 = 28.0;
 pub(super) const TAB_STRIP_SPACING: f64 = 2.0;
-pub(super) const FOOTER_ACTION_COUNT: f64 = 2.0;
+pub(super) const FOOTER_BASE_ACTION_COUNT: f64 = 2.0;
 
 pub(super) fn provider_tab_strip_content_width(
     provider_count: usize,
@@ -15,14 +15,15 @@ pub(super) fn provider_tab_strip_content_width(
         + provider_count as f64 * (size.icon_button_size() + TAB_STRIP_SPACING)
 }
 
-pub(super) fn provider_tab_strip_viewport_width() -> f64 {
+pub(super) fn provider_tab_strip_viewport_width(update_available: bool) -> f64 {
     let size = popup::bottom_bar_size();
+    let footer_action_count = FOOTER_BASE_ACTION_COUNT + f64::from(update_available);
     f64::from(popup::POPUP_WIDTH)
         - size.tab_padding_left()
         - size.padding_right()
         - size.column_spacing()
-        - (size.icon_button_size() * FOOTER_ACTION_COUNT
-            + size.action_spacing() * (FOOTER_ACTION_COUNT - 1.0))
+        - (size.icon_button_size() * footer_action_count
+            + size.action_spacing() * (footer_action_count - 1.0))
 }
 
 pub(super) fn provider_tabs_key(
@@ -247,6 +248,35 @@ pub(super) fn icon_button(
         color_scheme,
         hovered_action,
         set_hovered_action,
+        false,
+        on_click,
+    )
+}
+
+/// Icon-only update action. It keeps the same hit target as the other footer
+/// actions while staying accent-colored even before the pointer reaches it.
+pub(super) fn accent_icon_button(
+    id: &'static str,
+    icon: &'static str,
+    tip: &str,
+    color_scheme: ColorScheme,
+    hovered_action: &Option<String>,
+    set_hovered_action: SetState<Option<String>>,
+    on_click: impl IntoUnitCallback,
+) -> Element {
+    chrome_icon_button(
+        id,
+        icon,
+        icon,
+        tip,
+        popup::bottom_bar_icon_size(),
+        popup::bottom_bar_icon_glyph_size(),
+        false,
+        0.0,
+        color_scheme,
+        hovered_action,
+        set_hovered_action,
+        true,
         on_click,
     )
 }
@@ -263,6 +293,7 @@ pub(super) fn chrome_icon_button(
     color_scheme: ColorScheme,
     hovered_action: &Option<String>,
     set_hovered_action: SetState<Option<String>>,
+    always_accent: bool,
     on_click: impl IntoUnitCallback,
 ) -> Element {
     let hovered = hovered_action.as_deref() == Some(id);
@@ -283,22 +314,40 @@ pub(super) fn chrome_icon_button(
     // Remounting the icon host on every hover recycles native panels and can
     // leave a neighbor's painted glyph in this slot. Rotation is a transform
     // on the existing host, so it does not repaint or recycle the glyph.
-    let idle_icon: Element = crate::icons::element(normal_icon, glyph_size, idle_color)
-        .rotation(rotation)
-        .opacity(if hovered || is_refreshing { 0.0 } else { 1.0 })
-        .with_opacity_transition(crate::theme::duration(crate::theme::CONTROL_FAST_ANIMATION))
-        .relative_align_h_center()
-        .relative_align_v_center()
-        .into();
-    let accent_icon: Element = crate::icons::accent_element(hover_icon, glyph_size)
-        .rotation(rotation)
-        .opacity(if hovered || is_refreshing { 1.0 } else { 0.0 })
-        .with_opacity_transition(crate::theme::duration(crate::theme::CONTROL_FAST_ANIMATION))
-        .relative_align_h_center()
-        .relative_align_v_center()
-        .into();
+    let icon_layers: Vec<Element> = if always_accent {
+        vec![
+            crate::icons::accent_element(normal_icon, glyph_size)
+                .rotation(rotation)
+                .relative_align_h_center()
+                .relative_align_v_center()
+                .into(),
+        ]
+    } else {
+        vec![
+            crate::icons::element(normal_icon, glyph_size, idle_color)
+                .rotation(rotation)
+                .opacity(if hovered || is_refreshing { 0.0 } else { 1.0 })
+                .with_opacity_transition(crate::theme::duration(
+                    crate::theme::CONTROL_FAST_ANIMATION,
+                ))
+                .relative_align_h_center()
+                .relative_align_v_center()
+                .into(),
+            crate::icons::accent_element(hover_icon, glyph_size)
+                .rotation(rotation)
+                .opacity(if hovered || is_refreshing { 1.0 } else { 0.0 })
+                .with_opacity_transition(crate::theme::duration(
+                    crate::theme::CONTROL_FAST_ANIMATION,
+                ))
+                .relative_align_h_center()
+                .relative_align_v_center()
+                .into(),
+        ]
+    };
+    let mut layers = vec![hover_background];
+    layers.extend(icon_layers);
     // Stable across hover; remount only when theme tint changes.
-    relative_panel(vec![hover_background, idle_icon, accent_icon])
+    relative_panel(layers)
         .tooltip(tip)
         .width(size)
         .height(size)

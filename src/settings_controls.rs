@@ -1023,6 +1023,34 @@ pub(crate) fn settings_brick_table_header(row_key: &str) -> Element {
     .into()
 }
 
+/// Labeled native CheckBox. Content is the label so WinUI owns the
+/// check glyph (`E73E`) and hit target instead of a sibling TextBlock.
+///
+/// Default `CheckBoxPadding` is `8,5,0,0`. The content TextBlock already
+/// supplies the 8px left gap, so only the 5px optical top offset is set
+/// here. Zeroing padding top-aligns the label against the 20px glyph.
+/// https://learn.microsoft.com/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.checkbox
+pub(crate) fn settings_labeled_checkbox(
+    checked: bool,
+    label: impl Into<String>,
+    enabled: bool,
+    on_checked: impl IntoCallback<bool>,
+) -> CheckBox {
+    CheckBox::new(checked)
+        .content(label)
+        .enabled(enabled)
+        .on_checked(on_checked)
+        .min_width(0.0)
+        .padding(Thickness {
+            left: 0.0,
+            top: 5.0,
+            right: 0.0,
+            bottom: 0.0,
+        })
+        .horizontal_alignment(HorizontalAlignment::Left)
+        .vertical_alignment(VerticalAlignment::Center)
+}
+
 /// Trailing Home-tab master checkbox. Content is the label so WinUI
 /// applies the template's optical padding instead of a sibling TextBlock.
 pub(crate) fn settings_section_all_toggle(
