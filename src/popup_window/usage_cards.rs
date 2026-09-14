@@ -35,10 +35,12 @@ pub(super) fn combined_usage_card(
         ),
     };
 
-    let mut title_trailing_items: Vec<Element> = vec![
-        combined_usage_period_selector(period, on_period, hovered_period, set_hovered_period)
-            .into(),
-    ];
+    let mut title_trailing_items: Vec<Element> = vec![combined_usage_period_selector(
+        period,
+        on_period,
+        hovered_period,
+        set_hovered_period,
+    )];
     if let Some(handle) = drag_handle {
         title_trailing_items.push(handle);
     }
@@ -192,7 +194,7 @@ fn usage_stats_hit_layer(
         .relative_align_bottom()
         .on_pointer_entered(on_enter)
         .on_pointer_exited(on_exit)
-        .on_tapped(move || on_open())
+        .on_tapped(on_open)
         .with_key(format!("{key}-hit"))
         .into()
 }

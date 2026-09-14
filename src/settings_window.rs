@@ -153,10 +153,10 @@ pub fn open(
     updates: Arc<UpdateController>,
 ) -> windows_core::Result<()> {
     HOST.with(|slot| {
-        if is_open() {
-            if let Some(host) = slot.borrow().as_ref() {
-                return host.activate();
-            }
+        if is_open()
+            && let Some(host) = slot.borrow().as_ref()
+        {
+            return host.activate();
         }
 
         // A user can close the settings window using the title-bar button.
@@ -208,10 +208,10 @@ pub fn open(
 /// dismissed onboarding window never half-configures provider workers.
 pub fn open_onboarding(settings_tx: Sender<Settings>) -> windows_core::Result<()> {
     HOST.with(|slot| {
-        if is_open() {
-            if let Some(host) = slot.borrow().as_ref() {
-                return host.activate();
-            }
+        if is_open()
+            && let Some(host) = slot.borrow().as_ref()
+        {
+            return host.activate();
         }
         slot.borrow_mut().take();
 
@@ -693,21 +693,21 @@ pub fn render(
     });
 
     let page_context = SettingsPageContext {
-        theme: theme,
-        accent_color: accent_color,
-        animations_enabled: animations_enabled,
-        bottom_bar_size: bottom_bar_size,
-        popup_corner_radius: popup_corner_radius,
-        popup_background_material: popup_background_material,
-        time_format: time_format,
-        codex_enabled: codex_enabled,
-        claude_enabled: claude_enabled,
-        cursor_enabled: cursor_enabled,
-        opencode_zen_enabled: opencode_zen_enabled,
-        opencode_go_enabled: opencode_go_enabled,
-        openrouter_enabled: openrouter_enabled,
-        antigravity_enabled: antigravity_enabled,
-        grok_enabled: grok_enabled,
+        theme,
+        accent_color,
+        animations_enabled,
+        bottom_bar_size,
+        popup_corner_radius,
+        popup_background_material,
+        time_format,
+        codex_enabled,
+        claude_enabled,
+        cursor_enabled,
+        opencode_zen_enabled,
+        opencode_go_enabled,
+        openrouter_enabled,
+        antigravity_enabled,
+        grok_enabled,
         codex_path: &codex_path,
         claude_path: &claude_path,
         cursor_path: &cursor_path,
@@ -727,49 +727,49 @@ pub fn render(
         openrouter_key_inputs: &openrouter_key_inputs,
         openrouter_management_inputs: &openrouter_management_inputs,
         popup_order: &popup_order,
-        use_colored_provider_icons: use_colored_provider_icons,
-        use_colored_sidebar_icons: use_colored_sidebar_icons,
-        replace_chatgpt_logo_with_codex: replace_chatgpt_logo_with_codex,
-        automatic_activation: automatic_activation,
+        use_colored_provider_icons,
+        use_colored_sidebar_icons,
+        replace_chatgpt_logo_with_codex,
+        automatic_activation,
         scheduled_activations: &scheduled_activations,
         auto_activation_pauses: &auto_activation_pauses,
         expanded_scheduled_activation: &expanded_scheduled_activation,
         expanded_auto_activation_pause: &expanded_auto_activation_pause,
-        usage_stats_enabled: usage_stats_enabled,
+        usage_stats_enabled,
         usage_stats_excluded_providers: &usage_stats_excluded_providers,
-        limit_refresh_interval: limit_refresh_interval,
-        usage_refresh_interval: usage_refresh_interval,
-        reset_announcement_refresh_interval: reset_announcement_refresh_interval,
-        start_at_login: start_at_login,
-        show_used_percentage: show_used_percentage,
-        show_usage_pace: show_usage_pace,
-        compact_usage_cards: compact_usage_cards,
+        limit_refresh_interval,
+        usage_refresh_interval,
+        reset_announcement_refresh_interval,
+        start_at_login,
+        show_used_percentage,
+        show_usage_pace,
+        compact_usage_cards,
         popup_visibility: &popup_visibility,
         discovered_popup_bricks: &discovered_popup_bricks,
-        show_total_spend_on_all_tab: show_total_spend_on_all_tab,
-        total_spend_presentation: total_spend_presentation,
-        show_account_name: show_account_name,
-        activation_success: activation_success,
-        activation_failure: activation_failure,
-        limits_reset: limits_reset,
-        low_usage_enabled: low_usage_enabled,
-        low_usage_threshold: low_usage_threshold,
-        low_usage_expanded: low_usage_expanded,
-        low_usage_expand_progress: low_usage_expand_progress,
-        weekly_low_usage_enabled: weekly_low_usage_enabled,
-        weekly_low_usage_threshold: weekly_low_usage_threshold,
-        weekly_low_usage_expanded: weekly_low_usage_expanded,
-        weekly_low_usage_expand_progress: weekly_low_usage_expand_progress,
+        show_total_spend_on_all_tab,
+        total_spend_presentation,
+        show_account_name,
+        activation_success,
+        activation_failure,
+        limits_reset,
+        low_usage_enabled,
+        low_usage_threshold,
+        low_usage_expanded,
+        low_usage_expand_progress,
+        weekly_low_usage_enabled,
+        weekly_low_usage_threshold,
+        weekly_low_usage_expanded,
+        weekly_low_usage_expand_progress,
         tray_widgets: &tray_widgets,
         expanded_tray_widget: &expanded_tray_widget,
         editing_tray_indicator: &editing_tray_indicator,
         removed_tray_widget: &removed_tray_widget,
         hovered_card_id: &hovered_card_id,
         expanded_popup_provider: &expanded_popup_provider,
-        check_for_updates: check_for_updates,
-        notify_on_update: notify_on_update,
-        forced_reset_feed_enabled: forced_reset_feed_enabled,
-        forced_reset_notifications: forced_reset_notifications,
+        check_for_updates,
+        notify_on_update,
+        forced_reset_feed_enabled,
+        forced_reset_notifications,
         update_phase: &update_phase,
         log_content: &log_content,
         streamdeck_install_phase: &streamdeck_install_phase,
@@ -1039,8 +1039,7 @@ pub fn render(
         mica.relative_align_left()
             .relative_align_right()
             .relative_align_top()
-            .relative_align_bottom()
-            .into(),
+            .relative_align_bottom(),
         window_body
             .relative_align_left()
             .relative_align_right()

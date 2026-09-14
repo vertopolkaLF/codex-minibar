@@ -159,8 +159,7 @@ pub(crate) fn settings_toggle_card_with_description(
             .on_tapped({
                 let toggle_card = toggle_card.clone();
                 move || toggle_card()
-            })
-            .into(),
+            }),
         text_block(if value { "On" } else { "Off" })
             .margin(Thickness {
                 left: 0.0,
@@ -170,7 +169,7 @@ pub(crate) fn settings_toggle_card_with_description(
             })
             .relative_align_right()
             .relative_align_v_center()
-            .on_tapped(move || toggle_card())
+            .on_tapped(toggle_card)
             .into(),
         ToggleSwitch::new(value)
             .on_content("")
@@ -312,14 +311,12 @@ fn settings_expander_card_with_header(
         .relative_align_left()
         .relative_align_v_center();
     let header_content: Element = if header_is_tappable {
-        header_content
-            .on_tapped({
-                let toggle_expand = toggle_expand.clone();
-                move || toggle_expand()
-            })
-            .into()
+        header_content.on_tapped({
+            let toggle_expand = toggle_expand.clone();
+            move || toggle_expand()
+        })
     } else {
-        header_content.into()
+        header_content
     };
     let mut header_children: Vec<Element> = vec![
         // Transparent fill so empty header space is hit-testable (null bg is not).
@@ -802,8 +799,7 @@ pub(crate) fn settings_control_card(
             })
             .relative_align_left()
             .relative_align_right()
-            .relative_align_v_center()
-            .into(),
+            .relative_align_v_center(),
         control
             .into()
             .width(CONTROL_WIDTH)
@@ -814,8 +810,7 @@ pub(crate) fn settings_control_card(
                 bottom: 0.0,
             })
             .relative_align_right()
-            .relative_align_v_center()
-            .into(),
+            .relative_align_v_center(),
     ])
     .min_height(CARD_ROW_HEIGHT)
     .horizontal_alignment(HorizontalAlignment::Stretch)

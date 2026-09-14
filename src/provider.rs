@@ -216,10 +216,10 @@ pub fn start_provider_worker(
                 // a future provider delegates another coordinator.
                 event => Some(event),
             };
-            if let Some(event) = mapped {
-                if events.send(event).is_err() {
-                    break;
-                }
+            if let Some(event) = mapped
+                && events.send(event).is_err()
+            {
+                break;
             }
         }
     });

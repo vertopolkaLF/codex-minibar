@@ -375,7 +375,7 @@ pub fn brick_label(provider: ProviderKind, brick_id: &str) -> String {
         return "Spending".into();
     }
     if let Some(source_id) = brick_id.strip_prefix(&format!("{provider_id}.additional.")) {
-        return source_id.replace('-', " ").replace('_', " ");
+        return source_id.replace(['-', '_'], " ");
     }
     brick_id
         .rsplit('.')

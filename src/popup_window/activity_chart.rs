@@ -133,6 +133,7 @@ impl Series {
         }
     }
 
+    #[cfg(test)]
     fn xaml_brush(self, scheme: ColorScheme) -> String {
         match self.brush(scheme) {
             BrushBinding::Direct(color) => {
@@ -219,6 +220,7 @@ fn bucket_tooltip(bucket: &Bucket) -> String {
     )
 }
 
+#[cfg(test)]
 fn bucket_tooltip_xaml(bucket: &Bucket, scheme: ColorScheme) -> String {
     let date = if bucket.first == bucket.last {
         bucket.first.format("%a, %b %-d, %Y").to_string()
@@ -808,12 +810,12 @@ struct ActivityTooltipTrack {
 }
 
 thread_local! {
-    static ACTIVITY_TOOLTIP_TRACK: RefCell<ActivityTooltipTrack> = RefCell::new(ActivityTooltipTrack {
+    static ACTIVITY_TOOLTIP_TRACK: RefCell<ActivityTooltipTrack> = const { RefCell::new(ActivityTooltipTrack {
         host: None,
         cursor: None,
         tip_width: 0.0,
         tip_height: 0.0,
-    });
+    }) };
     static ACTIVITY_TOOLTIP_MOUNTED: Callback<Option<windows_core::IInspectable>> =
         Callback::new(|native: Option<windows_core::IInspectable>| {
             if let Some(host) = native.clone() {
@@ -825,8 +827,8 @@ thread_local! {
             apply_activity_tooltip_offset();
         });
     static ACTIVITY_PAGE_TIP: RefCell<Option<SetState<Option<ActivityTipData>>>> =
-        RefCell::new(None);
-    static ACTIVITY_PAGE_TIP_LAST: RefCell<Option<ActivityTipData>> = RefCell::new(None);
+        const { RefCell::new(None) };
+    static ACTIVITY_PAGE_TIP_LAST: RefCell<Option<ActivityTipData>> = const { RefCell::new(None) };
 }
 
 pub(super) fn install_activity_page_tip(set_tip: SetState<Option<ActivityTipData>>) {
@@ -1158,7 +1160,7 @@ fn activity_usage_tooltip(
         grid((
             vstack((
                 caption("Tokens").foreground(ThemeRef::SecondaryText),
-                text_block(total.clone())
+                text_block(total)
                     .font_size(20.0)
                     .font_weight(600)
                     .with_key("activity-tip-tokens"),
@@ -1168,7 +1170,7 @@ fn activity_usage_tooltip(
                 caption("Cost")
                     .foreground(ThemeRef::SecondaryText)
                     .horizontal_alignment(HorizontalAlignment::Right),
-                text_block(cost.clone())
+                text_block(cost)
                     .font_size(16.0)
                     .font_weight(600)
                     .foreground(ThemeRef::Accent)

@@ -633,18 +633,10 @@ pub enum ProviderKind {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct ProviderSettings {
     /// Enabled providers in the user's preferred popup/tab order.
     pub enabled: Vec<String>,
-}
-
-impl Default for ProviderSettings {
-    fn default() -> Self {
-        Self {
-            // A new installation chooses providers during onboarding.
-            enabled: Vec::new(),
-        }
-    }
 }
 
 impl ProviderSettings {
@@ -1851,9 +1843,7 @@ impl Settings {
     /// to decode. Returns `None` only when the file is not usable TOML at all.
     fn salvage_raw(raw: &str) -> Option<Self> {
         let mut document: toml::Value = toml::from_str(raw).ok()?;
-        let Some(root) = document.as_table_mut() else {
-            return None;
-        };
+        let root = document.as_table_mut()?;
         root.insert("tray_widgets".into(), toml::Value::Array(Vec::new()));
         root.insert(
             "scheduled_activations".into(),
@@ -2439,7 +2429,7 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                             Some("secondary_remaining") => ("secondary", "number"),
                             Some("primary_reset") => ("primary_reset", "reset_time"),
                             Some("secondary_reset") => ("primary_reset", "reset_time"),
-                            Some("combined") | _ => ("combined", "stacked_numbers"),
+                            _ => ("combined", "stacked_numbers"),
                         };
                         widget.insert("source".into(), toml::Value::String(source.into()));
                         widget.insert(
@@ -2661,10 +2651,10 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     });
                 let mut popup_order = vec![toml::Value::String("total_spend".into())];
                 for provider in providers {
-                    if let Some(id) = provider.as_str() {
-                        if matches!(id, "codex" | "claude" | "cursor" | "openrouter") {
-                            popup_order.push(toml::Value::String(id.into()));
-                        }
+                    if let Some(id) = provider.as_str()
+                        && matches!(id, "codex" | "claude" | "cursor" | "openrouter")
+                    {
+                        popup_order.push(toml::Value::String(id.into()));
                     }
                 }
                 for provider in ProviderKind::ALL {
@@ -3341,8 +3331,10 @@ show_usage_stats = false
     fn round_trips_through_disk() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.toml");
-        let mut expected = Settings::default();
-        expected.compact_usage_cards = true;
+        let expected = Settings {
+            compact_usage_cards: true,
+            ..Default::default()
+        };
         expected.save(&path).unwrap();
         assert_eq!(Settings::load_or_create(&path).unwrap(), expected);
     }
@@ -3734,8 +3726,10 @@ enabled = ["codex", "claude"]
     fn unknown_provider_and_metric_ids_round_trip_without_data_loss() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.toml");
-        let mut settings = Settings::default();
-        settings.version = SETTINGS_VERSION;
+        let mut settings = Settings {
+            version: SETTINGS_VERSION,
+            ..Default::default()
+        };
         settings.providers.enabled.push("future-provider".into());
         let mut widget = TrayWidget::custom_for_provider(ProviderKind::Codex);
         widget.indicators[0].provider_id = "future-provider".into();

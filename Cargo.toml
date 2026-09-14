@@ -47,6 +47,11 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphic
 windows-reactor-setup = { git = "https://github.com/microsoft/windows-rs" }
 winresource = "0.1"
 
+[lints.clippy]
+# WinUI builders thread many callbacks and snapshot fields; packing them into
+# structs would be a rewrite, not a lint fix.
+too_many_arguments = "allow"
+
 [profile.release]
 lto = "thin"
 strip = true

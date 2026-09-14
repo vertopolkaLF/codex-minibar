@@ -115,8 +115,7 @@ mod tests {
             &["models"],
             Duration::ZERO,
         )
-        .err()
-        .expect("a relative candidate must be rejected");
+        .expect_err("a relative candidate must be rejected");
         assert_eq!(error.to_string(), "Test provider CLI is not installed");
     }
 

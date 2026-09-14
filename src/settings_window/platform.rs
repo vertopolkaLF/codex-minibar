@@ -58,7 +58,7 @@ pub(super) fn set_settings_window_icon() {
 
     // `winresource` embeds the application icon as resource 1.
     let module = unsafe { GetModuleHandleW(std::ptr::null()) };
-    let icon = unsafe { LoadIconW(module, 1usize as *const u16) };
+    let icon = unsafe { LoadIconW(module, std::ptr::dangling::<u16>()) };
     if !icon.is_null() {
         unsafe {
             SendMessageW(hwnd, WM_SETICON, ICON_SMALL as usize, icon as isize);

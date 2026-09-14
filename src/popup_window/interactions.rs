@@ -116,8 +116,7 @@ pub(super) fn drag_handle(
             .into(),
         crate::icons::element("fluent-drag", 14.0, idle)
             .relative_align_h_center()
-            .relative_align_v_center()
-            .into(),
+            .relative_align_v_center(),
     ])
     .tooltip("Drag to reorder")
     .width(REORDER_BUTTON_SIZE)
@@ -291,13 +290,11 @@ pub(super) fn openrouter_delete_button(
     let idle_icon: Element = crate::icons::element("fluent-delete", 18.0, idle_color)
         .opacity(if hovered { 0.0 } else { 1.0 })
         .relative_align_h_center()
-        .relative_align_v_center()
-        .into();
+        .relative_align_v_center();
     let accent_icon: Element = crate::icons::accent_element("fluent-delete", 18.0)
         .opacity(if hovered { 1.0 } else { 0.0 })
         .relative_align_h_center()
-        .relative_align_v_center()
-        .into();
+        .relative_align_v_center();
     relative_panel(vec![hover_background, idle_icon, accent_icon])
         .tooltip("Remove key")
         .width(POPUP_ACTION_SIZE)

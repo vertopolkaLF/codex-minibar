@@ -263,7 +263,7 @@ fn about_settings_cards(
     )
     .with_key("about-resources");
 
-    let cards = vec![hero, updates_card.into(), resources.into()];
+    let cards = vec![hero, updates_card, resources];
 
     let _ = settings_tx;
     cards
@@ -335,8 +335,7 @@ fn about_action_card(
         .into();
     let AboutCardIcon::Phosphor(name) = icon;
     let icon: Element = crate::icons::element(name, 16.0, Color::rgb(226, 151, 78))
-        .vertical_alignment(VerticalAlignment::Center)
-        .into();
+        .vertical_alignment(VerticalAlignment::Center);
     let heading = grid((
         icon.grid_column(0),
         text_block(title)

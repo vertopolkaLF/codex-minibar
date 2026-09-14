@@ -1333,12 +1333,12 @@ struct ChartTooltipTrack {
 }
 
 thread_local! {
-    static CHART_TOOLTIP_TRACK: RefCell<ChartTooltipTrack> = RefCell::new(ChartTooltipTrack {
+    static CHART_TOOLTIP_TRACK: RefCell<ChartTooltipTrack> = const { RefCell::new(ChartTooltipTrack {
         host: None,
         cursor: None,
         tip_width: 0.0,
         tip_height: 0.0,
-    });
+    }) };
     static CHART_TOOLTIP_MOUNTED: Callback<Option<windows_core::IInspectable>> =
         Callback::new(|native: Option<windows_core::IInspectable>| {
             if let Some(host) = native.clone() {
@@ -1960,12 +1960,10 @@ fn breakdown_row(
         let icon_name = provider_registry::descriptor(provider).icon;
         let color = provider_brand_color(provider, color_scheme, use_colored_provider_icons);
         title.push(
-            crate::icons::element(icon_name, 14.0, color)
-                .with_key(format!(
-                    "usage-bd-icon-{}-{}-{:02X}{:02X}{:02X}",
-                    row_id, icon_name, color.r, color.g, color.b
-                ))
-                .into(),
+            crate::icons::element(icon_name, 14.0, color).with_key(format!(
+                "usage-bd-icon-{}-{}-{:02X}{:02X}{:02X}",
+                row_id, icon_name, color.r, color.g, color.b
+            )),
         );
     }
     title.push(

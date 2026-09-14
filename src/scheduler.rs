@@ -793,7 +793,7 @@ mod tests {
         };
 
         assert!(auto_activation_paused(
-            &[pause.clone()],
+            std::slice::from_ref(&pause),
             local.with_timezone(&Utc)
         ));
         assert!(!auto_activation_paused(
@@ -822,7 +822,7 @@ mod tests {
             .unwrap();
 
         assert!(auto_activation_paused(
-            &[pause.clone()],
+            std::slice::from_ref(&pause),
             late.with_timezone(&Utc)
         ));
         assert!(auto_activation_paused(
