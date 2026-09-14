@@ -572,7 +572,7 @@ fn spend_provider_icon_color(
     }
     let (red, green, blue) = match color_scheme {
         ColorScheme::Light => crate::provider_registry::light_surface_brand_rgb(provider),
-        ColorScheme::Dark => crate::provider_registry::descriptor(provider).brand_rgb,
+        ColorScheme::Dark => crate::provider_registry::dark_surface_brand_rgb(provider),
     };
     Color::rgb(red, green, blue)
 }
@@ -705,7 +705,7 @@ pub(super) fn combined_usage_color(provider: ProviderKind, color_scheme: ColorSc
         ProviderKind::Claude => Color::rgb(217, 119, 87),
         ProviderKind::Cursor => match color_scheme {
             ColorScheme::Light => Color::rgb(18, 18, 18),
-            ColorScheme::Dark => Color::rgb(230, 230, 230),
+            ColorScheme::Dark => Color::rgb(255, 255, 255),
         },
         ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => match color_scheme {
             ColorScheme::Light => Color::rgb(75, 75, 75),
@@ -715,7 +715,7 @@ pub(super) fn combined_usage_color(provider: ProviderKind, color_scheme: ColorSc
         ProviderKind::Antigravity => Color::rgb(66, 133, 244),
         ProviderKind::Grok => match color_scheme {
             ColorScheme::Light => Color::rgb(51, 51, 51),
-            ColorScheme::Dark => Color::rgb(220, 220, 220),
+            ColorScheme::Dark => Color::rgb(255, 255, 255),
         },
     }
 }

@@ -388,7 +388,7 @@ pub(super) fn popup_chrome_icon_color(color_scheme: ColorScheme, emphasized: boo
 fn popup_provider_icon_color(provider: ProviderKind, color_scheme: ColorScheme) -> Color {
     let (r, g, b) = match color_scheme {
         ColorScheme::Light => crate::provider_registry::light_surface_brand_rgb(provider),
-        ColorScheme::Dark => crate::provider_registry::descriptor(provider).brand_rgb,
+        ColorScheme::Dark => crate::provider_registry::dark_surface_brand_rgb(provider),
     };
     Color::rgb(r, g, b)
 }

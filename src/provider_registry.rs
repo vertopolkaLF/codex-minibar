@@ -253,6 +253,17 @@ pub fn light_surface_brand_rgb(provider: ProviderKind) -> (u8, u8, u8) {
     }
 }
 
+/// Brand colors used by small provider icons on the dark popup cards.
+///
+/// Cursor and Grok marks are monochrome: full white on dark chrome, near-black
+/// on light cards via [`light_surface_brand_rgb`].
+pub fn dark_surface_brand_rgb(provider: ProviderKind) -> (u8, u8, u8) {
+    match provider {
+        ProviderKind::Cursor | ProviderKind::Grok => (255, 255, 255),
+        _ => descriptor(provider).brand_rgb,
+    }
+}
+
 pub fn metric(provider: ProviderKind, id: &str) -> Option<&'static MetricDescriptor> {
     descriptor(provider)
         .metrics
