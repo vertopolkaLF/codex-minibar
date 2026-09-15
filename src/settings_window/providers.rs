@@ -613,6 +613,24 @@ fn bump_opencode_credentials(
     })
 }
 
+fn persist_opencode_manual_key(
+    settings_tx: Sender<Settings>,
+    provider: ProviderKind,
+    value: Option<String>,
+) -> anyhow::Result<()> {
+    let previous = crate::opencode::manual_key(provider)?;
+    crate::opencode::save_manual_key(provider, value.as_deref())?;
+    if let Err(error) = bump_opencode_credentials(settings_tx, provider) {
+        return match crate::opencode::save_manual_key(provider, previous.as_deref()) {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(anyhow::anyhow!(
+                "could not save credential revision ({error:#}); restoring the protected key also failed ({rollback_error:#})"
+            )),
+        };
+    }
+    Ok(())
+}
+
 fn persist_provider_folder(provider: ProviderKind, value: String, settings_tx: Sender<Settings>) {
     let Some(generation) = path_save_generation(provider) else {
         return;
@@ -2599,11 +2617,10 @@ fn submit_provider_dialog(
             if key.is_empty() {
                 return fail("Paste a key first.");
             }
-            if let Err(error) = crate::opencode::save_manual_key(provider, Some(&key)) {
+            if let Err(error) =
+                persist_opencode_manual_key(actions.settings_tx.clone(), provider, Some(key))
+            {
                 return fail(&format!("Could not save the key: {error:#}"));
-            }
-            if let Err(error) = bump_opencode_credentials(actions.settings_tx.clone(), provider) {
-                return fail(&format!("Could not save settings: {error:#}"));
             }
             finish_dialog(
                 &actions,
@@ -2614,11 +2631,10 @@ fn submit_provider_dialog(
             );
         }
         ProviderDialogKind::RemoveOpenCodeKey { provider } => {
-            if let Err(error) = crate::opencode::save_manual_key(provider, None) {
+            if let Err(error) =
+                persist_opencode_manual_key(actions.settings_tx.clone(), provider, None)
+            {
                 return fail(&format!("Could not remove the key: {error:#}"));
-            }
-            if let Err(error) = bump_opencode_credentials(actions.settings_tx.clone(), provider) {
-                return fail(&format!("Could not save settings: {error:#}"));
             }
             finish_dialog(
                 &actions,

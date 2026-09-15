@@ -207,6 +207,9 @@ pub fn start_provider_worker(
                         usage,
                     )),
                     WorkerEvent::UsageDataCleared(generation) => {
+                        // This acknowledges a clear command sent to this exact
+                        // worker. Keep the clear generation across a worker
+                        // replacement so the bridge can finish its barrier.
                         Some(WorkerEvent::ProviderUsageDataCleared(provider, generation))
                     }
                     WorkerEvent::UsageRefreshFailed(error) => Some(

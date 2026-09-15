@@ -255,7 +255,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn batch_updates_commit_all_values_and_remove_them_together() -> Result<()> {
+    fn batch_updates_replace_existing_values_and_remove_them_together() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("provider-secrets.json");
         save_many_to(
@@ -271,7 +271,22 @@ mod tests {
         );
         assert_eq!(load_from(&path, "api")?.as_deref(), Some("api-value"));
 
-        save_many_to(&path, &[("management".into(), None), ("api".into(), None)])?;
+        // `persist` requests replacement semantics; verify the Windows path
+        // updates an existing destination instead of only creating new files.
+        save_many_to(
+            &path,
+            &[
+                ("management".into(), Some("replacement-value".into())),
+                ("api".into(), None),
+            ],
+        )?;
+        assert_eq!(
+            load_from(&path, "management")?.as_deref(),
+            Some("replacement-value")
+        );
+        assert_eq!(load_from(&path, "api")?, None);
+
+        save_many_to(&path, &[("management".into(), None)])?;
         assert!(!path.exists());
         Ok(())
     }

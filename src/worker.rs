@@ -118,6 +118,9 @@ pub enum WorkerEvent {
     ProviderRequestFinished(crate::settings::ProviderKind, u64, RequestKind),
     ProviderLimitsUpdated(crate::settings::ProviderKind, u64, RateLimits),
     ProviderUsageUpdated(crate::settings::ProviderKind, u64, UsageStatistics),
+    /// Barrier acknowledgement for `ClearUsageData`; the `u64` is the clear
+    /// generation, not a credential revision. It remains valid when the
+    /// acknowledged worker is replaced while that clear is in flight.
     ProviderUsageDataCleared(crate::settings::ProviderKind, u64),
     ProviderUsageRefreshFailed(crate::settings::ProviderKind, u64, String),
     ProviderActivationStarted(crate::settings::ProviderKind, u64),
