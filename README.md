@@ -31,6 +31,13 @@ Codex Minibar reads quota data from locally authenticated provider sessions and 
 
 > Codex Minibar is an independent project. It is not affiliated with, endorsed by, or sponsored by OpenAI.
 
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/usage-stats.png" alt="Codex Minibar usage stats popup"></td>
+    <td width="50%"><img src="docs/screenshots/usage-analytics.png" alt="Codex Minibar usage analytics popup"></td>
+  </tr>
+</table>
+
 ## Features
 
 - Show five-hour and weekly usage in one or more configurable tray icons.
