@@ -376,8 +376,14 @@ fn settings_expander_card_with_header(
                 .max_height(body_height)
                 .into()
         }
+        // The fallback bound only shapes the animation; a fully open body
+        // keeps its natural height so long content is never clipped.
         None if expanded || progress > 0.0 => body_content
-            .max_height(EXPANDABLE_BODY_MAX_HEIGHT * progress)
+            .max_height(if progress >= 1.0 {
+                f64::INFINITY
+            } else {
+                EXPANDABLE_BODY_MAX_HEIGHT * progress
+            })
             .into(),
         None => Element::Empty,
     };

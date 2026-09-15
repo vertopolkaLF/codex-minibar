@@ -10,7 +10,14 @@ pub struct NavViewItem {
     pub icon_image_uri: Option<String>,
     /// Trailing glyph shown at the right edge of the label (e.g. drill-in chevron).
     pub trailing_icon_path: Option<(String, String)>,
+    /// Numeric InfoBadge shown before the trailing status dot.
+    pub info_badge: Option<i32>,
+    /// Small filled status ellipse at the trailing edge (XAML color string).
+    pub status_dot: Option<String>,
+    /// Render the whole item at reduced opacity (e.g. a disabled provider).
+    pub dimmed: bool,
     pub is_header: bool,
+    pub is_separator: bool,
     pub children: Vec<Self>,
 }
 impl NavViewItem {
@@ -24,6 +31,12 @@ impl NavViewItem {
         Self {
             content: content.into(),
             is_header: true,
+            ..Default::default()
+        }
+    }
+    pub fn separator() -> Self {
+        Self {
+            is_separator: true,
             ..Default::default()
         }
     }
@@ -42,6 +55,18 @@ impl NavViewItem {
     }
     pub fn trailing_icon_path(mut self, data: impl Into<String>, color: impl Into<String>) -> Self {
         self.trailing_icon_path = Some((data.into(), color.into()));
+        self
+    }
+    pub fn info_badge(mut self, value: i32) -> Self {
+        self.info_badge = Some(value);
+        self
+    }
+    pub fn status_dot(mut self, color: impl Into<String>) -> Self {
+        self.status_dot = Some(color.into());
+        self
+    }
+    pub fn dimmed(mut self, dimmed: bool) -> Self {
+        self.dimmed = dimmed;
         self
     }
     pub fn child(mut self, item: Self) -> Self {

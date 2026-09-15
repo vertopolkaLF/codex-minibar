@@ -47,7 +47,49 @@ pub fn first_available(explicit: Option<&Path>) -> Option<PathBuf> {
 /// Finds only a standalone Claude Code CLI, excluding the launcher bundled by
 /// Claude Desktop. Used by the UI to report both installations clearly.
 pub fn cli_available(explicit: Option<&Path>) -> Option<PathBuf> {
-    explicit.and_then(explicit_launcher).or_else(path_launcher)
+    let path_dirs = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .unwrap_or_default();
+    find_cli(explicit, &path_dirs, &common_launcher_dirs())
+}
+
+fn find_cli(
+    explicit: Option<&Path>,
+    path_dirs: &[PathBuf],
+    common_dirs: &[PathBuf],
+) -> Option<PathBuf> {
+    explicit.and_then(explicit_launcher).or_else(|| {
+        path_dirs
+            .iter()
+            .chain(common_dirs)
+            .find_map(|directory| launcher_in(directory))
+    })
+}
+
+fn common_launcher_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(base) = BaseDirs::new() {
+        // The native installer uses this location even when the current
+        // process inherited PATH before installation completed.
+        dirs.push(base.home_dir().join(".local/bin"));
+        #[cfg(not(windows))]
+        dirs.push(base.home_dir().join(".npm-global/bin"));
+    }
+    #[cfg(windows)]
+    {
+        if let Some(roaming) = std::env::var_os("APPDATA") {
+            dirs.push(PathBuf::from(roaming).join("npm"));
+        }
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            let local = PathBuf::from(local);
+            dirs.extend([local.join("npm"), local.join("pnpm")]);
+        }
+        if let Some(pnpm) = std::env::var_os("PNPM_HOME") {
+            dirs.push(PathBuf::from(pnpm));
+        }
+        dirs.extend(crate::discovery::node_global_bin_dirs());
+    }
+    dirs
 }
 
 fn explicit_launcher(path: &Path) -> Option<PathBuf> {
@@ -55,11 +97,6 @@ fn explicit_launcher(path: &Path) -> Option<PathBuf> {
         return Some(path.to_path_buf());
     }
     launcher_in(path)
-}
-
-fn path_launcher() -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).find_map(|directory| launcher_in(&directory))
 }
 
 fn launcher_in(directory: &Path) -> Option<PathBuf> {
@@ -763,6 +800,34 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
+
+    #[test]
+    fn finds_native_cli_when_path_is_missing_and_honors_overrides() {
+        let root = tempfile::tempdir().unwrap();
+        let native = root.path().join(".local/bin");
+        let on_path = root.path().join("path");
+        let explicit = root.path().join("custom");
+        #[cfg(windows)]
+        let name = "claude.exe";
+        #[cfg(not(windows))]
+        let name = "claude";
+        for directory in [&native, &on_path, &explicit] {
+            fs::create_dir_all(directory).unwrap();
+            fs::write(directory.join(name), b"fixture, never executed").unwrap();
+        }
+        let common = std::slice::from_ref(&native);
+        assert_eq!(find_cli(None, &[], common), Some(native.join(name)));
+        assert_eq!(
+            find_cli(None, std::slice::from_ref(&on_path), common),
+            Some(on_path.join(name))
+        );
+        assert_eq!(
+            find_cli(Some(&explicit), std::slice::from_ref(&on_path), common),
+            Some(explicit.join(name))
+        );
+        fs::remove_file(native.join(name)).unwrap();
+        assert_eq!(find_cli(None, &[], common), None);
+    }
 
     #[test]
     fn parses_oauth_session_and_weekly_windows() {

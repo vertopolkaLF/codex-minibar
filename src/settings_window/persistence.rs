@@ -22,7 +22,18 @@ pub(super) fn persist_u8(
 }
 
 pub(crate) fn persist_update(settings_tx: Sender<Settings>, update: impl FnOnce(&mut Settings)) {
-    let result = Settings::default_path().and_then(|path| {
+    if let Err(error) = try_persist_update(settings_tx, update) {
+        eprintln!("failed to save settings: {error:#}");
+    }
+}
+
+/// Credential dialogs must report persistence failures instead of displaying
+/// a success notice when the account list could not be saved.
+pub(super) fn try_persist_update(
+    settings_tx: Sender<Settings>,
+    update: impl FnOnce(&mut Settings),
+) -> anyhow::Result<()> {
+    Settings::default_path().and_then(|path| {
         let mut settings = Settings::load_or_create(&path)?;
         update(&mut settings);
         settings.normalize_tray_widgets();
@@ -36,10 +47,7 @@ pub(crate) fn persist_update(settings_tx: Sender<Settings>, update: impl FnOnce(
             .send(settings)
             .context("notify live settings listeners")?;
         Ok(())
-    });
-    if let Err(error) = result {
-        eprintln!("failed to save settings: {error:#}");
-    }
+    })
 }
 
 pub(super) fn replace_settings(

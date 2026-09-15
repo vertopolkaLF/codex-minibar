@@ -53,6 +53,12 @@ pub(super) fn start_background_bridge(
     set_ui: AsyncSetState<UiState>,
     ui_dispatcher: UiMarshaller,
 ) {
+    // Use the already hydrated persistent snapshot while the first network
+    // refresh is in flight. Opening Settings never starts another poll.
+    crate::settings_window::publish_openrouter_snapshot(
+        state.current_limits().get(ProviderKind::OpenRouter),
+        ui_dispatcher.clone(),
+    );
     let events = state.take_worker_events();
     let mut widgets = state
         .settings
@@ -185,6 +191,14 @@ pub(super) fn start_background_bridge(
                 ui.opencode_go_credentials_revision != settings.opencode_go_credentials_revision;
             let openrouter_credentials_changed =
                 ui.openrouter_credentials_revision != settings.openrouter_credentials_revision;
+            if openrouter_credentials_changed {
+                // Account ids can survive a key replacement. Do not present
+                // the old key's balance/label as data for its replacement.
+                crate::settings_window::publish_openrouter_snapshot(
+                    &RateLimits::default(),
+                    ui_dispatcher.clone(),
+                );
+            }
             ui.theme = settings.theme;
             ui.accent_color = settings.accent_color;
             ui.animations_enabled = settings.animations_enabled;
@@ -595,6 +609,12 @@ pub(super) fn start_background_bridge(
                         &limits,
                         ui_dispatcher.clone(),
                     );
+                    if provider == ProviderKind::OpenRouter {
+                        crate::settings_window::publish_openrouter_snapshot(
+                            limits.get(ProviderKind::OpenRouter),
+                            ui_dispatcher.clone(),
+                        );
+                    }
                     if ui.popup_visibility.absorb_discovered_bricks(&limits) {
                         let limits_for_settings = limits.clone();
                         crate::settings_window::persist_update(

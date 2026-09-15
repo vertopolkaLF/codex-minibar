@@ -1,4 +1,4 @@
-use super::providers::mutate_openrouter_accounts;
+use super::providers::ProviderReadiness;
 use super::*;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -142,87 +142,173 @@ pub(super) fn root_nav_items(nav_icon_color: &str, use_colored: bool) -> [NavVie
     ]
 }
 
+/// Provider pane: enabled providers first, then a divider and the disabled
+/// ones dimmed. Both blocks keep the Customize order.
 pub(super) fn providers_nav_items(
     popup_order: &[PopupWidgetKind],
     nav_icon_color: &str,
+    color_scheme: ColorScheme,
+    is_enabled: impl Fn(ProviderKind) -> bool,
+    readiness: impl Fn(ProviderKind) -> ProviderReadiness,
+    openrouter_account_count: usize,
 ) -> Vec<NavViewItem> {
-    let mut items = vec![NavViewItem::header("Providers")];
-    for provider in provider_order_from_popup(popup_order) {
+    let (ready_color, setup_color) = status_dot_colors(color_scheme);
+    let item = |provider: ProviderKind| {
         let descriptor = crate::provider_registry::descriptor(provider);
-        items.push(
-            NavViewItem::new(descriptor.display_name)
-                .tag(provider.id())
-                .icon_path(crate::icons::data(descriptor.icon), nav_icon_color),
-        );
+        NavViewItem::new(descriptor.display_name)
+            .tag(provider.id())
+            .icon_path(crate::icons::data(descriptor.icon), nav_icon_color)
+    };
+    let order = provider_order_from_popup(popup_order);
+    let mut items = Vec::new();
+    for provider in order
+        .iter()
+        .copied()
+        .filter(|provider| is_enabled(*provider))
+    {
+        let mut nav = item(provider);
+        if provider == ProviderKind::OpenRouter && openrouter_account_count > 0 {
+            nav = nav.info_badge(openrouter_account_count as i32);
+        }
+        nav = match readiness(provider) {
+            ProviderReadiness::Ready => nav.status_dot(ready_color),
+            ProviderReadiness::NeedsSetup => nav.status_dot(setup_color),
+            ProviderReadiness::Checking => nav,
+        };
+        items.push(nav);
     }
+    let disabled: Vec<ProviderKind> = order
+        .iter()
+        .copied()
+        .filter(|provider| !is_enabled(*provider))
+        .collect();
+    if !disabled.is_empty() && !items.is_empty() {
+        items.push(NavViewItem::separator());
+    }
+    items.extend(
+        disabled
+            .into_iter()
+            .map(|provider| item(provider).dimmed(true)),
+    );
     items
 }
 
-pub(super) fn providers_pane_add_footer(
-    set_openrouter_accounts: SetState<Vec<OpenRouterAccount>>,
-    settings_tx: Sender<Settings>,
-    set_selected_provider: SetState<ProviderKind>,
-    set_page_visible: AsyncSetState<bool>,
-    set_rendered_page: AsyncSetState<RenderedPage>,
-) -> Element {
-    let add_account_setter = set_openrouter_accounts;
-    let add_account_tx = settings_tx;
-    let select_openrouter = set_selected_provider;
-    let page_visible = set_page_visible;
-    let rendered_page = set_rendered_page;
-    border(
-        vstack((
-            text_block("Only OpenRouter supports multiple accounts.")
-                .font_size(11.0)
-                .opacity(0.72)
-                .wrap(),
-            Button::new("Add")
-                .icon(Symbol::Add)
-                .menu_flyout(vec![
-                    menu_item("OpenRouter account"),
-                    menu_separator(),
-                    menu_item("Codex (single session)"),
-                    menu_item("Claude (single session)"),
-                    menu_item("Cursor (single session)"),
-                    menu_item("OpenCode Zen (single session)"),
-                    menu_item("OpenCode Go (single session)"),
-                ])
-                .on_item_clicked(move |choice: String| match choice.as_str() {
-                    "OpenRouter account" => {
-                        mutate_openrouter_accounts(
-                            add_account_setter.clone(),
-                            add_account_tx.clone(),
-                            move |accounts| {
-                                let next_index = accounts.len() + 1;
-                                accounts
-                                    .push(OpenRouterAccount::new(format!("Account {next_index}")));
-                                true
-                            },
-                        );
-                        select_openrouter.call(ProviderKind::OpenRouter);
-                        fade_to_rendered_page(
-                            page_visible.clone(),
-                            rendered_page.clone(),
-                            RenderedPage::Provider(ProviderKind::OpenRouter),
-                        );
-                    }
-                    _ => {
-                        crate::notifications::show(
-                            "One signed-in session",
-                            "Open this provider's page to set it up.",
-                        );
-                    }
-                }),
+/// Identity for the provider pane. Menu items are rebuilt natively on change,
+/// so the NavigationView is remounted whenever membership, dots or badges move.
+pub(super) fn providers_nav_signature(items: &[NavViewItem]) -> String {
+    items
+        .iter()
+        .map(|item| {
+            format!(
+                "{}:{}:{}:{:?}:{:?}",
+                item.tag
+                    .as_deref()
+                    .unwrap_or(if item.is_separator { "-" } else { "" }),
+                item.dimmed,
+                item.is_header,
+                item.info_badge,
+                item.status_dot
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+fn status_dot_colors(color_scheme: ColorScheme) -> (&'static str, &'static str) {
+    match color_scheme {
+        ColorScheme::Dark => ("#6CCB5F", "#FCE100"),
+        ColorScheme::Light => ("#0F7B0F", "#9D5D00"),
+    }
+}
+
+/// Legend for the provider status dots. The theme brushes resolve to the same
+/// colors as [`status_dot_colors`].
+pub(super) fn providers_pane_legend() -> Element {
+    let entry = |brush: ThemeRef, label: &str| -> Element {
+        hstack((
+            border(Element::Empty)
+                .width(8.0)
+                .height(8.0)
+                .corner_radius(4.0)
+                .background(brush)
+                .vertical_alignment(VerticalAlignment::Center),
+            text_block(label)
+                .font_size(12.0)
+                .foreground(ThemeRef::SecondaryText)
+                .vertical_alignment(VerticalAlignment::Center),
         ))
-        .spacing(8.0)
-        .horizontal_alignment(HorizontalAlignment::Stretch),
+        .spacing(6.0)
+        .into()
+    };
+    border(
+        hstack((
+            entry(ThemeRef::SystemSuccess, "Ready"),
+            entry(ThemeRef::SystemCaution, "Needs setup"),
+        ))
+        .spacing(16.0),
     )
     .padding(Thickness {
-        left: 12.0,
+        left: 16.0,
         top: 0.0,
         right: 12.0,
-        bottom: 2.0,
+        bottom: 10.0,
     })
     .background(Color::transparent())
     .into()
+}
+
+#[cfg(test)]
+mod provider_navigation_tests {
+    use super::*;
+
+    #[test]
+    fn provider_identity_and_order_survive_every_enabled_combination() {
+        let popup_order = Settings::default().popup_order;
+        let order = provider_order_from_popup(&popup_order);
+        assert_eq!(order.len(), crate::provider_registry::PROVIDERS.len());
+        for scheme in [ColorScheme::Light, ColorScheme::Dark] {
+            for mask in 0..(1_u32 << order.len()) {
+                let enabled = |provider| {
+                    let index = order.iter().position(|item| *item == provider).unwrap();
+                    mask & (1 << index) != 0
+                };
+                let items = providers_nav_items(
+                    &popup_order,
+                    "#123456",
+                    scheme,
+                    enabled,
+                    |_| ProviderReadiness::Ready,
+                    2,
+                );
+                let tagged: Vec<_> = items.iter().filter(|item| item.tag.is_some()).collect();
+                let expected: Vec<_> = order
+                    .iter()
+                    .copied()
+                    .filter(|p| enabled(*p))
+                    .chain(order.iter().copied().filter(|p| !enabled(*p)))
+                    .collect();
+                assert_eq!(tagged.len(), order.len());
+                for (item, provider) in tagged.into_iter().zip(expected) {
+                    let descriptor = crate::provider_registry::descriptor(provider);
+                    assert_eq!(item.tag.as_deref(), Some(provider.id()));
+                    assert_eq!(item.content, descriptor.display_name);
+                    assert_eq!(
+                        item.icon_path.as_ref().unwrap().0,
+                        crate::icons::data(descriptor.icon)
+                    );
+                    assert_eq!(item.dimmed, !enabled(provider));
+                    assert_eq!(item.status_dot.is_some(), enabled(provider));
+                    assert_eq!(
+                        item.info_badge,
+                        (enabled(provider) && provider == ProviderKind::OpenRouter).then_some(2)
+                    );
+                }
+                let mixed = mask != 0 && mask != (1 << order.len()) - 1;
+                assert_eq!(
+                    items.iter().filter(|item| item.is_separator).count(),
+                    usize::from(mixed)
+                );
+            }
+        }
+    }
 }

@@ -134,57 +134,100 @@ fn xml_escape_attr(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
-fn nav_item_content(item: &NavViewItem) -> Result<bindings::UIElement> {
-    if let Some((path, color)) = &item.trailing_icon_path {
-        let label = xml_escape_attr(&item.content);
-        let path = xml_escape_attr(path);
-        let color = xml_escape_attr(color);
-        // PathIcon sizes from (0,0) to the path max, which left-pads directional
-        // glyphs. A 256 canvas matches the Phosphor viewBox so the caret is
-        // optically centered. NavigationViewItem sizes to content, so MinWidth
-        // reaches the pane's trailing edge.
-        let xaml = format!(
-            r#"<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" MinWidth="148" HorizontalAlignment="Stretch">
-  <Grid.ColumnDefinitions>
-    <ColumnDefinition Width="*"/>
-    <ColumnDefinition Width="Auto"/>
-  </Grid.ColumnDefinitions>
-  <TextBlock Text="{label}" VerticalAlignment="Center"/>
-  <Viewbox Grid.Column="1" Width="16" Height="16" VerticalAlignment="Center" Stretch="Uniform" Opacity="0.72" Margin="4,0,0,0">
-    <Canvas Width="256" Height="256">
-      <Path Data="{path}" Fill="{color}"/>
-    </Canvas>
-  </Viewbox>
-</Grid>"#
-        );
-        let factory: IXamlReaderStatics = {
-            static SHARED: windows_core::imp::FactoryCache<XamlReader, IXamlReaderStatics> =
-                windows_core::imp::FactoryCache::new();
-            SHARED.call(|factory| Ok(factory.clone()))?
-        };
-        unsafe {
-            let mut result = core::ptr::null_mut();
-            (windows_core::Interface::vtable(&factory).load)(
-                windows_core::Interface::as_raw(&factory),
-                core::mem::transmute_copy(&windows_core::HSTRING::from(xaml)),
-                &mut result,
-            )
-            .and_then(|| {
-                let inspectable: windows_core::IInspectable = windows_core::Type::from_abi(result)?;
-                inspectable.cast()
-            })
-        }
-    } else {
-        string_as_textblock(&item.content)?.cast()
+fn load_xaml(xaml: String) -> Result<windows_core::IInspectable> {
+    let factory: IXamlReaderStatics = {
+        static SHARED: windows_core::imp::FactoryCache<XamlReader, IXamlReaderStatics> =
+            windows_core::imp::FactoryCache::new();
+        SHARED.call(|factory| Ok(factory.clone()))?
+    };
+    unsafe {
+        let mut result = core::ptr::null_mut();
+        (windows_core::Interface::vtable(&factory).load)(
+            windows_core::Interface::as_raw(&factory),
+            core::mem::transmute_copy(&windows_core::HSTRING::from(xaml)),
+            &mut result,
+        )
+        .and_then(|| windows_core::Type::from_abi(result))
     }
 }
 
+fn nav_item_content(item: &NavViewItem) -> Result<bindings::UIElement> {
+    if item.trailing_icon_path.is_none() && item.info_badge.is_none() && item.status_dot.is_none()
+    {
+        return string_as_textblock(&item.content)?.cast();
+    }
+    let label = xml_escape_attr(&item.content);
+    let badge = item
+        .info_badge
+        .map(|value| {
+            format!(
+                r#"<InfoBadge Grid.Column="1" Value="{value}" VerticalAlignment="Center" Margin="4,0,0,0"/>"#
+            )
+        })
+        .unwrap_or_default();
+    let dot = item
+        .status_dot
+        .as_ref()
+        .map(|color| {
+            let color = xml_escape_attr(color);
+            format!(
+                r#"<Ellipse Grid.Column="2" Width="8" Height="8" Fill="{color}" VerticalAlignment="Center" Margin="8,0,2,0"/>"#
+            )
+        })
+        .unwrap_or_default();
+    // PathIcon sizes from (0,0) to the path max, which left-pads directional
+    // glyphs. A 256 canvas matches the Phosphor viewBox so the caret is
+    // optically centered.
+    let trailing = item
+        .trailing_icon_path
+        .as_ref()
+        .map(|(path, color)| {
+            let path = xml_escape_attr(path);
+            let color = xml_escape_attr(color);
+            format!(
+                r#"<Viewbox Grid.Column="3" Width="16" Height="16" VerticalAlignment="Center" Stretch="Uniform" Opacity="0.72" Margin="4,0,0,0">
+    <Canvas Width="256" Height="256">
+      <Path Data="{path}" Fill="{color}"/>
+    </Canvas>
+  </Viewbox>"#
+            )
+        })
+        .unwrap_or_default();
+    // NavigationViewItem sizes to content, so MinWidth reaches the pane's
+    // trailing edge.
+    let xaml = format!(
+        r#"<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" MinWidth="148" HorizontalAlignment="Stretch">
+  <Grid.ColumnDefinitions>
+    <ColumnDefinition Width="*"/>
+    <ColumnDefinition Width="Auto"/>
+    <ColumnDefinition Width="Auto"/>
+    <ColumnDefinition Width="Auto"/>
+  </Grid.ColumnDefinitions>
+  <TextBlock Text="{label}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+  {badge}
+  {dot}
+  {trailing}
+</Grid>"#
+    );
+    load_xaml(xaml)?.cast()
+}
+
 pub(super) fn build_nav_view_item(item: &NavViewItem) -> Result<windows_core::IInspectable> {
+    if item.is_separator {
+        return load_xaml(
+            r#"<NavigationViewItemSeparator xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"/>"#
+                .to_owned(),
+        );
+    }
     if item.is_header {
-        let h = bindings::NavigationViewItemHeader::new()?;
-        let tb = string_as_textblock(&item.content)?;
-        h.cast::<bindings::IContentControl>()?.SetContent(&tb)?;
-        return h.cast();
+        // Built from XAML so the alignment is explicit: the default header
+        // template lets the content float with the pane's content alignment.
+        let label = xml_escape_attr(&item.content);
+        return load_xaml(format!(
+            r#"<NavigationViewItemHeader xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" HorizontalContentAlignment="Left" HorizontalAlignment="Stretch">
+  <TextBlock Text="{label}" FontWeight="SemiBold" HorizontalAlignment="Left" VerticalAlignment="Center"/>
+</NavigationViewItemHeader>"#
+        ));
     }
     let nv_item = bindings::NavigationViewItem::new()?;
     let content = nav_item_content(item)?;
@@ -206,6 +249,9 @@ pub(super) fn build_nav_view_item(item: &NavViewItem) -> Result<windows_core::II
     } else if let Some((path, color)) = &item.icon_path {
         let icon_elem = svg_icon(path, color)?;
         nv_item.SetIcon(&icon_elem)?;
+    }
+    if item.dimmed {
+        nv_item.cast::<bindings::IUIElement>()?.SetOpacity(0.55)?;
     }
     if !item.children.is_empty() {
         let menu = nv_item

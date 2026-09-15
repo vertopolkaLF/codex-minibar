@@ -61,7 +61,7 @@ mod tray;
 
 use navigation::{
     RenderedPage, SettingsNavMode, Tab, fade_to_rendered_page, first_provider_in_order,
-    providers_nav_items, providers_pane_add_footer, root_nav_items,
+    providers_nav_items, providers_nav_signature, providers_pane_legend, root_nav_items,
 };
 use onboarding::{detected_providers, onboarding_render};
 use pages::render as render_page;
@@ -69,7 +69,10 @@ use platform::{
     install_settings_close_hide, load_settings_for_window, set_settings_window_icon,
     sync_settings_caption_button_theme,
 };
-use providers::{ProviderInstallStatus, provider_install_status, provider_page_content};
+use providers::{
+    OpenRouterSettingsSnapshot, ProviderDialog, ProviderDialogActions, ProviderInstallStatus,
+    provider_dialog_overlay, provider_install_status, provider_page_content, provider_readiness,
+};
 use shared::enabled_providers;
 use state::{SettingsPageContext, SettingsWindowState};
 use tray::tray_indicator_edit_overlay;
@@ -77,18 +80,25 @@ use tray::tray_indicator_edit_overlay;
 pub(crate) use persistence::persist_update;
 pub(crate) use platform::is_open;
 
-const WINDOW_WIDTH: f64 = 760.0;
-const WINDOW_HEIGHT: f64 = 520.0;
+/// Sized so a provider page with an expanded OpenRouter account fits without
+/// scrolling; the onboarding flow keeps its smaller footprint.
+const WINDOW_WIDTH: f64 = 920.0;
+const WINDOW_HEIGHT: f64 = 720.0;
+const ONBOARDING_WINDOW_WIDTH: f64 = 760.0;
+const ONBOARDING_WINDOW_HEIGHT: f64 = 520.0;
 const SETTINGS_WINDOW_TITLE: &str = "Codex Minibar Settings";
 const ONBOARDING_WINDOW_TITLE: &str = "Welcome to Codex Minibar";
 
 /// Debounces filesystem/registry provider detection while a path is edited.
 static PROVIDER_STATUS_GEN: AtomicU64 = AtomicU64::new(0);
 static DISCOVERED_POPUP_BRICKS: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+static OPENROUTER_SNAPSHOT: Mutex<Option<OpenRouterSettingsSnapshot>> = Mutex::new(None);
 
 thread_local! {
     static HOST: RefCell<Option<Rc<ReactorHost>>> = const { RefCell::new(None) };
     static LIVE_SETTINGS_STATE: RefCell<Option<SettingsWindowState>> = const { RefCell::new(None) };
+    static LIVE_OPENROUTER_SNAPSHOT: RefCell<Option<SetState<OpenRouterSettingsSnapshot>>> =
+        const { RefCell::new(None) };
 }
 
 pub fn sync_open_window(settings: Settings, ui_dispatcher: UiMarshaller) {
@@ -142,6 +152,39 @@ pub fn publish_discovered_popup_bricks(
         LIVE_SETTINGS_STATE.with(|state| {
             if let Some(state) = state.borrow().as_ref() {
                 state.discovered_popup_bricks.call(labels);
+            }
+        });
+    });
+}
+
+fn cached_openrouter_snapshot() -> OpenRouterSettingsSnapshot {
+    OPENROUTER_SNAPSHOT
+        .lock()
+        .ok()
+        .and_then(|snapshot| snapshot.clone())
+        .unwrap_or_default()
+}
+
+/// Publishes the latest OpenRouter key labels, spend and balances so the
+/// provider page can show them without fetching usage itself.
+pub fn publish_openrouter_snapshot(
+    limits: &crate::limits::RateLimits,
+    ui_dispatcher: UiMarshaller,
+) {
+    let snapshot = OpenRouterSettingsSnapshot {
+        accounts: limits.openrouter_accounts.clone(),
+        sampled_at: (!limits.openrouter_accounts.is_empty()).then_some(limits.sampled_at),
+    };
+    if let Ok(mut slot) = OPENROUTER_SNAPSHOT.lock() {
+        *slot = Some(snapshot.clone());
+    }
+    if !is_open() {
+        return;
+    }
+    ui_dispatcher.dispatch(move || {
+        LIVE_OPENROUTER_SNAPSHOT.with(|setter| {
+            if let Some(setter) = setter.borrow().as_ref() {
+                setter.call(snapshot);
             }
         });
     });
@@ -220,8 +263,8 @@ pub fn open_onboarding(settings_tx: Sender<Settings>) -> windows_core::Result<()
         let host = Rc::new(ReactorHost::new_with_window_options(
             ONBOARDING_WINDOW_TITLE,
             Some(WindowSize {
-                width: WINDOW_WIDTH,
-                height: WINDOW_HEIGHT,
+                width: ONBOARDING_WINDOW_WIDTH,
+                height: ONBOARDING_WINDOW_HEIGHT,
             }),
             InnerConstraints {
                 min_width: Some(560.0),
@@ -322,14 +365,14 @@ pub fn render(
         cx.use_state(settings.providers.is_enabled(ProviderKind::Antigravity));
     let (grok_enabled, set_grok_enabled) =
         cx.use_state(settings.providers.is_enabled(ProviderKind::Grok));
-    let (opencode_zen_key_input, set_opencode_zen_key_input) = cx.use_state(String::new());
-    let (opencode_go_key_input, set_opencode_go_key_input) = cx.use_state(String::new());
     let (openrouter_accounts, set_openrouter_accounts) =
         cx.use_state(crate::openrouter::accounts_for_settings(&settings));
-    let (openrouter_key_inputs, set_openrouter_key_inputs) =
-        cx.use_state(HashMap::<String, String>::new());
-    let (openrouter_management_inputs, set_openrouter_management_inputs) =
-        cx.use_state(HashMap::<String, String>::new());
+    let (openrouter_snapshot, set_openrouter_snapshot) = cx.use_state(cached_openrouter_snapshot());
+    let (expanded_provider_cards, set_expanded_provider_cards) =
+        cx.use_async_state(Vec::<String>::new());
+    let (provider_dialog, set_provider_dialog) = cx.use_async_state(None::<ProviderDialog>);
+    let (provider_notice, set_provider_notice) = cx.use_async_state(None::<String>);
+    let (provider_status_revision, set_provider_status_revision) = cx.use_async_state(0_u64);
     let (codex_path, set_codex_path) = cx.use_state(
         settings
             .codex_path
@@ -364,6 +407,96 @@ pub fn render(
     let (use_colored_sidebar_icons, set_use_colored_sidebar_icons) =
         cx.use_state(settings.use_colored_sidebar_icons);
 
+    let (codex_install_status, set_codex_install_status) =
+        cx.use_async_state(ProviderInstallStatus::checking());
+    let (claude_install_status, set_claude_install_status) =
+        cx.use_async_state(ProviderInstallStatus::checking());
+    let (cursor_install_status, set_cursor_install_status) =
+        cx.use_async_state(ProviderInstallStatus::checking_app());
+    let (opencode_zen_install_status, set_opencode_zen_install_status) =
+        cx.use_async_state(ProviderInstallStatus::checking_app());
+    let (opencode_go_install_status, set_opencode_go_install_status) =
+        cx.use_async_state(ProviderInstallStatus::checking_app());
+    let (openrouter_install_status, set_openrouter_install_status) =
+        cx.use_async_state(ProviderInstallStatus::checking_app());
+    let (antigravity_install_status, set_antigravity_install_status) =
+        cx.use_async_state(ProviderInstallStatus::checking());
+    let (grok_install_status, set_grok_install_status) =
+        cx.use_async_state(ProviderInstallStatus::checking_cli());
+    let last_status_paths = cx.use_ref(None::<[String; 5]>);
+    let status_codex_path = codex_path.clone();
+    let status_claude_path = claude_path.clone();
+    let status_cursor_path = cursor_path.clone();
+    let status_antigravity_path = antigravity_path.clone();
+    let status_grok_path = grok_path.clone();
+    cx.use_effect(
+        (
+            codex_path.clone(),
+            claude_path.clone(),
+            cursor_path.clone(),
+            antigravity_path.clone(),
+            grok_path.clone(),
+            provider_status_revision,
+            nav_mode,
+        ),
+        move || {
+            let generation = PROVIDER_STATUS_GEN.fetch_add(1, Ordering::Relaxed) + 1;
+            // Only a folder edit resets rows to "Checking…". A credential
+            // change re-detects quietly so saved keys do not flash the page.
+            let paths = [
+                status_codex_path.clone(),
+                status_claude_path.clone(),
+                status_cursor_path.clone(),
+                status_antigravity_path.clone(),
+                status_grok_path.clone(),
+            ];
+            let paths_changed = last_status_paths.get_cloned().as_ref() != Some(&paths);
+            last_status_paths.set(Some(paths));
+            if paths_changed {
+                set_codex_install_status.call(ProviderInstallStatus::checking());
+                set_claude_install_status.call(ProviderInstallStatus::checking());
+                set_cursor_install_status.call(ProviderInstallStatus::checking_app());
+                set_opencode_zen_install_status.call(ProviderInstallStatus::checking_app());
+                set_opencode_go_install_status.call(ProviderInstallStatus::checking_app());
+                set_openrouter_install_status.call(ProviderInstallStatus::checking_app());
+                set_antigravity_install_status.call(ProviderInstallStatus::checking());
+                set_grok_install_status.call(ProviderInstallStatus::checking_cli());
+            }
+            let codex_status = set_codex_install_status.clone();
+            let claude_status = set_claude_install_status.clone();
+            let cursor_status = set_cursor_install_status.clone();
+            let opencode_zen_status = set_opencode_zen_install_status.clone();
+            let opencode_go_status = set_opencode_go_install_status.clone();
+            let openrouter_status = set_openrouter_install_status.clone();
+            let antigravity_status = set_antigravity_install_status.clone();
+            let grok_status = set_grok_install_status.clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(250));
+                if PROVIDER_STATUS_GEN.load(Ordering::Relaxed) != generation {
+                    return;
+                }
+                let codex = provider_install_status(ProviderKind::Codex, &status_codex_path);
+                let claude = provider_install_status(ProviderKind::Claude, &status_claude_path);
+                let cursor = provider_install_status(ProviderKind::Cursor, &status_cursor_path);
+                let opencode_zen = provider_install_status(ProviderKind::OpenCodeZen, "");
+                let opencode_go = provider_install_status(ProviderKind::OpenCodeGo, "");
+                let openrouter = provider_install_status(ProviderKind::OpenRouter, "");
+                let antigravity =
+                    provider_install_status(ProviderKind::Antigravity, &status_antigravity_path);
+                let grok = provider_install_status(ProviderKind::Grok, &status_grok_path);
+                if PROVIDER_STATUS_GEN.load(Ordering::Relaxed) == generation {
+                    codex_status.call(codex);
+                    claude_status.call(claude);
+                    cursor_status.call(cursor);
+                    opencode_zen_status.call(opencode_zen);
+                    opencode_go_status.call(opencode_go);
+                    openrouter_status.call(openrouter);
+                    antigravity_status.call(antigravity);
+                    grok_status.call(grok);
+                }
+            });
+        },
+    );
     let nav_icon_color = match color_scheme {
         ColorScheme::Dark => "#E6E6E6",
         ColorScheme::Light => "#3A3A3A",
@@ -374,7 +507,34 @@ pub fn render(
     };
     let nav_menu_items: Vec<NavViewItem> = match nav_mode {
         SettingsNavMode::Root => root_nav_items(nav_icon_color, use_colored_sidebar_icons).into(),
-        SettingsNavMode::Providers => providers_nav_items(&popup_order, nav_icon_color),
+        SettingsNavMode::Providers => providers_nav_items(
+            &popup_order,
+            nav_icon_color,
+            color_scheme,
+            |provider| match provider {
+                ProviderKind::Codex => codex_enabled,
+                ProviderKind::Claude => claude_enabled,
+                ProviderKind::Cursor => cursor_enabled,
+                ProviderKind::OpenCodeZen => opencode_zen_enabled,
+                ProviderKind::OpenCodeGo => opencode_go_enabled,
+                ProviderKind::OpenRouter => openrouter_enabled,
+                ProviderKind::Antigravity => antigravity_enabled,
+                ProviderKind::Grok => grok_enabled,
+            },
+            |provider| {
+                provider_readiness(match provider {
+                    ProviderKind::Codex => &codex_install_status,
+                    ProviderKind::Claude => &claude_install_status,
+                    ProviderKind::Cursor => &cursor_install_status,
+                    ProviderKind::OpenCodeZen => &opencode_zen_install_status,
+                    ProviderKind::OpenCodeGo => &opencode_go_install_status,
+                    ProviderKind::OpenRouter => &openrouter_install_status,
+                    ProviderKind::Antigravity => &antigravity_install_status,
+                    ProviderKind::Grok => &grok_install_status,
+                })
+            },
+            openrouter_accounts.len(),
+        ),
     };
     let nav_key = match nav_mode {
         SettingsNavMode::Root => format!(
@@ -385,7 +545,10 @@ pub fn render(
                 "mono"
             }
         ),
-        SettingsNavMode::Providers => format!("settings-nav-providers-{nav_icon_color}"),
+        SettingsNavMode::Providers => format!(
+            "settings-nav-providers-{nav_icon_color}-{}",
+            providers_nav_signature(&nav_menu_items)
+        ),
     };
     let mut navigation = NavigationView::new(nav_menu_items, Element::Empty)
         .with_key(nav_key)
@@ -480,89 +643,13 @@ pub fn render(
                 navigation
             }
         }
-        SettingsNavMode::Providers => navigation.pane_footer(providers_pane_add_footer(
-            set_openrouter_accounts.clone(),
-            settings_tx.clone(),
-            set_selected_provider.clone(),
-            set_page_visible.clone(),
-            set_rendered_page.clone(),
-        )),
+        SettingsNavMode::Providers => navigation
+            // PaneTitle is the documented NavigationView header slot and
+            // remains visible when the built-in pane toggle is hidden.
+            .pane_title("Providers")
+            .pane_footer(providers_pane_legend()),
     };
 
-    let (codex_install_status, set_codex_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking());
-    let (claude_install_status, set_claude_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking());
-    let (cursor_install_status, set_cursor_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking_app());
-    let (opencode_zen_install_status, set_opencode_zen_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking_app());
-    let (opencode_go_install_status, set_opencode_go_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking_app());
-    let (openrouter_install_status, set_openrouter_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking_app());
-    let (antigravity_install_status, set_antigravity_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking());
-    let (grok_install_status, set_grok_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking_cli());
-    let status_codex_path = codex_path.clone();
-    let status_claude_path = claude_path.clone();
-    let status_cursor_path = cursor_path.clone();
-    let status_antigravity_path = antigravity_path.clone();
-    let status_grok_path = grok_path.clone();
-    cx.use_effect(
-        (
-            codex_path.clone(),
-            claude_path.clone(),
-            cursor_path.clone(),
-            antigravity_path.clone(),
-            grok_path.clone(),
-        ),
-        move || {
-            let generation = PROVIDER_STATUS_GEN.fetch_add(1, Ordering::Relaxed) + 1;
-            set_codex_install_status.call(ProviderInstallStatus::checking());
-            set_claude_install_status.call(ProviderInstallStatus::checking());
-            set_cursor_install_status.call(ProviderInstallStatus::checking_app());
-            set_opencode_zen_install_status.call(ProviderInstallStatus::checking_app());
-            set_opencode_go_install_status.call(ProviderInstallStatus::checking_app());
-            set_openrouter_install_status.call(ProviderInstallStatus::checking_app());
-            set_antigravity_install_status.call(ProviderInstallStatus::checking());
-            set_grok_install_status.call(ProviderInstallStatus::checking_cli());
-            let codex_status = set_codex_install_status.clone();
-            let claude_status = set_claude_install_status.clone();
-            let cursor_status = set_cursor_install_status.clone();
-            let opencode_zen_status = set_opencode_zen_install_status.clone();
-            let opencode_go_status = set_opencode_go_install_status.clone();
-            let openrouter_status = set_openrouter_install_status.clone();
-            let antigravity_status = set_antigravity_install_status.clone();
-            let grok_status = set_grok_install_status.clone();
-            thread::spawn(move || {
-                thread::sleep(Duration::from_millis(250));
-                if PROVIDER_STATUS_GEN.load(Ordering::Relaxed) != generation {
-                    return;
-                }
-                let codex = provider_install_status(ProviderKind::Codex, &status_codex_path);
-                let claude = provider_install_status(ProviderKind::Claude, &status_claude_path);
-                let cursor = provider_install_status(ProviderKind::Cursor, &status_cursor_path);
-                let opencode_zen = provider_install_status(ProviderKind::OpenCodeZen, "");
-                let opencode_go = provider_install_status(ProviderKind::OpenCodeGo, "");
-                let openrouter = provider_install_status(ProviderKind::OpenRouter, "");
-                let antigravity =
-                    provider_install_status(ProviderKind::Antigravity, &status_antigravity_path);
-                let grok = provider_install_status(ProviderKind::Grok, &status_grok_path);
-                if PROVIDER_STATUS_GEN.load(Ordering::Relaxed) == generation {
-                    codex_status.call(codex);
-                    claude_status.call(claude);
-                    cursor_status.call(cursor);
-                    opencode_zen_status.call(opencode_zen);
-                    opencode_go_status.call(opencode_go);
-                    openrouter_status.call(openrouter);
-                    antigravity_status.call(antigravity);
-                    grok_status.call(grok);
-                }
-            });
-        },
-    );
     let (use_colored_provider_icons, set_use_colored_provider_icons) =
         cx.use_state(settings.use_colored_provider_icons);
     let (replace_chatgpt_logo_with_codex, set_replace_chatgpt_logo_with_codex) =
@@ -633,6 +720,9 @@ pub fn render(
     let (forced_reset_notifications, set_forced_reset_notifications) =
         cx.use_state(settings.notifications.forced_reset_notifications);
 
+    LIVE_OPENROUTER_SNAPSHOT.with(|setter| {
+        *setter.borrow_mut() = Some(set_openrouter_snapshot.clone());
+    });
     LIVE_SETTINGS_STATE.with(|state| {
         *state.borrow_mut() = Some(SettingsWindowState {
             theme: set_theme.clone(),
@@ -721,11 +811,11 @@ pub fn render(
         openrouter_install_status: &openrouter_install_status,
         antigravity_install_status: &antigravity_install_status,
         grok_install_status: &grok_install_status,
-        opencode_zen_key_input: &opencode_zen_key_input,
-        opencode_go_key_input: &opencode_go_key_input,
         openrouter_accounts: &openrouter_accounts,
-        openrouter_key_inputs: &openrouter_key_inputs,
-        openrouter_management_inputs: &openrouter_management_inputs,
+        openrouter_snapshot: &openrouter_snapshot,
+        expanded_provider_cards: &expanded_provider_cards,
+        provider_notice: &provider_notice,
+        color_scheme,
         popup_order: &popup_order,
         use_colored_provider_icons,
         use_colored_sidebar_icons,
@@ -788,11 +878,10 @@ pub fn render(
         set_openrouter_enabled: set_openrouter_enabled.clone(),
         set_antigravity_enabled: set_antigravity_enabled.clone(),
         set_grok_enabled: set_grok_enabled.clone(),
-        set_opencode_zen_key_input: set_opencode_zen_key_input.clone(),
-        set_opencode_go_key_input: set_opencode_go_key_input.clone(),
         set_openrouter_accounts: set_openrouter_accounts.clone(),
-        set_openrouter_key_inputs: set_openrouter_key_inputs.clone(),
-        set_openrouter_management_inputs: set_openrouter_management_inputs.clone(),
+        set_expanded_provider_cards: set_expanded_provider_cards.clone(),
+        set_provider_dialog: set_provider_dialog.clone(),
+        set_provider_notice: set_provider_notice.clone(),
         set_codex_path: set_codex_path.clone(),
         set_claude_path: set_claude_path.clone(),
         set_cursor_path: set_cursor_path.clone(),
@@ -1020,6 +1109,25 @@ pub fn render(
         window_body.into()
     };
 
+    let provider_overlay = provider_dialog
+        .as_ref()
+        .filter(|_| nav_mode == SettingsNavMode::Providers)
+        .map(|dialog| {
+            provider_dialog_overlay(
+                dialog,
+                &openrouter_accounts,
+                ProviderDialogActions {
+                    set_dialog: set_provider_dialog.clone(),
+                    expanded_cards: expanded_provider_cards.clone(),
+                    set_expanded_cards: set_expanded_provider_cards.clone(),
+                    set_notice: set_provider_notice.clone(),
+                    status_revision: provider_status_revision,
+                    set_status_revision: set_provider_status_revision.clone(),
+                    settings_tx: settings_tx.clone(),
+                },
+            )
+        });
+
     let mica = {
         let mut host = swap_chain_panel()
             .grid_row_span(1)
@@ -1035,7 +1143,7 @@ pub fn render(
         let mica: Element = host.into();
         mica.with_key(format!("settings-mica-{}", color_scheme as i32))
     };
-    relative_panel::<Vec<Element>>(vec![
+    let mut layers = vec![
         mica.relative_align_left()
             .relative_align_right()
             .relative_align_top()
@@ -1045,11 +1153,21 @@ pub fn render(
             .relative_align_right()
             .relative_align_top()
             .relative_align_bottom(),
-    ])
-    .horizontal_alignment(HorizontalAlignment::Stretch)
-    .vertical_alignment(VerticalAlignment::Stretch)
-    .background(Color::transparent())
-    .into()
+    ];
+    if let Some(overlay) = provider_overlay {
+        layers.push(
+            overlay
+                .relative_align_left()
+                .relative_align_right()
+                .relative_align_top()
+                .relative_align_bottom(),
+        );
+    }
+    relative_panel::<Vec<Element>>(layers)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Stretch)
+        .background(Color::transparent())
+        .into()
 }
 
 fn settings_title_icon_uri() -> String {

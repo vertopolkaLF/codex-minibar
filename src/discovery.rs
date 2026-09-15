@@ -267,10 +267,63 @@ fn executable_names() -> &'static [&'static str] {
     &["codex"]
 }
 
+/// Folders where Node package managers place global launchers on Windows.
+/// nvm-windows keeps the active version behind `NVM_SYMLINK` and every
+/// installed version under `NVM_HOME`, none of which are guaranteed to be on
+/// the PATH a tray app inherited at login.
+#[cfg(windows)]
+pub fn node_global_bin_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(symlink) = env::var_os("NVM_SYMLINK") {
+        dirs.push(PathBuf::from(symlink));
+    }
+    if let Some(program_files) = env::var_os("ProgramFiles") {
+        dirs.push(PathBuf::from(program_files).join("nodejs"));
+    }
+    let nvm_home = env::var_os("NVM_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("APPDATA").map(|roaming| PathBuf::from(roaming).join("nvm")));
+    if let Some(nvm_home) = nvm_home {
+        dirs.extend(nvm_version_dirs(&nvm_home));
+    }
+    dirs
+}
+
+#[cfg(windows)]
+fn nvm_version_dirs(root: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut versions: Vec<_> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            if !path.is_dir() {
+                return None;
+            }
+            let name = entry.file_name();
+            let mut parts = name.to_str()?.strip_prefix('v')?.split('.');
+            let version: [u32; 3] = [
+                parts.next()?.parse().ok()?,
+                parts.next()?.parse().ok()?,
+                parts.next()?.parse().ok()?,
+            ];
+            parts.next().is_none().then_some((version, path))
+        })
+        .collect();
+    // The active symlink/PATH was checked first. For inactive installations,
+    // numeric ordering keeps v22 above v9 and v22.10 above v22.9.
+    versions.sort_by_key(|(version, _)| std::cmp::Reverse(*version));
+    versions.into_iter().map(|(_, path)| path).collect()
+}
+
 fn common_locations() -> Vec<PathBuf> {
     let mut paths = Vec::new();
     #[cfg(windows)]
     {
+        for dir in node_global_bin_dirs() {
+            paths.extend([dir.join("codex.cmd"), dir.join("codex.ps1")]);
+        }
         if let Some(local) = env::var_os("LOCALAPPDATA") {
             let local = PathBuf::from(local);
             paths.extend([
@@ -299,6 +352,29 @@ fn common_locations() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn nvm_discovery_ignores_non_versions_and_prefers_newest_numeric_version() {
+        let root = tempfile::tempdir().unwrap();
+        for name in [
+            "v9.9.9",
+            "v22.9.0",
+            "v22.10.0",
+            "v22.9.2",
+            "versions",
+            "v",
+            "v23.0.0-extra",
+        ] {
+            std::fs::create_dir(root.path().join(name)).unwrap();
+        }
+        std::fs::write(root.path().join("v99.0.0"), b"not a directory").unwrap();
+        assert_eq!(
+            nvm_version_dirs(root.path()),
+            ["v22.10.0", "v22.9.2", "v22.9.0", "v9.9.9"].map(|name| root.path().join(name))
+        );
+        assert!(nvm_version_dirs(&root.path().join("missing")).is_empty());
+    }
 
     #[test]
     fn explicit_missing_candidate_is_ignored() {

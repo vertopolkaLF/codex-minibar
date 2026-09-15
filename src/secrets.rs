@@ -21,11 +21,15 @@ struct SecretFile {
 
 pub fn load(name: &str) -> Result<Option<String>> {
     let path = path()?;
-    if !path.is_file() {
-        return Ok(None);
-    }
-    let raw = fs::read_to_string(&path)
-        .with_context(|| format!("read protected provider secrets from {}", path.display()))?;
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("read protected provider secrets from {}", path.display())
+            });
+        }
+    };
     let file: SecretFile =
         serde_json::from_str(&raw).context("parse protected provider secrets")?;
     let Some(encoded) = file.values.get(name) else {
@@ -80,6 +84,21 @@ pub fn save(name: &str, value: Option<&str>) -> Result<()> {
     fs::write(&path, encoded)
         .with_context(|| format!("write protected provider secrets to {}", path.display()))?;
     Ok(())
+}
+
+/// Short display form of a secret: its known prefix plus the last four
+/// characters, e.g. `sk-or-v1-…7c1e`. Never reveals the rest of the value.
+pub fn masked_hint(value: &str) -> String {
+    let value = value.trim();
+    let tail: String = {
+        let chars: Vec<char> = value.chars().collect();
+        chars[chars.len().saturating_sub(4)..].iter().collect()
+    };
+    let prefix = ["sk-or-v1-", "sk-or-", "sk-"]
+        .into_iter()
+        .find(|prefix| value.starts_with(prefix) && value.len() > prefix.len() + 4)
+        .unwrap_or("");
+    format!("{prefix}…{tail}")
 }
 
 /// Checks whether a protected secret with the given logical-name prefix is

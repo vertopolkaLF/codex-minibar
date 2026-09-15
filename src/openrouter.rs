@@ -119,7 +119,16 @@ fn body_indicates_expired_api_key(body: &str) -> bool {
     lower.contains("api key expired")
 }
 
-fn read_account_balance_with_agent(agent: &ureq::Agent, api_key: &str) -> Result<Option<u64>> {
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct AccountCredits {
+    balance_microusd: u64,
+    total_credits_microusd: u64,
+}
+
+fn read_account_credits_with_agent(
+    agent: &ureq::Agent,
+    api_key: &str,
+) -> Result<Option<AccountCredits>> {
     let response = match agent
         .get(CREDITS_API_URL)
         .set("Authorization", &format!("Bearer {api_key}"))
@@ -164,7 +173,7 @@ struct AccountFetchResult {
     id: String,
     name: String,
     api_keys: Vec<OpenRouterApiKeySnapshot>,
-    balance_microusd: Option<u64>,
+    credits: Option<AccountCredits>,
     cache_updates: Vec<(String, CachedOpenRouterKey)>,
 }
 
@@ -180,7 +189,7 @@ fn fetch_openrouter_account(
         .clone()
         .or_else(|| account.api_keys.first().map(|key| key.value.clone()));
 
-    let (key_directory, live_results, balance) = std::thread::scope(|scope| {
+    let (key_directory, live_results, credits) = std::thread::scope(|scope| {
         let directory = account.management_key.as_ref().map(|key| {
             let agent = agent.clone();
             let key = key.clone();
@@ -201,7 +210,7 @@ fn fetch_openrouter_account(
             .collect();
         let credits = credits_key.map(|key| {
             let agent = agent.clone();
-            scope.spawn(move || read_account_balance_with_agent(&agent, &key).ok().flatten())
+            scope.spawn(move || read_account_credits_with_agent(&agent, &key).ok().flatten())
         });
 
         let key_directory = directory
@@ -223,7 +232,11 @@ fn fetch_openrouter_account(
     let mut cache_updates = Vec::new();
     for (api_key, live) in account.api_keys.iter().zip(live_results) {
         let cache_id = key_cache_id(&account.id, &api_key.id);
-        let cached = key_cache.get(&cache_id).cloned().unwrap_or_default();
+        let cached = key_cache
+            .get(&cache_id)
+            .filter(|cached| cached.masked_key == collapse_api_key(&api_key.value))
+            .cloned()
+            .unwrap_or_default();
         let masked_key = collapse_api_key(&api_key.value).or_else(|| cached.masked_key.clone());
         // OpenRouter's own label mask (sk-or-v1-abc...xyz) often uses a
         // different head/tail length than our local collapse — match the
@@ -317,7 +330,7 @@ fn fetch_openrouter_account(
         id: account.id.clone(),
         name: account.name.clone(),
         api_keys,
-        balance_microusd: balance,
+        credits,
         cache_updates,
     }
 }
@@ -342,7 +355,7 @@ impl LimitProvider for OpenRouterClient {
                         id: String::new(),
                         name: String::new(),
                         api_keys: Vec::new(),
-                        balance_microusd: None,
+                        credits: None,
                         cache_updates: Vec::new(),
                     })
                 })
@@ -354,7 +367,7 @@ impl LimitProvider for OpenRouterClient {
             for (cache_id, cached) in result.cache_updates {
                 self.key_cache.insert(cache_id, cached);
             }
-            if result.api_keys.is_empty() && result.balance_microusd.is_none() {
+            if result.api_keys.is_empty() && result.credits.is_none() {
                 continue;
             }
             if result.id.is_empty() {
@@ -364,7 +377,10 @@ impl LimitProvider for OpenRouterClient {
                 id: result.id,
                 name: result.name,
                 api_keys: result.api_keys,
-                balance_microusd: result.balance_microusd,
+                balance_microusd: result.credits.map(|credits| credits.balance_microusd),
+                total_credits_microusd: result
+                    .credits
+                    .map(|credits| credits.total_credits_microusd),
             });
         }
 
@@ -422,11 +438,116 @@ pub fn management_key_is_configured(account_id: &str) -> bool {
 }
 
 pub fn save_account_api_key(account_id: &str, key_id: &str, value: Option<&str>) -> Result<()> {
-    secrets::save(&api_secret_name(account_id, key_id), value)
+    save_secret_and_hint(&api_secret_name(account_id, key_id), value)
 }
 
 pub fn save_management_key(account_id: &str, value: Option<&str>) -> Result<()> {
-    secrets::save(&management_secret_name(account_id), value)
+    save_secret_and_hint(&management_secret_name(account_id), value)
+}
+
+/// Masked form (`sk-or-v1-…abcd`) of a saved API key, or `None` when the key
+/// slot has no secret. Cached so Settings re-renders do not decrypt on every
+/// pointer move; saves through this module invalidate the entry.
+pub fn api_key_hint(account_id: &str, key_id: &str) -> Result<Option<String>> {
+    cached_secret_hint(&api_secret_name(account_id, key_id))
+}
+
+/// Masked form of an account's saved management key.
+pub fn management_key_hint(account_id: &str) -> Result<Option<String>> {
+    cached_secret_hint(&management_secret_name(account_id))
+}
+
+static SECRET_HINTS: std::sync::Mutex<Option<HashMap<String, Option<String>>>> =
+    std::sync::Mutex::new(None);
+
+fn cached_secret_hint(name: &str) -> Result<Option<String>> {
+    let mut cache = SECRET_HINTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    read_secret_hint(cache.get_or_insert_with(HashMap::new), name, || {
+        secrets::load(name)
+    })
+}
+
+fn read_secret_hint(
+    cache: &mut HashMap<String, Option<String>>,
+    name: &str,
+    load: impl FnOnce() -> Result<Option<String>>,
+) -> Result<Option<String>> {
+    if let Some(hint) = cache.get(name) {
+        return Ok(hint.clone());
+    }
+    // Only a definite answer is cached. A read that fails (file being
+    // rewritten, DPAPI hiccup) must not pin "Not saved" until the next save.
+    let hint = load()?
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| secrets::masked_hint(&value));
+    cache.insert(name.to_owned(), hint.clone());
+    Ok(hint)
+}
+
+fn save_secret_and_hint(name: &str, value: Option<&str>) -> Result<()> {
+    // Serialize reads with saves: an in-flight read must not repopulate the
+    // old hint after invalidation, and a failed save keeps the existing hint.
+    let mut cache = SECRET_HINTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    secrets::save(name, value)?;
+    if let Some(cache) = cache.as_mut() {
+        cache.remove(name);
+    }
+    Ok(())
+}
+
+/// Confirms OpenRouter accepts an inference API key before Settings stores it.
+pub fn verify_api_key(api_key: &str) -> Result<()> {
+    let agent = ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build();
+    match agent
+        .get(API_URL)
+        .set("Authorization", &format!("Bearer {}", api_key.trim()))
+        .set("Accept", "application/json")
+        .call()
+    {
+        Ok(_) => Ok(()),
+        Err(ureq::Error::Status(401, response)) => {
+            let body = response.into_string().unwrap_or_default();
+            if body_indicates_expired_api_key(&body) {
+                bail!("This key has expired. Create a new one on openrouter.ai.")
+            }
+            bail!("OpenRouter rejected this key. Check it and try again.")
+        }
+        Err(ureq::Error::Status(status, _)) => {
+            bail!("OpenRouter returned status {status}. Try again in a moment.")
+        }
+        Err(error) => Err(error).context("Could not reach OpenRouter"),
+    }
+}
+
+/// Confirms a key can read the account key directory, which only management
+/// keys are allowed to do.
+pub fn verify_management_key(management_key: &str) -> Result<()> {
+    let agent = ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build();
+    match agent
+        .get(KEYS_API_URL)
+        .set(
+            "Authorization",
+            &format!("Bearer {}", management_key.trim()),
+        )
+        .set("Accept", "application/json")
+        .call()
+    {
+        Ok(_) => Ok(()),
+        Err(ureq::Error::Status(401, _)) => {
+            bail!("OpenRouter rejected this key. Check it and try again.")
+        }
+        Err(ureq::Error::Status(403, _)) => {
+            bail!("This looks like an API key, not a management key.")
+        }
+        Err(ureq::Error::Status(status, _)) => {
+            bail!("OpenRouter returned status {status}. Try again in a moment.")
+        }
+        Err(error) => Err(error).context("Could not reach OpenRouter"),
+    }
 }
 
 impl UsageProvider for OpenRouterClient {
@@ -688,14 +809,17 @@ fn parse_key_response(raw: &str, sampled_at: DateTime<Utc>) -> Result<ParsedOpen
     })
 }
 
-fn parse_credits_response(raw: &str) -> Result<u64> {
+fn parse_credits_response(raw: &str) -> Result<AccountCredits> {
     let envelope: CreditsEnvelope =
         serde_json::from_str(raw).context("parse OpenRouter account credits response")?;
     let total_credits = money_value(Some(envelope.data.total_credits), "total_credits")?
         .context("OpenRouter credits response is missing total_credits")?;
     let total_usage = money_value(Some(envelope.data.total_usage), "total_usage")?
         .context("OpenRouter credits response is missing total_usage")?;
-    Ok(total_credits.saturating_sub(total_usage))
+    Ok(AccountCredits {
+        balance_microusd: total_credits.saturating_sub(total_usage),
+        total_credits_microusd: total_credits,
+    })
 }
 
 fn load_key_cache_from_store() -> HashMap<String, CachedOpenRouterKey> {
@@ -963,6 +1087,25 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn secret_hint_errors_are_retried_and_never_cached_as_missing() {
+        let mut cache = HashMap::new();
+        assert!(read_secret_hint(&mut cache, "key", || bail!("transient read failure")).is_err());
+        assert!(!cache.contains_key("key"));
+        let hint = read_secret_hint(&mut cache, "key", || Ok(Some("fixture-1234".into()))).unwrap();
+        assert_eq!(hint.as_deref(), Some("…1234"));
+        assert_eq!(
+            read_secret_hint(&mut cache, "key", || panic!("must use cache")).unwrap(),
+            hint
+        );
+        cache.remove("key");
+        assert_eq!(
+            read_secret_hint(&mut cache, "key", || Ok(None)).unwrap(),
+            None
+        );
+        assert!(cache.contains_key("key"));
+    }
+
     fn sample(raw: &str) -> RateLimits {
         let sampled_at = Utc.with_ymd_and_hms(2026, 8, 19, 12, 30, 0).unwrap();
         let parsed = parse_key_response(raw, sampled_at).unwrap();
@@ -1167,14 +1310,16 @@ mod tests {
         let balance =
             parse_credits_response(r#"{"data":{"total_credits":100.5,"total_usage":25.75}}"#)
                 .unwrap();
-        assert_eq!(balance, 74_750_000);
+        assert_eq!(balance.balance_microusd, 74_750_000);
+        assert_eq!(balance.total_credits_microusd, 100_500_000);
     }
 
     #[test]
     fn clamps_account_balance_when_usage_exceeds_credits() {
         let balance =
             parse_credits_response(r#"{"data":{"total_credits":1,"total_usage":2}}"#).unwrap();
-        assert_eq!(balance, 0);
+        assert_eq!(balance.balance_microusd, 0);
+        assert_eq!(balance.total_credits_microusd, 1_000_000);
         assert!(
             parse_credits_response(r#"{"data":{"total_credits":-1,"total_usage":0}}"#).is_err()
         );
@@ -1204,6 +1349,7 @@ mod tests {
                         disabled: false,
                     }],
                     balance_microusd: Some(50_000_000),
+                    total_credits_microusd: None,
                 },
                 OpenRouterAccountSnapshot {
                     id: "account-two".into(),
@@ -1218,6 +1364,7 @@ mod tests {
                         disabled: false,
                     }],
                     balance_microusd: Some(75_000_000),
+                    total_credits_microusd: None,
                 },
             ],
             sampled_at,
@@ -1257,6 +1404,7 @@ mod tests {
                         disabled: false,
                     }],
                     balance_microusd: None,
+                    total_credits_microusd: None,
                 },
                 OpenRouterAccountSnapshot {
                     id: "pixelscan".into(),
@@ -1271,6 +1419,7 @@ mod tests {
                         disabled: false,
                     }],
                     balance_microusd: Some(38_960_000),
+                    total_credits_microusd: None,
                 },
             ],
             sampled_at,
