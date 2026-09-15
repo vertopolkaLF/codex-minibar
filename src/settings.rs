@@ -1614,9 +1614,12 @@ pub struct Settings {
     pub providers: ProviderSettings,
     /// Display order for Home-tab widgets (Usage Stats + providers) and footer tabs.
     pub popup_order: Vec<PopupWidgetKind>,
+    /// Brand-colored provider glyphs in the popup. Settings expose the inverse
+    /// as "Use monochrome icons".
     pub use_colored_provider_icons: bool,
     /// Fluent Color glyphs in the Settings sidebar. When false, monochrome
-    /// Phosphor paths follow the resolved theme foreground instead.
+    /// Phosphor paths follow the resolved theme foreground instead. Settings
+    /// expose the inverse as "Use monochrome icons".
     pub use_colored_sidebar_icons: bool,
     pub replace_chatgpt_logo_with_codex: bool,
     pub automatic_activation: bool,
@@ -1699,7 +1702,7 @@ impl Default for Settings {
             time_format: TimeFormat::from_windows(),
             providers: ProviderSettings::default(),
             popup_order: PopupWidgetKind::default_order(),
-            use_colored_provider_icons: false,
+            use_colored_provider_icons: true,
             use_colored_sidebar_icons: true,
             replace_chatgpt_logo_with_codex: false,
             automatic_activation: false,
@@ -2998,7 +3001,7 @@ mod tests {
             PopupBackgroundMaterial::Acrylic
         );
         assert_eq!(value.time_format, TimeFormat::from_windows());
-        assert!(!value.use_colored_provider_icons);
+        assert!(value.use_colored_provider_icons);
         assert!(value.use_colored_sidebar_icons);
         assert!(!value.replace_chatgpt_logo_with_codex);
         assert!(!value.automatic_activation);

@@ -92,27 +92,27 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let mut rows = vec![
         settings_section_heading("Tabs").with_key("customize-tabs-heading"),
         settings_toggle_card(
-            "Use colored provider icons",
-            use_colored_provider_icons,
+            "Use monochrome icons",
+            !use_colored_provider_icons,
             {
                 let set_use_colored_provider_icons = set_use_colored_provider_icons.clone();
                 let apply_use_colored_provider_icons = apply_use_colored_provider_icons.clone();
-                move |value| {
+                move |value: bool| {
                     persist_bool(
                         set_use_colored_provider_icons.clone(),
                         apply_use_colored_provider_icons.clone(),
-                        value,
+                        !value,
                         |settings, value| {
                             settings.use_colored_provider_icons = value;
                         },
                     );
                 }
             },
-            "customize-colored-icons",
+            "customize-monochrome-icons",
             hovered_card_id,
             set_hovered_card_id.clone(),
         )
-        .with_key("customize-colored-icons"),
+        .with_key("customize-monochrome-icons"),
     ];
     rows.extend([
         settings_section_heading("Cards").with_key("customize-cards-heading"),

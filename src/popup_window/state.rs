@@ -368,7 +368,7 @@ impl Default for UiState {
             grok_enabled: false,
             openrouter_credentials_revision: 0,
             popup_order: PopupWidgetKind::default_order(),
-            use_colored_provider_icons: false,
+            use_colored_provider_icons: true,
             replace_chatgpt_logo_with_codex: false,
             codex_path: None,
             claude_path: None,

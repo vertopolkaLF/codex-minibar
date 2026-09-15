@@ -82,27 +82,27 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
         )
         .with_key("appearance-accent"),
         settings_toggle_card(
-            "Colored sidebar icons",
-            use_colored_sidebar_icons,
+            "Use monochrome icons",
+            !use_colored_sidebar_icons,
             {
                 let set_use_colored_sidebar_icons = set_use_colored_sidebar_icons.clone();
                 let apply_use_colored_sidebar_icons = apply_use_colored_sidebar_icons.clone();
-                move |value| {
+                move |value: bool| {
                     persist_bool(
                         set_use_colored_sidebar_icons.clone(),
                         apply_use_colored_sidebar_icons.clone(),
-                        value,
+                        !value,
                         |settings, value| {
                             settings.use_colored_sidebar_icons = value;
                         },
                     );
                 }
             },
-            "appearance-colored-sidebar-icons",
+            "appearance-monochrome-sidebar-icons",
             hovered_card_id,
             set_hovered_card_id.clone(),
         )
-        .with_key("appearance-colored-sidebar-icons"),
+        .with_key("appearance-monochrome-sidebar-icons"),
         settings_control_card(
             "Time format",
             None,
