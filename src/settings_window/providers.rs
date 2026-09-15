@@ -1643,12 +1643,6 @@ fn openrouter_account_body(
 
     rows.push(
         divider(ctx.color_scheme)
-            .margin(Thickness {
-                left: 0.0,
-                top: 8.0,
-                right: 0.0,
-                bottom: 8.0,
-            })
             .with_key("footer-divider")
             .into(),
     );
@@ -1667,15 +1661,21 @@ fn openrouter_account_body(
                 )))
             }),
             Button::new("Remove account").danger().on_click(move || {
-                    open_dialog(
-                        &remove_dialog,
-                        ProviderDialogKind::RemoveOpenRouterAccount {
-                            account_id: remove_account.clone(),
-                        },
-                    )
-                }),
+                open_dialog(
+                    &remove_dialog,
+                    ProviderDialogKind::RemoveOpenRouterAccount {
+                        account_id: remove_account.clone(),
+                    },
+                )
+            }),
         ))
         .spacing(4.0)
+        .margin(Thickness {
+            left: 0.0,
+            top: 12.0,
+            right: 0.0,
+            bottom: 0.0,
+        })
         .horizontal_alignment(HorizontalAlignment::Right)
         .with_key("account-footer")
         .into(),
@@ -1775,6 +1775,7 @@ fn openrouter_key_table(
             key_table_header_cell("Limit", 3, true),
         ])
         .columns(key_table_columns())
+        .rows([GridLength::Auto])
         .column_spacing(8.0)
         .margin(Thickness {
             left: 0.0,
@@ -1782,6 +1783,7 @@ fn openrouter_key_table(
             right: 0.0,
             bottom: 6.0,
         })
+        .vertical_alignment(VerticalAlignment::Top)
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .with_key("key-table-header")
         .into(),
@@ -1922,8 +1924,9 @@ fn openrouter_key_table(
                     .grid_column(4),
             ])
             .columns(key_table_columns())
+            .rows([GridLength::Star(1.0)])
             .column_spacing(8.0)
-            .min_height(44.0)
+            .height(44.0)
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .with_key(format!("key-row-{key_id}"))
             .into(),
