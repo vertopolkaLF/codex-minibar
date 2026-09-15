@@ -157,7 +157,7 @@ pub(super) fn providers_nav_items(
         let descriptor = crate::provider_registry::descriptor(provider);
         NavViewItem::new(descriptor.display_name)
             .tag(provider.id())
-            .icon_path(crate::icons::path_icon_data(descriptor.icon), nav_icon_color)
+            .icon_path(crate::icons::data(descriptor.icon), nav_icon_color)
     };
     let order = provider_order_from_popup(popup_order);
     let mut items = Vec::new();
@@ -258,7 +258,7 @@ mod provider_navigation_tests {
                     assert_eq!(item.content, descriptor.display_name);
                     assert_eq!(
                         item.icon_path.as_ref().unwrap().0,
-                        crate::icons::path_icon_data(descriptor.icon)
+                        crate::icons::data(descriptor.icon)
                     );
                     assert_eq!(item.dimmed, !enabled(provider));
                     assert_eq!(item.status_dot.is_some(), enabled(provider));
