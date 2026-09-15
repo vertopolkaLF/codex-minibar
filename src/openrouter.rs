@@ -1600,12 +1600,14 @@ mod tests {
 
     #[test]
     fn applies_renamed_account_names_onto_a_live_snapshot() {
-        let mut settings = Settings::default();
-        settings.openrouter_accounts = vec![OpenRouterAccount {
-            id: "acc".into(),
-            name: "TESTdfwfwer".into(),
-            api_key_ids: vec!["key".into()],
-        }];
+        let settings = Settings {
+            openrouter_accounts: vec![OpenRouterAccount {
+                id: "acc".into(),
+                name: "TESTdfwfwer".into(),
+                api_key_ids: vec!["key".into()],
+            }],
+            ..Default::default()
+        };
         let mut limits = RateLimits::default();
         limits.openrouter_accounts.push(OpenRouterAccountSnapshot {
             id: "acc".into(),

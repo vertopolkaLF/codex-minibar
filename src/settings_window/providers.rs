@@ -1691,11 +1691,7 @@ fn openrouter_account_body(
     );
     rows.push(openrouter_key_table(account, snapshot, ctx).with_key("keys-table"));
 
-    rows.push(
-        divider(ctx.color_scheme)
-            .with_key("footer-divider")
-            .into(),
-    );
+    rows.push(divider(ctx.color_scheme).with_key("footer-divider").into());
     let rename_dialog = set_dialog.clone();
     let rename_account = account.clone();
     let remove_dialog = set_dialog;

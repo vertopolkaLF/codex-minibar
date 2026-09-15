@@ -373,42 +373,41 @@ pub(super) fn start_background_bridge(
             flush_popup_ui(set_ui, ui);
         };
 
-        let drain_settings =
-            |ui: &mut UiState,
-             set_ui: &AsyncSetState<UiState>,
-             notification_settings: &mut NotificationSettings,
-             widgets: &mut Vec<TrayWidget>,
-             tray: &mut TrayManager,
-             check_for_updates: &mut bool,
-             notify_on_update: &mut bool,
-             forced_reset_notified_ids: &mut HashSet<String>,
-             live_settings: &mut Settings| {
-                let Some(settings_rx) = settings_rx.as_ref() else {
-                    return;
-                };
-                while let Ok(settings) = settings_rx.try_recv() {
-                    if settings.check_for_updates && !*check_for_updates {
-                        updates.check_async(false, settings.notifications.update_available);
-                    }
-                    *check_for_updates = settings.check_for_updates;
-                    *notify_on_update = settings.notifications.update_available;
-                    apply_settings(
-                        ui,
-                        set_ui,
-                        notification_settings,
-                        widgets,
-                        tray,
-                        settings,
-                        live_settings,
-                    );
-                    notify_new_forced_reset_info(
-                        &state.current_forced_resets(),
-                        forced_reset_notified_ids,
-                        notification_settings,
-                        &state,
-                    );
-                }
+        let drain_settings = |ui: &mut UiState,
+                              set_ui: &AsyncSetState<UiState>,
+                              notification_settings: &mut NotificationSettings,
+                              widgets: &mut Vec<TrayWidget>,
+                              tray: &mut TrayManager,
+                              check_for_updates: &mut bool,
+                              notify_on_update: &mut bool,
+                              forced_reset_notified_ids: &mut HashSet<String>,
+                              live_settings: &mut Settings| {
+            let Some(settings_rx) = settings_rx.as_ref() else {
+                return;
             };
+            while let Ok(settings) = settings_rx.try_recv() {
+                if settings.check_for_updates && !*check_for_updates {
+                    updates.check_async(false, settings.notifications.update_available);
+                }
+                *check_for_updates = settings.check_for_updates;
+                *notify_on_update = settings.notifications.update_available;
+                apply_settings(
+                    ui,
+                    set_ui,
+                    notification_settings,
+                    widgets,
+                    tray,
+                    settings,
+                    live_settings,
+                );
+                notify_new_forced_reset_info(
+                    &state.current_forced_resets(),
+                    forced_reset_notified_ids,
+                    notification_settings,
+                    &state,
+                );
+            }
+        };
 
         let drain_usage_actions =
             |ui: &mut UiState,

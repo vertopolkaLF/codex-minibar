@@ -715,18 +715,26 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     ProviderKind::Codex => ("provider-tab-codex", "Codex", PopupView::Codex),
                     ProviderKind::Claude => ("provider-tab-claude", "Claude", PopupView::Claude),
                     ProviderKind::Cursor => ("provider-tab-cursor", "Cursor", PopupView::Cursor),
-                    ProviderKind::OpenCodeZen => {
-                        ("provider-tab-opencode-zen", "OpenCode Zen", PopupView::OpenCodeZen)
-                    }
-                    ProviderKind::OpenCodeGo => {
-                        ("provider-tab-opencode-go", "OpenCode Go", PopupView::OpenCodeGo)
-                    }
-                    ProviderKind::OpenRouter => {
-                        ("provider-tab-openrouter", "OpenRouter", PopupView::OpenRouter)
-                    }
-                    ProviderKind::Antigravity => {
-                        ("provider-tab-antigravity", "Antigravity", PopupView::Antigravity)
-                    }
+                    ProviderKind::OpenCodeZen => (
+                        "provider-tab-opencode-zen",
+                        "OpenCode Zen",
+                        PopupView::OpenCodeZen,
+                    ),
+                    ProviderKind::OpenCodeGo => (
+                        "provider-tab-opencode-go",
+                        "OpenCode Go",
+                        PopupView::OpenCodeGo,
+                    ),
+                    ProviderKind::OpenRouter => (
+                        "provider-tab-openrouter",
+                        "OpenRouter",
+                        PopupView::OpenRouter,
+                    ),
+                    ProviderKind::Antigravity => (
+                        "provider-tab-antigravity",
+                        "Antigravity",
+                        PopupView::Antigravity,
+                    ),
                     ProviderKind::Grok => ("provider-tab-grok", "Grok", PopupView::Grok),
                 };
                 provider_tabs.push(popup_tab_button(
