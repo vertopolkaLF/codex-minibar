@@ -206,6 +206,9 @@ pub fn start_provider_worker(
                         worker_revision,
                         usage,
                     )),
+                    WorkerEvent::UsageLoadedFromCache(usage) => Some(
+                        WorkerEvent::ProviderUsageLoadedFromCache(provider, worker_revision, usage),
+                    ),
                     WorkerEvent::UsageDataCleared(generation) => {
                         // This acknowledges a clear command sent to this exact
                         // worker. Keep the clear generation across a worker

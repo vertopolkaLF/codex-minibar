@@ -745,6 +745,33 @@ pub(super) fn start_background_bridge(
                     ui.observe_usage_update();
                     publish_popup_ui(&set_ui, &ui);
                 }
+                Ok(WorkerEvent::ProviderUsageLoadedFromCache(provider, worker_revision, usage)) => {
+                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
+                        continue;
+                    }
+                    if (provider == ProviderKind::Codex && !ui.codex_enabled)
+                        || (provider == ProviderKind::Claude && !ui.claude_enabled)
+                        || (provider == ProviderKind::Cursor && !ui.cursor_enabled)
+                        || (provider == ProviderKind::OpenCodeZen && !ui.opencode_zen_enabled)
+                        || (provider == ProviderKind::OpenCodeGo && !ui.opencode_go_enabled)
+                        || (provider == ProviderKind::OpenRouter && !ui.openrouter_enabled)
+                        || (provider == ProviderKind::Antigravity && !ui.antigravity_enabled)
+                        || (provider == ProviderKind::Grok && !ui.grok_enabled)
+                    {
+                        continue;
+                    }
+                    crate::logger::info(format!(
+                        "{} usage cache loaded: today={} tokens, history={} tokens",
+                        provider.display_name(),
+                        usage.today.total_tokens(),
+                        usage.history.total_tokens()
+                    ));
+                    state.replace_usage(provider, usage);
+                    // Cached account.error values are historical diagnostics,
+                    // not proof that the provider is failing now.
+                    ui.observe_usage_update();
+                    publish_popup_ui(&set_ui, &ui);
+                }
                 Ok(WorkerEvent::ProviderUsageRefreshFailed(provider, worker_revision, error)) => {
                     if !provider_worker_event_is_current(&ui, provider, worker_revision) {
                         continue;
@@ -833,6 +860,7 @@ pub(super) fn start_background_bridge(
                     | WorkerEvent::RequestFinished(_)
                     | WorkerEvent::LimitsUpdated(_)
                     | WorkerEvent::UsageUpdated(_)
+                    | WorkerEvent::UsageLoadedFromCache(_)
                     | WorkerEvent::UsageDataCleared(_)
                     | WorkerEvent::UsageRefreshFailed(_)
                     | WorkerEvent::ActivationStarted

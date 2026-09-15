@@ -314,8 +314,8 @@ fn assemble_overview_snapshot(
         }
     }
     // Codex hourly data is populated by the account-aware usage worker at
-    // startup. Its UsageUpdated event invalidates the overview snapshot once
-    // the scan completes. Never bypass attribution with a raw-log scan here:
+    // startup. Its usage event invalidates the overview snapshot once the
+    // scan completes. Never bypass attribution with a raw-log scan here:
     // an empty active-account history may coexist with another account's logs.
 
     let mut daily_by_date: BTreeMap<NaiveDate, BTreeMap<ProviderKind, TokenUsage>> =

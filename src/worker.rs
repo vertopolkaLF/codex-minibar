@@ -104,6 +104,9 @@ pub enum WorkerEvent {
     RequestFinished(RequestKind),
     LimitsUpdated(RateLimits),
     UsageUpdated(UsageStatistics),
+    /// A persisted usage snapshot loaded without contacting the provider.
+    /// Cached diagnostics must not become a live provider error on startup.
+    UsageLoadedFromCache(UsageStatistics),
     UsageDataCleared(u64),
     UsageRefreshFailed(String),
     ActivationStarted,
@@ -118,6 +121,7 @@ pub enum WorkerEvent {
     ProviderRequestFinished(crate::settings::ProviderKind, u64, RequestKind),
     ProviderLimitsUpdated(crate::settings::ProviderKind, u64, RateLimits),
     ProviderUsageUpdated(crate::settings::ProviderKind, u64, UsageStatistics),
+    ProviderUsageLoadedFromCache(crate::settings::ProviderKind, u64, UsageStatistics),
     /// Barrier acknowledgement for `ClearUsageData`; the `u64` is the clear
     /// generation, not a credential revision. It remains valid when the
     /// acknowledged worker is replaced while that clear is in flight.
@@ -486,7 +490,7 @@ fn run_usage_task(
     if (usage_collection_enabled || load_cached_usage_when_disabled)
         && let Ok(usage) = provider.load_cached_usage_statistics(history_retention_days)
     {
-        let _ = events.send(WorkerEvent::UsageUpdated(usage));
+        let _ = events.send(WorkerEvent::UsageLoadedFromCache(usage));
     }
     let mut next_refresh = Instant::now();
     while !limits_ready.load(Ordering::Acquire) || !usage_collection_enabled {
@@ -502,7 +506,7 @@ fn run_usage_task(
                     usage_collection_enabled = true;
                     if let Ok(usage) = provider.load_cached_usage_statistics(history_retention_days)
                     {
-                        let _ = events.send(WorkerEvent::UsageUpdated(usage));
+                        let _ = events.send(WorkerEvent::UsageLoadedFromCache(usage));
                     }
                     next_refresh = Instant::now();
                 } else {
@@ -517,7 +521,7 @@ fn run_usage_task(
                         && let Ok(usage) =
                             provider.load_cached_usage_statistics(history_retention_days)
                     {
-                        let _ = events.send(WorkerEvent::UsageUpdated(usage));
+                        let _ = events.send(WorkerEvent::UsageLoadedFromCache(usage));
                     }
                 }
             }
@@ -558,7 +562,7 @@ fn run_usage_task(
             let _ = events.send(WorkerEvent::UsageUpdated(UsageStatistics::default()));
             if usage_collection_enabled && paused_after_clear.is_none() {
                 if let Ok(usage) = provider.load_cached_usage_statistics(history_retention_days) {
-                    let _ = events.send(WorkerEvent::UsageUpdated(usage));
+                    let _ = events.send(WorkerEvent::UsageLoadedFromCache(usage));
                 }
                 next_refresh = Instant::now();
             }
@@ -570,7 +574,7 @@ fn run_usage_task(
                     usage_collection_enabled = true;
                     if let Ok(usage) = provider.load_cached_usage_statistics(history_retention_days)
                     {
-                        let _ = events.send(WorkerEvent::UsageUpdated(usage));
+                        let _ = events.send(WorkerEvent::UsageLoadedFromCache(usage));
                     }
                     next_refresh = Instant::now();
                 }
@@ -580,7 +584,7 @@ fn run_usage_task(
                         && let Ok(usage) =
                             provider.load_cached_usage_statistics(history_retention_days)
                     {
-                        let _ = events.send(WorkerEvent::UsageUpdated(usage));
+                        let _ = events.send(WorkerEvent::UsageLoadedFromCache(usage));
                     }
                 }
                 Ok(WorkerCommand::SetUsageRefreshInterval(interval)) => {
@@ -628,7 +632,7 @@ fn run_usage_task(
                     history_retention_days = days;
                     if let Ok(usage) = provider.load_cached_usage_statistics(history_retention_days)
                     {
-                        let _ = events.send(WorkerEvent::UsageUpdated(usage));
+                        let _ = events.send(WorkerEvent::UsageLoadedFromCache(usage));
                     }
                     next_refresh = Instant::now();
                 }
@@ -873,14 +877,20 @@ mod tests {
         }
     }
 
-    fn recv_usage_update(events: &Receiver<WorkerEvent>) -> bool {
+    fn recv_usage_event(events: &Receiver<WorkerEvent>) -> Option<WorkerEvent> {
         loop {
             match events.recv_timeout(Duration::from_secs(1)) {
-                Ok(WorkerEvent::UsageUpdated(_)) => return true,
+                Ok(
+                    event @ (WorkerEvent::UsageUpdated(_) | WorkerEvent::UsageLoadedFromCache(_)),
+                ) => return Some(event),
                 Ok(_) => {}
-                Err(_) => return false,
+                Err(_) => return None,
             }
         }
+    }
+
+    fn recv_usage_update(events: &Receiver<WorkerEvent>) -> bool {
+        recv_usage_event(events).is_some()
     }
 
     fn no_usage_update(events: &Receiver<WorkerEvent>, timeout: Duration) -> bool {
@@ -891,7 +901,9 @@ mod tests {
                 return true;
             }
             match events.recv_timeout(remaining) {
-                Ok(WorkerEvent::UsageUpdated(_)) => return false,
+                Ok(WorkerEvent::UsageUpdated(_) | WorkerEvent::UsageLoadedFromCache(_)) => {
+                    return false;
+                }
                 Ok(_) => {}
                 Err(_) => return true,
             }
@@ -1303,9 +1315,15 @@ mod tests {
             );
         });
 
-        // Cached snapshot, then the initial local-log scan.
-        assert!(recv_usage_update(&events_rx));
-        assert!(recv_usage_update(&events_rx));
+        // Cached snapshot, then the initial live usage scan.
+        assert!(matches!(
+            recv_usage_event(&events_rx),
+            Some(WorkerEvent::UsageLoadedFromCache(_))
+        ));
+        assert!(matches!(
+            recv_usage_event(&events_rx),
+            Some(WorkerEvent::UsageUpdated(_))
+        ));
         assert_eq!(refreshes.load(Ordering::SeqCst), 1);
 
         commands_tx.send(WorkerCommand::Refresh).unwrap();
