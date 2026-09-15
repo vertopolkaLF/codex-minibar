@@ -330,14 +330,21 @@ fn popup_body_key_changes_when_pace_label_appears_or_hides() {
 #[test]
 fn swap_chain_strip_keys_include_identity_inputs_without_hover_state() {
     let providers = vec![ProviderKind::Codex, ProviderKind::Claude];
-    let same = provider_tabs_key(&providers, true, true, false, ColorScheme::Dark);
+    let same = provider_tabs_key(&providers, true, true, false, ColorScheme::Dark, &[]);
     assert_eq!(
         same,
-        provider_tabs_key(&providers, true, true, false, ColorScheme::Dark)
+        provider_tabs_key(&providers, true, true, false, ColorScheme::Dark, &[])
     );
     assert_ne!(
         same,
-        provider_tabs_key(&[ProviderKind::Codex], true, true, false, ColorScheme::Dark)
+        provider_tabs_key(
+            &[ProviderKind::Codex],
+            true,
+            true,
+            false,
+            ColorScheme::Dark,
+            &[],
+        )
     );
     assert_ne!(
         same,
@@ -347,15 +354,27 @@ fn swap_chain_strip_keys_include_identity_inputs_without_hover_state() {
             true,
             false,
             ColorScheme::Dark,
+            &[],
         )
     );
     assert_ne!(
         same,
-        provider_tabs_key(&providers, true, true, true, ColorScheme::Dark)
+        provider_tabs_key(&providers, true, true, true, ColorScheme::Dark, &[])
     );
     assert_ne!(
         same,
-        provider_tabs_key(&providers, true, true, false, ColorScheme::Light)
+        provider_tabs_key(&providers, true, true, false, ColorScheme::Light, &[])
+    );
+    assert_ne!(
+        same,
+        provider_tabs_key(
+            &providers,
+            true,
+            true,
+            false,
+            ColorScheme::Dark,
+            &[ProviderKind::Claude],
+        )
     );
 
     assert_ne!(
@@ -707,6 +726,36 @@ fn forbidden_provider_error_is_shortened_for_ui() {
         ui.provider_error(ProviderKind::Codex),
         Some("403 Forbidden")
     );
+}
+
+#[test]
+fn usage_error_uses_provider_error_presentation_without_overwriting_quota_error() {
+    let mut ui = UiState::default();
+
+    ui.set_usage_error(
+        ProviderKind::OpenRouter,
+        "OpenRouter analytics request failed: TLS certificate error",
+    );
+    assert_eq!(
+        ui.provider_error(ProviderKind::OpenRouter),
+        Some("OpenRouter analytics request failed: TLS certificate error")
+    );
+    assert!(ui.has_provider_error(ProviderKind::OpenRouter));
+
+    ui.set_provider_error(ProviderKind::OpenRouter, "quota request failed");
+    assert_eq!(
+        ui.provider_error(ProviderKind::OpenRouter),
+        Some("quota request failed")
+    );
+
+    ui.clear_provider_error(ProviderKind::OpenRouter);
+    assert_eq!(
+        ui.provider_error(ProviderKind::OpenRouter),
+        Some("OpenRouter analytics request failed: TLS certificate error")
+    );
+
+    ui.clear_usage_error(ProviderKind::OpenRouter);
+    assert_eq!(ui.provider_error(ProviderKind::OpenRouter), None);
 }
 
 #[test]

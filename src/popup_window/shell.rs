@@ -363,6 +363,20 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     .into(),
             );
         }
+        if view == PopupView::Usage {
+            for provider in &enabled_spend {
+                if let Some(error) = ui.provider_error(*provider) {
+                    body.push(
+                        InfoBar::new(format!("{} error", provider.display_name()))
+                            .message(error)
+                            .error()
+                            .is_closable(false)
+                            .with_key(format!("popup-usage-provider-error-{}", provider.id()))
+                            .into(),
+                    );
+                }
+            }
+        }
 
         if view == PopupView::Home {
             let widgets = visible_popup_widgets(
@@ -513,16 +527,12 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 .active_requests
                 .iter()
                 .any(|(_, kind)| *kind == RequestKind::Usage);
-            let usage_error = enabled_spend
-                .iter()
-                .find_map(|provider| ui.usage_error(*provider));
             body.push(crate::popup_usage::overview_page(
                 &overview_snapshot,
                 overview_metric,
                 overview_range,
                 overview_breakdown,
                 usage_recalculating,
-                usage_error,
                 overview_chart_hover,
                 color_scheme,
                 ui.use_colored_provider_icons,
@@ -762,6 +772,11 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             show_provider_icon_tabs,
             ui.use_colored_provider_icons,
             color_scheme,
+            &enabled_provider_order
+                .iter()
+                .copied()
+                .filter(|provider| ui.has_provider_error(*provider))
+                .collect::<Vec<_>>(),
         );
         horizontal_wheel_strip(
             hstack(provider_tabs)
@@ -933,11 +948,22 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         // or flipping expired chrome changes DesiredSize without a viewport
         // SizeChanged. Remounting the page is what tab switches already do so
         // the queued on_resize measure can shrink the HWND.
+        let provider_error_presence = match view {
+            PopupView::Usage => enabled_spend
+                .iter()
+                .filter(|provider| ui.has_provider_error(**provider))
+                .map(|provider| provider.id())
+                .collect::<Vec<_>>()
+                .join("-"),
+            _ => view
+                .provider()
+                .filter(|provider| ui.has_provider_error(*provider))
+                .map_or_else(String::new, |provider| provider.id().into()),
+        };
         let body_layout_key = format!(
             "popup-page-{role}-error={}-provider-error={}-visibility={}-total={}-presentation={:?}-period={}-account={}-providers={}-order={}-height={}-compact={}-usage={}-rev={}-resets={}-scheme={:?}-view={:?}",
             ui.error.is_some(),
-            view.provider()
-                .is_some_and(|provider| ui.has_provider_error(provider)),
+            provider_error_presence,
             popup_visibility_key(&ui.popup_visibility),
             ui.show_total_spend_on_all_tab,
             ui.total_spend_presentation,

@@ -24,7 +24,6 @@ pub fn overview_page(
     range: OverviewRange,
     breakdown: BreakdownMode,
     usage_recalculating: bool,
-    usage_error: Option<&str>,
     chart_hover: Option<usize>,
     color_scheme: ColorScheme,
     use_colored_provider_icons: bool,
@@ -35,7 +34,7 @@ pub fn overview_page(
 ) -> Element {
     if snapshot.providers.is_empty() {
         return vstack((
-            usage_title_row(None, usage_recalculating, usage_error),
+            usage_title_row(None, usage_recalculating),
             caption("Enable a provider in Settings and include it in Usage Stats to see local API usage.")
                 .foreground(ThemeRef::TertiaryText)
                 .wrap(),
@@ -95,7 +94,6 @@ pub fn overview_page(
             metric,
             range,
             usage_recalculating,
-            usage_error,
             set_metric,
             set_range,
             &set_chart_hover,
@@ -158,7 +156,6 @@ fn usage_header(
     metric: OverviewMetric,
     range: OverviewRange,
     usage_recalculating: bool,
-    usage_error: Option<&str>,
     set_metric: SetState<OverviewMetric>,
     set_range: SetState<OverviewRange>,
     set_chart_hover: &SetState<Option<usize>>,
@@ -166,7 +163,7 @@ fn usage_header(
     let clear_hover = set_chart_hover.clone();
     vstack((
         grid((
-            usage_title_row(Some(range_label), usage_recalculating, usage_error).grid_column(0),
+            usage_title_row(Some(range_label), usage_recalculating).grid_column(0),
             segmented_control(
                 "usage-metric",
                 vec![
@@ -201,17 +198,7 @@ fn usage_header(
     .into()
 }
 
-fn usage_refresh_indicator(recalculating: bool, error: Option<&str>) -> Element {
-    if let Some(error) = error {
-        return caption("⚠")
-            .foreground(ThemeRef::Accent)
-            .tooltip(error.to_owned())
-            .width(16.0)
-            .horizontal_alignment(HorizontalAlignment::Center)
-            .with_key("usage-refresh-error")
-            .into();
-    }
-
+fn usage_refresh_indicator(recalculating: bool) -> Element {
     if !recalculating {
         return Element::Empty;
     }
@@ -228,7 +215,7 @@ fn usage_refresh_indicator(recalculating: bool, error: Option<&str>) -> Element 
         .into()
 }
 
-fn usage_title_row(range_label: Option<&str>, recalculating: bool, error: Option<&str>) -> Element {
+fn usage_title_row(range_label: Option<&str>, recalculating: bool) -> Element {
     let mut title_parts: Vec<Element> = vec![
         body_strong("Usage")
             .vertical_alignment(VerticalAlignment::Top)
@@ -242,11 +229,7 @@ fn usage_title_row(range_label: Option<&str>, recalculating: bool, error: Option
                 .into(),
         );
     }
-    let title_offset = if recalculating || error.is_some() {
-        24.0
-    } else {
-        0.0
-    };
+    let title_offset = if recalculating { 24.0 } else { 0.0 };
     let title = hstack(title_parts)
         .spacing(8.0)
         .relative_align_left()
@@ -259,7 +242,7 @@ fn usage_title_row(range_label: Option<&str>, recalculating: bool, error: Option
         })
         .translation_x(title_offset)
         .with_translation_transition(crate::theme::duration(crate::theme::CONTROL_FAST_ANIMATION));
-    let indicator = usage_refresh_indicator(recalculating, error)
+    let indicator = usage_refresh_indicator(recalculating)
         .relative_align_left()
         .relative_align_v_center();
     relative_panel(vec![indicator, title.into()])
