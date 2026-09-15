@@ -978,10 +978,22 @@ fn provider_header(
         .with_key(format!("provider-icon-{}-{scheme_tag}", provider.id()))
         .into(),
         vstack((
-            text_block(provider.display_name()).font_size(28.0).bold(),
-            hstack(status).spacing(8.0),
+            text_block(provider.display_name())
+                .font_size(28.0)
+                .bold()
+                // Title line-box is ~36px for a 28px Segoe face. Trim the extra
+                // leading so the name+status group optically matches the 48px icon.
+                .margin(Thickness {
+                    left: 0.0,
+                    top: -6.0,
+                    right: 0.0,
+                    bottom: -2.0,
+                }),
+            hstack(status)
+                .spacing(8.0)
+                .vertical_alignment(VerticalAlignment::Center),
         ))
-        .spacing(2.0)
+        .spacing(0.0)
         .vertical_alignment(VerticalAlignment::Center)
         .grid_column(1)
         .into(),
