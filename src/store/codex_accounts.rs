@@ -250,6 +250,97 @@ pub(crate) struct AccountEvent {
     pub usage: TokenUsage,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct QuotaSampleEvent {
+    pub source: String,
+    pub offset: u64,
+    pub timestamp: DateTime<Utc>,
+    pub limit_id: String,
+    pub window_minutes: u32,
+    pub resets_at: Option<DateTime<Utc>>,
+    pub used_percent: u8,
+}
+
+const RESET_TOLERANCE_SECONDS: i64 = 5 * 60;
+
+#[derive(Clone, Debug)]
+struct AttributedQuotaSample {
+    account: String,
+    source: String,
+    offset: u64,
+    timestamp: DateTime<Utc>,
+    limit_id: String,
+    window_minutes: u32,
+    resets_at: DateTime<Utc>,
+    used_percent: u8,
+    baseline: bool,
+}
+
+#[derive(Default)]
+struct QuotaCycleSamples {
+    account: String,
+    limit_id: String,
+    window_minutes: u32,
+    reset_at: i64,
+    samples: Vec<AttributedQuotaSample>,
+}
+
+fn group_quota_samples(samples: Vec<AttributedQuotaSample>) -> Vec<QuotaCycleSamples> {
+    let mut cycles: Vec<QuotaCycleSamples> = Vec::new();
+    for sample in samples {
+        let reset_at = sample.resets_at.timestamp();
+        if let Some(cycle) = cycles.iter_mut().find(|cycle| {
+            cycle.account == sample.account
+                && cycle.limit_id == sample.limit_id
+                && cycle.window_minutes == sample.window_minutes
+                && (cycle.reset_at - reset_at).abs() <= RESET_TOLERANCE_SECONDS
+        }) {
+            cycle.samples.push(sample);
+        } else {
+            cycles.push(QuotaCycleSamples {
+                account: sample.account.clone(),
+                limit_id: sample.limit_id.clone(),
+                window_minutes: sample.window_minutes,
+                reset_at,
+                samples: vec![sample],
+            });
+        }
+    }
+    cycles
+}
+
+fn compact_quota_progression(
+    mut samples: Vec<AttributedQuotaSample>,
+) -> Vec<AttributedQuotaSample> {
+    samples.sort_by(|left, right| {
+        left.timestamp
+            .cmp(&right.timestamp)
+            .then_with(|| right.used_percent.cmp(&left.used_percent))
+            .then_with(|| left.source.cmp(&right.source))
+            .then_with(|| left.offset.cmp(&right.offset))
+    });
+    let mut maximum = 0_u8;
+    samples
+        .into_iter()
+        .filter(|sample| {
+            if sample.used_percent <= maximum {
+                false
+            } else {
+                maximum = sample.used_percent;
+                true
+            }
+        })
+        .collect()
+}
+
+fn start_of_local_date(date: NaiveDate) -> DateTime<Local> {
+    let naive = date.and_hms_opt(0, 0, 0).expect("valid date midnight");
+    Local
+        .from_local_datetime(&naive)
+        .earliest()
+        .unwrap_or_else(Local::now)
+}
+
 // The collector treats identical relative paths in sessions and archived_sessions
 // as the same rollout, preferring the active copy. Keep this identity on moves.
 fn archive_alias(source: &str) -> Option<String> {
@@ -302,7 +393,23 @@ impl ProviderStore {
         self.conn.execute_batch("CREATE TABLE IF NOT EXISTS codex_event_sources (
             source TEXT NOT NULL, session TEXT NOT NULL, ts INTEGER NOT NULL,
             signature TEXT NOT NULL, PRIMARY KEY(source,session,ts,signature));
-            CREATE INDEX IF NOT EXISTS codex_event_sources_event ON codex_event_sources(session,ts,signature);")?;
+            CREATE INDEX IF NOT EXISTS codex_event_sources_event ON codex_event_sources(session,ts,signature);
+            CREATE TABLE IF NOT EXISTS codex_quota_samples (
+                account TEXT NOT NULL, source TEXT NOT NULL, event_offset INTEGER NOT NULL,
+                ts INTEGER NOT NULL, date TEXT NOT NULL, limit_id TEXT NOT NULL,
+                window_minutes INTEGER NOT NULL, reset_at INTEGER,
+                used_percent INTEGER NOT NULL,
+                baseline INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(source,event_offset,limit_id,window_minutes)
+            );
+            CREATE INDEX IF NOT EXISTS codex_quota_account_time
+                ON codex_quota_samples(account,limit_id,window_minutes,ts);
+            CREATE INDEX IF NOT EXISTS codex_quota_source ON codex_quota_samples(source);")?;
+        self.ensure_column(
+            "codex_quota_samples",
+            "baseline",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
         // Existing preview databases did not persist sources. Recover links from
         // the still-present scanner metadata before the version-8 full replay.
         let tx = rusqlite::Transaction::new_unchecked(
@@ -660,6 +767,418 @@ impl ProviderStore {
         Ok(())
     }
 
+    pub(crate) fn save_codex_quota_scan(
+        &self,
+        samples: &[QuotaSampleEvent],
+        rebuilt_sources: &[String],
+        state: &Attribution,
+        before: &Option<Identity>,
+        after: &Option<Identity>,
+        end: DateTime<Utc>,
+    ) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        for source in rebuilt_sources {
+            tx.execute("DELETE FROM codex_quota_samples WHERE source=?1", [source])?;
+            if let Some(alias) = archive_alias(source) {
+                tx.execute("DELETE FROM codex_quota_samples WHERE source=?1", [alias])?;
+            }
+        }
+        let attributed = samples
+            .iter()
+            .filter_map(|sample| {
+                let resets_at = sample.resets_at?;
+                // Resumed/forked rollouts can replay an old rate-limit payload
+                // under a new log timestamp. Once its reset is already in the
+                // past it is historical transcript content, not a new snapshot.
+                if resets_at + Duration::seconds(RESET_TOLERANCE_SECONDS) < sample.timestamp {
+                    return None;
+                }
+                Some(AttributedQuotaSample {
+                    account: state.owner(sample.timestamp, before, after, end).to_owned(),
+                    source: sample.source.clone(),
+                    offset: sample.offset,
+                    timestamp: sample.timestamp,
+                    limit_id: sample.limit_id.clone(),
+                    window_minutes: sample.window_minutes,
+                    resets_at,
+                    used_percent: sample.used_percent,
+                    baseline: false,
+                })
+            })
+            .collect();
+        let mut cycles = group_quota_samples(attributed);
+        for cycle in &mut cycles {
+            let existing = {
+                let mut query = tx.prepare(
+                    "SELECT account,source,event_offset,ts,limit_id,window_minutes,reset_at,used_percent,baseline
+                     FROM codex_quota_samples
+                     WHERE account=?1 AND limit_id=?2 AND window_minutes=?3
+                       AND reset_at BETWEEN ?4 AND ?5",
+                )?;
+                query
+                    .query_map(
+                        params![
+                            cycle.account,
+                            cycle.limit_id,
+                            i64::from(cycle.window_minutes),
+                            cycle.reset_at - RESET_TOLERANCE_SECONDS,
+                            cycle.reset_at + RESET_TOLERANCE_SECONDS,
+                        ],
+                        |row| {
+                            let timestamp = Utc
+                                .timestamp_millis_opt(row.get::<_, i64>(3)?)
+                                .single()
+                                .ok_or_else(|| {
+                                    rusqlite::Error::IntegralValueOutOfRange(3, i64::MAX)
+                                })?;
+                            let resets_at = Utc
+                                .timestamp_opt(row.get::<_, i64>(6)?, 0)
+                                .single()
+                                .ok_or_else(|| {
+                                    rusqlite::Error::IntegralValueOutOfRange(6, i64::MAX)
+                                })?;
+                            Ok(AttributedQuotaSample {
+                                account: row.get(0)?,
+                                source: row.get(1)?,
+                                offset: row.get(2)?,
+                                timestamp,
+                                limit_id: row.get(4)?,
+                                window_minutes: row.get(5)?,
+                                resets_at,
+                                used_percent: row.get(7)?,
+                                baseline: row.get(8)?,
+                            })
+                        },
+                    )?
+                    .collect::<rusqlite::Result<Vec<_>>>()?
+            };
+            cycle.samples.extend(existing);
+            tx.execute(
+                "DELETE FROM codex_quota_samples
+                 WHERE account=?1 AND limit_id=?2 AND window_minutes=?3
+                   AND reset_at BETWEEN ?4 AND ?5",
+                params![
+                    cycle.account,
+                    cycle.limit_id,
+                    i64::from(cycle.window_minutes),
+                    cycle.reset_at - RESET_TOLERANCE_SECONDS,
+                    cycle.reset_at + RESET_TOLERANCE_SECONDS,
+                ],
+            )?;
+        }
+
+        let compacted = cycles
+            .into_iter()
+            .flat_map(|cycle| compact_quota_progression(cycle.samples))
+            .collect::<Vec<_>>();
+        let mut insert = tx.prepare(
+            "INSERT INTO codex_quota_samples(
+                account,source,event_offset,ts,date,limit_id,window_minutes,reset_at,used_percent,baseline)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
+             ON CONFLICT(source,event_offset,limit_id,window_minutes) DO UPDATE SET
+                account=excluded.account,ts=excluded.ts,date=excluded.date,
+                reset_at=excluded.reset_at,used_percent=excluded.used_percent,
+                baseline=excluded.baseline",
+        )?;
+        for sample in compacted {
+            insert.execute(params![
+                sample.account,
+                sample.source,
+                sample.offset as i64,
+                sample.timestamp.timestamp_millis(),
+                sample
+                    .timestamp
+                    .with_timezone(&Local)
+                    .date_naive()
+                    .to_string(),
+                sample.limit_id,
+                i64::from(sample.window_minutes),
+                sample.resets_at.timestamp(),
+                i64::from(sample.used_percent),
+                sample.baseline,
+            ])?;
+        }
+        drop(insert);
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Records the live account quota returned by Codex itself. The first
+    /// observation in a period is a baseline: it positions the remaining-quota
+    /// line, while only later increases are assigned to a calendar day.
+    pub(crate) fn save_codex_limit_snapshot(
+        &self,
+        account: &str,
+        limits: &RateLimits,
+    ) -> Result<()> {
+        if account == UNKNOWN {
+            return Ok(());
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        for window in [&limits.primary, &limits.secondary] {
+            let (Some(used_percent), Some(resets_at), Some(window_minutes)) = (
+                window.used_percent,
+                window.resets_at,
+                window.duration_minutes,
+            ) else {
+                continue;
+            };
+            if used_percent == 0
+                || resets_at + Duration::seconds(RESET_TOLERANCE_SECONDS) < limits.sampled_at
+            {
+                continue;
+            }
+            let (count, maximum): (u64, u8) = tx.query_row(
+                "SELECT COUNT(*),COALESCE(MAX(used_percent),0)
+                 FROM codex_quota_samples
+                 WHERE account=?1 AND limit_id='codex' AND window_minutes=?2
+                   AND reset_at BETWEEN ?3 AND ?4",
+                params![
+                    account,
+                    i64::from(window_minutes),
+                    resets_at.timestamp() - RESET_TOLERANCE_SECONDS,
+                    resets_at.timestamp() + RESET_TOLERANCE_SECONDS,
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            if used_percent <= maximum {
+                continue;
+            }
+            tx.execute(
+                "INSERT INTO codex_quota_samples(
+                    account,source,event_offset,ts,date,limit_id,window_minutes,
+                    reset_at,used_percent,baseline)
+                 VALUES(?1,?2,?3,?4,?5,'codex',?6,?7,?8,?9)
+                 ON CONFLICT(source,event_offset,limit_id,window_minutes) DO UPDATE SET
+                    account=excluded.account,ts=excluded.ts,date=excluded.date,
+                    reset_at=excluded.reset_at,used_percent=excluded.used_percent,
+                    baseline=excluded.baseline",
+                params![
+                    account,
+                    format!("live-limits/{account}"),
+                    limits.sampled_at.timestamp_millis(),
+                    limits.sampled_at.timestamp_millis(),
+                    limits
+                        .sampled_at
+                        .with_timezone(&Local)
+                        .date_naive()
+                        .to_string(),
+                    i64::from(window_minutes),
+                    resets_at.timestamp(),
+                    i64::from(used_percent),
+                    count == 0,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Reconstructs percentage points consumed per local day. Codex emits the
+    /// same global quota snapshot in every active task, sometimes out of order,
+    /// so each reset period uses one monotonic progression rather than summing
+    /// per-session copies.
+    pub(crate) fn load_codex_quota_history(
+        &self,
+        account: &str,
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> Result<(
+        Option<u32>,
+        BTreeMap<NaiveDate, u64>,
+        Vec<crate::usage::CodexQuotaCycle>,
+    )> {
+        if start > end {
+            return Ok((None, BTreeMap::new(), Vec::new()));
+        }
+        let expanded_start = start - Duration::days(8);
+        let mut query = self.conn.prepare(
+            "SELECT date,ts,window_minutes,reset_at,used_percent,baseline
+             FROM codex_quota_samples
+             WHERE account=?1 AND limit_id='codex' AND date>=?2 AND date<=?3
+             ORDER BY ts",
+        )?;
+        let rows = query
+            .query_map(
+                params![account, expanded_start.to_string(), end.to_string()],
+                |row| {
+                    Ok((
+                        parse_date(&row.get::<_, String>(0)?),
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, u32>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                        row.get::<_, u8>(4)?,
+                        row.get::<_, bool>(5)?,
+                    ))
+                },
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let window_minutes = if rows.iter().any(|row| row.2 == 10_080) {
+            Some(10_080)
+        } else if rows.iter().any(|row| row.2 == 300) {
+            Some(300)
+        } else {
+            None
+        };
+        let Some(window_minutes) = window_minutes else {
+            return Ok((None, BTreeMap::new(), Vec::new()));
+        };
+
+        #[derive(Default)]
+        struct Cycle {
+            reset_at: i64,
+            samples: Vec<(NaiveDate, i64, u8, bool)>,
+        }
+        let mut cycles: Vec<Cycle> = Vec::new();
+        for (date, timestamp, minutes, reset_at, used, baseline) in rows {
+            if minutes != window_minutes {
+                continue;
+            }
+            let Some(reset_at) = reset_at else {
+                continue;
+            };
+            if reset_at + RESET_TOLERANCE_SECONDS < timestamp.div_euclid(1_000) {
+                continue;
+            }
+            if let Some(cycle) = cycles
+                .iter_mut()
+                .find(|cycle| (cycle.reset_at - reset_at).abs() <= RESET_TOLERANCE_SECONDS)
+            {
+                cycle.samples.push((date, timestamp, used, baseline));
+            } else {
+                cycles.push(Cycle {
+                    reset_at,
+                    samples: vec![(date, timestamp, used, baseline)],
+                });
+            }
+        }
+
+        let range_start = start_of_local_date(start).with_timezone(&Utc);
+        let range_end = start_of_local_date(end + Duration::days(1)).with_timezone(&Utc);
+        let now = Utc::now();
+        let visible_end = range_end.min(now);
+        let mut daily = BTreeMap::<NaiveDate, u64>::new();
+        let mut quota_cycles = Vec::new();
+        cycles.sort_by_key(|cycle| cycle.reset_at);
+        let cycle_windows = cycles
+            .iter()
+            .map(|cycle| {
+                Utc.timestamp_opt(cycle.reset_at, 0)
+                    .single()
+                    .map(|resets_at| {
+                        (
+                            resets_at - Duration::minutes(i64::from(window_minutes)),
+                            resets_at,
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
+
+        for (index, cycle) in cycles.iter_mut().enumerate() {
+            cycle.samples.sort_by_key(|sample| sample.1);
+            let Some((starts_at, scheduled_reset)) = cycle_windows[index] else {
+                continue;
+            };
+            // A changed reset schedule means Codex started a new quota cycle
+            // before the previous projected reset. End the older cycle at that
+            // transition so historical schedules never render or accumulate in
+            // parallel.
+            let effective_reset = cycle_windows
+                .iter()
+                .skip(index + 1)
+                .flatten()
+                .map(|(next_start, _)| *next_start)
+                .find(|next_start| *next_start > starts_at)
+                .map_or(scheduled_reset, |next_start| {
+                    scheduled_reset.min(next_start)
+                });
+            let was_superseded = effective_reset < scheduled_reset;
+
+            let mut previous = 0_u8;
+            for (date, timestamp, used, baseline) in &cycle.samples {
+                let Some(at) = Utc.timestamp_millis_opt(*timestamp).single() else {
+                    continue;
+                };
+                if at < starts_at
+                    || at > effective_reset
+                    || (was_superseded && at == effective_reset)
+                {
+                    continue;
+                }
+                let increase = if *baseline {
+                    0
+                } else {
+                    used.saturating_sub(previous)
+                };
+                previous = previous.max(*used);
+                if increase > 0 && *date >= start && *date <= end {
+                    daily
+                        .entry(*date)
+                        .and_modify(|value| {
+                            *value = value.saturating_add(
+                                u64::from(increase) * crate::usage::ANALYTICS_PERCENT_SCALE,
+                            )
+                        })
+                        .or_insert(u64::from(increase) * crate::usage::ANALYTICS_PERCENT_SCALE);
+                }
+            }
+
+            let segment_start = starts_at.max(range_start);
+            let segment_end = effective_reset.min(visible_end);
+            if segment_start > segment_end {
+                continue;
+            }
+            let mut running = 0_u8;
+            let reset_is_visible = starts_at >= range_start;
+            if !reset_is_visible {
+                for (_, timestamp, used, _) in &cycle.samples {
+                    let Some(at) = Utc.timestamp_millis_opt(*timestamp).single() else {
+                        continue;
+                    };
+                    if at <= segment_start {
+                        running = running.max(*used);
+                    }
+                }
+            }
+            let mut points = vec![crate::usage::CodexQuotaPoint {
+                at: segment_start,
+                remaining_percent_micros: u64::from(100_u8.saturating_sub(running))
+                    * crate::usage::ANALYTICS_PERCENT_SCALE,
+            }];
+            for (_, timestamp, used, _) in &cycle.samples {
+                let Some(at) = Utc.timestamp_millis_opt(*timestamp).single() else {
+                    continue;
+                };
+                if ((!reset_is_visible && at <= segment_start) || at < segment_start)
+                    || at > segment_end
+                    || (was_superseded && at == segment_end)
+                    || *used <= running
+                {
+                    continue;
+                }
+                running = *used;
+                points.push(crate::usage::CodexQuotaPoint {
+                    at,
+                    remaining_percent_micros: u64::from(100_u8.saturating_sub(running))
+                        * crate::usage::ANALYTICS_PERCENT_SCALE,
+                });
+            }
+            if points.last().is_some_and(|point| point.at < segment_end) {
+                points.push(crate::usage::CodexQuotaPoint {
+                    at: segment_end,
+                    remaining_percent_micros: u64::from(100_u8.saturating_sub(running))
+                        * crate::usage::ANALYTICS_PERCENT_SCALE,
+                });
+            }
+            quota_cycles.push(crate::usage::CodexQuotaCycle {
+                starts_at,
+                resets_at: effective_reset,
+                points,
+            });
+        }
+        Ok((Some(window_minutes), daily, quota_cycles))
+    }
+
     pub(crate) fn account_statistics_for(
         &self,
         account: &str,
@@ -838,6 +1357,355 @@ mod tests {
         store.migrate().unwrap();
         store
     }
+
+    fn insert_quota(
+        db: &ProviderStore,
+        account: &str,
+        source: &str,
+        offset: i64,
+        timestamp: DateTime<Utc>,
+        window_minutes: u32,
+        reset_at: DateTime<Utc>,
+        used_percent: u8,
+    ) {
+        db.conn
+            .execute(
+                "INSERT INTO codex_quota_samples(
+                    account,source,event_offset,ts,date,limit_id,window_minutes,reset_at,used_percent)
+                 VALUES(?1,?2,?3,?4,?5,'codex',?6,?7,?8)",
+                params![
+                    account,
+                    source,
+                    offset,
+                    timestamp.timestamp_millis(),
+                    timestamp.with_timezone(&Local).date_naive().to_string(),
+                    i64::from(window_minutes),
+                    reset_at.timestamp(),
+                    i64::from(used_percent),
+                ],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn daily_quota_merges_stale_copies_resets_and_accounts() {
+        let db = store();
+        let first_reset = Utc::now() - Duration::hours(12);
+        let first = first_reset - Duration::days(1);
+        let second = first_reset - Duration::hours(1);
+        let next_reset = first_reset + Duration::days(7);
+
+        insert_quota(&db, "account-a", "one", 1, first, 10_080, first_reset, 10);
+        insert_quota(
+            &db,
+            "account-a",
+            "two",
+            1,
+            first + Duration::hours(1),
+            10_080,
+            first_reset + Duration::seconds(45),
+            11,
+        );
+        // A lagging task re-emits an older global snapshot. It must not reduce
+        // the cycle maximum or create another increment.
+        insert_quota(
+            &db,
+            "account-a",
+            "three",
+            1,
+            first + Duration::hours(2),
+            10_080,
+            first_reset,
+            10,
+        );
+        insert_quota(&db, "account-a", "one", 2, second, 10_080, first_reset, 15);
+        // A reset on the same local day starts a new cycle, so its first three
+        // percentage points are also consumption for that day.
+        insert_quota(
+            &db,
+            "account-a",
+            "one",
+            3,
+            second + Duration::hours(2),
+            10_080,
+            next_reset,
+            3,
+        );
+        // Prefer the weekly window when both are available.
+        insert_quota(
+            &db,
+            "account-a",
+            "one",
+            4,
+            second + Duration::hours(3),
+            300,
+            second + Duration::hours(5),
+            99,
+        );
+        insert_quota(
+            &db,
+            "account-b",
+            "other",
+            1,
+            second,
+            10_080,
+            first_reset,
+            90,
+        );
+
+        let start = first.with_timezone(&Local).date_naive();
+        let end = second.with_timezone(&Local).date_naive();
+        let (window, daily, cycles) = db
+            .load_codex_quota_history("account-a", start, end)
+            .unwrap();
+        assert_eq!(window, Some(10_080));
+        assert_eq!(daily.get(&start), Some(&11_000_000));
+        assert_eq!(daily.get(&end), Some(&7_000_000));
+        assert_eq!(daily.len(), 2);
+        assert_eq!(cycles.len(), 2);
+        assert_eq!(
+            cycles[0].points.first().unwrap().remaining_percent_micros,
+            100_000_000
+        );
+        assert_eq!(
+            cycles[0]
+                .points
+                .iter()
+                .map(|point| point.remaining_percent_micros)
+                .min(),
+            Some(85_000_000)
+        );
+        assert_eq!(
+            cycles[1]
+                .points
+                .iter()
+                .map(|point| point.remaining_percent_micros)
+                .min(),
+            Some(97_000_000)
+        );
+
+        let (_, other, other_cycles) = db
+            .load_codex_quota_history("account-b", start, end)
+            .unwrap();
+        assert_eq!(other.get(&end), Some(&90_000_000));
+        assert_eq!(other_cycles.len(), 1);
+        assert_eq!(
+            other_cycles[0]
+                .points
+                .last()
+                .unwrap()
+                .remaining_percent_micros,
+            10_000_000
+        );
+    }
+
+    #[test]
+    fn quota_history_truncates_a_cycle_when_a_new_schedule_starts() {
+        let db = store();
+        let first_start = Utc::now() - Duration::days(20);
+        let first_reset = first_start + Duration::days(7);
+        let forced_start = first_start + Duration::days(3);
+        let forced_reset = forced_start + Duration::days(7);
+        let first_sample = first_start + Duration::days(1);
+        let stale_sample = first_start + Duration::days(4);
+        let forced_sample = forced_start + Duration::hours(1);
+        let forced_later = forced_start + Duration::days(2);
+
+        insert_quota(
+            &db,
+            "account-a",
+            "first",
+            1,
+            first_sample,
+            10_080,
+            first_reset,
+            10,
+        );
+        insert_quota(
+            &db,
+            "account-a",
+            "first",
+            2,
+            stale_sample,
+            10_080,
+            first_reset,
+            40,
+        );
+        insert_quota(
+            &db,
+            "account-a",
+            "forced",
+            1,
+            forced_sample,
+            10_080,
+            forced_reset,
+            5,
+        );
+        insert_quota(
+            &db,
+            "account-a",
+            "forced",
+            2,
+            forced_later,
+            10_080,
+            forced_reset,
+            20,
+        );
+
+        let start = first_start.with_timezone(&Local).date_naive();
+        let end = (first_start + Duration::days(6))
+            .with_timezone(&Local)
+            .date_naive();
+        let (_, daily, cycles) = db
+            .load_codex_quota_history("account-a", start, end)
+            .unwrap();
+
+        assert_eq!(cycles.len(), 2);
+        assert_eq!(cycles[0].resets_at.timestamp(), forced_start.timestamp());
+        assert_eq!(cycles[0].resets_at, cycles[1].starts_at);
+        assert!(
+            cycles
+                .windows(2)
+                .all(|pair| pair[0].resets_at <= pair[1].starts_at)
+        );
+        assert_eq!(
+            cycles[0].points.last().unwrap().remaining_percent_micros,
+            90_000_000
+        );
+        assert!(
+            cycles[0]
+                .points
+                .iter()
+                .all(|point| point.at <= forced_start)
+        );
+        assert_eq!(
+            daily.get(&first_sample.with_timezone(&Local).date_naive()),
+            Some(&10_000_000)
+        );
+        assert_eq!(
+            daily.get(&forced_sample.with_timezone(&Local).date_naive()),
+            Some(&5_000_000)
+        );
+        assert_eq!(
+            daily.get(&forced_later.with_timezone(&Local).date_naive()),
+            Some(&15_000_000)
+        );
+        assert!(!daily.contains_key(&stale_sample.with_timezone(&Local).date_naive()));
+    }
+
+    #[test]
+    fn quota_scan_persists_only_global_progression_changes() {
+        let db = store();
+        let at = Utc.with_ymd_and_hms(2026, 9, 14, 8, 0, 0).unwrap();
+        let reset = at + Duration::days(6);
+        let state = Attribution {
+            initialized_at: at + Duration::days(1),
+            historical_owner: "account-a".into(),
+            history_pending: false,
+            observed: None,
+            observed_at: at + Duration::days(1),
+            ready: true,
+            spans: Vec::new(),
+        };
+        let sample = |source: &str, offset: u64, hours: i64, used_percent: u8| QuotaSampleEvent {
+            source: source.into(),
+            offset,
+            timestamp: at + Duration::hours(hours),
+            limit_id: "codex".into(),
+            window_minutes: 10_080,
+            resets_at: Some(reset),
+            used_percent,
+        };
+        db.save_codex_quota_scan(
+            &[
+                sample("one", 1, 0, 10),
+                sample("two", 1, 1, 10),
+                sample("three", 1, 2, 9),
+                sample("two", 2, 3, 11),
+                QuotaSampleEvent {
+                    source: "replayed".into(),
+                    offset: 1,
+                    timestamp: reset + Duration::hours(1),
+                    limit_id: "codex".into(),
+                    window_minutes: 10_080,
+                    resets_at: Some(reset),
+                    used_percent: 99,
+                },
+            ],
+            &[
+                "one".into(),
+                "two".into(),
+                "three".into(),
+                "replayed".into(),
+            ],
+            &state,
+            &None,
+            &None,
+            at + Duration::days(1),
+        )
+        .unwrap();
+        assert_eq!(
+            db.conn
+                .query_row("SELECT COUNT(*) FROM codex_quota_samples", [], |row| row
+                    .get::<_, u64>(0))
+                .unwrap(),
+            2
+        );
+
+        db.save_codex_quota_scan(
+            &[sample("four", 1, 4, 10), sample("four", 2, 5, 12)],
+            &[],
+            &state,
+            &None,
+            &None,
+            at + Duration::days(1),
+        )
+        .unwrap();
+        assert_eq!(
+            db.conn
+                .query_row("SELECT COUNT(*) FROM codex_quota_samples", [], |row| row
+                    .get::<_, u64>(0))
+                .unwrap(),
+            3
+        );
+    }
+
+    #[test]
+    fn live_limit_snapshot_sets_a_baseline_then_counts_only_new_usage() {
+        let db = store();
+        let sampled_at = Utc::now() - Duration::hours(2);
+        let reset = sampled_at + Duration::days(3);
+        let limits = |sampled_at, used_percent| RateLimits {
+            sampled_at,
+            secondary: crate::limits::LimitWindow {
+                used_percent: Some(used_percent),
+                resets_at: Some(reset),
+                duration_minutes: Some(10_080),
+            },
+            ..Default::default()
+        };
+        db.save_codex_limit_snapshot("account-a", &limits(sampled_at, 71))
+            .unwrap();
+        let day = sampled_at.with_timezone(&Local).date_naive();
+        let (_, daily, cycles) = db.load_codex_quota_history("account-a", day, day).unwrap();
+        assert!(daily.is_empty());
+        assert_eq!(
+            cycles[0].points.last().unwrap().remaining_percent_micros,
+            29_000_000
+        );
+
+        db.save_codex_limit_snapshot("account-a", &limits(sampled_at + Duration::hours(1), 75))
+            .unwrap();
+        let (_, daily, cycles) = db.load_codex_quota_history("account-a", day, day).unwrap();
+        assert_eq!(daily.get(&day), Some(&4_000_000));
+        assert_eq!(
+            cycles[0].points.last().unwrap().remaining_percent_micros,
+            25_000_000
+        );
+        let (_, other, _) = db.load_codex_quota_history("account-b", day, day).unwrap();
+        assert!(other.is_empty());
+    }
+
     #[test]
     fn token_refresh_keeps_identity_but_a_new_login_does_not() {
         let a = Identity {

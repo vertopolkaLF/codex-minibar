@@ -6,9 +6,10 @@
 use crate::settings::{
     AccentColor, AppTheme, AutoActivationPause, BottomBarSize, LimitRefreshInterval, LimitValue,
     OpenRouterAccount, PopupBackgroundMaterial, PopupCornerRadius, PopupVisibility,
-    PopupWidgetKind, ProviderKind, ResetAnnouncementRefreshInterval, ScheduledActivation, Settings,
-    TimeFormat, TotalSpendPresentation, TrayColorMode, TrayFixedColor, TrayIndicator,
-    TrayPresentation, TrayWidget, TrayWidgetKind, UsageRefreshInterval,
+    PopupWidgetKind, ProviderKind, QuotaChartPosition, ResetAnnouncementRefreshInterval,
+    ScheduledActivation, Settings, TimeFormat, TotalSpendPresentation, TrayColorMode,
+    TrayFixedColor, TrayIndicator, TrayPresentation, TrayWidget, TrayWidgetKind,
+    UsageRefreshInterval,
 };
 use crate::settings_controls::{
     SETTINGS_CARD_PADDING, settings_action_card, settings_brick_body_height, settings_brick_row,

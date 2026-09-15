@@ -22,12 +22,12 @@ use crate::{
     popup,
     provider_registry::{
         LimitSectionKind, additional_limit_brick_id, credits_brick_id, limit_section_brick_id,
-        resets_brick_id, spending_brick_id, usage_brick_id,
+        quota_history_brick_id, resets_brick_id, spending_brick_id, usage_brick_id,
     },
     settings::{
         AccentColor, AppTheme, NotificationSettings, PopupBackgroundMaterial, PopupSurface,
-        PopupVisibility, PopupWidgetKind, ProviderKind, Settings, TimeFormat, TotalSpendPeriod,
-        TotalSpendPresentation, TrayWidget,
+        PopupVisibility, PopupWidgetKind, ProviderKind, QuotaChartPosition, Settings, TimeFormat,
+        TotalSpendPeriod, TotalSpendPresentation, TrayWidget,
     },
     tray::{TrayManager, TrayMenuAction},
     updater::{UpdateController, UpdatePhase},

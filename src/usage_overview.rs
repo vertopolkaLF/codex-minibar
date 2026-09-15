@@ -9,7 +9,7 @@ use crate::{
     provider_registry,
     settings::{ProviderKind, TotalSpendPeriod},
     store::{self},
-    usage::{DailyTokenUsage, TokenUsage},
+    usage::{ANALYTICS_PERCENT_SCALE, CodexQuotaCycle, DailyTokenUsage, TokenUsage},
 };
 
 pub const OVERVIEW_MAX_DAYS: u16 = 90;
@@ -19,6 +19,7 @@ pub enum OverviewMetric {
     #[default]
     Cost,
     Tokens,
+    Usage,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -64,6 +65,8 @@ pub struct ProviderOverview {
     pub usage: TokenUsage,
     pub share_cost: f64,
     pub share_tokens: f64,
+    pub usage_percent_micros: u64,
+    pub share_usage: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -71,7 +74,11 @@ pub struct DailySeriesPoint {
     pub at: DateTime<Local>,
     pub date: NaiveDate,
     pub by_provider: BTreeMap<ProviderKind, u64>,
+    pub by_model: BTreeMap<String, u64>,
     pub total: u64,
+    /// Latest account quota remaining at this point, on the independent
+    /// zero-to-one-hundred-percent line scale.
+    pub remaining_percent_micros: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -85,6 +92,8 @@ pub struct BreakdownRow {
     pub priced_requests: u64,
     pub share: f64,
     pub by_provider: BTreeMap<ProviderKind, TokenUsage>,
+    pub usage_percent_micros: u64,
+    pub by_provider_usage: BTreeMap<ProviderKind, u64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -98,6 +107,11 @@ pub struct OverviewSnapshot {
     pub daily_series: Vec<DailySeriesPoint>,
     pub model_rows: Vec<BreakdownRow>,
     pub day_rows: Vec<BreakdownRow>,
+    pub analytics_updated_at: Option<DateTime<chrono::Utc>>,
+    pub analytics_error: Option<String>,
+    pub analytics_days: usize,
+    pub quota_window_minutes: Option<u32>,
+    pub quota_cycles: Vec<CodexQuotaCycle>,
 }
 
 /// Calendar window for the Home Usage Stats card. Thirty days matches the
@@ -225,6 +239,18 @@ fn assemble_overview_snapshot(
         .collect();
 
     if spend_providers.is_empty() {
+        return snapshot;
+    }
+    if metric == OverviewMetric::Usage {
+        snapshot.providers = spend_providers
+            .iter()
+            .copied()
+            .map(|provider| ProviderOverview {
+                provider,
+                ..Default::default()
+            })
+            .collect();
+        apply_analytics_overview(limits, &mut snapshot);
         return snapshot;
     }
 
@@ -374,6 +400,8 @@ fn assemble_overview_snapshot(
             usage,
             share_cost: 0.0,
             share_tokens: 0.0,
+            usage_percent_micros: 0,
+            share_usage: 0.0,
         });
     }
 
@@ -394,6 +422,7 @@ fn assemble_overview_snapshot(
     let total_metric = match metric {
         OverviewMetric::Cost => snapshot.totals.estimated_cost_microusd.max(1),
         OverviewMetric::Tokens => snapshot.totals.total_tokens().max(1),
+        OverviewMetric::Usage => 1,
     };
 
     if hourly {
@@ -418,6 +447,7 @@ fn assemble_overview_snapshot(
                 let metric_value = match metric {
                     OverviewMetric::Cost => cost,
                     OverviewMetric::Tokens => tokens,
+                    OverviewMetric::Usage => 0,
                 };
                 BreakdownRow {
                     label: format_hour_label(at),
@@ -429,6 +459,7 @@ fn assemble_overview_snapshot(
                     priced_requests,
                     share: metric_value as f64 / total_metric as f64 * 100.0,
                     by_provider,
+                    ..Default::default()
                 }
             })
             .filter(|row| row.tokens > 0 || row.cost_microusd > 0)
@@ -455,7 +486,9 @@ fn assemble_overview_snapshot(
                     at,
                     date: at.date_naive(),
                     by_provider: values,
+                    by_model: BTreeMap::new(),
                     total,
+                    remaining_percent_micros: None,
                 }
             })
             .collect();
@@ -475,6 +508,7 @@ fn assemble_overview_snapshot(
                 let metric_value = match metric {
                     OverviewMetric::Cost => cost,
                     OverviewMetric::Tokens => tokens,
+                    OverviewMetric::Usage => 0,
                 };
                 BreakdownRow {
                     label: date.format("%b %-d").to_string(),
@@ -486,6 +520,7 @@ fn assemble_overview_snapshot(
                     priced_requests: usage.priced_requests,
                     share: metric_value as f64 / total_metric as f64 * 100.0,
                     by_provider: providers.clone(),
+                    ..Default::default()
                 }
             })
             .collect();
@@ -499,6 +534,7 @@ fn assemble_overview_snapshot(
                     let value = match metric {
                         OverviewMetric::Cost => usage.estimated_cost_microusd,
                         OverviewMetric::Tokens => usage.total_tokens(),
+                        OverviewMetric::Usage => 0,
                     };
                     values.insert(provider, value);
                     total = total.saturating_add(value);
@@ -507,7 +543,9 @@ fn assemble_overview_snapshot(
                     at: start_of_local_day(date),
                     date,
                     by_provider: values,
+                    by_model: BTreeMap::new(),
                     total,
+                    remaining_percent_micros: None,
                 }
             })
             .collect();
@@ -528,13 +566,16 @@ fn assemble_overview_snapshot(
                     usage.estimated_cost_microusd as f64 / total_metric as f64 * 100.0
                 }
                 OverviewMetric::Tokens => usage.total_tokens() as f64 / total_metric as f64 * 100.0,
+                OverviewMetric::Usage => 0.0,
             },
             by_provider: BTreeMap::new(),
+            ..Default::default()
         })
         .collect();
     snapshot.model_rows.sort_by(|left, right| match metric {
         OverviewMetric::Cost => right.cost_microusd.cmp(&left.cost_microusd),
         OverviewMetric::Tokens => right.tokens.cmp(&left.tokens),
+        OverviewMetric::Usage => std::cmp::Ordering::Equal,
     });
 
     // Keep in-memory limits as a fallback when the store has not hydrated yet.
@@ -571,6 +612,142 @@ fn assemble_overview_snapshot(
     snapshot
 }
 
+fn apply_analytics_overview(limits: &ProviderLimits, snapshot: &mut OverviewSnapshot) {
+    for provider in &mut snapshot.providers {
+        provider.usage_percent_micros = 0;
+        provider.share_usage = 0.0;
+    }
+    snapshot.daily_series.clear();
+    snapshot.day_rows.clear();
+    snapshot.model_rows.clear();
+
+    let Some(analytics) = limits
+        .get(ProviderKind::Codex)
+        .usage
+        .codex_analytics
+        .as_ref()
+    else {
+        return;
+    };
+    snapshot.analytics_updated_at = analytics.fetched_at;
+    snapshot.analytics_error = analytics.error.clone();
+    snapshot.quota_window_minutes = analytics.quota_window_minutes;
+    snapshot.quota_cycles = analytics.quota_cycles.clone();
+
+    // Analytics is daily. An hourly chart would imply precision the endpoint
+    // does not provide, so Past 24h intentionally remains empty.
+    if snapshot.hourly {
+        return;
+    }
+    // A shorter cached response cannot describe the missing part of a longer
+    // overview period. Keep that graph empty instead of treating absent days as zero.
+    if analytics.start_date > snapshot.start_date || analytics.end_date < snapshot.end_date {
+        return;
+    }
+
+    let days = analytics
+        .daily
+        .iter()
+        .filter(|day| day.date >= snapshot.start_date && day.date <= snapshot.end_date)
+        .collect::<Vec<_>>();
+    if !days.iter().any(|day| day.quota_percent_micros > 0) && analytics.quota_cycles.is_empty() {
+        return;
+    }
+
+    snapshot.analytics_days = days
+        .iter()
+        .filter(|day| day.quota_percent_micros > 0)
+        .count();
+    let mut model_totals = BTreeMap::<String, u64>::new();
+    let mut quota_total = 0_u64;
+
+    for day in days {
+        let by_model = day.quota_by_model();
+        let total = by_model
+            .values()
+            .fold(0_u64, |sum, value| sum.saturating_add(*value));
+        quota_total = quota_total.saturating_add(total);
+        let mut by_provider = BTreeMap::new();
+        let mut by_provider_usage = BTreeMap::new();
+        if total > 0 {
+            by_provider.insert(ProviderKind::Codex, total);
+            by_provider_usage.insert(ProviderKind::Codex, total);
+        }
+        for (model, value) in &by_model {
+            model_totals
+                .entry(model.clone())
+                .and_modify(|total| *total = total.saturating_add(*value))
+                .or_insert(*value);
+        }
+        snapshot.daily_series.push(DailySeriesPoint {
+            at: start_of_local_day(day.date),
+            date: day.date,
+            by_provider,
+            by_model,
+            total,
+            remaining_percent_micros: analytics.remaining_at(end_of_local_day(day.date)),
+        });
+        snapshot.day_rows.push(BreakdownRow {
+            label: day.date.format("%b %-d").to_string(),
+            weekday: Some(weekday_short(day.date).to_owned()),
+            usage_percent_micros: total,
+            by_provider_usage,
+            share: total as f64 / ANALYTICS_PERCENT_SCALE as f64,
+            ..Default::default()
+        });
+    }
+    if snapshot.daily_series.is_empty() && !snapshot.quota_cycles.is_empty() {
+        let mut date = snapshot.start_date;
+        while date <= snapshot.end_date {
+            snapshot.daily_series.push(DailySeriesPoint {
+                at: start_of_local_day(date),
+                date,
+                by_provider: BTreeMap::new(),
+                by_model: BTreeMap::new(),
+                total: 0,
+                remaining_percent_micros: analytics.remaining_at(end_of_local_day(date)),
+            });
+            date += Duration::days(1);
+        }
+    }
+    snapshot.day_rows.reverse();
+
+    if quota_total > 0 {
+        snapshot.model_rows = model_totals
+            .into_iter()
+            .map(|(model, value)| {
+                let share_micros = ((u128::from(value) * u128::from(100 * ANALYTICS_PERCENT_SCALE))
+                    / u128::from(quota_total)) as u64;
+                BreakdownRow {
+                    label: model,
+                    provider: Some(ProviderKind::Codex),
+                    usage_percent_micros: value,
+                    share: share_micros as f64 / ANALYTICS_PERCENT_SCALE as f64,
+                    ..Default::default()
+                }
+            })
+            .collect();
+        snapshot
+            .model_rows
+            .sort_by(|left, right| right.usage_percent_micros.cmp(&left.usage_percent_micros));
+    }
+
+    if let Some(codex) = snapshot
+        .providers
+        .iter_mut()
+        .find(|provider| provider.provider == ProviderKind::Codex)
+    {
+        codex.usage_percent_micros = quota_total;
+        codex.share_usage = if quota_total > 0 { 100.0 } else { 0.0 };
+    }
+    snapshot.providers.sort_by(|left, right| {
+        right
+            .usage_percent_micros
+            .cmp(&left.usage_percent_micros)
+            .then_with(|| left.provider.id().cmp(right.provider.id()))
+    });
+}
+
 fn weekday_short(date: NaiveDate) -> &'static str {
     match date.weekday() {
         Weekday::Mon => "Mon",
@@ -593,6 +770,11 @@ fn start_of_local_day(date: NaiveDate) -> DateTime<Local> {
         .unwrap_or_else(Local::now)
 }
 
+fn end_of_local_day(date: NaiveDate) -> DateTime<chrono::Utc> {
+    let next = start_of_local_day(date + Duration::days(1)).with_timezone(&chrono::Utc);
+    (next - Duration::milliseconds(1)).min(chrono::Utc::now())
+}
+
 fn slice_provider_usage(days: &[DailyTokenUsage], start: NaiveDate, end: NaiveDate) -> TokenUsage {
     let mut usage = TokenUsage::default();
     for entry in days {
@@ -606,6 +788,11 @@ fn slice_provider_usage(days: &[DailyTokenUsage], start: NaiveDate, end: NaiveDa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        limits::RateLimits,
+        usage::{CodexAnalyticsDay, CodexAnalyticsUsage, UsageStatistics},
+    };
+    use chrono::Utc;
 
     #[test]
     fn thirty_day_total_spend_matches_usage_tab_range() {
@@ -651,5 +838,124 @@ mod tests {
                 (ProviderKind::Claude, 500_000),
             ]
         );
+    }
+
+    #[test]
+    fn analytics_overview_uses_actual_quota_and_leaves_other_providers_empty() {
+        let start = NaiveDate::from_ymd_opt(2026, 9, 14).unwrap();
+        let analytics = CodexAnalyticsUsage {
+            start_date: start - Duration::days(1),
+            end_date: start + Duration::days(1),
+            fetched_at: Some(Utc.timestamp_opt(1_789_000_000, 0).unwrap()),
+            daily: vec![
+                CodexAnalyticsDay {
+                    date: start - Duration::days(1),
+                    models: BTreeMap::from([("new-model".into(), 200_000_000)]),
+                    quota_percent_micros: 80_000_000,
+                },
+                CodexAnalyticsDay {
+                    date: start,
+                    models: BTreeMap::from([
+                        ("astra".into(), 20_000_000),
+                        ("sol".into(), 10_000_000),
+                    ]),
+                    quota_percent_micros: 30_000_000,
+                },
+                CodexAnalyticsDay {
+                    date: start + Duration::days(1),
+                    models: BTreeMap::from([("astra".into(), 15_000_000)]),
+                    quota_percent_micros: 15_000_000,
+                },
+            ],
+            quota_window_minutes: Some(10_080),
+            quota_cycles: Vec::new(),
+            error: Some("stale".into()),
+        };
+        let limits = ProviderLimits::from_entries([
+            (
+                ProviderKind::Codex,
+                RateLimits {
+                    usage: UsageStatistics {
+                        codex_analytics: Some(analytics),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ),
+            (ProviderKind::Claude, RateLimits::default()),
+        ]);
+
+        let snapshot = assemble_overview_snapshot(
+            &limits,
+            &[ProviderKind::Codex, ProviderKind::Claude],
+            OverviewMetric::Usage,
+            start,
+            start + Duration::days(1),
+            false,
+        );
+
+        assert_eq!(snapshot.daily_series.len(), 2);
+        assert_eq!(snapshot.daily_series[0].total, 30_000_000);
+        assert_eq!(snapshot.daily_series[1].total, 15_000_000);
+        assert_eq!(snapshot.analytics_days, 2);
+        assert_eq!(snapshot.analytics_error.as_deref(), Some("stale"));
+        assert_eq!(snapshot.providers[0].provider, ProviderKind::Codex);
+        assert_eq!(snapshot.quota_window_minutes, Some(10_080));
+        assert_eq!(snapshot.providers[0].usage_percent_micros, 45_000_000);
+        assert_eq!(snapshot.providers[1].usage_percent_micros, 0);
+        assert_eq!(snapshot.model_rows[0].label, "astra");
+        assert!((snapshot.model_rows[0].share - 77.777_777).abs() < 0.000_01);
+        assert!(
+            snapshot
+                .model_rows
+                .iter()
+                .all(|row| row.label != "new-model")
+        );
+
+        let uncovered = assemble_overview_snapshot(
+            &limits,
+            &[ProviderKind::Codex, ProviderKind::Claude],
+            OverviewMetric::Usage,
+            start - Duration::days(7),
+            start + Duration::days(1),
+            false,
+        );
+        assert!(uncovered.daily_series.is_empty());
+    }
+
+    #[test]
+    fn hourly_analytics_overview_is_empty() {
+        let day = NaiveDate::from_ymd_opt(2026, 9, 15).unwrap();
+        let limits = ProviderLimits::from_entries([(
+            ProviderKind::Codex,
+            RateLimits {
+                usage: UsageStatistics {
+                    codex_analytics: Some(CodexAnalyticsUsage {
+                        start_date: day,
+                        end_date: day,
+                        daily: vec![CodexAnalyticsDay {
+                            date: day,
+                            models: BTreeMap::from([("astra".into(), 100_000_000)]),
+                            quota_percent_micros: 10_000_000,
+                        }],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )]);
+
+        let snapshot = assemble_overview_snapshot(
+            &limits,
+            &[ProviderKind::Codex],
+            OverviewMetric::Usage,
+            day,
+            day,
+            true,
+        );
+        assert!(snapshot.daily_series.is_empty());
+        assert!(snapshot.day_rows.is_empty());
+        assert!(snapshot.model_rows.is_empty());
     }
 }

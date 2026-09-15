@@ -207,6 +207,32 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
         )
         .with_key("customize-show-account-name"),
     ]);
+    if codex_enabled {
+        let visibility = popup_visibility.clone();
+        let set_visibility = set_popup_visibility.clone();
+        let position_tx = settings_tx.clone();
+        rows.push(
+            settings_control_card(
+                "Quota chart position",
+                Some("Place Codex quota usage before or after its activity chart."),
+                ComboBox::new(["Above activity", "Below activity"])
+                    .selected_index(popup_visibility.quota_chart_position.index())
+                    .on_selection_changed(move |choice| {
+                        let position = QuotaChartPosition::from_index(choice);
+                        let mut next = visibility.clone();
+                        next.quota_chart_position = position;
+                        set_visibility.call(next);
+                        persist_update(position_tx.clone(), move |settings| {
+                            settings.popup_visibility.quota_chart_position = position;
+                        });
+                    }),
+                "customize-quota-chart-position",
+                hovered_card_id,
+                set_hovered_card_id.clone(),
+            )
+            .with_key("customize-quota-chart-position"),
+        );
+    }
     rows.extend(popup_settings_cards(
         popup_visibility,
         discovered_popup_bricks,

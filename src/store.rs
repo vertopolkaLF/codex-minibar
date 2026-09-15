@@ -148,6 +148,14 @@ impl ProviderStore {
                 fetched_at TEXT NOT NULL,
                 payload_json TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS codex_analytics_cache (
+                account TEXT NOT NULL,
+                start_date TEXT NOT NULL,
+                end_date TEXT NOT NULL,
+                fetched_at TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                PRIMARY KEY (account, start_date, end_date)
+            );
             ",
         )?;
         self.migrate_schema_updates()?;
@@ -275,6 +283,56 @@ impl ProviderStore {
         Ok(())
     }
 
+    pub(crate) fn load_codex_analytics_cache(
+        &self,
+        account: &str,
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+    ) -> Result<Option<(DateTime<Utc>, String)>> {
+        let row: Option<(String, String)> = self
+            .conn
+            .query_row(
+                "SELECT fetched_at,payload_json FROM codex_analytics_cache
+                 WHERE account=?1 AND start_date=?2 AND end_date=?3",
+                params![account, start_date.to_string(), end_date.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        row.map(|(fetched_at, payload)| {
+            Ok((
+                DateTime::parse_from_rfc3339(&fetched_at)
+                    .context("parse Codex Analytics cache timestamp")?
+                    .with_timezone(&Utc),
+                payload,
+            ))
+        })
+        .transpose()
+    }
+
+    pub(crate) fn save_codex_analytics_cache(
+        &self,
+        account: &str,
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+        fetched_at: DateTime<Utc>,
+        payload: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO codex_analytics_cache(account,start_date,end_date,fetched_at,payload_json)
+             VALUES(?1,?2,?3,?4,?5)
+             ON CONFLICT(account,start_date,end_date) DO UPDATE SET
+                fetched_at=excluded.fetched_at,payload_json=excluded.payload_json",
+            params![
+                account,
+                start_date.to_string(),
+                end_date.to_string(),
+                fetched_at.to_rfc3339(),
+                payload
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn load_limits(&self, provider: ProviderKind) -> Result<Option<RateLimits>> {
         let mut statement = self
             .conn
@@ -338,7 +396,7 @@ impl ProviderStore {
     }
 
     /// Deletes all locally derived usage data while preserving provider
-    /// credentials, quota snapshots, and the cached pricing catalog.
+    /// credentials, live limit snapshots, and the cached pricing catalog.
     pub fn clear_usage_data(&self) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         for table in [
@@ -351,11 +409,13 @@ impl ProviderStore {
             "scan_files",
             "codex_account_events",
             "codex_event_sources",
+            "codex_quota_samples",
             "codex_legacy_daily",
             "codex_legacy_model_daily",
             "codex_legacy_hourly",
             "codex_legacy_sessions",
             "codex_legacy_cursors",
+            "codex_analytics_cache",
         ] {
             tx.execute(&format!("DELETE FROM {table}"), [])?;
         }
@@ -1611,6 +1671,61 @@ mod tests {
         let store = ProviderStore { conn };
         store.migrate().unwrap();
         store
+    }
+
+    #[test]
+    fn codex_analytics_cache_isolated_by_account_and_exact_range_and_cleared() {
+        let dir = tempdir().unwrap();
+        let store = test_store(&dir.path().join("analytics.sqlite"));
+        let start = NaiveDate::from_ymd_opt(2026, 8, 17).unwrap();
+        let end = NaiveDate::from_ymd_opt(2026, 9, 15).unwrap();
+        let fetched_at = Utc.timestamp_opt(1_789_000_000, 0).unwrap();
+        store
+            .save_codex_analytics_cache("account-a", start, end, fetched_at, "a-30")
+            .unwrap();
+        store
+            .save_codex_analytics_cache("account-b", start, end, fetched_at, "b-30")
+            .unwrap();
+        store
+            .save_codex_analytics_cache(
+                "account-a",
+                start - Duration::days(60),
+                end,
+                fetched_at,
+                "a-90",
+            )
+            .unwrap();
+
+        assert_eq!(
+            store
+                .load_codex_analytics_cache("account-a", start, end)
+                .unwrap()
+                .map(|(_, body)| body)
+                .as_deref(),
+            Some("a-30")
+        );
+        assert_eq!(
+            store
+                .load_codex_analytics_cache("account-b", start, end)
+                .unwrap()
+                .map(|(_, body)| body)
+                .as_deref(),
+            Some("b-30")
+        );
+        assert!(
+            store
+                .load_codex_analytics_cache("account-a", start + Duration::days(1), end)
+                .unwrap()
+                .is_none()
+        );
+
+        store.clear_usage_data().unwrap();
+        assert!(
+            store
+                .load_codex_analytics_cache("account-a", start, end)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

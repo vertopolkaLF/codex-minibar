@@ -1,17 +1,18 @@
 use std::{
+    collections::BTreeMap,
     ffi::OsStr,
     fs,
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::mpsc,
+    sync::{Arc, mpsc},
     thread,
     time::{Duration as StdDuration, Instant},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::{TimeZone, Utc};
+use chrono::{Duration, Local, NaiveDate, TimeZone, Utc};
 use directories::BaseDirs;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -48,12 +49,270 @@ impl UsageProvider for CodexClient {
         &mut self,
         history_days: u16,
     ) -> Result<usage::UsageStatistics> {
-        usage::load_cached_usage_statistics(history_days)
+        let mut statistics = usage::load_cached_usage_statistics(history_days)?;
+        attach_cached_analytics(&mut statistics);
+        Ok(statistics)
     }
 
     fn refresh_usage_statistics(&mut self, history_days: u16) -> Result<usage::UsageStatistics> {
-        usage::refresh_usage_statistics(history_days)
+        let mut statistics = usage::refresh_usage_statistics(history_days)?;
+        refresh_analytics(&mut statistics, self.timeout);
+        Ok(statistics)
     }
+}
+
+const ANALYTICS_URL: &str =
+    "https://chatgpt.com/backend-api/wham/usage/daily-token-usage-breakdown";
+const ANALYTICS_CACHE_TTL: Duration = Duration::minutes(5);
+
+fn analytics_cache_is_fresh(fetched_at: chrono::DateTime<Utc>, now: chrono::DateTime<Utc>) -> bool {
+    let age = now.signed_duration_since(fetched_at);
+    age >= Duration::zero() && age < ANALYTICS_CACHE_TTL
+}
+
+#[derive(Deserialize)]
+struct AnalyticsResponse {
+    units: String,
+    #[serde(default)]
+    group_by: Option<String>,
+    #[serde(default)]
+    data: Vec<AnalyticsResponseDay>,
+}
+
+#[derive(Deserialize)]
+struct AnalyticsResponseDay {
+    date: String,
+    #[serde(default)]
+    models: Vec<AnalyticsResponseModel>,
+}
+
+#[derive(Deserialize)]
+struct AnalyticsResponseModel {
+    model: String,
+    credits: f64,
+}
+
+fn analytics_range(statistics: &usage::UsageStatistics) -> (NaiveDate, NaiveDate) {
+    let end = Local::now().date_naive();
+    let start = end - Duration::days(i64::from(statistics.history_days.clamp(1, 365) - 1));
+    (start, end)
+}
+
+fn parse_analytics_response(
+    body: &str,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    fetched_at: Option<chrono::DateTime<Utc>>,
+) -> Result<usage::CodexAnalyticsUsage> {
+    let response: AnalyticsResponse =
+        serde_json::from_str(body).context("parse Codex Analytics response")?;
+    if response.units != "percent" {
+        bail!(
+            "Codex Analytics returned unsupported units: {}",
+            response.units
+        );
+    }
+    if response
+        .group_by
+        .as_deref()
+        .is_some_and(|value| value != "day")
+    {
+        bail!("Codex Analytics returned a non-daily response");
+    }
+    let mut days = BTreeMap::<NaiveDate, BTreeMap<String, u64>>::new();
+    for day in response.data {
+        let date = NaiveDate::parse_from_str(&day.date, "%Y-%m-%d")
+            .context("parse Codex Analytics date")?;
+        if date < start_date || date > end_date {
+            bail!("Codex Analytics returned data outside the requested range");
+        }
+        let models = days.entry(date).or_default();
+        for entry in day.models {
+            let model = entry.model.trim();
+            if model.is_empty() || entry.credits == 0.0 {
+                continue;
+            }
+            if !entry.credits.is_finite() || entry.credits < 0.0 {
+                bail!("Codex Analytics returned an invalid percentage");
+            }
+            let scaled = (entry.credits * usage::ANALYTICS_PERCENT_SCALE as f64).round();
+            if scaled > u64::MAX as f64 {
+                bail!("Codex Analytics percentage is too large");
+            }
+            let total = models.entry(model.to_owned()).or_default();
+            *total = total.saturating_add(scaled as u64);
+        }
+    }
+    Ok(usage::CodexAnalyticsUsage {
+        start_date,
+        end_date,
+        fetched_at,
+        quota_window_minutes: None,
+        quota_cycles: Vec::new(),
+        daily: days
+            .into_iter()
+            .map(|(date, models)| usage::CodexAnalyticsDay {
+                date,
+                models,
+                quota_percent_micros: 0,
+            })
+            .collect(),
+        error: None,
+    })
+}
+
+fn attach_quota_history(account: &str, analytics: &mut usage::CodexAnalyticsUsage) -> Result<()> {
+    let (window_minutes, daily, cycles) = crate::store::with_store(|store| {
+        store.load_codex_quota_history(account, analytics.start_date, analytics.end_date)
+    })?;
+    analytics.quota_window_minutes = window_minutes;
+    analytics.quota_cycles = cycles;
+    for day in &mut analytics.daily {
+        day.quota_percent_micros = daily.get(&day.date).copied().unwrap_or(0);
+    }
+    Ok(())
+}
+
+fn cached_analytics(
+    account: &str,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+) -> Result<Option<(chrono::DateTime<Utc>, String, usage::CodexAnalyticsUsage)>> {
+    let Some((fetched_at, body)) = crate::store::with_store(|store| {
+        store.load_codex_analytics_cache(account, start_date, end_date)
+    })?
+    else {
+        return Ok(None);
+    };
+    let mut parsed = parse_analytics_response(&body, start_date, end_date, Some(fetched_at))?;
+    attach_quota_history(account, &mut parsed)?;
+    Ok(Some((fetched_at, body, parsed)))
+}
+
+fn attach_cached_analytics(statistics: &mut usage::UsageStatistics) {
+    let Some(account) = statistics.account_id.clone() else {
+        return;
+    };
+    let (start_date, end_date) = analytics_range(statistics);
+    statistics.codex_analytics = match cached_analytics(&account, start_date, end_date) {
+        Ok(cached) => cached.map(|(_, _, analytics)| analytics),
+        Err(error) => Some(usage::CodexAnalyticsUsage {
+            start_date,
+            end_date,
+            error: Some(format!("Could not read Codex Analytics cache: {error:#}")),
+            ..Default::default()
+        }),
+    };
+}
+
+fn refresh_analytics(statistics: &mut usage::UsageStatistics, timeout: StdDuration) {
+    let Some(account) = statistics.account_id.clone() else {
+        return;
+    };
+    let (start_date, end_date) = analytics_range(statistics);
+    let cached = cached_analytics(&account, start_date, end_date);
+    if let Ok(Some((fetched_at, _, analytics))) = &cached
+        && analytics_cache_is_fresh(*fetched_at, Utc::now())
+    {
+        statistics.codex_analytics = Some(analytics.clone());
+        return;
+    }
+    let stale = cached.ok().flatten().map(|(_, _, analytics)| analytics);
+    match fetch_analytics(&account, start_date, end_date, timeout) {
+        Ok((fetched_at, body, analytics)) => {
+            if crate::store::codex_accounts::current_id() != account {
+                statistics.codex_analytics = stale.map(|mut cached| {
+                    cached.error = Some("Codex account changed during Analytics refresh".into());
+                    cached
+                });
+                return;
+            }
+            match crate::store::with_store(|store| {
+                store.save_codex_analytics_cache(&account, start_date, end_date, fetched_at, &body)
+            }) {
+                Ok(()) => statistics.codex_analytics = Some(analytics),
+                Err(error) => {
+                    let mut visible = stale.unwrap_or(usage::CodexAnalyticsUsage {
+                        start_date,
+                        end_date,
+                        ..Default::default()
+                    });
+                    visible.error = Some(format!("Could not cache Codex Analytics: {error:#}"));
+                    statistics.codex_analytics = Some(visible);
+                }
+            }
+        }
+        Err(error) => {
+            let mut visible = stale.unwrap_or(usage::CodexAnalyticsUsage {
+                start_date,
+                end_date,
+                ..Default::default()
+            });
+            visible.error = Some(format!("Could not refresh Codex Analytics: {error:#}"));
+            statistics.codex_analytics = Some(visible);
+        }
+    }
+}
+
+fn fetch_analytics(
+    expected_account: &str,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    timeout: StdDuration,
+) -> Result<(chrono::DateTime<Utc>, String, usage::CodexAnalyticsUsage)> {
+    let auth = analytics_auth()?;
+    if auth.account_id != expected_account {
+        bail!("Codex account changed before Analytics refresh");
+    }
+    let url = format!("{ANALYTICS_URL}?start_date={start_date}&end_date={end_date}&group_by=day");
+    let tls = ureq::native_tls::TlsConnector::new().context("create Windows TLS connector")?;
+    let agent = ureq::AgentBuilder::new()
+        .timeout(timeout)
+        .tls_connector(Arc::new(tls))
+        .build();
+    let response = agent
+        .get(&url)
+        .set("Authorization", &format!("Bearer {}", auth.access_token))
+        .set("ChatGPT-Account-Id", &auth.account_id)
+        .set("Accept", "application/json")
+        .set(
+            "User-Agent",
+            concat!("codex-minibar/", env!("CARGO_PKG_VERSION")),
+        )
+        .call();
+    let body = match response {
+        Ok(response) => response
+            .into_string()
+            .context("read Codex Analytics response")?,
+        Err(ureq::Error::Status(401 | 403, _)) => {
+            bail!("Codex Analytics authentication was rejected")
+        }
+        Err(ureq::Error::Status(status, _)) => {
+            bail!("Codex Analytics request failed with HTTP {status}")
+        }
+        Err(error) => return Err(error).context("request Codex Analytics"),
+    };
+    let fetched_at = Utc::now();
+    let mut analytics = parse_analytics_response(&body, start_date, end_date, Some(fetched_at))?;
+    attach_quota_history(expected_account, &mut analytics)?;
+    Ok((fetched_at, body, analytics))
+}
+
+struct AnalyticsAuth {
+    access_token: String,
+    account_id: String,
+}
+
+fn analytics_auth() -> Result<AnalyticsAuth> {
+    let contents =
+        fs::read(usage::codex_home().join("auth.json")).context("read Codex authentication")?;
+    let auth: AuthFile = serde_json::from_slice(&contents).context("parse Codex authentication")?;
+    let tokens = auth.tokens.context("Codex authentication has no tokens")?;
+    Ok(AnalyticsAuth {
+        access_token: non_empty(tokens.access_token)
+            .context("Codex authentication has no access token")?,
+        account_id: non_empty(tokens.account_id).context("Codex authentication has no account")?,
+    })
 }
 
 pub struct CodexActivator {
@@ -152,6 +411,7 @@ impl CodexClient {
     }
 
     pub fn read_rate_limits(&self) -> Result<RateLimits> {
+        let account_before = crate::store::codex_accounts::current_id();
         // Desktop Codex dropped the legacy `untrusted` approval policy; only
         // `never` / `on-request` remain. Keep `-a never` so rate-limit polls
         // never block on an interactive approval prompt.
@@ -171,6 +431,14 @@ impl CodexClient {
             // authenticated Codex session. Never let a missing or malformed
             // identity token make otherwise valid quota data unavailable.
             limits.account_name = local_account_name();
+            let account_after = crate::store::codex_accounts::current_id();
+            if account_before == account_after
+                && let Err(error) = crate::store::with_store(|store| {
+                    store.save_codex_limit_snapshot(&account_after, &limits)
+                })
+            {
+                eprintln!("failed to persist Codex quota snapshot: {error:#}");
+            }
             limits
         })
     }
@@ -222,6 +490,8 @@ struct AuthFile {
 #[derive(Deserialize)]
 struct AuthTokens {
     id_token: Option<String>,
+    access_token: Option<String>,
+    account_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -562,6 +832,51 @@ pub fn is_installed(explicit: Option<&Path>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn analytics_parser_groups_speeds_and_preserves_small_percentages() {
+        let start = NaiveDate::from_ymd_opt(2026, 9, 14).unwrap();
+        let end = start + Duration::days(1);
+        let parsed = parse_analytics_response(
+            r#"{"units":"percent","group_by":"day","data":[{"date":"2026-09-14","models":[{"model":"gpt-6-astra","speed":"standard","credits":43.769902},{"model":"gpt-6-astra","speed":"fast","credits":1.25},{"model":"gpt-5.6-luna","speed":"standard","credits":0.001205},{"model":"unused","speed":"standard","credits":0.0}]},{"date":"2026-09-15","models":[]}]}"#,
+            start,
+            end,
+            None,
+        )
+        .unwrap();
+        assert_eq!(parsed.daily.len(), 2);
+        assert_eq!(parsed.daily[0].models.len(), 2);
+        assert_eq!(parsed.daily[0].models["gpt-6-astra"], 45_019_902);
+        assert_eq!(parsed.daily[0].models["gpt-5.6-luna"], 1_205);
+    }
+
+    #[test]
+    fn analytics_parser_rejects_incompatible_units_and_ranges() {
+        let day = NaiveDate::from_ymd_opt(2026, 9, 14).unwrap();
+        assert!(
+            parse_analytics_response(r#"{"units":"credits","data":[]}"#, day, day, None).is_err()
+        );
+        assert!(
+            parse_analytics_response(
+                r#"{"units":"percent","group_by":"day","data":[{"date":"2026-09-13","models":[]}]}"#,
+                day,
+                day,
+                None
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn analytics_cache_expires_after_five_minutes() {
+        let now = Utc.timestamp_opt(1_789_000_000, 0).unwrap();
+        assert!(analytics_cache_is_fresh(
+            now - Duration::minutes(4) - Duration::seconds(59),
+            now
+        ));
+        assert!(!analytics_cache_is_fresh(now - Duration::minutes(5), now));
+        assert!(!analytics_cache_is_fresh(now + Duration::seconds(1), now));
+    }
 
     #[test]
     fn parses_present_and_missing_windows() {

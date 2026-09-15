@@ -9,7 +9,7 @@ use windows_reactor::*;
 use crate::{
     popup, provider_registry,
     settings::ProviderKind,
-    usage::TokenUsage,
+    usage::{ANALYTICS_PERCENT_SCALE, TokenUsage},
     usage_overview::{
         BreakdownMode, BreakdownRow, DailySeriesPoint, OverviewMetric, OverviewRange,
         OverviewSnapshot, ProviderOverview,
@@ -45,6 +45,11 @@ pub fn overview_page(
         .into();
     }
 
+    let selected_error = if metric == OverviewMetric::Usage {
+        snapshot.analytics_error.as_deref()
+    } else {
+        usage_error
+    };
     let range_label = if snapshot.hourly {
         let start = snapshot
             .daily_series
@@ -65,7 +70,7 @@ pub fn overview_page(
         )
     };
 
-    let filled = if snapshot.hourly {
+    let mut filled = if snapshot.hourly {
         fill_hourly_series(&snapshot.daily_series)
     } else {
         fill_daily_series(
@@ -74,6 +79,12 @@ pub fn overview_page(
             snapshot.end_date,
         )
     };
+    if metric == OverviewMetric::Usage {
+        for point in &mut filled {
+            point.remaining_percent_micros =
+                quota_remaining_at_end_of_day(&snapshot.quota_cycles, point.date);
+        }
+    }
     let tooltip = chart_hover.and_then(|index| {
         filled.get(index).map(|point| {
             usage_page_tooltip(
@@ -95,7 +106,7 @@ pub fn overview_page(
             metric,
             range,
             usage_recalculating,
-            usage_error,
+            selected_error,
             set_metric,
             set_range,
             &set_chart_hover,
@@ -114,12 +125,13 @@ pub fn overview_page(
             &filled,
             snapshot.hourly,
             &snapshot.providers,
+            &snapshot.quota_cycles,
             metric,
             chart_hover,
             color_scheme,
             set_chart_hover,
         ),
-        usage_totals_card(&snapshot.totals).on_pointer_entered({
+        usage_totals_card(snapshot, metric).on_pointer_entered({
             let clear_hover = clear_hover.clone();
             move |_| dismiss_chart_hover(&clear_hover)
         }),
@@ -184,6 +196,14 @@ fn usage_header(
                         move || {
                             dismiss_chart_hover(&clear_hover);
                             set_metric.call(OverviewMetric::Tokens);
+                        }
+                    }),
+                    segmented_tab("Usage", metric == OverviewMetric::Usage, {
+                        let set_metric = set_metric.clone();
+                        let clear_hover = clear_hover.clone();
+                        move || {
+                            dismiss_chart_hover(&clear_hover);
+                            set_metric.call(OverviewMetric::Usage);
                         }
                     }),
                 ],
@@ -465,16 +485,38 @@ fn usage_hero(
     let headline = match metric {
         OverviewMetric::Cost => format_total_cost(&snapshot.totals),
         OverviewMetric::Tokens => format_token_count(snapshot.totals.total_tokens()),
+        OverviewMetric::Usage if snapshot.analytics_days > 0 => {
+            format_analytics_percent(snapshot.providers.iter().fold(0_u64, |total, entry| {
+                total.saturating_add(entry.usage_percent_micros)
+            }))
+        }
+        OverviewMetric::Usage => "—".into(),
     };
-    let mut meta: Vec<Element> = vec![
-        body(format!("{} sessions", snapshot.total_sessions))
-            .foreground(ThemeRef::SecondaryText)
-            .horizontal_alignment(HorizontalAlignment::Right)
-            .into(),
-    ];
+    let mut meta: Vec<Element> = if metric == OverviewMetric::Usage {
+        vec![
+            body(format!("{} active days", snapshot.analytics_days))
+                .foreground(ThemeRef::SecondaryText)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .into(),
+        ]
+    } else {
+        vec![
+            body(format!("{} sessions", snapshot.total_sessions))
+                .foreground(ThemeRef::SecondaryText)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .into(),
+        ]
+    };
     if metric == OverviewMetric::Cost {
         meta.push(
             caption("API estimate")
+                .foreground(ThemeRef::TertiaryText)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .into(),
+        );
+    } else if metric == OverviewMetric::Usage {
+        meta.push(
+            caption(quota_window_description(snapshot.quota_window_minutes))
                 .foreground(ThemeRef::TertiaryText)
                 .horizontal_alignment(HorizontalAlignment::Right)
                 .into(),
@@ -517,10 +559,21 @@ fn usage_share_bar(
             let weight = match metric {
                 OverviewMetric::Cost => entry.usage.estimated_cost_microusd,
                 OverviewMetric::Tokens => entry.usage.total_tokens(),
+                OverviewMetric::Usage => entry.usage_percent_micros,
             };
             (entry.provider, weight)
         })
+        .filter(|(_, weight)| metric != OverviewMetric::Usage || *weight > 0)
         .collect();
+    if entries.is_empty() {
+        return border(Element::Empty)
+            .height(10.0)
+            .corner_radius(4.0)
+            .background(ThemeRef::ControlFill)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .with_key("usage-hero-bar-empty")
+            .into();
+    }
     entries.sort_by(|(_, left), (_, right)| right.cmp(left));
     let total = entries
         .iter()
@@ -631,24 +684,38 @@ fn provider_row(
     let value = match metric {
         OverviewMetric::Cost => format_usage_cost(&entry.usage),
         OverviewMetric::Tokens => format_token_count(entry.usage.total_tokens()),
+        OverviewMetric::Usage if entry.usage_percent_micros > 0 => {
+            format_analytics_percent(entry.usage_percent_micros)
+        }
+        OverviewMetric::Usage => "—".into(),
     };
     let share = match metric {
         OverviewMetric::Cost => entry.share_cost,
         OverviewMetric::Tokens => entry.share_tokens,
+        OverviewMetric::Usage => entry.share_usage,
     };
     let other = match metric {
         OverviewMetric::Cost => format_token_count(entry.usage.total_tokens()),
         OverviewMetric::Tokens => format_usage_cost(&entry.usage),
+        OverviewMetric::Usage if entry.usage_percent_micros > 0 => {
+            "subscription quota consumed".into()
+        }
+        OverviewMetric::Usage => "No quota data".into(),
     };
-    let detail = format!(
-        "{:.1}% of {} · {}",
-        share,
-        match metric {
-            OverviewMetric::Cost => "cost",
-            OverviewMetric::Tokens => "tokens",
-        },
+    let detail = if metric == OverviewMetric::Usage {
         other
-    );
+    } else {
+        format!(
+            "{:.1}% of {} · {}",
+            share,
+            match metric {
+                OverviewMetric::Cost => "cost",
+                OverviewMetric::Tokens => "tokens",
+                OverviewMetric::Usage => unreachable!(),
+            },
+            other
+        )
+    };
 
     vstack((
         hstack((
@@ -667,13 +734,22 @@ fn provider_row(
         .spacing(8.0)
         .vertical_alignment(VerticalAlignment::Center),
         vstack((
-            hstack((
-                caption(value)
-                    .font_weight(600)
-                    .foreground(ThemeRef::PrimaryText),
-                caption(format!("· {} sessions", entry.sessions))
-                    .foreground(ThemeRef::SecondaryText),
-            ))
+            hstack({
+                let mut values: Vec<Element> = vec![
+                    caption(value)
+                        .font_weight(600)
+                        .foreground(ThemeRef::PrimaryText)
+                        .into(),
+                ];
+                if metric != OverviewMetric::Usage {
+                    values.push(
+                        caption(format!("· {} sessions", entry.sessions))
+                            .foreground(ThemeRef::SecondaryText)
+                            .into(),
+                    );
+                }
+                values
+            })
             .spacing(4.0),
             caption(detail).foreground(ThemeRef::TertiaryText),
         ))
@@ -689,6 +765,7 @@ fn usage_chart_card(
     series: &[DailySeriesPoint],
     hourly: bool,
     providers: &[ProviderOverview],
+    quota_cycles: &[crate::usage::CodexQuotaCycle],
     metric: OverviewMetric,
     hover: Option<usize>,
     color_scheme: ColorScheme,
@@ -697,12 +774,15 @@ fn usage_chart_card(
     let title = match (hourly, metric) {
         (true, OverviewMetric::Cost) => "Hourly cost",
         (true, OverviewMetric::Tokens) => "Hourly processed tokens",
+        (true, OverviewMetric::Usage) => "Usage",
         (false, OverviewMetric::Cost) => "Cost",
         (false, OverviewMetric::Tokens) => "Tokens",
+        (false, OverviewMetric::Usage) => "Usage",
     };
     let chart = usage_area_chart(
         series,
         providers,
+        quota_cycles,
         metric,
         hourly,
         hover,
@@ -724,6 +804,7 @@ const CHART_PAD_BOTTOM: f64 = 3.0;
 fn usage_area_chart(
     series: &[DailySeriesPoint],
     providers: &[ProviderOverview],
+    quota_cycles: &[crate::usage::CodexQuotaCycle],
     metric: OverviewMetric,
     hourly: bool,
     hover: Option<usize>,
@@ -741,9 +822,13 @@ fn usage_area_chart(
         - CHART_Y_GAP;
     if series.is_empty() {
         return border(
-            caption("No activity in this range")
-                .foreground(ThemeRef::TertiaryText)
-                .horizontal_alignment(HorizontalAlignment::Center),
+            caption(if metric == OverviewMetric::Usage {
+                "No quota data in this range"
+            } else {
+                "No activity in this range"
+            })
+            .foreground(ThemeRef::TertiaryText)
+            .horizontal_alignment(HorizontalAlignment::Center),
         )
         .height(CHART_PLOT_HEIGHT)
         .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -760,7 +845,15 @@ fn usage_area_chart(
         .max()
         .unwrap_or(0);
     let max_value = chart_scale_max(raw_max);
-    let xaml = usage_area_chart_xaml(series, providers, max_value, plot_width, color_scheme);
+    let xaml = usage_area_chart_xaml(
+        series,
+        providers,
+        quota_cycles,
+        metric,
+        max_value,
+        plot_width,
+        color_scheme,
+    );
     let plot = usage_area_chart_host(&xaml, series, providers, metric, color_scheme, plot_width);
     let count = series.len();
     let hits = usage_chart_hit_target(count, plot_width, provider_count, hover, set_hover);
@@ -812,19 +905,8 @@ fn usage_area_chart_host(
             .wrapping_mul(31)
             .wrapping_add(entry.provider as u64)),
     );
-    let fingerprint = series.iter().fold(0_u64, |hash, point| {
-        let provider_hash = point
-            .by_provider
-            .iter()
-            .fold(0_u64, |inner, (kind, value)| {
-                inner
-                    .wrapping_mul(31)
-                    .wrapping_add(*kind as u64)
-                    .wrapping_add(*value)
-            });
-        hash.wrapping_mul(31)
-            .wrapping_add(point.total)
-            .wrapping_add(provider_hash)
+    let fingerprint = xaml.bytes().fold(0_u64, |hash, byte| {
+        hash.wrapping_mul(16_777_619).wrapping_add(u64::from(byte))
     });
 
     let series_changed = CHART_SERIES.with(|cache| {
@@ -1031,6 +1113,8 @@ fn usage_x_axis(series: &[DailySeriesPoint], hourly: bool) -> Element {
 fn usage_area_chart_xaml(
     series: &[DailySeriesPoint],
     providers: &[ProviderOverview],
+    quota_cycles: &[crate::usage::CodexQuotaCycle],
+    metric: OverviewMetric,
     max_value: u64,
     width: f64,
     color_scheme: ColorScheme,
@@ -1089,6 +1173,14 @@ fn usage_area_chart_xaml(
 
     body.push_str(&fills);
     body.push_str(&strokes);
+    if metric == OverviewMetric::Usage {
+        body.push_str(&quota_timeline_xaml_body(
+            series,
+            quota_cycles,
+            width,
+            height,
+        ));
+    }
     body.push_str(&format!(
         r#"<Line X1="0" Y1="{baseline:.2}" X2="{width:.2}" Y2="{baseline:.2}" Stroke="{{ThemeResource AccentFillColorDefaultBrush}}" StrokeThickness="1.25" />"#
     ));
@@ -1096,6 +1188,91 @@ fn usage_area_chart_xaml(
     format!(
         r#"<Canvas xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Width="{width:.0}" Height="{height:.0}" Background="Transparent">{body}</Canvas>"#
     )
+}
+
+fn quota_timeline_xaml_body(
+    series: &[DailySeriesPoint],
+    cycles: &[crate::usage::CodexQuotaCycle],
+    width: f64,
+    height: f64,
+) -> String {
+    use chrono::TimeZone;
+
+    let Some(first) = series.first() else {
+        return String::new();
+    };
+    let Some(last) = series.last() else {
+        return String::new();
+    };
+    let start = first.at.with_timezone(&chrono::Utc);
+    let Some(end) = (last.date + Duration::days(1))
+        .and_hms_opt(0, 0, 0)
+        .and_then(|naive| Local.from_local_datetime(&naive).earliest())
+        .map(|at| at.with_timezone(&chrono::Utc).min(chrono::Utc::now()))
+    else {
+        return String::new();
+    };
+    if end <= start {
+        return String::new();
+    }
+    let plot_width = chart_plot_width(width);
+    let span = end.signed_duration_since(start).num_milliseconds().max(1) as f64;
+    let x_at = |at: DateTime<chrono::Utc>| {
+        let elapsed = at
+            .signed_duration_since(start)
+            .num_milliseconds()
+            .clamp(0, span as i64) as f64;
+        CHART_PAD_X + plot_width * elapsed / span
+    };
+    let plot_height = (height - CHART_PAD_TOP - CHART_PAD_BOTTOM).max(1.0);
+    let y_at = |remaining: u64| {
+        let ratio = remaining.min(100 * ANALYTICS_PERCENT_SCALE) as f64
+            / (100 * ANALYTICS_PERCENT_SCALE) as f64;
+        CHART_PAD_TOP + plot_height * (1.0 - ratio)
+    };
+
+    let mut resets = String::new();
+    let mut paths = String::new();
+    for cycle in cycles {
+        if cycle.starts_at > start && cycle.starts_at <= end {
+            let x = x_at(cycle.starts_at);
+            resets.push_str(&format!(
+                r#"<Line X1="{x:.2}" Y1="{CHART_PAD_TOP:.2}" X2="{x:.2}" Y2="{:.2}" Stroke="{{ThemeResource TextFillColorSecondaryBrush}}" StrokeThickness="1" StrokeDashArray="3,4" Opacity="0.7" />"#,
+                height - CHART_PAD_BOTTOM
+            ));
+        }
+        let points = cycle
+            .points
+            .iter()
+            .filter(|point| point.at >= start && point.at <= end)
+            .collect::<Vec<_>>();
+        if points.is_empty() {
+            continue;
+        }
+        let mut path = format!(
+            "M {:.2},{:.2}",
+            x_at(points[0].at),
+            y_at(points[0].remaining_percent_micros)
+        );
+        for point in points.iter().skip(1) {
+            path.push_str(&format!(
+                " L {:.2},{:.2}",
+                x_at(point.at),
+                y_at(point.remaining_percent_micros)
+            ));
+        }
+        if points.len() == 1 {
+            path.push_str(&format!(
+                " L {:.2},{:.2}",
+                x_at(points[0].at),
+                y_at(points[0].remaining_percent_micros)
+            ));
+        }
+        paths.push_str(&format!(
+            r#"<Path Data="{path}" Fill="Transparent" Stroke="{{ThemeResource TextFillColorPrimaryBrush}}" StrokeThickness="2.25" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />"#
+        ));
+    }
+    format!("{resets}{paths}")
 }
 
 fn series_x_positions(count: usize, width: f64) -> Vec<f64> {
@@ -1230,7 +1407,9 @@ fn fill_daily_series(
             at: start_of_local_day(day),
             date: day,
             by_provider: BTreeMap::new(),
+            by_model: BTreeMap::new(),
             total: 0,
+            remaining_percent_micros: None,
         }));
         day += Duration::days(1);
     }
@@ -1242,6 +1421,31 @@ fn start_of_local_day(date: NaiveDate) -> DateTime<Local> {
     date.and_hms_opt(0, 0, 0)
         .and_then(|naive| Local.from_local_datetime(&naive).single())
         .unwrap_or_else(Local::now)
+}
+
+fn quota_remaining_at_end_of_day(
+    cycles: &[crate::usage::CodexQuotaCycle],
+    date: NaiveDate,
+) -> Option<u64> {
+    use chrono::TimeZone;
+
+    let at = (date + Duration::days(1))
+        .and_hms_opt(0, 0, 0)
+        .and_then(|naive| Local.from_local_datetime(&naive).earliest())?
+        .with_timezone(&chrono::Utc)
+        .min(chrono::Utc::now());
+    cycles
+        .iter()
+        .filter(|cycle| cycle.starts_at <= at && at <= cycle.resets_at)
+        .max_by_key(|cycle| cycle.starts_at)
+        .and_then(|cycle| {
+            cycle
+                .points
+                .iter()
+                .filter(|point| point.at <= at)
+                .max_by_key(|point| point.at)
+        })
+        .map(|point| point.remaining_percent_micros)
 }
 
 fn series_color(provider: ProviderKind, color_scheme: ColorScheme) -> Color {
@@ -1272,6 +1476,7 @@ fn format_axis_value(value: u64, metric: OverviewMetric) -> String {
     match metric {
         OverviewMetric::Cost => format_spend(value),
         OverviewMetric::Tokens => format_token_count(value),
+        OverviewMetric::Usage => format_analytics_percent(value),
     }
 }
 
@@ -1477,82 +1682,133 @@ fn chart_tooltip(
     };
     let mut total_cents = 0_u64;
     let mut total_tokens = 0_u64;
+    let mut total_usage = 0_u64;
     let mut name_width = 5.0 * TOOLTIP_CHAR_CAPTION;
     let mut amount_width = 0.0_f64;
     let mut visible_count = 0_usize;
     let mut rows: Vec<Element> = Vec::new();
-    for entry in providers {
-        let value = point.by_provider.get(&entry.provider).copied().unwrap_or(0);
-        let amount = match metric {
-            OverviewMetric::Cost => {
-                total_cents = total_cents.saturating_add(spend_display_cents(value));
-                format_spend_tenths(value)
-            }
-            OverviewMetric::Tokens => {
-                total_tokens = total_tokens.saturating_add(value);
-                format_token_count(value)
-            }
-        };
-        let hidden = match metric {
-            OverviewMetric::Cost => spend_display_tenths(value) == 0,
-            OverviewMetric::Tokens => value == 0,
-        };
-        let descriptor = provider_registry::descriptor(entry.provider);
-        let color = provider_brand_color(entry.provider, color_scheme, true);
-        if !hidden {
+    if metric == OverviewMetric::Usage {
+        total_usage = point.total;
+        let mut models = point.by_model.iter().collect::<Vec<_>>();
+        models.sort_by(|left, right| right.1.cmp(left.1).then_with(|| left.0.cmp(right.0)));
+        for (model, value) in models {
+            let amount = format_analytics_percent(*value);
             visible_count += 1;
-            name_width = name_width
-                .max(descriptor.display_name.chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
+            name_width = name_width.max(model.chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
             amount_width = amount_width.max(amount.chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
+            let color = quota_model_color(model, color_scheme);
+            let label = hstack((
+                border(Element::Empty)
+                    .width(6.0)
+                    .height(6.0)
+                    .corner_radius(3.0)
+                    .background(color),
+                caption(model)
+                    .foreground(ThemeRef::SecondaryText)
+                    .vertical_alignment(VerticalAlignment::Center),
+            ))
+            .spacing(TOOLTIP_ROW_GAP)
+            .with_key(format!("usage-tip-model-label-{model}"));
+            rows.push(
+                border(tooltip_metric_row(label, amount))
+                    .padding(Thickness {
+                        left: 0.0,
+                        top: 0.0,
+                        right: 0.0,
+                        bottom: 6.0,
+                    })
+                    .with_key(format!("usage-tip-model-{model}"))
+                    .into(),
+            );
         }
-        let icon_name = provider_registry::icon(entry.provider);
-        let label = hstack((
-            crate::icons::element(icon_name, TOOLTIP_ICON, color)
-                .vertical_alignment(VerticalAlignment::Center)
-                .with_key(format!(
-                    "usage-tip-icon-{}-{}-{:02X}{:02X}{:02X}",
-                    entry.provider.id(),
-                    icon_name,
-                    color.r,
-                    color.g,
-                    color.b
-                )),
-            caption(descriptor.display_name)
-                .foreground(ThemeRef::SecondaryText)
-                .vertical_alignment(VerticalAlignment::Center),
-        ))
-        .spacing(TOOLTIP_ROW_GAP)
-        .with_key(format!("usage-tip-label-{}", entry.provider.id()));
-        // Keep every provider host mounted; collapse $0 rows so icons
-        // do not remount when a day has no spend.
-        let mut slot = border(
-            tooltip_metric_row(label, amount)
-                .with_key(format!("usage-tip-row-{}", entry.provider.id())),
-        )
-        .opacity(if hidden { 0.0 } else { 1.0 })
-        .with_key(format!("usage-tip-slot-{}", entry.provider.id()));
-        if hidden {
-            slot = slot.height(0.0);
-        } else {
-            slot = slot.padding(Thickness {
-                left: 0.0,
-                top: 0.0,
-                right: 0.0,
-                bottom: 6.0,
-            });
+    } else {
+        for entry in providers {
+            let value = point.by_provider.get(&entry.provider).copied().unwrap_or(0);
+            let amount = match metric {
+                OverviewMetric::Cost => {
+                    total_cents = total_cents.saturating_add(spend_display_cents(value));
+                    format_spend_tenths(value)
+                }
+                OverviewMetric::Tokens => {
+                    total_tokens = total_tokens.saturating_add(value);
+                    format_token_count(value)
+                }
+                OverviewMetric::Usage => {
+                    total_usage = total_usage.saturating_add(value);
+                    format_analytics_percent(value)
+                }
+            };
+            let hidden = match metric {
+                OverviewMetric::Cost => spend_display_tenths(value) == 0,
+                OverviewMetric::Tokens => value == 0,
+                OverviewMetric::Usage => value == 0,
+            };
+            let descriptor = provider_registry::descriptor(entry.provider);
+            let color = provider_brand_color(entry.provider, color_scheme, true);
+            if !hidden {
+                visible_count += 1;
+                name_width = name_width
+                    .max(descriptor.display_name.chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
+                amount_width =
+                    amount_width.max(amount.chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
+            }
+            let icon_name = provider_registry::icon(entry.provider);
+            let label = hstack((
+                crate::icons::element(icon_name, TOOLTIP_ICON, color)
+                    .vertical_alignment(VerticalAlignment::Center)
+                    .with_key(format!(
+                        "usage-tip-icon-{}-{}-{:02X}{:02X}{:02X}",
+                        entry.provider.id(),
+                        icon_name,
+                        color.r,
+                        color.g,
+                        color.b
+                    )),
+                caption(descriptor.display_name)
+                    .foreground(ThemeRef::SecondaryText)
+                    .vertical_alignment(VerticalAlignment::Center),
+            ))
+            .spacing(TOOLTIP_ROW_GAP)
+            .with_key(format!("usage-tip-label-{}", entry.provider.id()));
+            // Keep every provider host mounted; collapse $0 rows so icons
+            // do not remount when a day has no spend.
+            let mut slot = border(
+                tooltip_metric_row(label, amount)
+                    .with_key(format!("usage-tip-row-{}", entry.provider.id())),
+            )
+            .opacity(if hidden { 0.0 } else { 1.0 })
+            .with_key(format!("usage-tip-slot-{}", entry.provider.id()));
+            if hidden {
+                slot = slot.height(0.0);
+            } else {
+                slot = slot.padding(Thickness {
+                    left: 0.0,
+                    top: 0.0,
+                    right: 0.0,
+                    bottom: 6.0,
+                });
+            }
+            rows.push(slot.into());
         }
-        rows.push(slot.into());
     }
 
     let total = match metric {
         OverviewMetric::Cost => format_spend_tenths_from_cents(total_cents),
         OverviewMetric::Tokens => format_token_count(total_tokens),
+        OverviewMetric::Usage => format_analytics_percent(total_usage),
     };
     amount_width = amount_width.max(total.chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
     let inner_width =
         TOOLTIP_ICON + TOOLTIP_ROW_GAP + name_width + TOOLTIP_VALUE_GAP + amount_width;
-    let tip_width =
-        (title.chars().count() as f64 * TOOLTIP_CHAR_TITLE).max(inner_width) + TOOLTIP_PAD_X * 2.0;
+    let reference_width = if metric == OverviewMetric::Usage {
+        35.0 * TOOLTIP_CHAR_CAPTION
+    } else {
+        0.0
+    };
+    let tip_width = (title.chars().count() as f64 * TOOLTIP_CHAR_TITLE)
+        .max(inner_width)
+        .max(reference_width)
+        + TOOLTIP_PAD_X * 2.0;
     let body_width = tip_width - TOOLTIP_PAD_X * 2.0;
 
     rows.push(
@@ -1570,15 +1826,50 @@ fn chart_tooltip(
             .into(),
     );
     rows.push(
-        tooltip_metric_row(caption("Total").foreground(ThemeRef::SecondaryText), total)
-            .with_key("usage-tip-total"),
+        tooltip_metric_row(
+            caption(if metric == OverviewMetric::Usage {
+                "Quota consumed"
+            } else {
+                "Total"
+            })
+            .foreground(ThemeRef::SecondaryText),
+            total,
+        )
+        .with_key("usage-tip-total"),
     );
-    let row_count = visible_count + 2;
-    let set_key = providers
-        .iter()
-        .map(|entry| entry.provider.id())
-        .collect::<Vec<_>>()
-        .join("+");
+    if metric == OverviewMetric::Usage
+        && let Some(remaining) = point.remaining_percent_micros
+    {
+        rows.push(
+            tooltip_metric_row(
+                caption("Quota remaining").foreground(ThemeRef::SecondaryText),
+                format_analytics_percent(remaining),
+            )
+            .with_key("usage-tip-remaining"),
+        );
+    }
+    if metric == OverviewMetric::Usage {
+        rows.push(
+            caption("Line: quota remaining · Vertical marks: resets")
+                .foreground(ThemeRef::TertiaryText)
+                .wrap()
+                .with_key("usage-tip-reference")
+                .into(),
+        );
+    }
+    let row_count = visible_count
+        + 2
+        + usize::from(metric == OverviewMetric::Usage)
+        + usize::from(metric == OverviewMetric::Usage && point.remaining_percent_micros.is_some());
+    let set_key = if metric == OverviewMetric::Usage {
+        point.by_model.keys().cloned().collect::<Vec<_>>().join("+")
+    } else {
+        providers
+            .iter()
+            .map(|entry| entry.provider.id())
+            .collect::<Vec<_>>()
+            .join("+")
+    };
 
     let tip = border(
         vstack((
@@ -1615,7 +1906,39 @@ fn chart_tooltip(
     (tip, tip_width, tip_height)
 }
 
-fn usage_totals_card(totals: &TokenUsage) -> Element {
+fn usage_totals_card(snapshot: &OverviewSnapshot, metric: OverviewMetric) -> Element {
+    if metric == OverviewMetric::Usage {
+        let total = if snapshot.analytics_days > 0 {
+            format_analytics_percent(snapshot.providers.iter().fold(0_u64, |sum, provider| {
+                sum.saturating_add(provider.usage_percent_micros)
+            }))
+        } else {
+            "—".to_owned()
+        };
+        let updated = snapshot
+            .analytics_updated_at
+            .map(|at| at.with_timezone(&Local).format("%b %-d, %H:%M").to_string())
+            .unwrap_or_else(|| "—".into());
+        return usage_card(
+            vstack((
+                body_strong("Totals"),
+                grid((
+                    total_metric("Quota consumed", total).grid_column(0),
+                    total_metric("Active days", snapshot.analytics_days.to_string()).grid_column(1),
+                    total_metric("Updated", updated)
+                        .grid_column(0)
+                        .grid_row(1)
+                        .grid_column_span(2),
+                ))
+                .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
+                .rows([GridLength::Auto, GridLength::Auto])
+                .row_spacing(8.0)
+                .column_spacing(8.0),
+            ))
+            .spacing(8.0),
+        );
+    }
+    let totals = &snapshot.totals;
     let processed = totals.total_tokens();
     let uncached = totals
         .input_tokens
@@ -1673,6 +1996,7 @@ fn usage_breakdown_card(
     let table = match breakdown {
         BreakdownMode::Model => model_breakdown_table(
             &snapshot.model_rows,
+            metric,
             color_scheme,
             use_colored_provider_icons,
         ),
@@ -1718,14 +2042,15 @@ fn usage_breakdown_card(
 
 fn model_breakdown_table(
     rows: &[BreakdownRow],
+    metric: OverviewMetric,
     color_scheme: ColorScheme,
     use_colored_provider_icons: bool,
 ) -> Element {
     vstack((
-        breakdown_header(),
+        breakdown_header(metric),
         vstack(
             rows.iter()
-                .map(|row| breakdown_row(row, color_scheme, use_colored_provider_icons))
+                .map(|row| breakdown_row(row, metric, color_scheme, use_colored_provider_icons))
                 .collect::<Vec<_>>(),
         )
         .spacing(6.0)
@@ -1835,6 +2160,7 @@ fn day_breakdown_header(
         caption(match metric {
             OverviewMetric::Cost => "Cost",
             OverviewMetric::Tokens => "Tokens",
+            OverviewMetric::Usage => "Quota",
         })
         .foreground(ThemeRef::TertiaryText)
         .horizontal_alignment(HorizontalAlignment::Right)
@@ -1880,6 +2206,9 @@ fn day_breakdown_row(
             OverviewMetric::Tokens => {
                 format_token_count(value.map(TokenUsage::total_tokens).unwrap_or(0))
             }
+            OverviewMetric::Usage => {
+                format_analytics_percent(row.by_provider_usage.get(provider).copied().unwrap_or(0))
+            }
         };
         cells.push(
             caption(cell)
@@ -1891,6 +2220,7 @@ fn day_breakdown_row(
     let total = match metric {
         OverviewMetric::Cost => format_breakdown_cost(row),
         OverviewMetric::Tokens => format_token_count(row.tokens),
+        OverviewMetric::Usage => format_analytics_percent(row.usage_percent_micros),
     };
     cells.push(
         caption(total)
@@ -1917,7 +2247,18 @@ fn breakdown_rule() -> Element {
         .into()
 }
 
-fn breakdown_header() -> Element {
+fn breakdown_header(metric: OverviewMetric) -> Element {
+    if metric == OverviewMetric::Usage {
+        return grid((
+            caption("Model").foreground(ThemeRef::TertiaryText),
+            caption("Quota")
+                .foreground(ThemeRef::TertiaryText)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .grid_column(1),
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Pixel(64.0)])
+        .into();
+    }
     grid((
         caption("Model").foreground(ThemeRef::TertiaryText),
         caption("Cost")
@@ -1952,6 +2293,7 @@ fn breakdown_row_id(row: &BreakdownRow) -> String {
 
 fn breakdown_row(
     row: &BreakdownRow,
+    metric: OverviewMetric,
     color_scheme: ColorScheme,
     use_colored_provider_icons: bool,
 ) -> Element {
@@ -1984,6 +2326,19 @@ fn breakdown_row(
                 .vertical_alignment(VerticalAlignment::Bottom)
                 .into(),
         );
+    }
+    if metric == OverviewMetric::Usage {
+        return grid((
+            hstack(title)
+                .spacing(4.0)
+                .vertical_alignment(VerticalAlignment::Center),
+            caption(format_analytics_percent(row.usage_percent_micros))
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .grid_column(1),
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Pixel(64.0)])
+        .with_key(format!("usage-bd-row-{row_id}"))
+        .into();
     }
     grid((
         hstack(title)
@@ -2027,8 +2382,58 @@ fn provider_brand_color(
     Color::rgb(r, g, b)
 }
 
+fn quota_model_color(model: &str, scheme: ColorScheme) -> Color {
+    let mut hash = model.bytes().fold(0xcbf29ce484222325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+    });
+    hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d049bb133111eb);
+    hash ^= hash >> 31;
+    let hue = (hash >> 32) as f64 / u32::MAX as f64 * 6.0;
+    let lightness = if scheme == ColorScheme::Dark {
+        0.69
+    } else {
+        0.40
+    };
+    let chroma = (1.0_f64 - (2.0_f64 * lightness - 1.0).abs()) * 0.70;
+    let x = chroma * (1.0 - (hue % 2.0 - 1.0).abs());
+    let (red, green, blue) = match hue as u8 {
+        0 => (chroma, x, 0.0),
+        1 => (x, chroma, 0.0),
+        2 => (0.0, chroma, x),
+        3 => (0.0, x, chroma),
+        4 => (x, 0.0, chroma),
+        _ => (chroma, 0.0, x),
+    };
+    let offset = lightness - chroma / 2.0;
+    Color::rgb(
+        ((red + offset) * 255.0).round() as u8,
+        ((green + offset) * 255.0).round() as u8,
+        ((blue + offset) * 255.0).round() as u8,
+    )
+}
+
 fn format_spend(microusd: u64) -> String {
     format_spend_dollars((microusd as f64 / 1_000_000.0).round() as u64)
+}
+
+fn format_analytics_percent(value: u64) -> String {
+    let percent = value as f64 / ANALYTICS_PERCENT_SCALE as f64;
+    if percent >= 10.0 || percent == 0.0 {
+        format!("{percent:.0}%")
+    } else if percent >= 1.0 {
+        format!("{percent:.1}%")
+    } else {
+        format!("{percent:.2}%")
+    }
+}
+
+fn quota_window_description(window_minutes: Option<u32>) -> &'static str {
+    match window_minutes {
+        Some(10_080) => "Weekly quota consumed",
+        Some(300) => "5-hour quota consumed",
+        _ => "Subscription quota consumed",
+    }
 }
 
 fn format_total_cost(usage: &TokenUsage) -> String {
