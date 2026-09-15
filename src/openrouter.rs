@@ -496,24 +496,16 @@ impl AccountSecretChange {
             Self::ApiKey { value, .. } | Self::ManagementKey { value, .. } => value.as_deref(),
         }
     }
-
-    fn with_value(&self, value: Option<String>) -> Self {
-        match self {
-            Self::ApiKey {
-                account_id, key_id, ..
-            } => Self::api_key(account_id.clone(), key_id.clone(), value),
-            Self::ManagementKey { account_id, .. } => Self::management(account_id.clone(), value),
-        }
-    }
 }
 
-/// Previous values for an atomic group of account-secret changes. Callers use
-/// this to restore protected storage if the following settings commit fails.
-pub(crate) struct AccountSecretRollback(Vec<AccountSecretChange>);
+/// Previous ciphertext for an atomic group of account-secret changes. Callers
+/// restore protected storage if the following settings commit fails. Capture
+/// never decrypts, so a corrupt slot can still be overwritten or removed.
+pub(crate) struct AccountSecretRollback(secrets::EncodedRollback);
 
 impl AccountSecretRollback {
     pub(crate) fn restore(self) -> Result<()> {
-        write_account_secret_changes(&self.0)
+        self.0.restore()
     }
 }
 
@@ -523,27 +515,12 @@ pub(crate) fn apply_account_secret_changes(
     let mut cache = SECRET_HINTS
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    let previous = changes
-        .iter()
-        .map(|change| {
-            let value = load_secret_value(&change.secret_name())?;
-            Ok(change.with_value(value))
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let rollback =
+        secrets::EncodedRollback::capture(changes.iter().map(|change| change.secret_name()))?;
     let writes = account_secret_writes(changes);
     secrets::save_many(&writes)?;
     invalidate_secret_hints(&mut cache, &writes);
-    Ok(AccountSecretRollback(previous))
-}
-
-fn write_account_secret_changes(changes: &[AccountSecretChange]) -> Result<()> {
-    let mut cache = SECRET_HINTS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let writes = account_secret_writes(changes);
-    secrets::save_many(&writes)?;
-    invalidate_secret_hints(&mut cache, &writes);
-    Ok(())
+    Ok(AccountSecretRollback(rollback))
 }
 
 fn account_secret_writes(changes: &[AccountSecretChange]) -> Vec<(String, Option<String>)> {

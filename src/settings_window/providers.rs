@@ -618,10 +618,10 @@ fn persist_opencode_manual_key(
     provider: ProviderKind,
     value: Option<String>,
 ) -> anyhow::Result<()> {
-    let previous = crate::opencode::manual_key(provider)?;
+    let rollback = crate::opencode::snapshot_manual_key(provider)?;
     crate::opencode::save_manual_key(provider, value.as_deref())?;
     if let Err(error) = bump_opencode_credentials(settings_tx, provider) {
-        return match crate::opencode::save_manual_key(provider, previous.as_deref()) {
+        return match crate::opencode::restore_manual_key(rollback) {
             Ok(()) => Err(error),
             Err(rollback_error) => Err(anyhow::anyhow!(
                 "could not save credential revision ({error:#}); restoring the protected key also failed ({rollback_error:#})"
