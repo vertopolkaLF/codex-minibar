@@ -52,9 +52,9 @@ fn card_hover_handlers(
     (enter, exit)
 }
 
-/// Base card fill + stroke (Fluent card chrome) and WinUI-timed hover tint.
-fn card_background_layers(hovered: bool) -> (Element, Element) {
-    let base = border(Element::Empty)
+/// Base card fill + stroke (Fluent card chrome).
+fn card_base_layer() -> Element {
+    border(Element::Empty)
         .background(ThemeRef::CardBackground)
         .corner_radius(CARD_RADIUS)
         .border_thickness(Thickness::uniform(1.0))
@@ -63,18 +63,29 @@ fn card_background_layers(hovered: bool) -> (Element, Element) {
         .relative_align_right()
         .relative_align_top()
         .relative_align_bottom()
-        .into();
-    let hover = border(Element::Empty)
+        .into()
+}
+
+/// WinUI-timed hover tint clipped to the given corner radii.
+fn card_hover_overlay(hovered: bool, radii: CornerRadii) -> Element {
+    border(Element::Empty)
         .background(ThemeRef::SubtleFill)
         .opacity(if hovered { 1.0 } else { 0.0 })
         .with_opacity_transition(duration(CONTROL_FASTER_ANIMATION))
-        .corner_radius(CARD_RADIUS)
+        .corner_radii(radii)
         .relative_align_left()
         .relative_align_right()
         .relative_align_top()
         .relative_align_bottom()
-        .into();
-    (base, hover)
+        .into()
+}
+
+/// Base card fill + stroke (Fluent card chrome) and WinUI-timed hover tint.
+fn card_background_layers(hovered: bool) -> (Element, Element) {
+    (
+        card_base_layer(),
+        card_hover_overlay(hovered, CornerRadii::uniform(CARD_RADIUS)),
+    )
 }
 
 /// Fluent settings card with a status label and a native WinUI toggle pinned
@@ -264,6 +275,18 @@ fn settings_expander_card_with_header(
     let hovered = card_is_hovered(hovered_id, &card_id);
     let (on_enter, on_exit) = card_hover_handlers(card_id, set_hovered_id);
     let progress = expand_progress.clamp(0.0, 1.0);
+    // Expanded: round only the top so the tint stays on the header.
+    // Collapsed: the header is the whole card, so all four corners match.
+    let header_hover_radii = if progress > 0.0 {
+        CornerRadii {
+            top_left: CARD_RADIUS,
+            top_right: CARD_RADIUS,
+            bottom_right: 0.0,
+            bottom_left: 0.0,
+        }
+    } else {
+        CornerRadii::uniform(CARD_RADIUS)
+    };
 
     let trailing_reserve = if trailing.is_some() { 80.0 } else { 0.0 };
     let trailing = trailing.map(|trailing| {
@@ -319,6 +342,7 @@ fn settings_expander_card_with_header(
         header_content
     };
     let mut header_children: Vec<Element> = vec![
+        card_hover_overlay(hovered, header_hover_radii),
         // Transparent fill so empty header space is hit-testable (null bg is not).
         border(Element::Empty)
             .background(Color::transparent())
@@ -340,7 +364,9 @@ fn settings_expander_card_with_header(
     let header = relative_panel(header_children)
         .min_height(CARD_ROW_HEIGHT)
         .horizontal_alignment(HorizontalAlignment::Stretch)
-        .background(Color::transparent());
+        .background(Color::transparent())
+        .on_pointer_entered(on_enter)
+        .on_pointer_exited(on_exit);
 
     let body_content = border(
         vstack((
@@ -388,10 +414,8 @@ fn settings_expander_card_with_header(
         None => Element::Empty,
     };
 
-    let (base, hover) = card_background_layers(hovered);
     relative_panel(vec![
-        base,
-        hover,
+        card_base_layer(),
         vstack((header, body))
             .spacing(0.0)
             .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -403,8 +427,6 @@ fn settings_expander_card_with_header(
     ])
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .background(Color::transparent())
-    .on_pointer_entered(on_enter)
-    .on_pointer_exited(on_exit)
     .into()
 }
 
