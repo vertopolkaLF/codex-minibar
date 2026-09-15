@@ -735,8 +735,13 @@ pub(super) fn start_background_bridge(
                         usage.today.total_tokens(),
                         usage.history.total_tokens()
                     ));
+                    let usage_error = usage_error_message(&usage);
                     state.replace_usage(provider, usage);
-                    ui.clear_usage_error(provider);
+                    if let Some(error) = usage_error {
+                        ui.set_usage_error(provider, error);
+                    } else {
+                        ui.clear_usage_error(provider);
+                    }
                     ui.observe_usage_update();
                     publish_popup_ui(&set_ui, &ui);
                 }

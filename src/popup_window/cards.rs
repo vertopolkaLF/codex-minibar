@@ -214,9 +214,11 @@ pub(super) fn provider_cards(
                             )),
                         );
                     }
-                    if usage_visible {
+                    if usage_visible
+                        && let Some(account_usage) = openrouter_account_usage(limits, &account.id)
+                    {
                         account_strip.push(
-                            openrouter_account_usage(limits, &account.id)
+                            account_usage
                                 .with_key(format!("openrouter-account-usage-{}", account.id)),
                         );
                     }
@@ -1636,7 +1638,7 @@ pub(super) fn usage_statistics_card(provider: ProviderKind, limits: &RateLimits)
     usage_statistics_content(provider, &limits.usage)
 }
 
-fn openrouter_account_usage(limits: &RateLimits, account: &str) -> Element {
+fn openrouter_account_usage(limits: &RateLimits, account: &str) -> Option<Element> {
     let statistics = limits.usage.accounts.get(account);
     let mut contents = Vec::new();
     if let Some(statistics) = statistics.filter(|s| !s.daily.is_empty()) {
@@ -1645,14 +1647,14 @@ fn openrouter_account_usage(limits: &RateLimits, account: &str) -> Element {
             statistics,
         ));
     }
-    if let Some(error) = statistics.and_then(|s| s.error.as_deref()) {
-        contents.push(
-            caption(format!("Usage statistics: {error}"))
-                .foreground(ThemeRef::TertiaryText)
-                .wrap()
-                .into(),
-        );
-    } else if contents.is_empty() {
+    // Account-level analytics errors are promoted to the provider error bar
+    // by the background bridge. Keep partial history visible, but do not
+    // render the old gray inline diagnostic here as a second error surface.
+    let has_error = statistics.and_then(|s| s.error.as_deref()).is_some();
+    if has_error && contents.is_empty() {
+        return None;
+    }
+    if contents.is_empty() {
         contents.push(
             caption("Loading usage statistics…")
                 .foreground(ThemeRef::TertiaryText)
@@ -1660,7 +1662,7 @@ fn openrouter_account_usage(limits: &RateLimits, account: &str) -> Element {
                 .into(),
         );
     }
-    vstack(contents).spacing(6.0).into()
+    Some(vstack(contents).spacing(6.0).into())
 }
 
 fn usage_statistics_content(

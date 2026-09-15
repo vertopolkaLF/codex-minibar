@@ -27,6 +27,26 @@ pub(super) fn flush_popup_ui(set_ui: &AsyncSetState<UiState>, ui: &UiState) {
     set_ui.call(ui.clone());
 }
 
+/// Flatten provider usage errors, including per-account errors exposed by
+/// OpenRouter, into the provider-scoped presentation used by the popup.
+pub(super) fn usage_error_message(statistics: &crate::usage::UsageStatistics) -> Option<String> {
+    let mut errors = Vec::new();
+    let mut add_error = |error: Option<&str>| {
+        let Some(error) = error else {
+            return;
+        };
+        let error = error.trim();
+        if !error.is_empty() && !errors.iter().any(|seen| seen == error) {
+            errors.push(error.to_owned());
+        }
+    };
+    add_error(statistics.error.as_deref());
+    for account in statistics.accounts.values() {
+        add_error(account.error.as_deref());
+    }
+    (!errors.is_empty()).then(|| errors.join("; "))
+}
+
 /// Shared startup state handed from `main` into the reactor render tree.
 pub struct AppState {
     pub settings: Settings,

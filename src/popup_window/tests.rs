@@ -759,6 +759,23 @@ fn usage_error_uses_provider_error_presentation_without_overwriting_quota_error(
 }
 
 #[test]
+fn nested_usage_errors_are_promoted_to_provider_error_state() {
+    let mut statistics = crate::usage::UsageStatistics::default();
+    statistics.accounts.insert(
+        "account".into(),
+        crate::usage::UsageStatistics {
+            error: Some("analytics request failed".into()),
+            ..Default::default()
+        },
+    );
+
+    assert_eq!(
+        usage_error_message(&statistics).as_deref(),
+        Some("analytics request failed")
+    );
+}
+
+#[test]
 fn non_forbidden_provider_error_keeps_its_detail() {
     let mut ui = UiState::default();
 
