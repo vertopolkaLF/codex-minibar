@@ -885,6 +885,65 @@ pub(crate) fn update_available_nav_card(
     .into()
 }
 
+fn nav_footer_link(label: &'static str, url: &'static str) -> Element {
+    HyperlinkButton::new(label)
+        .font_size(12.0)
+        .min_width(0.0)
+        .min_height(0.0)
+        .height(24.0)
+        .padding(Thickness {
+            left: 8.0,
+            top: 2.0,
+            right: 8.0,
+            bottom: 2.0,
+        })
+        .on_click(move || {
+            if let Err(error) = crate::updater::open_url(url) {
+                eprintln!("failed to open {url}: {error:#}");
+            }
+        })
+        .into()
+}
+
+/// Compact providers-pane banner: send people to GitHub when a provider is missing.
+pub(crate) fn missing_provider_nav_card() -> Element {
+    border(
+        vstack((
+            text_block("Missing a provider?")
+                .font_size(13.0)
+                .semibold()
+                .wrap()
+                .horizontal_alignment(HorizontalAlignment::Stretch),
+            text_block("Request support or send a pull request.")
+                .font_size(12.0)
+                .wrap()
+                .foreground(ThemeRef::SecondaryText)
+                .horizontal_alignment(HorizontalAlignment::Stretch),
+            hstack((
+                nav_footer_link("Issue", crate::updater::PROVIDER_REQUEST_ISSUE_URL),
+                nav_footer_link("Pull request", crate::updater::CONTRIBUTING_URL),
+            ))
+            .spacing(0.0)
+            .horizontal_alignment(HorizontalAlignment::Left),
+        ))
+        .spacing(6.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch),
+    )
+    .padding(Thickness {
+        left: 12.0,
+        top: 10.0,
+        right: 12.0,
+        bottom: 8.0,
+    })
+    .background(ThemeRef::CardBackground)
+    .corner_radius(CARD_RADIUS)
+    .border_thickness(Thickness::uniform(1.0))
+    .border_brush(ThemeRef::CardStroke)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .with_key("missing-provider-banner")
+    .into()
+}
+
 /// Action card with trailing button + WinUI-timed hover.
 pub(crate) fn settings_action_card(
     label: impl Into<String>,

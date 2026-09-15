@@ -23,6 +23,9 @@ pub const GITHUB_REPO: &str = "codex-minibar";
 pub const RELEASES_URL: &str = "https://github.com/vertopolkaLF/codex-minibar/releases";
 pub const REPO_URL: &str = "https://github.com/vertopolkaLF/codex-minibar";
 pub const ISSUES_URL: &str = "https://github.com/vertopolkaLF/codex-minibar/issues";
+pub const PROVIDER_REQUEST_ISSUE_URL: &str =
+    "https://github.com/vertopolkaLF/codex-minibar/issues/new?template=03-provider-request.yml";
+pub const CONTRIBUTING_URL: &str = "https://github.com/vertopolkaLF/codex-minibar#contributing";
 
 const LATEST_RELEASE_API: &str =
     "https://api.github.com/repos/vertopolkaLF/codex-minibar/releases/latest";

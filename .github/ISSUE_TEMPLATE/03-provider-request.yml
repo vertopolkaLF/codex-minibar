@@ -1,0 +1,68 @@
+name: Provider Request
+description: Ask for a provider that is not in Codex Minibar yet, or offer to add it.
+title: "[Provider]: "
+type: feature
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Codex Minibar reads **local** provider data (CLI transcripts, desktop app files, or saved credentials). Requests that explain where that data lives are much easier to ship.
+
+        Please do **not** paste API keys, tokens, credentials, or raw usage history.
+
+  - type: input
+    id: provider
+    attributes:
+      label: Provider name
+      description: The product or CLI you want supported.
+      placeholder: Gemini CLI, Aider, Continue, …
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where do you use it?
+      multiple: true
+      options:
+        - CLI
+        - Desktop app
+        - Web / API only
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: data
+    attributes:
+      label: Where does usage or quota data live?
+      description: Paths, config files, transcript folders, or APIs you already know about. Approximate is fine.
+      placeholder: |
+        Usage shows up in %USERPROFILE%\.foo\sessions\ as JSONL transcripts.
+        Quota is in the desktop app settings, or behind an authenticated /usage endpoint.
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why this provider?
+      description: What should Codex Minibar show for it (limits, spend, sessions, reset timers)?
+      placeholder: I want the 5-hour quota and weekly spend in the tray, same as Codex.
+
+  - type: checkboxes
+    id: help
+    attributes:
+      label: How you can help
+      options:
+        - label: I can open a pull request or help test a draft integration.
+        - label: I can share sanitized sample files or fixtures (no secrets).
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and did not find the same provider request.
+          required: true

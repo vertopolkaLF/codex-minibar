@@ -15,7 +15,8 @@ use crate::settings_controls::{
     settings_brick_table_header, settings_card_padding, settings_checkbox_expander,
     settings_content_expander, settings_content_expander_with_trailing, settings_control_card,
     settings_info_card, settings_labeled_checkbox, settings_slider_content, settings_toggle_card,
-    settings_toggle_card_with_description, settings_toggle_expander, update_available_nav_card,
+    settings_toggle_card_with_description, settings_toggle_expander, missing_provider_nav_card,
+    update_available_nav_card,
 };
 use crate::theme::{CONTROL_FAST_ANIMATION, CONTROL_NORMAL_ANIMATION, duration};
 use crate::updater::{
@@ -659,7 +660,17 @@ pub fn render(
         SettingsNavMode::Providers => navigation
             // PaneTitle is the documented NavigationView header slot and
             // remains visible when the built-in pane toggle is hidden.
-            .pane_title("Providers"),
+            .pane_title("Providers")
+            .pane_footer(
+                border(missing_provider_nav_card())
+                    .padding(Thickness {
+                        left: 12.0,
+                        top: 0.0,
+                        right: 12.0,
+                        bottom: 2.0,
+                    })
+                    .background(Color::transparent()),
+            ),
     };
 
     let (use_colored_provider_icons, set_use_colored_provider_icons) =
