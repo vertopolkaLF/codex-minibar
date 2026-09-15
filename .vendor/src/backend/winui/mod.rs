@@ -504,9 +504,54 @@ fn put_direct_content(h: &Handle, child: Option<&bindings::UIElement>) {
     }
 }
 
+fn lookup_app_resource(key: &str) -> Result<windows_core::IInspectable> {
+    let resources = bindings::Application::Current()?.Resources()?;
+    let map = resources.cast::<windows_collections::IMap<
+        windows_core::IInspectable,
+        windows_core::IInspectable,
+    >>()?;
+    let lookup_key = windows_reference::IReference::from(windows_core::HSTRING::from(key));
+    map.Lookup(&lookup_key)
+}
+
+fn lookup_app_style(key: &str) -> Result<bindings::Style> {
+    lookup_app_resource(key)?.cast()
+}
+
+fn lookup_theme_brush(key: &str) -> Result<bindings::Brush> {
+    lookup_app_resource(key)?.cast()
+}
+
+/// Theme brushes for Button must be local values. Replacing `Style` would
+/// wipe Accent/Subtle/DefaultButtonStyle and leave a naked control.
+fn apply_theme_resource_properties(handle: &Handle, bindings: &[(Prop, ThemeRef)]) {
+    for (prop, theme_ref) in bindings {
+        let Ok(brush) = lookup_theme_brush(theme_ref.resource_key()) else {
+            continue;
+        };
+        match prop {
+            Prop::Foreground => {
+                diag::dropped(set_foreground(handle, &brush));
+            }
+            Prop::Background => {
+                diag::dropped(set_background(handle, &brush));
+            }
+            Prop::BorderBrush => {
+                diag::dropped(set_border_brush(handle, &brush));
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Build and apply a XAML Style with {ThemeResource} setters to an element.
 /// WinUI handles theme-reactive resolution natively (Light ↔ Dark).
 fn apply_theme_resource_style(handle: &Handle, bindings: &[(Prop, ThemeRef)]) {
+    if matches!(handle, Handle::Button(_) | Handle::HyperlinkButton(_)) {
+        apply_theme_resource_properties(handle, bindings);
+        return;
+    }
+
     let Some((target_type, fe)) = style_target_for_handle(handle) else {
         return;
     };
@@ -1328,25 +1373,21 @@ impl Backend for WinUIBackend {
                         1 => Some("AccentButtonStyle"),
                         2 => Some("SubtleButtonStyle"),
                         3 => Some("TextBlockButtonStyle"),
-                        _ => None, // 0 = Default
+                        // Keep DefaultButtonStyle so CornerRadius and padding stay.
+                        4 => Some("DefaultButtonStyle"),
+                        _ => None,
                     };
                     if let Some(key_str) = style_key {
-                        let resources =
-                            bindings::Application::Current().and_then(|app| app.Resources())?;
-                        let key = windows_reference::IReference::from(windows_core::HSTRING::from(
-                            key_str,
-                        ));
-                        let map = resources.cast::<windows_collections::IMap<
-                            windows_core::IInspectable,
-                            windows_core::IInspectable,
-                        >>()?;
-                        if let Ok(style_obj) = map.Lookup(&key)
-                            && let Ok(s) = style_obj.cast::<bindings::Style>()
-                        {
+                        if let Ok(s) = lookup_app_style(key_str) {
                             fe.SetStyle(&s)?;
                         }
                     } else {
                         fe.SetStyle(None)?;
+                    }
+                    if *v == 4 {
+                        if let Ok(brush) = lookup_theme_brush("SystemFillColorCriticalBrush") {
+                            b.cast::<bindings::IControl>()?.SetForeground(&brush)?;
+                        }
                     }
                     Ok(())
                 }
@@ -2718,12 +2759,13 @@ impl Backend for WinUIBackend {
         // Store bindings for theme-change re-resolution.
         if bindings.is_empty() {
             self.theme_brush_registry.borrow_mut().remove(&id);
-            // Clear any applied style
             let map = self.controls.borrow();
-            if let Some(handle) = map.get(&id)
-                && let Some((_, fe)) = style_target_for_handle(handle)
-            {
-                diag::dropped(fe.SetStyle(None));
+            if let Some(handle) = map.get(&id) {
+                if matches!(handle, Handle::Button(_) | Handle::HyperlinkButton(_)) {
+                    diag::dropped(set_foreground(handle, None::<&bindings::Brush>));
+                } else if let Some((_, fe)) = style_target_for_handle(handle) {
+                    diag::dropped(fe.SetStyle(None));
+                }
             }
             return;
         }

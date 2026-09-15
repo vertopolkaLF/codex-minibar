@@ -61,7 +61,7 @@ mod tray;
 
 use navigation::{
     RenderedPage, SettingsNavMode, Tab, fade_to_rendered_page, first_provider_in_order,
-    providers_nav_items, providers_nav_signature, providers_pane_legend, root_nav_items,
+    providers_nav_items, providers_nav_signature, root_nav_items,
 };
 use onboarding::{detected_providers, onboarding_render};
 use pages::render as render_page;
@@ -646,8 +646,7 @@ pub fn render(
         SettingsNavMode::Providers => navigation
             // PaneTitle is the documented NavigationView header slot and
             // remains visible when the built-in pane toggle is hidden.
-            .pane_title("Providers")
-            .pane_footer(providers_pane_legend()),
+            .pane_title("Providers"),
     };
 
     let (use_colored_provider_icons, set_use_colored_provider_icons) =

@@ -464,14 +464,14 @@ fn section_header(title: &str, caption: Option<&str>, action: Option<Element>) -
     let mut children: Vec<Element> = vec![
         vstack(text)
             .spacing(2.0)
-            .vertical_alignment(VerticalAlignment::Bottom)
+            .vertical_alignment(VerticalAlignment::Center)
             .grid_column(0)
             .into(),
     ];
     if let Some(action) = action {
         children.push(
             action
-                .vertical_alignment(VerticalAlignment::Bottom)
+                .vertical_alignment(VerticalAlignment::Center)
                 .grid_column(1),
         );
     }
@@ -1618,7 +1618,10 @@ fn openrouter_account_body(
                 .foreground(ThemeRef::SecondaryText)
                 .vertical_alignment(VerticalAlignment::Center)
                 .grid_column(0),
-            HyperlinkButton::new("Add API key")
+            Button::new("Add API key")
+                .icon(Symbol::Add)
+                .subtle()
+                .foreground(ThemeRef::AccentText)
                 .on_click(move || {
                     open_dialog(
                         &add_key_dialog,
@@ -1663,10 +1666,7 @@ fn openrouter_account_body(
                     rename_account.name.clone(),
                 )))
             }),
-            Button::new("Remove account")
-                .subtle()
-                .foreground(ThemeRef::SystemCritical)
-                .on_click(move || {
+            Button::new("Remove account").danger().on_click(move || {
                     open_dialog(
                         &remove_dialog,
                         ProviderDialogKind::RemoveOpenRouterAccount {
@@ -2012,7 +2012,7 @@ pub(super) fn provider_dialog_overlay(
     };
 
     let mut fields: Vec<Element> = Vec::new();
-    let (title, primary, destructive) = match &dialog.kind {
+    let (title, primary, _destructive) = match &dialog.kind {
         ProviderDialogKind::AddOpenRouterAccount => {
             fields.push(dialog_name_box(
                 dialog,
@@ -2185,12 +2185,8 @@ pub(super) fn provider_dialog_overlay(
             primary
         })
         .enabled(!dialog.checking)
-        .horizontal_alignment(HorizontalAlignment::Stretch);
-        let button = if destructive {
-            button.foreground(ThemeRef::SystemCritical)
-        } else {
-            button.accent()
-        };
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .accent();
         button
             .on_click(move || {
                 submit_provider_dialog(dialog.clone(), accounts.clone(), actions.clone())

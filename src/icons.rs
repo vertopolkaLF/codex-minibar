@@ -83,6 +83,18 @@ pub fn data(name: &str) -> &'static str {
     geom(name).path
 }
 
+/// PathIcon measures from (0,0) to the path's max point and ignores SVG
+/// viewBox padding. Wrap the glyph in a cancelled canvas outline so marks
+/// that do not touch the edge (OpenRouter) stay optically centered.
+pub fn path_icon_data(name: &str) -> String {
+    let icon = geom(name);
+    let canvas = icon.canvas;
+    format!(
+        "M0,0H{canvas}V{canvas}H0Z M0,0V{canvas}H{canvas}V0Z{}",
+        icon.path
+    )
+}
+
 /// Monochrome Phosphor/Fluent path used when Settings sidebar color icons
 /// are turned off. Keys match [`fluent_color_uri`].
 pub fn sidebar_mono_icon(name: &str) -> &'static str {

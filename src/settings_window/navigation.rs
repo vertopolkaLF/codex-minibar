@@ -157,7 +157,7 @@ pub(super) fn providers_nav_items(
         let descriptor = crate::provider_registry::descriptor(provider);
         NavViewItem::new(descriptor.display_name)
             .tag(provider.id())
-            .icon_path(crate::icons::data(descriptor.icon), nav_icon_color)
+            .icon_path(crate::icons::path_icon_data(descriptor.icon), nav_icon_color)
     };
     let order = provider_order_from_popup(popup_order);
     let mut items = Vec::new();
@@ -221,42 +221,6 @@ fn status_dot_colors(color_scheme: ColorScheme) -> (&'static str, &'static str) 
     }
 }
 
-/// Legend for the provider status dots. The theme brushes resolve to the same
-/// colors as [`status_dot_colors`].
-pub(super) fn providers_pane_legend() -> Element {
-    let entry = |brush: ThemeRef, label: &str| -> Element {
-        hstack((
-            border(Element::Empty)
-                .width(8.0)
-                .height(8.0)
-                .corner_radius(4.0)
-                .background(brush)
-                .vertical_alignment(VerticalAlignment::Center),
-            text_block(label)
-                .font_size(12.0)
-                .foreground(ThemeRef::SecondaryText)
-                .vertical_alignment(VerticalAlignment::Center),
-        ))
-        .spacing(6.0)
-        .into()
-    };
-    border(
-        hstack((
-            entry(ThemeRef::SystemSuccess, "Ready"),
-            entry(ThemeRef::SystemCaution, "Needs setup"),
-        ))
-        .spacing(16.0),
-    )
-    .padding(Thickness {
-        left: 16.0,
-        top: 0.0,
-        right: 12.0,
-        bottom: 10.0,
-    })
-    .background(Color::transparent())
-    .into()
-}
-
 #[cfg(test)]
 mod provider_navigation_tests {
     use super::*;
@@ -294,7 +258,7 @@ mod provider_navigation_tests {
                     assert_eq!(item.content, descriptor.display_name);
                     assert_eq!(
                         item.icon_path.as_ref().unwrap().0,
-                        crate::icons::data(descriptor.icon)
+                        crate::icons::path_icon_data(descriptor.icon)
                     );
                     assert_eq!(item.dimmed, !enabled(provider));
                     assert_eq!(item.status_dot.is_some(), enabled(provider));
