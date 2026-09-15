@@ -79,12 +79,12 @@ pub fn save_manual_key(provider: ProviderKind, value: Option<&str>) -> Result<()
 
 /// Snapshots the stored ciphertext without decrypting so a corrupt key can
 /// still be replaced or removed, then restored if settings fail to persist.
-pub fn snapshot_manual_key(provider: ProviderKind) -> Result<secrets::EncodedRollback> {
+pub(crate) fn snapshot_manual_key(provider: ProviderKind) -> Result<secrets::EncodedRollback> {
     let catalog = catalog(provider).context("provider is not an OpenCode catalog")?;
     secrets::EncodedRollback::capture([catalog.secret_name()])
 }
 
-pub fn restore_manual_key(rollback: secrets::EncodedRollback) -> Result<()> {
+pub(crate) fn restore_manual_key(rollback: secrets::EncodedRollback) -> Result<()> {
     rollback.restore()
 }
 
