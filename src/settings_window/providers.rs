@@ -951,9 +951,17 @@ fn provider_header(
     on_toggled: impl Fn(bool) + 'static,
 ) -> Element {
     let descriptor = crate::provider_registry::descriptor(provider);
-    let (icon_color, scheme_tag) = match color_scheme {
-        ColorScheme::Dark => (Color::rgb(230, 230, 230), "dark"),
-        ColorScheme::Light => (Color::rgb(58, 58, 58), "light"),
+    let scheme_tag = match color_scheme {
+        ColorScheme::Dark => "dark",
+        ColorScheme::Light => "light",
+    };
+    let icon_color = if enabled {
+        crate::icons::provider_brand_color(provider, color_scheme)
+    } else {
+        match color_scheme {
+            ColorScheme::Dark => Color::rgb(230, 230, 230),
+            ColorScheme::Light => Color::rgb(58, 58, 58),
+        }
     };
     let mut status: Vec<Element> = Vec::new();
     if let Some(dot) = dot {
@@ -980,7 +988,13 @@ fn provider_header(
         .border_brush(ThemeRef::CardStroke)
         .vertical_alignment(VerticalAlignment::Center)
         .grid_column(0)
-        .with_key(format!("provider-icon-{}-{scheme_tag}", provider.id()))
+        .with_key(format!(
+            "provider-icon-{}-{scheme_tag}-{:02X}{:02X}{:02X}",
+            provider.id(),
+            icon_color.r,
+            icon_color.g,
+            icon_color.b
+        ))
         .into(),
         vstack((
             text_block(provider.display_name())

@@ -153,11 +153,16 @@ pub(super) fn providers_nav_items(
     openrouter_account_count: usize,
 ) -> Vec<NavViewItem> {
     let (ready_color, setup_color) = status_dot_colors(color_scheme);
-    let item = |provider: ProviderKind| {
+    let item = |provider: ProviderKind, enabled: bool| {
         let descriptor = crate::provider_registry::descriptor(provider);
+        let icon_color = if enabled {
+            crate::icons::provider_brand_hex(provider, color_scheme)
+        } else {
+            nav_icon_color.to_string()
+        };
         NavViewItem::new(descriptor.display_name)
             .tag(provider.id())
-            .icon_path(crate::icons::data(descriptor.icon), nav_icon_color)
+            .icon_path(crate::icons::data(descriptor.icon), icon_color)
     };
     let order = provider_order_from_popup(popup_order);
     let mut items = Vec::new();
@@ -166,7 +171,7 @@ pub(super) fn providers_nav_items(
         .copied()
         .filter(|provider| is_enabled(*provider))
     {
-        let mut nav = item(provider);
+        let mut nav = item(provider, true);
         if provider == ProviderKind::OpenRouter && openrouter_account_count > 0 {
             nav = nav.info_badge(openrouter_account_count as i32);
         }
@@ -188,7 +193,7 @@ pub(super) fn providers_nav_items(
     items.extend(
         disabled
             .into_iter()
-            .map(|provider| item(provider).dimmed(true)),
+            .map(|provider| item(provider, false).dimmed(true)),
     );
     items
 }
@@ -200,14 +205,18 @@ pub(super) fn providers_nav_signature(items: &[NavViewItem]) -> String {
         .iter()
         .map(|item| {
             format!(
-                "{}:{}:{}:{:?}:{:?}",
+                "{}:{}:{}:{:?}:{:?}:{}",
                 item.tag
                     .as_deref()
                     .unwrap_or(if item.is_separator { "-" } else { "" }),
                 item.dimmed,
                 item.is_header,
                 item.info_badge,
-                item.status_dot
+                item.status_dot,
+                item.icon_path
+                    .as_ref()
+                    .map(|(_, color)| color.as_str())
+                    .unwrap_or("")
             )
         })
         .collect::<Vec<_>>()
@@ -260,6 +269,12 @@ mod provider_navigation_tests {
                         item.icon_path.as_ref().unwrap().0,
                         crate::icons::data(descriptor.icon)
                     );
+                    let expected_color = if enabled(provider) {
+                        crate::icons::provider_brand_hex(provider, scheme)
+                    } else {
+                        "#123456".into()
+                    };
+                    assert_eq!(item.icon_path.as_ref().unwrap().1, expected_color);
                     assert_eq!(item.dimmed, !enabled(provider));
                     assert_eq!(item.status_dot.is_some(), enabled(provider));
                     assert_eq!(
