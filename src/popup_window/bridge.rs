@@ -67,6 +67,9 @@ pub(super) fn start_background_bridge(
 ) {
     // Use the already hydrated persistent snapshot while the first network
     // refresh is in flight. Opening Settings never starts another poll.
+    // Account names live in settings, so overlay them before the first paint.
+    let startup_settings = state.settings.clone();
+    let _ = state.apply_openrouter_account_names(&startup_settings);
     crate::settings_window::publish_openrouter_snapshot(
         state.current_limits().get(ProviderKind::OpenRouter),
         ui_dispatcher.clone(),
@@ -104,6 +107,7 @@ pub(super) fn start_background_bridge(
         let mut usage_clear_generation = 0_u64;
         let mut pending_usage_clear: Option<(u64, Vec<ProviderKind>)> = None;
         let mut update_phase = updates.snapshot();
+        let mut live_settings = state.settings.clone();
         let mut ui = UiState {
             theme: state.settings.theme,
             accent_color: state.settings.accent_color,
@@ -181,7 +185,8 @@ pub(super) fn start_background_bridge(
                               notification_settings: &mut NotificationSettings,
                               widgets: &mut Vec<TrayWidget>,
                               tray: &mut TrayManager,
-                              settings: Settings| {
+                              settings: Settings,
+                              live_settings: &mut Settings| {
             crate::settings_window::sync_open_window(settings.clone(), ui_dispatcher.clone());
             let phase = updates.snapshot();
             ui.settings_revision = ui.settings_revision.wrapping_add(1);
@@ -209,6 +214,14 @@ pub(super) fn start_background_bridge(
                 // The matching worker revision also rejects output which was
                 // already queued by the worker being replaced.
                 state.replace_limits(ProviderKind::OpenRouter, RateLimits::default());
+                ui.observe_limits_update();
+                crate::settings_window::publish_openrouter_snapshot(
+                    state.current_limits().get(ProviderKind::OpenRouter),
+                    ui_dispatcher.clone(),
+                );
+            } else if state.apply_openrouter_account_names(&settings) {
+                // Rename is settings-only. Overlay the new names before the
+                // first paint so the popup does not keep the previous label.
                 ui.observe_limits_update();
                 crate::settings_window::publish_openrouter_snapshot(
                     state.current_limits().get(ProviderKind::OpenRouter),
@@ -356,6 +369,7 @@ pub(super) fn start_background_bridge(
                     let _ = commands.send(WorkerCommand::Refresh);
                 }
             }
+            *live_settings = settings;
             flush_popup_ui(set_ui, ui);
         };
 
@@ -367,7 +381,8 @@ pub(super) fn start_background_bridge(
              tray: &mut TrayManager,
              check_for_updates: &mut bool,
              notify_on_update: &mut bool,
-             forced_reset_notified_ids: &mut HashSet<String>| {
+             forced_reset_notified_ids: &mut HashSet<String>,
+             live_settings: &mut Settings| {
                 let Some(settings_rx) = settings_rx.as_ref() else {
                     return;
                 };
@@ -377,7 +392,15 @@ pub(super) fn start_background_bridge(
                     }
                     *check_for_updates = settings.check_for_updates;
                     *notify_on_update = settings.notifications.update_available;
-                    apply_settings(ui, set_ui, notification_settings, widgets, tray, settings);
+                    apply_settings(
+                        ui,
+                        set_ui,
+                        notification_settings,
+                        widgets,
+                        tray,
+                        settings,
+                        live_settings,
+                    );
                     notify_new_forced_reset_info(
                         &state.current_forced_resets(),
                         forced_reset_notified_ids,
@@ -515,6 +538,7 @@ pub(super) fn start_background_bridge(
                     &mut check_for_updates,
                     &mut notify_on_update,
                     &mut forced_reset_notified_ids,
+                    &mut live_settings,
                 );
                 drain_updates(&mut ui, &set_ui, &mut tray, &mut update_phase, &mut widgets);
                 if pump_tray_and_dismiss(
@@ -556,6 +580,7 @@ pub(super) fn start_background_bridge(
                 &mut check_for_updates,
                 &mut notify_on_update,
                 &mut forced_reset_notified_ids,
+                &mut live_settings,
             );
             drain_updates(&mut ui, &set_ui, &mut tray, &mut update_phase, &mut widgets);
             if pump_tray_and_dismiss(
@@ -627,6 +652,10 @@ pub(super) fn start_background_bridge(
                         limits.secondary.used_percent,
                         limits.secondary.resets_at,
                     ));
+                    let mut limits = limits;
+                    if provider == ProviderKind::OpenRouter {
+                        crate::openrouter::apply_account_names(&mut limits, &live_settings);
+                    }
                     // Publish once, then let both native tray and WinUI render
                     // from that exact snapshot.
                     state.replace_limits(provider, limits);

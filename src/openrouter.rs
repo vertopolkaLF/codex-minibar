@@ -422,6 +422,35 @@ pub fn accounts_for_settings(settings: &Settings) -> Vec<OpenRouterAccount> {
     accounts
 }
 
+/// Overlay locally chosen account names onto a live quota snapshot.
+/// A rename is a settings-only change and must not wait for the next worker
+/// poll or an app restart.
+pub fn apply_account_names(limits: &mut RateLimits, settings: &Settings) -> bool {
+    let names: HashMap<&str, &str> = settings
+        .openrouter_accounts
+        .iter()
+        .map(|account| (account.id.as_str(), account.name.as_str()))
+        .collect();
+    let mut changed = false;
+    for account in &mut limits.openrouter_accounts {
+        if let Some(name) = names.get(account.id.as_str())
+            && account.name != *name
+        {
+            account.name = (*name).to_owned();
+            changed = true;
+        }
+    }
+    if !limits.openrouter_accounts.is_empty() {
+        let expected = (limits.openrouter_accounts.len() == 1)
+            .then(|| limits.openrouter_accounts[0].name.clone());
+        if limits.account_name != expected {
+            limits.account_name = expected;
+            changed = true;
+        }
+    }
+    changed
+}
+
 pub fn is_installed_for_accounts(accounts: &[OpenRouterAccount]) -> bool {
     is_installed()
         || accounts.iter().any(|account| {
@@ -1567,5 +1596,27 @@ mod tests {
                 .all(|key| key.id != "test2"),
             "TEST2 must stay under Leon Flame and never appear under Pixelscan"
         );
+    }
+
+    #[test]
+    fn applies_renamed_account_names_onto_a_live_snapshot() {
+        let mut settings = Settings::default();
+        settings.openrouter_accounts = vec![OpenRouterAccount {
+            id: "acc".into(),
+            name: "TESTdfwfwer".into(),
+            api_key_ids: vec!["key".into()],
+        }];
+        let mut limits = RateLimits::default();
+        limits.openrouter_accounts.push(OpenRouterAccountSnapshot {
+            id: "acc".into(),
+            name: "TEST".into(),
+            ..Default::default()
+        });
+        limits.account_name = Some("TEST".into());
+
+        assert!(apply_account_names(&mut limits, &settings));
+        assert_eq!(limits.openrouter_accounts[0].name, "TESTdfwfwer");
+        assert_eq!(limits.account_name.as_deref(), Some("TESTdfwfwer"));
+        assert!(!apply_account_names(&mut limits, &settings));
     }
 }

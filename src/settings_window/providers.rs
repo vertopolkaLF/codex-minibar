@@ -563,7 +563,8 @@ fn show_provider_notice(set_notice: AsyncSetState<Option<String>>, message: Stri
 /// Apply an OpenRouter account-list change against on-disk settings, never a
 /// stale UI snapshot. Accounts are addressed by stable id so list shifts cannot
 /// move keys between accounts. The open window picks the result up through the
-/// live settings sync.
+/// live settings sync. Popup headings overlay these names onto the live quota
+/// snapshot, so a rename must not bump the credentials revision.
 fn persist_openrouter_accounts(
     settings_tx: Sender<Settings>,
     bump_credentials: bool,
