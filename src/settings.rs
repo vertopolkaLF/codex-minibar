@@ -1000,6 +1000,30 @@ impl PopupSurfaceVisibility {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuotaChartPosition {
+    AboveActivity,
+    #[default]
+    BelowActivity,
+}
+
+impl QuotaChartPosition {
+    pub const fn index(self) -> i32 {
+        match self {
+            Self::AboveActivity => 0,
+            Self::BelowActivity => 1,
+        }
+    }
+
+    pub const fn from_index(index: i32) -> Self {
+        match index {
+            0 => Self::AboveActivity,
+            _ => Self::BelowActivity,
+        }
+    }
+}
+
 /// Independent Home-tab vs provider-tab visibility for popup cards.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default)]
@@ -1008,6 +1032,8 @@ pub struct PopupVisibility {
     /// Provider id → show that provider's block on the Home tab.
     /// Missing keys default to true so older settings keep current cards.
     pub provider_all_tab: BTreeMap<String, bool>,
+    /// Placement of Codex's subscription-quota chart relative to its activity card.
+    pub quota_chart_position: QuotaChartPosition,
 }
 
 impl PopupVisibility {
@@ -1031,6 +1057,7 @@ impl PopupVisibility {
         Self {
             bricks,
             provider_all_tab: BTreeMap::new(),
+            quota_chart_position: QuotaChartPosition::default(),
         }
     }
 
@@ -3027,6 +3054,15 @@ mod tests {
                 .popup_visibility
                 .is_visible("codex.usage", PopupSurface::HomeTab, true)
         );
+        assert!(value.popup_visibility.is_visible(
+            "codex.quota-history",
+            PopupSurface::HomeTab,
+            true
+        ));
+        assert_eq!(
+            value.popup_visibility.quota_chart_position,
+            QuotaChartPosition::BelowActivity
+        );
         assert!(!value.popup_visibility.is_visible(
             "cursor.allModels",
             PopupSurface::HomeTab,
@@ -3200,12 +3236,13 @@ mod tests {
     fn popup_appearance_settings_round_trip_through_disk() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.toml");
-        let settings = Settings {
+        let mut settings = Settings {
             bottom_bar_size: BottomBarSize::Compact,
             popup_corner_radius: PopupCornerRadius::Large,
             popup_background_material: PopupBackgroundMaterial::Mica,
             ..Settings::default()
         };
+        settings.popup_visibility.quota_chart_position = QuotaChartPosition::AboveActivity;
         settings.save(&path).unwrap();
 
         let loaded = Settings::load_or_create(&path).unwrap();
@@ -3215,6 +3252,10 @@ mod tests {
         assert_eq!(
             loaded.popup_background_material,
             PopupBackgroundMaterial::Mica
+        );
+        assert_eq!(
+            loaded.popup_visibility.quota_chart_position,
+            QuotaChartPosition::AboveActivity
         );
     }
 

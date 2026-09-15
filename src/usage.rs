@@ -6,19 +6,20 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Duration, Local, NaiveDate, Timelike, Utc};
+use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{pricing, settings::ProviderKind, store};
 
+// Version 10 also rebuilds quota samples from Codex token_count records.
 // Version 9 upgrades attributed event identity to include the record offset.
 // Version 8 rebuilt event source links after the account-source migration.
 // Version 7 matched T3/ccusage Codex transcript rules and the current pricing
 // table: first session_meta
 // wins, fork/subagent copied history is dropped, and unchanged token_count
 // re-emits are ignored. Older daily totals must be rebuilt from the logs.
-pub(crate) const CODEX_CACHE_VERSION: u8 = 9;
+pub(crate) const CODEX_CACHE_VERSION: u8 = 11;
 // Version 4 only accepts Claude `assistant` usage lines, matching T3 and the
 // current model pricing table.
 pub(crate) const CLAUDE_CACHE_VERSION: u8 = 4;
@@ -94,12 +95,124 @@ pub struct UsageStatistics {
     pub history_days: u16,
     /// One aggregate per local calendar day, ordered from oldest to newest.
     pub daily: Vec<DailyTokenUsage>,
+    /// Official Codex Analytics percentages for the exact requested range.
+    /// These values are independent from locally scanned token and cost data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_analytics: Option<CodexAnalyticsUsage>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DailyTokenUsage {
     pub date: NaiveDate,
     pub usage: TokenUsage,
+}
+
+/// One million units represent one percentage point. Keeping percentages as
+/// integers makes snapshots stable for equality checks and cache round trips.
+pub const ANALYTICS_PERCENT_SCALE: u64 = 1_000_000;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexAnalyticsUsage {
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetched_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub daily: Vec<CodexAnalyticsDay>,
+    /// Quota window represented by the attributed daily percentages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota_window_minutes: Option<u32>,
+    /// Account-scoped subscription quota snapshots grouped by reset period.
+    /// Points store the remaining percentage so charts can show the quota
+    /// draining without joining one reset period to the next.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quota_cycles: Vec<CodexQuotaCycle>,
+    /// A refresh failure can accompany usable cached data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexQuotaCycle {
+    pub starts_at: DateTime<Utc>,
+    pub resets_at: DateTime<Utc>,
+    #[serde(default)]
+    pub points: Vec<CodexQuotaPoint>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexQuotaPoint {
+    pub at: DateTime<Utc>,
+    pub remaining_percent_micros: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexAnalyticsDay {
+    pub date: NaiveDate,
+    /// Relative server-side credit weights, grouped by model across speeds.
+    pub models: BTreeMap<String, u64>,
+    /// Percentage points consumed from the selected subscription quota window.
+    #[serde(default)]
+    pub quota_percent_micros: u64,
+}
+
+impl CodexAnalyticsDay {
+    pub fn weight_total(&self) -> u64 {
+        self.models
+            .values()
+            .fold(0_u64, |total, value| total.saturating_add(*value))
+    }
+
+    /// Splits this day's quota percentage across models without changing its
+    /// total. The remainder goes to the largest model so displayed rows add up.
+    pub fn quota_by_model(&self) -> BTreeMap<String, u64> {
+        let weights = self.weight_total();
+        if weights == 0 || self.quota_percent_micros == 0 {
+            return BTreeMap::new();
+        }
+        let mut rows = BTreeMap::new();
+        let mut allocated = 0_u64;
+        let mut largest = None::<(&str, u64)>;
+        for (model, weight) in &self.models {
+            let value = ((u128::from(self.quota_percent_micros) * u128::from(*weight))
+                / u128::from(weights)) as u64;
+            allocated = allocated.saturating_add(value);
+            rows.insert(model.clone(), value);
+            if largest.is_none_or(|(_, current)| *weight > current) {
+                largest = Some((model, *weight));
+            }
+        }
+        if let Some((model, _)) = largest {
+            let remainder = self.quota_percent_micros.saturating_sub(allocated);
+            rows.entry(model.to_owned())
+                .and_modify(|value| *value = value.saturating_add(remainder));
+        }
+        rows.retain(|_, value| *value > 0);
+        rows
+    }
+}
+
+impl CodexAnalyticsUsage {
+    pub fn has_data(&self) -> bool {
+        self.daily
+            .iter()
+            .any(|day| day.quota_percent_micros > 0 && !day.quota_by_model().is_empty())
+    }
+
+    pub fn remaining_at(&self, at: DateTime<Utc>) -> Option<u64> {
+        self.quota_cycles
+            .iter()
+            .filter(|cycle| cycle.starts_at <= at && at <= cycle.resets_at)
+            .max_by_key(|cycle| cycle.starts_at)
+            .and_then(|cycle| {
+                cycle
+                    .points
+                    .iter()
+                    .filter(|point| point.at <= at)
+                    .max_by_key(|point| point.at)
+            })
+            .map(|point| point.remaining_percent_micros)
+    }
 }
 
 impl UsageStatistics {
@@ -237,6 +350,7 @@ pub fn refresh_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
 
     let oldest = Local::now().date_naive() - Duration::days(CACHE_RETENTION_DAYS - 1);
     let mut account_events = Vec::new();
+    let mut quota_samples = Vec::new();
     let mut rebuilt_sources = Vec::new();
     for (path, key) in files {
         let cached = cache.files.entry(key.clone()).or_default();
@@ -255,6 +369,12 @@ pub fn refresh_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
                 .into_iter()
                 .filter(|event| event.timestamp.with_timezone(&Local).date_naive() >= oldest),
         );
+        quota_samples.extend(
+            delta
+                .quota_samples
+                .into_iter()
+                .filter(|sample| sample.timestamp.with_timezone(&Local).date_naive() >= oldest),
+        );
         cached.prune_before(oldest);
     }
     cache.version = CODEX_CACHE_VERSION;
@@ -265,6 +385,16 @@ pub fn refresh_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
     store::with_store(|store| {
         store.save_account_scan(
             &account_events,
+            &rebuilt_sources,
+            &attribution,
+            &before,
+            &after,
+            end,
+        )
+    })?;
+    store::with_store(|store| {
+        store.save_codex_quota_scan(
+            &quota_samples,
             &rebuilt_sources,
             &attribution,
             &before,
@@ -317,6 +447,7 @@ pub(crate) fn statistics_from_daily(
 
 pub(crate) struct FileDelta {
     pub events: Vec<store::codex_accounts::AccountEvent>,
+    pub quota_samples: Vec<store::codex_accounts::QuotaSampleEvent>,
     pub rebuilt: bool,
 }
 
@@ -326,6 +457,7 @@ pub(crate) fn scan_file_delta(
     cached: &mut CachedSessionFile,
 ) -> Result<FileDelta> {
     let mut events = Vec::new();
+    let mut quota_samples = Vec::new();
     let file_size = fs::metadata(path)
         .with_context(|| format!("read metadata for {}", path.display()))?
         .len();
@@ -335,7 +467,11 @@ pub(crate) fn scan_file_delta(
         cached.reset_scan_state();
     }
     if file_size == cached.offset {
-        return Ok(FileDelta { events, rebuilt });
+        return Ok(FileDelta {
+            events,
+            quota_samples,
+            rebuilt,
+        });
     }
 
     let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
@@ -361,6 +497,7 @@ pub(crate) fn scan_file_delta(
         let Ok(line) = std::str::from_utf8(&bytes) else {
             continue;
         };
+        quota_samples.extend(quota_samples_from_codex_line(line, source, offset));
         if let Some((timestamp, usage, model)) = ingest_codex_line(line, cached) {
             events.push(store::codex_accounts::AccountEvent {
                 source: source.to_owned(),
@@ -379,7 +516,79 @@ pub(crate) fn scan_file_delta(
         }
     }
     cached.offset = offset;
-    Ok(FileDelta { events, rebuilt })
+    Ok(FileDelta {
+        events,
+        quota_samples,
+        rebuilt,
+    })
+}
+
+fn quota_samples_from_codex_line(
+    line: &str,
+    source: &str,
+    offset: u64,
+) -> Vec<store::codex_accounts::QuotaSampleEvent> {
+    if !line.contains("\"token_count\"") || !line.contains("\"rate_limits\"") {
+        return Vec::new();
+    }
+    let Ok(event) = serde_json::from_str::<Value>(line) else {
+        return Vec::new();
+    };
+    if event.pointer("/payload/type").and_then(Value::as_str) != Some("token_count") {
+        return Vec::new();
+    }
+    let Some(timestamp) = event
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc))
+    else {
+        return Vec::new();
+    };
+    let Some(limits) = event
+        .pointer("/payload/rate_limits")
+        .or_else(|| event.pointer("/payload/info/rate_limits"))
+        .and_then(Value::as_object)
+    else {
+        return Vec::new();
+    };
+    let limit_id = limits
+        .get("limit_id")
+        .or_else(|| limits.get("limitId"))
+        .and_then(Value::as_str)
+        .unwrap_or("codex")
+        .to_owned();
+    ["primary", "secondary"]
+        .into_iter()
+        .filter_map(|role| {
+            let window = limits.get(role)?.as_object()?;
+            let used_percent = window
+                .get("used_percent")
+                .or_else(|| window.get("usedPercent"))?
+                .as_f64()?
+                .clamp(0.0, 100.0)
+                .round() as u8;
+            let window_minutes = window
+                .get("window_minutes")
+                .or_else(|| window.get("windowDurationMins"))?
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())?;
+            let resets_at = window
+                .get("resets_at")
+                .or_else(|| window.get("resetsAt"))
+                .and_then(Value::as_i64)
+                .and_then(|value| Utc.timestamp_opt(value, 0).single());
+            Some(store::codex_accounts::QuotaSampleEvent {
+                source: source.to_owned(),
+                offset,
+                timestamp,
+                limit_id: limit_id.clone(),
+                window_minutes,
+                resets_at,
+                used_percent,
+            })
+        })
+        .collect()
 }
 
 /// Returns active rollouts plus archived ones. An active path wins when an
@@ -927,6 +1136,41 @@ fn collect_claude_session_files() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quota_parser_reads_both_windows_from_token_count_events() {
+        let samples = quota_samples_from_codex_line(
+            r#"{"timestamp":"2026-09-15T10:20:30Z","payload":{"type":"token_count","info":{"rate_limits":{"limit_id":"codex","primary":{"used_percent":17,"window_minutes":300,"resets_at":1789467630},"secondary":{"used_percent":42,"window_minutes":10080,"resets_at":1790072430}}}}}"#,
+            "sessions/example.jsonl",
+            1234,
+        );
+
+        assert_eq!(samples.len(), 2);
+        assert_eq!(samples[0].source, "sessions/example.jsonl");
+        assert_eq!(samples[0].offset, 1234);
+        assert_eq!(samples[0].limit_id, "codex");
+        assert_eq!(samples[0].window_minutes, 300);
+        assert_eq!(samples[0].used_percent, 17);
+        assert_eq!(samples[1].window_minutes, 10_080);
+        assert_eq!(samples[1].used_percent, 42);
+        assert_eq!(
+            samples[1].resets_at,
+            Utc.timestamp_opt(1_790_072_430, 0).single()
+        );
+    }
+
+    #[test]
+    fn quota_parser_ignores_unrelated_or_incomplete_events() {
+        assert!(quota_samples_from_codex_line("{}", "source", 1).is_empty());
+        assert!(
+            quota_samples_from_codex_line(
+                r#"{"timestamp":"2026-09-15T10:20:30Z","payload":{"type":"message","rate_limits":{"primary":{"used_percent":17,"window_minutes":300}}}}"#,
+                "source",
+                1,
+            )
+            .is_empty()
+        );
+    }
 
     #[test]
     fn reads_per_request_token_usage() {

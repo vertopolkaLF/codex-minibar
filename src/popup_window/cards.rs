@@ -249,13 +249,22 @@ pub(super) fn provider_cards(
         return cards;
     }
     // Cursor usage is fetched from a remote CSV export rather than scanned
-    // from a local session log. Keep its card visible while that export is
-    // still empty or delayed, so the feature does not look like it vanished.
+    // from a local session log. Codex can also have live quota history before
+    // its token history has been attributed to the active account. Keep both
+    // cards visible while their history is empty or loading.
     let usage_brick = usage_brick_id(provider);
     let show_usage_stats = popup_visibility.is_visible(&usage_brick, surface, show_provider_tabs);
     let has_usage_statistics = include_usage_stats
         && show_usage_stats
-        && (limits.usage.has_data() || provider == ProviderKind::Cursor);
+        && (limits.usage.has_data()
+            || matches!(provider, ProviderKind::Codex | ProviderKind::Cursor));
+    let has_quota_history = provider == ProviderKind::Codex
+        && include_usage_stats
+        && popup_visibility.is_visible(
+            &quota_history_brick_id(provider),
+            surface,
+            show_provider_tabs,
+        );
     cards.extend(
         popup_sections(limits, false)
             .into_iter()
@@ -356,10 +365,26 @@ pub(super) fn provider_cards(
                 .with_key(format!("{}-banked-resets", provider.display_name())),
         );
     }
+    if has_quota_history
+        && popup_visibility.quota_chart_position == QuotaChartPosition::AboveActivity
+    {
+        cards.push(
+            usage_quota_chart(&limits.usage)
+                .with_key(format!("{}-quota-history", provider.display_name())),
+        );
+    }
     if has_usage_statistics {
         cards.push(
             usage_statistics_card(provider, limits)
                 .with_key(format!("{}-usage-statistics", provider.display_name())),
+        );
+    }
+    if has_quota_history
+        && popup_visibility.quota_chart_position == QuotaChartPosition::BelowActivity
+    {
+        cards.push(
+            usage_quota_chart(&limits.usage)
+                .with_key(format!("{}-quota-history", provider.display_name())),
         );
     }
     if popup_visibility.is_visible(&credits_brick_id(provider), surface, show_provider_tabs)

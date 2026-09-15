@@ -424,8 +424,66 @@ fn popup_visibility_hides_codex_resets_on_all_but_shows_on_provider_tab() {
         false,
         None,
     );
-    assert_eq!(all_cards.len(), 3);
-    assert_eq!(tab_cards.len(), 4);
+    assert_eq!(all_cards.len(), 4);
+    assert_eq!(tab_cards.len(), 6);
+}
+
+#[test]
+fn codex_usage_card_stays_visible_with_empty_token_history() {
+    let mut visibility = all_visible();
+    visibility.set_brick("codex.usage", true, true);
+    let cards = provider_cards(
+        ProviderKind::Codex,
+        true,
+        &plan_limits("plus"),
+        &[],
+        false,
+        true,
+        false,
+        &visibility,
+        PopupSurface::HomeTab,
+        true,
+        true,
+        false,
+        ColorScheme::Dark,
+        None,
+        None,
+        None,
+        false,
+        None,
+    );
+
+    // Heading, session, weekly, activity, and the independent quota chart.
+    assert_eq!(cards.len(), 5);
+}
+
+#[test]
+fn codex_quota_card_has_an_independent_visibility_toggle() {
+    let mut visibility = all_visible();
+    visibility.set_brick("codex.quota-history", false, false);
+    let cards = provider_cards(
+        ProviderKind::Codex,
+        true,
+        &plan_limits("plus"),
+        &[],
+        false,
+        true,
+        false,
+        &visibility,
+        PopupSurface::ProviderTab,
+        true,
+        true,
+        false,
+        ColorScheme::Dark,
+        None,
+        None,
+        None,
+        false,
+        None,
+    );
+
+    // Heading, session, weekly, and activity remain.
+    assert_eq!(cards.len(), 4);
 }
 
 #[test]

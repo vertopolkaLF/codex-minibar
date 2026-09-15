@@ -17,6 +17,7 @@ struct ChartProps {
     provider: ProviderKind,
     statistics: UsageStatistics,
     cost_based: bool,
+    quota_only: bool,
     today: NaiveDate,
     scheme: ColorScheme,
     transition: Duration,
@@ -25,12 +26,12 @@ struct ChartProps {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Selection {
     mask: u8,
-    cost: bool,
+    metric: Metric,
 }
 
 impl Selection {
     fn selected(self, series: Series) -> bool {
-        !self.cost && self.mask & (1 << series as u8) != 0
+        self.metric == Metric::Tokens && self.mask & (1 << series as u8) != 0
     }
 
     fn with_series(mut self, series: Series, checked: bool) -> Self {
@@ -40,16 +41,23 @@ impl Selection {
             return self;
         }
         let bit = 1 << series as u8;
-        self.mask = if self.cost {
+        self.mask = if self.metric != Metric::Tokens {
             bit
         } else if checked {
             self.mask | bit
         } else {
             self.mask & !bit
         };
-        self.cost = false;
+        self.metric = Metric::Tokens;
         self
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Metric {
+    Tokens,
+    Cost,
+    Usage,
 }
 
 #[derive(Clone, Debug)]
@@ -63,6 +71,7 @@ struct Bucket {
 struct Availability {
     series: u8,
     cost: bool,
+    usage: bool,
 }
 
 impl Availability {
@@ -81,9 +90,18 @@ impl Availability {
     }
 
     fn selection(self, requested: Selection) -> Selection {
+        let metric = match requested.metric {
+            Metric::Tokens if self.series != 0 => Metric::Tokens,
+            Metric::Cost if self.cost => Metric::Cost,
+            Metric::Usage if self.usage => Metric::Usage,
+            _ if self.series != 0 => Metric::Tokens,
+            _ if self.cost => Metric::Cost,
+            _ if self.usage => Metric::Usage,
+            _ => requested.metric,
+        };
         Selection {
             mask: requested.mask & self.series,
-            cost: self.cost && (requested.cost || self.series == 0),
+            metric,
         }
     }
 }
@@ -100,9 +118,9 @@ impl Series {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Input => "Input",
+            Self::Input => "In",
             Self::Cache => "Cache",
-            Self::Output => "Output",
+            Self::Output => "Out",
         }
     }
 
@@ -198,6 +216,19 @@ fn cost_label(usage: &TokenUsage) -> String {
     }
 }
 
+fn format_analytics_percent(value: u64) -> String {
+    let percent = value as f64 / crate::usage::ANALYTICS_PERCENT_SCALE as f64;
+    if percent >= 99.995 || percent == 0.0 {
+        format!("{percent:.0}%")
+    } else if percent >= 10.0 {
+        format!("{percent:.1}%")
+    } else if percent >= 1.0 {
+        format!("{percent:.2}%")
+    } else {
+        format!("{percent:.3}%")
+    }
+}
+
 fn bucket_tooltip(bucket: &Bucket) -> String {
     let date = if bucket.first == bucket.last {
         bucket.first.format("%a, %b %-d, %Y").to_string()
@@ -281,6 +312,7 @@ pub(super) fn usage_activity_chart(
             provider,
             statistics: statistics.clone(),
             cost_based,
+            quota_only: false,
             today: Local::now().date_naive(),
             scheme: current_color_scheme(),
             transition: crate::theme::duration(crate::theme::CONTROL_FAST_ANIMATION),
@@ -293,17 +325,50 @@ pub(super) fn usage_activity_chart(
     ))
 }
 
+pub(super) fn usage_quota_chart(statistics: &UsageStatistics) -> Element {
+    component(
+        render_chart,
+        ChartProps {
+            provider: ProviderKind::Codex,
+            statistics: statistics.clone(),
+            cost_based: false,
+            quota_only: true,
+            today: Local::now().date_naive(),
+            scheme: current_color_scheme(),
+            transition: crate::theme::duration(crate::theme::CONTROL_FAST_ANIMATION),
+        },
+    )
+    .with_key(format!(
+        "quota-chart-{}",
+        statistics.account_id.as_deref().unwrap_or("unknown")
+    ))
+}
+
 fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
     let (requested_selection, update_selection) = cx.use_reducer(Selection {
         mask: 7,
-        cost: props.cost_based,
+        metric: if props.quota_only {
+            Metric::Usage
+        } else if props.cost_based {
+            Metric::Cost
+        } else {
+            Metric::Tokens
+        },
     });
     let (hovered, set_hovered) = cx.use_state(None::<NaiveDate>);
-    let (by_model, set_by_model) = cx.use_state(false);
+    let (by_model, set_by_model) = cx.use_state(props.quota_only);
     let (model_page, set_model_page) = cx.use_reducer(0_usize);
     // Only a changed usage snapshot/date refetches; hover and toggles stay in memory.
     let model_resource = cx.use_resource(
-        |(provider, statistics, today): (ProviderKind, UsageStatistics, NaiveDate)| {
+        |(provider, statistics, today, quota_only): (
+            ProviderKind,
+            UsageStatistics,
+            NaiveDate,
+            bool,
+        )| {
+            if quota_only {
+                return Ok(Arc::new(models::ModelData::default()));
+            }
             let bounds = buckets(&statistics, today);
             crate::store::with_store(|store| {
                 if provider == ProviderKind::Codex
@@ -321,33 +386,44 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
             .map(|rows| Arc::new(models::group(rows, &bounds, provider)))
             .map_err(|error| format!("Could not load model data: {error:#}"))
         },
-        (props.provider, props.statistics.clone(), props.today),
+        (
+            props.provider,
+            props.statistics.clone(),
+            props.today,
+            props.quota_only,
+        ),
     );
     let data = cx.use_memo((props.statistics.clone(), props.today), || {
         buckets(&props.statistics, props.today)
     });
+    let analytics_data =
+        models::analytics(props.statistics.codex_analytics.as_ref(), data.as_slice());
     let model_data = model_resource.data();
-    let availability = if by_model {
+    let mut availability = if by_model && requested_selection.metric != Metric::Usage {
         model_data
             .map(|models| models.availability())
             .unwrap_or_default()
     } else {
         Availability::from_buckets(&data)
     };
+    // Codex always offers the mode. A valid empty Analytics response remains
+    // selectable and renders an empty chart instead of silently switching metrics.
+    availability.usage = props.quota_only && props.provider == ProviderKind::Codex;
     // Resolve against the displayed period without erasing the user's choices
     // while data is loading or a metric is temporarily unavailable.
     let selection = availability.selection(requested_selection);
-    let Selection {
-        mask,
-        cost: cost_mode,
-    } = selection;
+    let Selection { mask, metric } = selection;
+    let cost_mode = metric == Metric::Cost;
+    let usage_mode = metric == Metric::Usage;
     let chart_width = f64::from(popup::POPUP_WIDTH) - 2.0 - 32.0 - 2.0 - 24.0;
     let slot_width = chart_width / data.len() as f64;
     let bar_width = (slot_width - 2.0).clamp(1.0, 12.0);
     let maximum = data
         .iter()
         .map(|b| {
-            if by_model {
+            if usage_mode {
+                analytics_data.value(b.first)
+            } else if by_model {
                 model_data.map_or(0, |models| models.value(b.first, cost_mode))
             } else if cost_mode {
                 b.usage.estimated_cost_microusd
@@ -362,7 +438,9 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
     let bars: Vec<Element> = data
         .iter()
         .map(|bucket| {
-            let value = if by_model {
+            let value = if usage_mode {
+                analytics_data.value(bucket.first)
+            } else if by_model {
                 model_data.map_or(0, |models| models.value(bucket.first, cost_mode))
             } else if cost_mode {
                 bucket.usage.estimated_cost_microusd
@@ -371,7 +449,9 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
             };
             let date = bucket.first;
             let enter = set_hovered.clone();
-            let tooltip = if by_model {
+            let tooltip = if usage_mode {
+                analytics_data.description(bucket)
+            } else if by_model {
                 model_data.map_or_else(String::new, |models| models.description(bucket, cost_mode))
             } else {
                 bucket_tooltip(bucket)
@@ -381,7 +461,9 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
             } else {
                 (HEIGHT * value as f64 / maximum as f64).max(2.0)
             };
-            let bar: Element = if by_model && value > 0 {
+            let bar: Element = if usage_mode && by_model && value > 0 {
+                analytics_data.bar(date, props.scheme, bar_width, height, transition)
+            } else if by_model && value > 0 {
                 models::bar(
                     model_data.expect("model value requires data"),
                     date,
@@ -391,13 +473,17 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
                     height,
                     transition,
                 )
-            } else if cost_mode || value == 0 {
+            } else if cost_mode || usage_mode || value == 0 {
                 border(Element::Empty)
                     .width(bar_width)
                     .height(height)
                     .corner_radius(1.5)
                     .background(ThemeRef::Accent)
-                    .opacity(if value == 0 { 0.2 } else { 1.0 })
+                    .opacity(if value == 0 {
+                        if usage_mode { 0.0 } else { 0.2 }
+                    } else {
+                        1.0
+                    })
                     .with_layout_animation(
                         LayoutAnimationConfig::linear(transition).animate_size(true),
                     )
@@ -473,8 +559,12 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
                     }
                 })
                 .with_key("hover-target");
-            if by_model && model_data.is_some_and(|models| models.pages(date) > 1) {
-                let pages = model_data.map_or(1, |models| models.pages(date));
+            let pages = if usage_mode {
+                analytics_data.pages(date)
+            } else {
+                model_data.map_or(1, |models| models.pages(date))
+            };
+            if by_model && pages > 1 {
                 let page = set_model_page.clone();
                 hit_target = hit_target.on_pointer_wheel(move |event: PointerEventInfo| {
                     if !event.wheel_is_horizontal && event.wheel_delta != 0 {
@@ -495,13 +585,38 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
         .collect();
     let exit = set_hovered.clone();
     let mut chart_children: Vec<Element> = vec![hstack(bars).spacing(0.0).height(HEIGHT).into()];
-    let empty_label = if by_model && model_resource.error().is_some() {
+    if usage_mode
+        && let Some(xaml) = activity_quota_timeline_xaml(&analytics_data, &data, chart_width)
+    {
+        chart_children.push(activity_quota_timeline_host(
+            &xaml,
+            props.statistics.account_id.as_deref().unwrap_or("unknown"),
+            props.scheme,
+            chart_width,
+        ));
+    }
+    let analytics_error = props
+        .statistics
+        .codex_analytics
+        .as_ref()
+        .and_then(|analytics| analytics.error.as_deref());
+    let analytics_updated = props
+        .statistics
+        .codex_analytics
+        .as_ref()
+        .and_then(|analytics| analytics.fetched_at)
+        .map(|at| at.with_timezone(&Local).format("%b %-d, %H:%M").to_string());
+    let empty_label = if usage_mode && props.statistics.codex_analytics.is_none() {
+        Some("Loading quota history…")
+    } else if usage_mode && !analytics_data.has_data() && !analytics_data.has_timeline() {
+        Some(analytics_error.unwrap_or("No quota history in this period"))
+    } else if by_model && model_resource.error().is_some() {
         Some("Model data unavailable")
     } else if by_model && model_resource.is_loading() {
         Some("Loading models…")
-    } else if by_model && availability.series == 0 && !availability.cost {
+    } else if by_model && availability.series == 0 && !availability.cost && !availability.usage {
         Some("No model data")
-    } else if availability.series == 0 && !availability.cost {
+    } else if availability.series == 0 && !availability.cost && !availability.usage {
         Some("No usage data")
     } else if !by_model && !cost_mode && mask == 0 {
         Some("No series selected")
@@ -552,7 +667,7 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
                 .on_click(move || {
                     update.call(move |current| {
                         let current = Selection {
-                            cost: availability.selection(current).cost,
+                            metric: availability.selection(current).metric,
                             ..current
                         };
                         current.with_series(series, !current.selected(series))
@@ -583,16 +698,16 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
                 .into()
         })
         .collect();
-    let modes: Vec<Element> = [("Tokens", false), ("Cost", true)]
+    let modes: Vec<Element> = [("Tokens", Metric::Tokens), ("Cost", Metric::Cost)]
         .into_iter()
         .enumerate()
-        .map(|(index, (label, cost))| {
-            let available = if cost {
-                availability.cost
-            } else {
-                availability.series != 0
+        .map(|(index, (label, target_metric))| {
+            let available = match target_metric {
+                Metric::Tokens => availability.series != 0,
+                Metric::Cost => availability.cost,
+                Metric::Usage => availability.usage,
             };
-            let selected = available && cost_mode == cost;
+            let selected = available && metric == target_metric;
             let update = update_selection.clone();
             let highlight = border(Element::Empty)
                 .background(ThemeRef::ControlFill)
@@ -613,15 +728,28 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
                 .height(22.0)
                 .padding(Thickness::uniform(0.0))
                 .horizontal_alignment(HorizontalAlignment::Stretch)
-                .on_click(move || update.call(move |current| Selection { cost, ..current }))
-                .tooltip(if !available && cost {
-                    "No cost data for this period"
-                } else if !available {
-                    "No token data for this period"
-                } else if cost {
-                    "Daily cost in USD"
-                } else {
-                    "Daily token volume"
+                .on_click(move || {
+                    update.call(move |current| Selection {
+                        metric: target_metric,
+                        ..current
+                    })
+                })
+                .tooltip(match target_metric {
+                    Metric::Usage if let Some(error) = analytics_error => {
+                        format!(
+                            "Subscription quota consumed · Cached data shown{} · {error}",
+                            analytics_updated
+                                .as_deref()
+                                .map(|updated| format!(" · Updated {updated}"))
+                                .unwrap_or_default()
+                        )
+                    }
+                    Metric::Usage if available => "Daily subscription quota consumed".to_owned(),
+                    Metric::Usage => "No Codex quota history for this period".to_owned(),
+                    Metric::Cost if available => "Daily cost in USD".to_owned(),
+                    Metric::Cost => "No cost data for this period".to_owned(),
+                    Metric::Tokens if available => "Daily token volume".to_owned(),
+                    Metric::Tokens => "No token data for this period".to_owned(),
                 })
                 .automation_name(if available {
                     format!(
@@ -640,8 +768,16 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
                 .into()
         })
         .collect();
-    let model_available = model_data.is_some_and(|models| models.has_data());
-    let model_hint = if let Some(error) = model_resource.error() {
+    let model_available = if usage_mode {
+        analytics_data.has_data()
+    } else {
+        model_data.is_some_and(|models| models.has_data())
+    };
+    let model_hint = if usage_mode && !model_available {
+        analytics_error.unwrap_or("No quota model data").to_owned()
+    } else if usage_mode {
+        "Group quota consumption by model".into()
+    } else if let Some(error) = model_resource.error() {
         error.to_owned()
     } else if model_resource.is_loading() {
         "Loading model breakdown".into()
@@ -721,7 +857,7 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
         )
     };
     let summary = format!("{total} · {} requests", props.statistics.history.requests);
-    let legend: Element = if by_model {
+    let legend: Element = if by_model || usage_mode {
         // Keep the footer height stable without invisible focusable controls.
         border(Element::Empty)
             .height(24.0)
@@ -735,17 +871,55 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
             .with_key("token-legend")
             .into()
     };
-    let selectors = hstack((model_selector, metric_selector))
-        .spacing(8.0)
-        .grid_column(1);
-    let footer = grid((legend, selectors))
+    let footer: Element = if props.quota_only {
+        grid((
+            caption("Bars · quota used by model")
+                .foreground(ThemeRef::TertiaryText)
+                .vertical_alignment(VerticalAlignment::Center)
+                .grid_column(0),
+            caption("Line · quota left")
+                .foreground(ThemeRef::TertiaryText)
+                .vertical_alignment(VerticalAlignment::Center)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .grid_column(1),
+        ))
         .columns([GridLength::Star(1.0), GridLength::Auto])
-        .rows([GridLength::Auto]);
+        .rows([GridLength::Pixel(24.0)])
+        .with_key("quota-legend")
+        .into()
+    } else {
+        let selectors = hstack((model_selector, metric_selector))
+            .spacing(8.0)
+            .grid_column(1);
+        grid((legend, selectors))
+            .columns([GridLength::Star(1.0), GridLength::Auto])
+            .rows([GridLength::Auto])
+            .with_key("activity-footer")
+            .into()
+    };
     let tip = active_hover.and_then(|date| {
         data.iter()
             .find(|bucket| bucket.first == date)
             .and_then(|bucket| {
-                if by_model {
+                if usage_mode && by_model {
+                    Some(activity_tip_from_analytics_models(
+                        bucket,
+                        &analytics_data,
+                        props.provider,
+                        props.scheme,
+                        model_page,
+                        analytics_updated.as_deref(),
+                        analytics_error,
+                    ))
+                } else if usage_mode {
+                    Some(activity_tip_from_analytics(
+                        bucket,
+                        &analytics_data,
+                        props.provider,
+                        analytics_updated.as_deref(),
+                        analytics_error,
+                    ))
+                } else if by_model {
                     model_data.map(|models| {
                         activity_tip_from_models(
                             bucket,
@@ -767,7 +941,16 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
     });
     publish_activity_page_tip(tip);
 
-    let metrics = usage_card_metrics(props.provider, &props.statistics);
+    let metrics = if props.quota_only {
+        quota_card_metrics(
+            &props.statistics,
+            &analytics_data,
+            analytics_updated.as_deref(),
+            analytics_error,
+        )
+    } else {
+        usage_card_metrics(props.provider, &props.statistics)
+    };
     border(
         vstack((
             metrics,
@@ -781,8 +964,179 @@ fn render_chart(props: &ChartProps, cx: &mut RenderCx) -> Element {
     .border_thickness(Thickness::uniform(1.0))
     .border_brush(ThemeRef::CardStroke)
     .horizontal_alignment(HorizontalAlignment::Stretch)
-    .with_key(format!("activity-card-{}", props.provider.id()))
+    .with_key(if props.quota_only {
+        format!(
+            "quota-card-{}",
+            props.statistics.account_id.as_deref().unwrap_or("unknown")
+        )
+    } else {
+        format!("activity-card-{}", props.provider.id())
+    })
     .into()
+}
+
+fn activity_quota_timeline_xaml(
+    analytics: &models::AnalyticsData,
+    bounds: &[Bucket],
+    width: f64,
+) -> Option<String> {
+    use chrono::TimeZone;
+
+    let first = bounds.first()?;
+    let last = bounds.last()?;
+    if analytics.cycles().is_empty() {
+        return None;
+    }
+    let start = first
+        .first
+        .and_hms_opt(0, 0, 0)
+        .and_then(|naive| Local.from_local_datetime(&naive).earliest())?
+        .with_timezone(&Utc);
+    let end = (last.last + ChronoDuration::days(1))
+        .and_hms_opt(0, 0, 0)
+        .and_then(|naive| Local.from_local_datetime(&naive).earliest())?
+        .with_timezone(&Utc)
+        .min(Utc::now());
+    if end <= start {
+        return None;
+    }
+    let slot_width = width / bounds.len().max(1) as f64;
+    let (left, right) = if bounds.len() == 1 {
+        (2.0, (width - 2.0).max(2.0))
+    } else {
+        let left = slot_width / 2.0;
+        (left, (width - slot_width / 2.0).max(left))
+    };
+    let span = end.signed_duration_since(start).num_milliseconds().max(1) as f64;
+    let x_at = |at: DateTime<Utc>| {
+        let elapsed = at
+            .signed_duration_since(start)
+            .num_milliseconds()
+            .clamp(0, span as i64) as f64;
+        left + (right - left) * elapsed / span
+    };
+    let y_at = |remaining: u64| {
+        let ratio = remaining.min(100 * crate::usage::ANALYTICS_PERCENT_SCALE) as f64
+            / (100 * crate::usage::ANALYTICS_PERCENT_SCALE) as f64;
+        2.0 + (HEIGHT - 4.0) * (1.0 - ratio)
+    };
+
+    let mut resets = String::new();
+    let mut paths = String::new();
+    for cycle in analytics.cycles() {
+        if cycle.starts_at > start && cycle.starts_at <= end {
+            let x = x_at(cycle.starts_at);
+            resets.push_str(&format!(
+                r#"<Line X1="{x:.2}" Y1="0" X2="{x:.2}" Y2="{HEIGHT:.2}" Stroke="{{ThemeResource TextFillColorSecondaryBrush}}" StrokeThickness="1" StrokeDashArray="2,3" Opacity="0.65" />"#
+            ));
+        }
+        let visible = cycle
+            .points
+            .iter()
+            .filter(|point| point.at >= start && point.at <= end)
+            .collect::<Vec<_>>();
+        if visible.is_empty() {
+            continue;
+        }
+        let mut path = format!(
+            "M {:.2},{:.2}",
+            x_at(visible[0].at),
+            y_at(visible[0].remaining_percent_micros)
+        );
+        for point in visible.iter().skip(1) {
+            path.push_str(&format!(
+                " L {:.2},{:.2}",
+                x_at(point.at),
+                y_at(point.remaining_percent_micros)
+            ));
+        }
+        if visible.len() == 1 {
+            path.push_str(&format!(
+                " L {:.2},{:.2}",
+                x_at(visible[0].at),
+                y_at(visible[0].remaining_percent_micros)
+            ));
+        }
+        paths.push_str(&format!(
+            r#"<Path Data="{path}" Fill="Transparent" Stroke="{{ThemeResource TextFillColorPrimaryBrush}}" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />"#
+        ));
+    }
+    if paths.is_empty() {
+        return None;
+    }
+    Some(format!(
+        r#"<Canvas xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Width="{width:.2}" Height="{HEIGHT:.2}" Background="Transparent" IsHitTestVisible="False">{resets}{paths}</Canvas>"#
+    ))
+}
+
+fn activity_quota_timeline_host(
+    xaml: &str,
+    account: &str,
+    scheme: ColorScheme,
+    width: f64,
+) -> Element {
+    thread_local! {
+        static QUOTA_MOUNTS: RefCell<std::collections::HashMap<String, windows_core::IInspectable>> =
+            RefCell::new(std::collections::HashMap::new());
+        static QUOTA_FINGERPRINTS: RefCell<std::collections::HashMap<String, u64>> =
+            RefCell::new(std::collections::HashMap::new());
+    }
+    let host_key = format!("activity-quota-line-{account}-{}", scheme as i32);
+    let fingerprint = xaml.bytes().fold(0_u64, |hash, byte| {
+        hash.wrapping_mul(16_777_619).wrapping_add(u64::from(byte))
+    });
+    let changed = QUOTA_FINGERPRINTS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.get(&host_key) == Some(&fingerprint) {
+            false
+        } else {
+            cache.insert(host_key.clone(), fingerprint);
+            true
+        }
+    });
+    if changed {
+        QUOTA_MOUNTS.with(|mounts| {
+            if let Some(native) = mounts.borrow().get(&host_key).cloned()
+                && let Err(error) = crate::acrylic::install_usage_chart_into(native, xaml)
+            {
+                eprintln!("Could not update activity quota line: {error:?}");
+            }
+        });
+    }
+
+    let xaml_for_mount = xaml.to_owned();
+    let key_for_mount = host_key.clone();
+    let key_for_unmount = host_key.clone();
+    let mut host = swap_chain_panel().width(width).height(HEIGHT);
+    host.mounted = Some(Callback::new(
+        move |native: Option<windows_core::IInspectable>| {
+            if let Some(native) = native {
+                if let Err(error) =
+                    crate::acrylic::install_usage_chart_into(native.clone(), &xaml_for_mount)
+                {
+                    eprintln!("Could not install activity quota line: {error:?}");
+                }
+                let _ = windows_reactor::set_hit_test_visible(native.clone(), false);
+                QUOTA_MOUNTS.with(|mounts| {
+                    mounts.borrow_mut().insert(key_for_mount.clone(), native);
+                });
+            }
+        },
+    ));
+    host.unmounted = Some(Callback::new(
+        move |native: Option<windows_core::IInspectable>| {
+            if let Some(native) = native {
+                let _ = crate::acrylic::clear_children(native);
+            }
+            QUOTA_MOUNTS.with(|mounts| {
+                mounts.borrow_mut().remove(&key_for_unmount);
+            });
+            QUOTA_FINGERPRINTS.with(|cache| {
+                cache.borrow_mut().remove(&key_for_unmount);
+            });
+        },
+    ));
+    host.with_key(host_key).into()
 }
 
 const TOOLTIP_PAD_X: f64 = 14.0;
@@ -813,6 +1167,10 @@ enum ActivityTipKind {
         metric: String,
         rows: Vec<(String, String, Color)>,
         footer: Option<String>,
+    },
+    Analytics {
+        total: String,
+        footer: String,
     },
 }
 
@@ -905,6 +1263,54 @@ fn apply_activity_tooltip_offset() {
 
 fn activity_page_width() -> f64 {
     f64::from(popup::POPUP_WIDTH) - 2.0 - 32.0
+}
+
+fn quota_card_metrics(
+    statistics: &UsageStatistics,
+    analytics: &models::AnalyticsData,
+    updated: Option<&str>,
+    error: Option<&str>,
+) -> Element {
+    let consumed = if analytics.has_data() {
+        format!("{} consumed", format_analytics_percent(analytics.total()))
+    } else {
+        "—".into()
+    };
+    let remaining = analytics
+        .latest_remaining()
+        .map(|value| format!("{} left", format_analytics_percent(value)))
+        .unwrap_or_else(|| "—".into());
+    let status = match (updated, error) {
+        (Some(updated), Some(error)) => {
+            format!("Cached quota data · Updated {updated} · {error}")
+        }
+        (None, Some(error)) => format!("Cached quota data · {error}"),
+        (Some(updated), None) => format!("Updated {updated}"),
+        (None, None) => "Quota snapshots are collected locally".into(),
+    };
+    grid((
+        vstack((
+            caption(format!("Usage · {} days", statistics.history_days))
+                .foreground(ThemeRef::TertiaryText),
+            body_strong(consumed),
+        ))
+        .spacing(2.0)
+        .grid_column(0),
+        vstack((
+            caption("Current quota")
+                .foreground(ThemeRef::TertiaryText)
+                .horizontal_alignment(HorizontalAlignment::Right),
+            body_strong(remaining).horizontal_alignment(HorizontalAlignment::Right),
+        ))
+        .spacing(2.0)
+        .horizontal_alignment(HorizontalAlignment::Right)
+        .grid_column(1),
+    ))
+    .columns([GridLength::Star(1.0), GridLength::Auto])
+    .rows([GridLength::Auto])
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .tooltip(status)
+    .into()
 }
 
 fn usage_card_metrics(provider: ProviderKind, statistics: &UsageStatistics) -> Element {
@@ -1127,6 +1533,82 @@ fn activity_tip_from_models(
     }
 }
 
+fn activity_tip_from_analytics(
+    bucket: &Bucket,
+    analytics: &models::AnalyticsData,
+    provider: ProviderKind,
+    updated: Option<&str>,
+    error: Option<&str>,
+) -> ActivityTipData {
+    let mut footer =
+        "Line: quota remaining · Vertical marks: resets\nEstimated from quota snapshots".to_owned();
+    if let Some(remaining) = analytics.remaining_for(bucket) {
+        footer = format!(
+            "{} quota remaining\n{footer}",
+            format_analytics_percent(remaining)
+        );
+    }
+    if let Some(updated) = updated {
+        footer.push_str(&format!("\nUpdated {updated}"));
+    }
+    if let Some(error) = error {
+        footer.push_str(&format!("\nCached data · {error}"));
+    }
+    ActivityTipData {
+        provider,
+        title: bucket_title(bucket),
+        kind: ActivityTipKind::Analytics {
+            total: format_analytics_percent(analytics.value(bucket.first)),
+            footer,
+        },
+    }
+}
+
+fn activity_tip_from_analytics_models(
+    bucket: &Bucket,
+    analytics: &models::AnalyticsData,
+    provider: ProviderKind,
+    scheme: ColorScheme,
+    page: usize,
+    updated: Option<&str>,
+    error: Option<&str>,
+) -> ActivityTipData {
+    let (entries, total) = analytics.page_rows(bucket.first, scheme, page);
+    let page = page.min(analytics.pages(bucket.first).saturating_sub(1));
+    let mut footer = if total > models::PAGE_SIZE {
+        format!(
+            "{}–{} of {total} models · Scroll for more\n",
+            page * models::PAGE_SIZE + 1,
+            ((page + 1) * models::PAGE_SIZE).min(total)
+        )
+    } else {
+        String::new()
+    };
+    if let Some(remaining) = analytics.remaining_for(bucket) {
+        footer.push_str(&format!(
+            "{} quota remaining\n",
+            format_analytics_percent(remaining)
+        ));
+    }
+    footer
+        .push_str("Line: quota remaining · Vertical marks: resets\nEstimated from quota snapshots");
+    if let Some(updated) = updated {
+        footer.push_str(&format!("\nUpdated {updated}"));
+    }
+    if let Some(error) = error {
+        footer.push_str(&format!("\nCached data · {error}"));
+    }
+    ActivityTipData {
+        provider,
+        title: bucket_title(bucket),
+        kind: ActivityTipKind::Model {
+            metric: "Quota by model".into(),
+            rows: entries,
+            footer: Some(footer),
+        },
+    }
+}
+
 pub(super) fn activity_page_tooltip(data: &ActivityTipData, scheme: ColorScheme) -> Element {
     match &data.kind {
         ActivityTipKind::Usage {
@@ -1155,7 +1637,39 @@ pub(super) fn activity_page_tooltip(data: &ActivityTipData, scheme: ColorScheme)
             footer.as_deref(),
             scheme,
         ),
+        ActivityTipKind::Analytics { total, footer } => {
+            activity_analytics_tooltip(data.title.clone(), total, footer)
+        }
     }
+}
+
+fn activity_analytics_tooltip(title: String, total: &str, footer: &str) -> Element {
+    let rows: Vec<Element> = vec![
+        caption("Quota consumed")
+            .foreground(ThemeRef::SecondaryText)
+            .with_key("activity-tip-analytics-label")
+            .into(),
+        text_block(total.to_owned())
+            .font_size(20.0)
+            .font_weight(600)
+            .with_key("activity-tip-analytics-total")
+            .into(),
+        caption(footer.to_owned())
+            .foreground(ThemeRef::SecondaryText)
+            .wrap()
+            .with_key("activity-tip-analytics-footer")
+            .into(),
+    ];
+    let width = (title.chars().count() as f64 * TOOLTIP_CHAR_TITLE)
+        .max(35.0 * TOOLTIP_CHAR_CAPTION)
+        + TOOLTIP_PAD_X * 2.0;
+    activity_tooltip_shell(
+        title,
+        rows,
+        width,
+        TOOLTIP_PAD_Y * 2.0 + 20.0 + 10.0 + 24.0 + 40.0,
+        "activity-tip-analytics",
+    )
 }
 
 fn activity_usage_tooltip(
@@ -1388,17 +1902,18 @@ mod tests {
             available,
             Availability {
                 series: 0,
-                cost: true
+                cost: true,
+                usage: false,
             }
         );
         assert_eq!(
             available.selection(Selection {
                 mask: 7,
-                cost: false
+                metric: Metric::Tokens,
             }),
             Selection {
                 mask: 0,
-                cost: true
+                metric: Metric::Cost,
             }
         );
     }
@@ -1415,17 +1930,18 @@ mod tests {
             available,
             Availability {
                 series: 5,
-                cost: false
+                cost: false,
+                usage: false,
             }
         );
         assert_eq!(
             available.selection(Selection {
                 mask: 7,
-                cost: true
+                metric: Metric::Cost,
             }),
             Selection {
                 mask: 5,
-                cost: false
+                metric: Metric::Tokens,
             }
         );
         let cached = availability_for(TokenUsage {
@@ -1440,28 +1956,29 @@ mod tests {
     fn metric_availability_does_not_erase_selection_or_reenable_hidden_series() {
         let requested = Selection {
             mask: 5,
-            cost: false,
+            metric: Metric::Tokens,
         };
         let available = Availability {
             series: 7,
             cost: true,
+            usage: true,
         };
         assert_eq!(
             Availability::default().selection(requested),
             Selection {
                 mask: 0,
-                cost: false
+                metric: Metric::Tokens,
             }
         );
         assert_eq!(available.selection(requested), requested);
         assert_eq!(
             available.selection(Selection {
                 mask: 0,
-                cost: false
+                metric: Metric::Tokens,
             }),
             Selection {
                 mask: 0,
-                cost: false
+                metric: Metric::Tokens,
             }
         );
     }
@@ -1526,7 +2043,7 @@ mod tests {
     fn native_checked_echoes_preserve_mode_and_selection() {
         let mut selection = Selection {
             mask: 5,
-            cost: true,
+            metric: Metric::Cost,
         };
         for series in Series::ALL {
             selection = selection.with_series(series, false);
@@ -1535,12 +2052,12 @@ mod tests {
             selection,
             Selection {
                 mask: 5,
-                cost: true
+                metric: Metric::Cost,
             }
         );
 
         // Returning from cost restores the previous series; native check echoes are inert.
-        selection.cost = false;
+        selection.metric = Metric::Tokens;
         for series in Series::ALL {
             selection = selection.with_series(series, selection.selected(series));
         }
@@ -1552,13 +2069,13 @@ mod tests {
         assert_eq!(selection.mask, 2);
 
         // Choosing a token series while cost is shown starts with that series alone.
-        selection.cost = true;
+        selection.metric = Metric::Cost;
         selection = selection.with_series(Series::Output, true);
         assert_eq!(
             selection,
             Selection {
                 mask: 4,
-                cost: false
+                metric: Metric::Tokens,
             }
         );
     }
@@ -1645,5 +2162,64 @@ mod tests {
         assert_eq!(data.iter().map(|b| b.usage.requests).sum::<u64>(), 3);
         assert!(data.iter().any(|b| b.usage.requests == 0));
         assert!(bucket_tooltip(&data[0]).contains('–'));
+    }
+
+    #[test]
+    fn quota_timeline_keeps_reset_cycles_separate() {
+        use chrono::TimeZone;
+
+        let today = Local::now().date_naive();
+        let first = today - ChronoDuration::days(1);
+        let range_start = first
+            .and_hms_opt(0, 0, 0)
+            .and_then(|naive| Local.from_local_datetime(&naive).earliest())
+            .unwrap()
+            .with_timezone(&Utc);
+        let reset = range_start + ChronoDuration::hours(12);
+        let usage = crate::usage::CodexAnalyticsUsage {
+            start_date: first,
+            end_date: today,
+            quota_cycles: vec![
+                crate::usage::CodexQuotaCycle {
+                    starts_at: range_start,
+                    resets_at: reset,
+                    points: vec![
+                        crate::usage::CodexQuotaPoint {
+                            at: range_start,
+                            remaining_percent_micros: 100_000_000,
+                        },
+                        crate::usage::CodexQuotaPoint {
+                            at: reset - ChronoDuration::minutes(1),
+                            remaining_percent_micros: 2_000_000,
+                        },
+                    ],
+                },
+                crate::usage::CodexQuotaCycle {
+                    starts_at: reset,
+                    resets_at: reset + ChronoDuration::days(7),
+                    points: vec![
+                        crate::usage::CodexQuotaPoint {
+                            at: reset,
+                            remaining_percent_micros: 100_000_000,
+                        },
+                        crate::usage::CodexQuotaPoint {
+                            at: reset + ChronoDuration::minutes(1),
+                            remaining_percent_micros: 99_000_000,
+                        },
+                    ],
+                },
+            ],
+            ..Default::default()
+        };
+        let bounds = vec![Bucket {
+            first,
+            last: today,
+            usage: TokenUsage::default(),
+        }];
+        let analytics = models::analytics(Some(&usage), &bounds);
+        let xaml = activity_quota_timeline_xaml(&analytics, &bounds, 320.0).unwrap();
+        assert!(xaml.contains("StrokeDashArray"));
+        assert_eq!(xaml.matches("<Path ").count(), 2);
+        assert!(!xaml.contains("NaN"));
     }
 }

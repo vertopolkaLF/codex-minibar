@@ -2,6 +2,223 @@ use super::*;
 
 pub(super) const PAGE_SIZE: usize = 8;
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct AnalyticsData {
+    days: BTreeMap<NaiveDate, BTreeMap<String, u64>>,
+    maximum: u64,
+    cycles: Vec<crate::usage::CodexQuotaCycle>,
+}
+
+pub(super) fn analytics(
+    usage: Option<&crate::usage::CodexAnalyticsUsage>,
+    bounds: &[Bucket],
+) -> AnalyticsData {
+    let mut result = AnalyticsData::default();
+    let Some(usage) = usage else {
+        return result;
+    };
+    result.cycles = usage.quota_cycles.clone();
+    for day in &usage.daily {
+        let Some(bucket) = bounds
+            .iter()
+            .find(|bucket| bucket.first <= day.date && day.date <= bucket.last)
+        else {
+            continue;
+        };
+        let models = result.days.entry(bucket.first).or_default();
+        for (model, value) in day.quota_by_model() {
+            let total = models.entry(model).or_default();
+            *total = total.saturating_add(value);
+        }
+    }
+    result.maximum = result
+        .days
+        .values()
+        .map(|models| {
+            models
+                .values()
+                .fold(0_u64, |total, value| total.saturating_add(*value))
+        })
+        .max()
+        .unwrap_or_default();
+    result
+}
+
+impl AnalyticsData {
+    pub(super) fn has_data(&self) -> bool {
+        self.maximum > 0
+    }
+
+    pub(super) fn has_timeline(&self) -> bool {
+        self.cycles.iter().any(|cycle| !cycle.points.is_empty())
+    }
+
+    fn raw_value(&self, date: NaiveDate) -> u64 {
+        self.days
+            .get(&date)
+            .into_iter()
+            .flat_map(|models| models.values())
+            .fold(0_u64, |total, value| total.saturating_add(*value))
+    }
+
+    pub(super) fn value(&self, date: NaiveDate) -> u64 {
+        self.raw_value(date)
+    }
+
+    pub(super) fn total(&self) -> u64 {
+        self.days.values().fold(0_u64, |total, models| {
+            total.saturating_add(
+                models
+                    .values()
+                    .fold(0_u64, |day, value| day.saturating_add(*value)),
+            )
+        })
+    }
+
+    pub(super) fn latest_remaining(&self) -> Option<u64> {
+        let now = Utc::now();
+        self.cycles
+            .iter()
+            .filter(|cycle| cycle.starts_at <= now && now <= cycle.resets_at)
+            .max_by_key(|cycle| cycle.starts_at)
+            .and_then(|cycle| {
+                cycle
+                    .points
+                    .iter()
+                    .filter(|point| point.at <= now)
+                    .max_by_key(|point| point.at)
+            })
+            .map(|point| point.remaining_percent_micros)
+    }
+
+    pub(super) fn cycles(&self) -> &[crate::usage::CodexQuotaCycle] {
+        &self.cycles
+    }
+
+    pub(super) fn remaining_for(&self, bucket: &Bucket) -> Option<u64> {
+        use chrono::TimeZone;
+
+        let end = bucket.last + ChronoDuration::days(1);
+        let end = end
+            .and_hms_opt(0, 0, 0)
+            .and_then(|naive| Local.from_local_datetime(&naive).earliest())?
+            .with_timezone(&Utc)
+            .min(Utc::now());
+        self.cycles
+            .iter()
+            .filter(|cycle| cycle.starts_at <= end && end <= cycle.resets_at)
+            .max_by_key(|cycle| cycle.starts_at)
+            .and_then(|cycle| {
+                cycle
+                    .points
+                    .iter()
+                    .filter(|point| point.at <= end)
+                    .max_by_key(|point| point.at)
+            })
+            .map(|point| point.remaining_percent_micros)
+    }
+
+    pub(super) fn pages(&self, date: NaiveDate) -> usize {
+        self.days
+            .get(&date)
+            .map_or(1, |models| models.len().div_ceil(PAGE_SIZE).max(1))
+    }
+
+    fn sorted(&self, date: NaiveDate) -> Vec<(&str, u64)> {
+        let mut rows: Vec<_> = self
+            .days
+            .get(&date)
+            .into_iter()
+            .flat_map(|models| models.iter())
+            .map(|(model, value)| (model.as_str(), *value))
+            .collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        rows
+    }
+
+    pub(super) fn page_rows(
+        &self,
+        date: NaiveDate,
+        scheme: ColorScheme,
+        page: usize,
+    ) -> (Vec<(String, String, Color)>, usize) {
+        let all = self.sorted(date);
+        let page = page.min(self.pages(date).saturating_sub(1));
+        let rows = all
+            .iter()
+            .skip(page * PAGE_SIZE)
+            .take(PAGE_SIZE)
+            .map(|(name, value)| {
+                (
+                    (*name).to_owned(),
+                    format_analytics_percent(*value),
+                    color(name, scheme),
+                )
+            })
+            .collect();
+        (rows, all.len())
+    }
+
+    pub(super) fn description(&self, bucket: &Bucket) -> String {
+        let mut result = format!(
+            "{} – {} · Quota consumed {}",
+            bucket.first,
+            bucket.last,
+            format_analytics_percent(self.value(bucket.first))
+        );
+        for (name, value) in self.sorted(bucket.first) {
+            result.push_str(&format!("\n{name}: {}", format_analytics_percent(value)));
+        }
+        if let Some(remaining) = self.remaining_for(bucket) {
+            result.push_str(&format!(
+                "\nQuota remaining: {}",
+                format_analytics_percent(remaining)
+            ));
+        }
+        result.push_str("\nEstimated from quota snapshots");
+        result
+    }
+
+    pub(super) fn bar(
+        &self,
+        date: NaiveDate,
+        scheme: ColorScheme,
+        width: f64,
+        height: f64,
+        transition: Duration,
+    ) -> Element {
+        let total = self.raw_value(date);
+        let models: Vec<_> = self
+            .days
+            .get(&date)
+            .into_iter()
+            .flat_map(|models| models.iter())
+            .collect();
+        let rows = models
+            .iter()
+            .map(|(_, value)| GridLength::Star(**value as f64 / total.max(1) as f64));
+        let segments: Vec<Element> = models
+            .iter()
+            .enumerate()
+            .map(|(index, (name, _))| {
+                border(Element::Empty)
+                    .grid_row(index as i32)
+                    .background(color(name, scheme))
+                    .with_key(format!("analytics-model-{name}"))
+                    .into()
+            })
+            .collect();
+        border(grid(segments).rows(rows).columns([GridLength::Star(1.0)]))
+            .width(width)
+            .height(height)
+            .corner_radius(1.5)
+            .background(Color::transparent())
+            .with_layout_animation(LayoutAnimationConfig::linear(transition).animate_size(true))
+            .with_key("analytics-model-bar")
+            .into()
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct ModelData {
     days: BTreeMap<NaiveDate, BTreeMap<String, TokenUsage>>,
@@ -314,6 +531,69 @@ mod tests {
     use super::*;
 
     #[test]
+    fn analytics_groups_actual_quota_and_preserves_model_totals() {
+        let first = NaiveDate::from_ymd_opt(2026, 9, 8).unwrap();
+        let bounds = vec![
+            Bucket {
+                first,
+                last: first + ChronoDuration::days(1),
+                usage: TokenUsage::default(),
+            },
+            Bucket {
+                first: first + ChronoDuration::days(2),
+                last: first + ChronoDuration::days(3),
+                usage: TokenUsage::default(),
+            },
+        ];
+        let usage = crate::usage::CodexAnalyticsUsage {
+            start_date: first,
+            end_date: first + ChronoDuration::days(3),
+            daily: vec![
+                crate::usage::CodexAnalyticsDay {
+                    date: first,
+                    models: BTreeMap::from([
+                        ("astra".into(), 30 * crate::usage::ANALYTICS_PERCENT_SCALE),
+                        ("sol".into(), 10 * crate::usage::ANALYTICS_PERCENT_SCALE),
+                    ]),
+                    quota_percent_micros: 20 * crate::usage::ANALYTICS_PERCENT_SCALE,
+                },
+                crate::usage::CodexAnalyticsDay {
+                    date: first + ChronoDuration::days(1),
+                    models: BTreeMap::from([(
+                        "astra".into(),
+                        20 * crate::usage::ANALYTICS_PERCENT_SCALE,
+                    )]),
+                    quota_percent_micros: 10 * crate::usage::ANALYTICS_PERCENT_SCALE,
+                },
+                crate::usage::CodexAnalyticsDay {
+                    date: first + ChronoDuration::days(2),
+                    models: BTreeMap::from([(
+                        "sol".into(),
+                        30 * crate::usage::ANALYTICS_PERCENT_SCALE,
+                    )]),
+                    quota_percent_micros: 15 * crate::usage::ANALYTICS_PERCENT_SCALE,
+                },
+            ],
+            ..Default::default()
+        };
+        let data = analytics(Some(&usage), &bounds);
+
+        assert_eq!(
+            data.value(first),
+            30 * crate::usage::ANALYTICS_PERCENT_SCALE
+        );
+        assert_eq!(
+            data.value(first + ChronoDuration::days(2)),
+            15 * crate::usage::ANALYTICS_PERCENT_SCALE
+        );
+        let (rows, total) = data.page_rows(first, ColorScheme::Dark, 0);
+        assert_eq!(total, 2);
+        assert_eq!(rows[0].0, "astra");
+        assert_eq!(rows[0].1, "25.0%");
+        assert_eq!(rows[1].1, "5.00%");
+    }
+
+    #[test]
     fn grouped_models_preserve_dates_totals_and_do_not_double_count_cache() {
         let date = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
         let usage = TokenUsage {
@@ -383,7 +663,8 @@ mod tests {
             data.availability(),
             Availability {
                 series: 0,
-                cost: true
+                cost: true,
+                usage: false,
             }
         );
         assert_eq!(xml("x\u{fffe}&\u{0}"), "x&amp;");

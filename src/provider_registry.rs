@@ -324,6 +324,10 @@ pub fn usage_brick_id(provider: ProviderKind) -> String {
     format!("{}.usage", descriptor(provider).id)
 }
 
+pub fn quota_history_brick_id(provider: ProviderKind) -> String {
+    format!("{}.quota-history", descriptor(provider).id)
+}
+
 pub fn spending_brick_id(provider: ProviderKind) -> String {
     format!("{}.spending", descriptor(provider).id)
 }
@@ -373,6 +377,9 @@ pub fn catalog_brick_ids(provider: ProviderKind) -> Vec<String> {
     if supports_usage_stats(provider) {
         ids.push(usage_brick_id(provider));
     }
+    if provider == ProviderKind::Codex {
+        ids.push(quota_history_brick_id(provider));
+    }
     if supports_spending_strips(provider) {
         ids.push(spending_brick_id(provider));
     }
@@ -392,7 +399,10 @@ pub fn brick_label(provider: ProviderKind, brick_id: &str) -> String {
         return "Credits".into();
     }
     if brick_id == usage_brick_id(provider) {
-        return "Usage stats".into();
+        return "Activity".into();
+    }
+    if brick_id == quota_history_brick_id(provider) {
+        return "Quota usage".into();
     }
     if brick_id == spending_brick_id(provider) {
         return "Spending".into();
