@@ -442,6 +442,7 @@ fn provider_row(
     children.push(
         vstack(text)
             .spacing(2.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
             .vertical_alignment(VerticalAlignment::Center)
             .grid_column(1)
             .into(),
@@ -1188,8 +1189,9 @@ fn source_row(
                     text_block(path)
                         .font_size(12.0)
                         .foreground(ThemeRef::SecondaryText)
-                        .wrap()
-                        .selectable()
+                        .max_lines(2)
+                        .horizontal_alignment(HorizontalAlignment::Stretch)
+                        .tooltip(path)
                         .into(),
                 ],
                 vec![
