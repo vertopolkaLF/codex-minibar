@@ -112,16 +112,21 @@ pub enum WorkerEvent {
     PollFailed(String),
     Stopped,
     /// A provider-scoped event emitted by the multi-provider coordinator.
-    ProviderRequestStarted(crate::settings::ProviderKind, RequestKind),
-    ProviderRequestFinished(crate::settings::ProviderKind, RequestKind),
-    ProviderLimitsUpdated(crate::settings::ProviderKind, RateLimits),
-    ProviderUsageUpdated(crate::settings::ProviderKind, UsageStatistics),
+    /// The `u64` after the provider is the credential revision captured when
+    /// that worker started, allowing the UI to reject queued stale output.
+    ProviderRequestStarted(crate::settings::ProviderKind, u64, RequestKind),
+    ProviderRequestFinished(crate::settings::ProviderKind, u64, RequestKind),
+    ProviderLimitsUpdated(crate::settings::ProviderKind, u64, RateLimits),
+    ProviderUsageUpdated(crate::settings::ProviderKind, u64, UsageStatistics),
+    /// Barrier acknowledgement for `ClearUsageData`; the `u64` is the clear
+    /// generation, not a credential revision. It remains valid when the
+    /// acknowledged worker is replaced while that clear is in flight.
     ProviderUsageDataCleared(crate::settings::ProviderKind, u64),
-    ProviderUsageRefreshFailed(crate::settings::ProviderKind, String),
-    ProviderActivationStarted(crate::settings::ProviderKind),
-    ProviderActivationSucceeded(crate::settings::ProviderKind),
-    ProviderActivationFailed(crate::settings::ProviderKind, String),
-    ProviderPollFailed(crate::settings::ProviderKind, String),
+    ProviderUsageRefreshFailed(crate::settings::ProviderKind, u64, String),
+    ProviderActivationStarted(crate::settings::ProviderKind, u64),
+    ProviderActivationSucceeded(crate::settings::ProviderKind, u64),
+    ProviderActivationFailed(crate::settings::ProviderKind, u64, String),
+    ProviderPollFailed(crate::settings::ProviderKind, u64, String),
     /// Snapshot from the public Codex forced-reset announcement feed.
     ForcedResetsUpdated(crate::reset_feed::ResetFeedSnapshot),
     /// The feed refresh failed; cached forced resets remain usable.

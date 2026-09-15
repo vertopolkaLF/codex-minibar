@@ -44,6 +44,82 @@ pub(super) fn install_settings_close_hide() {
     }
 }
 
+/// Puts `text` on the Windows clipboard as Unicode text.
+#[cfg(windows)]
+pub(super) fn copy_text_to_clipboard(text: &str) -> anyhow::Result<()> {
+    use windows_sys::Win32::Foundation::GlobalFree;
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+    };
+    use windows_sys::Win32::System::Memory::{
+        GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock,
+    };
+    const CF_UNICODETEXT: u32 = 13;
+
+    let owner = find_settings_window();
+    if owner.is_null() {
+        anyhow::bail!("could not find the Settings window for clipboard access");
+    }
+    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let bytes = wide.len() * std::mem::size_of::<u16>();
+    // SAFETY: plain Win32 clipboard protocol. The global block is handed to
+    // the clipboard on success and freed on every failure path.
+    unsafe {
+        // A null owner followed by EmptyClipboard makes SetClipboardData fail.
+        if OpenClipboard(owner) == 0 {
+            anyhow::bail!("the clipboard is in use by another app");
+        }
+        let result = (|| {
+            let handle = GlobalAlloc(GMEM_MOVEABLE, bytes);
+            if handle.is_null() {
+                anyhow::bail!("could not allocate clipboard memory");
+            }
+            let target = GlobalLock(handle);
+            if target.is_null() {
+                GlobalFree(handle);
+                anyhow::bail!("could not lock clipboard memory");
+            }
+            std::ptr::copy_nonoverlapping(wide.as_ptr().cast::<u8>(), target.cast::<u8>(), bytes);
+            GlobalUnlock(handle);
+            // Do not clear the user's current clipboard until the complete
+            // replacement block is allocated, locked, and populated.
+            if EmptyClipboard() == 0 {
+                GlobalFree(handle);
+                anyhow::bail!("could not clear the clipboard");
+            }
+            if SetClipboardData(CF_UNICODETEXT, handle).is_null() {
+                GlobalFree(handle);
+                anyhow::bail!("could not place text on the clipboard");
+            }
+            Ok(())
+        })();
+        CloseClipboard();
+        result
+    }
+}
+
+#[cfg(not(windows))]
+pub(super) fn copy_text_to_clipboard(_text: &str) -> anyhow::Result<()> {
+    anyhow::bail!("clipboard is only supported on Windows")
+}
+
+/// Opens Explorer with `path` selected.
+#[cfg(windows)]
+pub(super) fn reveal_in_explorer(path: &str) -> anyhow::Result<()> {
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new("explorer.exe")
+        .raw_arg(format!("/select,\"{path}\""))
+        .creation_flags(0x0800_0000)
+        .spawn()
+        .context("open Explorer")?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub(super) fn reveal_in_explorer(_path: &str) -> anyhow::Result<()> {
+    anyhow::bail!("revealing files is only supported on Windows")
+}
+
 #[cfg(windows)]
 pub(super) fn set_settings_window_icon() {
     use windows_sys::Win32::{

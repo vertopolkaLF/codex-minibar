@@ -48,7 +48,6 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let grok_enabled = ctx.grok_enabled;
     let popup_order = ctx.popup_order;
     let use_colored_provider_icons = ctx.use_colored_provider_icons;
-    let replace_chatgpt_logo_with_codex = ctx.replace_chatgpt_logo_with_codex;
     let show_used_percentage = ctx.show_used_percentage;
     let show_usage_pace = ctx.show_usage_pace;
     let compact_usage_cards = ctx.compact_usage_cards;
@@ -59,7 +58,6 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let total_spend_presentation = ctx.total_spend_presentation;
     let expanded_popup_provider = ctx.expanded_popup_provider;
     let set_use_colored_provider_icons = ctx.set_use_colored_provider_icons.clone();
-    let set_replace_chatgpt_logo_with_codex = ctx.set_replace_chatgpt_logo_with_codex.clone();
     let set_show_used_percentage = ctx.set_show_used_percentage.clone();
     let set_show_usage_pace = ctx.set_show_usage_pace.clone();
     let set_compact_usage_cards = ctx.set_compact_usage_cards.clone();
@@ -72,7 +70,6 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let set_hovered_card_id = ctx.set_hovered_card_id.clone();
     let settings_tx = ctx.settings_tx.clone();
     let apply_use_colored_provider_icons = settings_tx.clone();
-    let apply_replace_chatgpt_logo_with_codex = settings_tx.clone();
     let apply_show_used_percentage = settings_tx.clone();
     let apply_show_usage_pace = settings_tx.clone();
     let apply_compact_usage_cards = settings_tx.clone();
@@ -117,34 +114,6 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
         )
         .with_key("customize-colored-icons"),
     ];
-    if codex_enabled {
-        rows.push(
-            settings_toggle_card(
-                "Replace ChatGPT logo with Codex",
-                replace_chatgpt_logo_with_codex,
-                {
-                    let set_replace_chatgpt_logo_with_codex =
-                        set_replace_chatgpt_logo_with_codex.clone();
-                    let apply_replace_chatgpt_logo_with_codex =
-                        apply_replace_chatgpt_logo_with_codex.clone();
-                    move |value| {
-                        persist_bool(
-                            set_replace_chatgpt_logo_with_codex.clone(),
-                            apply_replace_chatgpt_logo_with_codex.clone(),
-                            value,
-                            |settings, value| {
-                                settings.replace_chatgpt_logo_with_codex = value;
-                            },
-                        );
-                    }
-                },
-                "customize-codex-logo",
-                hovered_card_id,
-                set_hovered_card_id.clone(),
-            )
-            .with_key("customize-codex-logo"),
-        );
-    }
     rows.extend([
         settings_section_heading("Cards").with_key("customize-cards-heading"),
         settings_toggle_card(

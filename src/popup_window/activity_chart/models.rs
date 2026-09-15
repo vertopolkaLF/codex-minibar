@@ -220,8 +220,7 @@ impl ModelData {
 
         let all = self.sorted(bucket.first, cost);
         let page = page.min(self.pages(bucket.first).saturating_sub(1));
-        let descriptor = crate::provider_registry::descriptor(provider);
-        let icon = crate::icons::geom(descriptor.icon);
+        let icon = crate::icons::geom(crate::provider_registry::icon(provider));
         let icon_path = xml(icon.path);
         let canvas = icon.canvas;
         let icon_color = xaml_color(combined_usage_color(provider, scheme));

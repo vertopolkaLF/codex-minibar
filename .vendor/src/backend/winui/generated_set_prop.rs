@@ -492,6 +492,9 @@ pub fn dispatch(handle: &Handle, prop: Prop, value: &PropValue) -> Result<bool> 
         (Prop::TextWrapping, PropValue::I32(v), Handle::TextBlock(h)) => {
             h.SetTextWrapping(TextWrapping(*v))?;
         }
+        (Prop::TextTrimming, PropValue::I32(v), Handle::TextBlock(h)) => {
+            h.SetTextTrimming(TextTrimming(*v))?;
+        }
         (Prop::TextWrapping, PropValue::I32(v), Handle::TextBox(h)) => {
             h.SetTextWrapping(TextWrapping(*v))?;
         }

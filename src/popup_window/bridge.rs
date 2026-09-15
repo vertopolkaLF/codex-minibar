@@ -2,6 +2,18 @@ use super::*;
 
 use std::collections::HashSet;
 
+pub(super) fn provider_worker_event_is_current(
+    ui: &UiState,
+    provider: ProviderKind,
+    worker_revision: u64,
+) -> bool {
+    let current_revision = match provider {
+        ProviderKind::OpenRouter => ui.openrouter_credentials_revision,
+        _ => 0,
+    };
+    worker_revision == current_revision
+}
+
 fn forced_reset_info_body(reset: &crate::reset_feed::ForcedReset) -> String {
     let local = reset.reset_at.with_timezone(&Local);
     let when = format!(
@@ -53,6 +65,15 @@ pub(super) fn start_background_bridge(
     set_ui: AsyncSetState<UiState>,
     ui_dispatcher: UiMarshaller,
 ) {
+    // Use the already hydrated persistent snapshot while the first network
+    // refresh is in flight. Opening Settings never starts another poll.
+    // Account names live in settings, so overlay them before the first paint.
+    let startup_settings = state.settings.clone();
+    let _ = state.apply_openrouter_account_names(&startup_settings);
+    crate::settings_window::publish_openrouter_snapshot(
+        state.current_limits().get(ProviderKind::OpenRouter),
+        ui_dispatcher.clone(),
+    );
     let events = state.take_worker_events();
     let mut widgets = state
         .settings
@@ -86,6 +107,7 @@ pub(super) fn start_background_bridge(
         let mut usage_clear_generation = 0_u64;
         let mut pending_usage_clear: Option<(u64, Vec<ProviderKind>)> = None;
         let mut update_phase = updates.snapshot();
+        let mut live_settings = state.settings.clone();
         let mut ui = UiState {
             theme: state.settings.theme,
             accent_color: state.settings.accent_color,
@@ -163,7 +185,8 @@ pub(super) fn start_background_bridge(
                               notification_settings: &mut NotificationSettings,
                               widgets: &mut Vec<TrayWidget>,
                               tray: &mut TrayManager,
-                              settings: Settings| {
+                              settings: Settings,
+                              live_settings: &mut Settings| {
             crate::settings_window::sync_open_window(settings.clone(), ui_dispatcher.clone());
             let phase = updates.snapshot();
             ui.settings_revision = ui.settings_revision.wrapping_add(1);
@@ -185,6 +208,26 @@ pub(super) fn start_background_bridge(
                 ui.opencode_go_credentials_revision != settings.opencode_go_credentials_revision;
             let openrouter_credentials_changed =
                 ui.openrouter_credentials_revision != settings.openrouter_credentials_revision;
+            if openrouter_credentials_changed {
+                // Account ids can survive a key replacement. Do not present
+                // the old key's balance/label as data for its replacement.
+                // The matching worker revision also rejects output which was
+                // already queued by the worker being replaced.
+                state.replace_limits(ProviderKind::OpenRouter, RateLimits::default());
+                ui.observe_limits_update();
+                crate::settings_window::publish_openrouter_snapshot(
+                    state.current_limits().get(ProviderKind::OpenRouter),
+                    ui_dispatcher.clone(),
+                );
+            } else if state.apply_openrouter_account_names(&settings) {
+                // Rename is settings-only. Overlay the new names before the
+                // first paint so the popup does not keep the previous label.
+                ui.observe_limits_update();
+                crate::settings_window::publish_openrouter_snapshot(
+                    state.current_limits().get(ProviderKind::OpenRouter),
+                    ui_dispatcher.clone(),
+                );
+            }
             ui.theme = settings.theme;
             ui.accent_color = settings.accent_color;
             ui.animations_enabled = settings.animations_enabled;
@@ -211,9 +254,6 @@ pub(super) fn start_background_bridge(
             ui.antigravity_enabled = settings.providers.is_enabled(ProviderKind::Antigravity);
             ui.grok_enabled = settings.providers.is_enabled(ProviderKind::Grok);
             ui.openrouter_credentials_revision = settings.openrouter_credentials_revision;
-            // Keep the previous OpenRouter snapshot visible while the worker
-            // restarts. Wiping to Default made the tab go blank for the full
-            // sequential /key poll (15s timeout × each key) after adding a key.
             ui.popup_order = settings.popup_order.clone();
             ui.use_colored_provider_icons = settings.use_colored_provider_icons;
             ui.replace_chatgpt_logo_with_codex = settings.replace_chatgpt_logo_with_codex;
@@ -253,6 +293,11 @@ pub(super) fn start_background_bridge(
             ui.cursor_path = settings.cursor_path.clone();
             ui.antigravity_path = settings.antigravity_path.clone();
             ui.grok_path = settings.grok_path.clone();
+            for provider in ProviderKind::ALL {
+                if restart.contains(&provider) || !settings.providers.is_enabled(provider) {
+                    ui.clear_provider_requests(provider);
+                }
+            }
             if providers_changed || !restart.is_empty() {
                 let provider_errors = state.sync_provider_workers(&settings, &restart);
                 for (provider, error) in provider_errors {
@@ -324,36 +369,45 @@ pub(super) fn start_background_bridge(
                     let _ = commands.send(WorkerCommand::Refresh);
                 }
             }
+            *live_settings = settings;
             flush_popup_ui(set_ui, ui);
         };
 
-        let drain_settings =
-            |ui: &mut UiState,
-             set_ui: &AsyncSetState<UiState>,
-             notification_settings: &mut NotificationSettings,
-             widgets: &mut Vec<TrayWidget>,
-             tray: &mut TrayManager,
-             check_for_updates: &mut bool,
-             notify_on_update: &mut bool,
-             forced_reset_notified_ids: &mut HashSet<String>| {
-                let Some(settings_rx) = settings_rx.as_ref() else {
-                    return;
-                };
-                while let Ok(settings) = settings_rx.try_recv() {
-                    if settings.check_for_updates && !*check_for_updates {
-                        updates.check_async(false, settings.notifications.update_available);
-                    }
-                    *check_for_updates = settings.check_for_updates;
-                    *notify_on_update = settings.notifications.update_available;
-                    apply_settings(ui, set_ui, notification_settings, widgets, tray, settings);
-                    notify_new_forced_reset_info(
-                        &state.current_forced_resets(),
-                        forced_reset_notified_ids,
-                        notification_settings,
-                        &state,
-                    );
-                }
+        let drain_settings = |ui: &mut UiState,
+                              set_ui: &AsyncSetState<UiState>,
+                              notification_settings: &mut NotificationSettings,
+                              widgets: &mut Vec<TrayWidget>,
+                              tray: &mut TrayManager,
+                              check_for_updates: &mut bool,
+                              notify_on_update: &mut bool,
+                              forced_reset_notified_ids: &mut HashSet<String>,
+                              live_settings: &mut Settings| {
+            let Some(settings_rx) = settings_rx.as_ref() else {
+                return;
             };
+            while let Ok(settings) = settings_rx.try_recv() {
+                if settings.check_for_updates && !*check_for_updates {
+                    updates.check_async(false, settings.notifications.update_available);
+                }
+                *check_for_updates = settings.check_for_updates;
+                *notify_on_update = settings.notifications.update_available;
+                apply_settings(
+                    ui,
+                    set_ui,
+                    notification_settings,
+                    widgets,
+                    tray,
+                    settings,
+                    live_settings,
+                );
+                notify_new_forced_reset_info(
+                    &state.current_forced_resets(),
+                    forced_reset_notified_ids,
+                    notification_settings,
+                    &state,
+                );
+            }
+        };
 
         let drain_usage_actions =
             |ui: &mut UiState,
@@ -483,6 +537,7 @@ pub(super) fn start_background_bridge(
                     &mut check_for_updates,
                     &mut notify_on_update,
                     &mut forced_reset_notified_ids,
+                    &mut live_settings,
                 );
                 drain_updates(&mut ui, &set_ui, &mut tray, &mut update_phase, &mut widgets);
                 if pump_tray_and_dismiss(
@@ -524,6 +579,7 @@ pub(super) fn start_background_bridge(
                 &mut check_for_updates,
                 &mut notify_on_update,
                 &mut forced_reset_notified_ids,
+                &mut live_settings,
             );
             drain_updates(&mut ui, &set_ui, &mut tray, &mut update_phase, &mut widgets);
             if pump_tray_and_dismiss(
@@ -558,15 +614,24 @@ pub(super) fn start_background_bridge(
                 Ok(WorkerEvent::ForcedResetsRefreshFailed(error)) => {
                     crate::logger::info(format!("Codex reset feed refresh failed: {error}"));
                 }
-                Ok(WorkerEvent::ProviderRequestStarted(provider, kind)) => {
+                Ok(WorkerEvent::ProviderRequestStarted(provider, worker_revision, kind)) => {
+                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
+                        continue;
+                    }
                     ui.request_started(provider, kind);
                     publish_popup_ui(&set_ui, &ui);
                 }
-                Ok(WorkerEvent::ProviderRequestFinished(provider, kind)) => {
+                Ok(WorkerEvent::ProviderRequestFinished(provider, worker_revision, kind)) => {
+                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
+                        continue;
+                    }
                     ui.request_finished(provider, kind);
                     publish_popup_ui(&set_ui, &ui);
                 }
-                Ok(WorkerEvent::ProviderLimitsUpdated(provider, limits)) => {
+                Ok(WorkerEvent::ProviderLimitsUpdated(provider, worker_revision, limits)) => {
+                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
+                        continue;
+                    }
                     if (provider == ProviderKind::Codex && !ui.codex_enabled)
                         || (provider == ProviderKind::Claude && !ui.claude_enabled)
                         || (provider == ProviderKind::Cursor && !ui.cursor_enabled)
@@ -586,6 +651,10 @@ pub(super) fn start_background_bridge(
                         limits.secondary.used_percent,
                         limits.secondary.resets_at,
                     ));
+                    let mut limits = limits;
+                    if provider == ProviderKind::OpenRouter {
+                        crate::openrouter::apply_account_names(&mut limits, &live_settings);
+                    }
                     // Publish once, then let both native tray and WinUI render
                     // from that exact snapshot.
                     state.replace_limits(provider, limits);
@@ -595,6 +664,12 @@ pub(super) fn start_background_bridge(
                         &limits,
                         ui_dispatcher.clone(),
                     );
+                    if provider == ProviderKind::OpenRouter {
+                        crate::settings_window::publish_openrouter_snapshot(
+                            limits.get(ProviderKind::OpenRouter),
+                            ui_dispatcher.clone(),
+                        );
+                    }
                     if ui.popup_visibility.absorb_discovered_bricks(&limits) {
                         let limits_for_settings = limits.clone();
                         crate::settings_window::persist_update(
@@ -625,7 +700,10 @@ pub(super) fn start_background_bridge(
                     ui.observe_limits_update();
                     publish_popup_ui(&set_ui, &ui);
                 }
-                Ok(WorkerEvent::ProviderUsageUpdated(provider, usage)) => {
+                Ok(WorkerEvent::ProviderUsageUpdated(provider, worker_revision, usage)) => {
+                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
+                        continue;
+                    }
                     if provider == ProviderKind::Codex
                         && usage
                             .account_id
@@ -656,7 +734,10 @@ pub(super) fn start_background_bridge(
                     ui.observe_usage_update();
                     publish_popup_ui(&set_ui, &ui);
                 }
-                Ok(WorkerEvent::ProviderUsageRefreshFailed(provider, error)) => {
+                Ok(WorkerEvent::ProviderUsageRefreshFailed(provider, worker_revision, error)) => {
+                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
+                        continue;
+                    }
                     crate::logger::info(format!(
                         "{} usage refresh failed: {error}",
                         provider.display_name()
@@ -681,10 +762,16 @@ pub(super) fn start_background_bridge(
                         pending_usage_clear = None;
                     }
                 }
-                Ok(WorkerEvent::ProviderActivationStarted(provider)) => {
+                Ok(WorkerEvent::ProviderActivationStarted(provider, worker_revision)) => {
+                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
+                        continue;
+                    }
                     crate::logger::info(format!("{} activation started", provider.display_name()));
                 }
-                Ok(WorkerEvent::ProviderActivationSucceeded(provider)) => {
+                Ok(WorkerEvent::ProviderActivationSucceeded(provider, worker_revision)) => {
+                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
+                        continue;
+                    }
                     crate::logger::info(format!(
                         "{} activation succeeded",
                         provider.display_name()
@@ -699,7 +786,10 @@ pub(super) fn start_background_bridge(
                     }
                     publish_popup_ui(&set_ui, &ui);
                 }
-                Ok(WorkerEvent::ProviderActivationFailed(provider, error)) => {
+                Ok(WorkerEvent::ProviderActivationFailed(provider, worker_revision, error)) => {
+                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
+                        continue;
+                    }
                     crate::logger::info(format!(
                         "{} activation failed: {error}",
                         provider.display_name()
@@ -711,7 +801,10 @@ pub(super) fn start_background_bridge(
                     );
                     publish_popup_ui(&set_ui, &ui);
                 }
-                Ok(WorkerEvent::ProviderPollFailed(provider, error)) => {
+                Ok(WorkerEvent::ProviderPollFailed(provider, worker_revision, error)) => {
+                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
+                        continue;
+                    }
                     crate::logger::info(format!(
                         "{} polling failed: {error}",
                         provider.display_name()

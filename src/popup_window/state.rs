@@ -68,6 +68,18 @@ impl AppState {
             .unwrap_or_default()
     }
 
+    /// Overlay locally chosen OpenRouter account names onto the live quota
+    /// snapshot. A rename is a settings-only change and must not wait for the
+    /// next worker poll or an app restart.
+    pub(super) fn apply_openrouter_account_names(&self, settings: &Settings) -> bool {
+        let mut limits = self.current_limits().get(ProviderKind::OpenRouter).clone();
+        if !crate::openrouter::apply_account_names(&mut limits, settings) {
+            return false;
+        }
+        self.replace_limits(ProviderKind::OpenRouter, limits);
+        true
+    }
+
     pub(super) fn replace_limits(&self, provider: ProviderKind, mut limits: RateLimits) {
         let persisted = if let Ok(mut current) = self.limits.lock() {
             // Quota polling must not erase the independently refreshed usage
@@ -461,6 +473,12 @@ impl UiState {
         {
             self.active_requests.remove(index);
         }
+        self.refreshing = !self.active_requests.is_empty();
+    }
+
+    pub(super) fn clear_provider_requests(&mut self, provider: ProviderKind) {
+        self.active_requests
+            .retain(|(active_provider, _)| *active_provider != provider);
         self.refreshing = !self.active_requests.is_empty();
     }
 }

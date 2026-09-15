@@ -16,6 +16,8 @@ impl ButtonStyle {
     pub const Subtle: Self = Self(2);
     /// Borderless text-link style (inline hyperlink pattern).
     pub const TextLink: Self = Self(3);
+    /// Default button chrome with critical (red) label text.
+    pub const Danger: Self = Self(4);
 }
 
 #[derive(Clone, Default, Debug, PartialEq)]
@@ -126,6 +128,11 @@ impl Button {
 
     pub fn text_link(mut self) -> Self {
         self.style = ButtonStyle::TextLink;
+        self
+    }
+
+    pub fn danger(mut self) -> Self {
+        self.style = ButtonStyle::Danger;
         self
     }
 

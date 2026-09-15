@@ -349,7 +349,7 @@ fn build_catalog(state: &AppState) -> Vec<ProviderInfo> {
             ProviderInfo {
                 id: descriptor.id.into(),
                 name: descriptor.display_name.into(),
-                icon: descriptor.icon.into(),
+                icon: provider_registry::icon(provider).into(),
                 metrics,
             }
         })
@@ -382,7 +382,7 @@ fn provider_snapshot(provider: ProviderKind, limits: &ProviderLimits) -> Provide
     ProviderSnapshot {
         id: descriptor.id.into(),
         name: descriptor.display_name.into(),
-        icon: descriptor.icon.into(),
+        icon: provider_registry::icon(provider).into(),
         brand_rgb: [
             descriptor.brand_rgb.0,
             descriptor.brand_rgb.1,

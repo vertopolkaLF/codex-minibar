@@ -626,7 +626,7 @@ fn provider_row(
     use_colored_provider_icons: bool,
 ) -> Element {
     let descriptor = provider_registry::descriptor(entry.provider);
-    let icon_name = descriptor.icon;
+    let icon_name = provider_registry::icon(entry.provider);
     let color = provider_brand_color(entry.provider, color_scheme, use_colored_provider_icons);
     let value = match metric {
         OverviewMetric::Cost => format_usage_cost(&entry.usage),
@@ -1505,13 +1505,14 @@ fn chart_tooltip(
                 .max(descriptor.display_name.chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
             amount_width = amount_width.max(amount.chars().count() as f64 * TOOLTIP_CHAR_CAPTION);
         }
+        let icon_name = provider_registry::icon(entry.provider);
         let label = hstack((
-            crate::icons::element(descriptor.icon, TOOLTIP_ICON, color)
+            crate::icons::element(icon_name, TOOLTIP_ICON, color)
                 .vertical_alignment(VerticalAlignment::Center)
                 .with_key(format!(
                     "usage-tip-icon-{}-{}-{:02X}{:02X}{:02X}",
                     entry.provider.id(),
-                    descriptor.icon,
+                    icon_name,
                     color.r,
                     color.g,
                     color.b
@@ -1813,7 +1814,7 @@ fn day_breakdown_header(
             .into(),
     ];
     for (index, provider) in providers.iter().enumerate() {
-        let icon_name = provider_registry::descriptor(*provider).icon;
+        let icon_name = provider_registry::icon(*provider);
         let color = provider_brand_color(*provider, color_scheme, use_colored_provider_icons);
         cells.push(
             crate::icons::element(icon_name, 14.0, color)
@@ -1957,7 +1958,7 @@ fn breakdown_row(
     let row_id = breakdown_row_id(row);
     let mut title = Vec::new();
     if let Some(provider) = row.provider {
-        let icon_name = provider_registry::descriptor(provider).icon;
+        let icon_name = provider_registry::icon(provider);
         let color = provider_brand_color(provider, color_scheme, use_colored_provider_icons);
         title.push(
             crate::icons::element(icon_name, 14.0, color).with_key(format!(

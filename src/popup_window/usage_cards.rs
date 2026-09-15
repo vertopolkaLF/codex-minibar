@@ -580,14 +580,14 @@ fn spend_provider_icon(
     use_colored: bool,
     slot: &str,
 ) -> Element {
-    let descriptor = crate::provider_registry::descriptor(provider);
+    let icon_name = crate::provider_registry::icon(provider);
     let color = spend_provider_icon_color(provider, color_scheme, use_colored);
-    crate::icons::element(descriptor.icon, 16.0, color)
+    crate::icons::element(icon_name, 16.0, color)
         .vertical_alignment(VerticalAlignment::Center)
         .with_key(format!(
             "spend-{slot}-icon-{}-{}-{:02X}{:02X}{:02X}",
             provider.id(),
-            descriptor.icon,
+            icon_name,
             color.r,
             color.g,
             color.b
@@ -656,15 +656,16 @@ fn spend_provider_tile(
     use_colored_provider_icons: bool,
 ) -> Element {
     let descriptor = crate::provider_registry::descriptor(provider);
+    let icon_name = crate::provider_registry::icon(provider);
     let color = spend_provider_icon_color(provider, color_scheme, use_colored_provider_icons);
     vstack((
         hstack((
-            crate::icons::element(descriptor.icon, 16.0, color)
+            crate::icons::element(icon_name, 16.0, color)
                 .vertical_alignment(VerticalAlignment::Center)
                 .with_key(format!(
                     "spend-hero-icon-{}-{}-{:02X}{:02X}{:02X}",
                     provider.id(),
-                    descriptor.icon,
+                    icon_name,
                     color.r,
                     color.g,
                     color.b

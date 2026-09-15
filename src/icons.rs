@@ -65,6 +65,9 @@ pub fn geom(name: &str) -> IconGeom {
         "paint-brush" => include_str!("../assets/icons/ph-paint-brush-fill.svg"),
         "bell" => include_str!("../assets/icons/ph-bell-fill.svg"),
         "info" => include_str!("../assets/icons/ph-info-fill.svg"),
+        "key" => include_str!("../assets/icons/ph-key-fill.svg"),
+        "desktop" => include_str!("../assets/icons/ph-desktop-fill.svg"),
+        "terminal-window" => include_str!("../assets/icons/ph-terminal-window-fill.svg"),
         _ => panic!("unknown icon: {name}"),
     };
     let canvas = viewbox_size(svg);
@@ -78,6 +81,27 @@ pub fn geom(name: &str) -> IconGeom {
 
 pub fn data(name: &str) -> &'static str {
     geom(name).path
+}
+
+/// Brand tint used by provider marks on light/dark surfaces.
+pub fn provider_brand_color(
+    provider: crate::settings::ProviderKind,
+    color_scheme: ColorScheme,
+) -> Color {
+    let (red, green, blue) = match color_scheme {
+        ColorScheme::Light => crate::provider_registry::light_surface_brand_rgb(provider),
+        ColorScheme::Dark => crate::provider_registry::dark_surface_brand_rgb(provider),
+    };
+    Color::rgb(red, green, blue)
+}
+
+/// XAML color string for [`provider_brand_color`].
+pub fn provider_brand_hex(
+    provider: crate::settings::ProviderKind,
+    color_scheme: ColorScheme,
+) -> String {
+    let color = provider_brand_color(provider, color_scheme);
+    format!("#{:02X}{:02X}{:02X}", color.r, color.g, color.b)
 }
 
 /// Monochrome Phosphor/Fluent path used when Settings sidebar color icons

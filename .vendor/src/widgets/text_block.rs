@@ -8,6 +8,7 @@ pub struct TextBlock {
     pub font_size: Option<f64>,
     pub font_weight: Option<u16>,
     pub text_wrapping: TextWrapping,
+    pub text_trimming: TextTrimming,
     pub is_text_selection_enabled: bool,
 }
 impl TextBlock {
@@ -28,6 +29,12 @@ impl Widget for TextBlock {
         }
         if let Some(v) = self.font_weight {
             out.push(Binding::Prop(Prop::FontWeight, PropValue::U16(v)));
+        }
+        if self.text_trimming != TextTrimming::None {
+            out.push(Binding::Prop(
+                Prop::TextTrimming,
+                PropValue::I32(self.text_trimming.0),
+            ));
         }
         out
     }
@@ -57,6 +64,19 @@ impl TextBlock {
     pub fn wrap(mut self) -> Self {
         self.text_wrapping = TextWrapping::Wrap;
         self
+    }
+
+    pub fn text_trimming(mut self, trimming: TextTrimming) -> Self {
+        self.text_trimming = trimming;
+        self
+    }
+
+    /// Wrap to at most `lines`, then crop with a trailing ellipsis.
+    pub fn max_lines(self, lines: i32) -> Self {
+        let line_height = self.font_size.unwrap_or(14.0) * 1.4;
+        self.wrap()
+            .text_trimming(TextTrimming::CharacterEllipsis)
+            .max_height((line_height * f64::from(lines.max(1))).ceil())
     }
 
     pub fn selectable(mut self) -> Self {

@@ -14792,6 +14792,15 @@ impl ITextBlock {
             .ok()
         }
     }
+    pub(crate) fn SetTextTrimming(&self, value: TextTrimming) -> windows_core::Result<()> {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetTextTrimming)(
+                windows_core::Interface::as_raw(self),
+                value,
+            )
+            .ok()
+        }
+    }
     pub(crate) fn Text(&self) -> windows_core::Result<String> {
         unsafe {
             let mut result__ = core::mem::zeroed();
@@ -14862,7 +14871,8 @@ pub struct ITextBlock_Vtbl {
     pub SetTextWrapping:
         unsafe extern "system" fn(*mut core::ffi::c_void, TextWrapping) -> windows_core::HRESULT,
     TextTrimming: usize,
-    SetTextTrimming: usize,
+    pub SetTextTrimming:
+        unsafe extern "system" fn(*mut core::ffi::c_void, TextTrimming) -> windows_core::HRESULT,
     TextAlignment: usize,
     SetTextAlignment: usize,
     pub Text: unsafe extern "system" fn(
@@ -23203,6 +23213,22 @@ impl windows_core::TypeKind for TextWrapping {
 impl windows_core::RuntimeType for TextWrapping {
     const SIGNATURE: windows_core::imp::ConstBuffer =
         windows_core::imp::ConstBuffer::from_slice(b"enum(Microsoft.UI.Xaml.TextWrapping;i4)");
+}
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TextTrimming(pub i32);
+impl TextTrimming {
+    pub const None: Self = Self(0);
+    pub const CharacterEllipsis: Self = Self(1);
+    pub const WordEllipsis: Self = Self(2);
+    pub const Clip: Self = Self(3);
+}
+impl windows_core::TypeKind for TextTrimming {
+    type TypeKind = windows_core::CopyType;
+}
+impl windows_core::RuntimeType for TextTrimming {
+    const SIGNATURE: windows_core::imp::ConstBuffer =
+        windows_core::imp::ConstBuffer::from_slice(b"enum(Microsoft.UI.Xaml.TextTrimming;i4)");
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

@@ -32,13 +32,18 @@ pub(super) fn provider_tabs_key(
 ) -> String {
     let size = popup::bottom_bar_size();
     format!(
-        "provider-tabs-home-usage-{}-{}-{}-{}-{}-{}",
+        "provider-tabs-home-usage-{}-{}-{}-{}-{}-{}-{}",
         provider_order_key(providers),
         usage_enabled,
         show_provider_icon_tabs,
         use_colored_provider_icons,
         color_scheme as i32,
         size.index(),
+        providers
+            .iter()
+            .map(|provider| crate::provider_registry::icon(*provider))
+            .collect::<Vec<_>>()
+            .join("+"),
     )
 }
 

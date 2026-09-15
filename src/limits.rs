@@ -87,6 +87,10 @@ pub struct OpenRouterAccountSnapshot {
     pub name: String,
     pub api_keys: Vec<OpenRouterApiKeySnapshot>,
     pub balance_microusd: Option<u64>,
+    /// Account-wide purchased credits from `/credits`, independent of which
+    /// API keys are tracked locally. Older persisted snapshots omit this.
+    #[serde(default)]
+    pub total_credits_microusd: Option<u64>,
 }
 
 /// Pace tip on a usage progress bar (even-burn marker position).
