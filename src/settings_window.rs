@@ -75,7 +75,7 @@ use providers::{
 };
 use shared::enabled_providers;
 use state::{SettingsPageContext, SettingsWindowState};
-use tray::tray_indicator_edit_overlay;
+use tray::{close_indicator_edit_modal, tray_indicator_edit_overlay};
 
 pub(crate) use persistence::{persist_update, try_persist_update_fallible};
 pub(crate) use platform::is_open;
@@ -1153,6 +1153,7 @@ pub fn render(
             .relative_align_top()
             .relative_align_bottom(),
     ];
+    let provider_overlay_open = provider_overlay.is_some();
     if let Some(overlay) = provider_overlay {
         layers.push(
             overlay
@@ -1162,11 +1163,32 @@ pub fn render(
                 .relative_align_bottom(),
         );
     }
-    relative_panel::<Vec<Element>>(layers)
+    let mut root = relative_panel::<Vec<Element>>(layers)
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .vertical_alignment(VerticalAlignment::Stretch)
-        .background(Color::transparent())
-        .into()
+        .background(Color::transparent());
+    if provider_overlay_open {
+        if !provider_dialog
+            .as_ref()
+            .is_some_and(ProviderDialog::is_checking)
+        {
+            let dismiss = set_provider_dialog.clone();
+            root = root.keyboard_accelerator(KeyboardAccelerator::new(
+                VirtualKey::Escape,
+                VirtualKeyModifiers::None,
+                move || dismiss.call(None),
+            ));
+        }
+    } else if editing_tray_indicator.is_some() {
+        let dismiss_editing = set_editing_tray_indicator.clone();
+        let dismiss_visible = set_indicator_modal_visible.clone();
+        root = root.keyboard_accelerator(KeyboardAccelerator::new(
+            VirtualKey::Escape,
+            VirtualKeyModifiers::None,
+            move || close_indicator_edit_modal(dismiss_editing.clone(), dismiss_visible.clone()),
+        ));
+    }
+    root.into()
 }
 
 fn settings_title_icon_uri() -> String {

@@ -304,6 +304,10 @@ impl ProviderDialog {
             .map(|inputs| inputs.clone())
             .unwrap_or_default()
     }
+
+    pub(super) fn is_checking(&self) -> bool {
+        self.checking
+    }
 }
 
 /// Setters a dialog needs after it closes. Everything here is `Send` so key
@@ -1962,12 +1966,17 @@ fn dialog_field_handler(dialog: &ProviderDialog, field: DialogField) -> impl Fn(
     }
 }
 
+fn dialog_submit_enter(on_submit: impl Fn() + Clone + 'static) -> KeyboardAccelerator {
+    KeyboardAccelerator::new(VirtualKey::Enter, VirtualKeyModifiers::None, on_submit)
+}
+
 fn dialog_password(
     dialog: &ProviderDialog,
     field: DialogField,
     header: &str,
     placeholder: &str,
     help: &str,
+    on_submit: impl Fn() + Clone + 'static,
 ) -> Element {
     vstack((
         PasswordBox::new()
@@ -1975,6 +1984,7 @@ fn dialog_password(
             .placeholder_text(placeholder)
             .enabled(!dialog.checking)
             .on_password_changed(dialog_field_handler(dialog, field))
+            .keyboard_accelerator(dialog_submit_enter(on_submit))
             .horizontal_alignment(HorizontalAlignment::Stretch),
         secondary_text(help),
     ))
@@ -1983,13 +1993,18 @@ fn dialog_password(
     .into()
 }
 
-fn dialog_name_box(dialog: &ProviderDialog, help: Option<&str>) -> Element {
+fn dialog_name_box(
+    dialog: &ProviderDialog,
+    help: Option<&str>,
+    on_submit: impl Fn() + Clone + 'static,
+) -> Element {
     let mut children: Vec<Element> = vec![
         text_box(dialog.initial_name.clone())
             .header("Account name")
             .placeholder_text("e.g. Personal")
             .enabled(!dialog.checking)
             .on_text_changed(dialog_field_handler(dialog, DialogField::Name))
+            .keyboard_accelerator(dialog_submit_enter(on_submit))
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .into(),
     ];
@@ -2014,12 +2029,20 @@ pub(super) fn provider_dialog_overlay(
             .unwrap_or_else(|| "this".into())
     };
 
+    let on_submit = {
+        let dialog = dialog.clone();
+        let accounts = accounts.to_vec();
+        let actions = actions.clone();
+        move || submit_provider_dialog(dialog.clone(), accounts.clone(), actions.clone())
+    };
+
     let mut fields: Vec<Element> = Vec::new();
     let (title, primary, _destructive) = match &dialog.kind {
         ProviderDialogKind::AddOpenRouterAccount => {
             fields.push(dialog_name_box(
                 dialog,
                 Some("Only used to tell accounts apart in Minibar."),
+                on_submit.clone(),
             ));
             fields.push(dialog_password(
                 dialog,
@@ -2027,6 +2050,7 @@ pub(super) fn provider_dialog_overlay(
                 "Management key",
                 "sk-or-v1-…",
                 "Recommended. Shows credit balance and usage history.",
+                on_submit.clone(),
             ));
             fields.push(dialog_password(
                 dialog,
@@ -2034,6 +2058,7 @@ pub(super) fn provider_dialog_overlay(
                 "API key",
                 "sk-or-v1-…",
                 "Optional. You can add more API keys later.",
+                on_submit.clone(),
             ));
             ("Add OpenRouter account".to_owned(), "Add account", false)
         }
@@ -2050,6 +2075,7 @@ pub(super) fn provider_dialog_overlay(
                 "API key",
                 "sk-or-v1-…",
                 "Minibar checks the key with OpenRouter before saving it.",
+                on_submit.clone(),
             ));
             (
                 if replacing {
@@ -2075,6 +2101,7 @@ pub(super) fn provider_dialog_overlay(
                 "Management key",
                 "sk-or-v1-…",
                 "Create one under Settings → Management keys on openrouter.ai.",
+                on_submit.clone(),
             ));
             (
                 if *replace {
@@ -2088,7 +2115,7 @@ pub(super) fn provider_dialog_overlay(
             )
         }
         ProviderDialogKind::RenameOpenRouterAccount { .. } => {
-            fields.push(dialog_name_box(dialog, None));
+            fields.push(dialog_name_box(dialog, None, on_submit.clone()));
             ("Rename account".to_owned(), "Rename", false)
         }
         ProviderDialogKind::RemoveOpenRouterApiKey { account_id, key_id } => {
@@ -2142,6 +2169,7 @@ pub(super) fn provider_dialog_overlay(
                 "API key",
                 "sk-…",
                 "Saved in Windows user storage, never in the settings file.",
+                on_submit.clone(),
             ));
             (
                 if *replace {
@@ -2240,6 +2268,7 @@ pub(super) fn provider_dialog_overlay(
     .on_tapped(|| {});
 
     let dismiss = actions.set_dialog;
+    let dismiss_escape = dismiss.clone();
     relative_panel::<Vec<Element>>(vec![
         border(Element::Empty)
             .background(DIALOG_SCRIM)
@@ -2261,6 +2290,15 @@ pub(super) fn provider_dialog_overlay(
     ])
     .horizontal_alignment(HorizontalAlignment::Stretch)
     .vertical_alignment(VerticalAlignment::Stretch)
+    .keyboard_accelerator(KeyboardAccelerator::new(
+        VirtualKey::Escape,
+        VirtualKeyModifiers::None,
+        move || {
+            if can_cancel {
+                dismiss_escape.call(None);
+            }
+        },
+    ))
     .with_key("provider-dialog-overlay")
     .into()
 }

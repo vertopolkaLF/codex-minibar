@@ -332,7 +332,7 @@ fn open_indicator_edit_modal(
     });
 }
 
-fn close_indicator_edit_modal(
+pub(super) fn close_indicator_edit_modal(
     set_editing: AsyncSetState<Option<(String, usize)>>,
     set_visible: AsyncSetState<bool>,
 ) {
@@ -1199,6 +1199,8 @@ pub(super) fn tray_indicator_edit_overlay(
 
     let dismiss_editing = set_editing_indicator.clone();
     let dismiss_visible = set_indicator_modal_visible.clone();
+    let dismiss_editing_escape = dismiss_editing.clone();
+    let dismiss_visible_escape = dismiss_visible.clone();
     let form = tray_indicator_edit_form(
         widget_index,
         *indicator_index,
@@ -1276,6 +1278,16 @@ pub(super) fn tray_indicator_edit_overlay(
         ])
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .vertical_alignment(VerticalAlignment::Stretch)
+        .keyboard_accelerator(KeyboardAccelerator::new(
+            VirtualKey::Escape,
+            VirtualKeyModifiers::None,
+            move || {
+                close_indicator_edit_modal(
+                    dismiss_editing_escape.clone(),
+                    dismiss_visible_escape.clone(),
+                );
+            },
+        ))
         .with_key("tray-indicator-edit-overlay")
         .into(),
     )
