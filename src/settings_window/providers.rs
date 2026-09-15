@@ -1,4 +1,4 @@
-use super::persistence::{persist_update, try_persist_update};
+use super::persistence::{persist_update, try_persist_update, try_persist_update_fallible};
 use super::platform::{choose_provider_folder, copy_text_to_clipboard, reveal_in_explorer};
 use super::*;
 use crate::limits::{OpenRouterAccountSnapshot, OpenRouterApiKeySnapshot, SpendingSummary};
@@ -560,19 +560,40 @@ fn show_provider_notice(set_notice: AsyncSetState<Option<String>>, message: Stri
 fn persist_openrouter_accounts(
     settings_tx: Sender<Settings>,
     bump_credentials: bool,
-    mutate: impl FnOnce(&mut Vec<OpenRouterAccount>) + 'static,
+    mutate: impl FnOnce(&mut Vec<OpenRouterAccount>) -> anyhow::Result<()> + 'static,
 ) -> anyhow::Result<()> {
-    try_persist_update(settings_tx, move |settings| {
+    try_persist_update_fallible(settings_tx, move |settings| {
         // Include the synthetic legacy account when present so edits land on
         // the same identities the Settings UI is showing.
         let mut accounts = crate::openrouter::accounts_for_settings(settings);
-        mutate(&mut accounts);
+        mutate(&mut accounts)?;
         settings.openrouter_accounts = accounts;
         if bump_credentials {
             settings.openrouter_credentials_revision =
                 settings.openrouter_credentials_revision.wrapping_add(1);
         }
+        Ok(())
     })
+}
+
+/// Commits protected OpenRouter secrets as one file update, then commits the
+/// matching account metadata. If the settings write fails, protected storage
+/// is restored to its exact previous values so neither side can be orphaned.
+fn persist_openrouter_credentials(
+    settings_tx: Sender<Settings>,
+    changes: Vec<crate::openrouter::AccountSecretChange>,
+    mutate: impl FnOnce(&mut Vec<OpenRouterAccount>) -> anyhow::Result<()> + 'static,
+) -> anyhow::Result<()> {
+    let rollback = crate::openrouter::apply_account_secret_changes(&changes)?;
+    if let Err(error) = persist_openrouter_accounts(settings_tx, true, mutate) {
+        return match rollback.restore() {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(anyhow::anyhow!(
+                "could not save account metadata ({error:#}); restoring protected credentials also failed ({rollback_error:#})"
+            )),
+        };
+    }
+    Ok(())
 }
 
 fn bump_opencode_credentials(
@@ -2297,17 +2318,30 @@ fn submit_provider_dialog(
                 }
                 let mut account = OpenRouterAccount::new(name.clone());
                 account.api_key_ids.clear();
+                let mut secret_changes = Vec::new();
                 if !management_key.is_empty() {
-                    crate::openrouter::save_management_key(&account.id, Some(&management_key))?;
+                    secret_changes.push(crate::openrouter::AccountSecretChange::management(
+                        account.id.clone(),
+                        Some(management_key),
+                    ));
                 }
                 if !api_key.is_empty() {
                     let key_id = OpenRouterAccount::new_api_key_id();
-                    crate::openrouter::save_account_api_key(&account.id, &key_id, Some(&api_key))?;
+                    secret_changes.push(crate::openrouter::AccountSecretChange::api_key(
+                        account.id.clone(),
+                        key_id.clone(),
+                        Some(api_key),
+                    ));
                     account.api_key_ids.push(key_id);
                 }
                 let card = account_card_id(&account.id);
-                persist_openrouter_accounts(settings_tx, true, move |accounts| {
+                persist_openrouter_credentials(settings_tx, secret_changes, move |accounts| {
+                    anyhow::ensure!(
+                        !accounts.iter().any(|existing| existing.id == account.id),
+                        "OpenRouter account already exists"
+                    );
                     accounts.push(account);
+                    Ok(())
                 })?;
                 Ok(DialogOutcome {
                     notice: format!("Added {name}. Keys are saved in Windows user storage."),
@@ -2333,8 +2367,27 @@ fn submit_provider_dialog(
                 let card = account_card_id(&account.id);
                 match key_id {
                     Some(key_id) => {
-                        crate::openrouter::save_account_api_key(&account.id, &key_id, Some(&key))?;
-                        persist_openrouter_accounts(settings_tx, true, |_| {})?;
+                        persist_openrouter_credentials(
+                            settings_tx,
+                            vec![crate::openrouter::AccountSecretChange::api_key(
+                                account.id.clone(),
+                                key_id.clone(),
+                                Some(key),
+                            )],
+                            move |accounts| {
+                                let saved = accounts
+                                    .iter()
+                                    .find(|saved| saved.id == account.id)
+                                    .ok_or_else(|| {
+                                        anyhow::anyhow!("OpenRouter account no longer exists")
+                                    })?;
+                                anyhow::ensure!(
+                                    saved.api_key_ids.contains(&key_id),
+                                    "OpenRouter API key no longer exists"
+                                );
+                                Ok(())
+                            },
+                        )?;
                         Ok(DialogOutcome {
                             notice: format!("API key saved for {name}."),
                             expand_card: Some(card),
@@ -2342,15 +2395,25 @@ fn submit_provider_dialog(
                     }
                     None => {
                         let key_id = OpenRouterAccount::new_api_key_id();
-                        crate::openrouter::save_account_api_key(&account.id, &key_id, Some(&key))?;
                         let account_id = account.id.clone();
-                        persist_openrouter_accounts(settings_tx, true, move |accounts| {
-                            if let Some(account) =
-                                accounts.iter_mut().find(|account| account.id == account_id)
-                            {
+                        persist_openrouter_credentials(
+                            settings_tx,
+                            vec![crate::openrouter::AccountSecretChange::api_key(
+                                account_id.clone(),
+                                key_id.clone(),
+                                Some(key),
+                            )],
+                            move |accounts| {
+                                let account = accounts
+                                    .iter_mut()
+                                    .find(|account| account.id == account_id)
+                                    .ok_or_else(|| {
+                                        anyhow::anyhow!("OpenRouter account no longer exists")
+                                    })?;
                                 account.api_key_ids.push(key_id);
-                            }
-                        })?;
+                                Ok(())
+                            },
+                        )?;
                         Ok(DialogOutcome {
                             notice: format!("API key added to {name}."),
                             expand_card: Some(card),
@@ -2376,8 +2439,21 @@ fn submit_provider_dialog(
             let settings_tx = actions.settings_tx.clone();
             run_dialog_work(dialog, actions, move || {
                 crate::openrouter::verify_management_key(&key)?;
-                crate::openrouter::save_management_key(&account.id, Some(&key))?;
-                persist_openrouter_accounts(settings_tx, true, |_| {})?;
+                let saved_account_id = account.id.clone();
+                persist_openrouter_credentials(
+                    settings_tx,
+                    vec![crate::openrouter::AccountSecretChange::management(
+                        saved_account_id.clone(),
+                        Some(key),
+                    )],
+                    move |accounts| {
+                        anyhow::ensure!(
+                            accounts.iter().any(|saved| saved.id == saved_account_id),
+                            "OpenRouter account no longer exists"
+                        );
+                        Ok(())
+                    },
+                )?;
                 Ok(DialogOutcome {
                     notice: if replace {
                         "Management key replaced.".to_owned()
@@ -2398,11 +2474,12 @@ fn submit_provider_dialog(
             }
             if let Err(error) =
                 persist_openrouter_accounts(actions.settings_tx.clone(), false, move |accounts| {
-                    if let Some(account) =
-                        accounts.iter_mut().find(|account| account.id == account_id)
-                    {
-                        account.name = name;
-                    }
+                    let account = accounts
+                        .iter_mut()
+                        .find(|account| account.id == account_id)
+                        .ok_or_else(|| anyhow::anyhow!("OpenRouter account no longer exists"))?;
+                    account.name = name;
+                    Ok(())
                 })
             {
                 return fail(&format!("Could not rename the account: {error:#}"));
@@ -2416,20 +2493,29 @@ fn submit_provider_dialog(
             );
         }
         ProviderDialogKind::RemoveOpenRouterApiKey { account_id, key_id } => {
-            if let Err(error) = crate::openrouter::save_account_api_key(&account_id, &key_id, None)
-            {
+            let secret_change = crate::openrouter::AccountSecretChange::api_key(
+                account_id.clone(),
+                key_id.clone(),
+                None,
+            );
+            if let Err(error) = persist_openrouter_credentials(
+                actions.settings_tx.clone(),
+                vec![secret_change],
+                move |accounts| {
+                    let account = accounts
+                        .iter_mut()
+                        .find(|account| account.id == account_id)
+                        .ok_or_else(|| anyhow::anyhow!("OpenRouter account no longer exists"))?;
+                    let before = account.api_key_ids.len();
+                    account.api_key_ids.retain(|id| id != &key_id);
+                    anyhow::ensure!(
+                        account.api_key_ids.len() != before,
+                        "OpenRouter API key no longer exists"
+                    );
+                    Ok(())
+                },
+            ) {
                 return fail(&format!("Could not remove the key: {error:#}"));
-            }
-            if let Err(error) =
-                persist_openrouter_accounts(actions.settings_tx.clone(), true, move |accounts| {
-                    if let Some(account) =
-                        accounts.iter_mut().find(|account| account.id == account_id)
-                    {
-                        account.api_key_ids.retain(|id| id != &key_id);
-                    }
-                })
-            {
-                return fail(&format!("Could not save the account: {error:#}"));
             }
             finish_dialog(
                 &actions,
@@ -2440,13 +2526,21 @@ fn submit_provider_dialog(
             );
         }
         ProviderDialogKind::RemoveOpenRouterManagementKey { account_id } => {
-            if let Err(error) = crate::openrouter::save_management_key(&account_id, None) {
+            if let Err(error) = persist_openrouter_credentials(
+                actions.settings_tx.clone(),
+                vec![crate::openrouter::AccountSecretChange::management(
+                    account_id.clone(),
+                    None,
+                )],
+                move |accounts| {
+                    anyhow::ensure!(
+                        accounts.iter().any(|account| account.id == account_id),
+                        "OpenRouter account no longer exists"
+                    );
+                    Ok(())
+                },
+            ) {
                 return fail(&format!("Could not remove the key: {error:#}"));
-            }
-            if let Err(error) =
-                persist_openrouter_accounts(actions.settings_tx.clone(), true, |_| {})
-            {
-                return fail(&format!("Could not save the account: {error:#}"));
             }
             finish_dialog(
                 &actions,
@@ -2461,22 +2555,35 @@ fn submit_provider_dialog(
                 actions.set_dialog.call(None);
                 return;
             };
-            for key_id in &account.api_key_ids {
-                if let Err(error) =
-                    crate::openrouter::save_account_api_key(&account.id, key_id, None)
-                {
-                    return fail(&format!("Could not remove the account: {error:#}"));
-                }
-            }
-            if let Err(error) = crate::openrouter::save_management_key(&account.id, None) {
-                return fail(&format!("Could not remove the account: {error:#}"));
-            }
-            let name = account_display_name(&account);
-            if let Err(error) =
-                persist_openrouter_accounts(actions.settings_tx.clone(), true, move |accounts| {
-                    accounts.retain(|account| account.id != account_id);
+            let mut secret_changes = account
+                .api_key_ids
+                .iter()
+                .map(|key_id| {
+                    crate::openrouter::AccountSecretChange::api_key(
+                        account.id.clone(),
+                        key_id.clone(),
+                        None,
+                    )
                 })
-            {
+                .collect::<Vec<_>>();
+            secret_changes.push(crate::openrouter::AccountSecretChange::management(
+                account.id.clone(),
+                None,
+            ));
+            let name = account_display_name(&account);
+            if let Err(error) = persist_openrouter_credentials(
+                actions.settings_tx.clone(),
+                secret_changes,
+                move |accounts| {
+                    let before = accounts.len();
+                    accounts.retain(|account| account.id != account_id);
+                    anyhow::ensure!(
+                        accounts.len() != before,
+                        "OpenRouter account no longer exists"
+                    );
+                    Ok(())
+                },
+            ) {
                 return fail(&format!("Could not remove the account: {error:#}"));
             }
             finish_dialog(

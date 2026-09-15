@@ -4,7 +4,12 @@
 //! DPAPI. The plaintext only exists for the duration of a provider request or
 //! an explicit save operation.
 
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -21,7 +26,11 @@ struct SecretFile {
 
 pub fn load(name: &str) -> Result<Option<String>> {
     let path = path()?;
-    let raw = match fs::read_to_string(&path) {
+    load_from(&path, name)
+}
+
+fn load_from(path: &Path, name: &str) -> Result<Option<String>> {
+    let raw = match fs::read_to_string(path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
@@ -47,29 +56,46 @@ pub fn load(name: &str) -> Result<Option<String>> {
 }
 
 pub fn save(name: &str, value: Option<&str>) -> Result<()> {
+    save_many(&[(name.to_owned(), value.map(str::to_owned))])
+}
+
+/// Applies several secret changes through one protected-file replacement.
+/// Validation and DPAPI encryption happen before the existing file changes,
+/// so account-level edits cannot leave only part of their keys updated.
+pub fn save_many(changes: &[(String, Option<String>)]) -> Result<()> {
     let path = path()?;
+    save_many_to(&path, changes)
+}
+
+fn save_many_to(path: &Path, changes: &[(String, Option<String>)]) -> Result<()> {
     let mut file = if path.is_file() {
-        let raw = fs::read_to_string(&path)
+        let raw = fs::read_to_string(path)
             .with_context(|| format!("read protected provider secrets from {}", path.display()))?;
         serde_json::from_str::<SecretFile>(&raw).context("parse protected provider secrets")?
     } else {
         SecretFile::default()
     };
 
-    match value.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(value) => {
-            let protected = protect(value.as_bytes())?;
-            file.values
-                .insert(name.to_owned(), STANDARD.encode(protected));
-        }
-        None => {
-            file.values.remove(name);
+    for (name, value) in changes {
+        match value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            Some(value) => {
+                let protected = protect(value.as_bytes())?;
+                file.values
+                    .insert(name.to_owned(), STANDARD.encode(protected));
+            }
+            None => {
+                file.values.remove(name);
+            }
         }
     }
 
     if file.values.is_empty() {
         if path.is_file() {
-            fs::remove_file(&path).with_context(|| {
+            fs::remove_file(path).with_context(|| {
                 format!("remove empty provider secrets file {}", path.display())
             })?;
         }
@@ -80,9 +106,26 @@ pub fn save(name: &str, value: Option<&str>) -> Result<()> {
         fs::create_dir_all(parent)
             .with_context(|| format!("create provider secrets directory {}", parent.display()))?;
     }
+    let parent = path
+        .parent()
+        .context("provider secrets path has no parent directory")?;
     let encoded = serde_json::to_vec_pretty(&file).context("serialize provider secrets")?;
-    fs::write(&path, encoded)
-        .with_context(|| format!("write protected provider secrets to {}", path.display()))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent).with_context(|| {
+        format!(
+            "create temporary provider secrets file in {}",
+            parent.display()
+        )
+    })?;
+    temporary
+        .write_all(&encoded)
+        .context("write temporary provider secrets")?;
+    temporary
+        .as_file()
+        .sync_all()
+        .context("flush temporary provider secrets")?;
+    temporary
+        .persist(path)
+        .with_context(|| format!("commit protected provider secrets to {}", path.display()))?;
     Ok(())
 }
 
@@ -205,4 +248,31 @@ fn unprotect(data: &[u8]) -> Result<Vec<u8>> {
 #[cfg(not(windows))]
 fn unprotect(_data: &[u8]) -> Result<Vec<u8>> {
     bail!("manual provider secrets are only supported on Windows")
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn batch_updates_commit_all_values_and_remove_them_together() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("provider-secrets.json");
+        save_many_to(
+            &path,
+            &[
+                ("management".into(), Some("management-value".into())),
+                ("api".into(), Some("api-value".into())),
+            ],
+        )?;
+        assert_eq!(
+            load_from(&path, "management")?.as_deref(),
+            Some("management-value")
+        );
+        assert_eq!(load_from(&path, "api")?.as_deref(), Some("api-value"));
+
+        save_many_to(&path, &[("management".into(), None), ("api".into(), None)])?;
+        assert!(!path.exists());
+        Ok(())
+    }
 }

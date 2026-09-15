@@ -77,7 +77,7 @@ use shared::enabled_providers;
 use state::{SettingsPageContext, SettingsWindowState};
 use tray::tray_indicator_edit_overlay;
 
-pub(crate) use persistence::persist_update;
+pub(crate) use persistence::{persist_update, try_persist_update_fallible};
 pub(crate) use platform::is_open;
 
 /// Sized so a provider page with an expanded OpenRouter account fits without

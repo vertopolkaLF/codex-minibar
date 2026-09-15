@@ -463,6 +463,12 @@ impl UiState {
         }
         self.refreshing = !self.active_requests.is_empty();
     }
+
+    pub(super) fn clear_provider_requests(&mut self, provider: ProviderKind) {
+        self.active_requests
+            .retain(|(active_provider, _)| *active_provider != provider);
+        self.refreshing = !self.active_requests.is_empty();
+    }
 }
 
 impl UiState {

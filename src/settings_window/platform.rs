@@ -70,9 +70,6 @@ pub(super) fn copy_text_to_clipboard(text: &str) -> anyhow::Result<()> {
             anyhow::bail!("the clipboard is in use by another app");
         }
         let result = (|| {
-            if EmptyClipboard() == 0 {
-                anyhow::bail!("could not clear the clipboard");
-            }
             let handle = GlobalAlloc(GMEM_MOVEABLE, bytes);
             if handle.is_null() {
                 anyhow::bail!("could not allocate clipboard memory");
@@ -84,6 +81,12 @@ pub(super) fn copy_text_to_clipboard(text: &str) -> anyhow::Result<()> {
             }
             std::ptr::copy_nonoverlapping(wide.as_ptr().cast::<u8>(), target.cast::<u8>(), bytes);
             GlobalUnlock(handle);
+            // Do not clear the user's current clipboard until the complete
+            // replacement block is allocated, locked, and populated.
+            if EmptyClipboard() == 0 {
+                GlobalFree(handle);
+                anyhow::bail!("could not clear the clipboard");
+            }
             if SetClipboardData(CF_UNICODETEXT, handle).is_null() {
                 GlobalFree(handle);
                 anyhow::bail!("could not place text on the clipboard");

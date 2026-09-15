@@ -29,13 +29,23 @@ pub(crate) fn persist_update(settings_tx: Sender<Settings>, update: impl FnOnce(
 
 /// Credential dialogs must report persistence failures instead of displaying
 /// a success notice when the account list could not be saved.
-pub(super) fn try_persist_update(
+pub(crate) fn try_persist_update(
     settings_tx: Sender<Settings>,
     update: impl FnOnce(&mut Settings),
 ) -> anyhow::Result<()> {
+    try_persist_update_fallible(settings_tx, |settings| {
+        update(settings);
+        Ok(())
+    })
+}
+
+pub(crate) fn try_persist_update_fallible(
+    settings_tx: Sender<Settings>,
+    update: impl FnOnce(&mut Settings) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
     Settings::default_path().and_then(|path| {
         let mut settings = Settings::load_or_create(&path)?;
-        update(&mut settings);
+        update(&mut settings)?;
         settings.normalize_tray_widgets();
         settings.normalize_popup_visibility();
         // Persist first so a flaky side effect cannot block live UI updates.
@@ -43,9 +53,12 @@ pub(super) fn try_persist_update(
         if let Err(error) = settings.apply_runtime_effects() {
             eprintln!("failed to apply runtime settings effects: {error:#}");
         }
-        settings_tx
-            .send(settings)
-            .context("notify live settings listeners")?;
+        // Disk persistence is the transaction boundary. A disconnected live
+        // listener means the UI is shutting down; it must not make callers
+        // roll back secrets after the settings file has already committed.
+        if let Err(error) = settings_tx.send(settings) {
+            eprintln!("failed to notify live settings listeners: {error}");
+        }
         Ok(())
     })
 }

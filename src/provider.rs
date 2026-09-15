@@ -52,6 +52,13 @@ pub fn start_provider_worker(
     events: Sender<WorkerEvent>,
 ) -> Result<WorkerHandle> {
     let activation_path = provider_activation_path(provider, activation_path);
+    // The OpenRouter worker is replaced whenever this revision changes. Tag
+    // every forwarded event so queued output from the old worker can never
+    // overwrite the replacement worker's state.
+    let worker_revision = match provider {
+        ProviderKind::OpenRouter => settings.openrouter_credentials_revision,
+        _ => 0,
+    };
     let automatic_activation = settings.automatic_activation
         && crate::provider_registry::descriptor(provider).supports_activation;
     let mut worker = match provider {
@@ -179,43 +186,53 @@ pub fn start_provider_worker(
         .ok_or_else(|| anyhow!("provider worker did not expose an event stream"))?;
     thread::spawn(move || {
         while let Ok(event) = source_events.recv() {
-            let mapped = match event {
-                WorkerEvent::RequestStarted(kind) => {
-                    Some(WorkerEvent::ProviderRequestStarted(provider, kind))
-                }
-                WorkerEvent::RequestFinished(kind) => {
-                    Some(WorkerEvent::ProviderRequestFinished(provider, kind))
-                }
-                WorkerEvent::LimitsUpdated(limits) => {
-                    Some(WorkerEvent::ProviderLimitsUpdated(provider, limits))
-                }
-                WorkerEvent::UsageUpdated(usage) => {
-                    Some(WorkerEvent::ProviderUsageUpdated(provider, usage))
-                }
-                WorkerEvent::UsageDataCleared(generation) => {
-                    Some(WorkerEvent::ProviderUsageDataCleared(provider, generation))
-                }
-                WorkerEvent::UsageRefreshFailed(error) => {
-                    Some(WorkerEvent::ProviderUsageRefreshFailed(provider, error))
-                }
-                WorkerEvent::ActivationStarted => {
-                    Some(WorkerEvent::ProviderActivationStarted(provider))
-                }
-                WorkerEvent::ActivationSucceeded => {
-                    Some(WorkerEvent::ProviderActivationSucceeded(provider))
-                }
-                WorkerEvent::ActivationFailed(error) => {
-                    Some(WorkerEvent::ProviderActivationFailed(provider, error))
-                }
-                WorkerEvent::PollFailed(error) => {
-                    Some(WorkerEvent::ProviderPollFailed(provider, error))
-                }
-                WorkerEvent::Stopped => None,
-                // Only the worker itself emits unscoped events. Passing any
-                // already-scoped value through avoids silently losing data if
-                // a future provider delegates another coordinator.
-                event => Some(event),
-            };
+            let mapped =
+                match event {
+                    WorkerEvent::RequestStarted(kind) => Some(WorkerEvent::ProviderRequestStarted(
+                        provider,
+                        worker_revision,
+                        kind,
+                    )),
+                    WorkerEvent::RequestFinished(kind) => Some(
+                        WorkerEvent::ProviderRequestFinished(provider, worker_revision, kind),
+                    ),
+                    WorkerEvent::LimitsUpdated(limits) => Some(WorkerEvent::ProviderLimitsUpdated(
+                        provider,
+                        worker_revision,
+                        limits,
+                    )),
+                    WorkerEvent::UsageUpdated(usage) => Some(WorkerEvent::ProviderUsageUpdated(
+                        provider,
+                        worker_revision,
+                        usage,
+                    )),
+                    WorkerEvent::UsageDataCleared(generation) => {
+                        Some(WorkerEvent::ProviderUsageDataCleared(provider, generation))
+                    }
+                    WorkerEvent::UsageRefreshFailed(error) => Some(
+                        WorkerEvent::ProviderUsageRefreshFailed(provider, worker_revision, error),
+                    ),
+                    WorkerEvent::ActivationStarted => Some(WorkerEvent::ProviderActivationStarted(
+                        provider,
+                        worker_revision,
+                    )),
+                    WorkerEvent::ActivationSucceeded => Some(
+                        WorkerEvent::ProviderActivationSucceeded(provider, worker_revision),
+                    ),
+                    WorkerEvent::ActivationFailed(error) => Some(
+                        WorkerEvent::ProviderActivationFailed(provider, worker_revision, error),
+                    ),
+                    WorkerEvent::PollFailed(error) => Some(WorkerEvent::ProviderPollFailed(
+                        provider,
+                        worker_revision,
+                        error,
+                    )),
+                    WorkerEvent::Stopped => None,
+                    // Only the worker itself emits unscoped events. Passing any
+                    // already-scoped value through avoids silently losing data if
+                    // a future provider delegates another coordinator.
+                    event => Some(event),
+                };
             if let Some(event) = mapped
                 && events.send(event).is_err()
             {

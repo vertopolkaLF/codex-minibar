@@ -645,6 +645,35 @@ fn every_limits_sample_forces_a_reactive_state_change() {
 }
 
 #[test]
+fn credential_worker_events_are_accepted_only_for_the_current_revision() {
+    let ui = UiState {
+        openrouter_credentials_revision: 7,
+        ..UiState::default()
+    };
+
+    assert!(bridge::provider_worker_event_is_current(
+        &ui,
+        ProviderKind::OpenRouter,
+        7
+    ));
+    assert!(!bridge::provider_worker_event_is_current(
+        &ui,
+        ProviderKind::OpenRouter,
+        6
+    ));
+    assert!(bridge::provider_worker_event_is_current(
+        &ui,
+        ProviderKind::OpenCodeZen,
+        0
+    ));
+    assert!(bridge::provider_worker_event_is_current(
+        &ui,
+        ProviderKind::Codex,
+        0
+    ));
+}
+
+#[test]
 fn provider_error_survives_until_that_provider_succeeds() {
     let mut ui = UiState::default();
 

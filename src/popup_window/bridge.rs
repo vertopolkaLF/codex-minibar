@@ -2,6 +2,18 @@ use super::*;
 
 use std::collections::HashSet;
 
+pub(super) fn provider_worker_event_is_current(
+    ui: &UiState,
+    provider: ProviderKind,
+    worker_revision: u64,
+) -> bool {
+    let current_revision = match provider {
+        ProviderKind::OpenRouter => ui.openrouter_credentials_revision,
+        _ => 0,
+    };
+    worker_revision == current_revision
+}
+
 fn forced_reset_info_body(reset: &crate::reset_feed::ForcedReset) -> String {
     let local = reset.reset_at.with_timezone(&Local);
     let when = format!(
@@ -194,8 +206,12 @@ pub(super) fn start_background_bridge(
             if openrouter_credentials_changed {
                 // Account ids can survive a key replacement. Do not present
                 // the old key's balance/label as data for its replacement.
+                // The matching worker revision also rejects output which was
+                // already queued by the worker being replaced.
+                state.replace_limits(ProviderKind::OpenRouter, RateLimits::default());
+                ui.observe_limits_update();
                 crate::settings_window::publish_openrouter_snapshot(
-                    &RateLimits::default(),
+                    state.current_limits().get(ProviderKind::OpenRouter),
                     ui_dispatcher.clone(),
                 );
             }
@@ -225,9 +241,6 @@ pub(super) fn start_background_bridge(
             ui.antigravity_enabled = settings.providers.is_enabled(ProviderKind::Antigravity);
             ui.grok_enabled = settings.providers.is_enabled(ProviderKind::Grok);
             ui.openrouter_credentials_revision = settings.openrouter_credentials_revision;
-            // Keep the previous OpenRouter snapshot visible while the worker
-            // restarts. Wiping to Default made the tab go blank for the full
-            // sequential /key poll (15s timeout × each key) after adding a key.
             ui.popup_order = settings.popup_order.clone();
             ui.use_colored_provider_icons = settings.use_colored_provider_icons;
             ui.replace_chatgpt_logo_with_codex = settings.replace_chatgpt_logo_with_codex;
@@ -267,6 +280,11 @@ pub(super) fn start_background_bridge(
             ui.cursor_path = settings.cursor_path.clone();
             ui.antigravity_path = settings.antigravity_path.clone();
             ui.grok_path = settings.grok_path.clone();
+            for provider in ProviderKind::ALL {
+                if restart.contains(&provider) || !settings.providers.is_enabled(provider) {
+                    ui.clear_provider_requests(provider);
+                }
+            }
             if providers_changed || !restart.is_empty() {
                 let provider_errors = state.sync_provider_workers(&settings, &restart);
                 for (provider, error) in provider_errors {
@@ -572,15 +590,24 @@ pub(super) fn start_background_bridge(
                 Ok(WorkerEvent::ForcedResetsRefreshFailed(error)) => {
                     crate::logger::info(format!("Codex reset feed refresh failed: {error}"));
                 }
-                Ok(WorkerEvent::ProviderRequestStarted(provider, kind)) => {
+                Ok(WorkerEvent::ProviderRequestStarted(provider, worker_revision, kind)) => {
+                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
+                        continue;
+                    }
                     ui.request_started(provider, kind);
                     publish_popup_ui(&set_ui, &ui);
                 }
-                Ok(WorkerEvent::ProviderRequestFinished(provider, kind)) => {
+                Ok(WorkerEvent::ProviderRequestFinished(provider, worker_revision, kind)) => {
+                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
+                        continue;
+                    }
                     ui.request_finished(provider, kind);
                     publish_popup_ui(&set_ui, &ui);
                 }
-                Ok(WorkerEvent::ProviderLimitsUpdated(provider, limits)) => {
+                Ok(WorkerEvent::ProviderLimitsUpdated(provider, worker_revision, limits)) => {
+                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
+                        continue;
+                    }
                     if (provider == ProviderKind::Codex && !ui.codex_enabled)
                         || (provider == ProviderKind::Claude && !ui.claude_enabled)
                         || (provider == ProviderKind::Cursor && !ui.cursor_enabled)
@@ -645,7 +672,10 @@ pub(super) fn start_background_bridge(
                     ui.observe_limits_update();
                     publish_popup_ui(&set_ui, &ui);
                 }
-                Ok(WorkerEvent::ProviderUsageUpdated(provider, usage)) => {
+                Ok(WorkerEvent::ProviderUsageUpdated(provider, worker_revision, usage)) => {
+                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
+                        continue;
+                    }
                     if provider == ProviderKind::Codex
                         && usage
                             .account_id
@@ -676,7 +706,10 @@ pub(super) fn start_background_bridge(
                     ui.observe_usage_update();
                     publish_popup_ui(&set_ui, &ui);
                 }
-                Ok(WorkerEvent::ProviderUsageRefreshFailed(provider, error)) => {
+                Ok(WorkerEvent::ProviderUsageRefreshFailed(provider, worker_revision, error)) => {
+                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
+                        continue;
+                    }
                     crate::logger::info(format!(
                         "{} usage refresh failed: {error}",
                         provider.display_name()
@@ -701,10 +734,16 @@ pub(super) fn start_background_bridge(
                         pending_usage_clear = None;
                     }
                 }
-                Ok(WorkerEvent::ProviderActivationStarted(provider)) => {
+                Ok(WorkerEvent::ProviderActivationStarted(provider, worker_revision)) => {
+                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
+                        continue;
+                    }
                     crate::logger::info(format!("{} activation started", provider.display_name()));
                 }
-                Ok(WorkerEvent::ProviderActivationSucceeded(provider)) => {
+                Ok(WorkerEvent::ProviderActivationSucceeded(provider, worker_revision)) => {
+                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
+                        continue;
+                    }
                     crate::logger::info(format!(
                         "{} activation succeeded",
                         provider.display_name()
@@ -719,7 +758,10 @@ pub(super) fn start_background_bridge(
                     }
                     publish_popup_ui(&set_ui, &ui);
                 }
-                Ok(WorkerEvent::ProviderActivationFailed(provider, error)) => {
+                Ok(WorkerEvent::ProviderActivationFailed(provider, worker_revision, error)) => {
+                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
+                        continue;
+                    }
                     crate::logger::info(format!(
                         "{} activation failed: {error}",
                         provider.display_name()
@@ -731,7 +773,10 @@ pub(super) fn start_background_bridge(
                     );
                     publish_popup_ui(&set_ui, &ui);
                 }
-                Ok(WorkerEvent::ProviderPollFailed(provider, error)) => {
+                Ok(WorkerEvent::ProviderPollFailed(provider, worker_revision, error)) => {
+                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
+                        continue;
+                    }
                     crate::logger::info(format!(
                         "{} polling failed: {error}",
                         provider.display_name()

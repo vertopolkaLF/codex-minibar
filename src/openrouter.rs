@@ -232,12 +232,16 @@ fn fetch_openrouter_account(
     let mut cache_updates = Vec::new();
     for (api_key, live) in account.api_keys.iter().zip(live_results) {
         let cache_id = key_cache_id(&account.id, &api_key.id);
+        let current_mask = collapse_api_key(&api_key.value);
         let cached = key_cache
             .get(&cache_id)
-            .filter(|cached| cached.masked_key == collapse_api_key(&api_key.value))
+            // Snapshots written before the fingerprint field existed are safe
+            // to reuse until the first successful refresh writes one. Current
+            // snapshots still reject metadata from a replaced key.
+            .filter(|cached| cached_key_matches_mask(cached, current_mask.as_deref()))
             .cloned()
             .unwrap_or_default();
-        let masked_key = collapse_api_key(&api_key.value).or_else(|| cached.masked_key.clone());
+        let masked_key = current_mask.or_else(|| cached.masked_key.clone());
         // OpenRouter's own label mask (sk-or-v1-abc...xyz) often uses a
         // different head/tail length than our local collapse — match the
         // full secret against directory labels instead of exact strings.
@@ -443,6 +447,121 @@ pub fn save_account_api_key(account_id: &str, key_id: &str, value: Option<&str>)
 
 pub fn save_management_key(account_id: &str, value: Option<&str>) -> Result<()> {
     save_secret_and_hint(&management_secret_name(account_id), value)
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum AccountSecretChange {
+    ApiKey {
+        account_id: String,
+        key_id: String,
+        value: Option<String>,
+    },
+    ManagementKey {
+        account_id: String,
+        value: Option<String>,
+    },
+}
+
+impl AccountSecretChange {
+    pub(crate) fn api_key(
+        account_id: impl Into<String>,
+        key_id: impl Into<String>,
+        value: Option<String>,
+    ) -> Self {
+        Self::ApiKey {
+            account_id: account_id.into(),
+            key_id: key_id.into(),
+            value,
+        }
+    }
+
+    pub(crate) fn management(account_id: impl Into<String>, value: Option<String>) -> Self {
+        Self::ManagementKey {
+            account_id: account_id.into(),
+            value,
+        }
+    }
+
+    fn secret_name(&self) -> String {
+        match self {
+            Self::ApiKey {
+                account_id, key_id, ..
+            } => api_secret_name(account_id, key_id),
+            Self::ManagementKey { account_id, .. } => management_secret_name(account_id),
+        }
+    }
+
+    fn value(&self) -> Option<&str> {
+        match self {
+            Self::ApiKey { value, .. } | Self::ManagementKey { value, .. } => value.as_deref(),
+        }
+    }
+
+    fn with_value(&self, value: Option<String>) -> Self {
+        match self {
+            Self::ApiKey {
+                account_id, key_id, ..
+            } => Self::api_key(account_id.clone(), key_id.clone(), value),
+            Self::ManagementKey { account_id, .. } => Self::management(account_id.clone(), value),
+        }
+    }
+}
+
+/// Previous values for an atomic group of account-secret changes. Callers use
+/// this to restore protected storage if the following settings commit fails.
+pub(crate) struct AccountSecretRollback(Vec<AccountSecretChange>);
+
+impl AccountSecretRollback {
+    pub(crate) fn restore(self) -> Result<()> {
+        write_account_secret_changes(&self.0)
+    }
+}
+
+pub(crate) fn apply_account_secret_changes(
+    changes: &[AccountSecretChange],
+) -> Result<AccountSecretRollback> {
+    let mut cache = SECRET_HINTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let previous = changes
+        .iter()
+        .map(|change| {
+            let value = load_secret_value(&change.secret_name())?;
+            Ok(change.with_value(value))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let writes = account_secret_writes(changes);
+    secrets::save_many(&writes)?;
+    invalidate_secret_hints(&mut cache, &writes);
+    Ok(AccountSecretRollback(previous))
+}
+
+fn write_account_secret_changes(changes: &[AccountSecretChange]) -> Result<()> {
+    let mut cache = SECRET_HINTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let writes = account_secret_writes(changes);
+    secrets::save_many(&writes)?;
+    invalidate_secret_hints(&mut cache, &writes);
+    Ok(())
+}
+
+fn account_secret_writes(changes: &[AccountSecretChange]) -> Vec<(String, Option<String>)> {
+    changes
+        .iter()
+        .map(|change| (change.secret_name(), change.value().map(str::to_owned)))
+        .collect()
+}
+
+fn invalidate_secret_hints(
+    cache: &mut Option<HashMap<String, Option<String>>>,
+    writes: &[(String, Option<String>)],
+) {
+    if let Some(cache) = cache.as_mut() {
+        for (name, _) in writes {
+            cache.remove(name);
+        }
+    }
 }
 
 /// Masked form (`sk-or-v1-…abcd`) of a saved API key, or `None` when the key
@@ -851,6 +970,13 @@ fn key_cache_id(account_id: &str, key_id: &str) -> String {
     format!("{account_id}\0{key_id}")
 }
 
+fn cached_key_matches_mask(cached: &CachedOpenRouterKey, current_mask: Option<&str>) -> bool {
+    match cached.masked_key.as_deref() {
+        None => true,
+        Some(cached_mask) => Some(cached_mask) == current_mask,
+    }
+}
+
 /// Merge live `/key` spending with cached metadata. Usage is taken from the
 /// live response only — never from cache.
 fn merge_key_spending(
@@ -1217,6 +1343,28 @@ mod tests {
         assert_eq!(placeholder.used_microusd, 0);
         assert_eq!(placeholder.limit_microusd, Some(1_000_000));
         assert!(placeholder.resets_at.is_some());
+    }
+
+    #[test]
+    fn legacy_key_cache_is_accepted_but_a_present_mismatched_fingerprint_is_rejected() {
+        let legacy = CachedOpenRouterKey {
+            label: Some("Existing key".into()),
+            masked_key: None,
+            ..Default::default()
+        };
+        assert!(cached_key_matches_mask(
+            &legacy,
+            Some("sk-or-v1-current...1234")
+        ));
+
+        let fingerprinted = CachedOpenRouterKey {
+            masked_key: Some("sk-or-v1-old...9876".into()),
+            ..Default::default()
+        };
+        assert!(!cached_key_matches_mask(
+            &fingerprinted,
+            Some("sk-or-v1-current...1234")
+        ));
     }
 
     #[test]

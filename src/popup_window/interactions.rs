@@ -244,24 +244,42 @@ pub(super) fn remove_openrouter_api_key(
     key_id: String,
     settings_tx: Sender<Settings>,
 ) {
-    if let Err(error) = crate::openrouter::save_account_api_key(&account_id, &key_id, None) {
-        notifications::show("OpenRouter key not removed", &format!("{error:#}"));
-        return;
-    }
-    crate::settings_window::persist_update(settings_tx, move |settings| {
-        let mut accounts = crate::openrouter::accounts_for_settings(settings);
-        let Some(account) = accounts.iter_mut().find(|account| account.id == account_id) else {
-            return;
-        };
-        let before = account.api_key_ids.len();
-        account.api_key_ids.retain(|id| id != &key_id);
-        if account.api_key_ids.len() == before {
+    let change =
+        crate::openrouter::AccountSecretChange::api_key(account_id.clone(), key_id.clone(), None);
+    let rollback = match crate::openrouter::apply_account_secret_changes(&[change]) {
+        Ok(rollback) => rollback,
+        Err(error) => {
+            notifications::show("OpenRouter key not removed", &format!("{error:#}"));
             return;
         }
-        settings.openrouter_accounts = accounts;
-        settings.openrouter_credentials_revision =
-            settings.openrouter_credentials_revision.wrapping_add(1);
-    });
+    };
+    if let Err(error) =
+        crate::settings_window::try_persist_update_fallible(settings_tx, move |settings| {
+            let mut accounts = crate::openrouter::accounts_for_settings(settings);
+            let account = accounts
+                .iter_mut()
+                .find(|account| account.id == account_id)
+                .ok_or_else(|| anyhow::anyhow!("OpenRouter account no longer exists"))?;
+            let before = account.api_key_ids.len();
+            account.api_key_ids.retain(|id| id != &key_id);
+            anyhow::ensure!(
+                account.api_key_ids.len() != before,
+                "OpenRouter API key no longer exists"
+            );
+            settings.openrouter_accounts = accounts;
+            settings.openrouter_credentials_revision =
+                settings.openrouter_credentials_revision.wrapping_add(1);
+            Ok(())
+        })
+    {
+        let message = match rollback.restore() {
+            Ok(()) => format!("{error:#}"),
+            Err(rollback_error) => {
+                format!("{error:#}; restoring the protected key also failed: {rollback_error:#}")
+            }
+        };
+        notifications::show("OpenRouter key not removed", &message);
+    }
 }
 
 pub(super) fn openrouter_delete_button(
