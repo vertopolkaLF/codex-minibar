@@ -263,6 +263,12 @@ pub(super) fn start_background_bridge(
                 if !settings.providers.is_enabled(provider) {
                     ui.clear_provider_error(provider);
                 }
+                if !settings.usage_stats_enabled
+                    || !crate::provider_registry::supports_usage_stats(provider)
+                    || !settings.usage_stats_provider_enabled(provider)
+                {
+                    ui.clear_usage_error(provider);
+                }
             }
             // Repaint the existing native icons in place. Recreating them makes
             // Explorer animate a remove/add sequence and causes a visible flash.
@@ -661,6 +667,10 @@ pub(super) fn start_background_bridge(
                         "{} usage refresh failed: {error}",
                         provider.display_name()
                     ));
+                    // Usage/analytics failures use the same provider-scoped
+                    // presentation as quota failures. The state keeps the
+                    // source separate so a successful quota poll does not
+                    // clear an active analytics error.
                     ui.set_usage_error(provider, error);
                     publish_popup_ui(&set_ui, &ui);
                 }

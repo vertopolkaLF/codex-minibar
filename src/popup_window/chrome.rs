@@ -29,16 +29,18 @@ pub(super) fn provider_tabs_key(
     show_provider_icon_tabs: bool,
     use_colored_provider_icons: bool,
     color_scheme: ColorScheme,
+    errored_providers: &[ProviderKind],
 ) -> String {
     let size = popup::bottom_bar_size();
     format!(
-        "provider-tabs-home-usage-{}-{}-{}-{}-{}-{}",
+        "provider-tabs-home-usage-{}-{}-{}-{}-{}-{}-errors={}",
         provider_order_key(providers),
         usage_enabled,
         show_provider_icon_tabs,
         use_colored_provider_icons,
         color_scheme as i32,
         size.index(),
+        provider_order_key(errored_providers),
     )
 }
 

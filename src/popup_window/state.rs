@@ -421,24 +421,36 @@ impl UiState {
         self.provider_errors.remove(&provider);
     }
 
+    /// Return the latest error from either the provider's quota poll or its
+    /// usage/analytics refresh. Both are provider failures in the popup UI,
+    /// but they have independent lifetimes so a healthy quota poll cannot
+    /// hide a still-failing analytics request.
     pub(super) fn provider_error(&self, provider: ProviderKind) -> Option<&str> {
-        self.provider_errors.get(&provider).map(String::as_str)
+        if let Some(error) = self.provider_errors.get(&provider) {
+            Some(error.as_str())
+        } else {
+            self.usage_errors.get(&provider).map(String::as_str)
+        }
     }
 
     pub(super) fn has_provider_error(&self, provider: ProviderKind) -> bool {
-        self.provider_errors.contains_key(&provider)
+        self.provider_errors.contains_key(&provider) || self.usage_errors.contains_key(&provider)
     }
 
     pub(super) fn set_usage_error(&mut self, provider: ProviderKind, error: impl Into<String>) {
-        self.usage_errors.insert(provider, error.into());
+        let raw_error = error.into();
+        let display_error = Self::error_for_ui(&raw_error);
+        if self.usage_errors.get(&provider) != Some(&display_error) {
+            crate::logger::info(format!(
+                "{} provider usage error: {raw_error}",
+                provider.display_name()
+            ));
+        }
+        self.usage_errors.insert(provider, display_error);
     }
 
     pub(super) fn clear_usage_error(&mut self, provider: ProviderKind) {
         self.usage_errors.remove(&provider);
-    }
-
-    pub(super) fn usage_error(&self, provider: ProviderKind) -> Option<&str> {
-        self.usage_errors.get(&provider).map(String::as_str)
     }
 
     pub(super) fn usage_stats_provider_enabled(&self, provider: ProviderKind) -> bool {
