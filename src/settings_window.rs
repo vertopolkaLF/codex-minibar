@@ -314,8 +314,10 @@ pub fn render(
     let (root_selected, set_root_selected) = cx.use_state(Tab::default());
     let (nav_mode, set_nav_mode) = cx.use_state(SettingsNavMode::Root);
     let (return_root_tab, set_return_root_tab) = cx.use_state(Tab::General);
-    let (selected_provider, set_selected_provider) =
-        cx.use_state(first_provider_in_order(&settings.popup_order));
+    let (selected_provider, set_selected_provider) = cx.use_state(first_provider_in_order(
+        &settings.popup_order,
+        |provider| settings.providers.is_enabled(provider),
+    ));
     let (rendered_page, set_rendered_page) = cx.use_async_state(RenderedPage::default());
     let (page_visible, set_page_visible) = cx.use_async_state(true);
     let (log_content, set_log_content) = cx
@@ -569,7 +571,18 @@ pub fn render(
                 match nav_mode {
                     SettingsNavMode::Root => {
                         if tag == "providers" {
-                            let first = first_provider_in_order(&popup_order);
+                            let first = first_provider_in_order(&popup_order, |provider| {
+                                match provider {
+                                    ProviderKind::Codex => codex_enabled,
+                                    ProviderKind::Claude => claude_enabled,
+                                    ProviderKind::Cursor => cursor_enabled,
+                                    ProviderKind::OpenCodeZen => opencode_zen_enabled,
+                                    ProviderKind::OpenCodeGo => opencode_go_enabled,
+                                    ProviderKind::OpenRouter => openrouter_enabled,
+                                    ProviderKind::Antigravity => antigravity_enabled,
+                                    ProviderKind::Grok => grok_enabled,
+                                }
+                            });
                             let restore = if root_selected != Tab::Providers {
                                 root_selected
                             } else {
@@ -1035,8 +1048,10 @@ pub fn render(
             let set_root_selected = set_root_selected.clone();
             let set_page_visible = set_page_visible.clone();
             let set_rendered_page = set_rendered_page.clone();
+            let set_provider_dialog = set_provider_dialog.clone();
             move || {
                 let restore = return_root_tab;
+                set_provider_dialog.call(None);
                 set_nav_mode.call(SettingsNavMode::Root);
                 set_root_selected.call(restore);
                 fade_to_rendered_page(

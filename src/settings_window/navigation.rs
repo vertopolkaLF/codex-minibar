@@ -93,10 +93,18 @@ pub(super) fn provider_order_from_popup(popup_order: &[PopupWidgetKind]) -> Vec<
         .collect()
 }
 
-pub(super) fn first_provider_in_order(popup_order: &[PopupWidgetKind]) -> ProviderKind {
-    provider_order_from_popup(popup_order)
-        .into_iter()
-        .next()
+/// First enabled provider in Customize order. If none are on, the first
+/// listed provider — same order the Providers pane shows.
+pub(super) fn first_provider_in_order(
+    popup_order: &[PopupWidgetKind],
+    is_enabled: impl Fn(ProviderKind) -> bool,
+) -> ProviderKind {
+    let order = provider_order_from_popup(popup_order);
+    order
+        .iter()
+        .copied()
+        .find(|provider| is_enabled(*provider))
+        .or_else(|| order.into_iter().next())
         .unwrap_or(ProviderKind::Codex)
 }
 
@@ -289,5 +297,21 @@ mod provider_navigation_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn first_provider_prefers_enabled_nav_order() {
+        let popup_order = Settings::default().popup_order;
+        let order = provider_order_from_popup(&popup_order);
+        assert_eq!(first_provider_in_order(&popup_order, |_| false), order[0]);
+        assert_eq!(
+            first_provider_in_order(&popup_order, |provider| provider != order[0]),
+            order[1]
+        );
+        let last = *order.last().expect("providers");
+        assert_eq!(
+            first_provider_in_order(&popup_order, |provider| provider == last),
+            last
+        );
     }
 }
