@@ -372,6 +372,15 @@ fn status_dot(brush: ThemeRef) -> Element {
         .corner_radius(4.0)
         .background(brush)
         .vertical_alignment(VerticalAlignment::Center)
+        // Segoe's line box is taller than the glyphs, so a centered 8px
+        // circle sits high next to 12–13px labels. Equal +top/−bottom
+        // keeps the layout size and shifts the fill onto the x-height.
+        .margin(Thickness {
+            left: 0.0,
+            top: 1.0,
+            right: 0.0,
+            bottom: -1.0,
+        })
         .into()
 }
 
