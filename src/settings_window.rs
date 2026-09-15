@@ -548,8 +548,9 @@ pub fn render(
             }
         ),
         SettingsNavMode::Providers => format!(
-            "settings-nav-providers-{nav_icon_color}-{}",
-            providers_nav_signature(&nav_menu_items)
+            "settings-nav-providers-{nav_icon_color}-{}-{}",
+            providers_nav_signature(&nav_menu_items),
+            crate::provider_registry::icon(ProviderKind::Codex)
         ),
     };
     let mut navigation = NavigationView::new(nav_menu_items, Element::Empty)

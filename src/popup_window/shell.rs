@@ -710,48 +710,24 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         }
         if show_provider_icon_tabs {
             for provider in &enabled_provider_order {
-                let (tab_id, icon_name, tip, view) = match provider {
-                    ProviderKind::Codex => (
-                        "provider-tab-codex",
-                        if ui.replace_chatgpt_logo_with_codex {
-                            "codex"
-                        } else {
-                            "chatgpt"
-                        },
-                        "Codex",
-                        PopupView::Codex,
-                    ),
-                    ProviderKind::Claude => {
-                        ("provider-tab-claude", "claude", "Claude", PopupView::Claude)
+                let icon_name = crate::provider_registry::icon(*provider);
+                let (tab_id, tip, view) = match provider {
+                    ProviderKind::Codex => ("provider-tab-codex", "Codex", PopupView::Codex),
+                    ProviderKind::Claude => ("provider-tab-claude", "Claude", PopupView::Claude),
+                    ProviderKind::Cursor => ("provider-tab-cursor", "Cursor", PopupView::Cursor),
+                    ProviderKind::OpenCodeZen => {
+                        ("provider-tab-opencode-zen", "OpenCode Zen", PopupView::OpenCodeZen)
                     }
-                    ProviderKind::Cursor => {
-                        ("provider-tab-cursor", "cursor", "Cursor", PopupView::Cursor)
+                    ProviderKind::OpenCodeGo => {
+                        ("provider-tab-opencode-go", "OpenCode Go", PopupView::OpenCodeGo)
                     }
-                    ProviderKind::OpenCodeZen => (
-                        "provider-tab-opencode-zen",
-                        "opencode",
-                        "OpenCode Zen",
-                        PopupView::OpenCodeZen,
-                    ),
-                    ProviderKind::OpenCodeGo => (
-                        "provider-tab-opencode-go",
-                        "opencode",
-                        "OpenCode Go",
-                        PopupView::OpenCodeGo,
-                    ),
-                    ProviderKind::OpenRouter => (
-                        "provider-tab-openrouter",
-                        "openrouter",
-                        "OpenRouter",
-                        PopupView::OpenRouter,
-                    ),
-                    ProviderKind::Antigravity => (
-                        "provider-tab-antigravity",
-                        "antigravity",
-                        "Antigravity",
-                        PopupView::Antigravity,
-                    ),
-                    ProviderKind::Grok => ("provider-tab-grok", "grok", "Grok", PopupView::Grok),
+                    ProviderKind::OpenRouter => {
+                        ("provider-tab-openrouter", "OpenRouter", PopupView::OpenRouter)
+                    }
+                    ProviderKind::Antigravity => {
+                        ("provider-tab-antigravity", "Antigravity", PopupView::Antigravity)
+                    }
+                    ProviderKind::Grok => ("provider-tab-grok", "Grok", PopupView::Grok),
                 };
                 provider_tabs.push(popup_tab_button(
                     tab_id,

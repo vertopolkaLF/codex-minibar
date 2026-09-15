@@ -1,4 +1,6 @@
-use super::persistence::{persist_update, try_persist_update, try_persist_update_fallible};
+use super::persistence::{
+    persist_bool, persist_update, try_persist_update, try_persist_update_fallible,
+};
 use super::platform::{choose_provider_folder, copy_text_to_clipboard, reveal_in_explorer};
 use super::*;
 use crate::limits::{OpenRouterAccountSnapshot, OpenRouterApiKeySnapshot, SpendingSummary};
@@ -950,7 +952,7 @@ fn provider_header(
     color_scheme: ColorScheme,
     on_toggled: impl Fn(bool) + 'static,
 ) -> Element {
-    let descriptor = crate::provider_registry::descriptor(provider);
+    let icon_name = crate::provider_registry::icon(provider);
     let scheme_tag = match color_scheme {
         ColorScheme::Dark => "dark",
         ColorScheme::Light => "light",
@@ -976,7 +978,7 @@ fn provider_header(
     );
     grid(vec![
         border(
-            crate::icons::element(descriptor.icon, 24.0, icon_color)
+            crate::icons::element(icon_name, 24.0, icon_color)
                 .horizontal_alignment(HorizontalAlignment::Center)
                 .vertical_alignment(VerticalAlignment::Center),
         )
@@ -989,7 +991,7 @@ fn provider_header(
         .vertical_alignment(VerticalAlignment::Center)
         .grid_column(0)
         .with_key(format!(
-            "provider-icon-{}-{scheme_tag}-{:02X}{:02X}{:02X}",
+            "provider-icon-{}-{scheme_tag}-{icon_name}-{:02X}{:02X}{:02X}",
             provider.id(),
             icon_color.r,
             icon_color.g,
@@ -1178,11 +1180,38 @@ fn install_sections(
             );
         }
     }
+    if provider == ProviderKind::Codex {
+        out.push(section_header("Appearance", None, None).with_key("appearance-header"));
+        out.push(codex_logo_toggle(ctx).with_key("codex-replace-logo"));
+    }
     if let Some(config) = folder_config(provider, ctx) {
         out.push(section_header("Advanced", None, None).with_key("advanced-header"));
         out.push(advanced_folder_expander(provider, config, ctx).with_key("advanced-folder"));
     }
     out
+}
+
+fn codex_logo_toggle(ctx: &SettingsPageContext<'_>) -> Element {
+    let set_replace_chatgpt_logo_with_codex = ctx.set_replace_chatgpt_logo_with_codex.clone();
+    let settings_tx = ctx.settings_tx.clone();
+    settings_toggle_card(
+        "Replace ChatGPT logo with Codex",
+        ctx.replace_chatgpt_logo_with_codex,
+        move |value| {
+            crate::provider_registry::apply_logo_settings(value);
+            persist_bool(
+                set_replace_chatgpt_logo_with_codex.clone(),
+                settings_tx.clone(),
+                value,
+                |settings, value| {
+                    settings.replace_chatgpt_logo_with_codex = value;
+                },
+            );
+        },
+        "codex-replace-logo",
+        ctx.hovered_card_id,
+        ctx.set_hovered_card_id.clone(),
+    )
 }
 
 fn source_row(

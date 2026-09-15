@@ -2,6 +2,11 @@ use crate::{
     limits::{LimitWindow, RateLimits},
     settings::ProviderKind,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// When false (the default), Codex uses the ChatGPT mark. Settings flips this
+/// so every surface that calls [`icon`] updates together.
+static REPLACE_CHATGPT_LOGO_WITH_CODEX: AtomicBool = AtomicBool::new(false);
 
 /// Provider-independent identity for a quota window exposed to popup, tray,
 /// settings, and future provider surfaces.
@@ -234,6 +239,24 @@ pub fn descriptor(provider: ProviderKind) -> &'static ProviderDescriptor {
         .iter()
         .find(|descriptor| descriptor.kind == provider)
         .expect("every ProviderKind must have a registry descriptor")
+}
+
+/// Install live logo overrides from settings. Call this from
+/// [`crate::settings::Settings::apply_runtime_effects`] so UI, tray, and
+/// plugins all see the same marks without threading a bool through every page.
+pub fn apply_logo_settings(replace_chatgpt_logo_with_codex: bool) {
+    REPLACE_CHATGPT_LOGO_WITH_CODEX.store(replace_chatgpt_logo_with_codex, Ordering::Relaxed);
+}
+
+/// Live provider mark for UI. Canonical asset ids stay on
+/// [`ProviderDescriptor::icon`]; this is what every surface should paint.
+pub fn icon(provider: ProviderKind) -> &'static str {
+    match provider {
+        ProviderKind::Codex if !REPLACE_CHATGPT_LOGO_WITH_CODEX.load(Ordering::Relaxed) => {
+            "chatgpt"
+        }
+        _ => descriptor(provider).icon,
+    }
 }
 
 /// Brand colors used by small provider icons on the light popup cards.
@@ -564,6 +587,24 @@ pub fn resolve_metric<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_icon_follows_codex_logo_setting_for_every_provider() {
+        apply_logo_settings(false);
+        for provider in ProviderKind::ALL {
+            let expected = match provider {
+                ProviderKind::Codex => "chatgpt",
+                _ => descriptor(provider).icon,
+            };
+            assert_eq!(icon(provider), expected);
+        }
+        apply_logo_settings(true);
+        for provider in ProviderKind::ALL {
+            assert_eq!(icon(provider), descriptor(provider).icon);
+        }
+        apply_logo_settings(false);
+        assert_eq!(icon(ProviderKind::Codex), "chatgpt");
+    }
 
     #[test]
     fn tray_options_include_dynamic_windows_and_resolve_the_selected_quota() {

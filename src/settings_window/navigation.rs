@@ -170,7 +170,10 @@ pub(super) fn providers_nav_items(
         };
         NavViewItem::new(descriptor.display_name)
             .tag(provider.id())
-            .icon_path(crate::icons::data(descriptor.icon), icon_color)
+            .icon_path(
+                crate::icons::data(crate::provider_registry::icon(provider)),
+                icon_color,
+            )
     };
     let order = provider_order_from_popup(popup_order);
     let mut items = Vec::new();
@@ -275,7 +278,7 @@ mod provider_navigation_tests {
                     assert_eq!(item.content, descriptor.display_name);
                     assert_eq!(
                         item.icon_path.as_ref().unwrap().0,
-                        crate::icons::data(descriptor.icon)
+                        crate::icons::data(crate::provider_registry::icon(provider))
                     );
                     let expected_color = if enabled(provider) {
                         crate::icons::provider_brand_hex(provider, scheme)

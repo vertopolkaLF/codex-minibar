@@ -2147,6 +2147,7 @@ impl Settings {
             self.popup_corner_radius,
             self.popup_background_material,
         );
+        crate::provider_registry::apply_logo_settings(self.replace_chatgpt_logo_with_codex);
         self.time_format.apply();
         apply_startup_registration(self.start_at_login)
     }
