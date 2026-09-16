@@ -753,7 +753,18 @@ fn tick(
         );
     }
 
-    events.insert(0, WorkerEvent::LimitsUpdated(limits));
+    // When automatic activation succeeds, publish the activation result before
+    // its fresh limit snapshot. The bridge can then combine the reset and
+    // activation toasts without changing the legacy order for other polls.
+    let activation_succeeded = automatic_activation
+        && events
+            .iter()
+            .any(|event| matches!(event, WorkerEvent::ActivationSucceeded));
+    if activation_succeeded {
+        events.push(WorkerEvent::LimitsUpdated(limits));
+    } else {
+        events.insert(0, WorkerEvent::LimitsUpdated(limits));
+    }
     Ok(events)
 }
 
@@ -948,8 +959,11 @@ mod tests {
         assert_eq!(activator.0, 0);
         tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
         assert_eq!(activator.0, 0);
-        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
+        let events = tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
         assert_eq!(activator.0, 1);
+        assert!(matches!(events[0], WorkerEvent::ActivationStarted));
+        assert!(matches!(events[1], WorkerEvent::ActivationSucceeded));
+        assert!(matches!(events[2], WorkerEvent::LimitsUpdated(_)));
         assert_eq!(
             state.last_seen_resets_at,
             limits_at(20, 1).primary.resets_at

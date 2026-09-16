@@ -103,6 +103,7 @@ pub(super) fn start_background_bridge(
         let fallback_attempt = state.last_activation_at;
         let mut notification_settings = state.settings.notifications.clone();
         let mut limit_notifications = HashMap::<ProviderKind, LimitNotificationTracker>::new();
+        let mut pending_auto_activation_successes = HashSet::<ProviderKind>::new();
         let mut forced_reset_notified_ids = HashSet::<String>::new();
         let mut usage_clear_generation = 0_u64;
         let mut pending_usage_clear: Option<(u64, Vec<ProviderKind>)> = None;
@@ -685,11 +686,31 @@ pub(super) fn start_background_bridge(
                             },
                         );
                     }
-                    limit_notifications.entry(provider).or_default().observe(
-                        limits.get(provider),
-                        &notification_settings,
-                        provider,
-                    );
+                    let combine_activation_notification =
+                        pending_auto_activation_successes.remove(&provider);
+                    let notification_result = if combine_activation_notification {
+                        limit_notifications
+                            .entry(provider)
+                            .or_default()
+                            .observe_with_primary_reset_deferred(
+                                limits.get(provider),
+                                &notification_settings,
+                                provider,
+                            )
+                    } else {
+                        limit_notifications.entry(provider).or_default().observe(
+                            limits.get(provider),
+                            &notification_settings,
+                            provider,
+                        )
+                    };
+                    if combine_activation_notification {
+                        if notification_result.primary_reset {
+                            notifications::show_activation_succeeded_after_reset(provider);
+                        } else if notification_settings.activation_success {
+                            notifications::show_activation_succeeded(provider);
+                        }
+                    }
                     if let Err(error) = tray.sync(
                         &widgets,
                         &limits,
@@ -823,7 +844,12 @@ pub(super) fn start_background_bridge(
                         provider.display_name(),
                         format_activation_at(Utc::now())
                     );
-                    if notification_settings.activation_success {
+                    let combine_activation_notification = live_settings.automatic_activation
+                        && notification_settings.limits_changed
+                        && notification_settings.activation_success;
+                    if combine_activation_notification {
+                        pending_auto_activation_successes.insert(provider);
+                    } else if notification_settings.activation_success {
                         notifications::show_activation_succeeded(provider);
                     }
                     publish_popup_ui(&set_ui, &ui);
@@ -832,6 +858,7 @@ pub(super) fn start_background_bridge(
                     if !provider_worker_event_is_current(&ui, provider, worker_revision) {
                         continue;
                     }
+                    pending_auto_activation_successes.remove(&provider);
                     crate::logger::info(format!(
                         "{} activation failed: {error}",
                         provider.display_name()

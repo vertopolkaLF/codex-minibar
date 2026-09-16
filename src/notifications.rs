@@ -125,6 +125,16 @@ pub fn show_activation_succeeded(provider: ProviderKind) {
     show("5-hour limit started", provider.display_name());
 }
 
+/// Toast after automatic activation follows a newly reset 5-hour window.
+pub fn show_activation_succeeded_after_reset(provider: ProviderKind) {
+    show("5-hour limit reset and activated", provider.display_name());
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct LimitNotificationResult {
+    pub primary_reset: bool,
+}
+
 /// Tracks previous API limit snapshots so actual reset / low-usage toasts fire
 /// once. Public reset-feed announcements use a separate info-only path.
 #[derive(Debug, Default)]
@@ -147,8 +157,17 @@ impl LimitNotificationTracker {
         limits: &RateLimits,
         settings: &NotificationSettings,
         provider: ProviderKind,
-    ) {
-        self.observe_at(limits, settings, provider, Utc::now());
+    ) -> LimitNotificationResult {
+        self.observe_at(limits, settings, provider, Utc::now(), false)
+    }
+
+    pub fn observe_with_primary_reset_deferred(
+        &mut self,
+        limits: &RateLimits,
+        settings: &NotificationSettings,
+        provider: ProviderKind,
+    ) -> LimitNotificationResult {
+        self.observe_at(limits, settings, provider, Utc::now(), true)
     }
 
     fn observe_at(
@@ -157,7 +176,8 @@ impl LimitNotificationTracker {
         settings: &NotificationSettings,
         provider: ProviderKind,
         now: DateTime<Utc>,
-    ) {
+        defer_primary_reset: bool,
+    ) -> LimitNotificationResult {
         if !self.primed {
             self.capture(limits);
             self.startup_low_usage_primary = low_usage_state(
@@ -169,7 +189,7 @@ impl LimitNotificationTracker {
                 settings.weekly_low_usage_threshold_percent,
             );
             self.primed = true;
-            return;
+            return LimitNotificationResult::default();
         }
 
         let primary_reset =
@@ -179,7 +199,7 @@ impl LimitNotificationTracker {
 
         if primary_reset {
             self.startup_low_usage_primary = None;
-            if settings.limits_changed {
+            if settings.limits_changed && !defer_primary_reset {
                 show("5-hour limit reset", provider.display_name());
             }
         }
@@ -227,6 +247,7 @@ impl LimitNotificationTracker {
         }
 
         self.capture(limits);
+        LimitNotificationResult { primary_reset }
     }
 
     fn capture(&mut self, limits: &RateLimits) {
@@ -534,12 +555,14 @@ mod tests {
             &settings,
             ProviderKind::Codex,
             reset - chrono::Duration::hours(5),
+            false,
         );
         tracker.observe_at(
             &reset_metadata,
             &settings,
             ProviderKind::Codex,
             reset - chrono::Duration::hours(1),
+            false,
         );
 
         assert!(tracker.low_usage_notified_primary.is_none());
@@ -551,6 +574,55 @@ mod tests {
         assert!(!suppress_startup_low_usage(Some(true), Some(21), 20));
         assert!(!suppress_startup_low_usage(Some(false), Some(20), 20));
         assert!(!suppress_startup_low_usage(None, Some(20), 20));
+    }
+
+    #[test]
+    fn deferred_primary_reset_reports_the_reset_for_combined_activation_toast() {
+        let previous_reset = Utc.with_ymd_and_hms(2026, 7, 14, 12, 0, 0).unwrap();
+        let next_reset = Utc.with_ymd_and_hms(2026, 7, 14, 17, 0, 0).unwrap();
+        let settings = NotificationSettings {
+            limits_changed: true,
+            ..Default::default()
+        };
+        let initial = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(80),
+                resets_at: Some(previous_reset),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let updated = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(0),
+                resets_at: Some(next_reset),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut tracker = LimitNotificationTracker::default();
+
+        tracker.observe_at(
+            &initial,
+            &settings,
+            ProviderKind::Codex,
+            previous_reset,
+            false,
+        );
+        let result = tracker.observe_at(
+            &updated,
+            &settings,
+            ProviderKind::Codex,
+            previous_reset,
+            true,
+        );
+
+        assert_eq!(
+            result,
+            LimitNotificationResult {
+                primary_reset: true
+            }
+        );
     }
 }
 
