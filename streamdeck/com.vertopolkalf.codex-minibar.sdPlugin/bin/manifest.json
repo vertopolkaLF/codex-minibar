@@ -2,11 +2,11 @@
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
   "UUID": "com.vertopolkalf.codex-minibar",
   "Name": "Codex Minibar",
-  "Version": "0.1.0.4",
+  "Version": "0.1.0.5",
   "Author": "vertopolkalf",
-  "Description": "Live Codex, Claude, Cursor, OpenCode, and OpenRouter quota indicators.",
+  "Description": "Codex Minibar puts live AI usage quotas on your Stream Deck. Watch remaining or used limits for Codex, Claude, Cursor, OpenCode Zen, OpenCode Go, and OpenRouter, including 5-hour, weekly, monthly, and spending windows, with reset countdowns on each key.\n\nThe Quota Indicator action reads live snapshots from the Codex Minibar Windows app on the same PC and updates each key about once a second. Place as many keys as you need, choose a provider and limit in the Property Inspector, and keep session, weekly, Cursor model, and OpenRouter spend data on hardware.\n\nFeatures:\n- Quota Indicator action with a single limit or a combined 5-hour plus weekly widget\n- Styles: progress rings, solid status color, horizontal or vertical bars, left rail, stacked numbers, stacked bars, reset time, and reset countdown\n- Remaining or used values, optional percent symbol, usage pace, and a provider name or logo\n- Key press can open the Minibar popup, jump to that provider, or cycle selected providers\n- If Codex Minibar is closed, pressing a key starts it and the plugin reconnects\n\nRequirements:\n- Windows 10 or later and Stream Deck software 6.9 or later\n- The free Codex Minibar desktop app: https://vertopolkalf.github.io/codex-minibar/",
   "Icon": "imgs/plugin",
-  "CategoryIcon": "imgs/plugin",
+  "CategoryIcon": "imgs/category",
   "Category": "Codex Minibar",
   "CodePath": "bin/plugin.js",
   "SDKVersion": 3,
@@ -27,7 +27,7 @@
       "UUID": "com.vertopolkalf.codex-minibar.quota-indicator",
       "Name": "Quota Indicator",
       "Tooltip": "Show provider quota and reset countdown",
-      "Icon": "imgs/actions/quota-indicator",
+      "Icon": "imgs/actions/quota-indicator-icon",
       "States": [
         {
           "Image": "imgs/actions/quota-indicator"

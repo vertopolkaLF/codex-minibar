@@ -379,6 +379,11 @@ function rowsFor(provider: ProviderSnapshot, settings: ActionSettings): MetricRo
     .slice(0, 3);
 }
 
+export function watchedWindows(provider: ProviderSnapshot | null, settings: ActionSettings): WindowSnapshot[] {
+  if (!provider) return [];
+  return rowsFor(provider, settings).map(row => row.window);
+}
+
 function displayedValue(row: MetricRow, settings: ActionSettings): number | null {
   return settings.valueMode === "used" ? row.window.used_percent : row.window.remaining_percent;
 }

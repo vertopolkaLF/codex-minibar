@@ -1,0 +1,14 @@
+Codex Minibar puts live AI usage quotas on your Stream Deck. Watch remaining or used limits for Codex, Claude, Cursor, OpenCode Zen, OpenCode Go, and OpenRouter, including 5-hour, weekly, monthly, and spending windows, with reset countdowns on each key.
+
+The Quota Indicator action reads live snapshots from the Codex Minibar Windows app on the same PC and updates each key about once a second. Place as many keys as you need, choose a provider and limit in the Property Inspector, and keep session, weekly, Cursor model, and OpenRouter spend data on hardware.
+
+Features:
+- Quota Indicator action with a single limit or a combined 5-hour plus weekly widget
+- Styles: progress rings, solid status color, horizontal or vertical bars, left rail, stacked numbers, stacked bars, reset time, and reset countdown
+- Remaining or used values, optional percent symbol, usage pace, and a provider name or logo
+- Key press can open the Minibar popup, jump to that provider, or cycle selected providers
+- If Codex Minibar is closed, pressing a key starts it and the plugin reconnects
+
+Requirements:
+- Windows 10 or later and Stream Deck software 6.9 or later
+- The free Codex Minibar desktop app: https://vertopolkalf.github.io/codex-minibar/
