@@ -1,0 +1,79 @@
+name: Stream Deck plugin
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "streamdeck/**"
+      - "data/com.vertopolkalf.codex-minibar.streamDeckPlugin"
+      - ".github/workflows/streamdeck.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: streamdeck-plugin
+  cancel-in-progress: false
+
+jobs:
+  pack:
+    name: Pack plugin into data/
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compare plugin versions
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          src_file="streamdeck/com.vertopolkalf.codex-minibar.sdPlugin/manifest.json"
+          packed_file="data/com.vertopolkalf.codex-minibar.streamDeckPlugin"
+          src_version=$(jq -r '.Version' "$src_file")
+          packed_version=""
+          if [[ -f "$packed_file" ]]; then
+            packed_version=$(unzip -p "$packed_file" "com.vertopolkalf.codex-minibar.sdPlugin/manifest.json" | jq -r '.Version')
+          fi
+          echo "Source plugin version: $src_version"
+          echo "Packaged plugin version: ${packed_version:-<missing>}"
+          echo "version=$src_version" >> "$GITHUB_OUTPUT"
+          if [[ -n "$packed_version" && "$src_version" == "$packed_version" ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Packaged plugin already matches $src_version; skipping."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.check.outputs.changed == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: streamdeck/package-lock.json
+
+      - name: Install dependencies
+        if: steps.check.outputs.changed == 'true'
+        working-directory: streamdeck
+        run: npm ci
+
+      - name: Build and pack plugin
+        if: steps.check.outputs.changed == 'true'
+        working-directory: streamdeck
+        run: npm run pack
+
+      - name: Commit packaged plugin
+        if: steps.check.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/com.vertopolkalf.codex-minibar.streamDeckPlugin
+          if git diff --cached --quiet -- data/com.vertopolkalf.codex-minibar.streamDeckPlugin; then
+            echo "Packed plugin is already committed"
+            exit 0
+          fi
+          git commit -m "pack streamdeck plugin ${VERSION}"
+          git push

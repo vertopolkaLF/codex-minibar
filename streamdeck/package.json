@@ -8,7 +8,7 @@
     "dev": "streamdeck dev",
     "reload": "streamdeck dev && streamdeck restart com.vertopolkalf.codex-minibar",
     "install:reload": "npm run build && streamdeck dev && streamdeck link com.vertopolkalf.codex-minibar.sdPlugin && streamdeck restart com.vertopolkalf.codex-minibar",
-    "pack": "npm run build && streamdeck pack com.vertopolkalf.codex-minibar.sdPlugin"
+    "pack": "npm run build && streamdeck pack com.vertopolkalf.codex-minibar.sdPlugin --output ../data --force --no-update-check"
   },
   "dependencies": {
     "@elgato/streamdeck": "^2.1.2"
