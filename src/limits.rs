@@ -12,6 +12,11 @@ const FIVE_HOUR_WINDOW_MINUTES: u32 = 5 * 60;
 /// an unactivated one.
 const UNACTIVATED_RESET_TOLERANCE: Duration = Duration::minutes(5);
 
+/// Provider field name for Codex Plus Luna Reserve (`additional_rate_limits`).
+pub const GPT_RESERVE_LIMIT_ID: &str = "gpt-reserve";
+/// User-facing label for [`GPT_RESERVE_LIMIT_ID`].
+pub const LUNA_RESERVE_TITLE: &str = "Luna Reserve";
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LimitWindow {
     pub used_percent: Option<u8>,
@@ -277,6 +282,25 @@ impl RateLimits {
         self.primary.is_empty()
     }
 
+    /// True when the weekly window reports no remaining usage.
+    pub fn weekly_exhausted(&self) -> bool {
+        self.secondary.remaining_percent() == Some(0)
+    }
+
+    /// Codex Plus Luna Reserve window, when the provider reported one.
+    pub fn luna_reserve(&self) -> Option<&AdditionalLimit> {
+        self.additional_limits
+            .iter()
+            .find(|limit| limit.id.eq_ignore_ascii_case(GPT_RESERVE_LIMIT_ID))
+            .filter(|limit| !limit.window.is_empty())
+    }
+
+    /// When Codex weekly is exhausted, session/weekly widgets fall onto Luna
+    /// Reserve so the tray and popup still show a usable remaining quota.
+    pub fn codex_luna_reserve_override(&self) -> Option<&AdditionalLimit> {
+        self.weekly_exhausted().then(|| self.luna_reserve()).flatten()
+    }
+
     /// Free plans expose a single monthly window instead of a 5-hour session
     /// plus a weekly window.
     pub fn is_free_plan(&self) -> bool {
@@ -287,6 +311,9 @@ impl RateLimits {
 
     /// Window used by tray widgets that target the 5h/primary source.
     pub fn effective_primary(&self) -> &LimitWindow {
+        if let Some(reserve) = self.codex_luna_reserve_override() {
+            return &reserve.window;
+        }
         if self.five_hour_disabled() {
             &self.secondary
         } else {
@@ -445,5 +472,58 @@ mod tests {
 
         assert!(limits.is_free_plan());
         assert!(!RateLimits::default().is_free_plan());
+    }
+
+    #[test]
+    fn luna_reserve_overrides_when_weekly_is_exhausted() {
+        let limits = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(7),
+                duration_minutes: Some(300),
+                ..Default::default()
+            },
+            secondary: LimitWindow {
+                used_percent: Some(100),
+                duration_minutes: Some(10_080),
+                ..Default::default()
+            },
+            additional_limits: vec![AdditionalLimit {
+                id: GPT_RESERVE_LIMIT_ID.into(),
+                title: LUNA_RESERVE_TITLE.into(),
+                window: LimitWindow {
+                    used_percent: Some(12),
+                    duration_minutes: Some(10_080),
+                    ..Default::default()
+                },
+            }],
+            ..Default::default()
+        };
+
+        assert!(limits.weekly_exhausted());
+        assert_eq!(
+            limits.codex_luna_reserve_override().map(|limit| limit.window.used_percent),
+            Some(Some(12))
+        );
+        assert_eq!(limits.effective_primary().used_percent, Some(12));
+    }
+
+    #[test]
+    fn luna_reserve_stays_hidden_without_window_data() {
+        let limits = RateLimits {
+            secondary: LimitWindow {
+                used_percent: Some(100),
+                ..Default::default()
+            },
+            additional_limits: vec![AdditionalLimit {
+                id: GPT_RESERVE_LIMIT_ID.into(),
+                title: LUNA_RESERVE_TITLE.into(),
+                window: LimitWindow::default(),
+            }],
+            ..Default::default()
+        };
+
+        assert!(limits.weekly_exhausted());
+        assert!(limits.luna_reserve().is_none());
+        assert!(limits.codex_luna_reserve_override().is_none());
     }
 }

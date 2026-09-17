@@ -528,12 +528,20 @@ fn parse_wham_additional_limits(value: Option<&Value>) -> Vec<AdditionalLimit> {
                 return None;
             }
             Some(AdditionalLimit {
-                title: id.clone(),
+                title: additional_limit_title(&id),
                 id,
                 window,
             })
         })
         .collect()
+}
+
+fn additional_limit_title(id: &str) -> String {
+    if id.eq_ignore_ascii_case(crate::limits::GPT_RESERVE_LIMIT_ID) {
+        crate::limits::LUNA_RESERVE_TITLE.to_owned()
+    } else {
+        id.to_owned()
+    }
 }
 
 fn json_u64(value: &Value) -> Option<u64> {
@@ -1040,6 +1048,10 @@ mod tests {
         assert_eq!(parsed.reset_credits.as_ref().unwrap().available_count, 2);
         assert_eq!(parsed.additional_limits.len(), 1);
         assert_eq!(parsed.additional_limits[0].id, "gpt-reserve");
+        assert_eq!(
+            parsed.additional_limits[0].title,
+            crate::limits::LUNA_RESERVE_TITLE
+        );
         assert_eq!(parsed.additional_limits[0].window.used_percent, Some(0));
     }
 

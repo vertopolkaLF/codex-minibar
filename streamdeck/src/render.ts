@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { JsonObject } from "@elgato/utils";
 
-import type { ProviderSnapshot, SnapshotResponse, WindowSnapshot } from "./bridge";
+import type { AdditionalSnapshot, ProviderSnapshot, SnapshotResponse, WindowSnapshot } from "./bridge";
 
 export type ValueMode = "remaining" | "used";
 export type Presentation =
@@ -324,7 +324,29 @@ function additionalMatches(
   ].some(candidate => compactMetricId(candidate) === wanted);
 }
 
+function hasWindowData(window: WindowSnapshot): boolean {
+  return window.used_percent !== null || window.resets_at !== null;
+}
+
+function lunaReserveOverride(provider: ProviderSnapshot): AdditionalSnapshot | null {
+  if (provider.id !== "codex" || provider.secondary.remaining_percent !== 0) {
+    return null;
+  }
+  const reserve = provider.additional.find(item => item.id.toLowerCase() === "gpt-reserve");
+  return reserve && hasWindowData(reserve.window) ? reserve : null;
+}
+
 function metricWindow(provider: ProviderSnapshot, metricId: string): MetricRow | null {
+  const luna = lunaReserveOverride(provider);
+  if (
+    luna
+    && (metricId === `${provider.id}.primary`
+      || metricId === `${provider.id}.secondary`
+      || metricId.endsWith(".session")
+      || metricId.endsWith(".weekly"))
+  ) {
+    return { label: luna.label || "Luna Reserve", window: luna.window };
+  }
   if (metricId === `${provider.id}.primary`) return { label: "5h session", window: provider.primary };
   if (metricId === `${provider.id}.secondary`) return { label: "Weekly", window: provider.secondary };
   if (metricId.endsWith(".session")) return { label: "5h session", window: provider.primary };

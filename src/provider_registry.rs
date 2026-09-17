@@ -53,6 +53,11 @@ const CODEX_METRICS: &[MetricDescriptor] = &[
         label: "Weekly",
         source: MetricSource::Secondary,
     },
+    MetricDescriptor {
+        id: "codex.lunaReserve",
+        label: "Luna Reserve",
+        source: MetricSource::Additional("gpt-reserve"),
+    },
 ];
 
 const CLAUDE_METRICS: &[MetricDescriptor] = &[
@@ -514,6 +519,9 @@ pub enum LimitSectionKind {
 }
 
 pub fn metric_label(provider: ProviderKind, limits: &RateLimits, id: &str) -> String {
+    if uses_codex_luna_reserve_override(provider, limits, id) {
+        return crate::limits::LUNA_RESERVE_TITLE.into();
+    }
     if let Some(metric) = metric(provider, id) {
         return metric.label.into();
     }
@@ -532,6 +540,11 @@ pub fn metric_window<'a>(
 ) -> Option<&'a LimitWindow> {
     if let Some(metric) = metric(provider, id) {
         return match metric.source {
+            MetricSource::Primary | MetricSource::Secondary
+                if uses_codex_luna_reserve_override(provider, limits, id) =>
+            {
+                limits.luna_reserve().map(|limit| &limit.window)
+            }
             MetricSource::Primary => Some(&limits.primary),
             MetricSource::Secondary => Some(&limits.secondary),
             MetricSource::Additional(source_id) => limits
@@ -546,6 +559,16 @@ pub fn metric_window<'a>(
         .iter()
         .find(|limit| dynamic_metric_id(provider, &limit.id) == id)
         .map(|limit| &limit.window)
+}
+
+fn uses_codex_luna_reserve_override(provider: ProviderKind, limits: &RateLimits, id: &str) -> bool {
+    if provider != ProviderKind::Codex || limits.codex_luna_reserve_override().is_none() {
+        return false;
+    }
+    match metric(provider, id).map(|metric| metric.source) {
+        Some(MetricSource::Primary | MetricSource::Secondary) => true,
+        _ => false,
+    }
 }
 
 /// Resolves the configured metric, temporarily falling back to the first live
@@ -570,7 +593,11 @@ pub fn resolve_metric<'a>(
         if let Some(window) = metric_window(provider, limits, metric.id)
             && !window.is_empty()
         {
-            return Some((metric.id.into(), metric.label.into(), window));
+            return Some((
+                metric.id.into(),
+                metric_label(provider, limits, metric.id),
+                window,
+            ));
         }
     }
     limits.additional_limits.iter().find_map(|limit| {
@@ -805,6 +832,48 @@ mod tests {
             )
             .len(),
             0
+        );
+    }
+
+    #[test]
+    fn codex_session_and_weekly_resolve_to_luna_reserve_when_weekly_is_empty() {
+        let limits = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(7),
+                duration_minutes: Some(300),
+                ..Default::default()
+            },
+            secondary: LimitWindow {
+                used_percent: Some(100),
+                duration_minutes: Some(10_080),
+                ..Default::default()
+            },
+            additional_limits: vec![crate::limits::AdditionalLimit {
+                id: crate::limits::GPT_RESERVE_LIMIT_ID.into(),
+                title: crate::limits::LUNA_RESERVE_TITLE.into(),
+                window: LimitWindow {
+                    used_percent: Some(12),
+                    duration_minutes: Some(10_080),
+                    ..Default::default()
+                },
+            }],
+            ..Default::default()
+        };
+
+        let (session_id, session_label, session_window) =
+            resolve_metric(ProviderKind::Codex, &limits, "codex.session").unwrap();
+        let (weekly_id, weekly_label, weekly_window) =
+            resolve_metric(ProviderKind::Codex, &limits, "codex.weekly").unwrap();
+
+        assert_eq!(session_id, "codex.session");
+        assert_eq!(weekly_id, "codex.weekly");
+        assert_eq!(session_label, crate::limits::LUNA_RESERVE_TITLE);
+        assert_eq!(weekly_label, crate::limits::LUNA_RESERVE_TITLE);
+        assert_eq!(session_window.used_percent, Some(12));
+        assert_eq!(weekly_window.used_percent, Some(12));
+        assert_eq!(
+            additional_limit_brick_id(ProviderKind::Codex, "gpt-reserve"),
+            "codex.lunaReserve"
         );
     }
 }

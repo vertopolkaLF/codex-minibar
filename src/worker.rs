@@ -693,11 +693,15 @@ fn tick(
     let now = Utc::now();
     // The UI hides an absent 5h window via this same predicate. Never turn
     // "this account has no session window" into a request to activate one.
+    // Exhausted weekly also blocks auto-activation: burning a fresh 5h window
+    // cannot help until the weekly quota returns.
     let session_window_available = !limits.five_hour_disabled();
+    let weekly_blocks_auto_activation = limits.weekly_exhausted();
     let scheduled_due = session_window_available
         .then(|| scheduler::due_scheduled_activation(scheduled_activations, state, now))
         .flatten();
     let automatic_due = session_window_available
+        && !weekly_blocks_auto_activation
         && automatic_activation
         && !scheduler::auto_activation_paused(auto_activation_pauses, now)
         && !scheduler::scheduled_activation_within(
@@ -1273,6 +1277,27 @@ mod tests {
                 | WorkerEvent::ActivationSucceeded
                 | WorkerEvent::ActivationFailed(_)
         )));
+    }
+
+    #[test]
+    fn exhausted_weekly_blocks_automatic_activation_only() {
+        let mut first = limits_at(15, 0);
+        first.secondary = LimitWindow {
+            used_percent: Some(100),
+            resets_at: Some(Utc::now() + ChronoDuration::days(2)),
+            duration_minutes: Some(10_080),
+        };
+        let mut second = limits_at(20, 1);
+        second.secondary = first.secondary.clone();
+
+        let mut provider = ScriptedProvider::new(vec![first, second]);
+        let mut activator = CountingActivator(0);
+        let mut state = ActivationState::default();
+
+        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
+        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
+
+        assert_eq!(activator.0, 0);
     }
 
     struct FailingActivator;

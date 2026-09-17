@@ -316,6 +316,8 @@ pub(super) fn provider_cards(
     );
     // Claude can return extra windows such as Fable or Opus. They belong with
     // the ordinary limit cards, before banked resets, statistics, or credits.
+    // Normal session/weekly cards stay visible even when Luna Reserve is active;
+    // tray widgets remap separately via resolve_metric.
     let additional_limits = limits.additional_limits.iter().filter_map(|limit| {
         let brick_id = additional_limit_brick_id(provider, &limit.id);
         if !popup_visibility.is_visible(&brick_id, surface, show_provider_tabs) {
