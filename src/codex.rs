@@ -379,8 +379,7 @@ fn fetch_wham_reset_credits(
         .context("request Codex reset credits")?
         .into_string()
         .context("read Codex reset credits response")?;
-    let value: Value =
-        serde_json::from_str(&body).context("parse Codex reset credits response")?;
+    let value: Value = serde_json::from_str(&body).context("parse Codex reset credits response")?;
     Ok(parse_wham_reset_credits(Some(&value)))
 }
 
@@ -487,14 +486,10 @@ fn parse_wham_reset_credits(value: Option<&Value>) -> Option<RateLimitResetCredi
                 .unwrap_or_default()
                 .to_owned(),
             granted_at: parse_flexible_timestamp(
-                credit
-                    .get("granted_at")
-                    .or_else(|| credit.get("grantedAt")),
+                credit.get("granted_at").or_else(|| credit.get("grantedAt")),
             ),
             expires_at: parse_flexible_timestamp(
-                credit
-                    .get("expires_at")
-                    .or_else(|| credit.get("expiresAt")),
+                credit.get("expires_at").or_else(|| credit.get("expiresAt")),
             ),
             title: credit
                 .get("title")
@@ -545,7 +540,11 @@ fn json_u64(value: &Value) -> Option<u64> {
     value
         .as_u64()
         .or_else(|| value.as_i64().and_then(|value| u64::try_from(value).ok()))
-        .or_else(|| value.as_f64().and_then(|value| (value >= 0.0).then_some(value as u64)))
+        .or_else(|| {
+            value
+                .as_f64()
+                .and_then(|value| (value >= 0.0).then_some(value as u64))
+        })
 }
 
 fn json_i64(value: &Value) -> Option<i64> {
