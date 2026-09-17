@@ -212,9 +212,9 @@ impl CodexClient {
         let value: Value =
             serde_json::from_str(&body).context("parse Codex OAuth usage response")?;
         let mut limits = parse_wham_usage(&value, Utc::now())?;
-        let reset_credits =
-            fetch_wham_reset_credits(&agent, &credentials).unwrap_or_else(|_| limits.reset_credits);
-        limits.reset_credits = reset_credits;
+        if let Ok(reset_credits) = fetch_wham_reset_credits(&agent, &credentials) {
+            limits.reset_credits = reset_credits;
+        }
         if limits.account_name.is_none() {
             limits.account_name = local_account_name();
         }
