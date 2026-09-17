@@ -196,10 +196,13 @@ impl LimitNotificationTracker {
             reset_has_occurred(self.primary_resets_at, limits.primary.resets_at, now);
         let secondary_reset =
             reset_has_occurred(self.secondary_resets_at, limits.secondary.resets_at, now);
+        // Exhausted weekly already blocks auto-activation. A 5h reset toast is
+        // equally useless until that weekly quota comes back.
+        let notify_five_hour_reset = can_notify_five_hour_reset(limits);
 
         if primary_reset {
             self.startup_low_usage_primary = None;
-            if settings.limits_changed && !defer_primary_reset {
+            if settings.limits_changed && !defer_primary_reset && notify_five_hour_reset {
                 show("5-hour limit reset", provider.display_name());
             }
         }
@@ -247,7 +250,9 @@ impl LimitNotificationTracker {
         }
 
         self.capture(limits);
-        LimitNotificationResult { primary_reset }
+        LimitNotificationResult {
+            primary_reset: primary_reset && notify_five_hour_reset,
+        }
     }
 
     fn capture(&mut self, limits: &RateLimits) {
@@ -296,6 +301,10 @@ fn reset_minute(reset: DateTime<Utc>) -> DateTime<Utc> {
 
 fn can_notify_weekly(limits: &RateLimits) -> bool {
     !limits.is_free_plan()
+}
+
+fn can_notify_five_hour_reset(limits: &RateLimits) -> bool {
+    !limits.weekly_exhausted()
 }
 
 fn secondary_limit_label(limits: &RateLimits, provider: ProviderKind) -> String {
@@ -382,6 +391,27 @@ mod tests {
 
         assert!(!can_notify_weekly(&limits));
         assert!(can_notify_weekly(&RateLimits::default()));
+    }
+
+    #[test]
+    fn exhausted_weekly_suppresses_five_hour_reset_notifications() {
+        let limits = RateLimits {
+            secondary: LimitWindow {
+                used_percent: Some(100),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(!can_notify_five_hour_reset(&limits));
+        assert!(can_notify_five_hour_reset(&RateLimits::default()));
+        assert!(can_notify_five_hour_reset(&RateLimits {
+            secondary: LimitWindow {
+                used_percent: Some(99),
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
     }
 
     #[test]
@@ -623,6 +653,57 @@ mod tests {
                 primary_reset: true
             }
         );
+    }
+
+    #[test]
+    fn exhausted_weekly_does_not_report_a_five_hour_reset() {
+        let previous_reset = Utc.with_ymd_and_hms(2026, 7, 14, 12, 0, 0).unwrap();
+        let next_reset = Utc.with_ymd_and_hms(2026, 7, 14, 17, 0, 0).unwrap();
+        let weekly = LimitWindow {
+            used_percent: Some(100),
+            resets_at: Some(Utc.with_ymd_and_hms(2026, 7, 21, 12, 0, 0).unwrap()),
+            duration_minutes: Some(10_080),
+        };
+        let settings = NotificationSettings {
+            limits_changed: true,
+            ..Default::default()
+        };
+        let initial = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(80),
+                resets_at: Some(previous_reset),
+                ..Default::default()
+            },
+            secondary: weekly.clone(),
+            ..Default::default()
+        };
+        let updated = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(0),
+                resets_at: Some(next_reset),
+                ..Default::default()
+            },
+            secondary: weekly,
+            ..Default::default()
+        };
+        let mut tracker = LimitNotificationTracker::default();
+
+        tracker.observe_at(
+            &initial,
+            &settings,
+            ProviderKind::Codex,
+            previous_reset,
+            false,
+        );
+        let result = tracker.observe_at(
+            &updated,
+            &settings,
+            ProviderKind::Codex,
+            previous_reset,
+            false,
+        );
+
+        assert_eq!(result, LimitNotificationResult::default());
     }
 }
 
