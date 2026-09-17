@@ -4,26 +4,34 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::mpsc,
+    sync::{Arc, mpsc},
     thread,
     time::{Duration as StdDuration, Instant},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::{TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use directories::BaseDirs;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::limits::{
-    Credits, LimitWindow, RateLimitResetCredit, RateLimitResetCreditsSummary, RateLimits,
+    AdditionalLimit, Credits, LimitWindow, RateLimitResetCredit, RateLimitResetCreditsSummary,
+    RateLimits,
 };
 use crate::usage;
 use crate::worker::{Activator, LimitProvider, UsageProvider};
 
 pub const ACTIVATION_PROMPT: &str = "Reply exactly: a";
 pub const ACTIVATION_MODEL: &str = "gpt-5.6-luna";
+
+/// ChatGPT WHAM quota endpoint used by CodexBar and the Codex CLI account
+/// path. Prefer this over spawning `codex app-server` so periodic polls do not
+/// touch the Windows sandbox / LSASS path (issue #25).
+const WHAM_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+const WHAM_RESET_CREDITS_URL: &str =
+    "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 
 pub struct CodexClient {
     executable: PathBuf,
@@ -152,6 +160,68 @@ impl CodexClient {
     }
 
     pub fn read_rate_limits(&self) -> Result<RateLimits> {
+        match self.read_rate_limits_via_oauth() {
+            Ok(limits) => Ok(limits),
+            Err(oauth_error) => {
+                crate::logger::info(format!(
+                    "Codex OAuth quota unavailable ({oauth_error:#}); falling back to app-server"
+                ));
+                self.read_rate_limits_via_app_server().map_err(|cli_error| {
+                    cli_error.context(format!("OAuth quota failed: {oauth_error:#}"))
+                })
+            }
+        }
+    }
+
+    fn read_rate_limits_via_oauth(&self) -> Result<RateLimits> {
+        let credentials = load_oauth_credentials()?;
+        let tls = ureq::native_tls::TlsConnector::new().context("create Windows TLS connector")?;
+        let agent = ureq::AgentBuilder::new()
+            .timeout(self.timeout)
+            .tls_connector(Arc::new(tls))
+            .build();
+        let mut request = agent
+            .get(WHAM_USAGE_URL)
+            .set(
+                "Authorization",
+                &format!("Bearer {}", credentials.access_token),
+            )
+            .set("Accept", "application/json")
+            .set(
+                "User-Agent",
+                &format!("Codex-Minibar/{}", env!("CARGO_PKG_VERSION")),
+            );
+        if let Some(account_id) = credentials.account_id.as_deref() {
+            request = request.set("ChatGPT-Account-Id", account_id);
+        }
+        let body = match request.call() {
+            Ok(response) => response
+                .into_string()
+                .context("read Codex OAuth usage response")?,
+            Err(ureq::Error::Status(401, _)) => {
+                bail!("Codex OAuth token expired or invalid. Run `codex login`.")
+            }
+            Err(ureq::Error::Status(429, _)) => {
+                bail!("Codex usage endpoint is rate limited. Try again in a few minutes.")
+            }
+            Err(ureq::Error::Status(status, _)) => {
+                bail!("Codex OAuth usage request failed with HTTP {status}")
+            }
+            Err(error) => return Err(error).context("request Codex OAuth usage"),
+        };
+        let value: Value =
+            serde_json::from_str(&body).context("parse Codex OAuth usage response")?;
+        let mut limits = parse_wham_usage(&value, Utc::now())?;
+        if let Ok(reset_credits) = fetch_wham_reset_credits(&agent, &credentials) {
+            limits.reset_credits = reset_credits;
+        }
+        if limits.account_name.is_none() {
+            limits.account_name = local_account_name();
+        }
+        Ok(limits)
+    }
+
+    fn read_rate_limits_via_app_server(&self) -> Result<RateLimits> {
         // Desktop Codex dropped the legacy `untrusted` approval policy; only
         // `never` / `on-request` remain. Keep `-a never` so rate-limit polls
         // never block on an interactive approval prompt.
@@ -222,6 +292,14 @@ struct AuthFile {
 #[derive(Deserialize)]
 struct AuthTokens {
     id_token: Option<String>,
+    access_token: Option<String>,
+    account_id: Option<String>,
+}
+
+#[derive(Clone)]
+struct OAuthCredentials {
+    access_token: String,
+    account_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -230,9 +308,35 @@ struct IdTokenClaims {
     email: Option<String>,
 }
 
+fn load_oauth_credentials() -> Result<OAuthCredentials> {
+    let path = auth_json_path().context("resolve Codex auth.json")?;
+    let contents = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+    let auth: AuthFile =
+        serde_json::from_slice(&contents).with_context(|| format!("parse {}", path.display()))?;
+    let tokens = auth
+        .tokens
+        .context("Codex auth.json has no OAuth tokens; run `codex login`")?;
+    let access_token = tokens
+        .access_token
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .context("Codex auth.json has no access token; run `codex login`")?;
+    let account_id = tokens
+        .account_id
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    Ok(OAuthCredentials {
+        access_token,
+        account_id,
+    })
+}
+
+fn auth_json_path() -> Option<PathBuf> {
+    BaseDirs::new().map(|dirs| dirs.home_dir().join(".codex").join("auth.json"))
+}
+
 fn local_account_name() -> Option<String> {
-    let home = BaseDirs::new()?.home_dir().to_path_buf();
-    let contents = std::fs::read(home.join(".codex").join("auth.json")).ok()?;
+    let contents = fs::read(auth_json_path()?).ok()?;
     let auth: AuthFile = serde_json::from_slice(&contents).ok()?;
     let token = auth.tokens?.id_token?;
     account_name_from_id_token(&token)
@@ -250,6 +354,215 @@ fn non_empty(value: Option<String>) -> Option<String> {
         let value = value.trim();
         (!value.is_empty()).then(|| value.to_owned())
     })
+}
+
+fn fetch_wham_reset_credits(
+    agent: &ureq::Agent,
+    credentials: &OAuthCredentials,
+) -> Result<Option<RateLimitResetCreditsSummary>> {
+    let mut request = agent
+        .get(WHAM_RESET_CREDITS_URL)
+        .set(
+            "Authorization",
+            &format!("Bearer {}", credentials.access_token),
+        )
+        .set("Accept", "application/json")
+        .set(
+            "User-Agent",
+            &format!("Codex-Minibar/{}", env!("CARGO_PKG_VERSION")),
+        );
+    if let Some(account_id) = credentials.account_id.as_deref() {
+        request = request.set("ChatGPT-Account-Id", account_id);
+    }
+    let body = request
+        .call()
+        .context("request Codex reset credits")?
+        .into_string()
+        .context("read Codex reset credits response")?;
+    let value: Value = serde_json::from_str(&body).context("parse Codex reset credits response")?;
+    Ok(parse_wham_reset_credits(Some(&value)))
+}
+
+pub fn parse_wham_usage(response: &Value, sampled_at: DateTime<Utc>) -> Result<RateLimits> {
+    let rate_limit = response
+        .get("rate_limit")
+        .context("missing rate_limit in Codex OAuth usage response")?;
+    let primary = parse_wham_window(rate_limit.get("primary_window"));
+    let primary_window_is_unactivated = primary.looks_like_unactivated_five_hour(sampled_at);
+    let account_name = response
+        .get("email")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    Ok(RateLimits {
+        primary,
+        secondary: parse_wham_window(rate_limit.get("secondary_window")),
+        sampled_at,
+        primary_window_is_unactivated,
+        account_name,
+        plan_type: response
+            .get("plan_type")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        limit_name: None,
+        secondary_limit_name: None,
+        credits: parse_wham_credits(response.get("credits")),
+        reset_credits: parse_wham_reset_credits(response.get("rate_limit_reset_credits")),
+        additional_limits: parse_wham_additional_limits(response.get("additional_rate_limits")),
+        spending: None,
+        openrouter_accounts: Default::default(),
+        usage: Default::default(),
+    }
+    .normalized(sampled_at))
+}
+
+fn parse_wham_window(value: Option<&Value>) -> LimitWindow {
+    let Some(value) = value.filter(|value| !value.is_null()) else {
+        return LimitWindow::default();
+    };
+    let used_percent = value
+        .get("used_percent")
+        .and_then(json_u64)
+        .and_then(|value| u8::try_from(value.min(100)).ok());
+    let resets_at = value
+        .get("reset_at")
+        .and_then(json_i64)
+        .and_then(|timestamp| Utc.timestamp_opt(timestamp, 0).single());
+    let duration_minutes = value
+        .get("limit_window_seconds")
+        .and_then(json_u64)
+        .map(|seconds| (seconds / 60) as u32)
+        .filter(|minutes| *minutes > 0);
+    LimitWindow {
+        used_percent,
+        resets_at,
+        duration_minutes,
+    }
+}
+
+fn parse_wham_credits(value: Option<&Value>) -> Credits {
+    Credits {
+        has_credits: value
+            .and_then(|v| v.get("has_credits"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        unlimited: value
+            .and_then(|v| v.get("unlimited"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        balance: value.and_then(|v| v.get("balance")).and_then(|balance| {
+            balance
+                .as_str()
+                .map(str::to_owned)
+                .or_else(|| balance.as_f64().map(|value| value.to_string()))
+                .or_else(|| balance.as_i64().map(|value| value.to_string()))
+        }),
+    }
+}
+
+fn parse_wham_reset_credits(value: Option<&Value>) -> Option<RateLimitResetCreditsSummary> {
+    let value = value.filter(|value| !value.is_null())?;
+    let available_count = value
+        .get("available_count")
+        .or_else(|| value.get("availableCount"))
+        .and_then(json_u64)
+        .and_then(|count| u32::try_from(count).ok())
+        .unwrap_or(0);
+    let credits = value
+        .get("credits")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|credit| RateLimitResetCredit {
+            reset_type: credit
+                .get("reset_type")
+                .or_else(|| credit.get("resetType"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            status: credit
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            granted_at: parse_flexible_timestamp(
+                credit.get("granted_at").or_else(|| credit.get("grantedAt")),
+            ),
+            expires_at: parse_flexible_timestamp(
+                credit.get("expires_at").or_else(|| credit.get("expiresAt")),
+            ),
+            title: credit
+                .get("title")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            description: credit
+                .get("description")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        })
+        .collect();
+    Some(RateLimitResetCreditsSummary {
+        available_count,
+        credits,
+    })
+}
+
+fn parse_wham_additional_limits(value: Option<&Value>) -> Vec<AdditionalLimit> {
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let id = entry
+                .get("limit_name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())?
+                .to_owned();
+            let window = parse_wham_window(
+                entry
+                    .pointer("/rate_limit/primary_window")
+                    .or_else(|| entry.get("primary_window")),
+            );
+            if window == LimitWindow::default() {
+                return None;
+            }
+            Some(AdditionalLimit {
+                title: id.clone(),
+                id,
+                window,
+            })
+        })
+        .collect()
+}
+
+fn json_u64(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_i64().and_then(|value| u64::try_from(value).ok()))
+        .or_else(|| {
+            value
+                .as_f64()
+                .and_then(|value| (value >= 0.0).then_some(value as u64))
+        })
+}
+
+fn json_i64(value: &Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        .or_else(|| value.as_f64().map(|value| value as i64))
+}
+
+fn parse_flexible_timestamp(value: Option<&Value>) -> Option<DateTime<Utc>> {
+    let value = value?;
+    if let Some(timestamp) = json_i64(value) {
+        return Utc.timestamp_opt(timestamp, 0).single();
+    }
+    value
+        .as_str()
+        .and_then(|raw| DateTime::parse_from_rfc3339(raw).ok())
+        .map(|parsed| parsed.with_timezone(&Utc))
 }
 
 fn send_request(stdin: &mut impl Write, id: u64, method: &str, params: Value) -> Result<()> {
@@ -678,12 +991,84 @@ mod tests {
     }
 
     #[test]
+    fn parses_wham_oauth_usage_windows_and_credits() {
+        let sampled_at = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
+        let value = json!({
+            "email": "ada@example.com",
+            "plan_type": "plus",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 12,
+                    "limit_window_seconds": 18_000,
+                    "reset_at": 1_700_003_600
+                },
+                "secondary_window": {
+                    "used_percent": 44,
+                    "limit_window_seconds": 604_800,
+                    "reset_at": 1_700_475_600
+                }
+            },
+            "credits": {
+                "has_credits": true,
+                "unlimited": false,
+                "balance": "12.5"
+            },
+            "rate_limit_reset_credits": {
+                "available_count": 2
+            },
+            "additional_rate_limits": [{
+                "limit_name": "gpt-reserve",
+                "rate_limit": {
+                    "primary_window": {
+                        "used_percent": 0,
+                        "limit_window_seconds": 604_800,
+                        "reset_at": 1_700_604_800
+                    }
+                }
+            }]
+        });
+
+        let parsed = parse_wham_usage(&value, sampled_at).unwrap();
+        assert_eq!(parsed.account_name.as_deref(), Some("ada@example.com"));
+        assert_eq!(parsed.plan_type.as_deref(), Some("plus"));
+        assert_eq!(parsed.primary.used_percent, Some(12));
+        assert_eq!(parsed.primary.duration_minutes, Some(300));
+        assert_eq!(parsed.secondary.used_percent, Some(44));
+        assert_eq!(parsed.secondary.duration_minutes, Some(10_080));
+        assert!(parsed.credits.has_credits);
+        assert_eq!(parsed.credits.balance.as_deref(), Some("12.5"));
+        assert_eq!(parsed.reset_credits.as_ref().unwrap().available_count, 2);
+        assert_eq!(parsed.additional_limits.len(), 1);
+        assert_eq!(parsed.additional_limits[0].id, "gpt-reserve");
+        assert_eq!(parsed.additional_limits[0].window.used_percent, Some(0));
+    }
+
+    #[test]
+    fn parses_wham_reset_credit_iso_timestamps() {
+        let value = json!({
+            "available_count": 1,
+            "credits": [{
+                "reset_type": "codex_rate_limits",
+                "status": "available",
+                "granted_at": "2026-09-04T01:14:53.340415Z",
+                "expires_at": "2026-10-04T01:14:53.340415Z",
+                "title": "Full reset"
+            }]
+        });
+        let summary = parse_wham_reset_credits(Some(&value)).unwrap();
+        assert_eq!(summary.available_count, 1);
+        assert_eq!(summary.credits[0].status, "available");
+        assert_eq!(summary.credits[0].title.as_deref(), Some("Full reset"));
+        assert!(summary.credits[0].expires_at.is_some());
+    }
+
+    #[test]
     #[ignore = "requires an installed and authenticated Codex CLI"]
     fn reads_live_rate_limits() {
         let executable = first_available(None).expect("Codex CLI should be discoverable");
         let limits = CodexClient::new(executable)
             .read_rate_limits()
-            .expect("Codex app-server should return rate limits");
+            .expect("Codex quota should return rate limits");
         assert!(limits.primary.used_percent.is_some() || limits.primary.resets_at.is_some());
     }
 
