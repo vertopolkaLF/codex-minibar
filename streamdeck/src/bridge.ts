@@ -37,6 +37,12 @@ export interface AdditionalSnapshot {
   window: WindowSnapshot;
 }
 
+export interface MetricSnapshot {
+  id: string;
+  label: string;
+  window: WindowSnapshot;
+}
+
 export interface ProviderSnapshot {
   id: string;
   name: string;
@@ -48,6 +54,7 @@ export interface ProviderSnapshot {
   primary: WindowSnapshot;
   secondary: WindowSnapshot;
   additional: AdditionalSnapshot[];
+  metrics: MetricSnapshot[];
 }
 
 export interface SnapshotResponse {

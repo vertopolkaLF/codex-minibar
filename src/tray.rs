@@ -76,15 +76,15 @@ fn widget_tooltip(widget: &TrayWidget, limits: &ProviderLimits) -> String {
             continue;
         };
         let provider_limits = limits.get(provider);
-        let Some((_, label, window)) =
-            provider_registry::resolve_metric(provider, provider_limits, &indicator.metric_id)
+        let Some(metric) =
+            crate::widget_data::resolve_metric(provider, provider_limits, &indicator.metric_id)
         else {
             continue;
         };
-        let value = percent(window, indicator.limit_value)
+        let value = percent(&metric.window, indicator.limit_value)
             .map(|value| format!("{value}%"))
             .unwrap_or_else(|| "?".into());
-        let item = format!("{label} {value}");
+        let item = format!("{} {value}", metric.label);
         if let Some((_, items)) = rows
             .iter_mut()
             .find(|(row_provider, _)| *row_provider == provider)
@@ -280,15 +280,15 @@ fn resolve_indicators(
         .take(3)
         .filter_map(|indicator| {
             let provider = indicator.provider()?;
-            let (_, _, window) = provider_registry::resolve_metric(
+            let metric = crate::widget_data::resolve_metric(
                 provider,
                 limits.get(provider),
                 &indicator.metric_id,
             )?;
-            let remaining = window.remaining_percent();
+            let remaining = metric.window.remaining_percent();
             Some(ResolvedIndicator {
-                displayed_percent: percent(window, indicator.limit_value),
-                reset: window.resets_at,
+                displayed_percent: percent(&metric.window, indicator.limit_value),
+                reset: metric.window.resets_at,
                 color: indicator_color(indicator, provider, remaining, accent),
             })
         })

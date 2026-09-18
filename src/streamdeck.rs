@@ -18,10 +18,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    limits::{LimitWindow, ProviderLimits},
     popup_window::AppState,
     provider_registry,
     settings::{ProviderKind, Settings},
+    widget_data::{self, ProviderSnapshot},
 };
 
 const PLUGIN_FILE_NAME: &str = "com.vertopolkalf.codex-minibar.streamDeckPlugin";
@@ -143,36 +143,6 @@ struct ProviderInfo {
 struct MetricInfo {
     id: String,
     label: String,
-}
-
-#[derive(Debug, Serialize)]
-struct ProviderSnapshot {
-    id: String,
-    name: String,
-    icon: String,
-    brand_rgb: [u8; 3],
-    account_name: Option<String>,
-    plan_type: Option<String>,
-    sampled_at: DateTime<Utc>,
-    primary: WindowSnapshot,
-    secondary: WindowSnapshot,
-    additional: Vec<AdditionalSnapshot>,
-}
-
-#[derive(Debug, Serialize)]
-struct WindowSnapshot {
-    used_percent: Option<u8>,
-    remaining_percent: Option<u8>,
-    resets_at: Option<DateTime<Utc>>,
-    duration_minutes: Option<u32>,
-}
-
-#[derive(Debug, Serialize)]
-struct AdditionalSnapshot {
-    id: String,
-    metric_id: String,
-    label: String,
-    window: WindowSnapshot,
 }
 
 /// Starts the loopback server and returns the queue consumed by the UI-owned
@@ -371,47 +341,8 @@ fn build_snapshot(state: &AppState) -> Response {
             .unwrap_or_default(),
         providers: ProviderKind::ALL
             .into_iter()
-            .map(|provider| provider_snapshot(provider, &limits))
+            .map(|provider| widget_data::snapshot(provider, &limits))
             .collect(),
-    }
-}
-
-fn provider_snapshot(provider: ProviderKind, limits: &ProviderLimits) -> ProviderSnapshot {
-    let descriptor = provider_registry::descriptor(provider);
-    let snapshot = limits.get(provider);
-    ProviderSnapshot {
-        id: descriptor.id.into(),
-        name: descriptor.display_name.into(),
-        icon: provider_registry::icon(provider).into(),
-        brand_rgb: [
-            descriptor.brand_rgb.0,
-            descriptor.brand_rgb.1,
-            descriptor.brand_rgb.2,
-        ],
-        account_name: snapshot.account_name.clone(),
-        plan_type: snapshot.plan_type.clone(),
-        sampled_at: snapshot.sampled_at,
-        primary: window_snapshot(&snapshot.primary),
-        secondary: window_snapshot(&snapshot.secondary),
-        additional: snapshot
-            .additional_limits
-            .iter()
-            .map(|additional| AdditionalSnapshot {
-                id: additional.id.clone(),
-                metric_id: provider_registry::additional_limit_brick_id(provider, &additional.id),
-                label: additional.title.clone(),
-                window: window_snapshot(&additional.window),
-            })
-            .collect(),
-    }
-}
-
-fn window_snapshot(window: &LimitWindow) -> WindowSnapshot {
-    WindowSnapshot {
-        used_percent: window.used_percent,
-        remaining_percent: window.remaining_percent(),
-        resets_at: window.resets_at,
-        duration_minutes: window.duration_minutes,
     }
 }
 
@@ -425,6 +356,7 @@ fn write_response(stream: &mut TcpStream, response: &Response) -> io::Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::limits::LimitWindow;
 
     #[test]
     fn window_snapshot_exposes_remaining_without_provider_credentials() {
@@ -433,7 +365,7 @@ mod tests {
             resets_at: None,
             duration_minutes: Some(300),
         };
-        let snapshot = window_snapshot(&window);
+        let snapshot = widget_data::window_snapshot(&window);
         assert_eq!(snapshot.used_percent, Some(25));
         assert_eq!(snapshot.remaining_percent, Some(75));
     }

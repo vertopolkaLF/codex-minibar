@@ -34,4 +34,5 @@ pub mod tray;
 pub mod updater;
 pub mod usage;
 pub mod usage_overview;
+pub mod widget_data;
 pub mod worker;

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { JsonObject } from "@elgato/utils";
 
-import type { AdditionalSnapshot, ProviderSnapshot, SnapshotResponse, WindowSnapshot } from "./bridge";
+import type { ProviderSnapshot, SnapshotResponse, WindowSnapshot } from "./bridge";
 
 export type ValueMode = "remaining" | "used";
 export type Presentation =
@@ -304,68 +304,20 @@ function textColorForBackground(color: string): string {
 
 const DEPLETED_RING = "#e64a48";
 
-function compactMetricId(id: string): string {
-  return id.toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-function additionalMatches(
-  item: { id: string; metric_id: string },
-  metricId: string,
-  providerId: string,
-): boolean {
-  if (item.metric_id === metricId || item.id === metricId) return true;
-  if (metricId === `${providerId}.additional.${item.id}`) return true;
-  const wanted = compactMetricId(metricId);
-  return [
-    item.id,
-    item.metric_id,
-    `${providerId}.${item.id}`,
-    `${providerId}.additional.${item.id}`,
-  ].some(candidate => compactMetricId(candidate) === wanted);
-}
-
 function hasWindowData(window: WindowSnapshot): boolean {
   return window.used_percent !== null || window.resets_at !== null;
 }
 
-function lunaReserveOverride(provider: ProviderSnapshot): AdditionalSnapshot | null {
-  if (provider.id !== "codex" || provider.secondary.remaining_percent !== 0) {
-    return null;
-  }
-  const reserve = provider.additional.find(item => item.id.toLowerCase() === "gpt-reserve");
-  return reserve && hasWindowData(reserve.window) ? reserve : null;
-}
-
 function metricWindow(provider: ProviderSnapshot, metricId: string): MetricRow | null {
-  const luna = lunaReserveOverride(provider);
-  if (
-    luna
-    && (metricId === `${provider.id}.primary`
-      || metricId === `${provider.id}.secondary`
-      || metricId.endsWith(".session")
-      || metricId.endsWith(".weekly"))
-  ) {
-    return { label: luna.label || "Luna Reserve", window: luna.window };
-  }
-  if (metricId === `${provider.id}.primary`) return { label: "5h session", window: provider.primary };
-  if (metricId === `${provider.id}.secondary`) return { label: "Weekly", window: provider.secondary };
-  if (metricId.endsWith(".session")) return { label: "5h session", window: provider.primary };
-  if (metricId.endsWith(".weekly")) return { label: "Weekly", window: provider.secondary };
-  if (metricId === "cursor.auto") return { label: "Cursor Models", window: provider.secondary };
-  const extra = provider.additional.find(item => additionalMatches(item, metricId, provider.id));
-  return extra ? { label: extra.label, window: extra.window } : null;
+  const metric = provider.metrics.find(item => item.id === metricId);
+  return metric ? { label: metric.label, window: metric.window } : null;
 }
 
 function defaultMetricIds(provider: ProviderSnapshot): string[] {
-  const ids: string[] = [];
-  if (provider.primary.used_percent !== null || provider.primary.resets_at !== null) {
-    ids.push(`${provider.id}.session`);
-  }
-  if (provider.secondary.used_percent !== null || provider.secondary.resets_at !== null) {
-    ids.push(`${provider.id}.weekly`);
-  }
-  ids.push(...provider.additional.map(item => item.metric_id));
-  return ids.slice(0, 3);
+  return provider.metrics
+    .filter(metric => hasWindowData(metric.window))
+    .map(metric => metric.id)
+    .slice(0, 3);
 }
 
 function rowsFor(provider: ProviderSnapshot, settings: ActionSettings): MetricRow[] {
