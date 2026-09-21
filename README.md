@@ -82,11 +82,17 @@ Browser-session access is not used.
    The installer is per-user and does not require administrator rights.
 3. Alternatively, download the matching `portable.zip`, extract it, and run
    `codex-minibar.exe`.
+   The NSIS installer also registers `minibar` as a launch alias for the same app.
 4. Find the icon in the notification area. If it is hidden, Windows may have tucked it under
    the `^` overflow menu, because apparently that is where delightful UX goes to die.
 
 On first run, Codex Minibar discovers Codex automatically. Open **Settings** from the tray
 menu if you need to choose another executable or adjust the tray widgets and notifications.
+
+To start the troubleshooting handoff, run `codex-minibar trouble` or `minibar trouble`.
+The command scans for Codex and Claude Code, asks which one should investigate, then opens
+a terminal with the shared Codex Minibar troubleshooting prompt. The same handoff is
+available from **Settings → Log → Run Troubleshoot with AI**.
 
 ## Updating
 

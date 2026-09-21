@@ -298,7 +298,9 @@ impl RateLimits {
     /// When Codex weekly is exhausted, session/weekly widgets fall onto Luna
     /// Reserve so the tray and popup still show a usable remaining quota.
     pub fn codex_luna_reserve_override(&self) -> Option<&AdditionalLimit> {
-        self.weekly_exhausted().then(|| self.luna_reserve()).flatten()
+        self.weekly_exhausted()
+            .then(|| self.luna_reserve())
+            .flatten()
     }
 
     /// Free plans expose a single monthly window instead of a 5-hour session
@@ -501,7 +503,9 @@ mod tests {
 
         assert!(limits.weekly_exhausted());
         assert_eq!(
-            limits.codex_luna_reserve_override().map(|limit| limit.window.used_percent),
+            limits
+                .codex_luna_reserve_override()
+                .map(|limit| limit.window.used_percent),
             Some(Some(12))
         );
         assert_eq!(limits.effective_primary().used_percent, Some(12));

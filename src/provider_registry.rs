@@ -565,10 +565,10 @@ fn uses_codex_luna_reserve_override(provider: ProviderKind, limits: &RateLimits,
     if provider != ProviderKind::Codex || limits.codex_luna_reserve_override().is_none() {
         return false;
     }
-    match metric(provider, id).map(|metric| metric.source) {
-        Some(MetricSource::Primary | MetricSource::Secondary) => true,
-        _ => false,
-    }
+    matches!(
+        metric(provider, id).map(|metric| metric.source),
+        Some(MetricSource::Primary | MetricSource::Secondary)
+    )
 }
 
 /// Resolves the configured metric, temporarily falling back to the first live

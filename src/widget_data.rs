@@ -101,10 +101,10 @@ pub fn snapshot(provider: ProviderKind, limits: &ProviderLimits) -> ProviderSnap
         .collect::<Vec<_>>();
     for additional in provider_limits.additional_limits.iter() {
         let metric_id = provider_registry::additional_limit_brick_id(provider, &additional.id);
-        if metrics.iter().all(|metric| metric.id != metric_id) {
-            if let Some(metric) = metric_snapshot(provider, provider_limits, &metric_id) {
-                metrics.push(metric);
-            }
+        if metrics.iter().all(|metric| metric.id != metric_id)
+            && let Some(metric) = metric_snapshot(provider, provider_limits, &metric_id)
+        {
+            metrics.push(metric);
         }
     }
 
