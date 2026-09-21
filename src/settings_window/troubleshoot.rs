@@ -38,14 +38,11 @@ pub(super) fn picker_overlay(
         .enabled(selected.is_some())
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .on_click(move || {
-            if let Some(tool) = selected.clone() {
-                if let Err(error) = crate::troubleshoot::launch_selected(&tool) {
-                    eprintln!("failed to start troubleshooting terminal: {error:#}");
-                    crate::notifications::show(
-                        "Troubleshooting could not start",
-                        &error.to_string(),
-                    );
-                }
+            if let Some(tool) = selected.clone()
+                && let Err(error) = crate::troubleshoot::launch_selected(&tool)
+            {
+                eprintln!("failed to start troubleshooting terminal: {error:#}");
+                crate::notifications::show("Troubleshooting could not start", &error.to_string());
             }
             set_for_run.call(None);
         })
