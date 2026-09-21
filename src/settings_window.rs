@@ -59,6 +59,7 @@ mod state;
 #[cfg(test)]
 mod tests;
 mod tray;
+mod troubleshoot;
 
 use navigation::{
     RenderedPage, SettingsNavMode, Tab, fade_to_rendered_page, first_provider_in_order,
@@ -374,6 +375,8 @@ pub fn render(
     let (expanded_provider_cards, set_expanded_provider_cards) =
         cx.use_async_state(Vec::<String>::new());
     let (provider_dialog, set_provider_dialog) = cx.use_async_state(None::<ProviderDialog>);
+    let (troubleshoot_picker, set_troubleshoot_picker) =
+        cx.use_async_state(None::<crate::troubleshoot::ToolPickerState>);
     let (provider_notice, set_provider_notice) = cx.use_async_state(None::<String>);
     let (provider_status_revision, set_provider_status_revision) = cx.use_async_state(0_u64);
     let (codex_path, set_codex_path) = cx.use_state(
@@ -955,6 +958,7 @@ pub fn render(
         set_notify_on_update: set_notify_on_update.clone(),
         set_forced_reset_feed_enabled: set_forced_reset_feed_enabled.clone(),
         set_forced_reset_notifications: set_forced_reset_notifications.clone(),
+        set_troubleshoot_picker: set_troubleshoot_picker.clone(),
         set_streamdeck_install_phase: set_streamdeck_install_phase.clone(),
         theme_navigation_guard: theme_navigation_guard.clone(),
         theme_navigation_guard_timer: theme_navigation_guard_timer.clone(),
@@ -1153,6 +1157,10 @@ pub fn render(
             )
         });
 
+    let troubleshoot_overlay = troubleshoot_picker
+        .as_ref()
+        .map(|picker| troubleshoot::picker_overlay(picker, set_troubleshoot_picker.clone()));
+
     let mica = {
         let mut host = swap_chain_panel()
             .grid_row_span(1)
@@ -1180,7 +1188,17 @@ pub fn render(
             .relative_align_bottom(),
     ];
     let provider_overlay_open = provider_overlay.is_some();
+    let troubleshoot_overlay_open = troubleshoot_overlay.is_some();
     if let Some(overlay) = provider_overlay {
+        layers.push(
+            overlay
+                .relative_align_left()
+                .relative_align_right()
+                .relative_align_top()
+                .relative_align_bottom(),
+        );
+    }
+    if let Some(overlay) = troubleshoot_overlay {
         layers.push(
             overlay
                 .relative_align_left()
@@ -1205,6 +1223,13 @@ pub fn render(
                 move || dismiss.call(None),
             ));
         }
+    } else if troubleshoot_overlay_open {
+        let dismiss = set_troubleshoot_picker.clone();
+        root = root.keyboard_accelerator(KeyboardAccelerator::new(
+            VirtualKey::Escape,
+            VirtualKeyModifiers::None,
+            move || dismiss.call(None),
+        ));
     } else if editing_tray_indicator.is_some() {
         let dismiss_editing = set_editing_tray_indicator.clone();
         let dismiss_visible = set_indicator_modal_visible.clone();

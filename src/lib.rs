@@ -31,6 +31,7 @@ pub mod store;
 pub mod streamdeck;
 pub mod theme;
 pub mod tray;
+pub mod troubleshoot;
 pub mod updater;
 pub mod usage;
 pub mod usage_overview;

@@ -16,7 +16,7 @@ use codex_minibar::{
     scheduler::ActivationState,
     settings::Settings,
     single_instance::{self, SingleInstance},
-    store,
+    store, troubleshoot,
     updater::{
         UpdateController, show_post_update_success_if_needed, sync_installed_display_version,
     },
@@ -176,6 +176,15 @@ fn show_error(message: &str) {
 }
 
 fn main() {
+    if troubleshoot::is_cli_request() {
+        if let Err(error) = troubleshoot::launch_cli_picker() {
+            show_error(&format!(
+                "Could not start Codex Minibar troubleshooting: {error:#}"
+            ));
+        }
+        return;
+    }
+
     let instance = match SingleInstance::acquire_or_activate_existing() {
         Ok(Some(instance)) => instance,
         Ok(None) => return,

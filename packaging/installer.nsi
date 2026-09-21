@@ -137,6 +137,13 @@ Section "Install"
   CreateShortCut "$SMPROGRAMS\{{PRODUCT_NAME}}\{{PRODUCT_NAME}}.lnk" "$INSTDIR\codex-minibar.exe"
   CreateShortCut "$DESKTOP\{{PRODUCT_NAME}}.lnk" "$INSTDIR\codex-minibar.exe"
 
+  ; Make both executable names discoverable by ShellExecute/Win+R without
+  ; adding the per-user install directory to PATH.
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\App Paths\codex-minibar.exe" "" "$INSTDIR\codex-minibar.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\App Paths\codex-minibar.exe" "Path" "$INSTDIR"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\App Paths\minibar.exe" "" "$INSTDIR\codex-minibar.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\App Paths\minibar.exe" "Path" "$INSTDIR"
+
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
   WriteRegStr SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\{{PRODUCT_NAME}} {{ARCH}}" \
@@ -162,6 +169,9 @@ Section "Uninstall"
   Delete "$DESKTOP\{{PRODUCT_NAME}}.lnk"
   Delete "$SMPROGRAMS\{{PRODUCT_NAME}}\{{PRODUCT_NAME}}.lnk"
   RMDir "$SMPROGRAMS\{{PRODUCT_NAME}}"
+
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\App Paths\codex-minibar.exe"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\App Paths\minibar.exe"
 
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Codex Minibar"
   DeleteRegKey SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\{{PRODUCT_NAME}} {{ARCH}}"
