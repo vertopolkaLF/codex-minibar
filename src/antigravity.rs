@@ -326,6 +326,7 @@ fn read_remote_limits(agent: &ureq::Agent, base: &str, access_token: &str) -> Re
     let available_observations = observations_from_models(&available);
     let verified = match post_json(agent, base, "retrieveUserQuota", access_token, &request) {
         Ok(value) => observations_from_buckets(&value, &model_labels),
+        Err(error) if crate::worker::is_rate_limited_error(&error) => return Err(error),
         Err(_) => Vec::new(),
     };
     let observations = choose_observations(verified, available_observations)?;
@@ -395,6 +396,11 @@ fn post_json(
         }
         Err(ureq::Error::Status(403, _)) => {
             bail!("Antigravity limits are not available for this account")
+        }
+        Err(ureq::Error::Status(429, _)) => {
+            return Err(crate::worker::rate_limit_error(
+                "Antigravity quota request was rate limited (HTTP 429).",
+            ));
         }
         Err(ureq::Error::Status(status, _)) => {
             bail!("Antigravity quota request failed with HTTP {status}")

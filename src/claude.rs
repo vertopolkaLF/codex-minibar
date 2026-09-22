@@ -279,7 +279,9 @@ impl ClaudeClient {
                 bail!("Claude OAuth request was unauthorized. {sign_in_hint}")
             }
             Err(ureq::Error::Status(429, _)) => {
-                bail!("Claude usage endpoint is rate limited. Try again in a few minutes.")
+                return Err(crate::worker::rate_limit_error(
+                    "Claude usage endpoint is rate limited. Try again in a few minutes.",
+                ));
             }
             Err(ureq::Error::Status(status, _)) => {
                 bail!("Claude OAuth usage request failed with HTTP {status}")
@@ -298,7 +300,11 @@ impl ClaudeClient {
             // Account metadata stays separate from quota reads. Cache it for
             // 30 minutes and refresh immediately when any reset changes. One
             // profile request covers both the name and the plan fallback.
-            let profile = fetch_profile(&agent, &credentials.access_token).ok();
+            let profile = match fetch_profile(&agent, &credentials.access_token) {
+                Ok(profile) => Some(profile),
+                Err(error) if crate::worker::is_rate_limited_error(&error) => return Err(error),
+                Err(_) => None,
+            };
             self.account_cache.record(
                 profile
                     .as_ref()

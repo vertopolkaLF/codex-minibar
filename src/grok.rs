@@ -83,6 +83,11 @@ impl LimitProvider for GrokClient {
             Err(ureq::Error::Status(401 | 403, _)) => {
                 bail!("Grok session is not authorized; run `grok login`")
             }
+            Err(ureq::Error::Status(429, _)) => {
+                return Err(crate::worker::rate_limit_error(
+                    "Grok subscription quota request was rate limited (HTTP 429).",
+                ));
+            }
             Err(ureq::Error::Status(status, _)) => {
                 bail!("Grok subscription quota request failed with HTTP {status}")
             }

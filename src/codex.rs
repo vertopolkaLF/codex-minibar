@@ -162,6 +162,7 @@ impl CodexClient {
     pub fn read_rate_limits(&self) -> Result<RateLimits> {
         match self.read_rate_limits_via_oauth() {
             Ok(limits) => Ok(limits),
+            Err(error) if crate::worker::is_rate_limited_error(&error) => Err(error),
             Err(oauth_error) => {
                 crate::logger::info(format!(
                     "Codex OAuth quota unavailable ({oauth_error:#}); falling back to app-server"
@@ -202,7 +203,9 @@ impl CodexClient {
                 bail!("Codex OAuth token expired or invalid. Run `codex login`.")
             }
             Err(ureq::Error::Status(429, _)) => {
-                bail!("Codex usage endpoint is rate limited. Try again in a few minutes.")
+                return Err(crate::worker::rate_limit_error(
+                    "Codex usage endpoint is rate limited. Try again in a few minutes.",
+                ));
             }
             Err(ureq::Error::Status(status, _)) => {
                 bail!("Codex OAuth usage request failed with HTTP {status}")
@@ -212,8 +215,10 @@ impl CodexClient {
         let value: Value =
             serde_json::from_str(&body).context("parse Codex OAuth usage response")?;
         let mut limits = parse_wham_usage(&value, Utc::now())?;
-        if let Ok(reset_credits) = fetch_wham_reset_credits(&agent, &credentials) {
-            limits.reset_credits = reset_credits;
+        match fetch_wham_reset_credits(&agent, &credentials) {
+            Ok(reset_credits) => limits.reset_credits = reset_credits,
+            Err(error) if crate::worker::is_rate_limited_error(&error) => return Err(error),
+            Err(_) => {}
         }
         if let Some(account_name) = local_account_name() {
             limits.account_name = Some(account_name);

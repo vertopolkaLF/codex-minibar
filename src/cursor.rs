@@ -127,14 +127,35 @@ impl CursorClient {
                     .join()
                     .unwrap_or_else(|_| Err(anyhow!("Cursor summary worker panicked"))),
                 sand.join()
-                    .unwrap_or_else(|_| Err(anyhow!("Cursor Grok Bot worker panicked")))
-                    .ok(),
+                    .unwrap_or_else(|_| Err(anyhow!("Cursor Grok Bot worker panicked"))),
             )
         });
+        if let Err(error) = &usage
+            && crate::worker::is_rate_limited_error(error)
+        {
+            return Err(crate::worker::rate_limit_error(format!(
+                "Cursor quota request was rate limited: {error:#}"
+            )));
+        }
+        if let Err(error) = &summary
+            && crate::worker::is_rate_limited_error(error)
+        {
+            return Err(crate::worker::rate_limit_error(format!(
+                "Cursor quota summary was rate limited: {error:#}"
+            )));
+        }
+        if let Err(error) = &sand
+            && crate::worker::is_rate_limited_error(error)
+        {
+            return Err(crate::worker::rate_limit_error(format!(
+                "Cursor Grok Bot quota was rate limited: {error:#}"
+            )));
+        }
+        let sand = sand.as_ref().ok();
         match (usage, summary) {
-            (Ok(usage), Ok(summary)) => map_usage(Some(&usage), Some(&summary), sand.as_ref()),
-            (Ok(usage), Err(_)) => map_usage(Some(&usage), None, sand.as_ref()),
-            (Err(_), Ok(summary)) => map_usage(None, Some(&summary), sand.as_ref()),
+            (Ok(usage), Ok(summary)) => map_usage(Some(&usage), Some(&summary), sand),
+            (Ok(usage), Err(_)) => map_usage(Some(&usage), None, sand),
+            (Err(_), Ok(summary)) => map_usage(None, Some(&summary), sand),
             (Err(usage_error), Err(summary_error)) => Err(usage_error).context(format!(
                 "Cursor usage summary fallback also failed: {summary_error:#}"
             )),
@@ -243,7 +264,14 @@ impl CursorClient {
                 })
                 .context("read cached Cursor usage after export failure")?;
                 if cached.has_data() {
-                    Ok(cached)
+                    if crate::worker::is_rate_limited_error(&error) {
+                        Ok(UsageStatistics {
+                            error: Some("Cursor usage export was rate limited (HTTP 429).".into()),
+                            ..cached
+                        })
+                    } else {
+                        Ok(cached)
+                    }
                 } else {
                     Err(error.context("refresh Cursor usage export with no cached data"))
                 }

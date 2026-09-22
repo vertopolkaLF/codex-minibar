@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, TimeZone, Utc};
 use serde::Deserialize;
 
@@ -108,6 +108,11 @@ fn read_key_with_agent(
             if status == 401 && body_indicates_expired_api_key(&body) {
                 return Ok(KeyReadOutcome::Expired);
             }
+            if status == 429 {
+                return Err(crate::worker::rate_limit_error(
+                    "OpenRouter API-key usage request was rate limited (HTTP 429).",
+                ));
+            }
             bail!("request OpenRouter API-key usage: {API_URL}: status code {status}");
         }
         Err(error) => Err(error).context("request OpenRouter API-key usage"),
@@ -175,6 +180,7 @@ struct AccountFetchResult {
     api_keys: Vec<OpenRouterApiKeySnapshot>,
     credits: Option<AccountCredits>,
     cache_updates: Vec<(String, CachedOpenRouterKey)>,
+    rate_limited: bool,
 }
 
 /// Fetch directory, every `/key`, and credits concurrently for one account.
@@ -189,14 +195,14 @@ fn fetch_openrouter_account(
         .clone()
         .or_else(|| account.api_keys.first().map(|key| key.value.clone()));
 
-    let (key_directory, live_results, credits) = std::thread::scope(|scope| {
+    let (key_directory, live_results, credits, rate_limited) = std::thread::scope(|scope| {
         let directory = account.management_key.as_ref().map(|key| {
             let agent = agent.clone();
             let key = key.clone();
             scope.spawn(move || {
                 // Key display names must come only from this account's management
                 // key directory. Never fall back to an ordinary API key here.
-                read_key_directory_with_agent(&agent, &key).unwrap_or_default()
+                read_key_directory_with_agent(&agent, &key)
             })
         });
         let keys: Vec<_> = account
@@ -210,12 +216,19 @@ fn fetch_openrouter_account(
             .collect();
         let credits = credits_key.map(|key| {
             let agent = agent.clone();
-            scope.spawn(move || read_account_credits_with_agent(&agent, &key).ok().flatten())
+            scope.spawn(move || read_account_credits_with_agent(&agent, &key))
         });
 
-        let key_directory = directory
-            .map(|handle| handle.join().unwrap_or_default())
-            .unwrap_or_default();
+        let directory = directory.map(|handle| {
+            handle
+                .join()
+                .unwrap_or_else(|_| Err(anyhow!("OpenRouter key directory worker panicked")))
+        });
+        let mut rate_limited = directory
+            .as_ref()
+            .and_then(|result| result.as_ref().err())
+            .is_some_and(crate::worker::is_rate_limited_error);
+        let key_directory = directory.and_then(Result::ok).unwrap_or_default();
         let live_results: Vec<Result<KeyReadOutcome>> = keys
             .into_iter()
             .map(|handle| {
@@ -224,8 +237,23 @@ fn fetch_openrouter_account(
                     .unwrap_or_else(|_| bail!("OpenRouter API-key worker panicked"))
             })
             .collect();
-        let balance = credits.and_then(|handle| handle.join().ok()).flatten();
-        (key_directory, live_results, balance)
+        rate_limited |= live_results.iter().any(|result| {
+            result
+                .as_ref()
+                .err()
+                .is_some_and(crate::worker::is_rate_limited_error)
+        });
+        let credits = credits.map(|handle| {
+            handle
+                .join()
+                .unwrap_or_else(|_| Err(anyhow!("OpenRouter credits worker panicked")))
+        });
+        rate_limited |= credits
+            .as_ref()
+            .and_then(|result| result.as_ref().err())
+            .is_some_and(crate::worker::is_rate_limited_error);
+        let balance = credits.and_then(Result::ok).flatten();
+        (key_directory, live_results, balance, rate_limited)
     });
 
     let mut api_keys = Vec::new();
@@ -336,6 +364,7 @@ fn fetch_openrouter_account(
         api_keys,
         credits,
         cache_updates,
+        rate_limited,
     }
 }
 
@@ -361,10 +390,17 @@ impl LimitProvider for OpenRouterClient {
                         api_keys: Vec::new(),
                         credits: None,
                         cache_updates: Vec::new(),
+                        rate_limited: false,
                     })
                 })
                 .collect()
         });
+
+        if fetched.iter().any(|account| account.rate_limited) {
+            return Err(crate::worker::rate_limit_error(
+                "OpenRouter account usage request was rate limited (HTTP 429).",
+            ));
+        }
 
         let mut accounts = Vec::new();
         for result in fetched {

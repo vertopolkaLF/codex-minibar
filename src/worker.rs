@@ -1,7 +1,7 @@
 use std::{
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, Sender},
     },
@@ -21,6 +21,98 @@ use crate::{
 
 const UNACTIVATED_CONFIRMATION_INTERVAL: Duration = Duration::from_secs(30);
 const ACTIVATION_CONFIRM_GAP: Duration = Duration::from_secs(10);
+const RATE_LIMIT_FIRST_PAUSE: Duration = Duration::from_secs(5 * 60);
+const RATE_LIMIT_ESCALATED_PAUSE: Duration = Duration::from_secs(15 * 60);
+const RATE_LIMIT_ESCALATION_WINDOW: Duration = Duration::from_secs(5 * 60);
+
+#[derive(Debug)]
+pub(crate) struct ProviderRateLimitResponse;
+
+impl std::fmt::Display for ProviderRateLimitResponse {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("provider returned HTTP 429")
+    }
+}
+
+impl std::error::Error for ProviderRateLimitResponse {}
+
+pub(crate) fn rate_limit_error(message: impl Into<String>) -> anyhow::Error {
+    anyhow::Error::new(ProviderRateLimitResponse).context(message.into())
+}
+
+pub(crate) fn is_rate_limited_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.downcast_ref::<ProviderRateLimitResponse>().is_some()
+            || matches!(
+                cause.downcast_ref::<ureq::Error>(),
+                Some(ureq::Error::Status(429, _))
+            )
+    })
+}
+
+#[derive(Default)]
+struct ProviderRateLimitPause {
+    last_429_at: Option<Instant>,
+    paused_until: Option<Instant>,
+}
+
+impl ProviderRateLimitPause {
+    fn active_until(&self, now: Instant) -> Option<Instant> {
+        self.paused_until.filter(|deadline| *deadline > now)
+    }
+
+    fn record_429(&mut self, now: Instant) -> (Instant, Duration) {
+        let repeated = self.last_429_at.is_some_and(|last| {
+            now.saturating_duration_since(last) <= RATE_LIMIT_ESCALATION_WINDOW
+        });
+        let duration = if repeated {
+            RATE_LIMIT_ESCALATED_PAUSE
+        } else {
+            RATE_LIMIT_FIRST_PAUSE
+        };
+        self.last_429_at = Some(now);
+        let deadline = now + duration;
+        let paused_until = self
+            .paused_until
+            .map_or(deadline, |previous| previous.max(deadline));
+        self.paused_until = Some(paused_until);
+        (paused_until, paused_until.saturating_duration_since(now))
+    }
+}
+
+fn active_rate_limit_pause(
+    pause: &Arc<Mutex<ProviderRateLimitPause>>,
+    now: Instant,
+) -> Option<Instant> {
+    pause
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .active_until(now)
+}
+
+fn record_provider_429(pause: &Arc<Mutex<ProviderRateLimitPause>>, now: Instant) -> Duration {
+    pause
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .record_429(now)
+        .1
+}
+
+fn usage_reports_rate_limit(usage: &UsageStatistics) -> bool {
+    fn message_reports_rate_limit(message: &str) -> bool {
+        let message = message.to_ascii_lowercase();
+        message.contains("rate limited")
+            || message.contains("http 429")
+            || message.contains("status 429")
+            || message.contains("status code 429")
+    }
+
+    usage
+        .error
+        .as_deref()
+        .is_some_and(message_reports_rate_limit)
+        || usage.accounts.values().any(usage_reports_rate_limit)
+}
 
 fn effective_limit_poll_interval(
     configured: Duration,
@@ -73,6 +165,8 @@ pub trait Activator: Send + 'static {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WorkerCommand {
     Refresh,
+    /// Wakes the sibling task after this provider's shared 429 cooldown changes.
+    RateLimitPauseChanged,
     ClearUsageData(u64),
     ResumeUsageRefresh(u64),
     SetLimitRefreshInterval(Duration),
@@ -272,10 +366,13 @@ fn start_worker_with_channels(
     let (limit_commands, limit_commands_rx) = mpsc::channel();
     let (usage_commands, usage_commands_rx) = mpsc::channel();
     let limits_ready = Arc::new(AtomicBool::new(usage_provider.refresh_without_limits()));
+    let rate_limit_pause = Arc::new(Mutex::new(ProviderRateLimitPause::default()));
 
     let limit_join = {
         let event_sender = event_sender.clone();
         let limits_ready = Arc::clone(&limits_ready);
+        let rate_limit_pause = Arc::clone(&rate_limit_pause);
+        let usage_commands = usage_commands.clone();
         thread::spawn(move || {
             run_limit_task(
                 provider,
@@ -288,14 +385,18 @@ fn start_worker_with_channels(
                 limit_commands_rx,
                 event_sender,
                 limits_ready,
+                rate_limit_pause,
+                usage_commands,
             )
         })
     };
     let usage_join = {
         let event_sender = event_sender.clone();
+        let rate_limit_pause = Arc::clone(&rate_limit_pause);
+        let limit_commands = limit_commands.clone();
         thread::spawn(move || {
             enter_background_processing_mode();
-            run_usage_task(
+            run_usage_task_with_rate_limit(
                 usage_provider,
                 history_retention_days,
                 usage_refresh_interval,
@@ -303,6 +404,8 @@ fn start_worker_with_channels(
                 usage_commands_rx,
                 event_sender,
                 limits_ready,
+                rate_limit_pause,
+                limit_commands,
             )
         })
     };
@@ -320,6 +423,7 @@ fn start_worker_with_channels(
                     let _ = limit_commands.send(WorkerCommand::Refresh);
                     let _ = usage_commands.send(WorkerCommand::Refresh);
                 }
+                WorkerCommand::RateLimitPauseChanged => {}
                 WorkerCommand::ClearUsageData(generation) => {
                     let _ = usage_commands.send(WorkerCommand::ClearUsageData(generation));
                 }
@@ -392,16 +496,29 @@ fn run_limit_task(
     commands: Receiver<WorkerCommand>,
     events: Sender<WorkerEvent>,
     limits_ready: Arc<AtomicBool>,
+    rate_limit_pause: Arc<Mutex<ProviderRateLimitPause>>,
+    usage_commands: Sender<WorkerCommand>,
 ) {
     let mut state = ActivationState::load_or_default(&state_path).unwrap_or_default();
     // This worker belongs to one provider, so its deadline and any retry stay
     // provider-local. A failing provider cannot wake another provider's loop.
     let mut next_poll = Instant::now();
+    let mut manual_refresh_requested = false;
     loop {
-        if next_poll <= Instant::now() {
+        let now = Instant::now();
+        if manual_refresh_requested || next_poll <= now {
+            let manual_refresh = manual_refresh_requested;
+            let pause_before_request = active_rate_limit_pause(&rate_limit_pause, now);
+            if !manual_refresh && let Some(paused_until) = pause_before_request {
+                next_poll = next_poll.max(paused_until);
+                continue;
+            }
+            manual_refresh_requested = false;
+
             // Schedule from the end of each request. A manual refresh replaces
-            // the previous deadline instead of leaving a stale timer behind.
+            // a regular deadline only when no rate-limit pause is active.
             let _ = events.send(WorkerEvent::RequestStarted(RequestKind::Limits));
+            let mut rate_limited = false;
             match tick(
                 &mut provider,
                 &mut activator,
@@ -424,16 +541,33 @@ fn run_limit_task(
                     let _ = events.send(WorkerEvent::RequestFinished(RequestKind::Limits));
                 }
                 Err(error) => {
+                    rate_limited = is_rate_limited_error(&error);
                     let _ = events.send(WorkerEvent::PollFailed(error.to_string()));
                     let _ = events.send(WorkerEvent::RequestFinished(RequestKind::Limits));
                 }
             }
-            next_poll = Instant::now()
-                + effective_limit_poll_interval(poll_interval, automatic_activation, &state);
+            let completed_at = Instant::now();
+            if rate_limited {
+                let remaining = record_provider_429(&rate_limit_pause, completed_at);
+                let _ = usage_commands.send(WorkerCommand::RateLimitPauseChanged);
+                crate::logger::info(format!(
+                    "Provider quota poll received HTTP 429; pausing this provider for {} minutes",
+                    remaining.as_secs().div_ceil(60)
+                ));
+            }
+            // A manual request may probe during a pause, but a successful
+            // probe must not clear or restart the existing cooldown. A new
+            // 429 response can still escalate it through record_429 above.
+            if !(manual_refresh && pause_before_request.is_some() && !rate_limited) {
+                next_poll = completed_at
+                    + effective_limit_poll_interval(poll_interval, automatic_activation, &state);
+            }
             continue;
         }
 
-        match commands.recv_timeout(next_poll.saturating_duration_since(Instant::now())) {
+        let wake_at = active_rate_limit_pause(&rate_limit_pause, now)
+            .map_or(next_poll, |paused_until| next_poll.max(paused_until));
+        match commands.recv_timeout(wake_at.saturating_duration_since(now)) {
             Ok(WorkerCommand::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
             Ok(WorkerCommand::SetAutomaticActivation(enabled)) => {
                 let changed = automatic_activation != enabled;
@@ -462,9 +596,9 @@ fn run_limit_task(
                 next_poll = Instant::now()
                     + effective_limit_poll_interval(poll_interval, automatic_activation, &state);
             }
-            Ok(WorkerCommand::Refresh) | Err(RecvTimeoutError::Timeout) => {
-                next_poll = Instant::now();
-            }
+            Ok(WorkerCommand::Refresh) => manual_refresh_requested = true,
+            Ok(WorkerCommand::RateLimitPauseChanged) => {}
+            Err(RecvTimeoutError::Timeout) => {}
             Ok(WorkerCommand::ClearUsageData(_)) | Ok(WorkerCommand::ResumeUsageRefresh(_)) => {}
             Ok(WorkerCommand::SetHistoryRetentionDays(_))
             | Ok(WorkerCommand::SetUsageRefreshInterval(_))
@@ -473,7 +607,7 @@ fn run_limit_task(
     }
 }
 
-fn run_usage_task(
+fn run_usage_task_with_rate_limit(
     mut provider: impl UsageProvider,
     mut history_retention_days: u16,
     mut usage_refresh_interval: Duration,
@@ -481,6 +615,8 @@ fn run_usage_task(
     commands: Receiver<WorkerCommand>,
     events: Sender<WorkerEvent>,
     limits_ready: Arc<AtomicBool>,
+    rate_limit_pause: Arc<Mutex<ProviderRateLimitPause>>,
+    limit_commands: Sender<WorkerCommand>,
 ) {
     let load_cached_usage_when_disabled = provider.load_cached_usage_when_disabled();
     // Cached aggregates are a fast local read and make the popup useful before
@@ -529,6 +665,7 @@ fn run_usage_task(
                 usage_refresh_interval = interval.max(Duration::from_secs(60));
             }
             Ok(WorkerCommand::Refresh)
+            | Ok(WorkerCommand::RateLimitPauseChanged)
             | Ok(WorkerCommand::SetLimitRefreshInterval(_))
             | Ok(WorkerCommand::SetAutomaticActivation(_))
             | Ok(WorkerCommand::SetScheduledActivations(_))
@@ -551,6 +688,7 @@ fn run_usage_task(
     // limit task. Otherwise every settings update wakes this task and turns a
     // ten-minute maintenance scan into a tight loop.
     let mut paused_after_clear = None::<u64>;
+    let mut manual_refresh_requested = false;
     let mut usage_identity = provider.account_identity();
     loop {
         // `None` is an unreadable identity sample, not a logout. Ignore it so a
@@ -603,26 +741,52 @@ fn run_usage_task(
             }
             continue;
         }
-        if paused_after_clear.is_none() && next_refresh <= Instant::now() {
+        let now = Instant::now();
+        if paused_after_clear.is_none() && (manual_refresh_requested || next_refresh <= now) {
+            let manual_refresh = manual_refresh_requested;
+            let pause_before_request = active_rate_limit_pause(&rate_limit_pause, now);
+            if !manual_refresh && let Some(paused_until) = pause_before_request {
+                next_refresh = next_refresh.max(paused_until);
+                continue;
+            }
+            manual_refresh_requested = false;
+
             let _ = events.send(WorkerEvent::RequestStarted(RequestKind::Usage));
             #[cfg(not(test))]
             let _ = crate::pricing::refresh_if_stale();
-            match provider.refresh_usage_statistics(history_retention_days) {
+            let rate_limited = match provider.refresh_usage_statistics(history_retention_days) {
                 Ok(usage) => {
+                    let rate_limited = usage_reports_rate_limit(&usage);
                     let _ = events.send(WorkerEvent::UsageUpdated(usage));
+                    rate_limited
                 }
                 Err(error) => {
+                    let rate_limited = is_rate_limited_error(&error);
                     let _ = events.send(WorkerEvent::UsageRefreshFailed(error.to_string()));
+                    rate_limited
                 }
-            }
+            };
             let _ = events.send(WorkerEvent::RequestFinished(RequestKind::Usage));
-            next_refresh = Instant::now() + usage_refresh_interval;
+            let completed_at = Instant::now();
+            if rate_limited {
+                let remaining = record_provider_429(&rate_limit_pause, completed_at);
+                let _ = limit_commands.send(WorkerCommand::RateLimitPauseChanged);
+                crate::logger::info(format!(
+                    "Provider usage refresh received HTTP 429; pausing this provider for {} minutes",
+                    remaining.as_secs().div_ceil(60)
+                ));
+            }
+            if !(manual_refresh && pause_before_request.is_some() && !rate_limited) {
+                next_refresh = completed_at + usage_refresh_interval;
+            }
             continue;
         }
 
+        let wake_at = active_rate_limit_pause(&rate_limit_pause, now)
+            .map_or(next_refresh, |paused_until| next_refresh.max(paused_until));
         match commands.recv_timeout(
-            next_refresh
-                .saturating_duration_since(Instant::now())
+            wake_at
+                .saturating_duration_since(now)
                 .min(provider.identity_poll_interval()),
         ) {
             Ok(WorkerCommand::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
@@ -649,11 +813,7 @@ fn run_usage_task(
                 next_refresh = Instant::now();
             }
             Err(RecvTimeoutError::Timeout) => {}
-            Ok(WorkerCommand::Refresh) => {
-                if paused_after_clear.is_none() {
-                    next_refresh = Instant::now();
-                }
-            }
+            Ok(WorkerCommand::Refresh) => manual_refresh_requested = true,
             Ok(WorkerCommand::ClearUsageData(generation)) => {
                 if let Err(error) = crate::store::with_store(|store| store.clear_usage_data()) {
                     eprintln!("failed to clear usage data: {error:#}");
@@ -674,9 +834,35 @@ fn run_usage_task(
             Ok(WorkerCommand::SetLimitRefreshInterval(_))
             | Ok(WorkerCommand::SetAutomaticActivation(_))
             | Ok(WorkerCommand::SetScheduledActivations(_))
-            | Ok(WorkerCommand::SetAutoActivationPauses(_)) => {}
+            | Ok(WorkerCommand::SetAutoActivationPauses(_))
+            | Ok(WorkerCommand::RateLimitPauseChanged) => {}
         }
     }
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+fn run_usage_task(
+    provider: impl UsageProvider,
+    history_retention_days: u16,
+    usage_refresh_interval: Duration,
+    usage_collection_enabled: bool,
+    commands: Receiver<WorkerCommand>,
+    events: Sender<WorkerEvent>,
+    limits_ready: Arc<AtomicBool>,
+) {
+    let (limit_commands, _limit_commands_rx) = mpsc::channel();
+    run_usage_task_with_rate_limit(
+        provider,
+        history_retention_days,
+        usage_refresh_interval,
+        usage_collection_enabled,
+        commands,
+        events,
+        limits_ready,
+        Arc::new(Mutex::new(ProviderRateLimitPause::default())),
+        limit_commands,
+    );
 }
 
 fn tick(
