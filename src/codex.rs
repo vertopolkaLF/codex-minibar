@@ -215,8 +215,8 @@ impl CodexClient {
         if let Ok(reset_credits) = fetch_wham_reset_credits(&agent, &credentials) {
             limits.reset_credits = reset_credits;
         }
-        if limits.account_name.is_none() {
-            limits.account_name = local_account_name();
+        if let Some(account_name) = local_account_name() {
+            limits.account_name = Some(account_name);
         }
         Ok(limits)
     }
