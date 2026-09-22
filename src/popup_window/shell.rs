@@ -113,6 +113,8 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let (hovered_usage_stats, set_hovered_usage_stats) = cx.use_state(None::<UsageStatsHover>);
     let (hovered_forced_reset_home, set_hovered_forced_reset_home) = cx.use_state(false);
     let (hovered_forced_reset_provider, set_hovered_forced_reset_provider) = cx.use_state(false);
+    let (reset_card_reveal, set_reset_card_reveal) = cx.use_async_state(ResetCardReveal::default());
+    let (hovered_reset_card, set_hovered_reset_card) = cx.use_state(None::<String>);
     // Relative timestamps need an occasional render tick while the popup is
     // visible. `prepare_show_on_ui_thread` requests an immediate render on
     // every open, so there is no reason to reconcile the entire hidden WinUI
@@ -491,6 +493,10 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                             provider_error,
                             hovered_forced_reset_home,
                             Some(set_hovered_forced_reset_home.clone()),
+                            Some(&reset_card_reveal),
+                            Some(set_reset_card_reveal.clone()),
+                            hovered_reset_card.as_deref(),
+                            Some(set_hovered_reset_card.clone()),
                         ))
                         .spacing(6.0)
                         .with_key(format!(
@@ -596,6 +602,10 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                         provider_error,
                         hovered_forced_reset_provider,
                         Some(set_hovered_forced_reset_provider.clone()),
+                        Some(&reset_card_reveal),
+                        Some(set_reset_card_reveal.clone()),
+                        hovered_reset_card.as_deref(),
+                        Some(set_hovered_reset_card.clone()),
                     ))
                     .spacing(6.0)
                     .with_key(format!(

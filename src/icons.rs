@@ -28,6 +28,9 @@ pub fn geom(name: &str) -> IconGeom {
         "fluent-drag" => {
             include_str!("../assets/icons/fluent-re-order-dots-vertical-16-filled.svg")
         }
+        "fluent-chevron-down" => {
+            include_str!("../assets/icons/fluent-chevron-down-16-regular.svg")
+        }
         "fluent-folder" => include_str!("../assets/icons/fluent-folder-16-filled.svg"),
         "fluent-chart" => {
             include_str!("../assets/icons/fluent-data-histogram-24-filled.svg")

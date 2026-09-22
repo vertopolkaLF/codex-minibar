@@ -1,5 +1,64 @@
 use super::*;
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct ResetCardReveal {
+    key: Option<String>,
+    open: bool,
+    progress: f64,
+}
+
+static RESET_CARD_ANIMATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn toggle_reset_card_reveal(
+    current: ResetCardReveal,
+    set_reveal: AsyncSetState<ResetCardReveal>,
+    key: String,
+) {
+    let same_card = current.key.as_deref() == Some(key.as_str());
+    let open = !same_card || !current.open;
+    let from = if same_card { current.progress } else { 0.0 };
+    let to = if open { 1.0 } else { 0.0 };
+    let generation = RESET_CARD_ANIMATION.fetch_add(1, Ordering::Relaxed) + 1;
+    let duration = crate::theme::duration(crate::theme::CONTROL_NORMAL_ANIMATION);
+    if duration.is_zero() {
+        set_reveal.call(ResetCardReveal {
+            key: open.then_some(key),
+            open,
+            progress: to,
+        });
+        return;
+    }
+    set_reveal.call(ResetCardReveal {
+        key: Some(key.clone()),
+        open,
+        progress: from,
+    });
+    thread::spawn(move || {
+        let started = Instant::now();
+        loop {
+            if RESET_CARD_ANIMATION.load(Ordering::Relaxed) != generation {
+                return;
+            }
+            let t = (started.elapsed().as_secs_f64() / duration.as_secs_f64()).min(1.0);
+            let eased = 1.0 - (1.0 - t).powi(3);
+            let progress = from + (to - from) * eased;
+            set_reveal.call(ResetCardReveal {
+                key: if t >= 1.0 && !open {
+                    None
+                } else {
+                    Some(key.clone())
+                },
+                open,
+                progress,
+            });
+            if t >= 1.0 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(16));
+        }
+    });
+}
+
 fn card_metadata(value: impl Into<String>, alignment: HorizontalAlignment) -> Element {
     caption(value)
         .foreground(ThemeRef::TertiaryText)
@@ -40,6 +99,10 @@ pub(super) fn provider_cards(
     provider_error: Option<(&str, Callback<()>)>,
     forced_reset_hovered: bool,
     set_forced_reset_hovered: Option<SetState<bool>>,
+    reset_card_reveal: Option<&ResetCardReveal>,
+    set_reset_card_reveal: Option<AsyncSetState<ResetCardReveal>>,
+    hovered_reset_card: Option<&str>,
+    set_hovered_reset_card: Option<SetState<Option<String>>>,
 ) -> Vec<Element> {
     let (monthly_label, primary_label, secondary_label) = match provider {
         ProviderKind::Cursor => ("Cursor Models", "Cursor Models", "Cursor Models"),
@@ -355,9 +418,18 @@ pub(super) fn provider_cards(
     if popup_visibility.is_visible(&resets_brick_id(provider), surface, show_provider_tabs)
         && limits.available_reset_count() > 0
     {
+        let expansion_key = format!("{}-{surface:?}", provider.id());
+        let hovered = hovered_reset_card == Some(expansion_key.as_str());
         cards.push(
-            reset_credits_card(limits)
-                .with_key(format!("{}-banked-resets", provider.display_name())),
+            reset_credits_card(
+                limits,
+                reset_card_reveal.cloned().unwrap_or_default(),
+                hovered,
+                set_reset_card_reveal,
+                set_hovered_reset_card,
+                expansion_key,
+            )
+            .with_key(format!("{}-banked-resets", provider.display_name())),
         );
     }
     if has_usage_statistics {
@@ -1449,7 +1521,17 @@ pub(super) fn credits_card(limits: &RateLimits) -> Element {
     .into()
 }
 
-pub(super) fn reset_credits_card(limits: &RateLimits) -> Element {
+pub(super) fn reset_credits_card(
+    limits: &RateLimits,
+    reveal: ResetCardReveal,
+    hovered: bool,
+    set_reveal: Option<AsyncSetState<ResetCardReveal>>,
+    set_hovered: Option<SetState<Option<String>>>,
+    expansion_key: String,
+) -> Element {
+    let current_card = reveal.key.as_deref() == Some(expansion_key.as_str());
+    let expanded = current_card && reveal.open;
+    let reveal_progress = if current_card { reveal.progress } else { 0.0 };
     let count = limits.available_reset_count();
     let count_label = if count == 1 {
         "1 Banked Reset".into()
@@ -1473,36 +1555,206 @@ pub(super) fn reset_credits_card(limits: &RateLimits) -> Element {
         |expires_at| card_status_row("Expires in", format_reset_in(Some(expires_at))),
     );
 
-    border(
-        grid((
+    let available = limits
+        .reset_credits
+        .as_ref()
+        .map(|summary| {
+            summary
+                .credits
+                .iter()
+                .filter(|credit| credit.status.eq_ignore_ascii_case("available"))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let expandable =
+        count > 1 && available.len() > 1 && set_reveal.is_some() && set_hovered.is_some();
+    let title: Element = if expandable {
+        hstack((
             text_block(count_label)
                 .font_weight(600)
-                .foreground(ThemeRef::Accent)
-                .vertical_alignment(VerticalAlignment::Center),
-            vstack((
-                card_metadata(expiration_date, HorizontalAlignment::Right),
-                expiration_status,
+                .foreground(ThemeRef::Accent),
+            border(crate::icons::element(
+                "fluent-chevron-down",
+                16.0,
+                Color::rgb(138, 138, 138),
             ))
-            .spacing(1.0)
-            .horizontal_alignment(HorizontalAlignment::Right)
-            .vertical_alignment(VerticalAlignment::Bottom)
-            .grid_column(1),
+            .rotation(if expanded { 180.0 } else { 0.0 })
+            .with_rotation_transition(crate::theme::duration(crate::theme::CONTROL_FAST_ANIMATION)),
         ))
-        .columns([GridLength::Star(1.0), GridLength::Auto])
-        .rows([GridLength::Auto])
-        .horizontal_alignment(HorizontalAlignment::Stretch),
-    )
-    .corner_radius(f64::from(popup::CARD_CORNER_RADIUS_DIP))
-    .padding(Thickness {
-        left: 16.0,
-        top: 12.0,
-        right: 16.0,
-        bottom: 12.0,
-    })
-    .background(ThemeRef::CardBackground)
-    .border_thickness(Thickness::uniform(1.0))
-    .border_brush(ThemeRef::CardStroke)
-    .into()
+        .spacing(8.0)
+        .vertical_alignment(VerticalAlignment::Center)
+        .into()
+    } else {
+        text_block(count_label)
+            .font_weight(600)
+            .foreground(ThemeRef::Accent)
+            .vertical_alignment(VerticalAlignment::Center)
+            .into()
+    };
+    let header_content = grid((
+        title,
+        vstack((
+            card_metadata(expiration_date, HorizontalAlignment::Right),
+            expiration_status,
+        ))
+        .spacing(1.0)
+        .horizontal_alignment(HorizontalAlignment::Right)
+        .vertical_alignment(VerticalAlignment::Bottom)
+        .grid_column(1),
+    ))
+    .columns([GridLength::Star(1.0), GridLength::Auto])
+    .rows([GridLength::Auto])
+    .horizontal_alignment(HorizontalAlignment::Stretch);
+    let header: Element = if expandable {
+        let radius = f64::from(popup::CARD_CORNER_RADIUS_DIP);
+        let hover_radii = if reveal_progress > 0.0 {
+            CornerRadii {
+                top_left: radius,
+                top_right: radius,
+                bottom_right: 0.0,
+                bottom_left: 0.0,
+            }
+        } else {
+            CornerRadii::uniform(radius)
+        };
+        let set_reveal = set_reveal.expect("expandable card has state setter");
+        let set_hovered = set_hovered.expect("expandable card has hover setter");
+        let set_on_enter = set_hovered.clone();
+        let enter_key = expansion_key.clone();
+        let click_key = expansion_key.clone();
+        relative_panel::<Vec<Element>>(vec![
+            border(Element::Empty)
+                .background(ThemeRef::SubtleFill)
+                .opacity(if hovered { 1.0 } else { 0.0 })
+                .with_opacity_transition(crate::theme::duration(
+                    crate::theme::CONTROL_FASTER_ANIMATION,
+                ))
+                .corner_radii(hover_radii)
+                .relative_align_left()
+                .relative_align_right()
+                .relative_align_top()
+                .relative_align_bottom()
+                .into(),
+            border(header_content)
+                .padding(Thickness {
+                    left: 16.0,
+                    top: 12.0,
+                    right: 16.0,
+                    bottom: 12.0,
+                })
+                .background(Color::transparent())
+                .relative_align_left()
+                .relative_align_right()
+                .relative_align_top()
+                .relative_align_bottom()
+                .into(),
+        ])
+        .background(Color::transparent())
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .on_pointer_entered(move |_| set_on_enter.call(Some(enter_key.clone())))
+        .on_pointer_exited(move || set_hovered.call(None))
+        .on_tapped(move || {
+            toggle_reset_card_reveal(reveal.clone(), set_reveal.clone(), click_key.clone())
+        })
+        .tooltip(if expanded {
+            "Hide resets"
+        } else {
+            "Show all resets"
+        })
+        .into()
+    } else {
+        border(header_content)
+            .padding(Thickness {
+                left: 16.0,
+                top: 12.0,
+                right: 16.0,
+                bottom: 12.0,
+            })
+            .into()
+    };
+    let mut content: Vec<Element> = vec![header];
+    if expandable && (expanded || reveal_progress > 0.0) {
+        let available_count = available.len();
+        let mut rows: Vec<Element> = Vec::with_capacity(available_count * 2 + 1);
+        rows.push(
+            border(Element::Empty)
+                .height(1.0)
+                .background(ThemeRef::CardStroke)
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .into(),
+        );
+        for (index, credit) in available.into_iter().enumerate() {
+            if index > 0 {
+                rows.push(
+                    border(Element::Empty)
+                        .height(1.0)
+                        .background(ThemeRef::CardStroke)
+                        .horizontal_alignment(HorizontalAlignment::Stretch)
+                        .into(),
+                );
+            }
+            let name = credit
+                .title
+                .as_deref()
+                .filter(|title| !title.trim().is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("Banked Reset {}", index + 1));
+            let date = credit.expires_at.map_or_else(
+                || "No expiration date".into(),
+                |expires_at| {
+                    let local = expires_at.with_timezone(&Local);
+                    format!(
+                        "{}, {}",
+                        local.format("%b %-d"),
+                        TimeFormat::current().format_hm(local)
+                    )
+                },
+            );
+            rows.push(
+                grid((
+                    text_block(name)
+                        .foreground(ThemeRef::SecondaryText)
+                        .vertical_alignment(VerticalAlignment::Center),
+                    vstack((
+                        card_metadata(date, HorizontalAlignment::Right),
+                        credit.expires_at.map_or_else(
+                            || card_metadata("Available to use", HorizontalAlignment::Right),
+                            |expires_at| {
+                                card_status_row("Expires in", format_reset_in(Some(expires_at)))
+                            },
+                        ),
+                    ))
+                    .spacing(1.0)
+                    .horizontal_alignment(HorizontalAlignment::Right)
+                    .grid_column(1),
+                ))
+                .columns([GridLength::Star(1.0), GridLength::Auto])
+                .rows([GridLength::Auto])
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .into(),
+            );
+        }
+        let body = border(vstack(rows).spacing(9.0))
+            .padding(Thickness {
+                left: 16.0,
+                top: 0.0,
+                right: 16.0,
+                bottom: 12.0,
+            })
+            .opacity(reveal_progress);
+        content.push(if reveal_progress >= 1.0 {
+            body.into()
+        } else {
+            body.max_height((available_count as f64 * 58.0 + 16.0) * reveal_progress)
+                .into()
+        });
+    }
+    let card = border(vstack(content).spacing(0.0))
+        .corner_radius(f64::from(popup::CARD_CORNER_RADIUS_DIP))
+        .background(ThemeRef::CardBackground)
+        .border_thickness(Thickness::uniform(1.0))
+        .border_brush(ThemeRef::CardStroke);
+    card.into()
 }
 
 /// Shows the nearest announced Codex forced resets from the public feed.

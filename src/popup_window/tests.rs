@@ -187,6 +187,10 @@ fn usage_statistics_section_respects_its_live_toggle() {
         None,
         false,
         None,
+        None,
+        None,
+        None,
+        None,
     );
     assert_eq!(home_cards.len(), 1);
 
@@ -208,6 +212,10 @@ fn usage_statistics_section_respects_its_live_toggle() {
         None,
         None,
         false,
+        None,
+        None,
+        None,
+        None,
         None,
     );
     assert_eq!(provider_page_cards.len(), 2);
@@ -232,6 +240,10 @@ fn usage_statistics_section_respects_its_live_toggle() {
         None,
         None,
         false,
+        None,
+        None,
+        None,
+        None,
         None,
     );
     assert_eq!(cards.len(), 1);
@@ -422,6 +434,10 @@ fn popup_visibility_hides_codex_resets_on_all_but_shows_on_provider_tab() {
         None,
         false,
         None,
+        None,
+        None,
+        None,
+        None,
     );
     let tab_cards = provider_cards(
         ProviderKind::Codex,
@@ -441,6 +457,10 @@ fn popup_visibility_hides_codex_resets_on_all_but_shows_on_provider_tab() {
         None,
         None,
         false,
+        None,
+        None,
+        None,
+        None,
         None,
     );
     assert_eq!(all_cards.len(), 3);
@@ -490,6 +510,10 @@ fn popup_section_all_off_drops_provider_from_home_tab() {
         None,
         None,
         false,
+        None,
+        None,
+        None,
+        None,
         None,
     );
     assert!(!tab_cards.is_empty());
@@ -602,6 +626,10 @@ fn provider_cards_include_each_additional_limit() {
         None,
         None,
         false,
+        None,
+        None,
+        None,
+        None,
         None,
     );
     // Heading + 5h + weekly + Fable (no separate plan metadata row).
@@ -1028,6 +1056,10 @@ fn openrouter_places_each_chart_inside_its_own_account_on_both_surfaces() {
                     None,
                     None,
                     false,
+                    None,
+                    None,
+                    None,
+                    None,
                     None,
                 );
                 assert_eq!(cards.len(), 3); // provider heading and two account strips; no combined card.
