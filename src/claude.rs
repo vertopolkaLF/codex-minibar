@@ -16,15 +16,22 @@ use serde_json::Value;
 
 use crate::{
     claude_desktop,
-    limits::{AdditionalLimit, LimitWindow, RateLimits},
+    limits::{
+        AdditionalLimit, LimitWindow, RateLimitResetCredit, RateLimitResetCreditsSummary,
+        RateLimits,
+    },
     usage,
     worker::{Activator, LimitProvider, UsageProvider},
 };
 
-const OAUTH_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+/// `cedar_ember=1` asks the endpoint to include banked usage-limit resets,
+/// the same query Claude Code's `/limit-reset` flow sends. `skip_spend=1`
+/// drops the spend block, which nothing here reads.
+const OAUTH_USAGE_URL: &str =
+    "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1";
 const OAUTH_PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 const OAUTH_BETA: &str = "oauth-2025-04-20";
-const FALLBACK_CLAUDE_CODE_VERSION: &str = "2.1.0";
+const FALLBACK_CLAUDE_CODE_VERSION: &str = "2.1.280";
 const PROFILE_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 60);
 pub const ACTIVATION_MODEL: &str = "haiku";
 pub const ACTIVATION_PROMPT: &str = "reply with letter a";
@@ -260,10 +267,9 @@ impl ClaudeClient {
             .set("Accept", "application/json")
             .set("Content-Type", "application/json")
             .set("anthropic-beta", OAUTH_BETA)
-            .set(
-                "User-Agent",
-                &format!("claude-code/{FALLBACK_CLAUDE_CODE_VERSION}"),
-            )
+            // Banked resets are only reported to the CLI surface; any other
+            // User-Agent gets `cedar_ember.ineligible_reason = "surface"`.
+            .set("User-Agent", &cli_user_agent())
             .call();
         let body = match response {
             Ok(response) => response
@@ -322,6 +328,19 @@ impl LimitProvider for ClaudeClient {
     fn read_limits(&mut self) -> Result<RateLimits> {
         self.read_rate_limits()
     }
+}
+
+/// Claude Code's own User-Agent, versioned after the CLI bundled with Claude
+/// Desktop when present so the server sees a current client.
+fn cli_user_agent() -> String {
+    let version = claude_desktop::bundled_cli()
+        .as_deref()
+        .and_then(Path::parent)
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| FALLBACK_CLAUDE_CODE_VERSION.to_owned());
+    format!("claude-cli/{version} (external, cli)")
 }
 
 fn reset_schedule(limits: &RateLimits) -> Vec<(String, Option<DateTime<Utc>>)> {
@@ -488,6 +507,9 @@ struct OAuthUsageResponse {
     organization_name: Option<String>,
     #[serde(default)]
     limits: Vec<OAuthLimitEntry>,
+    /// Banked usage-limit resets. Kept out of `additional_windows` because it
+    /// is not a quota window.
+    cedar_ember: Option<OAuthBankedResets>,
     /// Claude regularly adds model- and feature-specific quota windows (for
     /// example `seven_day_fable`). Keep every window-shaped field instead of
     /// silently throwing newer limits away.
@@ -538,6 +560,28 @@ struct OAuthLimitScopeModel {
     display_name: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct OAuthBankedResets {
+    #[serde(default)]
+    eligible: bool,
+    #[serde(default)]
+    grants: Vec<OAuthResetGrant>,
+}
+
+#[derive(Deserialize)]
+struct OAuthResetGrant {
+    id: Option<String>,
+    label: Option<String>,
+    #[serde(default)]
+    resets_left: u32,
+    starts_at: Option<String>,
+    ends_at: Option<String>,
+    #[serde(default)]
+    clears: Vec<String>,
+    #[serde(default)]
+    paused: bool,
+}
+
 #[derive(Clone, Deserialize)]
 struct OAuthUsageWindow {
     utilization: Option<f64>,
@@ -577,12 +621,59 @@ pub fn parse_usage_response(response: &str, sampled_at: DateTime<Utc>) -> Result
         additional_limits,
         sampled_at,
         account_name: non_empty(response.organization_name),
+        reset_credits: response
+            .cedar_ember
+            .and_then(|banked| banked_resets(banked, sampled_at)),
         // The OAuth usage payload does not contain a subscription tier. Do
         // not present the provider name as if it were a plan.
         plan_type: None,
         ..RateLimits::default()
     }
     .normalized(sampled_at))
+}
+
+/// Maps Claude's reset grants onto the shared banked-reset summary. Each grant
+/// becomes one credit row; the count is the resets still left across grants
+/// that have not expired. Paused grants still count, as they stay banked.
+fn banked_resets(
+    banked: OAuthBankedResets,
+    now: DateTime<Utc>,
+) -> Option<RateLimitResetCreditsSummary> {
+    if !banked.eligible {
+        return None;
+    }
+    let credits = banked
+        .grants
+        .into_iter()
+        .filter(|grant| grant.resets_left > 0)
+        .filter_map(|grant| {
+            let expires_at = parse_timestamp(grant.ends_at.as_deref());
+            if expires_at.is_some_and(|expires_at| expires_at <= now) {
+                return None;
+            }
+            Some((
+                grant.resets_left,
+                RateLimitResetCredit {
+                    reset_type: (!grant.clears.is_empty()).then(|| grant.clears.join(",")),
+                    status: if grant.paused { "paused" } else { "available" }.to_owned(),
+                    granted_at: parse_timestamp(grant.starts_at.as_deref()),
+                    expires_at,
+                    title: non_empty(grant.label),
+                    description: non_empty(grant.id),
+                },
+            ))
+        })
+        .collect::<Vec<_>>();
+    Some(RateLimitResetCreditsSummary {
+        available_count: credits.iter().map(|(count, _)| count).sum(),
+        credits: credits.into_iter().map(|(_, credit)| credit).collect(),
+    })
+}
+
+fn parse_timestamp(value: Option<&str>) -> Option<DateTime<Utc>> {
+    value
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc))
 }
 
 /// Identity and plan both come from the profile endpoint. The former
@@ -992,6 +1083,39 @@ mod tests {
         assert_eq!(limits.additional_limits[1].title, "Opus");
         assert_eq!(limits.account_name.as_deref(), Some("example"));
         assert_eq!(limits.plan_type, None);
+    }
+
+    #[test]
+    fn parses_banked_resets_from_cedar_ember() {
+        let sampled_at = Utc.with_ymd_and_hms(2026, 9, 22, 18, 0, 0).unwrap();
+        let limits = parse_usage_response(
+            r#"{"five_hour":{"utilization":1},"seven_day":{"utilization":60},"cedar_ember":{"eligible":true,"ineligible_reason":null,"at_limit":false,"exhausted":[],"grants":[{"id":"opus55-launch-team-20260921","label":"Claude Opus 5.5 launch: one usage-limit reset for Team members","resets_total":1,"resets_left":1,"starts_at":"2026-09-22T16:00:00+00:00","ends_at":"2026-10-22T16:00:00+00:00","clears":["five_hour","seven_day","seven_day_overage_included"],"paused":false,"usable_now":true,"use_requires_limit":false,"percent_used":{"five_hour":1,"seven_day":60},"blocking":[],"arm":null},{"id":"spent","resets_left":0,"ends_at":"2026-10-01T00:00:00Z"},{"id":"expired","resets_left":2,"ends_at":"2026-09-01T00:00:00Z"}],"next_grant_id":"opus55-launch-team-20260921","weekly_resets_at":"2026-09-25T14:00:00+00:00","cooldown_until":null}}"#,
+            sampled_at,
+        )
+        .unwrap();
+
+        assert!(limits.additional_limits.is_empty());
+        assert_eq!(limits.available_reset_count(), 1);
+        assert_eq!(
+            limits.next_reset_credit_expiration(),
+            Some(Utc.with_ymd_and_hms(2026, 10, 22, 16, 0, 0).unwrap())
+        );
+        let credit = &limits.reset_credits.as_ref().unwrap().credits[0];
+        assert_eq!(
+            credit.title.as_deref(),
+            Some("Claude Opus 5.5 launch: one usage-limit reset for Team members")
+        );
+    }
+
+    #[test]
+    fn ineligible_surface_reports_no_banked_resets() {
+        let limits = parse_usage_response(
+            r#"{"five_hour":{"utilization":1},"cedar_ember":{"eligible":false,"ineligible_reason":"surface","grants":[]}}"#,
+            Utc::now(),
+        )
+        .unwrap();
+        assert!(limits.reset_credits.is_none());
+        assert_eq!(limits.available_reset_count(), 0);
     }
 
     #[test]
