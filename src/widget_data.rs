@@ -76,18 +76,46 @@ pub fn resolve_metric(
 ) -> Option<WidgetMetric> {
     let (resolved_id, label, raw_window) =
         provider_registry::resolve_metric(provider, limits, configured_id)?;
-    let window = canonical_widget_window(
-        provider,
-        limits,
-        &[configured_id, resolved_id.as_str()],
-        raw_window,
-    );
+    let metric_ids = [configured_id, resolved_id.as_str()];
+    let five_hour_reserve = codex_five_hour_reserve_override(provider, limits, &metric_ids);
+    let (label, window) = if let Some(reserve_window) = five_hour_reserve {
+        let mut window = reserve_window.clone();
+        window.resets_at = limits.primary.resets_at;
+        window.duration_minutes = limits.primary.duration_minutes;
+        (crate::limits::LUNA_RESERVE_TITLE.to_owned(), window)
+    } else {
+        (
+            label,
+            canonical_widget_window(provider, limits, &metric_ids, raw_window),
+        )
+    };
     Some(WidgetMetric {
         id: configured_id.to_owned(),
         resolved_id,
         label,
         window,
     })
+}
+
+fn codex_five_hour_reserve_override<'a>(
+    provider: ProviderKind,
+    limits: &'a RateLimits,
+    metric_ids: &[&str],
+) -> Option<&'a LimitWindow> {
+    if provider != ProviderKind::Codex
+        || limits.weekly_exhausted()
+        || limits.primary.remaining_percent() != Some(0)
+        || !metric_ids.iter().any(|id| {
+            matches!(
+                provider_registry::metric(provider, id).map(|metric| metric.source),
+                Some(provider_registry::MetricSource::Primary)
+            )
+        })
+    {
+        return None;
+    }
+
+    limits.luna_reserve().map(|reserve| &reserve.window)
 }
 
 /// Build the shared sanitized snapshot consumed by external widget clients.
