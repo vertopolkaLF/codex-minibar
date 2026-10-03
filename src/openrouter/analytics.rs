@@ -436,9 +436,8 @@ fn refresh_account(
                 "minute"
             };
             let query_end = end.min(now);
-            let body = fetch(start, query_end, Some(granularity))?;
             let mut models = BTreeMap::<String, TokenUsage>::new();
-            for row in parse_hourly(&body, granularity, start, query_end)? {
+            for row in complete_bucket_rows(start, query_end, granularity, &mut fetch)? {
                 models.entry(row.model).or_default().add(&row.usage);
             }
             models
@@ -473,12 +472,7 @@ fn refresh_account(
             && now >= h.fetched_at
             && now - h.fetched_at < Duration::minutes(5)
     }) {
-        let rows = parse_hourly(
-            &fetch(start, now, Some(granularity))?,
-            granularity,
-            start,
-            now,
-        )?;
+        let rows = complete_bucket_rows(start, now, granularity, &mut fetch)?;
         account.hourly = Some(HourlyCache {
             fetched_at: now,
             granularity: granularity.into(),
@@ -596,6 +590,36 @@ fn parse(body: &str) -> Result<BTreeMap<String, TokenUsage>> {
     }
     Ok(models)
 }
+/// Split truncated time-series responses on bucket boundaries. No incomplete
+/// child response is committed, and half-open intervals prevent double counting.
+fn complete_bucket_rows(
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    granularity: &str,
+    fetch: &mut impl FnMut(DateTime<Utc>, DateTime<Utc>, Option<&str>) -> Result<String>,
+) -> Result<Vec<HourlyRow>> {
+    let body = fetch(start, end, Some(granularity))?;
+    let response: Value = serde_json::from_str(&body).context("parse OpenRouter analytics")?;
+    if response
+        .pointer("/data/metadata/truncated")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return parse_hourly(&body, granularity, start, end);
+    }
+    let bucket_seconds = if granularity == "minute" { 60 } else { 3600 };
+    let midpoint = start.timestamp() + (end.timestamp() - start.timestamp()) / 2;
+    let split = DateTime::from_timestamp(midpoint.div_euclid(bucket_seconds) * bucket_seconds, 0)
+        .context("OpenRouter analytics invalid split timestamp")?;
+    ensure!(
+        split > start && split < end,
+        "OpenRouter analytics exceeded the row limit within a single time bucket"
+    );
+    let mut rows = complete_bucket_rows(start, split, granularity, fetch)?;
+    rows.extend(complete_bucket_rows(split, end, granularity, fetch)?);
+    Ok(rows)
+}
+
 fn parse_hourly(
     body: &str,
     granularity: &str,
@@ -637,6 +661,82 @@ fn parse_hourly(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn truncated_dense_minute_history_splits_without_missing_or_duplicate_buckets() {
+        let start = DateTime::parse_from_rfc3339("2026-10-01T18:30:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let end = start + Duration::hours(24);
+        let mut intervals = Vec::new();
+        let result = complete_bucket_rows(start, end, "minute", &mut |from, to, granularity| {
+            assert_eq!(granularity, Some("minute"));
+            intervals.push((from, to));
+            if to - from > Duration::hours(12) {
+                return Ok(json!({"data":{"metadata":{"truncated":true},"data":[]}}).to_string());
+            }
+            let rows = (0..(to - from).num_minutes())
+                .flat_map(|minute| {
+                    let at = (from + Duration::minutes(minute)).to_rfc3339();
+                    (0..7).map(move |model| {
+                        let mut row = fixture(&at, "date__minute");
+                        row["model"] = json!(format!("model-{model}"));
+                        row
+                    })
+                })
+                .collect();
+            Ok(envelope(rows))
+        })
+        .unwrap();
+        let split = start + Duration::hours(12);
+        assert_eq!(intervals, vec![(start, end), (start, split), (split, end)]);
+        assert_eq!(result.len(), 1440 * 7);
+        let unique = result
+            .iter()
+            .map(|row| (row.at, row.model.as_str()))
+            .collect::<HashSet<_>>();
+        assert_eq!(unique.len(), result.len());
+        assert_eq!(
+            result
+                .iter()
+                .map(|row| row.usage.estimated_cost_microusd)
+                .sum::<u64>(),
+            1440 * 7 * 123456
+        );
+    }
+
+    #[test]
+    fn truncated_single_bucket_fails_without_recursing_forever() {
+        let start = Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap();
+        let mut calls = 0;
+        let result = complete_bucket_rows(
+            start,
+            start + Duration::minutes(1),
+            "minute",
+            &mut |_, _, _| {
+                calls += 1;
+                Ok(json!({"data":{"metadata":{"truncated":true},"data":[]}}).to_string())
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn failed_truncated_child_never_commits_a_partial_day() {
+        let now = boundaries(Local::now().date_naive()).unwrap().0 + Duration::hours(12);
+        let mut account = AccountCache::default();
+        let mut calls = 0;
+        let result = refresh_account(&mut account, 30, now, |_, _, _| {
+            calls += 1;
+            match calls {
+                1 => Ok(json!({"data":{"metadata":{"truncated":true},"data":[]}}).to_string()),
+                2 => Ok(envelope(vec![])),
+                _ => anyhow::bail!("second half failed"),
+            }
+        });
+        assert!(result.is_err());
+        assert!(account.days.is_empty());
+    }
     #[test]
     fn daily_history_requires_time_buckets_instead_of_overlapping_rollup_totals() {
         let now = boundaries(Local::now().date_naive()).unwrap().0 + Duration::hours(12);

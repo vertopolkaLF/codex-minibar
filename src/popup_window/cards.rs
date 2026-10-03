@@ -128,17 +128,17 @@ pub(super) fn provider_cards(
                 .into(),
         );
     }
-    if single_openrouter_account {
-        if let Some(balance) = limits.openrouter_accounts[0].balance_microusd {
-            trailing.push(
-                text_block(format_usd(balance as f64 / 1_000_000.0))
-                    .font_weight(600)
-                    .foreground(ThemeRef::Accent)
-                    .horizontal_alignment(HorizontalAlignment::Right)
-                    .vertical_alignment(VerticalAlignment::Center)
-                    .into(),
-            );
-        }
+    if single_openrouter_account
+        && let Some(balance) = limits.openrouter_accounts[0].balance_microusd
+    {
+        trailing.push(
+            text_block(format_usd(balance as f64 / 1_000_000.0))
+                .font_weight(600)
+                .foreground(ThemeRef::Accent)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .vertical_alignment(VerticalAlignment::Center)
+                .into(),
+        );
     }
     if let Some(handle) = drag_handle {
         trailing.push(handle);
