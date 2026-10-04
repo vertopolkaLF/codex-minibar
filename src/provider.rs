@@ -318,11 +318,11 @@ pub fn automatic_activation(provider: ProviderKind, settings: &Settings) -> bool
     // applies while the default profile is being read.
     let local_login_tracked = match provider {
         ProviderKind::Claude => crate::claude::profiles_for_settings(settings)
-            .first()
-            .is_some_and(|p| p.is_default() && p.enabled),
+            .iter()
+            .any(|p| p.is_default() && p.enabled),
         ProviderKind::Codex => crate::codex::profiles_for_settings(settings)
-            .first()
-            .is_some_and(|p| p.is_default() && p.enabled),
+            .iter()
+            .any(|p| p.is_default() && p.enabled),
         _ => true,
     };
     settings.automatic_activation
@@ -384,7 +384,7 @@ mod tests {
     use crate::settings::ClaudeProfile;
 
     #[test]
-    fn codex_activation_requires_default_as_the_enabled_primary_account() {
+    fn codex_activation_requires_enabled_default_regardless_of_account_order() {
         let mut settings = Settings {
             automatic_activation: true,
             ..Settings::default()
@@ -399,7 +399,7 @@ mod tests {
         assert!(automatic_activation(ProviderKind::Claude, &settings));
         settings.codex_profiles[0].enabled = true;
         settings.codex_profiles.swap(0, 1);
-        assert!(!automatic_activation(ProviderKind::Codex, &settings));
+        assert!(automatic_activation(ProviderKind::Codex, &settings));
     }
 
     #[test]

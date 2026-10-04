@@ -1755,3 +1755,28 @@ fn cold_popup_seed_preserves_saved_account_membership_and_revisions() {
     assert_eq!(ui.codex_credentials_revision, 11);
     assert_eq!(codex_account_tabs(&ui.codex_profiles).len(), 1);
 }
+
+#[test]
+fn activation_toast_uses_default_even_when_a_saved_account_is_first() {
+    let profiles = vec![
+        crate::limits::AccountProfileSnapshot {
+            id: "work".into(),
+            name: "Work".into(),
+            ..Default::default()
+        },
+        crate::limits::AccountProfileSnapshot {
+            id: "default".into(),
+            name: "Default".into(),
+            ..Default::default()
+        },
+    ];
+    assert_eq!(
+        primary_notification_profile(&profiles, false).unwrap().id,
+        "work"
+    );
+    assert_eq!(
+        primary_notification_profile(&profiles, true).unwrap().id,
+        "default"
+    );
+    assert!(primary_notification_profile(&profiles[..1], true).is_none());
+}

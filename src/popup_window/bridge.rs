@@ -68,6 +68,17 @@ fn account_profile_tracker<'a>(
         ))
 }
 
+pub(super) fn primary_notification_profile(
+    profiles: &[crate::limits::AccountProfileSnapshot],
+    activation_succeeded: bool,
+) -> Option<&crate::limits::AccountProfileSnapshot> {
+    if activation_succeeded {
+        profiles.iter().find(|profile| profile.id == "default")
+    } else {
+        profiles.first()
+    }
+}
+
 pub(super) fn update_available_from_phase(phase: &UpdatePhase) -> bool {
     matches!(phase, UpdatePhase::Available(_))
 }
@@ -89,14 +100,11 @@ pub(super) fn start_background_bridge(
     // Account names live in settings, so overlay them before the first paint.
     let startup_settings = state.settings.clone();
     let _ = state.apply_openrouter_account_names(&startup_settings);
-    let retained = crate::codex::prepare_profile_refresh(
+    let retained = crate::codex::prepare_startup_limits(
         state.current_limits().get(ProviderKind::Codex),
         &startup_settings,
-        &startup_settings,
     );
-    if !startup_settings.codex_profiles.is_empty() {
-        state.replace_limits(ProviderKind::Codex, retained);
-    }
+    state.replace_limits(ProviderKind::Codex, retained);
     let _ = state.apply_codex_profile_names(&startup_settings);
     crate::settings_window::publish_openrouter_snapshot(
         state.current_limits().get(ProviderKind::OpenRouter),
@@ -845,7 +853,9 @@ pub(super) fn start_background_bridge(
                             .retain(|key, _| !key.starts_with(ProviderKind::Codex.id()));
                     }
                     let profiles = limits.get(provider).account_profiles(provider);
-                    let tracker = match profiles.first() {
+                    let primary_profile =
+                        primary_notification_profile(profiles, combine_activation_notification);
+                    let tracker = match primary_profile {
                         Some(profile) => {
                             account_profile_tracker(&mut limit_notifications, profile, provider)
                         }
@@ -855,22 +865,20 @@ pub(super) fn start_background_bridge(
                     };
                     let notification_result = if combine_activation_notification {
                         tracker.observe_with_primary_reset_deferred(
-                            profiles
-                                .first()
-                                .map_or(limits.get(provider), |profile| &profile.limits),
+                            primary_profile.map_or(limits.get(provider), |profile| &profile.limits),
                             &notification_settings,
                             provider,
                         )
                     } else {
                         tracker.observe(
-                            profiles
-                                .first()
-                                .map_or(limits.get(provider), |profile| &profile.limits),
+                            primary_profile.map_or(limits.get(provider), |profile| &profile.limits),
                             &notification_settings,
                             provider,
                         )
                     };
-                    for profile in profiles.iter().skip(1) {
+                    for profile in profiles.iter().filter(|profile| {
+                        primary_profile.is_none_or(|primary| primary.id != profile.id)
+                    }) {
                         account_profile_tracker(&mut limit_notifications, profile, provider)
                             .observe(&profile.limits, &notification_settings, provider);
                     }

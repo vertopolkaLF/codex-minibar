@@ -36,7 +36,8 @@ const WHAM_RESET_CREDITS_URL: &str =
 pub(crate) mod profile_oauth;
 mod profiles;
 pub use profiles::{
-    apply_profile_names, prepare_profile_refresh, profiles_for_settings, save_profile_credential,
+    apply_profile_names, prepare_profile_refresh, prepare_startup_limits, profiles_for_settings,
+    save_profile_credential,
 };
 pub(crate) use profiles::{
     load_profile_credential, profiles_with_default, set_home_profile_visibility,

@@ -44,6 +44,18 @@ pub(crate) fn load_profile_credential(profile_id: &str) -> Result<Option<String>
     secrets::load(&format!("{PROFILE_SECRET_PREFIX}{profile_id}"))
 }
 
+/// Normalize persisted account membership before workers or UI read the cache.
+/// Keep legacy ambient-only snapshots untouched, including their service name.
+pub fn prepare_startup_limits(limits: &RateLimits, settings: &Settings) -> RateLimits {
+    if settings.codex_profiles.is_empty() && limits.codex_profiles.is_empty() {
+        return limits.clone();
+    }
+    let usage = limits.usage.clone();
+    let mut retained = prepare_profile_refresh(limits, settings, settings);
+    retained.usage = usage;
+    retained
+}
+
 /// Prepare the visible samples before replacing a Codex reader.
 pub fn prepare_profile_refresh(
     limits: &RateLimits,
@@ -89,7 +101,9 @@ pub fn prepare_profile_refresh(
         })
         .collect::<Vec<_>>();
     let mut retained = snapshots
-        .first()
+        .iter()
+        .find(|sample| sample.limits.sampled_at.timestamp() > 0)
+        .or_else(|| snapshots.first())
         .map(|sample| sample.limits.clone())
         .unwrap_or_default();
     retained.codex_profiles = snapshots;
@@ -239,6 +253,89 @@ pub fn apply_profile_names(limits: &mut RateLimits, settings: &Settings) -> bool
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn new_first_profile_keeps_a_later_defaults_cached_provider_quota() {
+        let previous = Settings::default();
+        let mut next = previous.clone();
+        next.codex_profiles = vec![
+            CodexProfile::new("Work"),
+            profiles_for_settings(&previous)[0].clone(),
+        ];
+        let limits = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(42),
+                ..Default::default()
+            },
+            sampled_at: Utc::now(),
+            ..Default::default()
+        };
+        let retained = prepare_profile_refresh(&limits, &previous, &next);
+        assert_eq!(retained.primary.used_percent, Some(42));
+        assert_eq!(retained.codex_profiles[0].name, "Work");
+        assert_eq!(retained.codex_profiles[0].limits.sampled_at.timestamp(), 0);
+        assert_eq!(
+            retained.codex_profiles[1].limits.primary.used_percent,
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn startup_without_saved_settings_discards_deleted_accounts_and_keeps_default() {
+        let settings = Settings::default();
+        let default = profiles_for_settings(&settings)[0].clone();
+        let saved = CodexProfile::new("Deleted");
+        let sample = |used| RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(used),
+                ..Default::default()
+            },
+            sampled_at: Utc::now(),
+            ..Default::default()
+        };
+        let mut cached = sample(90);
+        cached.account_name = Some("Deleted".into());
+        cached.codex_profiles = vec![
+            CodexProfileSnapshot {
+                id: saved.id,
+                name: saved.name,
+                limits: sample(90),
+                error: None,
+            },
+            CodexProfileSnapshot {
+                id: default.id,
+                name: default.name,
+                limits: sample(15),
+                error: None,
+            },
+        ];
+        let retained = prepare_startup_limits(&cached, &settings);
+        assert_eq!(retained.codex_profiles.len(), 1);
+        assert_eq!(retained.codex_profiles[0].id, "default");
+        assert_eq!(retained.primary.used_percent, Some(15));
+        assert_ne!(retained.account_name.as_deref(), Some("Deleted"));
+    }
+
+    #[test]
+    fn startup_keeps_legacy_ambient_name_and_clears_saved_only_cache() {
+        let settings = Settings::default();
+        let legacy = RateLimits {
+            account_name: Some("Local account".into()),
+            sampled_at: Utc::now(),
+            ..Default::default()
+        };
+        assert_eq!(prepare_startup_limits(&legacy, &settings), legacy);
+        let mut cached = legacy;
+        cached.codex_profiles = vec![CodexProfileSnapshot {
+            id: "deleted".into(),
+            name: "Deleted".into(),
+            limits: cached.clone(),
+            error: None,
+        }];
+        let retained = prepare_startup_limits(&cached, &settings);
+        assert_eq!(retained.primary.used_percent, None);
+        assert_eq!(retained.codex_profiles[0].limits.sampled_at.timestamp(), 0);
+    }
+
     #[test]
     fn account_snapshots_roundtrip_without_oauth_credentials() {
         let profile = CodexProfile::new("Work");
