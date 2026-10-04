@@ -149,9 +149,17 @@ pub struct LimitNotificationTracker {
     /// `resets_at` of the window we already notified for low primary usage.
     low_usage_notified_primary: Option<DateTime<Utc>>,
     low_usage_notified_secondary: Option<DateTime<Utc>>,
+    /// Shown in toasts instead of the provider name, to tell apart several
+    /// accounts of one provider.
+    name: Option<String>,
 }
 
 impl LimitNotificationTracker {
+    pub fn named(&mut self, name: String) -> &mut Self {
+        self.name = Some(name);
+        self
+    }
+
     pub fn observe(
         &mut self,
         limits: &RateLimits,
@@ -199,11 +207,15 @@ impl LimitNotificationTracker {
         // Exhausted weekly already blocks auto-activation. A 5h reset toast is
         // equally useless until that weekly quota comes back.
         let notify_five_hour_reset = can_notify_five_hour_reset(limits);
+        let name = self
+            .name
+            .clone()
+            .unwrap_or_else(|| provider.display_name().to_owned());
 
         if primary_reset {
             self.startup_low_usage_primary = None;
             if settings.limits_changed && !defer_primary_reset && notify_five_hour_reset {
-                show("5-hour limit reset", provider.display_name());
+                show("5-hour limit reset", &name);
             }
         }
         // Free plans have no weekly limit. Their single monthly quota may shift
@@ -211,14 +223,14 @@ impl LimitNotificationTracker {
         if secondary_reset && can_notify_weekly(limits) {
             self.startup_low_usage_secondary = None;
             if settings.limits_changed {
-                show("Weekly limit reset", provider.display_name());
+                show("Weekly limit reset", &name);
             }
         }
 
         if settings.low_usage_enabled {
             let threshold = settings.low_usage_threshold_percent;
             maybe_notify_low_usage(
-                &format!("{} 5-hour", provider.display_name()),
+                &format!("{name} 5-hour"),
                 limits.primary.remaining_percent(),
                 limits.primary.resets_at,
                 threshold,
@@ -233,7 +245,7 @@ impl LimitNotificationTracker {
         }
         if settings.weekly_low_usage_enabled && can_notify_weekly(limits) {
             let threshold = settings.weekly_low_usage_threshold_percent;
-            let label = secondary_limit_label(limits, provider);
+            let label = secondary_limit_label(limits, &name);
             maybe_notify_low_usage(
                 &label,
                 limits.secondary.remaining_percent(),
@@ -307,7 +319,7 @@ fn can_notify_five_hour_reset(limits: &RateLimits) -> bool {
     !limits.weekly_exhausted()
 }
 
-fn secondary_limit_label(limits: &RateLimits, provider: ProviderKind) -> String {
+fn secondary_limit_label(limits: &RateLimits, name: &str) -> String {
     if let Some(name) = limits
         .secondary_limit_name
         .as_deref()
@@ -316,7 +328,7 @@ fn secondary_limit_label(limits: &RateLimits, provider: ProviderKind) -> String 
     {
         return name.to_owned();
     }
-    format!("{} weekly", provider.display_name())
+    format!("{name} weekly")
 }
 
 fn maybe_notify_low_usage(
@@ -421,16 +433,13 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(
-            secondary_limit_label(&limits, ProviderKind::Cursor),
-            "Cursor Models"
-        );
+        assert_eq!(secondary_limit_label(&limits, "Cursor"), "Cursor Models");
     }
 
     #[test]
     fn unnamed_secondary_limit_keeps_weekly_fallback() {
         assert_eq!(
-            secondary_limit_label(&RateLimits::default(), ProviderKind::Codex),
+            secondary_limit_label(&RateLimits::default(), "Codex"),
             "Codex weekly"
         );
     }

@@ -57,10 +57,10 @@ pub fn start_provider_worker(
     // overwrite the replacement worker's state.
     let worker_revision = match provider {
         ProviderKind::OpenRouter => settings.openrouter_credentials_revision,
+        ProviderKind::Claude => settings.claude_credentials_revision,
         _ => 0,
     };
-    let automatic_activation = settings.automatic_activation
-        && crate::provider_registry::descriptor(provider).supports_activation;
+    let automatic_activation = automatic_activation(provider, settings);
     let mut worker = match provider {
         ProviderKind::Codex => {
             let executable = first_available(settings.codex_path.as_deref())?;
@@ -84,7 +84,7 @@ pub fn start_provider_worker(
                 .unwrap_or_else(|| PathBuf::from("claude"));
             crate::logger::info(format!("Claude executable: {}", executable.display()));
             worker::start_worker(
-                ClaudeClient::new(),
+                ClaudeClient::with_profiles(crate::claude::profiles_for_settings(settings)),
                 ClaudeClient::new(),
                 ClaudeActivator::new(Some(executable)),
                 activation_path,
@@ -270,6 +270,20 @@ pub fn start_provider_worker(
     Ok(worker)
 }
 
+/// Whether a provider's worker may start sessions on its own. Shared by
+/// worker start-up and live settings changes so the two cannot disagree.
+pub fn automatic_activation(provider: ProviderKind, settings: &Settings) -> bool {
+    // Claude activation starts a session with the local login, so it only
+    // applies while the default profile is being read.
+    let local_login_tracked = provider != ProviderKind::Claude
+        || crate::claude::profiles_for_settings(settings)
+            .iter()
+            .any(|profile| profile.is_default() && profile.enabled);
+    settings.automatic_activation
+        && crate::provider_registry::descriptor(provider).supports_activation
+        && local_login_tracked
+}
+
 fn schedules_for(
     provider: ProviderKind,
     settings: &Settings,
@@ -315,5 +329,29 @@ fn provider_activation_path(provider: ProviderKind, base_path: PathBuf) -> PathB
         ProviderKind::Antigravity => base_path.with_file_name("activation-antigravity.toml"),
         ProviderKind::Grok => base_path.with_file_name("activation-grok.toml"),
         ProviderKind::Kiro => base_path.with_file_name("activation-kiro.toml"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::ClaudeProfile;
+
+    #[test]
+    fn claude_activation_needs_the_default_profile() {
+        let mut settings = Settings {
+            automatic_activation: true,
+            ..Settings::default()
+        };
+        assert!(automatic_activation(ProviderKind::Claude, &settings));
+
+        settings.claude_profiles = vec![ClaudeProfile {
+            id: ClaudeProfile::DEFAULT_ID.into(),
+            name: "Default".into(),
+            enabled: false,
+        }];
+        assert!(!automatic_activation(ProviderKind::Claude, &settings));
+        // Other providers do not depend on Claude profiles.
+        assert!(automatic_activation(ProviderKind::Codex, &settings));
     }
 }

@@ -304,13 +304,13 @@ fn period_switcher(
     )
 }
 
-struct SegmentedTab {
+pub(crate) struct SegmentedTab {
     label: String,
     selected: bool,
     on_click: Callback<()>,
 }
 
-fn segmented_tab(
+pub(crate) fn segmented_tab(
     label: impl Into<String>,
     selected: bool,
     on_click: impl IntoUnitCallback,
@@ -328,7 +328,7 @@ fn segmented_tab_width(label: &str) -> f64 {
     (label.chars().count() as f64 * 8.0 + 22.0).max(48.0)
 }
 
-fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: bool) -> Element {
+pub(crate) fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: bool) -> Element {
     let count = tabs.len().max(1);
     let selected = tabs.iter().position(|tab| tab.selected).unwrap_or(0);
     let anim = crate::theme::duration(crate::theme::CONTROL_FAST_ANIMATION);

@@ -100,6 +100,17 @@ impl AppState {
         true
     }
 
+    /// Overlay renamed Claude profiles onto the live snapshot, for the same
+    /// reason as the OpenRouter account names above.
+    pub(super) fn apply_claude_profile_names(&self, settings: &Settings) -> bool {
+        let mut limits = self.current_limits().get(ProviderKind::Claude).clone();
+        if !crate::claude::apply_profile_names(&mut limits, settings) {
+            return false;
+        }
+        self.replace_limits(ProviderKind::Claude, limits);
+        true
+    }
+
     pub(super) fn replace_limits(&self, provider: ProviderKind, mut limits: RateLimits) {
         let persisted = if let Ok(mut current) = self.limits.lock() {
             // Quota polling must not erase the independently refreshed usage
@@ -343,9 +354,13 @@ pub(super) struct UiState {
     pub(super) popup_two_columns: bool,
     pub(super) popup_right_column: Option<Vec<PopupWidgetKind>>,
     pub(super) use_colored_provider_icons: bool,
+    pub(super) show_accounts_as_tabs: bool,
     pub(super) replace_chatgpt_logo_with_codex: bool,
     pub(super) codex_path: Option<std::path::PathBuf>,
     pub(super) claude_path: Option<std::path::PathBuf>,
+    pub(super) claude_profiles: Vec<crate::settings::ClaudeProfile>,
+    pub(super) claude_home_excluded_profiles: Vec<String>,
+    pub(super) claude_credentials_revision: u64,
     pub(super) cursor_path: Option<std::path::PathBuf>,
     pub(super) antigravity_path: Option<std::path::PathBuf>,
     pub(super) grok_path: Option<std::path::PathBuf>,
@@ -400,9 +415,13 @@ impl Default for UiState {
             popup_two_columns: false,
             popup_right_column: None,
             use_colored_provider_icons: true,
+            show_accounts_as_tabs: false,
             replace_chatgpt_logo_with_codex: false,
             codex_path: None,
             claude_path: None,
+            claude_profiles: Vec::new(),
+            claude_home_excluded_profiles: Vec::new(),
+            claude_credentials_revision: 0,
             cursor_path: None,
             antigravity_path: None,
             grok_path: None,

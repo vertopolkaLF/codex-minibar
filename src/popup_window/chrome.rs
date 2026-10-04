@@ -5,6 +5,84 @@ pub(super) const REORDER_BUTTON_SIZE: f64 = 28.0;
 pub(super) const TAB_STRIP_SPACING: f64 = 2.0;
 pub(super) const FOOTER_BASE_ACTION_COUNT: f64 = 2.0;
 
+pub(super) fn provider_icon_tab_count(
+    providers: &[ProviderKind],
+    claude_accounts: &[crate::settings::ClaudeProfile],
+) -> usize {
+    let separate_claude = providers.contains(&ProviderKind::Claude) && !claude_accounts.is_empty();
+    if providers.len() <= 1 && !separate_claude {
+        return 0;
+    }
+    providers
+        .iter()
+        .map(|provider| {
+            if *provider == ProviderKind::Claude {
+                claude_accounts.len().max(1)
+            } else {
+                1
+            }
+        })
+        .sum()
+}
+
+pub(super) fn claude_account_tabs(
+    saved: &[crate::settings::ClaudeProfile],
+) -> Vec<crate::settings::ClaudeProfile> {
+    crate::claude::profiles_with_default(saved)
+        .into_iter()
+        .filter(|profile| profile.enabled)
+        .collect()
+}
+
+pub(super) fn claude_account_tabs_key(profiles: &[crate::settings::ClaudeProfile]) -> String {
+    profiles
+        .iter()
+        .enumerate()
+        .map(|(index, profile)| format!("{}:{}:{}", index + 1, profile.id.len(), profile.id))
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+pub(super) fn selected_claude_account_tab<'a>(
+    profiles: &'a [crate::settings::ClaudeProfile],
+    selected: Option<&str>,
+) -> Option<&'a str> {
+    profiles
+        .iter()
+        .find(|profile| Some(profile.id.as_str()) == selected)
+        .or_else(|| profiles.first())
+        .map(|profile| profile.id.as_str())
+}
+
+pub(super) fn provider_tab_reorder_item(
+    provider: ProviderKind,
+    settings_tx: Sender<Settings>,
+    set_ui: AsyncSetState<UiState>,
+    ui: UiState,
+    visible: Vec<ProviderKind>,
+    animations_enabled: bool,
+) -> ReorderItem {
+    ReorderItem::new(
+        provider.id(),
+        "popup-provider-tabs",
+        animations_enabled,
+        move |(from, to): (String, String)| {
+            let (Some(from), Some(to)) = (ProviderKind::from_id(&from), ProviderKind::from_id(&to))
+            else {
+                return;
+            };
+            let set_ui = set_ui.clone();
+            let mut ui = ui.clone();
+            crate::settings_window::persist_update(settings_tx.clone(), |settings| {
+                if settings.reorder_providers(from, to, &visible) {
+                    ui.popup_order = settings.popup_order.clone();
+                    set_ui.call(ui);
+                }
+            });
+        },
+    )
+}
+
 pub(super) fn provider_tab_strip_content_width(provider_count: usize, usage_enabled: bool) -> f64 {
     let size = popup::bottom_bar_size();
     (size.icon_button_size() * (1.0 + f64::from(usage_enabled)))
@@ -61,12 +139,13 @@ pub(super) fn footer_actions_key(update_available: bool, color_scheme: ColorSche
 
 /// Compact footer selector item for choosing the Home, Usage, or provider view.
 pub(super) fn popup_tab_button(
-    id: &'static str,
+    id: impl Into<String>,
     icon_name: Option<&'static str>,
     label: Option<&'static str>,
-    tip: &'static str,
+    tip: impl Into<String>,
     selected: bool,
     has_error: bool,
+    account_number: Option<usize>,
     use_colored_provider_icons: bool,
     color_scheme: ColorScheme,
     hovered_action: &Option<String>,
@@ -74,10 +153,12 @@ pub(super) fn popup_tab_button(
     on_wheel: impl IntoCallback<PointerEventInfo>,
     on_click: impl IntoUnitCallback,
 ) -> Element {
+    let id = id.into();
+    let enter_id = id.clone();
     let on_click = on_click.into_unit_callback();
     let bottom_bar = popup::bottom_bar_size();
     let glyph_size = bottom_bar.icon_glyph_size();
-    let hovered = hovered_action.as_deref() == Some(id);
+    let hovered = hovered_action.as_deref() == Some(id.as_str());
     let set_on_enter = set_hovered_action.clone();
     let set_on_exit = set_hovered_action;
     let idle_icon_color = popup_chrome_icon_color(color_scheme, false);
@@ -165,6 +246,32 @@ pub(super) fn popup_tab_button(
         }
     }
     layers.push(selection_marker);
+    if let Some(number) = account_number {
+        layers.push(
+            border(
+                text_block(number.to_string())
+                    .font_size(if number < 10 { 9.0 } else { 8.0 })
+                    .semibold()
+                    .foreground(ThemeRef::custom("TextOnAccentFillColorPrimaryBrush"))
+                    .horizontal_alignment(HorizontalAlignment::Center)
+                    .vertical_alignment(VerticalAlignment::Center),
+            )
+            .width(14.0)
+            .height(14.0)
+            .corner_radius(7.0)
+            .background(ThemeRef::Accent)
+            .relative_align_right()
+            .relative_align_bottom()
+            .margin(Thickness {
+                left: 0.0,
+                top: 0.0,
+                right: 1.0,
+                bottom: 4.0,
+            })
+            .with_key(format!("{id}-account-number-{number}"))
+            .into(),
+        );
+    }
     if has_error {
         layers.push(
             provider_error_badge(13.0, on_click.clone())
@@ -202,7 +309,7 @@ pub(super) fn popup_tab_button(
         .max_height(bottom_bar.icon_button_size())
         .background(Color::transparent())
         .on_pointer_entered(move |_: PointerEventInfo| {
-            set_on_enter.call(Some(id.to_string()));
+            set_on_enter.call(Some(enter_id.clone()));
         })
         .on_pointer_exited(move || set_on_exit.call(None))
         .on_pointer_wheel(on_wheel)

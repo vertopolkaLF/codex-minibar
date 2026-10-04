@@ -1,5 +1,28 @@
 use super::*;
 
+/// Filter a copy for Home only. The canonical quota snapshots remain intact.
+pub(super) fn claude_limits_for_home(
+    limits: &RateLimits,
+    saved: &[crate::settings::ClaudeProfile],
+    excluded: &[String],
+) -> Option<RateLimits> {
+    let enabled = claude_account_tabs(saved);
+    let is_visible = |id: &str| {
+        enabled.iter().any(|p| p.id == id) && !excluded.iter().any(|hidden| hidden == id)
+    };
+    if limits.claude_profiles.is_empty() {
+        // Legacy single-Default snapshots, and the placeholder before the
+        // first multi-profile read, describe only the first enabled account.
+        return enabled
+            .first()
+            .filter(|p| is_visible(&p.id))
+            .map(|_| limits.clone());
+    }
+    let mut filtered = limits.clone();
+    filtered.claude_profiles.retain(|p| is_visible(&p.id));
+    (!filtered.claude_profiles.is_empty()).then_some(filtered)
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct ResetCardReveal {
     key: Option<String>,
@@ -105,6 +128,66 @@ pub(super) fn provider_cards(
     hovered_reset_card: Option<&str>,
     set_hovered_reset_card: Option<SetState<Option<String>>>,
 ) -> Vec<Element> {
+    if !limits.claude_profiles.is_empty() {
+        // Each profile is its own keyed strip, so WinUI cannot recycle a card
+        // into another profile's slot when the profile set changes.
+        // A profile's own failure marks only that profile; a failure of the
+        // whole provider marks them all.
+        let any_profile_error = limits
+            .claude_profiles
+            .iter()
+            .any(|profile| profile.error.is_some());
+        let mut drag_handle = drag_handle;
+        let mut cards = limits
+            .claude_profiles
+            .iter()
+            .enumerate()
+            .map(|(index, profile)| {
+                vstack(provider_cards(
+                    provider,
+                    is_first && index == 0,
+                    &profile.limits,
+                    forced_resets,
+                    show_used_percentage,
+                    show_usage_pace,
+                    compact_usage_cards,
+                    show_usage_values,
+                    popup_visibility,
+                    surface,
+                    show_provider_tabs,
+                    // Usage statistics come from local logs shared by every
+                    // profile, so they are shown once below the profiles.
+                    false,
+                    true,
+                    color_scheme,
+                    drag_handle.take(),
+                    None,
+                    provider_error
+                        .as_ref()
+                        .filter(|_| profile.error.is_some() || !any_profile_error)
+                        .map(|(error, on_error)| (*error, on_error.clone())),
+                    forced_reset_hovered,
+                    set_forced_reset_hovered.clone(),
+                    reset_card_reveal,
+                    set_reset_card_reveal.clone(),
+                    hovered_reset_card,
+                    set_hovered_reset_card.clone(),
+                ))
+                .spacing(6.0)
+                .with_key(format!("claude-profile-{}", profile.id))
+                .into()
+            })
+            .collect::<Vec<Element>>();
+        cards.extend(shared_usage_statistics_card(
+            provider,
+            limits,
+            include_usage_stats,
+            popup_visibility,
+            surface,
+            show_provider_tabs,
+        ));
+        return cards;
+    }
     let (monthly_label, primary_label, secondary_label) = match provider {
         ProviderKind::Cursor => ("Cursor Models", "Cursor Models", "Cursor Models"),
         ProviderKind::OpenRouter => ("Spending", "Spending", "Spending"),
@@ -436,6 +519,21 @@ pub(super) fn provider_cards(
         )
     });
     cards.extend(additional_limits);
+    // A Claude profile backed by an Admin API key reports organization spend
+    // instead of subscription windows.
+    if provider == ProviderKind::Claude
+        && let Some(spending) = limits.spending.as_ref()
+    {
+        cards.push(
+            spending_card(
+                spending,
+                show_used_percentage,
+                compact_usage_cards,
+                color_scheme,
+            )
+            .with_key(format!("Claude-spending-{compact_usage_cards}")),
+        );
+    }
     if provider == ProviderKind::Codex
         && let Some(card) = forced_reset_card(
             forced_resets,
@@ -449,7 +547,12 @@ pub(super) fn provider_cards(
     if popup_visibility.is_visible(&resets_brick_id(provider), surface, show_provider_tabs)
         && limits.available_reset_count() > 0
     {
-        let expansion_key = format!("{}-{surface:?}", provider.id());
+        // The account keeps two Claude profiles from expanding together.
+        let expansion_key = format!(
+            "{}-{surface:?}-{}",
+            provider.id(),
+            limits.account_name.as_deref().unwrap_or_default()
+        );
         let hovered = hovered_reset_card == Some(expansion_key.as_str());
         cards.push(
             reset_credits_card(
@@ -475,6 +578,24 @@ pub(super) fn provider_cards(
         cards.push(credits_card(limits).with_key(format!("{}-credits", provider.display_name())));
     }
     cards
+}
+
+/// The usage card for a provider whose limit cards come from Claude profiles.
+pub(super) fn shared_usage_statistics_card(
+    provider: ProviderKind,
+    limits: &RateLimits,
+    include_usage_stats: bool,
+    popup_visibility: &PopupVisibility,
+    surface: PopupSurface,
+    show_provider_tabs: bool,
+) -> Option<Element> {
+    (include_usage_stats
+        && limits.usage.has_data()
+        && popup_visibility.is_visible(&usage_brick_id(provider), surface, show_provider_tabs))
+    .then(|| {
+        usage_statistics_card(provider, limits)
+            .with_key(format!("{}-usage-statistics", provider.display_name()))
+    })
 }
 
 pub(super) fn spending_card(
@@ -820,55 +941,98 @@ pub(super) fn popup_body_height_key(
         if provider == ProviderKind::OpenRouter {
             key.push_str(&openrouter_accounts_strip_key(snapshot));
         } else {
-            key.push(if snapshot.five_hour_disabled() {
-                '0'
-            } else {
-                '1'
-            });
-            key.push(if snapshot.spending.is_some() {
-                's'
-            } else {
-                '-'
-            });
-            key.push(if snapshot.usage.has_data() { 'u' } else { '-' });
-            key.push(if snapshot.is_free_plan() { 'f' } else { 'p' });
-            if snapshot.is_free_plan() {
-                if !snapshot.secondary.is_empty() {
-                    key.push(pace_label_layout_key(
-                        &snapshot.secondary,
-                        show_used_percentage,
-                        show_usage_pace,
-                    ));
-                }
-            } else {
-                if !snapshot.primary.is_empty() {
-                    key.push(pace_label_layout_key(
-                        &snapshot.primary,
-                        show_used_percentage,
-                        show_usage_pace,
-                    ));
-                }
-                if !snapshot.secondary.is_empty() {
-                    key.push(pace_label_layout_key(
-                        &snapshot.secondary,
-                        show_used_percentage,
-                        show_usage_pace,
-                    ));
-                }
+            // Every Claude profile adds its own cards and error marker.
+            for profile in &snapshot.claude_profiles {
+                key.push_str(&profile.id);
+                key.push(if profile.error.is_some() { '!' } else { ';' });
             }
-            for limit in &snapshot.additional_limits {
-                key.push('|');
-                key.push_str(&limit.id);
-                key.push(pace_label_layout_key(
-                    &limit.window,
-                    show_used_percentage,
-                    show_usage_pace,
-                ));
+            let profiles = snapshot
+                .claude_profiles
+                .iter()
+                .map(|profile| &profile.limits);
+            for snapshot in std::iter::once(snapshot).chain(profiles) {
+                push_limits_layout_key(&mut key, snapshot, show_used_percentage, show_usage_pace);
             }
         }
     }
     if matches!(view, PopupView::Home | PopupView::Codex) {
         key.push_str(&format!("|tibo-resets:{forced_reset_count}"));
+    }
+    key
+}
+
+/// The structural part of one limits snapshot: which cards it shows.
+fn push_limits_layout_key(
+    key: &mut String,
+    snapshot: &RateLimits,
+    show_used_percentage: bool,
+    show_usage_pace: bool,
+) {
+    key.push(if snapshot.five_hour_disabled() {
+        '0'
+    } else {
+        '1'
+    });
+    key.push(if snapshot.spending.is_some() {
+        's'
+    } else {
+        '-'
+    });
+    key.push(if snapshot.usage.has_data() { 'u' } else { '-' });
+    key.push(if snapshot.is_free_plan() { 'f' } else { 'p' });
+    if snapshot.is_free_plan() {
+        if !snapshot.secondary.is_empty() {
+            key.push(pace_label_layout_key(
+                &snapshot.secondary,
+                show_used_percentage,
+                show_usage_pace,
+            ));
+        }
+    } else {
+        if !snapshot.primary.is_empty() {
+            key.push(pace_label_layout_key(
+                &snapshot.primary,
+                show_used_percentage,
+                show_usage_pace,
+            ));
+        }
+        if !snapshot.secondary.is_empty() {
+            key.push(pace_label_layout_key(
+                &snapshot.secondary,
+                show_used_percentage,
+                show_usage_pace,
+            ));
+        }
+    }
+    for limit in &snapshot.additional_limits {
+        key.push('|');
+        key.push_str(&limit.id);
+        key.push(pace_label_layout_key(
+            &limit.window,
+            show_used_percentage,
+            show_usage_pace,
+        ));
+    }
+}
+
+/// Layout of the Claude profile shown on the provider tab. Switching to a
+/// profile with the same cards must not remount the page, or its content
+/// would replay the mount animation.
+pub(super) fn claude_profile_layout_key(
+    limits: &RateLimits,
+    selected: Option<&str>,
+    show_used_percentage: bool,
+    show_usage_pace: bool,
+) -> String {
+    let mut key = String::new();
+    if let Some(profile) = limits.claude_profile(selected) {
+        key.push(if profile.error.is_some() { '!' } else { ';' });
+        push_limits_layout_key(
+            &mut key,
+            &profile.limits,
+            show_used_percentage,
+            show_usage_pace,
+        );
     }
     key
 }

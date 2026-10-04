@@ -116,6 +116,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let (hovered_forced_reset_provider, set_hovered_forced_reset_provider) = cx.use_state(false);
     let (reset_card_reveal, set_reset_card_reveal) = cx.use_async_state(ResetCardReveal::default());
     let (hovered_reset_card, set_hovered_reset_card) = cx.use_state(None::<String>);
+    let (claude_profile, set_claude_profile) = cx.use_state(None::<String>);
     // Relative timestamps need an occasional render tick while the popup is
     // visible. `prepare_show_on_ui_thread` requests an immediate render on
     // every open, so there is no reason to reconcile the entire hidden WinUI
@@ -272,8 +273,16 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         })
         .collect::<Vec<_>>();
 
-    let enabled_provider_count = enabled_provider_order.len();
-    let show_provider_icon_tabs = enabled_provider_count > 1;
+    let claude_account_tabs = if ui.show_accounts_as_tabs && ui.claude_enabled {
+        claude_account_tabs(&ui.claude_profiles)
+    } else {
+        Vec::new()
+    };
+    let selected_claude_account =
+        selected_claude_account_tab(&claude_account_tabs, claude_profile.as_deref());
+    let provider_icon_tab_count =
+        provider_icon_tab_count(&enabled_provider_order, &claude_account_tabs);
+    let show_provider_icon_tabs = provider_icon_tab_count > 0;
     let show_provider_tabs = show_provider_icon_tabs;
     let show_footer_tabs = true;
     let selected_view = pager.current;
@@ -489,17 +498,43 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     provider_widget => {
                         let provider = provider_widget.as_provider().expect("provider widget");
                         let limits_for_provider = limits.get(provider);
-                        let provider_error = ui.provider_error(provider).map(|error| {
-                            let pager_dispatch = pager_dispatch.clone();
-                            (
-                                error,
-                                Callback::new(move |()| {
-                                    pager_dispatch.call(PagerAction::Select(
-                                        PopupView::from_provider(provider),
-                                    ));
-                                }),
-                            )
-                        });
+                        let home_claude_limits = (provider == ProviderKind::Claude)
+                            .then(|| {
+                                claude_limits_for_home(
+                                    limits_for_provider,
+                                    &ui.claude_profiles,
+                                    &ui.claude_home_excluded_profiles,
+                                )
+                            })
+                            .flatten();
+                        let hide_claude_cards =
+                            provider == ProviderKind::Claude && home_claude_limits.is_none();
+                        if hide_claude_cards {
+                            continue;
+                        }
+                        let limits_for_provider =
+                            home_claude_limits.as_ref().unwrap_or(limits_for_provider);
+                        // A failing Claude profile marks its own card; the
+                        // provider-level slot only carries the click target.
+                        let provider_error = ui
+                            .provider_error(provider)
+                            .or_else(|| {
+                                limits_for_provider
+                                    .claude_profiles
+                                    .iter()
+                                    .find_map(|profile| profile.error.as_deref())
+                            })
+                            .map(|error| {
+                                let pager_dispatch = pager_dispatch.clone();
+                                (
+                                    error,
+                                    Callback::new(move |()| {
+                                        pager_dispatch.call(PagerAction::Select(
+                                            PopupView::from_provider(provider),
+                                        ));
+                                    }),
+                                )
+                            });
                         let handle = can_reorder_widgets.then(|| {
                             drag_handle(
                                 provider_widget,
@@ -508,50 +543,57 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                                 set_widget_drag.clone(),
                             )
                         });
-                        vstack(provider_cards(
-                            provider,
-                            is_first,
-                            limits_for_provider,
-                            &forced_resets,
-                            ui.show_used_percentage,
-                            ui.show_usage_pace,
-                            ui.compact_usage_cards,
-                            ui.show_usage_values,
-                            &ui.popup_visibility,
-                            PopupSurface::HomeTab,
-                            show_provider_tabs,
-                            ui.usage_stats_provider_enabled(provider),
-                            ui.show_account_name,
-                            color_scheme,
-                            handle,
-                            (provider == ProviderKind::OpenRouter).then(|| {
-                                OpenRouterPopupActions {
-                                    settings_tx: settings_tx.clone(),
-                                    hovered_action: hovered_action.clone(),
-                                    set_hovered_action: set_hovered_action.clone(),
-                                    now: Utc::now(),
+                        let cards = if hide_claude_cards {
+                            Vec::new()
+                        } else {
+                            provider_cards(
+                                provider,
+                                is_first,
+                                limits_for_provider,
+                                &forced_resets,
+                                ui.show_used_percentage,
+                                ui.show_usage_pace,
+                                ui.compact_usage_cards,
+                                ui.show_usage_values,
+                                &ui.popup_visibility,
+                                PopupSurface::HomeTab,
+                                show_provider_tabs,
+                                ui.usage_stats_provider_enabled(provider),
+                                ui.show_account_name,
+                                color_scheme,
+                                handle,
+                                (provider == ProviderKind::OpenRouter).then(|| {
+                                    OpenRouterPopupActions {
+                                        settings_tx: settings_tx.clone(),
+                                        hovered_action: hovered_action.clone(),
+                                        set_hovered_action: set_hovered_action.clone(),
+                                        now: Utc::now(),
+                                    }
+                                }),
+                                provider_error,
+                                hovered_forced_reset_home,
+                                Some(set_hovered_forced_reset_home.clone()),
+                                Some(&reset_card_reveal),
+                                Some(set_reset_card_reveal.clone()),
+                                hovered_reset_card.as_deref(),
+                                Some(set_hovered_reset_card.clone()),
+                            )
+                        };
+                        vstack(cards)
+                            .spacing(6.0)
+                            .with_key(format!(
+                                "provider-{}-{}-{}",
+                                provider.id(),
+                                if is_first { "first" } else { "rest" },
+                                if provider == ProviderKind::OpenRouter {
+                                    openrouter_accounts_strip_key(limits_for_provider)
+                                } else if provider == ProviderKind::Claude {
+                                    format!("home-hidden={:?}", ui.claude_home_excluded_profiles)
+                                } else {
+                                    String::new()
                                 }
-                            }),
-                            provider_error,
-                            hovered_forced_reset_home,
-                            Some(set_hovered_forced_reset_home.clone()),
-                            Some(&reset_card_reveal),
-                            Some(set_reset_card_reveal.clone()),
-                            hovered_reset_card.as_deref(),
-                            Some(set_hovered_reset_card.clone()),
-                        ))
-                        .spacing(6.0)
-                        .with_key(format!(
-                            "provider-{}-{}-{}",
-                            provider.id(),
-                            if is_first { "first" } else { "rest" },
-                            if provider == ProviderKind::OpenRouter {
-                                openrouter_accounts_strip_key(limits_for_provider)
-                            } else {
-                                String::new()
-                            }
-                        ))
-                        .into()
+                            ))
+                            .into()
                     }
                 };
                 let section = if can_reorder_widgets {
@@ -646,58 +688,87 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 .collect();
             for provider in providers_for_view {
                 let limits_for_provider = limits.get(provider);
-                let provider_error = ui.provider_error(provider).map(|error| {
-                    let pager_dispatch = pager_dispatch.clone();
-                    (
-                        error,
-                        Callback::new(move |()| {
-                            pager_dispatch
-                                .call(PagerAction::Select(PopupView::from_provider(provider)));
-                        }),
-                    )
-                });
-                body.push(
-                    vstack(provider_cards(
+                // With several Claude profiles the tab shows one at a time,
+                // picked from the strip of profile buttons above the footer.
+                let profile = limits_for_provider.claude_profile(claude_profile.as_deref());
+                if let Some(selected) = profile
+                    && let Some(error) = &selected.error
+                {
+                    body.push(
+                        InfoBar::new(format!("{} error", selected.name))
+                            .message(UiState::error_for_ui(error))
+                            .error()
+                            .is_closable(false)
+                            .with_key(format!("popup-claude-profile-error-{}", selected.id))
+                            .into(),
+                    );
+                }
+                let provider_error = ui
+                    .provider_error(provider)
+                    .or(profile.and_then(|profile| profile.error.as_deref()))
+                    .map(|error| {
+                        let pager_dispatch = pager_dispatch.clone();
+                        (
+                            error,
+                            Callback::new(move |()| {
+                                pager_dispatch
+                                    .call(PagerAction::Select(PopupView::from_provider(provider)));
+                            }),
+                        )
+                    });
+                let mut cards = provider_cards(
+                    provider,
+                    !has_preceding_section,
+                    profile.map_or(limits_for_provider, |profile| &profile.limits),
+                    &forced_resets,
+                    ui.show_used_percentage,
+                    ui.show_usage_pace,
+                    ui.compact_usage_cards,
+                    ui.show_usage_values,
+                    &ui.popup_visibility,
+                    surface,
+                    show_provider_tabs,
+                    true,
+                    ui.show_account_name,
+                    color_scheme,
+                    None,
+                    (provider == ProviderKind::OpenRouter).then(|| OpenRouterPopupActions {
+                        settings_tx: settings_tx.clone(),
+                        hovered_action: hovered_action.clone(),
+                        set_hovered_action: set_hovered_action.clone(),
+                        now: Utc::now(),
+                    }),
+                    provider_error,
+                    hovered_forced_reset_provider,
+                    Some(set_hovered_forced_reset_provider.clone()),
+                    Some(&reset_card_reveal),
+                    Some(set_reset_card_reveal.clone()),
+                    hovered_reset_card.as_deref(),
+                    Some(set_hovered_reset_card.clone()),
+                );
+                if profile.is_some() {
+                    cards.extend(shared_usage_statistics_card(
                         provider,
-                        !has_preceding_section,
                         limits_for_provider,
-                        &forced_resets,
-                        ui.show_used_percentage,
-                        ui.show_usage_pace,
-                        ui.compact_usage_cards,
-                        ui.show_usage_values,
+                        true,
                         &ui.popup_visibility,
                         surface,
                         show_provider_tabs,
-                        true,
-                        ui.show_account_name,
-                        color_scheme,
-                        None,
-                        (provider == ProviderKind::OpenRouter).then(|| OpenRouterPopupActions {
-                            settings_tx: settings_tx.clone(),
-                            hovered_action: hovered_action.clone(),
-                            set_hovered_action: set_hovered_action.clone(),
-                            now: Utc::now(),
-                        }),
-                        provider_error,
-                        hovered_forced_reset_provider,
-                        Some(set_hovered_forced_reset_provider.clone()),
-                        Some(&reset_card_reveal),
-                        Some(set_reset_card_reveal.clone()),
-                        hovered_reset_card.as_deref(),
-                        Some(set_hovered_reset_card.clone()),
-                    ))
-                    .spacing(6.0)
-                    .with_key(format!(
-                        "provider-{}-{}",
-                        provider.id(),
-                        if provider == ProviderKind::OpenRouter {
-                            openrouter_accounts_strip_key(limits_for_provider)
-                        } else {
-                            String::new()
-                        }
-                    ))
-                    .into(),
+                    ));
+                }
+                body.push(
+                    vstack(cards)
+                        .spacing(6.0)
+                        .with_key(format!(
+                            "provider-{}-{}",
+                            provider.id(),
+                            if provider == ProviderKind::OpenRouter {
+                                openrouter_accounts_strip_key(limits_for_provider)
+                            } else {
+                                String::new()
+                            }
+                        ))
+                        .into(),
                 );
                 has_preceding_section = true;
             }
@@ -745,11 +816,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         // Build only live tabs — never pad with Element::Empty. Empty siblings
         // collapse during reconcile and let swap-chain hosts keep a prior
         // provider's pixels in another tab's slot.
-        let provider_tab_count = if show_provider_icon_tabs {
-            enabled_provider_order.len()
-        } else {
-            0
-        };
+        let provider_tab_count = provider_icon_tab_count;
         let tab_content_width =
             provider_tab_strip_content_width(provider_tab_count, ui.usage_stats_enabled);
         let tab_viewport_width = provider_tab_strip_viewport_width(ui.update_version.is_some());
@@ -780,6 +847,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             "Home",
             selected_view == PopupView::Home,
             false,
+            None,
             ui.use_colored_provider_icons,
             color_scheme,
             &hovered_action,
@@ -798,6 +866,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 "Usage",
                 selected_view == PopupView::Usage,
                 false,
+                None,
                 ui.use_colored_provider_icons,
                 color_scheme,
                 &hovered_action,
@@ -812,6 +881,56 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         if show_provider_icon_tabs {
             for provider in &enabled_provider_order {
                 let icon_name = crate::provider_registry::icon(*provider);
+                if *provider == ProviderKind::Claude && !claude_account_tabs.is_empty() {
+                    let mut account_buttons = Vec::new();
+                    for (index, account) in claude_account_tabs.iter().enumerate() {
+                        let id = account.id.clone();
+                        let set_claude_profile = set_claude_profile.clone();
+                        let pager_dispatch = pager_dispatch.clone();
+                        let has_error =
+                            ui.has_provider_error(ProviderKind::Claude)
+                                || limits.get(ProviderKind::Claude).claude_profiles.iter().any(
+                                    |profile| profile.id == account.id && profile.error.is_some(),
+                                );
+                        account_buttons.push(popup_tab_button(
+                            format!("provider-tab-claude-account-{}", account.id),
+                            Some(icon_name),
+                            None,
+                            format!("Claude · {}", account.name),
+                            selected_view == PopupView::Claude
+                                && selected_claude_account == Some(account.id.as_str()),
+                            has_error,
+                            Some(index + 1),
+                            ui.use_colored_provider_icons,
+                            color_scheme,
+                            &hovered_action,
+                            set_hovered_action.clone(),
+                            on_tab_wheel.clone(),
+                            move || {
+                                set_claude_profile.call(Some(id.clone()));
+                                pager_dispatch.call(PagerAction::Select(PopupView::Claude));
+                            },
+                        ));
+                    }
+                    provider_tabs.push(
+                        hstack(account_buttons)
+                            .spacing(bottom_bar_size.tab_spacing())
+                            .with_key(format!(
+                                "claude-account-tabs-{}",
+                                claude_account_tabs_key(&claude_account_tabs)
+                            ))
+                            .reorder_item(provider_tab_reorder_item(
+                                *provider,
+                                settings_tx.clone(),
+                                set_ui.clone(),
+                                ui.clone(),
+                                enabled_provider_order.clone(),
+                                page_animations_enabled,
+                            ))
+                            .into(),
+                    );
+                    continue;
+                }
                 let (tab_id, tip, view) = match provider {
                     ProviderKind::Codex => ("provider-tab-codex", "Codex", PopupView::Codex),
                     ProviderKind::Claude => ("provider-tab-claude", "Claude", PopupView::Claude),
@@ -847,6 +966,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                         tip,
                         selected_view == view,
                         ui.has_provider_error(*provider),
+                        None,
                         ui.use_colored_provider_icons,
                         color_scheme,
                         &hovered_action,
@@ -857,40 +977,19 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                             move || pager_dispatch.call(PagerAction::Select(view))
                         },
                     )
-                    .reorder_item({
-                        let settings_tx = settings_tx.clone();
-                        let set_ui = set_ui.clone();
-                        let ui = ui.clone();
-                        let visible = enabled_provider_order.clone();
-                        ReorderItem::new(
-                            provider.id(),
-                            "popup-provider-tabs",
-                            page_animations_enabled,
-                            move |(from, to): (String, String)| {
-                                let (Some(from), Some(to)) =
-                                    (ProviderKind::from_id(&from), ProviderKind::from_id(&to))
-                                else {
-                                    return;
-                                };
-                                let set_ui = set_ui.clone();
-                                let mut ui = ui.clone();
-                                crate::settings_window::persist_update(
-                                    settings_tx.clone(),
-                                    |settings| {
-                                        if settings.reorder_providers(from, to, &visible) {
-                                            ui.popup_order = settings.popup_order.clone();
-                                            set_ui.call(ui);
-                                        }
-                                    },
-                                );
-                            },
-                        )
-                    }),
+                    .reorder_item(provider_tab_reorder_item(
+                        *provider,
+                        settings_tx.clone(),
+                        set_ui.clone(),
+                        ui.clone(),
+                        enabled_provider_order.clone(),
+                        page_animations_enabled,
+                    )),
                 );
             }
         }
         let tabs_key = format!(
-            "{}-animations={}",
+            "{}-animations={}-account-tabs={}-claude={}",
             provider_tabs_key(
                 &enabled_provider_order,
                 ui.usage_stats_enabled,
@@ -903,7 +1002,9 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     .filter(|provider| ui.has_provider_error(*provider))
                     .collect::<Vec<_>>(),
             ),
-            page_animations_enabled
+            page_animations_enabled,
+            ui.show_accounts_as_tabs,
+            claude_account_tabs_key(&claude_account_tabs),
         );
         horizontal_wheel_strip(
             hstack(provider_tabs)
@@ -1060,6 +1161,20 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     .border_brush(ThemeRef::CardStroke)
     .horizontal_alignment(HorizontalAlignment::Stretch);
 
+    // Switching to a Claude profile with different cards rebuilds its page so
+    // the popup height is measured again.
+    let profile_layout = claude_profile_layout_key(
+        limits.get(ProviderKind::Claude),
+        claude_profile.as_deref(),
+        ui.show_used_percentage,
+        ui.show_usage_pace,
+    );
+    let previous_profile_layout = cx.use_ref(profile_layout.clone());
+    let profile_layout_changed = previous_profile_layout.get_cloned() != profile_layout;
+    if profile_layout_changed {
+        previous_profile_layout.set(profile_layout.clone());
+    }
+
     // The body can outgrow the popup when both providers, statistics, and an
     // error are visible. Give it the flexible row and keep the footer in a
     // separate Auto row so it remains fixed to the bottom edge.
@@ -1119,10 +1234,11 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
             view,
         );
         let body_layout_key = format!(
-            "{body_layout_key}-two={two_columns}-right={}",
+            "{body_layout_key}-two={two_columns}-right={}-profile={}",
             ui.popup_right_column
                 .as_deref()
-                .map_or_else(|| "auto".into(), popup_order_key)
+                .map_or_else(|| "auto".into(), popup_order_key),
+            profile_layout
         );
         let page_width = if view.uses_two_columns(two_columns) {
             popup::POPUP_WIDE_WIDTH
@@ -1163,6 +1279,20 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                     current,
                     set_drag.clone(),
                 );
+            });
+        }
+        if from_x == to_x
+            && measure_height
+            && view == PopupView::Claude
+            && profile_layout_changed
+            && page_animations_enabled
+        {
+            // The rebuilt page is measured a frame after it mounts. Fade it
+            // in so that frame at the previous popup height is not seen as
+            // the cards jumping.
+            content = content.animate(AnimationConfig {
+                easing: Easing::Fluent,
+                ..AnimationConfig::fade_in(PAGER_ANIMATION_DURATION)
             });
         }
         if from_x != to_x {
@@ -1266,9 +1396,66 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
         .vertical_alignment(VerticalAlignment::Stretch)
         .grid_row(0);
 
+    // The Claude profile switcher is pinned above the footer, outside the
+    // scrolling page. Inside the page it would slide out from under the
+    // pointer while a profile switch resizes the popup.
+    const PROFILE_STRIP_HEIGHT: i32 = 46;
+    let claude_profiles = &limits.get(ProviderKind::Claude).claude_profiles;
+    let show_profile_strip = selected_view == PopupView::Claude
+        && !ui.show_accounts_as_tabs
+        && !claude_profiles.is_empty();
+    cx.use_effect(show_profile_strip, move || {
+        popup::set_footer_extra_height_dip(if show_profile_strip {
+            PROFILE_STRIP_HEIGHT
+        } else {
+            0
+        });
+    });
+    let mut shell_rows: Vec<Element> = vec![page_viewport.into()];
+    if show_profile_strip {
+        let selected = limits
+            .get(ProviderKind::Claude)
+            .claude_profile(claude_profile.as_deref())
+            .map(|profile| profile.id.as_str());
+        let ids = claude_profiles
+            .iter()
+            .map(|profile| profile.id.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        let tabs = claude_profiles
+            .iter()
+            .map(|profile| {
+                let set_claude_profile = set_claude_profile.clone();
+                let id = profile.id.clone();
+                crate::popup_usage::segmented_tab(
+                    profile.name.clone(),
+                    selected == Some(profile.id.as_str()),
+                    move || set_claude_profile.call(Some(id.clone())),
+                )
+            })
+            .collect();
+        shell_rows.push(
+            border(crate::popup_usage::segmented_control(
+                &format!("claude-profiles-{ids}"),
+                tabs,
+                true,
+            ))
+            .padding(Thickness {
+                left: 16.0,
+                top: 0.0,
+                right: 16.0,
+                bottom: 10.0,
+            })
+            .height(f64::from(PROFILE_STRIP_HEIGHT))
+            .grid_row(1)
+            .with_key(format!("claude-profile-strip-{ids}"))
+            .into(),
+        );
+    }
+    shell_rows.push(footer.grid_row(2).into());
     let body_panel = border(
-        grid((page_viewport, footer.grid_row(1)))
-            .rows([GridLength::Star(1.0), GridLength::Auto])
+        grid(shell_rows)
+            .rows([GridLength::Star(1.0), GridLength::Auto, GridLength::Auto])
             .columns([GridLength::Star(1.0)])
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .vertical_alignment(VerticalAlignment::Stretch)

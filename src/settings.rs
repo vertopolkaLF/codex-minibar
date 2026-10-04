@@ -697,9 +697,9 @@ impl Default for OpenRouterAccount {
 impl OpenRouterAccount {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
-            id: new_openrouter_id("account"),
+            id: new_id("openrouter-account"),
             name: name.into(),
-            api_key_ids: vec![new_openrouter_id("api")],
+            api_key_ids: vec![new_id("openrouter-api")],
             api_key_names: Default::default(),
         }
     }
@@ -715,13 +715,13 @@ impl OpenRouterAccount {
     }
 
     pub fn new_api_key_id() -> String {
-        new_openrouter_id("api")
+        new_id("openrouter-api")
     }
 
     pub fn normalize(&mut self) -> bool {
         let mut changed = false;
         if self.id.trim().is_empty() {
-            self.id = new_openrouter_id("account");
+            self.id = new_id("openrouter-account");
             changed = true;
         }
         if self.name.trim().is_empty() {
@@ -748,7 +748,34 @@ impl OpenRouterAccount {
     }
 }
 
-fn new_openrouter_id(prefix: &str) -> String {
+/// A Claude account tracked by Minibar. The built-in `default` profile follows
+/// this PC's Claude login; every other profile uses a pasted credential kept
+/// in the protected provider secret store.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaudeProfile {
+    pub id: String,
+    pub name: String,
+    #[serde(default = "default_show_usage_values")]
+    pub enabled: bool,
+}
+
+impl ClaudeProfile {
+    pub const DEFAULT_ID: &'static str = "default";
+
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            id: new_id("claude-profile"),
+            name: name.into(),
+            enabled: true,
+        }
+    }
+
+    pub fn is_default(&self) -> bool {
+        self.id == Self::DEFAULT_ID
+    }
+}
+
+fn new_id(prefix: &str) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -758,7 +785,7 @@ fn new_openrouter_id(prefix: &str) -> String {
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     let sequence = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    format!("openrouter-{prefix}-{timestamp:x}-{sequence:x}")
+    format!("{prefix}-{timestamp:x}-{sequence:x}")
 }
 
 impl ProviderKind {
@@ -1642,6 +1669,8 @@ pub struct Settings {
     /// Brand-colored provider glyphs in the popup. Settings expose the inverse
     /// as "Use monochrome icons".
     pub use_colored_provider_icons: bool,
+    #[serde(default)]
+    pub show_accounts_as_tabs: bool,
     /// Fluent Color glyphs in the Settings sidebar. When false, monochrome
     /// Phosphor paths follow the resolved theme foreground instead. Settings
     /// expose the inverse as "Use monochrome icons".
@@ -1721,6 +1750,17 @@ pub struct Settings {
     /// stored separately in protected Windows user storage.
     #[serde(default)]
     pub openrouter_accounts: Vec<OpenRouterAccount>,
+    /// Claude profiles the user changed or added. The default profile is
+    /// implied until it is saved here; see `claude::profiles_for_settings`.
+    #[serde(default)]
+    pub claude_profiles: Vec<ClaudeProfile>,
+    /// Home visibility is independent of polling and provider-tab visibility.
+    #[serde(default)]
+    pub claude_home_excluded_profiles: Vec<String>,
+    /// Reject queued results and refresh the running Claude reader after a
+    /// profile's protected credential or enabled account set changes.
+    #[serde(default)]
+    pub claude_credentials_revision: u64,
     pub tray_widgets: Vec<TrayWidget>,
     pub notifications: NotificationSettings,
     pub history_retention_days: u16,
@@ -1748,6 +1788,7 @@ impl Default for Settings {
             popup_two_columns: false,
             popup_right_column: None,
             use_colored_provider_icons: true,
+            show_accounts_as_tabs: false,
             use_colored_sidebar_icons: true,
             replace_chatgpt_logo_with_codex: false,
             automatic_activation: false,
@@ -1780,6 +1821,9 @@ impl Default for Settings {
             opencode_go_credentials_revision: 0,
             openrouter_credentials_revision: 0,
             openrouter_accounts: Vec::new(),
+            claude_profiles: Vec::new(),
+            claude_home_excluded_profiles: Vec::new(),
+            claude_credentials_revision: 0,
             // An empty list intentionally means "show the ordinary app icon".
             tray_widgets: Vec::new(),
             notifications: NotificationSettings::default(),
@@ -1965,11 +2009,19 @@ impl Settings {
         for account in &mut self.openrouter_accounts {
             changed |= account.normalize();
             if !account_ids.insert(account.id.clone()) {
-                account.id = new_openrouter_id("account");
+                account.id = new_id("openrouter-account");
                 account_ids.insert(account.id.clone());
                 changed = true;
             }
         }
+        // A profile's id names its saved credential, so a duplicate is dropped
+        // rather than given a new id.
+        let mut profile_ids = std::collections::HashSet::new();
+        let profile_count = self.claude_profiles.len();
+        self.claude_profiles.retain(|profile| {
+            !profile.id.trim().is_empty() && profile_ids.insert(profile.id.clone())
+        });
+        changed |= self.claude_profiles.len() != profile_count;
         if self.version < SETTINGS_VERSION {
             self.version = SETTINGS_VERSION;
             changed = true;

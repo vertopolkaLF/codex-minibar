@@ -282,6 +282,7 @@ static POPUP_BACKGROUND_MATERIAL: AtomicU8 =
     AtomicU8::new(PopupBackgroundMaterial::Acrylic.index() as u8);
 /// Natural height of the body stack, including its padding, in DIPs.
 static BODY_CONTENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(0);
+static FOOTER_EXTRA_HEIGHT_DIP: AtomicI32 = AtomicI32::new(0);
 /// Dynamic client-height limit for the monitor that owns the current popup.
 static MAX_CLIENT_HEIGHT_DIP: AtomicI32 = AtomicI32::new(FALLBACK_CLIENT_HEIGHT_LIMIT);
 /// Physical monitor bounds (not work area) — right edge is the seam to the next display.
@@ -397,7 +398,16 @@ pub fn bottom_bar_icon_glyph_size() -> f64 {
 }
 
 fn footer_height_dip() -> i32 {
-    bottom_bar_size().footer_height_dip()
+    bottom_bar_size().footer_height_dip() + FOOTER_EXTRA_HEIGHT_DIP.load(Ordering::SeqCst)
+}
+
+/// Reserves room for a strip pinned between the page and the footer, such
+/// as the Claude profile switcher. It counts as footer height, so the page
+/// is still measured on its own.
+pub fn set_footer_extra_height_dip(height_dip: i32) {
+    if FOOTER_EXTRA_HEIGHT_DIP.swap(height_dip, Ordering::SeqCst) != height_dip {
+        resize_for_body_content();
+    }
 }
 
 pub fn corner_radius_dip() -> i32 {

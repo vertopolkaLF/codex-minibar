@@ -4,8 +4,8 @@
 //! details; both surfaces share tokens from [`crate::theme`].
 
 use crate::settings::{
-    AccentColor, AppTheme, AutoActivationPause, BottomBarSize, LimitRefreshInterval, LimitValue,
-    OpenRouterAccount, PopupBackgroundMaterial, PopupCornerRadius, PopupVisibility,
+    AccentColor, AppTheme, AutoActivationPause, BottomBarSize, ClaudeProfile, LimitRefreshInterval,
+    LimitValue, OpenRouterAccount, PopupBackgroundMaterial, PopupCornerRadius, PopupVisibility,
     PopupWidgetKind, ProviderKind, ResetAnnouncementRefreshInterval, ScheduledActivation, Settings,
     TimeFormat, TotalSpendPresentation, TrayColorMode, TrayFixedColor, TrayIndicator,
     TrayPresentation, TrayWidget, TrayWidgetKind, UsageRefreshInterval,
@@ -373,6 +373,10 @@ pub fn render(
         cx.use_state(settings.providers.is_enabled(ProviderKind::Kiro));
     let (openrouter_accounts, set_openrouter_accounts) =
         cx.use_state(crate::openrouter::accounts_for_settings(&settings));
+    let (claude_profiles, set_claude_profiles) =
+        cx.use_state(crate::claude::profiles_for_settings(&settings));
+    let (claude_home_excluded_profiles, set_claude_home_excluded_profiles) =
+        cx.use_state(settings.claude_home_excluded_profiles.clone());
     let (openrouter_snapshot, set_openrouter_snapshot) = cx.use_state(cached_openrouter_snapshot());
     let (expanded_provider_cards, set_expanded_provider_cards) =
         cx.use_async_state(Vec::<String>::new());
@@ -769,6 +773,8 @@ pub fn render(
 
     let (use_colored_provider_icons, set_use_colored_provider_icons) =
         cx.use_state(settings.use_colored_provider_icons);
+    let (show_accounts_as_tabs, set_show_accounts_as_tabs) =
+        cx.use_state(settings.show_accounts_as_tabs);
     let (replace_chatgpt_logo_with_codex, set_replace_chatgpt_logo_with_codex) =
         cx.use_state(settings.replace_chatgpt_logo_with_codex);
     let (start_at_login, set_start_at_login) = cx.use_state(settings.start_at_login);
@@ -861,6 +867,8 @@ pub fn render(
             grok_enabled: set_grok_enabled.clone(),
             kiro_enabled: set_kiro_enabled.clone(),
             openrouter_accounts: set_openrouter_accounts.clone(),
+            claude_profiles: set_claude_profiles.clone(),
+            claude_home_excluded_profiles: set_claude_home_excluded_profiles.clone(),
             codex_path: set_codex_path.clone(),
             claude_path: set_claude_path.clone(),
             cursor_path: set_cursor_path.clone(),
@@ -871,6 +879,7 @@ pub fn render(
             kiro_cli_path: set_kiro_cli_path.clone(),
             popup_order: set_popup_order.clone(),
             use_colored_provider_icons: set_use_colored_provider_icons.clone(),
+            show_accounts_as_tabs: set_show_accounts_as_tabs.clone(),
             use_colored_sidebar_icons: set_use_colored_sidebar_icons.clone(),
             replace_chatgpt_logo_with_codex: set_replace_chatgpt_logo_with_codex.clone(),
             automatic_activation: set_automatic_activation.clone(),
@@ -942,12 +951,15 @@ pub fn render(
         grok_install_status: &grok_install_status,
         kiro_install_status: &kiro_install_status,
         openrouter_accounts: &openrouter_accounts,
+        claude_profiles: &claude_profiles,
+        claude_home_excluded_profiles: &claude_home_excluded_profiles,
         openrouter_snapshot: &openrouter_snapshot,
         expanded_provider_cards: &expanded_provider_cards,
         provider_notice: &provider_notice,
         color_scheme,
         popup_order: &popup_order,
         use_colored_provider_icons,
+        show_accounts_as_tabs,
         use_colored_sidebar_icons,
         replace_chatgpt_logo_with_codex,
         automatic_activation,
@@ -1012,6 +1024,8 @@ pub fn render(
         set_grok_enabled: set_grok_enabled.clone(),
         set_kiro_enabled: set_kiro_enabled.clone(),
         set_openrouter_accounts: set_openrouter_accounts.clone(),
+        set_claude_profiles: set_claude_profiles.clone(),
+        set_claude_home_excluded_profiles: set_claude_home_excluded_profiles.clone(),
         set_expanded_provider_cards: set_expanded_provider_cards.clone(),
         set_provider_dialog: set_provider_dialog.clone(),
         set_provider_notice: set_provider_notice.clone(),
@@ -1025,6 +1039,7 @@ pub fn render(
         set_kiro_cli_path: set_kiro_cli_path.clone(),
         set_popup_order: set_popup_order.clone(),
         set_use_colored_provider_icons: set_use_colored_provider_icons.clone(),
+        set_show_accounts_as_tabs: set_show_accounts_as_tabs.clone(),
         set_use_colored_sidebar_icons: set_use_colored_sidebar_icons.clone(),
         set_replace_chatgpt_logo_with_codex: set_replace_chatgpt_logo_with_codex.clone(),
         set_automatic_activation: set_automatic_activation.clone(),

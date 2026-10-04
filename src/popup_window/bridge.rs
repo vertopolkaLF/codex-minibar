@@ -9,6 +9,7 @@ pub(super) fn provider_worker_event_is_current(
 ) -> bool {
     let current_revision = match provider {
         ProviderKind::OpenRouter => ui.openrouter_credentials_revision,
+        ProviderKind::Claude => ui.claude_credentials_revision,
         _ => 0,
     };
     worker_revision == current_revision
@@ -47,6 +48,18 @@ fn notify_new_forced_reset_info(
             state.mark_forced_reset_info_notified(reset.id.clone());
         }
     }
+}
+
+/// The tracker for one Claude profile, named so its toasts say which account
+/// they are about.
+fn claude_profile_tracker<'a>(
+    trackers: &'a mut HashMap<String, LimitNotificationTracker>,
+    profile: &crate::limits::ClaudeProfileSnapshot,
+) -> &'a mut LimitNotificationTracker {
+    trackers
+        .entry(format!("claude:{}", profile.id))
+        .or_default()
+        .named(format!("Claude · {}", profile.name))
 }
 
 pub(super) fn update_available_from_phase(phase: &UpdatePhase) -> bool {
@@ -102,7 +115,10 @@ pub(super) fn start_background_bridge(
         let mut tray = TrayManager::new();
         let fallback_attempt = state.last_activation_at;
         let mut notification_settings = state.settings.notifications.clone();
-        let mut limit_notifications = HashMap::<ProviderKind, LimitNotificationTracker>::new();
+        // Keyed by provider id, or by profile for a multi-profile provider.
+        let mut limit_notifications = HashMap::<String, LimitNotificationTracker>::new();
+        let mut notified_claude_profiles = state.settings.claude_profiles.clone();
+        let mut notified_claude_revision = state.settings.claude_credentials_revision;
         let mut pending_auto_activation_successes = HashSet::<ProviderKind>::new();
         let mut forced_reset_notified_ids = HashSet::<String>::new();
         let mut usage_clear_generation = 0_u64;
@@ -152,9 +168,13 @@ pub(super) fn start_background_bridge(
             openrouter_credentials_revision: state.settings.openrouter_credentials_revision,
             popup_order: state.settings.popup_order.clone(),
             use_colored_provider_icons: state.settings.use_colored_provider_icons,
+            show_accounts_as_tabs: state.settings.show_accounts_as_tabs,
             replace_chatgpt_logo_with_codex: state.settings.replace_chatgpt_logo_with_codex,
             codex_path: state.settings.codex_path.clone(),
             claude_path: state.settings.claude_path.clone(),
+            claude_profiles: state.settings.claude_profiles.clone(),
+            claude_home_excluded_profiles: state.settings.claude_home_excluded_profiles.clone(),
+            claude_credentials_revision: state.settings.claude_credentials_revision,
             cursor_path: state.settings.cursor_path.clone(),
             antigravity_path: state.settings.antigravity_path.clone(),
             grok_path: state.settings.grok_path.clone(),
@@ -234,6 +254,26 @@ pub(super) fn start_background_bridge(
                     ui_dispatcher.clone(),
                 );
             }
+            // A rename only relabels the cards. Adding, removing or toggling
+            // a profile changes what is read, so the reader restarts.
+            let read_set = |profiles: &[crate::settings::ClaudeProfile]| {
+                profiles
+                    .iter()
+                    .map(|profile| (profile.id.clone(), profile.enabled))
+                    .collect::<Vec<_>>()
+            };
+            let claude_profiles_changed =
+                read_set(&ui.claude_profiles) != read_set(&settings.claude_profiles);
+            let claude_credentials_changed =
+                ui.claude_credentials_revision != settings.claude_credentials_revision;
+            if claude_profiles_changed || claude_credentials_changed {
+                // Never show a removed or disabled profile's numbers while
+                // the restarted worker makes its first read.
+                state.replace_limits(ProviderKind::Claude, RateLimits::default());
+                ui.observe_limits_update();
+            } else if state.apply_claude_profile_names(&settings) {
+                ui.observe_limits_update();
+            }
             ui.theme = settings.theme;
             ui.accent_color = settings.accent_color;
             ui.animations_enabled = settings.animations_enabled;
@@ -266,6 +306,7 @@ pub(super) fn start_background_bridge(
             ui.popup_two_columns = settings.popup_two_columns;
             ui.popup_right_column = settings.popup_right_column.clone();
             ui.use_colored_provider_icons = settings.use_colored_provider_icons;
+            ui.show_accounts_as_tabs = settings.show_accounts_as_tabs;
             ui.replace_chatgpt_logo_with_codex = settings.replace_chatgpt_logo_with_codex;
             *notification_settings = settings.notifications.clone();
             state.sync_reset_feed(&settings);
@@ -286,7 +327,12 @@ pub(super) fn start_background_bridge(
             flush_popup_ui(set_ui, ui);
             let restart = [
                 (ProviderKind::Codex, settings.codex_path != ui.codex_path),
-                (ProviderKind::Claude, settings.claude_path != ui.claude_path),
+                (
+                    ProviderKind::Claude,
+                    settings.claude_path != ui.claude_path
+                        || claude_profiles_changed
+                        || claude_credentials_changed,
+                ),
                 (ProviderKind::Cursor, settings.cursor_path != ui.cursor_path),
                 (
                     ProviderKind::Antigravity,
@@ -306,6 +352,9 @@ pub(super) fn start_background_bridge(
             .collect::<Vec<_>>();
             ui.codex_path = settings.codex_path.clone();
             ui.claude_path = settings.claude_path.clone();
+            ui.claude_profiles = settings.claude_profiles.clone();
+            ui.claude_home_excluded_profiles = settings.claude_home_excluded_profiles.clone();
+            ui.claude_credentials_revision = settings.claude_credentials_revision;
             ui.cursor_path = settings.cursor_path.clone();
             ui.antigravity_path = settings.antigravity_path.clone();
             ui.grok_path = settings.grok_path.clone();
@@ -345,8 +394,7 @@ pub(super) fn start_background_bridge(
             }
             for (provider, commands) in state.worker_commands() {
                 let _ = commands.send(WorkerCommand::SetAutomaticActivation(
-                    settings.automatic_activation
-                        && crate::provider_registry::descriptor(provider).supports_activation,
+                    crate::provider::automatic_activation(provider, &settings),
                 ));
                 let schedules = settings
                     .scheduled_activations
@@ -685,6 +733,10 @@ pub(super) fn start_background_bridge(
                     if provider == ProviderKind::OpenRouter {
                         crate::openrouter::apply_account_names(&mut limits, &live_settings);
                     }
+                    // The running reader still has the names it started with.
+                    if provider == ProviderKind::Claude {
+                        crate::claude::apply_profile_names(&mut limits, &live_settings);
+                    }
                     // Publish once, then let both native tray and WinUI render
                     // from that exact snapshot.
                     state.replace_limits(provider, limits);
@@ -711,22 +763,43 @@ pub(super) fn start_background_bridge(
                     }
                     let combine_activation_notification =
                         pending_auto_activation_successes.remove(&provider);
-                    let notification_result = if combine_activation_notification {
+                    // With several Claude profiles each one is tracked by
+                    // itself and named in its toasts. The first profile is
+                    // also the provider-level snapshot observed here.
+                    if provider == ProviderKind::Claude
+                        && (notified_claude_profiles != ui.claude_profiles
+                            || notified_claude_revision != ui.claude_credentials_revision)
+                    {
+                        // A tracker primed on one account must not compare
+                        // its reset time with a different account's.
+                        notified_claude_profiles = ui.claude_profiles.clone();
+                        notified_claude_revision = ui.claude_credentials_revision;
                         limit_notifications
-                            .entry(provider)
-                            .or_default()
-                            .observe_with_primary_reset_deferred(
-                                limits.get(provider),
-                                &notification_settings,
-                                provider,
-                            )
-                    } else {
-                        limit_notifications.entry(provider).or_default().observe(
+                            .retain(|key, _| !key.starts_with(ProviderKind::Claude.id()));
+                    }
+                    let profiles = &limits.get(provider).claude_profiles;
+                    let tracker = match profiles.first() {
+                        Some(profile) => claude_profile_tracker(&mut limit_notifications, profile),
+                        None => limit_notifications
+                            .entry(provider.id().to_owned())
+                            .or_default(),
+                    };
+                    let notification_result = if combine_activation_notification {
+                        tracker.observe_with_primary_reset_deferred(
                             limits.get(provider),
                             &notification_settings,
                             provider,
                         )
+                    } else {
+                        tracker.observe(limits.get(provider), &notification_settings, provider)
                     };
+                    for profile in profiles.iter().skip(1) {
+                        claude_profile_tracker(&mut limit_notifications, profile).observe(
+                            &profile.limits,
+                            &notification_settings,
+                            provider,
+                        );
+                    }
                     if combine_activation_notification {
                         if notification_result.primary_reset {
                             notifications::show_activation_succeeded_after_reset(provider);

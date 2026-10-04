@@ -3,7 +3,196 @@ use std::collections::HashSet;
 use chrono::TimeZone;
 
 use super::*;
+use crate::claude::set_home_profile_visibility as set_claude_home_visibility;
 use crate::settings::{PopupSurface, PopupVisibility};
+
+#[test]
+fn home_account_visibility_filters_only_the_rendered_copy_and_can_restore_all() {
+    use crate::settings::ClaudeProfile;
+    let profiles = vec![
+        ClaudeProfile {
+            id: ClaudeProfile::DEFAULT_ID.into(),
+            name: "Default".into(),
+            enabled: true,
+        },
+        ClaudeProfile {
+            id: "work".into(),
+            name: "Work".into(),
+            enabled: true,
+        },
+    ];
+    let limits = RateLimits {
+        claude_profiles: profiles
+            .iter()
+            .enumerate()
+            .map(|(index, profile)| crate::limits::ClaudeProfileSnapshot {
+                id: profile.id.clone(),
+                name: profile.name.clone(),
+                limits: RateLimits {
+                    primary: LimitWindow {
+                        used_percent: Some(10 + index as u8),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                error: None,
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let mut excluded = Vec::new();
+    set_claude_home_visibility(&mut excluded, ClaudeProfile::DEFAULT_ID, false);
+    set_claude_home_visibility(&mut excluded, ClaudeProfile::DEFAULT_ID, false);
+    assert_eq!(excluded.len(), 1);
+    let home = claude_limits_for_home(&limits, &profiles, &excluded).unwrap();
+    assert_eq!(home.claude_profiles.len(), 1);
+    assert_eq!(home.claude_profiles[0].id, "work");
+    assert_eq!(
+        home.claude_profiles[0].limits.primary.used_percent,
+        Some(11)
+    );
+    assert_eq!(limits.claude_profiles.len(), 2);
+    assert_eq!(claude_account_tabs(&profiles).len(), 2);
+    set_claude_home_visibility(&mut excluded, "work", false);
+    assert!(claude_limits_for_home(&limits, &profiles, &excluded).is_none());
+    set_claude_home_visibility(&mut excluded, "work", true);
+    assert_eq!(
+        claude_limits_for_home(&limits, &profiles, &excluded)
+            .unwrap()
+            .claude_profiles[0]
+            .id,
+        "work"
+    );
+    set_claude_home_visibility(&mut excluded, ClaudeProfile::DEFAULT_ID, true);
+    assert_eq!(
+        claude_limits_for_home(&limits, &profiles, &excluded)
+            .unwrap()
+            .claude_profiles
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn home_visibility_also_hides_the_legacy_single_default_snapshot() {
+    let limits = plan_limits("pro");
+    assert!(claude_limits_for_home(&limits, &[], &[]).is_some());
+    assert!(
+        claude_limits_for_home(
+            &limits,
+            &[],
+            &[crate::settings::ClaudeProfile::DEFAULT_ID.into()]
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn claude_account_tabs_follow_enabled_profiles_and_fall_back_after_removal() {
+    use crate::settings::ClaudeProfile;
+    let implicit = claude_account_tabs(&[]);
+    assert_eq!(implicit.len(), 1);
+    assert_eq!(implicit[0].id, ClaudeProfile::DEFAULT_ID);
+    let saved = vec![
+        ClaudeProfile {
+            id: ClaudeProfile::DEFAULT_ID.into(),
+            name: "Default".into(),
+            enabled: false,
+        },
+        ClaudeProfile {
+            id: "work".into(),
+            name: "Work".into(),
+            enabled: true,
+        },
+        ClaudeProfile {
+            id: "personal".into(),
+            name: "Personal".into(),
+            enabled: true,
+        },
+    ];
+    let tabs = claude_account_tabs(&saved);
+    assert_eq!(
+        tabs.iter()
+            .map(|p| (p.id.as_str(), p.name.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("work", "Work"), ("personal", "Personal")]
+    );
+    assert_eq!(
+        selected_claude_account_tab(&tabs, Some("personal")),
+        Some("personal")
+    );
+    assert_eq!(
+        selected_claude_account_tab(&tabs, Some("removed")),
+        Some("work")
+    );
+    let mut reversed = tabs.clone();
+    reversed.reverse();
+    assert_ne!(
+        claude_account_tabs_key(&tabs),
+        claude_account_tabs_key(&reversed)
+    );
+    assert_ne!(
+        claude_account_tabs_key(&tabs),
+        claude_account_tabs_key(&tabs[..1])
+    );
+    assert_eq!(selected_claude_account_tab(&[], Some("work")), None);
+    let disabled = saved
+        .into_iter()
+        .map(|mut p| {
+            p.enabled = false;
+            p
+        })
+        .collect::<Vec<_>>();
+    assert!(claude_account_tabs(&disabled).is_empty());
+}
+
+#[test]
+fn account_tabs_replace_only_claude_for_every_enabled_provider_combination() {
+    let accounts = claude_account_tabs(&[
+        crate::settings::ClaudeProfile {
+            id: "work".into(),
+            name: "Work".into(),
+            enabled: true,
+        },
+        crate::settings::ClaudeProfile {
+            id: "personal".into(),
+            name: "Personal".into(),
+            enabled: true,
+        },
+    ]);
+    for mask in 0..(1usize << ProviderKind::ALL.len()) {
+        let providers = ProviderKind::ALL
+            .iter()
+            .enumerate()
+            .filter_map(|(index, provider)| ((mask & (1 << index)) != 0).then_some(*provider))
+            .collect::<Vec<_>>();
+        let enabled_accounts = if providers.contains(&ProviderKind::Claude) {
+            accounts.as_slice()
+        } else {
+            &[]
+        };
+        let expected = if providers.contains(&ProviderKind::Claude) {
+            providers.len() + 2
+        } else if providers.len() > 1 {
+            providers.len()
+        } else {
+            0
+        };
+        assert_eq!(
+            provider_icon_tab_count(&providers, enabled_accounts),
+            expected,
+            "mask={mask}"
+        );
+        assert_eq!(
+            provider_icon_tab_count(&providers, &[]),
+            if providers.len() > 1 {
+                providers.len()
+            } else {
+                0
+            }
+        );
+    }
+}
 
 fn plan_limits(plan_type: &str) -> RateLimits {
     RateLimits {
@@ -708,6 +897,7 @@ fn every_limits_sample_forces_a_reactive_state_change() {
 fn credential_worker_events_are_accepted_only_for_the_current_revision() {
     let ui = UiState {
         openrouter_credentials_revision: 7,
+        claude_credentials_revision: 3,
         ..UiState::default()
     };
 
@@ -720,6 +910,21 @@ fn credential_worker_events_are_accepted_only_for_the_current_revision() {
         &ui,
         ProviderKind::OpenRouter,
         6
+    ));
+    assert!(bridge::provider_worker_event_is_current(
+        &ui,
+        ProviderKind::Claude,
+        3
+    ));
+    assert!(!bridge::provider_worker_event_is_current(
+        &ui,
+        ProviderKind::Claude,
+        2
+    ));
+    assert!(!bridge::provider_worker_event_is_current(
+        &ui,
+        ProviderKind::Claude,
+        0
     ));
     assert!(bridge::provider_worker_event_is_current(
         &ui,
@@ -1335,4 +1540,46 @@ fn two_column_native_host_stays_wide_on_every_compact_provider_page() {
             }
         }
     }
+}
+
+#[test]
+fn home_shows_every_claude_profile_as_its_own_strip() {
+    let mut limits = plan_limits("max");
+    for id in ["default", "work"] {
+        limits
+            .claude_profiles
+            .push(crate::limits::ClaudeProfileSnapshot {
+                id: id.into(),
+                name: id.into(),
+                limits: plan_limits("max"),
+                error: None,
+            });
+    }
+    let cards = provider_cards(
+        ProviderKind::Claude,
+        true,
+        &limits,
+        &[],
+        false,
+        true,
+        false,
+        true,
+        &all_visible(),
+        PopupSurface::HomeTab,
+        true,
+        true,
+        false,
+        ColorScheme::Dark,
+        None,
+        None,
+        None,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    // One keyed strip per profile instead of one flat list of limit cards.
+    assert_eq!(cards.len(), 2);
 }

@@ -74,6 +74,18 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
             "customize-two-columns", hovered_card_id, set_hovered_card_id.clone(),
         ).with_key("customize-two-columns"),
         settings_section_heading("Tabs").with_key("customize-tabs-heading"),
+        settings_toggle_card_with_description(
+            "Show accounts as separate tabs",
+            Some("Give each enabled Claude account its own icon with a numbered badge. Replaces the profile switcher."),
+            ctx.show_accounts_as_tabs,
+            {
+                let set_value = ctx.set_show_accounts_as_tabs.clone();
+                let settings_tx = settings_tx.clone();
+                move |value| persist_bool(set_value.clone(), settings_tx.clone(), value,
+                    |settings, value| settings.show_accounts_as_tabs = value)
+            },
+            "customize-account-tabs", hovered_card_id, set_hovered_card_id.clone(),
+        ).with_key("customize-account-tabs"),
         settings_toggle_card(
             "Use monochrome icons",
             !use_colored_provider_icons,

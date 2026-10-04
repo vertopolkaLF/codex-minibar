@@ -21,6 +21,8 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let set_grok_enabled = ctx.set_grok_enabled.clone();
     let set_kiro_enabled = ctx.set_kiro_enabled.clone();
     let set_openrouter_accounts = ctx.set_openrouter_accounts.clone();
+    let set_claude_profiles = ctx.set_claude_profiles.clone();
+    let set_claude_home_excluded_profiles = ctx.set_claude_home_excluded_profiles.clone();
     let set_codex_path = ctx.set_codex_path.clone();
     let set_claude_path = ctx.set_claude_path.clone();
     let set_cursor_path = ctx.set_cursor_path.clone();
@@ -31,6 +33,7 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let set_kiro_cli_path = ctx.set_kiro_cli_path.clone();
     let set_popup_order = ctx.set_popup_order.clone();
     let set_use_colored_provider_icons = ctx.set_use_colored_provider_icons.clone();
+    let set_show_accounts_as_tabs = ctx.set_show_accounts_as_tabs.clone();
     let set_use_colored_sidebar_icons = ctx.set_use_colored_sidebar_icons.clone();
     let set_replace_chatgpt_logo_with_codex = ctx.set_replace_chatgpt_logo_with_codex.clone();
     let set_automatic_activation = ctx.set_automatic_activation.clone();
@@ -89,6 +92,8 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
         grok_enabled: set_grok_enabled,
         kiro_enabled: set_kiro_enabled,
         openrouter_accounts: set_openrouter_accounts,
+        claude_profiles: set_claude_profiles,
+        claude_home_excluded_profiles: set_claude_home_excluded_profiles,
         codex_path: set_codex_path,
         claude_path: set_claude_path,
         cursor_path: set_cursor_path,
@@ -99,6 +104,7 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
         kiro_cli_path: set_kiro_cli_path,
         popup_order: set_popup_order,
         use_colored_provider_icons: set_use_colored_provider_icons,
+        show_accounts_as_tabs: set_show_accounts_as_tabs,
         use_colored_sidebar_icons: set_use_colored_sidebar_icons,
         replace_chatgpt_logo_with_codex: set_replace_chatgpt_logo_with_codex,
         automatic_activation: set_automatic_activation,

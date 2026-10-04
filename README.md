@@ -76,7 +76,7 @@ also supplies plan and account labels. If it is unavailable, Minibar falls back 
 usage cache when available and keeps its own last stored Kiro snapshot. The endpoint is currently
 undocumented by Kiro and may change. Kiro subscription credits stay separate from API-equivalent
 Total Spend.
-Optional OpenCode and OpenRouter manual API keys are protected with Windows user-scoped DPAPI
+Optional OpenCode and OpenRouter manual API keys and manual Claude profile credentials are protected with Windows user-scoped DPAPI
 storage. The app stores its own settings and usage history in your Windows user profile.
 
 Kiro's plan appears on its provider card. The account label uses Kiro's display name when available,
@@ -86,6 +86,39 @@ For Antigravity, run `agy` and complete its normal sign-in once; Minibar reads t
 Windows Credential Manager session and never stores it in app settings. For Grok, run `grok login`;
 Minibar reads the official CLI auth cache. If either session expires, refresh it in the official CLI.
 Browser-session access is not used.
+
+### Add another Claude account
+
+Open **Settings → Providers → Claude → Add account**, give the account a name,
+and choose a connection method. The dialog includes instructions and clickable help links.
+The built-in **Default** profile follows this PC's Claude Code or desktop login;
+you can turn it off without removing your other profiles.
+
+- **Browser session** (recommended): open [claude.ai](https://claude.ai) in a separate
+  browser profile or private window and sign in to the second account. In Chrome or Edge,
+  press **F12 → Application → Storage → Cookies → https://claude.ai**. Find `sessionKey`,
+  copy its **Value**, and paste it into Minibar. See [Chrome's cookie guide](https://developer.chrome.com/docs/devtools/application/cookies).
+- **OAuth token**: sign in to Claude Code with a separate configuration directory.
+  See [Claude Code's multiple-account instructions](https://code.claude.com/docs/en/authentication#log-in-with-multiple-accounts).
+  In a separate PowerShell window, run:
+
+  ```powershell
+  $env:CLAUDE_CONFIG_DIR = Join-Path $env:USERPROFILE '.claude-minibar-work'
+  claude
+  ```
+
+  After signing in to the second subscription account, open
+  `%USERPROFILE%\.claude-minibar-work\.credentials.json` and copy only
+  `claudeAiOauth.accessToken`, without quotes. It starts with `sk-ant-oat`.
+  If that file is unavailable, use Browser session. `claude setup-token` may lack usage
+  access and is not a substitute for this login token.
+
+Click **Check and save**. Home shows the enabled profiles; the Claude tab lets you
+switch between them. Expand the account card to change its name, toggle **Show on Home**,
+or use **Update credential** when a cookie or token expires:
+Minibar keeps the profile's name and enabled state. Pasted OAuth tokens are not
+automatically refreshed. API keys and Admin API keys are not offered for subscription
+account setup; organization API spending is a different metric.
 
 ## Install
 

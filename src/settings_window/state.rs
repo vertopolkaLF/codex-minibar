@@ -19,6 +19,8 @@ pub(super) struct SettingsWindowState {
     pub(super) grok_enabled: SetState<bool>,
     pub(super) kiro_enabled: SetState<bool>,
     pub(super) openrouter_accounts: SetState<Vec<OpenRouterAccount>>,
+    pub(super) claude_profiles: SetState<Vec<ClaudeProfile>>,
+    pub(super) claude_home_excluded_profiles: SetState<Vec<String>>,
     pub(super) codex_path: SetState<String>,
     pub(super) claude_path: SetState<String>,
     pub(super) cursor_path: SetState<String>,
@@ -29,6 +31,7 @@ pub(super) struct SettingsWindowState {
     pub(super) kiro_cli_path: SetState<String>,
     pub(super) popup_order: SetState<Vec<PopupWidgetKind>>,
     pub(super) use_colored_provider_icons: SetState<bool>,
+    pub(super) show_accounts_as_tabs: SetState<bool>,
     pub(super) use_colored_sidebar_icons: SetState<bool>,
     pub(super) replace_chatgpt_logo_with_codex: SetState<bool>,
     pub(super) automatic_activation: SetState<bool>,
@@ -94,6 +97,10 @@ impl SettingsWindowState {
             .call(settings.providers.is_enabled(ProviderKind::Kiro));
         self.openrouter_accounts
             .call(crate::openrouter::accounts_for_settings(settings));
+        self.claude_profiles
+            .call(crate::claude::profiles_for_settings(settings));
+        self.claude_home_excluded_profiles
+            .call(settings.claude_home_excluded_profiles.clone());
         self.codex_path.call(
             settings
                 .codex_path
@@ -145,6 +152,8 @@ impl SettingsWindowState {
         self.popup_order.call(settings.popup_order.clone());
         self.use_colored_provider_icons
             .call(settings.use_colored_provider_icons);
+        self.show_accounts_as_tabs
+            .call(settings.show_accounts_as_tabs);
         self.use_colored_sidebar_icons
             .call(settings.use_colored_sidebar_icons);
         self.replace_chatgpt_logo_with_codex
@@ -241,12 +250,15 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) grok_install_status: &'a ProviderInstallStatus,
     pub(super) kiro_install_status: &'a ProviderInstallStatus,
     pub(super) openrouter_accounts: &'a [OpenRouterAccount],
+    pub(super) claude_profiles: &'a [ClaudeProfile],
+    pub(super) claude_home_excluded_profiles: &'a [String],
     pub(super) openrouter_snapshot: &'a OpenRouterSettingsSnapshot,
     pub(super) expanded_provider_cards: &'a [String],
     pub(super) provider_notice: &'a Option<String>,
     pub(super) color_scheme: ColorScheme,
     pub(super) popup_order: &'a [PopupWidgetKind],
     pub(super) use_colored_provider_icons: bool,
+    pub(super) show_accounts_as_tabs: bool,
     pub(super) use_colored_sidebar_icons: bool,
     pub(super) replace_chatgpt_logo_with_codex: bool,
     pub(super) automatic_activation: bool,
@@ -311,6 +323,8 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) set_grok_enabled: SetState<bool>,
     pub(super) set_kiro_enabled: SetState<bool>,
     pub(super) set_openrouter_accounts: SetState<Vec<OpenRouterAccount>>,
+    pub(super) set_claude_profiles: SetState<Vec<ClaudeProfile>>,
+    pub(super) set_claude_home_excluded_profiles: SetState<Vec<String>>,
     pub(super) set_expanded_provider_cards: AsyncSetState<Vec<String>>,
     pub(super) set_provider_dialog: AsyncSetState<Option<ProviderDialog>>,
     pub(super) set_provider_notice: AsyncSetState<Option<String>>,
@@ -324,6 +338,7 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) set_kiro_cli_path: SetState<String>,
     pub(super) set_popup_order: SetState<Vec<PopupWidgetKind>>,
     pub(super) set_use_colored_provider_icons: SetState<bool>,
+    pub(super) set_show_accounts_as_tabs: SetState<bool>,
     pub(super) set_use_colored_sidebar_icons: SetState<bool>,
     pub(super) set_replace_chatgpt_logo_with_codex: SetState<bool>,
     pub(super) set_automatic_activation: SetState<bool>,

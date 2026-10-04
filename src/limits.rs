@@ -110,6 +110,16 @@ pub struct OpenRouterAccountSnapshot {
     pub total_credits_microusd: Option<u64>,
 }
 
+/// One Claude profile's quota. `limits` keeps the last successful read, so a
+/// failing profile still shows its previous numbers next to `error`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ClaudeProfileSnapshot {
+    pub id: String,
+    pub name: String,
+    pub limits: RateLimits,
+    pub error: Option<String>,
+}
+
 /// Pace tip on a usage progress bar (even-burn marker position).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PaceTip {
@@ -246,6 +256,10 @@ pub struct RateLimits {
     /// configured. Other providers leave this empty.
     #[serde(default)]
     pub openrouter_accounts: Vec<OpenRouterAccountSnapshot>,
+    /// Every enabled Claude profile when more than one is tracked. The fields
+    /// above then describe the first profile. Other providers leave this empty.
+    #[serde(default)]
+    pub claude_profiles: Vec<ClaudeProfileSnapshot>,
     /// Token statistics computed from local Codex session logs.
     pub usage: UsageStatistics,
 }
@@ -283,6 +297,15 @@ impl ProviderLimits {
 }
 
 impl RateLimits {
+    /// The Claude profile a single-profile view shows: the selected one, or
+    /// the first when nothing valid is selected.
+    pub fn claude_profile(&self, selected: Option<&str>) -> Option<&ClaudeProfileSnapshot> {
+        self.claude_profiles
+            .iter()
+            .find(|profile| selected == Some(profile.id.as_str()))
+            .or(self.claude_profiles.first())
+    }
+
     /// OpenAI sometimes drops the 5h window and leaves weekly data in `primary`.
     /// Remap that so the UI/tray keep treating primary as the short session.
     pub fn normalized(mut self, now: DateTime<Utc>) -> Self {

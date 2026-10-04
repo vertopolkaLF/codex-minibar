@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fs,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -17,9 +17,11 @@ use serde_json::Value;
 use crate::{
     claude_desktop,
     limits::{
-        AdditionalLimit, LimitWindow, RateLimitResetCredit, RateLimitResetCreditsSummary,
-        RateLimits,
+        AdditionalLimit, ClaudeProfileSnapshot, LimitWindow, RateLimitResetCredit,
+        RateLimitResetCreditsSummary, RateLimits, SpendingSummary,
     },
+    secrets,
+    settings::{ClaudeProfile, Settings},
     usage,
     worker::{Activator, LimitProvider, UsageProvider},
 };
@@ -31,6 +33,13 @@ const OAUTH_USAGE_URL: &str =
     "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1";
 const OAUTH_PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 const OAUTH_BETA: &str = "oauth-2025-04-20";
+const WEB_ORGANIZATIONS_URL: &str = "https://claude.ai/api/organizations";
+const WEB_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+const ADMIN_COST_REPORT_URL: &str = "https://api.anthropic.com/v1/organizations/cost_report";
+const ADMIN_API_VERSION: &str = "2023-06-01";
+const PROFILE_SECRET_PREFIX: &str = "claude-profile-";
+const PROFILE_CREDENTIAL_HINT: &str =
+    "Use Update credential for this profile in Settings > Providers > Claude.";
 const FALLBACK_CLAUDE_CODE_VERSION: &str = "2.1.280";
 const PROFILE_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 60);
 pub const ACTIVATION_MODEL: &str = "haiku";
@@ -198,11 +207,143 @@ fn terminate(child: &mut Child) {
     let _ = child.wait();
 }
 
-/// Reads Claude Code's local OAuth session and queries the same usage endpoint
-/// used by CodexBar. Credentials stay in Claude's own `.credentials.json`.
+/// Profiles in display order. The default profile is implied until the user
+/// changes it, so existing settings files keep working unchanged.
+pub fn profiles_for_settings(settings: &Settings) -> Vec<ClaudeProfile> {
+    profiles_with_default(&settings.claude_profiles)
+}
+
+pub(crate) fn profiles_with_default(saved: &[ClaudeProfile]) -> Vec<ClaudeProfile> {
+    let mut profiles = saved.to_vec();
+    if !profiles.iter().any(ClaudeProfile::is_default) {
+        profiles.insert(
+            0,
+            ClaudeProfile {
+                id: ClaudeProfile::DEFAULT_ID.into(),
+                name: "Default".into(),
+                enabled: true,
+            },
+        );
+    }
+    profiles
+}
+
+pub(crate) fn set_home_profile_visibility(
+    excluded: &mut Vec<String>,
+    profile_id: &str,
+    visible: bool,
+) {
+    excluded.retain(|id| id != profile_id);
+    if !visible {
+        excluded.push(profile_id.to_owned());
+    }
+}
+
+pub fn save_profile_credential(profile_id: &str, value: Option<&str>) -> Result<()> {
+    secrets::save(&format!("{PROFILE_SECRET_PREFIX}{profile_id}"), value)
+}
+
+pub(crate) fn load_profile_credential(profile_id: &str) -> Result<Option<String>> {
+    secrets::load(&format!("{PROFILE_SECRET_PREFIX}{profile_id}"))
+}
+
+/// Only subscription quota sources are offered by the account setup dialog.
+/// Existing Admin API profiles remain readable for compatibility.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ProfileCredentialMethod {
+    #[default]
+    BrowserSession,
+    OAuthToken,
+}
+
+impl ProfileCredentialMethod {
+    pub(crate) fn validate(self, raw: &str) -> Result<()> {
+        match (self, Credential::parse(raw)?) {
+            (Self::BrowserSession, Credential::Cookie(cookie)) => {
+                anyhow::ensure!(
+                    cookie.split(';').any(|part| part
+                        .trim()
+                        .strip_prefix("sessionKey=")
+                        .is_some_and(|value| !value.trim().is_empty())),
+                    "Paste the sessionKey value or a Cookie header containing sessionKey."
+                );
+                Ok(())
+            }
+            (Self::OAuthToken, Credential::OAuth(_)) => Ok(()),
+            (_, Credential::AdminKey(_)) => bail!(
+                "Admin API keys report API organization spending, not Claude subscription limits. Use a browser session or an OAuth token."
+            ),
+            (Self::BrowserSession, _) => {
+                bail!("This is an OAuth token. Select the OAuth token tab.")
+            }
+            (Self::OAuthToken, _) => bail!(
+                "Paste an OAuth access token starting with sk-ant-oat. For a sessionKey, select Browser session."
+            ),
+        }
+    }
+}
+
+/// Checks a pasted credential with one live read before it is saved.
+pub fn verify_credential(credential: &str) -> Result<()> {
+    let mut client = ClaudeClient::new();
+    let agent = client.agent()?;
+    client.read_credential(&agent, "", credential).map(drop)
+}
+
+/// How a pasted profile credential is used. Like CodexBar, the kind is
+/// inferred from the value's shape instead of asking the user to pick one.
+#[derive(Debug, PartialEq, Eq)]
+enum Credential {
+    /// `sk-ant-admin…`: organization spend from the Admin API.
+    AdminKey(String),
+    /// `sk-ant-oat…`: the same OAuth usage endpoint as the default profile.
+    OAuth(String),
+    /// A claude.ai `Cookie` header; a bare value is taken as the `sessionKey`.
+    Cookie(String),
+}
+
+impl Credential {
+    fn parse(raw: &str) -> Result<Self> {
+        let value = raw.trim();
+        let lower = value.to_ascii_lowercase();
+        if lower.starts_with("cookie:") {
+            return Ok(Self::Cookie(value["cookie:".len()..].trim().to_owned()));
+        }
+        if value.contains('=') {
+            return Ok(Self::Cookie(value.to_owned()));
+        }
+        let token = if lower.starts_with("bearer ") {
+            value["bearer ".len()..].trim()
+        } else {
+            value
+        };
+        let lower = token.to_ascii_lowercase();
+        if lower.starts_with("sk-ant-admin") {
+            Ok(Self::AdminKey(token.to_owned()))
+        } else if lower.starts_with("sk-ant-oat") {
+            Ok(Self::OAuth(token.to_owned()))
+        } else if lower.starts_with("sk-ant-api") {
+            bail!(
+                "Standard API keys cannot report Claude subscription limits. Paste a sessionKey or an OAuth access token."
+            )
+        } else if token.is_empty() {
+            bail!("Paste a credential first.")
+        } else {
+            Ok(Self::Cookie(format!("sessionKey={token}")))
+        }
+    }
+}
+
+/// Reads Claude usage for every enabled profile. The default profile uses
+/// Claude's own local OAuth session, the same endpoint CodexBar queries, and
+/// its credentials stay in Claude's own `.credentials.json`.
 pub struct ClaudeClient {
     timeout: Duration,
-    account_cache: ClaudeAccountCache,
+    profiles: Vec<ClaudeProfile>,
+    account_cache: HashMap<String, ClaudeAccountCache>,
+    /// Last multi-profile read, kept so a failing profile shows its previous
+    /// numbers instead of going blank.
+    snapshots: Vec<ClaudeProfileSnapshot>,
 }
 
 #[derive(Default)]
@@ -235,9 +376,15 @@ impl ClaudeAccountCache {
 
 impl ClaudeClient {
     pub fn new() -> Self {
+        Self::with_profiles(profiles_for_settings(&Settings::default()))
+    }
+
+    pub fn with_profiles(profiles: Vec<ClaudeProfile>) -> Self {
         Self {
             timeout: Duration::from_secs(15),
-            account_cache: ClaudeAccountCache::default(),
+            profiles,
+            account_cache: HashMap::new(),
+            snapshots: Vec::new(),
         }
     }
 
@@ -247,65 +394,129 @@ impl ClaudeClient {
     }
 
     pub fn read_rate_limits(&mut self) -> Result<RateLimits> {
-        let credentials = load_credentials()?;
-        let sign_in_hint = credentials.source.sign_in_hint();
+        let enabled = self
+            .profiles
+            .iter()
+            .filter(|profile| profile.enabled)
+            .cloned()
+            .collect::<Vec<_>>();
+        // Preserve the untouched built-in Default's original account label.
+        // Named/manual profiles need snapshots even when only one is enabled.
+        if let [profile] = enabled.as_slice()
+            && self.profiles.len() == 1
+            && profile.is_default()
+            && profile.name == "Default"
+        {
+            self.snapshots.clear();
+            return self.read_profile(profile);
+        }
+        anyhow::ensure!(
+            !enabled.is_empty(),
+            "Every Claude profile is turned off. Turn one on in Settings > Providers > Claude."
+        );
+        let results = enabled
+            .into_iter()
+            .map(|profile| {
+                let result = self.read_profile(&profile);
+                (profile, result)
+            })
+            .collect();
+        let limits = merge_profiles(results, &self.snapshots, Utc::now())?;
+        self.snapshots = limits.claude_profiles.clone();
+        Ok(limits)
+    }
 
+    fn read_profile(&mut self, profile: &ClaudeProfile) -> Result<RateLimits> {
+        let agent = self.agent()?;
+        if profile.is_default() {
+            let credentials = load_credentials()?;
+            let sign_in_hint = credentials.source.sign_in_hint();
+            // Both credential files record the plan next to the token, so the
+            // common case needs no request at all to label it.
+            let local_plan_type = plan_type_from_account_fields(
+                credentials.subscription_type,
+                credentials.rate_limit_tier,
+            );
+            return self.read_oauth(
+                &agent,
+                &profile.id,
+                &credentials.access_token,
+                sign_in_hint,
+                local_plan_type,
+            );
+        }
+        let credential = secrets::load(&format!("{PROFILE_SECRET_PREFIX}{}", profile.id))?
+            .with_context(|| {
+                format!("Claude profile has no saved credential. {PROFILE_CREDENTIAL_HINT}")
+            })?;
+        self.read_credential(&agent, &profile.id, &credential)
+    }
+
+    fn read_credential(
+        &mut self,
+        agent: &ureq::Agent,
+        profile_id: &str,
+        credential: &str,
+    ) -> Result<RateLimits> {
+        match Credential::parse(credential)? {
+            Credential::OAuth(token) => {
+                self.read_oauth(agent, profile_id, &token, PROFILE_CREDENTIAL_HINT, None)
+            }
+            // Cloudflare challenges the Schannel handshake of the shared
+            // agent, so claude.ai is read through ureq's default TLS backend.
+            Credential::Cookie(cookie) => read_web_usage(
+                &ureq::AgentBuilder::new().timeout(self.timeout).build(),
+                &cookie,
+            ),
+            Credential::AdminKey(key) => read_admin_spending(agent, &key),
+        }
+    }
+
+    fn agent(&self) -> Result<ureq::Agent> {
         // `ureq` is built without its default Rustls backend. Configure the
         // native TLS adapter explicitly so Claude's HTTPS endpoint uses the
         // Windows certificate store (Schannel), as the updater already does.
         let tls = ureq::native_tls::TlsConnector::new().context("create Windows TLS connector")?;
-        let agent = ureq::AgentBuilder::new()
+        Ok(ureq::AgentBuilder::new()
             .timeout(self.timeout)
             .tls_connector(Arc::new(tls))
-            .build();
-        let response = agent
-            .get(OAUTH_USAGE_URL)
-            .set(
-                "Authorization",
-                &format!("Bearer {}", credentials.access_token),
-            )
-            .set("Accept", "application/json")
-            .set("Content-Type", "application/json")
-            .set("anthropic-beta", OAUTH_BETA)
-            // Banked resets are only reported to the CLI surface; any other
-            // User-Agent gets `cedar_ember.ineligible_reason = "surface"`.
-            .set("User-Agent", &cli_user_agent())
-            .call();
-        let body = match response {
-            Ok(response) => response
-                .into_string()
-                .context("read Claude OAuth response")?,
-            Err(ureq::Error::Status(401, _)) => {
-                bail!("Claude OAuth request was unauthorized. {sign_in_hint}")
-            }
-            Err(ureq::Error::Status(429, _)) => {
-                return Err(crate::worker::rate_limit_error(
-                    "Claude usage endpoint is rate limited. Try again in a few minutes.",
-                ));
-            }
-            Err(ureq::Error::Status(status, _)) => {
-                bail!("Claude OAuth usage request failed with HTTP {status}")
-            }
-            Err(error) => return Err(error).context("request Claude OAuth usage"),
-        };
+            .build())
+    }
+
+    fn read_oauth(
+        &mut self,
+        agent: &ureq::Agent,
+        profile_id: &str,
+        access_token: &str,
+        sign_in_hint: &str,
+        local_plan_type: Option<String>,
+    ) -> Result<RateLimits> {
+        let body = send(
+            agent
+                .get(OAUTH_USAGE_URL)
+                .set("Authorization", &format!("Bearer {access_token}"))
+                .set("Accept", "application/json")
+                .set("Content-Type", "application/json")
+                .set("anthropic-beta", OAUTH_BETA)
+                // Banked resets are only reported to the CLI surface; any other
+                // User-Agent gets `cedar_ember.ineligible_reason = "surface"`.
+                .set("User-Agent", &cli_user_agent()),
+            "Claude OAuth usage request",
+            sign_in_hint,
+        )?;
         let mut limits = parse_usage_response(&body, Utc::now())?;
-        // Both credential files record the plan next to the token, so the
-        // common case needs no request at all to label it.
-        let local_plan_type = plan_type_from_account_fields(
-            credentials.subscription_type.clone(),
-            credentials.rate_limit_tier.clone(),
-        );
         let reset_schedule = reset_schedule(&limits);
-        if self.account_cache.needs_refresh(&reset_schedule) {
+        let cache = self.account_cache.entry(profile_id.to_owned()).or_default();
+        if cache.needs_refresh(&reset_schedule) {
             // Account metadata stays separate from quota reads. Cache it for
             // 30 minutes and refresh immediately when any reset changes. One
             // profile request covers both the name and the plan fallback.
-            let profile = match fetch_profile(&agent, &credentials.access_token) {
+            let profile = match fetch_profile(agent, access_token) {
                 Ok(profile) => Some(profile),
                 Err(error) if crate::worker::is_rate_limited_error(&error) => return Err(error),
                 Err(_) => None,
             };
-            self.account_cache.record(
+            cache.record(
                 profile
                     .as_ref()
                     .and_then(|profile| profile.account_name.clone()),
@@ -316,12 +527,256 @@ impl ClaudeClient {
         // Newer usage responses omit organization_name, but older responses
         // still expose it. The cached profile is authoritative whenever it
         // provides an identity value.
-        if let Some(account_name) = self.account_cache.account_name.clone() {
+        if let Some(account_name) = cache.account_name.clone() {
             limits.account_name = Some(account_name);
         }
-        limits.plan_type = local_plan_type.or_else(|| self.account_cache.plan_type.clone());
+        limits.plan_type = local_plan_type.or_else(|| cache.plan_type.clone());
         Ok(limits)
     }
+}
+
+/// Combines per-profile reads into one provider snapshot. A failed profile
+/// keeps its previous numbers next to the error, and the first profile fills
+/// the provider-level fields the tray and notifications read.
+///
+/// When no profile could be read the provider itself has failed, so the worker
+/// reports it and, for a rate limit, pauses polling as it does for one profile.
+fn merge_profiles(
+    results: Vec<(ClaudeProfile, Result<RateLimits>)>,
+    previous: &[ClaudeProfileSnapshot],
+    now: DateTime<Utc>,
+) -> Result<RateLimits> {
+    if results.iter().all(|(_, result)| result.is_err()) {
+        let mut errors = results
+            .into_iter()
+            .filter_map(|(_, result)| result.err())
+            .collect::<Vec<_>>();
+        errors.sort_by_key(|error| !crate::worker::is_rate_limited_error(error));
+        if let Some(error) = errors.into_iter().next() {
+            return Err(error);
+        }
+        return Ok(RateLimits::default());
+    }
+    let mut snapshots = results
+        .into_iter()
+        .map(|(profile, result)| {
+            let (limits, error) = match result {
+                Ok(limits) => (limits, None),
+                Err(error) => {
+                    crate::logger::info(format!(
+                        "Claude profile {} failed: {error:#}",
+                        profile.name
+                    ));
+                    let limits = previous
+                        .iter()
+                        .find(|snapshot| snapshot.id == profile.id)
+                        .map(|snapshot| snapshot.limits.clone())
+                        .unwrap_or_else(|| RateLimits {
+                            sampled_at: now,
+                            ..RateLimits::default()
+                        });
+                    (limits, Some(format!("{error:#}")))
+                }
+            };
+            ClaudeProfileSnapshot {
+                id: profile.id,
+                name: profile.name,
+                limits,
+                error,
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut limits = snapshots
+        .first()
+        .map(|snapshot| snapshot.limits.clone())
+        .unwrap_or_default();
+    // Profile cards are told apart by the name the user gave them.
+    for snapshot in &mut snapshots {
+        snapshot.limits.account_name = Some(snapshot.name.clone());
+    }
+    limits.claude_profiles = snapshots;
+    Ok(limits)
+}
+
+/// Overlay renamed profiles onto a live snapshot. A rename is a settings-only
+/// change and must not wait for the next read.
+pub fn apply_profile_names(limits: &mut RateLimits, settings: &Settings) -> bool {
+    // A rename can arrive before the legacy single-Default reader publishes
+    // another sample. Promote its existing quota immediately, without a fetch.
+    if limits.claude_profiles.is_empty() {
+        let enabled = profiles_for_settings(settings)
+            .into_iter()
+            .filter(|profile| profile.enabled)
+            .collect::<Vec<_>>();
+        if let [profile] = enabled.as_slice()
+            && (!profile.is_default() || profile.name != "Default")
+        {
+            let mut snapshot = limits.clone();
+            snapshot.account_name = Some(profile.name.clone());
+            limits.claude_profiles.push(ClaudeProfileSnapshot {
+                id: profile.id.clone(),
+                name: profile.name.clone(),
+                limits: snapshot,
+                error: None,
+            });
+            return true;
+        }
+    }
+    let mut changed = false;
+    for snapshot in &mut limits.claude_profiles {
+        if let Some(profile) = settings
+            .claude_profiles
+            .iter()
+            .find(|profile| profile.id == snapshot.id && profile.name != snapshot.name)
+        {
+            snapshot.name = profile.name.clone();
+            snapshot.limits.account_name = Some(profile.name.clone());
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Sends a Claude request and maps the failures every endpoint shares.
+fn send(request: ureq::Request, what: &str, sign_in_hint: &str) -> Result<String> {
+    match request.call() {
+        Ok(response) => response.into_string().with_context(|| what.to_owned()),
+        // claude.ai answers an expired session with 403, the API with 401.
+        Err(ureq::Error::Status(401 | 403, _)) => {
+            bail!("{what} was unauthorized. {sign_in_hint}")
+        }
+        Err(ureq::Error::Status(429, _)) => Err(crate::worker::rate_limit_error(
+            "Claude usage endpoint is rate limited. Try again in a few minutes.",
+        )),
+        Err(ureq::Error::Status(status, _)) => bail!("{what} failed with HTTP {status}"),
+        Err(error) => Err(error).with_context(|| what.to_owned()),
+    }
+}
+
+#[derive(Deserialize)]
+struct WebOrganization {
+    uuid: String,
+    name: Option<String>,
+    #[serde(default)]
+    capabilities: Vec<String>,
+    rate_limit_tier: Option<String>,
+    billing_type: Option<String>,
+}
+
+impl WebOrganization {
+    /// The tier names Max and Team plans. A Pro plan only shows up as a
+    /// capability or, like CodexBar infers it, as a Stripe-billed Claude tier.
+    fn plan_type(&self) -> Option<String> {
+        let tier = self.rate_limit_tier.clone().unwrap_or_default();
+        let stripe_billed = self
+            .billing_type
+            .as_deref()
+            .is_some_and(|billing| billing.contains("stripe"));
+        plan_type_from_tier(Some(tier.clone()))
+            .or_else(|| {
+                self.capabilities
+                    .iter()
+                    .find_map(|capability| plan_type_from_tier(Some(capability.clone())))
+            })
+            .or_else(|| (stripe_billed && tier.contains("claude")).then(|| "pro".to_owned()))
+    }
+}
+
+/// Reads subscription limits with a claude.ai session cookie. The web usage
+/// endpoint returns the same window shape as the OAuth one.
+fn read_web_usage(agent: &ureq::Agent, cookie: &str) -> Result<RateLimits> {
+    let get = |url: &str| {
+        send(
+            agent
+                .get(url)
+                .set("Cookie", cookie)
+                .set("Accept", "application/json")
+                // Cloudflare challenges obvious non-browser clients before
+                // they ever reach the API.
+                .set("User-Agent", WEB_USER_AGENT),
+            "Claude web usage request",
+            PROFILE_CREDENTIAL_HINT,
+        )
+    };
+    let organization = pick_organization(&get(WEB_ORGANIZATIONS_URL)?)?;
+    let body = get(&format!(
+        "{WEB_ORGANIZATIONS_URL}/{}/usage",
+        organization.uuid
+    ))?;
+    let mut limits = parse_usage_response(&body, Utc::now())?;
+    limits.plan_type = organization.plan_type();
+    limits.account_name = non_empty(organization.name);
+    Ok(limits)
+}
+
+/// A login can belong to several organizations; subscription limits live on
+/// the one with chat access, not on an API-only organization.
+fn pick_organization(response: &str) -> Result<WebOrganization> {
+    let mut organizations: Vec<WebOrganization> =
+        serde_json::from_str(response).context("parse Claude organizations")?;
+    anyhow::ensure!(
+        !organizations.is_empty(),
+        "Claude session has no organization"
+    );
+    let index = organizations
+        .iter()
+        .position(|organization| organization.capabilities.iter().any(|name| name == "chat"))
+        .unwrap_or(0);
+    Ok(organizations.swap_remove(index))
+}
+
+#[derive(Deserialize)]
+struct CostReport {
+    data: Vec<CostBucket>,
+}
+
+#[derive(Deserialize)]
+struct CostBucket {
+    results: Vec<CostResult>,
+}
+
+#[derive(Deserialize)]
+struct CostResult {
+    amount: String,
+}
+
+/// Admin API keys belong to an API organization, which has spend rather than
+/// subscription windows. Reports the last 30 days of cost.
+fn read_admin_spending(agent: &ureq::Agent, api_key: &str) -> Result<RateLimits> {
+    let now = Utc::now();
+    let starting_at = (now - chrono::Duration::days(30)).format("%Y-%m-%dT00:00:00Z");
+    let body = send(
+        agent
+            .get(ADMIN_COST_REPORT_URL)
+            .query("starting_at", &starting_at.to_string())
+            .query("bucket_width", "1d")
+            .query("limit", "31")
+            .set("x-api-key", api_key)
+            .set("anthropic-version", ADMIN_API_VERSION),
+        "Claude Admin API cost report",
+        PROFILE_CREDENTIAL_HINT,
+    )?;
+    parse_cost_report(&body, now)
+}
+
+fn parse_cost_report(response: &str, sampled_at: DateTime<Utc>) -> Result<RateLimits> {
+    let report: CostReport =
+        serde_json::from_str(response).context("parse Claude Admin API cost report")?;
+    // `amount` is a decimal string in cents.
+    let cents = report
+        .data
+        .iter()
+        .flat_map(|bucket| &bucket.results)
+        .filter_map(|result| result.amount.parse::<f64>().ok())
+        .sum::<f64>();
+    Ok(RateLimits {
+        sampled_at,
+        spending: Some(SpendingSummary {
+            used_microusd: (cents * 10_000.0).round() as u64,
+            ..SpendingSummary::default()
+        }),
+        ..RateLimits::default()
+    })
 }
 
 impl Default for ClaudeClient {
@@ -728,10 +1183,13 @@ fn parse_profile(response: &str) -> Result<AccountProfile> {
                 non_empty(organization.name),
                 // A seat or organization type names the plan directly; the
                 // rate-limit tier is the weakest signal and usually opaque
-                // (`default_raven`), so it is consulted last.
-                plan_type_from_tier(organization.seat_tier)
-                    .or_else(|| plan_type_from_tier(organization.organization_type))
-                    .or_else(|| plan_type_from_tier(organization.rate_limit_tier)),
+                // (`default_raven`), so it only fills a gap or adds the Max
+                // multiplier to a matching plan.
+                plan_type_from_account_fields(
+                    plan_type_from_tier(organization.seat_tier)
+                        .or_else(|| plan_type_from_tier(organization.organization_type)),
+                    organization.rate_limit_tier,
+                ),
             )
         });
     Ok(AccountProfile {
@@ -751,7 +1209,12 @@ fn plan_type_from_account_fields(
     subscription_type: Option<String>,
     rate_limit_tier: Option<String>,
 ) -> Option<String> {
-    non_empty(subscription_type).or_else(|| plan_type_from_tier(rate_limit_tier))
+    let from_tier = plan_type_from_tier(rate_limit_tier);
+    match (non_empty(subscription_type), from_tier) {
+        // The tier agrees with the subscription and adds the Max multiplier.
+        (Some(subscription), Some(tier)) if tier.starts_with(&subscription) => Some(tier),
+        (subscription, tier) => subscription.or(tier),
+    }
 }
 
 /// Infers a visible subscription tier from an internal tier identifier such as
@@ -760,13 +1223,20 @@ fn plan_type_from_account_fields(
 fn plan_type_from_tier(tier: Option<String>) -> Option<String> {
     non_empty(tier).and_then(|tier| {
         let tier = tier.to_ascii_lowercase();
-        ["enterprise", "team", "max", "pro"]
+        let parts = tier
+            .split(|character: char| !character.is_alphanumeric())
+            .collect::<Vec<_>>();
+        let plan = ["enterprise", "team", "max", "pro"]
             .into_iter()
-            .find(|plan| {
-                tier.split(|character: char| !character.is_alphanumeric())
-                    .any(|part| part == *plan)
-            })
-            .map(str::to_owned)
+            .find(|plan| parts.contains(plan))?;
+        // Max tiers carry their usage multiplier: `default_claude_max_20x`.
+        let multiplier = parts
+            .iter()
+            .find(|part| plan == "max" && matches!(**part, "5x" | "20x"));
+        Some(match multiplier {
+            Some(multiplier) => format!("{plan} {multiplier}"),
+            None => plan.to_owned(),
+        })
     })
 }
 
@@ -1014,7 +1484,13 @@ mod tests {
         );
         assert_eq!(
             plan_type_from_account_fields(None, Some("default_claude_max_20x".into())).as_deref(),
-            Some("max")
+            Some("max 20x")
+        );
+        // A matching tier adds the multiplier to the explicit subscription.
+        assert_eq!(
+            plan_type_from_account_fields(Some("max".into()), Some("default_claude_max_5x".into()))
+                .as_deref(),
+            Some("max 5x")
         );
         assert_eq!(
             plan_type_from_account_fields(None, Some("default".into())),
@@ -1141,5 +1617,228 @@ mod tests {
                 "--effort=low",
             ]
         );
+    }
+
+    #[test]
+    fn pasted_credentials_are_routed_by_their_shape() {
+        let parse = |raw| Credential::parse(raw).unwrap();
+        assert_eq!(
+            parse(" Bearer sk-ant-admin01-x "),
+            Credential::AdminKey("sk-ant-admin01-x".into())
+        );
+        assert_eq!(
+            parse("sk-ant-oat01-x"),
+            Credential::OAuth("sk-ant-oat01-x".into())
+        );
+        // A bare value is a sessionKey; anything cookie-shaped is sent as is.
+        assert_eq!(
+            parse("sk-ant-sid01-x"),
+            Credential::Cookie("sessionKey=sk-ant-sid01-x".into())
+        );
+        assert_eq!(
+            parse("Cookie: sessionKey=abc; other=1"),
+            Credential::Cookie("sessionKey=abc; other=1".into())
+        );
+        // A standard API key would otherwise be sent to claude.ai as a cookie.
+        assert!(Credential::parse("sk-ant-api03-x").is_err());
+        assert!(Credential::parse("  ").is_err());
+    }
+
+    #[test]
+    fn subscription_setup_validates_the_selected_method_before_fetching() {
+        use ProfileCredentialMethod::{BrowserSession, OAuthToken};
+        assert!(BrowserSession.validate("sk-ant-sid01-fixture").is_ok());
+        assert!(
+            BrowserSession
+                .validate("Cookie: other=1; sessionKey=fixture")
+                .is_ok()
+        );
+        assert!(OAuthToken.validate("Bearer sk-ant-oat01-fixture").is_ok());
+        assert!(BrowserSession.validate("sk-ant-oat01-fixture").is_err());
+        assert!(OAuthToken.validate("sessionKey=fixture").is_err());
+        assert!(BrowserSession.validate("other=1").is_err());
+        assert!(BrowserSession.validate("sessionKey=").is_err());
+        for method in [BrowserSession, OAuthToken] {
+            assert!(method.validate("sk-ant-admin01-fixture").is_err());
+            assert!(method.validate("sk-ant-api03-fixture").is_err());
+            assert!(method.validate(" ").is_err());
+        }
+    }
+
+    #[test]
+    fn renaming_the_only_default_profile_promotes_its_live_sample_immediately() {
+        let mut limits = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(42),
+                ..Default::default()
+            },
+            account_name: Some("Service name".into()),
+            ..Default::default()
+        };
+        assert!(!apply_profile_names(&mut limits, &Settings::default()));
+        let mut settings = Settings::default();
+        settings.claude_profiles = profiles_for_settings(&settings);
+        settings.claude_profiles[0].name = "Personal".into();
+        assert!(apply_profile_names(&mut limits, &settings));
+        let profile = &limits.claude_profiles[0];
+        assert_eq!(profile.name, "Personal");
+        assert_eq!(profile.limits.account_name.as_deref(), Some("Personal"));
+        assert_eq!(profile.limits.primary.used_percent, Some(42));
+        assert!(profile.limits.claude_profiles.is_empty());
+        assert!(!apply_profile_names(&mut limits, &settings));
+        settings.claude_profiles[0].name = "Work".into();
+        assert!(apply_profile_names(&mut limits, &settings));
+        assert_eq!(
+            limits.claude_profiles[0].limits.account_name.as_deref(),
+            Some("Work")
+        );
+    }
+
+    #[test]
+    fn one_manual_profile_keeps_its_identity_when_default_is_disabled() {
+        let profile = ClaudeProfile {
+            id: "work".into(),
+            name: "Work".into(),
+            enabled: true,
+        };
+        let sample = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(20),
+                ..Default::default()
+            },
+            account_name: Some("Organization".into()),
+            ..Default::default()
+        };
+        let mut limits =
+            merge_profiles(vec![(profile.clone(), Ok(sample))], &[], Utc::now()).unwrap();
+        assert_eq!(limits.claude_profiles.len(), 1);
+        assert_eq!(limits.claude_profiles[0].id, "work");
+        assert_eq!(
+            limits.claude_profiles[0].limits.account_name.as_deref(),
+            Some("Work")
+        );
+        let mut settings = Settings::default();
+        settings.claude_profiles = profiles_for_settings(&settings);
+        settings.claude_profiles[0].enabled = false;
+        settings.claude_profiles.push(ClaudeProfile {
+            name: "Renamed".into(),
+            ..profile
+        });
+        assert!(apply_profile_names(&mut limits, &settings));
+        assert_eq!(limits.claude_profiles[0].name, "Renamed");
+        assert_eq!(
+            limits.claude_profiles[0].limits.primary.used_percent,
+            Some(20)
+        );
+    }
+
+    #[test]
+    fn a_failing_profile_keeps_its_previous_limits_and_reports_the_error() {
+        let profile = |id: &str, name: &str| ClaudeProfile {
+            id: id.into(),
+            name: name.into(),
+            enabled: true,
+        };
+        let limits = |percent| RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(percent),
+                ..LimitWindow::default()
+            },
+            account_name: Some("Real Name".into()),
+            ..RateLimits::default()
+        };
+        let now = Utc::now();
+        let first = merge_profiles(
+            vec![
+                (profile("default", "Default"), Ok(limits(10))),
+                (profile("work", "Work"), Ok(limits(40))),
+            ],
+            &[],
+            now,
+        )
+        .unwrap();
+        // The provider-level fields describe the first profile, unrenamed.
+        assert_eq!(first.primary.used_percent, Some(10));
+        assert_eq!(first.account_name.as_deref(), Some("Real Name"));
+
+        let second = merge_profiles(
+            vec![
+                (profile("default", "Default"), Ok(limits(20))),
+                (
+                    profile("work", "Work"),
+                    Err(anyhow::anyhow!("session expired")),
+                ),
+            ],
+            &first.claude_profiles,
+            now,
+        )
+        .unwrap();
+        let [default, work] = second.claude_profiles.as_slice() else {
+            panic!("expected both profiles");
+        };
+        assert_eq!(default.limits.primary.used_percent, Some(20));
+        assert_eq!(default.error, None);
+        assert_eq!(work.limits.primary.used_percent, Some(40));
+        assert_eq!(work.limits.account_name.as_deref(), Some("Work"));
+        assert_eq!(work.error.as_deref(), Some("session expired"));
+
+        // With nothing readable the provider fails, and a rate limit wins so
+        // the worker pauses polling.
+        let error = merge_profiles(
+            vec![
+                (
+                    profile("default", "Default"),
+                    Err(anyhow::anyhow!("session expired")),
+                ),
+                (
+                    profile("work", "Work"),
+                    Err(crate::worker::rate_limit_error("slow down")),
+                ),
+            ],
+            &second.claude_profiles,
+            now,
+        )
+        .unwrap_err();
+        assert!(crate::worker::is_rate_limited_error(&error));
+    }
+
+    #[test]
+    fn web_usage_reads_the_organization_with_chat_access() {
+        let organization = pick_organization(
+            r#"[{"uuid":"api","name":"API","capabilities":["api"]},{"uuid":"chat","name":"Team","capabilities":["chat","claude_max"]}]"#,
+        )
+        .unwrap();
+        assert_eq!(organization.uuid, "chat");
+        assert!(pick_organization("[]").is_err());
+
+        let plan = |json: &str| pick_organization(json).unwrap().plan_type();
+        assert_eq!(
+            plan(r#"[{"uuid":"a","rate_limit_tier":"default_claude_max_5x"}]"#).as_deref(),
+            Some("max 5x")
+        );
+        assert_eq!(
+            plan(r#"[{"uuid":"a","rate_limit_tier":"default_claude_ai","capabilities":["chat","claude_pro"]}]"#)
+                .as_deref(),
+            Some("pro")
+        );
+        assert_eq!(
+            plan(r#"[{"uuid":"a","rate_limit_tier":"default_claude_ai","billing_type":"stripe_subscription"}]"#)
+                .as_deref(),
+            Some("pro")
+        );
+        assert_eq!(
+            plan(r#"[{"uuid":"a","rate_limit_tier":"default_claude_ai"}]"#),
+            None
+        );
+    }
+
+    #[test]
+    fn admin_cost_report_sums_cents_into_spending() {
+        let limits = parse_cost_report(
+            r#"{"data":[{"results":[{"amount":"123.45"},{"amount":"0.55"}]},{"results":[{"amount":"76"}]}],"has_more":false}"#,
+            Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(limits.spending.unwrap().used_microusd, 2_000_000);
     }
 }

@@ -419,6 +419,7 @@ pub fn parse_wham_usage(response: &Value, sampled_at: DateTime<Utc>) -> Result<R
         additional_limits: parse_wham_additional_limits(response.get("additional_rate_limits")),
         spending: None,
         openrouter_accounts: Default::default(),
+        claude_profiles: Default::default(),
         usage: Default::default(),
     }
     .normalized(sampled_at))
@@ -670,6 +671,7 @@ pub fn parse_rate_limits(
         additional_limits: Default::default(),
         spending: None,
         openrouter_accounts: Default::default(),
+        claude_profiles: Default::default(),
         usage: Default::default(),
     }
     .normalized(sampled_at))
