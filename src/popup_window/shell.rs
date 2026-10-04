@@ -696,26 +696,32 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
                 {
                     body.push(
                         InfoBar::new(format!("{} error", selected.name))
-                            .message(UiState::error_for_ui(error))
+                            .message(cached_profile_error_for_ui(&selected.limits, error))
                             .error()
                             .is_closable(false)
                             .with_key(format!("popup-claude-profile-error-{}", selected.id))
                             .into(),
                     );
                 }
-                let provider_error = ui
+                let error_message = ui
                     .provider_error(provider)
                     .or(profile.and_then(|profile| profile.error.as_deref()))
                     .map(|error| {
-                        let pager_dispatch = pager_dispatch.clone();
-                        (
-                            error,
-                            Callback::new(move |()| {
-                                pager_dispatch
-                                    .call(PagerAction::Select(PopupView::from_provider(provider)));
-                            }),
+                        profile.map_or_else(
+                            || error.to_owned(),
+                            |selected| cached_profile_error_for_ui(&selected.limits, error),
                         )
                     });
+                let provider_error = error_message.as_deref().map(|error| {
+                    let pager_dispatch = pager_dispatch.clone();
+                    (
+                        error,
+                        Callback::new(move |()| {
+                            pager_dispatch
+                                .call(PagerAction::Select(PopupView::from_provider(provider)));
+                        }),
+                    )
+                });
                 let mut cards = provider_cards(
                     provider,
                     !has_preceding_section,
@@ -1403,7 +1409,7 @@ pub fn app(cx: &mut RenderCx, state: Arc<AppState>) -> Element {
     let claude_profiles = &limits.get(ProviderKind::Claude).claude_profiles;
     let show_profile_strip = selected_view == PopupView::Claude
         && !ui.show_accounts_as_tabs
-        && !claude_profiles.is_empty();
+        && claude_profiles.len() > 1;
     cx.use_effect(show_profile_strip, move || {
         popup::set_footer_extra_height_dip(if show_profile_strip {
             PROFILE_STRIP_HEIGHT

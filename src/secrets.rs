@@ -17,6 +17,42 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 const FILE_NAME: &str = "provider-secrets.json";
+// Serialize read/modify/replace across provider UI writes and token refreshes.
+static OPERATIONS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+// Ciphertext detects replacements; generations also detect repeated removals
+// (where both the old and newer write leave the slot absent).
+static GENERATIONS: std::sync::Mutex<BTreeMap<(PathBuf, String), u64>> =
+    std::sync::Mutex::new(BTreeMap::new());
+
+fn generation(path: &Path, name: &str) -> u64 {
+    *GENERATIONS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(&(path.to_owned(), name.to_owned()))
+        .unwrap_or(&0)
+}
+
+fn advance_generations(path: &Path, names: impl IntoIterator<Item = impl AsRef<str>>) -> Vec<u64> {
+    let mut generations = GENERATIONS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    names
+        .into_iter()
+        .map(|name| {
+            let revision = generations
+                .entry((path.to_owned(), name.as_ref().to_owned()))
+                .or_default();
+            *revision = revision.wrapping_add(1);
+            *revision
+        })
+        .collect()
+}
+
+fn operation_guard() -> Result<std::sync::MutexGuard<'static, ()>> {
+    OPERATIONS
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Provider secret storage is unavailable."))
+}
 
 #[derive(Default, Serialize, Deserialize)]
 struct SecretFile {
@@ -25,6 +61,7 @@ struct SecretFile {
 }
 
 pub fn load(name: &str) -> Result<Option<String>> {
+    let _guard = operation_guard()?;
     let path = path()?;
     load_from(&path, name)
 }
@@ -51,22 +88,50 @@ fn load_from(path: &Path, name: &str) -> Result<Option<String>> {
 /// blobs without decrypting, so a corrupt slot can still be replaced or removed.
 pub(crate) struct EncodedRollback {
     entries: Vec<(String, Option<String>)>,
+    applied: Vec<(String, Option<String>)>,
+    generations: Vec<u64>,
 }
 
 impl EncodedRollback {
-    pub(crate) fn capture(names: impl IntoIterator<Item = impl AsRef<str>>) -> Result<Self> {
-        let path = path()?;
-        let names = names
-            .into_iter()
-            .map(|name| name.as_ref().to_owned())
-            .collect::<Vec<_>>();
-        capture_encoded_from(&path, &names)
-    }
-
     pub(crate) fn restore(self) -> Result<()> {
+        let _guard = operation_guard()?;
         let path = path()?;
-        restore_encoded_to(&path, &self.entries)
+        restore_encoded_to(&path, &self)
     }
+}
+
+/// Capture the prior ciphertext and publish the batch under one lock. Later
+/// rollback compares exact ciphertext so a newer write to a slot always wins.
+pub(crate) fn apply_with_rollback(changes: &[(String, Option<String>)]) -> Result<EncodedRollback> {
+    let _guard = operation_guard()?;
+    apply_with_rollback_to(&path()?, changes)
+}
+
+fn apply_with_rollback_to(
+    path: &Path,
+    changes: &[(String, Option<String>)],
+) -> Result<EncodedRollback> {
+    let mut file = read_secret_file(path)?.unwrap_or_default();
+    let names = changes
+        .iter()
+        .map(|(name, _)| name)
+        .collect::<std::collections::BTreeSet<_>>();
+    let entries = names
+        .iter()
+        .map(|name| ((*name).clone(), file.values.get(*name).cloned()))
+        .collect();
+    apply_changes(&mut file, changes)?;
+    let applied = names
+        .iter()
+        .map(|name| ((*name).clone(), file.values.get(*name).cloned()))
+        .collect();
+    commit_secret_file(path, &file)?;
+    let generations = advance_generations(path, names);
+    Ok(EncodedRollback {
+        entries,
+        applied,
+        generations,
+    })
 }
 
 pub fn save(name: &str, value: Option<&str>) -> Result<()> {
@@ -77,13 +142,20 @@ pub fn save(name: &str, value: Option<&str>) -> Result<()> {
 /// Validation and DPAPI encryption happen before the existing file changes,
 /// so account-level edits cannot leave only part of their keys updated.
 pub fn save_many(changes: &[(String, Option<String>)]) -> Result<()> {
+    let _guard = operation_guard()?;
     let path = path()?;
     save_many_to(&path, changes)
 }
 
 fn save_many_to(path: &Path, changes: &[(String, Option<String>)]) -> Result<()> {
     let mut file = read_secret_file(path)?.unwrap_or_default();
+    apply_changes(&mut file, changes)?;
+    commit_secret_file(path, &file)?;
+    advance_generations(path, changes.iter().map(|(name, _)| name));
+    Ok(())
+}
 
+fn apply_changes(file: &mut SecretFile, changes: &[(String, Option<String>)]) -> Result<()> {
     for (name, value) in changes {
         match value
             .as_deref()
@@ -101,7 +173,7 @@ fn save_many_to(path: &Path, changes: &[(String, Option<String>)]) -> Result<()>
         }
     }
 
-    commit_secret_file(path, &file)
+    Ok(())
 }
 
 fn read_secret_file(path: &Path) -> Result<Option<SecretFile>> {
@@ -119,24 +191,25 @@ fn read_secret_file(path: &Path) -> Result<Option<SecretFile>> {
         .map(Some)
 }
 
-fn capture_encoded_from(path: &Path, names: &[String]) -> Result<EncodedRollback> {
-    let file = read_secret_file(path)?;
-    Ok(EncodedRollback {
-        entries: names
-            .iter()
-            .map(|name| {
-                let encoded = file
-                    .as_ref()
-                    .and_then(|file| file.values.get(name).cloned());
-                (name.clone(), encoded)
-            })
-            .collect(),
-    })
-}
-
-fn restore_encoded_to(path: &Path, entries: &[(String, Option<String>)]) -> Result<()> {
+fn restore_encoded_to(path: &Path, rollback: &EncodedRollback) -> Result<()> {
     let mut file = read_secret_file(path)?.unwrap_or_default();
-    for (name, encoded) in entries {
+    let mut conflict = false;
+    let mut changed = false;
+    let mut restored = Vec::new();
+    for (((name, encoded), (_, applied)), expected_generation) in rollback
+        .entries
+        .iter()
+        .zip(&rollback.applied)
+        .zip(&rollback.generations)
+    {
+        if file.values.get(name) != applied.as_ref()
+            || generation(path, name) != *expected_generation
+        {
+            conflict = true;
+            continue;
+        }
+        changed = true;
+        restored.push(name);
         match encoded {
             Some(encoded) => {
                 file.values.insert(name.clone(), encoded.clone());
@@ -146,7 +219,15 @@ fn restore_encoded_to(path: &Path, entries: &[(String, Option<String>)]) -> Resu
             }
         }
     }
-    commit_secret_file(path, &file)
+    if changed {
+        commit_secret_file(path, &file)?;
+        advance_generations(path, restored);
+    }
+    anyhow::ensure!(
+        !conflict,
+        "A newer provider secret update was preserved; its rollback was skipped."
+    );
+    Ok(())
 }
 
 fn commit_secret_file(path: &Path, file: &SecretFile) -> Result<()> {
@@ -312,6 +393,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rollback_does_not_overwrite_a_newer_secret_update() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("provider-secrets.json");
+        save_many_to(&path, &[("api".into(), Some("original".into()))])?;
+        let rollback =
+            apply_with_rollback_to(&path, &[("api".into(), Some("first-update".into()))])?;
+        save_many_to(&path, &[("api".into(), Some("newer-update".into()))])?;
+        assert!(restore_encoded_to(&path, &rollback).is_err());
+        assert_eq!(load_from(&path, "api")?.as_deref(), Some("newer-update"));
+        Ok(())
+    }
+
+    #[test]
+    fn rollback_preserves_a_newer_removal_of_an_already_absent_slot() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("provider-secrets.json");
+        save_many_to(&path, &[("api".into(), Some("original".into()))])?;
+        let rollback = apply_with_rollback_to(&path, &[("api".into(), None)])?;
+        save_many_to(&path, &[("api".into(), None)])?;
+        assert!(restore_encoded_to(&path, &rollback).is_err());
+        assert_eq!(load_from(&path, "api")?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn rollback_restores_its_slots_without_losing_another_provider_update() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("provider-secrets.json");
+        save_many_to(&path, &[("api".into(), Some("original".into()))])?;
+        let rollback = apply_with_rollback_to(&path, &[("api".into(), Some("temporary".into()))])?;
+        save_many_to(&path, &[("other-provider".into(), Some("newer".into()))])?;
+        restore_encoded_to(&path, &rollback)?;
+        assert_eq!(load_from(&path, "api")?.as_deref(), Some("original"));
+        assert_eq!(
+            load_from(&path, "other-provider")?.as_deref(),
+            Some("newer")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn batch_updates_replace_existing_values_and_remove_them_together() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("provider-secrets.json");
@@ -362,12 +484,11 @@ mod tests {
         )?;
         assert!(load_from(&path, "api").is_err());
 
-        let names = vec!["api".to_string()];
-        let rollback = capture_encoded_from(&path, &names)?;
-        save_many_to(&path, &[("api".into(), Some("replacement".into()))])?;
+        let rollback =
+            apply_with_rollback_to(&path, &[("api".into(), Some("replacement".into()))])?;
         assert_eq!(load_from(&path, "api")?.as_deref(), Some("replacement"));
 
-        restore_encoded_to(&path, &rollback.entries)?;
+        restore_encoded_to(&path, &rollback)?;
         assert!(load_from(&path, "api").is_err());
         assert!(fs::read_to_string(&path)?.contains("not-valid-ciphertext"));
         Ok(())
@@ -377,12 +498,10 @@ mod tests {
     fn encoded_rollback_treats_missing_names_as_absent() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("provider-secrets.json");
-        let names = vec!["missing".to_string()];
-        let rollback = capture_encoded_from(&path, &names)?;
+        let rollback = apply_with_rollback_to(&path, &[("missing".into(), Some("new".into()))])?;
         assert_eq!(rollback.entries, vec![("missing".into(), None)]);
 
-        save_many_to(&path, &[("missing".into(), Some("new".into()))])?;
-        restore_encoded_to(&path, &rollback.entries)?;
+        restore_encoded_to(&path, &rollback)?;
         assert!(!path.exists());
         Ok(())
     }

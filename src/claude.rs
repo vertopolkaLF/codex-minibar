@@ -26,6 +26,13 @@ use crate::{
     worker::{Activator, LimitProvider, UsageProvider},
 };
 
+pub(crate) mod profile_oauth;
+
+/// Called by the primary instance before accepting any account sign-ins.
+pub fn cleanup_abandoned_logins() -> Result<()> {
+    profile_oauth::cleanup_abandoned_logins()
+}
+
 /// `cedar_ember=1` asks the endpoint to include banked usage-limit resets,
 /// the same query Claude Code's `/limit-reset` flow sends. `skip_spend=1`
 /// drops the spend block, which nothing here reads.
@@ -252,6 +259,7 @@ pub(crate) fn load_profile_credential(profile_id: &str) -> Result<Option<String>
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum ProfileCredentialMethod {
     #[default]
+    SignIn,
     BrowserSession,
     OAuthToken,
 }
@@ -259,6 +267,7 @@ pub(crate) enum ProfileCredentialMethod {
 impl ProfileCredentialMethod {
     pub(crate) fn validate(self, raw: &str) -> Result<()> {
         match (self, Credential::parse(raw)?) {
+            (Self::SignIn, _) => bail!("Use Sign in to save a refreshable Claude login."),
             (Self::BrowserSession, Credential::Cookie(cookie)) => {
                 anyhow::ensure!(
                     cookie.split(';').any(|part| part
@@ -344,6 +353,7 @@ pub struct ClaudeClient {
     /// Last multi-profile read, kept so a failing profile shows its previous
     /// numbers instead of going blank.
     snapshots: Vec<ClaudeProfileSnapshot>,
+    rate_limited: bool,
 }
 
 #[derive(Default)]
@@ -385,7 +395,13 @@ impl ClaudeClient {
             profiles,
             account_cache: HashMap::new(),
             snapshots: Vec::new(),
+            rate_limited: false,
         }
+    }
+
+    pub fn with_cached_limits(mut self, limits: &RateLimits) -> Self {
+        self.snapshots = profile_samples(limits, &self.profiles);
+        self
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
@@ -407,8 +423,11 @@ impl ClaudeClient {
             && profile.is_default()
             && profile.name == "Default"
         {
-            self.snapshots.clear();
-            return self.read_profile(profile);
+            let result = self.read_profile(profile);
+            if let Ok(limits) = &result {
+                self.snapshots = profile_samples(limits, &self.profiles);
+            }
+            return result;
         }
         anyhow::ensure!(
             !enabled.is_empty(),
@@ -421,6 +440,19 @@ impl ClaudeClient {
                 (profile, result)
             })
             .collect();
+        self.merge_profile_results(results)
+    }
+
+    fn merge_profile_results(
+        &mut self,
+        results: Vec<(ClaudeProfile, Result<RateLimits>)>,
+    ) -> Result<RateLimits> {
+        self.rate_limited |= results.iter().any(|(_, result)| {
+            result
+                .as_ref()
+                .err()
+                .is_some_and(crate::worker::is_rate_limited_error)
+        });
         let limits = merge_profiles(results, &self.snapshots, Utc::now())?;
         self.snapshots = limits.claude_profiles.clone();
         Ok(limits)
@@ -445,10 +477,21 @@ impl ClaudeClient {
                 local_plan_type,
             );
         }
-        let credential = secrets::load(&format!("{PROFILE_SECRET_PREFIX}{}", profile.id))?
-            .with_context(|| {
-                format!("Claude profile has no saved credential. {PROFILE_CREDENTIAL_HINT}")
-            })?;
+        let guard = profile_oauth::credential_guard()?;
+        let credential = load_profile_credential(&profile.id)?.with_context(|| {
+            format!("Claude profile has no saved credential. {PROFILE_CREDENTIAL_HINT}")
+        })?;
+        let session = profile_oauth::resolve(&agent, &profile.id, &credential)?;
+        drop(guard);
+        if let Some(session) = session {
+            return self.read_oauth(
+                &agent,
+                &profile.id,
+                session.token(),
+                PROFILE_CREDENTIAL_HINT,
+                session.plan(),
+            );
+        }
         self.read_credential(&agent, &profile.id, &credential)
     }
 
@@ -535,6 +578,89 @@ impl ClaudeClient {
     }
 }
 
+/// Prepare the visible samples before replacing a Claude reader.
+pub fn prepare_profile_refresh(
+    limits: &RateLimits,
+    previous: &Settings,
+    next: &Settings,
+) -> RateLimits {
+    let previous_profiles = profiles_for_settings(previous);
+    let previous_samples = profile_samples(limits, &previous_profiles);
+    let profiles = profiles_for_settings(next);
+    let snapshots = profiles
+        .iter()
+        .filter(|profile| profile.enabled)
+        .map(|profile| {
+            let unchanged = previous_profiles
+                .iter()
+                .any(|old| old.id == profile.id && old.enabled)
+                && previous
+                    .claude_profile_credential_revisions
+                    .get(&profile.id)
+                    .copied()
+                    .unwrap_or(0)
+                    == next
+                        .claude_profile_credential_revisions
+                        .get(&profile.id)
+                        .copied()
+                        .unwrap_or(0)
+                && (!profile.is_default() || previous.claude_path == next.claude_path);
+            let mut snapshot = unchanged
+                .then(|| {
+                    previous_samples
+                        .iter()
+                        .find(|sample| sample.id == profile.id)
+                        .cloned()
+                })
+                .flatten()
+                .unwrap_or_else(|| ClaudeProfileSnapshot {
+                    id: profile.id.clone(),
+                    ..Default::default()
+                });
+            snapshot.name = profile.name.clone();
+            snapshot.limits.account_name = Some(profile.name.clone());
+            snapshot
+        })
+        .collect::<Vec<_>>();
+    let mut retained = snapshots
+        .first()
+        .map(|sample| sample.limits.clone())
+        .unwrap_or_default();
+    retained.claude_profiles = snapshots;
+    retained
+}
+
+/// The legacy single-account response is always Default. Never attribute its
+/// quota to whichever new profile happens to appear first in settings.
+fn profile_samples(limits: &RateLimits, profiles: &[ClaudeProfile]) -> Vec<ClaudeProfileSnapshot> {
+    if !limits.claude_profiles.is_empty() {
+        return limits
+            .claude_profiles
+            .iter()
+            .filter(|sample| {
+                profiles
+                    .iter()
+                    .any(|profile| profile.enabled && profile.id == sample.id)
+            })
+            .cloned()
+            .collect();
+    }
+    profiles
+        .iter()
+        .find(|profile| profile.enabled && profile.is_default())
+        .map(|profile| {
+            let mut sample = limits.clone();
+            sample.claude_profiles.clear();
+            vec![ClaudeProfileSnapshot {
+                id: profile.id.clone(),
+                name: profile.name.clone(),
+                limits: sample,
+                error: None,
+            }]
+        })
+        .unwrap_or_default()
+}
+
 /// Combines per-profile reads into one provider snapshot. A failed profile
 /// keeps its previous numbers next to the error, and the first profile fills
 /// the provider-level fields the tray and notifications read.
@@ -544,7 +670,7 @@ impl ClaudeClient {
 fn merge_profiles(
     results: Vec<(ClaudeProfile, Result<RateLimits>)>,
     previous: &[ClaudeProfileSnapshot],
-    now: DateTime<Utc>,
+    _now: DateTime<Utc>,
 ) -> Result<RateLimits> {
     if results.iter().all(|(_, result)| result.is_err()) {
         let mut errors = results
@@ -571,10 +697,7 @@ fn merge_profiles(
                         .iter()
                         .find(|snapshot| snapshot.id == profile.id)
                         .map(|snapshot| snapshot.limits.clone())
-                        .unwrap_or_else(|| RateLimits {
-                            sampled_at: now,
-                            ..RateLimits::default()
-                        });
+                        .unwrap_or_default();
                     (limits, Some(format!("{error:#}")))
                 }
             };
@@ -588,6 +711,13 @@ fn merge_profiles(
         .collect::<Vec<_>>();
     let mut limits = snapshots
         .first()
+        .filter(|snapshot| {
+            snapshot.error.is_none()
+                || previous.iter().any(|cached| {
+                    cached.id == snapshot.id && cached.limits.sampled_at.timestamp() > 0
+                })
+        })
+        .or_else(|| snapshots.iter().find(|snapshot| snapshot.error.is_none()))
         .map(|snapshot| snapshot.limits.clone())
         .unwrap_or_default();
     // Profile cards are told apart by the name the user gave them.
@@ -786,6 +916,9 @@ impl Default for ClaudeClient {
 }
 
 impl LimitProvider for ClaudeClient {
+    fn take_rate_limit_response(&mut self) -> bool {
+        std::mem::take(&mut self.rate_limited)
+    }
     fn read_limits(&mut self) -> Result<RateLimits> {
         self.read_rate_limits()
     }
@@ -1729,6 +1862,217 @@ mod tests {
         assert_eq!(
             limits.claude_profiles[0].limits.primary.used_percent,
             Some(20)
+        );
+    }
+
+    #[test]
+    fn adding_profile_and_restarting_reader_keeps_default_sample_on_429() {
+        let previous = Settings::default();
+        let mut next = previous.clone();
+        next.claude_profiles = profiles_for_settings(&previous);
+        let added = ClaudeProfile::new("Account 1");
+        next.claude_profiles.push(added.clone());
+        let sample = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(0),
+                ..Default::default()
+            },
+            secondary: LimitWindow {
+                used_percent: Some(3),
+                ..Default::default()
+            },
+            sampled_at: Utc::now() - chrono::Duration::minutes(1),
+            ..Default::default()
+        };
+        let visible = prepare_profile_refresh(&sample, &previous, &next);
+        let mut restarted =
+            ClaudeClient::with_profiles(profiles_for_settings(&next)).with_cached_limits(&visible);
+        let merged = restarted
+            .merge_profile_results(vec![
+                (
+                    profiles_for_settings(&next)[0].clone(),
+                    Err(crate::worker::rate_limit_error("fixture 429")),
+                ),
+                (added, Ok(sample.clone())),
+            ])
+            .unwrap();
+        let default = merged
+            .claude_profiles
+            .iter()
+            .find(|profile| profile.id == ClaudeProfile::DEFAULT_ID)
+            .unwrap();
+        assert_eq!(default.limits.primary.used_percent, Some(0));
+        assert_eq!(default.limits.secondary.used_percent, Some(3));
+        assert_eq!(default.limits.sampled_at, sample.sampled_at);
+        assert!(default.error.is_some());
+        assert!(restarted.take_rate_limit_response());
+        assert!(!restarted.take_rate_limit_response());
+    }
+
+    #[test]
+    fn profile_refresh_discards_only_disabled_removed_and_replaced_credentials() {
+        let mut previous = Settings::default();
+        let profile = |id: &str| ClaudeProfile {
+            id: id.into(),
+            name: id.into(),
+            enabled: true,
+        };
+        previous.claude_profiles = vec![
+            profile("default"),
+            profile("changed"),
+            profile("disabled"),
+            profile("removed"),
+            profile("untouched"),
+        ];
+        let sample = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(25),
+                ..Default::default()
+            },
+            sampled_at: Utc::now(),
+            ..Default::default()
+        };
+        let limits = merge_profiles(
+            previous
+                .claude_profiles
+                .iter()
+                .cloned()
+                .map(|profile| (profile, Ok(sample.clone())))
+                .collect(),
+            &[],
+            Utc::now(),
+        )
+        .unwrap();
+        let mut next = previous.clone();
+        next.claude_profiles
+            .retain(|profile| profile.id != "removed");
+        next.claude_profiles
+            .iter_mut()
+            .find(|profile| profile.id == "disabled")
+            .unwrap()
+            .enabled = false;
+        next.claude_profiles
+            .iter_mut()
+            .find(|profile| profile.id == "untouched")
+            .unwrap()
+            .name = "Renamed".into();
+        next.claude_profile_credential_revisions
+            .insert("changed".into(), 1);
+        next.claude_credentials_revision += 1;
+        let retained = prepare_profile_refresh(&limits, &previous, &next);
+        assert_eq!(retained.claude_profiles.len(), 3);
+        for id in ["default", "untouched"] {
+            let cached = retained
+                .claude_profiles
+                .iter()
+                .find(|profile| profile.id == id)
+                .unwrap();
+            assert_eq!(cached.limits.primary.used_percent, Some(25));
+            assert_eq!(cached.limits.sampled_at, sample.sampled_at);
+        }
+        let changed = retained
+            .claude_profiles
+            .iter()
+            .find(|profile| profile.id == "changed")
+            .unwrap();
+        assert_eq!(changed.limits.primary.used_percent, None);
+        assert_eq!(changed.limits.sampled_at.timestamp(), 0);
+        assert_eq!(
+            retained
+                .claude_profiles
+                .iter()
+                .find(|profile| profile.id == "untouched")
+                .unwrap()
+                .name,
+            "Renamed"
+        );
+    }
+
+    #[test]
+    fn legacy_default_sample_never_moves_to_a_new_first_profile() {
+        let previous = Settings::default();
+        let mut next = previous.clone();
+        next.claude_profiles = vec![
+            ClaudeProfile::new("First"),
+            profiles_for_settings(&previous)[0].clone(),
+        ];
+        let sample = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(42),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let retained = prepare_profile_refresh(&sample, &previous, &next);
+        assert_eq!(
+            retained.claude_profiles[0].limits.primary.used_percent,
+            None
+        );
+        assert_eq!(retained.claude_profiles[1].id, "default");
+        assert_eq!(
+            retained.claude_profiles[1].limits.primary.used_percent,
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn failed_first_profile_without_cache_uses_a_successful_profile_for_provider_quota() {
+        let default = profiles_for_settings(&Settings::default())[0].clone();
+        let work = ClaudeProfile::new("Work");
+        let sample = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(25),
+                ..Default::default()
+            },
+            sampled_at: Utc::now(),
+            account_name: Some("Work identity".into()),
+            ..Default::default()
+        };
+        let merged = merge_profiles(
+            vec![
+                (default, Err(anyhow::anyhow!("fixture failure"))),
+                (work, Ok(sample)),
+            ],
+            &[],
+            Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(merged.primary.used_percent, Some(25));
+        assert_eq!(merged.account_name.as_deref(), Some("Work identity"));
+        assert!(merged.claude_profiles[0].error.is_some());
+        assert_eq!(merged.claude_profiles[0].limits.primary.used_percent, None);
+    }
+
+    #[test]
+    fn failed_first_profile_with_cache_keeps_its_provider_quota() {
+        let default = profiles_for_settings(&Settings::default())[0].clone();
+        let sample = |percent| RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(percent),
+                ..Default::default()
+            },
+            sampled_at: Utc::now(),
+            ..Default::default()
+        };
+        let previous = vec![ClaudeProfileSnapshot {
+            id: default.id.clone(),
+            name: default.name.clone(),
+            limits: sample(10),
+            error: None,
+        }];
+        let merged = merge_profiles(
+            vec![
+                (default, Err(anyhow::anyhow!("fixture failure"))),
+                (ClaudeProfile::new("Work"), Ok(sample(40))),
+            ],
+            &previous,
+            Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(merged.primary.used_percent, Some(10));
+        assert_eq!(
+            merged.claude_profiles[1].limits.primary.used_percent,
+            Some(40)
         );
     }
 
