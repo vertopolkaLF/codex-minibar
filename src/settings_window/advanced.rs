@@ -21,7 +21,9 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let set_grok_enabled = ctx.set_grok_enabled.clone();
     let set_kiro_enabled = ctx.set_kiro_enabled.clone();
     let set_openrouter_accounts = ctx.set_openrouter_accounts.clone();
+    let set_codex_profiles = ctx.set_codex_profiles.clone();
     let set_claude_profiles = ctx.set_claude_profiles.clone();
+    let set_codex_home_excluded_profiles = ctx.set_codex_home_excluded_profiles.clone();
     let set_claude_home_excluded_profiles = ctx.set_claude_home_excluded_profiles.clone();
     let set_codex_path = ctx.set_codex_path.clone();
     let set_claude_path = ctx.set_claude_path.clone();
@@ -92,7 +94,9 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
         grok_enabled: set_grok_enabled,
         kiro_enabled: set_kiro_enabled,
         openrouter_accounts: set_openrouter_accounts,
+        codex_profiles: set_codex_profiles,
         claude_profiles: set_claude_profiles,
+        codex_home_excluded_profiles: set_codex_home_excluded_profiles,
         claude_home_excluded_profiles: set_claude_home_excluded_profiles,
         codex_path: set_codex_path,
         claude_path: set_claude_path,

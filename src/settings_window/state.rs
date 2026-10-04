@@ -19,7 +19,9 @@ pub(super) struct SettingsWindowState {
     pub(super) grok_enabled: SetState<bool>,
     pub(super) kiro_enabled: SetState<bool>,
     pub(super) openrouter_accounts: SetState<Vec<OpenRouterAccount>>,
+    pub(super) codex_profiles: SetState<Vec<CodexProfile>>,
     pub(super) claude_profiles: SetState<Vec<ClaudeProfile>>,
+    pub(super) codex_home_excluded_profiles: SetState<Vec<String>>,
     pub(super) claude_home_excluded_profiles: SetState<Vec<String>>,
     pub(super) codex_path: SetState<String>,
     pub(super) claude_path: SetState<String>,
@@ -97,8 +99,12 @@ impl SettingsWindowState {
             .call(settings.providers.is_enabled(ProviderKind::Kiro));
         self.openrouter_accounts
             .call(crate::openrouter::accounts_for_settings(settings));
+        self.codex_profiles
+            .call(crate::codex::profiles_for_settings(settings));
         self.claude_profiles
             .call(crate::claude::profiles_for_settings(settings));
+        self.codex_home_excluded_profiles
+            .call(settings.codex_home_excluded_profiles.clone());
         self.claude_home_excluded_profiles
             .call(settings.claude_home_excluded_profiles.clone());
         self.codex_path.call(
@@ -250,7 +256,9 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) grok_install_status: &'a ProviderInstallStatus,
     pub(super) kiro_install_status: &'a ProviderInstallStatus,
     pub(super) openrouter_accounts: &'a [OpenRouterAccount],
+    pub(super) codex_profiles: &'a [CodexProfile],
     pub(super) claude_profiles: &'a [ClaudeProfile],
+    pub(super) codex_home_excluded_profiles: &'a [String],
     pub(super) claude_home_excluded_profiles: &'a [String],
     pub(super) openrouter_snapshot: &'a OpenRouterSettingsSnapshot,
     pub(super) expanded_provider_cards: &'a [String],
@@ -323,7 +331,9 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) set_grok_enabled: SetState<bool>,
     pub(super) set_kiro_enabled: SetState<bool>,
     pub(super) set_openrouter_accounts: SetState<Vec<OpenRouterAccount>>,
+    pub(super) set_codex_profiles: SetState<Vec<CodexProfile>>,
     pub(super) set_claude_profiles: SetState<Vec<ClaudeProfile>>,
+    pub(super) set_codex_home_excluded_profiles: SetState<Vec<String>>,
     pub(super) set_claude_home_excluded_profiles: SetState<Vec<String>>,
     pub(super) set_expanded_provider_cards: AsyncSetState<Vec<String>>,
     pub(super) set_provider_dialog: AsyncSetState<Option<ProviderDialog>>,

@@ -28,7 +28,7 @@ use windows_sys::Win32::{
     },
 };
 
-pub(super) struct LoginChild {
+pub(crate) struct LoginChild {
     process: OwnedHandle,
     job: OwnedHandle,
 }
@@ -43,6 +43,27 @@ fn wide(value: &OsStr) -> io::Result<Vec<u16>> {
     }
     value.push(0);
     Ok(value)
+}
+
+fn quote_argument(value: &OsStr) -> Vec<u16> {
+    let mut result = vec![b'"' as u16];
+    let mut slashes = 0;
+    for c in value.encode_wide() {
+        if c == b'\\' as u16 {
+            slashes += 1;
+            continue;
+        }
+        if c == b'"' as u16 {
+            result.extend(std::iter::repeat_n(b'\\' as u16, slashes * 2 + 1));
+        } else {
+            result.extend(std::iter::repeat_n(b'\\' as u16, slashes));
+        }
+        result.push(c);
+        slashes = 0;
+    }
+    result.extend(std::iter::repeat_n(b'\\' as u16, slashes * 2));
+    result.push(b'"' as u16);
+    result
 }
 
 struct Attributes(Vec<usize>);
@@ -63,13 +84,14 @@ impl Drop for Attributes {
 }
 
 impl LoginChild {
-    pub(super) fn spawn(command: &Command) -> io::Result<Self> {
+    pub(crate) fn spawn(command: &Command) -> io::Result<Self> {
         let application = wide(command.get_program())?;
-        // The only arguments are fixed CLI words. Paths are passed separately;
-        // quote argv[0] so spaces in the native executable path remain intact.
-        let mut command_line = vec![b'"' as u16];
-        command_line.extend_from_slice(&application[..application.len() - 1]);
-        command_line.extend("\" auth login --claudeai".encode_utf16());
+        // Follow CommandLineToArgvW quoting, retaining literal TOML quotes.
+        let mut command_line = quote_argument(command.get_program());
+        for argument in command.get_args() {
+            command_line.push(b' ' as u16);
+            command_line.extend(quote_argument(argument));
+        }
         command_line.push(0);
         let directory = wide(
             command
@@ -196,7 +218,7 @@ impl LoginChild {
             })
         }
     }
-    pub(super) fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+    pub(crate) fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
         // SAFETY: process remains owned and valid.
         match unsafe { WaitForSingleObject(self.process.as_raw_handle(), 0) } {
             WAIT_TIMEOUT => Ok(None),
@@ -212,14 +234,14 @@ impl LoginChild {
         }
         Ok(ExitStatus::from_raw(code))
     }
-    pub(super) fn kill(&mut self) -> io::Result<()> {
+    pub(crate) fn kill(&mut self) -> io::Result<()> {
         // SAFETY: private job contains only the login process and descendants.
         if unsafe { TerminateJobObject(self.job.as_raw_handle(), 1) } == 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(())
     }
-    pub(super) fn wait(&mut self) -> io::Result<ExitStatus> {
+    pub(crate) fn wait(&mut self) -> io::Result<ExitStatus> {
         // SAFETY: process remains owned while waiting.
         if unsafe { WaitForSingleObject(self.process.as_raw_handle(), INFINITE) } != WAIT_OBJECT_0 {
             return Err(io::Error::last_os_error());
@@ -231,5 +253,20 @@ impl Drop for LoginChild {
     fn drop(&mut self) {
         let _ = self.kill();
         let _ = self.wait();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn native_arguments_preserve_literal_toml_quotes_and_trailing_slashes() {
+        let quote = |value: &str| String::from_utf16(&quote_argument(OsStr::new(value))).unwrap();
+        assert_eq!(quote("auth"), "\"auth\"");
+        assert_eq!(
+            quote("cli_auth_credentials_store=\"file\""),
+            r#""cli_auth_credentials_store=\"file\"""#
+        );
+        assert_eq!(quote(r"C:\path with spaces\"), r#""C:\path with spaces\\""#);
     }
 }

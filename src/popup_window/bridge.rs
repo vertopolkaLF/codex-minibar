@@ -10,6 +10,7 @@ pub(super) fn provider_worker_event_is_current(
     let current_revision = match provider {
         ProviderKind::OpenRouter => ui.openrouter_credentials_revision,
         ProviderKind::Claude => ui.claude_credentials_revision,
+        ProviderKind::Codex => ui.codex_credentials_revision,
         _ => 0,
     };
     worker_revision == current_revision
@@ -50,16 +51,21 @@ fn notify_new_forced_reset_info(
     }
 }
 
-/// The tracker for one Claude profile, named so its toasts say which account
+/// The tracker for one provider account, named so its toasts say which account
 /// they are about.
-fn claude_profile_tracker<'a>(
+fn account_profile_tracker<'a>(
     trackers: &'a mut HashMap<String, LimitNotificationTracker>,
     profile: &crate::limits::ClaudeProfileSnapshot,
+    provider: ProviderKind,
 ) -> &'a mut LimitNotificationTracker {
     trackers
-        .entry(format!("claude:{}", profile.id))
+        .entry(format!("{}:{}", provider.id(), profile.id))
         .or_default()
-        .named(format!("Claude · {}", profile.name))
+        .named(format!(
+            "{} \u{00b7} {}",
+            provider.display_name(),
+            profile.name
+        ))
 }
 
 pub(super) fn update_available_from_phase(phase: &UpdatePhase) -> bool {
@@ -83,6 +89,15 @@ pub(super) fn start_background_bridge(
     // Account names live in settings, so overlay them before the first paint.
     let startup_settings = state.settings.clone();
     let _ = state.apply_openrouter_account_names(&startup_settings);
+    let retained = crate::codex::prepare_profile_refresh(
+        state.current_limits().get(ProviderKind::Codex),
+        &startup_settings,
+        &startup_settings,
+    );
+    if !startup_settings.codex_profiles.is_empty() {
+        state.replace_limits(ProviderKind::Codex, retained);
+    }
+    let _ = state.apply_codex_profile_names(&startup_settings);
     crate::settings_window::publish_openrouter_snapshot(
         state.current_limits().get(ProviderKind::OpenRouter),
         ui_dispatcher.clone(),
@@ -117,7 +132,9 @@ pub(super) fn start_background_bridge(
         let mut notification_settings = state.settings.notifications.clone();
         // Keyed by provider id, or by profile for a multi-profile provider.
         let mut limit_notifications = HashMap::<String, LimitNotificationTracker>::new();
+        let mut notified_codex_profiles = state.settings.codex_profiles.clone();
         let mut notified_claude_profiles = state.settings.claude_profiles.clone();
+        let mut notified_codex_revision = state.settings.codex_credentials_revision;
         let mut notified_claude_revision = state.settings.claude_credentials_revision;
         let mut pending_auto_activation_successes = HashSet::<ProviderKind>::new();
         let mut forced_reset_notified_ids = HashSet::<String>::new();
@@ -172,8 +189,11 @@ pub(super) fn start_background_bridge(
             replace_chatgpt_logo_with_codex: state.settings.replace_chatgpt_logo_with_codex,
             codex_path: state.settings.codex_path.clone(),
             claude_path: state.settings.claude_path.clone(),
+            codex_profiles: state.settings.codex_profiles.clone(),
             claude_profiles: state.settings.claude_profiles.clone(),
+            codex_home_excluded_profiles: state.settings.codex_home_excluded_profiles.clone(),
             claude_home_excluded_profiles: state.settings.claude_home_excluded_profiles.clone(),
+            codex_credentials_revision: state.settings.codex_credentials_revision,
             claude_credentials_revision: state.settings.claude_credentials_revision,
             cursor_path: state.settings.cursor_path.clone(),
             antigravity_path: state.settings.antigravity_path.clone(),
@@ -282,6 +302,26 @@ pub(super) fn start_background_bridge(
             } else if state.apply_claude_profile_names(&settings) {
                 ui.observe_limits_update();
             }
+            let codex_profiles_changed =
+                read_set(&ui.codex_profiles) != read_set(&settings.codex_profiles);
+            let codex_credentials_changed =
+                ui.codex_credentials_revision != settings.codex_credentials_revision;
+            if codex_profiles_changed
+                || codex_credentials_changed
+                || ui.codex_path != settings.codex_path
+            {
+                // Keep samples for unchanged profiles through reader replacement.
+                // Removed, disabled and credential-replaced profiles lose theirs.
+                let retained = crate::codex::prepare_profile_refresh(
+                    state.current_limits().get(ProviderKind::Codex),
+                    live_settings,
+                    &settings,
+                );
+                state.replace_limits(ProviderKind::Codex, retained);
+                ui.observe_limits_update();
+            } else if state.apply_codex_profile_names(&settings) {
+                ui.observe_limits_update();
+            }
             ui.theme = settings.theme;
             ui.accent_color = settings.accent_color;
             ui.animations_enabled = settings.animations_enabled;
@@ -329,12 +369,13 @@ pub(super) fn start_background_bridge(
                 .cloned()
                 .collect();
             ui.update_version = update_version_from_phase(&phase);
-            // Presentation settings must visibly apply before any background
-            // work. In particular, changing provider icons must never wait on
-            // a worker lock, network request, or provider lifecycle change.
-            flush_popup_ui(set_ui, ui);
             let restart = [
-                (ProviderKind::Codex, settings.codex_path != ui.codex_path),
+                (
+                    ProviderKind::Codex,
+                    settings.codex_path != ui.codex_path
+                        || codex_profiles_changed
+                        || codex_credentials_changed,
+                ),
                 (
                     ProviderKind::Claude,
                     settings.claude_path != ui.claude_path
@@ -360,8 +401,11 @@ pub(super) fn start_background_bridge(
             .collect::<Vec<_>>();
             ui.codex_path = settings.codex_path.clone();
             ui.claude_path = settings.claude_path.clone();
+            ui.codex_profiles = settings.codex_profiles.clone();
             ui.claude_profiles = settings.claude_profiles.clone();
+            ui.codex_home_excluded_profiles = settings.codex_home_excluded_profiles.clone();
             ui.claude_home_excluded_profiles = settings.claude_home_excluded_profiles.clone();
+            ui.codex_credentials_revision = settings.codex_credentials_revision;
             ui.claude_credentials_revision = settings.claude_credentials_revision;
             ui.cursor_path = settings.cursor_path.clone();
             ui.antigravity_path = settings.antigravity_path.clone();
@@ -374,6 +418,10 @@ pub(super) fn start_background_bridge(
                     ui.clear_provider_requests(provider);
                 }
             }
+            // Presentation settings must visibly apply before any background
+            // work. In particular, changing provider icons must never wait on
+            // a worker lock, network request, or provider lifecycle change.
+            flush_popup_ui(set_ui, ui);
             if providers_changed || !restart.is_empty() {
                 let provider_errors = state.sync_provider_workers(&settings, &restart);
                 for (provider, error) in provider_errors {
@@ -785,28 +833,46 @@ pub(super) fn start_background_bridge(
                         limit_notifications
                             .retain(|key, _| !key.starts_with(ProviderKind::Claude.id()));
                     }
-                    let profiles = &limits.get(provider).claude_profiles;
+                    if provider == ProviderKind::Codex
+                        && (notified_codex_profiles != ui.codex_profiles
+                            || notified_codex_revision != ui.codex_credentials_revision)
+                    {
+                        // A tracker primed on one account must not compare
+                        // its reset time with a different account's.
+                        notified_codex_profiles = ui.codex_profiles.clone();
+                        notified_codex_revision = ui.codex_credentials_revision;
+                        limit_notifications
+                            .retain(|key, _| !key.starts_with(ProviderKind::Codex.id()));
+                    }
+                    let profiles = limits.get(provider).account_profiles(provider);
                     let tracker = match profiles.first() {
-                        Some(profile) => claude_profile_tracker(&mut limit_notifications, profile),
+                        Some(profile) => {
+                            account_profile_tracker(&mut limit_notifications, profile, provider)
+                        }
                         None => limit_notifications
                             .entry(provider.id().to_owned())
                             .or_default(),
                     };
                     let notification_result = if combine_activation_notification {
                         tracker.observe_with_primary_reset_deferred(
-                            limits.get(provider),
+                            profiles
+                                .first()
+                                .map_or(limits.get(provider), |profile| &profile.limits),
                             &notification_settings,
                             provider,
                         )
                     } else {
-                        tracker.observe(limits.get(provider), &notification_settings, provider)
-                    };
-                    for profile in profiles.iter().skip(1) {
-                        claude_profile_tracker(&mut limit_notifications, profile).observe(
-                            &profile.limits,
+                        tracker.observe(
+                            profiles
+                                .first()
+                                .map_or(limits.get(provider), |profile| &profile.limits),
                             &notification_settings,
                             provider,
-                        );
+                        )
+                    };
+                    for profile in profiles.iter().skip(1) {
+                        account_profile_tracker(&mut limit_notifications, profile, provider)
+                            .observe(&profile.limits, &notification_settings, provider);
                     }
                     if combine_activation_notification {
                         if notification_result.primary_reset {

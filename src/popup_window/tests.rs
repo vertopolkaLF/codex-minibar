@@ -195,12 +195,12 @@ fn account_tabs_replace_only_claude_for_every_enabled_provider_combination() {
             0
         };
         assert_eq!(
-            provider_icon_tab_count(&providers, enabled_accounts),
+            provider_icon_tab_count(&providers, enabled_accounts, &[]),
             expected,
             "mask={mask}"
         );
         assert_eq!(
-            provider_icon_tab_count(&providers, &[]),
+            provider_icon_tab_count(&providers, &[], &[]),
             if providers.len() > 1 {
                 providers.len()
             } else {
@@ -1598,4 +1598,160 @@ fn home_shows_every_claude_profile_as_its_own_strip() {
     );
     // One keyed strip per profile instead of one flat list of limit cards.
     assert_eq!(cards.len(), 2);
+}
+
+#[test]
+fn codex_and_claude_account_tabs_cover_all_provider_and_account_sets() {
+    let saved = vec![
+        crate::settings::CodexProfile {
+            id: "default".into(),
+            name: "Default".into(),
+            enabled: true,
+        },
+        crate::settings::CodexProfile {
+            id: "work".into(),
+            name: "Work".into(),
+            enabled: true,
+        },
+    ];
+    for provider_mask in 0..(1usize << ProviderKind::ALL.len()) {
+        let providers = ProviderKind::ALL
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| ((provider_mask & (1 << i)) != 0).then_some(*p))
+            .collect::<Vec<_>>();
+        for codex_mask in 0..4 {
+            for claude_mask in 0..4 {
+                let select = |mask: usize| {
+                    saved
+                        .iter()
+                        .enumerate()
+                        .map(|(i, p)| {
+                            let mut p = p.clone();
+                            p.enabled = mask & (1 << i) != 0;
+                            p
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let codex = if providers.contains(&ProviderKind::Codex) {
+                    codex_account_tabs(&select(codex_mask))
+                } else {
+                    vec![]
+                };
+                let claude = if providers.contains(&ProviderKind::Claude) {
+                    claude_account_tabs(&select(claude_mask))
+                } else {
+                    vec![]
+                };
+                let expected = if providers.len() <= 1 && codex.is_empty() && claude.is_empty() {
+                    0
+                } else {
+                    providers
+                        .iter()
+                        .map(|p| match p {
+                            ProviderKind::Codex => codex.len().max(1),
+                            ProviderKind::Claude => claude.len().max(1),
+                            _ => 1,
+                        })
+                        .sum()
+                };
+                assert_eq!(
+                    provider_icon_tab_count(&providers, &claude, &codex),
+                    expected
+                );
+                for account in &codex {
+                    assert!(account.enabled);
+                    assert_eq!(
+                        selected_codex_account_tab(&codex, Some(&account.id)),
+                        Some(account.id.as_str())
+                    );
+                }
+                assert_eq!(
+                    selected_codex_account_tab(&codex, Some("removed")),
+                    codex.first().map(|p| p.id.as_str())
+                );
+            }
+        }
+    }
+    assert_ne!(
+        codex_account_tabs_key(&saved),
+        codex_account_tabs_key(&saved[..1])
+    );
+    assert_ne!(
+        codex_account_tabs_key(&saved),
+        codex_account_tabs_key(&saved.iter().rev().cloned().collect::<Vec<_>>())
+    );
+}
+
+#[test]
+fn codex_home_visibility_does_not_remove_canonical_or_provider_tab_accounts() {
+    let saved = crate::codex::profiles_with_default(&[crate::settings::CodexProfile {
+        id: "work".into(),
+        name: "Work".into(),
+        enabled: true,
+    }]);
+    let limits = RateLimits {
+        codex_profiles: saved
+            .iter()
+            .map(|p| crate::limits::CodexProfileSnapshot {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                limits: RateLimits::default(),
+                error: None,
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let home = codex_limits_for_home(&limits, &saved, &["default".into()]).unwrap();
+    assert_eq!(home.codex_profiles.len(), 1);
+    assert_eq!(home.codex_profiles[0].id, "work");
+    assert_eq!(limits.codex_profiles.len(), 2);
+    assert_eq!(codex_account_tabs(&saved).len(), 2);
+    assert!(codex_limits_for_home(&limits, &saved, &["default".into(), "work".into()]).is_none());
+}
+
+#[test]
+fn replaced_codex_worker_events_cannot_overwrite_current_accounts() {
+    let ui = UiState {
+        codex_credentials_revision: 7,
+        claude_credentials_revision: 3,
+        ..Default::default()
+    };
+    assert!(!provider_worker_event_is_current(
+        &ui,
+        ProviderKind::Codex,
+        6
+    ));
+    assert!(provider_worker_event_is_current(
+        &ui,
+        ProviderKind::Codex,
+        7
+    ));
+    assert!(provider_worker_event_is_current(
+        &ui,
+        ProviderKind::Claude,
+        3
+    ));
+}
+
+#[test]
+fn cold_popup_seed_preserves_saved_account_membership_and_revisions() {
+    let mut settings = Settings::default();
+    settings.show_accounts_as_tabs = true;
+    settings.codex_profiles = crate::codex::profiles_for_settings(&settings);
+    settings.codex_profiles[0].enabled = false;
+    settings
+        .codex_profiles
+        .push(crate::settings::CodexProfile::new("Work"));
+    settings.codex_home_excluded_profiles = vec![settings.codex_profiles[1].id.clone()];
+    settings.codex_credentials_revision = 11;
+    let ui = UiState::popup_layout_from_settings(&settings);
+    assert!(ui.show_accounts_as_tabs);
+    assert_eq!(ui.codex_profiles, settings.codex_profiles);
+    assert_eq!(
+        ui.codex_home_excluded_profiles,
+        settings.codex_home_excluded_profiles
+    );
+    assert_eq!(ui.codex_credentials_revision, 11);
+    assert_eq!(codex_account_tabs(&ui.codex_profiles).len(), 1);
 }

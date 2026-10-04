@@ -887,7 +887,12 @@ fn tick(
     // "this account has no session window" into a request to activate one.
     // Exhausted weekly also blocks auto-activation: burning a fresh 5h window
     // cannot help until the weekly quota returns.
-    let session_window_available = !limits.five_hour_disabled()
+    let session_window_available = (limits.codex_profiles.is_empty()
+        || limits
+            .codex_profiles
+            .first()
+            .is_some_and(|p| p.id == "default" && p.error.is_none()))
+        && !limits.five_hour_disabled()
         && limits
             .claude_profiles
             .first()
@@ -1511,6 +1516,92 @@ mod tests {
                 name: "Default".into(),
                 limits: limits.clone(),
                 error: Some("fixture 429".into()),
+            });
+        let mut activator = CountingActivator(0);
+        let events = tick(
+            &mut ScriptedProvider::new(vec![limits]),
+            &mut activator,
+            &mut ActivationState::default(),
+            true,
+            &[schedule],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(activator.0, 0);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, WorkerEvent::LimitsUpdated(_)))
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, WorkerEvent::ActivationStarted))
+        );
+    }
+
+    #[test]
+    fn cached_failed_codex_profile_sample_does_not_trigger_scheduled_activation() {
+        let local_now = Local::now();
+        let schedule = ScheduledActivation {
+            id: "due-now".into(),
+            provider_id: crate::settings::ProviderKind::Codex.id().into(),
+            weekday: local_now.weekday().num_days_from_monday() as u8,
+            weekdays: vec![local_now.weekday().num_days_from_monday() as u8],
+            time_minutes: (local_now.hour() * 60 + local_now.minute()) as u16,
+            enabled: true,
+        };
+        let mut limits = limits_at(15, 0);
+        limits
+            .codex_profiles
+            .push(crate::limits::CodexProfileSnapshot {
+                id: "default".into(),
+                name: "Default".into(),
+                limits: limits.clone(),
+                error: Some("fixture 429".into()),
+            });
+        let mut activator = CountingActivator(0);
+        let events = tick(
+            &mut ScriptedProvider::new(vec![limits]),
+            &mut activator,
+            &mut ActivationState::default(),
+            true,
+            &[schedule],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(activator.0, 0);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, WorkerEvent::LimitsUpdated(_)))
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, WorkerEvent::ActivationStarted))
+        );
+    }
+
+    #[test]
+    fn saved_codex_account_never_triggers_ambient_scheduled_activation() {
+        let local_now = Local::now();
+        let schedule = ScheduledActivation {
+            id: "due-now".into(),
+            provider_id: crate::settings::ProviderKind::Codex.id().into(),
+            weekday: local_now.weekday().num_days_from_monday() as u8,
+            weekdays: vec![local_now.weekday().num_days_from_monday() as u8],
+            time_minutes: (local_now.hour() * 60 + local_now.minute()) as u16,
+            enabled: true,
+        };
+        let mut limits = limits_at(15, 0);
+        limits
+            .codex_profiles
+            .push(crate::limits::CodexProfileSnapshot {
+                id: "work".into(),
+                name: "Default".into(),
+                limits: limits.clone(),
+                error: None,
             });
         let mut activator = CountingActivator(0);
         let events = tick(
