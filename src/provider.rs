@@ -88,15 +88,21 @@ pub(crate) fn start_provider_worker_with_limits(
     let worker_revision = match provider {
         ProviderKind::OpenRouter => settings.openrouter_credentials_revision,
         ProviderKind::Claude => settings.claude_credentials_revision,
+        ProviderKind::Codex => settings.codex_credentials_revision,
         _ => 0,
     };
     let automatic_activation = automatic_activation(provider, settings);
     let mut worker = match provider {
         ProviderKind::Codex => {
-            let executable = first_available(settings.codex_path.as_deref())?;
+            let executable = first_available(settings.codex_path.as_deref())
+                .unwrap_or_else(|_| PathBuf::from("codex"));
             crate::logger::info(format!("Codex executable: {}", executable.display()));
             worker::start_worker(
-                CodexClient::new(&executable),
+                CodexClient::new(&executable)
+                    .with_profiles(crate::codex::profiles_for_settings(settings))
+                    .with_cached_limits(
+                        cached_limits.unwrap_or(&crate::limits::RateLimits::default()),
+                    ),
                 CodexClient::new(&executable),
                 CodexActivator::new(executable),
                 activation_path,
@@ -308,12 +314,17 @@ pub(crate) fn start_provider_worker_with_limits(
 /// Whether a provider's worker may start sessions on its own. Shared by
 /// worker start-up and live settings changes so the two cannot disagree.
 pub fn automatic_activation(provider: ProviderKind, settings: &Settings) -> bool {
-    // Claude activation starts a session with the local login, so it only
+    // Activation starts a session with the local login, so it only
     // applies while the default profile is being read.
-    let local_login_tracked = provider != ProviderKind::Claude
-        || crate::claude::profiles_for_settings(settings)
+    let local_login_tracked = match provider {
+        ProviderKind::Claude => crate::claude::profiles_for_settings(settings)
             .iter()
-            .any(|profile| profile.is_default() && profile.enabled);
+            .any(|p| p.is_default() && p.enabled),
+        ProviderKind::Codex => crate::codex::profiles_for_settings(settings)
+            .iter()
+            .any(|p| p.is_default() && p.enabled),
+        _ => true,
+    };
     settings.automatic_activation
         && crate::provider_registry::descriptor(provider).supports_activation
         && local_login_tracked
@@ -371,6 +382,25 @@ fn provider_activation_path(provider: ProviderKind, base_path: PathBuf) -> PathB
 mod tests {
     use super::*;
     use crate::settings::ClaudeProfile;
+
+    #[test]
+    fn codex_activation_requires_enabled_default_regardless_of_account_order() {
+        let mut settings = Settings {
+            automatic_activation: true,
+            ..Settings::default()
+        };
+        assert!(automatic_activation(ProviderKind::Codex, &settings));
+        settings.codex_profiles = crate::codex::profiles_for_settings(&settings);
+        settings.codex_profiles[0].enabled = false;
+        settings
+            .codex_profiles
+            .push(crate::settings::CodexProfile::new("Work"));
+        assert!(!automatic_activation(ProviderKind::Codex, &settings));
+        assert!(automatic_activation(ProviderKind::Claude, &settings));
+        settings.codex_profiles[0].enabled = true;
+        settings.codex_profiles.swap(0, 1);
+        assert!(automatic_activation(ProviderKind::Codex, &settings));
+    }
 
     #[test]
     fn claude_activation_needs_the_default_profile() {

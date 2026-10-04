@@ -110,15 +110,18 @@ pub struct OpenRouterAccountSnapshot {
     pub total_credits_microusd: Option<u64>,
 }
 
-/// One Claude profile's quota. `limits` keeps the last successful read, so a
+/// One provider account's quota. `limits` keeps the last successful read, so a
 /// failing profile still shows its previous numbers next to `error`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct ClaudeProfileSnapshot {
+pub struct AccountProfileSnapshot {
     pub id: String,
     pub name: String,
     pub limits: RateLimits,
     pub error: Option<String>,
 }
+
+pub type ClaudeProfileSnapshot = AccountProfileSnapshot;
+pub type CodexProfileSnapshot = AccountProfileSnapshot;
 
 /// Pace tip on a usage progress bar (even-burn marker position).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -260,6 +263,10 @@ pub struct RateLimits {
     /// above then describe the first profile. Other providers leave this empty.
     #[serde(default)]
     pub claude_profiles: Vec<ClaudeProfileSnapshot>,
+    /// Independent enabled Codex accounts. Provider-level fields hold the
+    /// primary account sample used by tray widgets and activation guards.
+    #[serde(default)]
+    pub codex_profiles: Vec<CodexProfileSnapshot>,
     /// Token statistics computed from local Codex session logs.
     pub usage: UsageStatistics,
 }
@@ -304,6 +311,23 @@ impl RateLimits {
             .iter()
             .find(|profile| selected == Some(profile.id.as_str()))
             .or(self.claude_profiles.first())
+    }
+
+    /// The Codex profile a single-profile view shows: the selected one, or
+    /// the first when nothing valid is selected.
+    pub fn codex_profile(&self, selected: Option<&str>) -> Option<&CodexProfileSnapshot> {
+        self.codex_profiles
+            .iter()
+            .find(|profile| selected == Some(profile.id.as_str()))
+            .or(self.codex_profiles.first())
+    }
+
+    pub fn account_profiles(&self, provider: ProviderKind) -> &[AccountProfileSnapshot] {
+        match provider {
+            ProviderKind::Codex => &self.codex_profiles,
+            ProviderKind::Claude => &self.claude_profiles,
+            _ => &[],
+        }
     }
 
     /// OpenAI sometimes drops the 5h window and leaves weekly data in `primary`.

@@ -309,6 +309,16 @@ pub(super) enum ProviderDialogKind {
     RemoveOpenCodeKey {
         provider: ProviderKind,
     },
+    AddCodexProfile,
+    UpdateCodexCredential {
+        profile_id: String,
+    },
+    RenameCodexProfile {
+        profile_id: String,
+    },
+    RemoveCodexProfile {
+        profile_id: String,
+    },
     AddClaudeProfile,
     UpdateClaudeCredential {
         profile_id: String,
@@ -402,7 +412,10 @@ impl ProviderDialog {
     }
 
     fn is_sign_in(&self) -> bool {
-        self.claude_method == ProfileCredentialMethod::SignIn
+        matches!(
+            self.kind,
+            ProviderDialogKind::AddCodexProfile | ProviderDialogKind::UpdateCodexCredential { .. }
+        ) || self.claude_method == ProfileCredentialMethod::SignIn
             && matches!(
                 self.kind,
                 ProviderDialogKind::AddClaudeProfile
@@ -814,6 +827,66 @@ fn persist_claude_credential(
         };
     }
     crate::claude::profile_oauth::forget(profile_id);
+    Ok(())
+}
+
+fn persist_codex_profiles(
+    settings_tx: Sender<Settings>,
+    changed_credential: Option<&str>,
+    mutate: impl FnOnce(&mut Vec<CodexProfile>) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    try_persist_update_fallible(settings_tx, move |settings| {
+        let mut profiles = crate::codex::profiles_for_settings(settings);
+        let before = profiles
+            .iter()
+            .map(|p| (p.id.clone(), p.enabled))
+            .collect::<Vec<_>>();
+        mutate(&mut profiles)?;
+        let after = profiles
+            .iter()
+            .map(|p| (p.id.clone(), p.enabled))
+            .collect::<Vec<_>>();
+        settings.codex_profiles = profiles;
+        settings.codex_profile_credential_revisions.retain(|id, _| {
+            settings
+                .codex_profiles
+                .iter()
+                .any(|profile| profile.id == *id)
+        });
+        if let Some(id) = changed_credential {
+            let revision = settings
+                .codex_profile_credential_revisions
+                .entry(id.to_owned())
+                .or_default();
+            *revision = revision.wrapping_add(1);
+        }
+        if changed_credential.is_some() || before != after {
+            settings.codex_credentials_revision =
+                settings.codex_credentials_revision.wrapping_add(1);
+        }
+        Ok(())
+    })
+}
+
+/// Keep the existing credential when validation or the settings commit fails.
+fn persist_codex_credential(
+    settings_tx: Sender<Settings>,
+    profile_id: &str,
+    credential: &str,
+    mutate: impl FnOnce(&mut Vec<CodexProfile>) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let _guard = crate::codex::profile_oauth::credential_guard()?;
+    let previous = crate::codex::load_profile_credential(profile_id)?;
+    crate::codex::save_profile_credential(profile_id, Some(credential))?;
+    if let Err(error) = persist_codex_profiles(settings_tx, Some(profile_id), mutate) {
+        return match crate::codex::save_profile_credential(profile_id, previous.as_deref()) {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(anyhow::anyhow!(
+                "Could not save profile settings ({error:#}); restoring its previous credential also failed ({rollback_error:#})."
+            )),
+        };
+    }
+    crate::codex::profile_oauth::forget(profile_id);
     Ok(())
 }
 
@@ -1396,6 +1469,11 @@ pub(super) fn provider_page_content(
         ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
             opencode_sections(provider, status, ctx)
         }
+        ProviderKind::Codex => {
+            let mut sections = codex_profile_sections(ctx);
+            sections.extend(install_sections(provider, status, ctx));
+            sections
+        }
         ProviderKind::Claude => {
             let mut sections = claude_profile_sections(ctx);
             sections.extend(install_sections(provider, status, ctx));
@@ -1957,6 +2035,208 @@ fn claude_account_expander(profile: &ClaudeProfile, ctx: &SettingsPageContext<'_
                     open_dialog(
                         &remove_dialog,
                         ProviderDialogKind::RemoveClaudeProfile {
+                            profile_id: remove_id.clone(),
+                        },
+                    )
+                })
+                .into(),
+        ]);
+    }
+    rows.push(
+        hstack(actions)
+            .spacing(4.0)
+            .horizontal_alignment(HorizontalAlignment::Right)
+            .margin(Thickness {
+                left: 0.0,
+                top: 12.0,
+                right: 0.0,
+                bottom: 0.0,
+            })
+            .into(),
+    );
+    settings_content_expander(
+        header,
+        expanded,
+        toggle_expanded_card(card_id.clone(), ctx),
+        card_id,
+        ctx.hovered_card_id,
+        ctx.set_hovered_card_id.clone(),
+        vstack(rows)
+            .spacing(12.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch),
+    )
+}
+fn codex_profile_sections(ctx: &SettingsPageContext<'_>) -> Vec<Element> {
+    let set_dialog = ctx.set_provider_dialog.clone();
+    let mut out = vec![
+        section_header(
+            "Accounts",
+            Some(
+                "Track work and personal accounts together. Default follows this PC's Codex login. Sign in to connect another ChatGPT account.",
+            ),
+            Some(
+                Button::new("Add account")
+                    .icon(Symbol::Add)
+                    .on_click(move || open_dialog(&set_dialog, ProviderDialogKind::AddCodexProfile))
+                    .into(),
+            ),
+        )
+        .with_key("codex-profiles-header"),
+    ];
+    for profile in ctx.codex_profiles {
+        out.push(
+            codex_account_expander(profile, ctx).with_key(format!("codex-account-{}", profile.id)),
+        );
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// OpenRouter
+// ---------------------------------------------------------------------------
+
+fn codex_account_expander(profile: &CodexProfile, ctx: &SettingsPageContext<'_>) -> Element {
+    let card_id = format!("codex-account-{}", profile.id);
+    let expanded = ctx.expanded_provider_cards.contains(&card_id);
+    let toggle_header = toggle_expanded_card(card_id.clone(), ctx);
+    let initial = profile
+        .name
+        .chars()
+        .next()
+        .map(|letter| letter.to_uppercase().collect::<String>())
+        .unwrap_or_else(|| "?".into());
+    let header = hstack((
+        border(
+            text_block(initial)
+                .font_size(13.0)
+                .semibold()
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center),
+        )
+        .width(32.0)
+        .height(32.0)
+        .corner_radius(16.0)
+        .background(ThemeRef::ControlFillSecondary)
+        .vertical_alignment(VerticalAlignment::Center),
+        vstack((
+            text_block(profile.name.clone()).font_size(14.0),
+            secondary_text(if !profile.enabled {
+                "Disabled"
+            } else if profile.is_default() {
+                "Follows this PC's Codex login"
+            } else {
+                "Saved credential"
+            }),
+        ))
+        .vertical_alignment(VerticalAlignment::Center),
+    ))
+    .spacing(12.0)
+    .on_tapped(move || toggle_header(!expanded));
+
+    let rename_dialog = ctx.set_provider_dialog.clone();
+    let rename_id = profile.id.clone();
+    let name = profile.name.clone();
+    let mut actions: Vec<Element> = vec![
+        Button::new("Rename")
+            .on_click(move || {
+                rename_dialog.call(Some(ProviderDialog::with_name(
+                    ProviderDialogKind::RenameCodexProfile {
+                        profile_id: rename_id.clone(),
+                    },
+                    name.clone(),
+                )))
+            })
+            .into(),
+    ];
+    let settings_tx = ctx.settings_tx.clone();
+    let enabled_id = profile.id.clone();
+    let enabled_row = provider_row(
+        None,
+        "Enabled",
+        vec![secondary_text("Fetch limits and make this account available in the popup.").into()],
+        vec![
+            ToggleSwitch::new(profile.enabled)
+                .on_content("")
+                .off_content("")
+                .on_toggled(move |enabled| {
+                    let profile_id = enabled_id.clone();
+                    if let Err(error) =
+                        persist_codex_profiles(settings_tx.clone(), None, move |profiles| {
+                            if let Some(profile) = profiles.iter_mut().find(|p| p.id == profile_id)
+                            {
+                                profile.enabled = enabled;
+                            }
+                            Ok(())
+                        })
+                    {
+                        crate::notifications::show("Could not save account", &format!("{error:#}"));
+                    }
+                })
+                .min_width(0.0)
+                .width(50.0)
+                .vertical_alignment(VerticalAlignment::Center)
+                .into(),
+        ],
+    );
+    let settings_tx = ctx.settings_tx.clone();
+    let home_id = profile.id.clone();
+    let set_excluded = ctx.set_codex_home_excluded_profiles.clone();
+    let home_row = provider_row(
+        None,
+        "Show on Home",
+        vec![secondary_text("Its provider tab stays available when hidden from Home.").into()],
+        vec![
+            ToggleSwitch::new(!ctx.codex_home_excluded_profiles.contains(&profile.id))
+                .on_content("")
+                .off_content("")
+                .on_toggled(move |visible| {
+                    let mut excluded = Vec::new();
+                    let result = try_persist_update_fallible(settings_tx.clone(), |settings| {
+                        crate::codex::set_home_profile_visibility(
+                            &mut settings.codex_home_excluded_profiles,
+                            &home_id,
+                            visible,
+                        );
+                        excluded = settings.codex_home_excluded_profiles.clone();
+                        Ok(())
+                    });
+                    match result {
+                        Ok(()) => set_excluded.call(excluded),
+                        Err(error) => crate::notifications::show(
+                            "Could not save Home visibility",
+                            &format!("{error:#}"),
+                        ),
+                    }
+                })
+                .min_width(0.0)
+                .width(50.0)
+                .vertical_alignment(VerticalAlignment::Center)
+                .into(),
+        ],
+    );
+    let mut rows = vec![enabled_row, home_row];
+    if !profile.is_default() {
+        let update_dialog = ctx.set_provider_dialog.clone();
+        let update_id = profile.id.clone();
+        let remove_dialog = ctx.set_provider_dialog.clone();
+        let remove_id = profile.id.clone();
+        actions.extend([
+            Button::new("Sign in again")
+                .on_click(move || {
+                    open_dialog(
+                        &update_dialog,
+                        ProviderDialogKind::UpdateCodexCredential {
+                            profile_id: update_id.clone(),
+                        },
+                    )
+                })
+                .into(),
+            Button::new("Remove account")
+                .danger()
+                .on_click(move || {
+                    open_dialog(
+                        &remove_dialog,
+                        ProviderDialogKind::RemoveCodexProfile {
                             profile_id: remove_id.clone(),
                         },
                     )
@@ -3010,6 +3290,38 @@ pub(super) fn provider_dialog_overlay(
             );
             ("Remove API key?".to_owned(), "Remove", true)
         }
+        ProviderDialogKind::AddCodexProfile | ProviderDialogKind::UpdateCodexCredential { .. } => {
+            if matches!(dialog.kind, ProviderDialogKind::AddCodexProfile) {
+                fields.push(dialog_name_box(
+                    dialog,
+                    Some("Optional. Leave blank for Account 1, Account 2, and so on."),
+                    on_submit.clone(),
+                ));
+            }
+            fields.push(secondary_text(if dialog.checking {
+                "Finish signing in with the other ChatGPT account in your browser. Cancel stops this login."
+            } else {
+                "Sign in opens your browser through Codex CLI. Use the ChatGPT account you want to track. Minibar saves its session encrypted and refreshes it automatically. Your current CLI and desktop login stay unchanged. Native Codex CLI or Codex desktop must be installed."
+            }).into());
+            (
+                if matches!(dialog.kind, ProviderDialogKind::AddCodexProfile) {
+                    "Add Codex account"
+                } else {
+                    "Sign in to Codex account"
+                }
+                .to_owned(),
+                "Sign in",
+                false,
+            )
+        }
+        ProviderDialogKind::RenameCodexProfile { .. } => {
+            fields.push(dialog_name_box(dialog, None, on_submit.clone()));
+            ("Rename profile".to_owned(), "Rename", false)
+        }
+        ProviderDialogKind::RemoveCodexProfile { .. } => {
+            fields.push(secondary_text("Minibar forgets this account and its saved login. Your Codex CLI and desktop login stay unchanged.").into());
+            ("Remove account?".to_owned(), "Remove", true)
+        }
         ProviderDialogKind::AddClaudeProfile => {
             fields.push(dialog_name_box(
                 dialog,
@@ -3120,7 +3432,10 @@ pub(super) fn provider_dialog_overlay(
 
     let claude_credential_dialog = matches!(
         dialog.kind,
-        ProviderDialogKind::AddClaudeProfile | ProviderDialogKind::UpdateClaudeCredential { .. }
+        ProviderDialogKind::AddClaudeProfile
+            | ProviderDialogKind::UpdateClaudeCredential { .. }
+            | ProviderDialogKind::AddCodexProfile
+            | ProviderDialogKind::UpdateCodexCredential { .. }
     );
     let dialog_body = vstack(body)
         .spacing(14.0)
@@ -3264,7 +3579,7 @@ fn run_dialog_work(
     });
 }
 
-fn claude_profile_name(requested: &str, profiles: &[ClaudeProfile]) -> anyhow::Result<String> {
+fn account_profile_name(requested: &str, profiles: &[ClaudeProfile]) -> anyhow::Result<String> {
     let requested = requested.trim();
     if !requested.is_empty() {
         anyhow::ensure!(
@@ -3291,7 +3606,7 @@ fn submit_claude_login(dialog: ProviderDialog, actions: ProviderDialogActions) {
     run_dialog_work(dialog, actions, move || {
         let settings = Settings::load_or_create(&Settings::default_path()?)?;
         if updating.is_none() {
-            claude_profile_name(&name, &crate::claude::profiles_for_settings(&settings))?;
+            account_profile_name(&name, &crate::claude::profiles_for_settings(&settings))?;
         }
         let credential =
             crate::claude::profile_oauth::login(settings.claude_path.as_deref(), &control)?;
@@ -3302,7 +3617,7 @@ fn submit_claude_login(dialog: ProviderDialog, actions: ProviderDialogActions) {
         let added = updating.is_none();
         persist_claude_credential(settings_tx, &profile_id, &credential, move |profiles| {
             if added {
-                profile.name = claude_profile_name(&name, profiles)?;
+                profile.name = account_profile_name(&name, profiles)?;
                 profiles.push(profile);
             } else {
                 anyhow::ensure!(
@@ -3321,6 +3636,47 @@ fn submit_claude_login(dialog: ProviderDialog, actions: ProviderDialogActions) {
     });
 }
 
+fn submit_codex_login(dialog: ProviderDialog, actions: ProviderDialogActions) {
+    let name = dialog.inputs().name.trim().to_owned();
+    let updating = match &dialog.kind {
+        ProviderDialogKind::UpdateCodexCredential { profile_id } => Some(profile_id.clone()),
+        _ => None,
+    };
+    let control = dialog.login_control.clone();
+    let settings_tx = actions.settings_tx.clone();
+    run_dialog_work(dialog, actions, move || {
+        let settings = Settings::load_or_create(&Settings::default_path()?)?;
+        if updating.is_none() {
+            account_profile_name(&name, &crate::codex::profiles_for_settings(&settings))?;
+        }
+        let credential =
+            crate::codex::profile_oauth::login(settings.codex_path.as_deref(), &control)?;
+        control.begin_save()?;
+        let mut profile = CodexProfile::new(name.clone());
+        let profile_id = updating.clone().unwrap_or_else(|| profile.id.clone());
+        let saved_id = profile_id.clone();
+        let added = updating.is_none();
+        persist_codex_credential(settings_tx, &profile_id, &credential, move |profiles| {
+            if added {
+                profile.name = account_profile_name(&name, profiles)?;
+                profiles.push(profile);
+            } else {
+                anyhow::ensure!(
+                    profiles
+                        .iter()
+                        .any(|saved| saved.id == saved_id && !saved.is_default()),
+                    "This profile is no longer available."
+                );
+            }
+            Ok(())
+        })?;
+        Ok(DialogOutcome {
+            notice: "Codex account signed in. Its session refreshes automatically.".into(),
+            expand_card: added.then(|| format!("codex-account-{profile_id}")),
+        })
+    });
+}
+
 fn looks_like_openrouter_key(value: &str) -> bool {
     value.starts_with("sk-or-")
 }
@@ -3331,6 +3687,13 @@ fn submit_provider_dialog(
     actions: ProviderDialogActions,
 ) {
     if dialog.checking {
+        return;
+    }
+    if matches!(
+        dialog.kind,
+        ProviderDialogKind::AddCodexProfile | ProviderDialogKind::UpdateCodexCredential { .. }
+    ) {
+        submit_codex_login(dialog, actions);
         return;
     }
     if dialog.claude_method == ProfileCredentialMethod::SignIn
@@ -3743,13 +4106,13 @@ fn submit_provider_dialog(
             run_dialog_work(dialog, actions, move || {
                 // Checked first: the credential check below costs a request.
                 let settings = Settings::load_or_create(&Settings::default_path()?)?;
-                claude_profile_name(&name, &crate::claude::profiles_for_settings(&settings))?;
+                account_profile_name(&name, &crate::claude::profiles_for_settings(&settings))?;
                 crate::claude::verify_credential(&credential)?;
                 let mut profile = ClaudeProfile::new(name.clone());
                 let profile_id = profile.id.clone();
                 let mut saved_name = String::new();
                 persist_claude_credential(settings_tx, &profile_id, &credential, |profiles| {
-                    saved_name = claude_profile_name(&name, profiles)?;
+                    saved_name = account_profile_name(&name, profiles)?;
                     profile.name = saved_name.clone();
                     profiles.push(profile);
                     Ok(())
@@ -3838,6 +4201,59 @@ fn submit_provider_dialog(
                     eprintln!("failed to delete the Claude profile credential: {error:#}");
                 }
                 crate::claude::profile_oauth::forget(&profile_id);
+                Ok(DialogOutcome {
+                    notice: "Profile removed.".into(),
+                    expand_card: None,
+                })
+            });
+        }
+        ProviderDialogKind::AddCodexProfile | ProviderDialogKind::UpdateCodexCredential { .. } => {
+            unreachable!("Codex login handled above")
+        }
+        ProviderDialogKind::RenameCodexProfile { profile_id } => {
+            let name = inputs.name.trim().to_owned();
+            if name.is_empty() {
+                return fail("Give the profile a name.");
+            }
+            if let Err(error) =
+                persist_codex_profiles(actions.settings_tx.clone(), None, move |profiles| {
+                    anyhow::ensure!(
+                        !profiles
+                            .iter()
+                            .any(|saved| saved.id != profile_id && saved.name == name),
+                        "A profile with this name already exists."
+                    );
+                    if let Some(profile) = profiles.iter_mut().find(|saved| saved.id == profile_id)
+                    {
+                        profile.name = name;
+                    }
+                    Ok(())
+                })
+            {
+                return fail(&format!("Could not rename the profile: {error:#}"));
+            }
+            finish_dialog(
+                &actions,
+                DialogOutcome {
+                    notice: "Profile renamed.".into(),
+                    expand_card: None,
+                },
+            );
+        }
+        ProviderDialogKind::RemoveCodexProfile { profile_id } => {
+            let settings_tx = actions.settings_tx.clone();
+            run_dialog_work(dialog, actions, move || {
+                let _guard = crate::codex::profile_oauth::credential_guard()?;
+                let removed_id = profile_id.clone();
+                persist_codex_profiles(settings_tx, None, move |profiles| {
+                    profiles.retain(|profile| profile.id != removed_id);
+                    Ok(())
+                })?;
+                // The profile is gone either way; a leftover credential is unused.
+                if let Err(error) = crate::codex::save_profile_credential(&profile_id, None) {
+                    eprintln!("failed to delete the Codex profile credential: {error:#}");
+                }
+                crate::codex::profile_oauth::forget(&profile_id);
                 Ok(DialogOutcome {
                     notice: "Profile removed.".into(),
                     expand_card: None,

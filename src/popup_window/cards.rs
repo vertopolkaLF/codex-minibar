@@ -23,6 +23,28 @@ pub(super) fn claude_limits_for_home(
     (!filtered.claude_profiles.is_empty()).then_some(filtered)
 }
 
+pub(super) fn codex_limits_for_home(
+    limits: &RateLimits,
+    saved: &[crate::settings::CodexProfile],
+    excluded: &[String],
+) -> Option<RateLimits> {
+    let enabled = codex_account_tabs(saved);
+    let is_visible = |id: &str| {
+        enabled.iter().any(|p| p.id == id) && !excluded.iter().any(|hidden| hidden == id)
+    };
+    if limits.codex_profiles.is_empty() {
+        // Legacy single-Default snapshots, and the placeholder before the
+        // first multi-profile read, describe only the first enabled account.
+        return enabled
+            .first()
+            .filter(|p| is_visible(&p.id))
+            .map(|_| limits.clone());
+    }
+    let mut filtered = limits.clone();
+    filtered.codex_profiles.retain(|p| is_visible(&p.id));
+    (!filtered.codex_profiles.is_empty()).then_some(filtered)
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct ResetCardReveal {
     key: Option<String>,
@@ -128,18 +150,18 @@ pub(super) fn provider_cards(
     hovered_reset_card: Option<&str>,
     set_hovered_reset_card: Option<SetState<Option<String>>>,
 ) -> Vec<Element> {
-    if !limits.claude_profiles.is_empty() {
+    if !limits.account_profiles(provider).is_empty() {
         // Each profile is its own keyed strip, so WinUI cannot recycle a card
         // into another profile's slot when the profile set changes.
         // A profile's own failure marks only that profile; a failure of the
         // whole provider marks them all.
         let any_profile_error = limits
-            .claude_profiles
+            .account_profiles(provider)
             .iter()
             .any(|profile| profile.error.is_some());
         let mut drag_handle = drag_handle;
         let mut cards = limits
-            .claude_profiles
+            .account_profiles(provider)
             .iter()
             .enumerate()
             .map(|(index, profile)| {
@@ -185,7 +207,7 @@ pub(super) fn provider_cards(
                     set_hovered_reset_card.clone(),
                 ))
                 .spacing(6.0)
-                .with_key(format!("claude-profile-{}", profile.id))
+                .with_key(format!("{}-profile-{}", provider.id(), profile.id))
                 .into()
             })
             .collect::<Vec<Element>>();
@@ -955,12 +977,12 @@ pub(super) fn popup_body_height_key(
             key.push_str(&openrouter_accounts_strip_key(snapshot));
         } else {
             // Every Claude profile adds its own cards and error marker.
-            for profile in &snapshot.claude_profiles {
+            for profile in snapshot.account_profiles(provider) {
                 key.push_str(&profile.id);
                 key.push(if profile.error.is_some() { '!' } else { ';' });
             }
             let profiles = snapshot
-                .claude_profiles
+                .account_profiles(provider)
                 .iter()
                 .map(|profile| &profile.limits);
             for snapshot in std::iter::once(snapshot).chain(profiles) {
@@ -1039,6 +1061,26 @@ pub(super) fn claude_profile_layout_key(
 ) -> String {
     let mut key = String::new();
     if let Some(profile) = limits.claude_profile(selected) {
+        key.push(if profile.error.is_some() { '!' } else { ';' });
+        push_limits_layout_key(
+            &mut key,
+            &profile.limits,
+            show_used_percentage,
+            show_usage_pace,
+        );
+    }
+    key
+}
+
+/// Structural layout of the selected Codex account, for popup remeasurement.
+pub(super) fn codex_profile_layout_key(
+    limits: &RateLimits,
+    selected: Option<&str>,
+    show_used_percentage: bool,
+    show_usage_pace: bool,
+) -> String {
+    let mut key = String::new();
+    if let Some(profile) = limits.codex_profile(selected) {
         key.push(if profile.error.is_some() { '!' } else { ';' });
         push_limits_layout_key(
             &mut key,

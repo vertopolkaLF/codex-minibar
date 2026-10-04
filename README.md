@@ -76,7 +76,7 @@ also supplies plan and account labels. If it is unavailable, Minibar falls back 
 usage cache when available and keeps its own last stored Kiro snapshot. The endpoint is currently
 undocumented by Kiro and may change. Kiro subscription credits stay separate from API-equivalent
 Total Spend.
-Optional OpenCode and OpenRouter manual API keys and manual Claude profile credentials are protected with Windows user-scoped DPAPI
+Optional OpenCode and OpenRouter manual API keys and saved Codex sessions and Claude profile credentials are protected with Windows user-scoped DPAPI
 storage. The app stores its own settings and usage history in your Windows user profile.
 
 Kiro's plan appears on its provider card. The account label uses Kiro's display name when available,
@@ -86,6 +86,26 @@ For Antigravity, run `agy` and complete its normal sign-in once; Minibar reads t
 Windows Credential Manager session and never stores it in app settings. For Grok, run `grok login`;
 Minibar reads the official CLI auth cache. If either session expires, refresh it in the official CLI.
 Browser-session access is not used.
+
+### Add another Codex account
+
+Open **Settings → Providers → Codex → Add account**, optionally name it, and click
+**Sign in**. Finish authorization with the desired ChatGPT account in your browser
+within five minutes. Requires native Codex CLI or Codex desktop; npm installations
+are supported when their package contains the native Windows executable.
+
+**Default** follows your existing Codex login (including `CODEX_HOME`). Additional
+accounts use isolated logins, stored with Windows user-scoped DPAPI, and refresh
+automatically. Adding or selecting an account does not switch your CLI or desktop
+login. Each enabled account has independent limits and errors. Rename, disable,
+remove, or sign in again from its account card; **Show on Home** affects only Home.
+The Codex tab has an account switcher, or enable **Show accounts as separate tabs**
+to give each Codex and Claude account its own numbered icon.
+
+Tray quotas follow the provider-level account sample. Automatic and scheduled
+activation use only the existing Default login; saved accounts are never activated.
+Usage statistics still come from local CLI logs and retain their existing account
+attribution; adding OAuth accounts does not create historical usage for them.
 
 ### Add another Claude account
 

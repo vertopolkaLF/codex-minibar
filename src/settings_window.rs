@@ -4,11 +4,12 @@
 //! details; both surfaces share tokens from [`crate::theme`].
 
 use crate::settings::{
-    AccentColor, AppTheme, AutoActivationPause, BottomBarSize, ClaudeProfile, LimitRefreshInterval,
-    LimitValue, OpenRouterAccount, PopupBackgroundMaterial, PopupCornerRadius, PopupVisibility,
-    PopupWidgetKind, ProviderKind, ResetAnnouncementRefreshInterval, ScheduledActivation, Settings,
-    TimeFormat, TotalSpendPresentation, TrayColorMode, TrayFixedColor, TrayIndicator,
-    TrayPresentation, TrayWidget, TrayWidgetKind, UsageRefreshInterval,
+    AccentColor, AppTheme, AutoActivationPause, BottomBarSize, ClaudeProfile, CodexProfile,
+    LimitRefreshInterval, LimitValue, OpenRouterAccount, PopupBackgroundMaterial,
+    PopupCornerRadius, PopupVisibility, PopupWidgetKind, ProviderKind,
+    ResetAnnouncementRefreshInterval, ScheduledActivation, Settings, TimeFormat,
+    TotalSpendPresentation, TrayColorMode, TrayFixedColor, TrayIndicator, TrayPresentation,
+    TrayWidget, TrayWidgetKind, UsageRefreshInterval,
 };
 use crate::settings_controls::{
     SETTINGS_CARD_PADDING, missing_provider_nav_card, settings_action_card,
@@ -373,8 +374,12 @@ pub fn render(
         cx.use_state(settings.providers.is_enabled(ProviderKind::Kiro));
     let (openrouter_accounts, set_openrouter_accounts) =
         cx.use_state(crate::openrouter::accounts_for_settings(&settings));
+    let (codex_profiles, set_codex_profiles) =
+        cx.use_state(crate::codex::profiles_for_settings(&settings));
     let (claude_profiles, set_claude_profiles) =
         cx.use_state(crate::claude::profiles_for_settings(&settings));
+    let (codex_home_excluded_profiles, set_codex_home_excluded_profiles) =
+        cx.use_state(settings.codex_home_excluded_profiles.clone());
     let (claude_home_excluded_profiles, set_claude_home_excluded_profiles) =
         cx.use_state(settings.claude_home_excluded_profiles.clone());
     let (openrouter_snapshot, set_openrouter_snapshot) = cx.use_state(cached_openrouter_snapshot());
@@ -875,7 +880,9 @@ pub fn render(
             grok_enabled: set_grok_enabled.clone(),
             kiro_enabled: set_kiro_enabled.clone(),
             openrouter_accounts: set_openrouter_accounts.clone(),
+            codex_profiles: set_codex_profiles.clone(),
             claude_profiles: set_claude_profiles.clone(),
+            codex_home_excluded_profiles: set_codex_home_excluded_profiles.clone(),
             claude_home_excluded_profiles: set_claude_home_excluded_profiles.clone(),
             codex_path: set_codex_path.clone(),
             claude_path: set_claude_path.clone(),
@@ -959,7 +966,9 @@ pub fn render(
         grok_install_status: &grok_install_status,
         kiro_install_status: &kiro_install_status,
         openrouter_accounts: &openrouter_accounts,
+        codex_profiles: &codex_profiles,
         claude_profiles: &claude_profiles,
+        codex_home_excluded_profiles: &codex_home_excluded_profiles,
         claude_home_excluded_profiles: &claude_home_excluded_profiles,
         openrouter_snapshot: &openrouter_snapshot,
         expanded_provider_cards: &expanded_provider_cards,
@@ -1032,7 +1041,9 @@ pub fn render(
         set_grok_enabled: set_grok_enabled.clone(),
         set_kiro_enabled: set_kiro_enabled.clone(),
         set_openrouter_accounts: set_openrouter_accounts.clone(),
+        set_codex_profiles: set_codex_profiles.clone(),
         set_claude_profiles: set_claude_profiles.clone(),
+        set_codex_home_excluded_profiles: set_codex_home_excluded_profiles.clone(),
         set_claude_home_excluded_profiles: set_claude_home_excluded_profiles.clone(),
         set_expanded_provider_cards: set_expanded_provider_cards.clone(),
         set_provider_dialog: set_provider_dialog.clone(),

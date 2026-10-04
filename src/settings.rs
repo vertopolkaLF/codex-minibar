@@ -748,23 +748,25 @@ impl OpenRouterAccount {
     }
 }
 
-/// A Claude account tracked by Minibar. The built-in `default` profile follows
-/// this PC's Claude login; every other profile uses a saved OAuth session or pasted credential kept
-/// in the protected provider secret store.
+/// A provider account tracked by Minibar. The built-in `default` profile follows
+/// this PC's login; other profiles use sessions in the protected secret store.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ClaudeProfile {
+pub struct AccountProfile {
     pub id: String,
     pub name: String,
     #[serde(default = "default_show_usage_values")]
     pub enabled: bool,
 }
 
-impl ClaudeProfile {
+pub type ClaudeProfile = AccountProfile;
+pub type CodexProfile = AccountProfile;
+
+impl AccountProfile {
     pub const DEFAULT_ID: &'static str = "default";
 
     pub fn new(name: impl Into<String>) -> Self {
         Self {
-            id: new_id("claude-profile"),
+            id: new_id("account-profile"),
             name: name.into(),
             enabled: true,
         }
@@ -1750,6 +1752,21 @@ pub struct Settings {
     /// stored separately in protected Windows user storage.
     #[serde(default)]
     pub openrouter_accounts: Vec<OpenRouterAccount>,
+    /// Codex profiles the user changed or added. The default profile is
+    /// implied until it is saved here; see `codex::profiles_for_settings`.
+    #[serde(default)]
+    pub codex_profiles: Vec<CodexProfile>,
+    /// Home visibility is independent of polling and provider-tab visibility.
+    #[serde(default)]
+    pub codex_home_excluded_profiles: Vec<String>,
+    /// Reject queued results and refresh the running Codex reader after a
+    /// profile's protected credential or enabled account set changes.
+    #[serde(default)]
+    pub codex_credentials_revision: u64,
+    /// Per-profile credential identity changes. Token refreshes do not advance
+    /// these; replacing a saved login invalidates only that profile's sample.
+    #[serde(default)]
+    pub codex_profile_credential_revisions: BTreeMap<String, u64>,
     /// Claude profiles the user changed or added. The default profile is
     /// implied until it is saved here; see `claude::profiles_for_settings`.
     #[serde(default)]
@@ -1825,6 +1842,10 @@ impl Default for Settings {
             opencode_go_credentials_revision: 0,
             openrouter_credentials_revision: 0,
             openrouter_accounts: Vec::new(),
+            codex_profiles: Vec::new(),
+            codex_home_excluded_profiles: Vec::new(),
+            codex_credentials_revision: 0,
+            codex_profile_credential_revisions: BTreeMap::new(),
             claude_profiles: Vec::new(),
             claude_home_excluded_profiles: Vec::new(),
             claude_credentials_revision: 0,
@@ -2027,6 +2048,12 @@ impl Settings {
             !profile.id.trim().is_empty() && profile_ids.insert(profile.id.clone())
         });
         changed |= self.claude_profiles.len() != profile_count;
+        let mut profile_ids = std::collections::HashSet::new();
+        let profile_count = self.codex_profiles.len();
+        self.codex_profiles.retain(|profile| {
+            !profile.id.trim().is_empty() && profile_ids.insert(profile.id.clone())
+        });
+        changed |= self.codex_profiles.len() != profile_count;
         if self.version < SETTINGS_VERSION {
             self.version = SETTINGS_VERSION;
             changed = true;

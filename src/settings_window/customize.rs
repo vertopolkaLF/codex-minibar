@@ -76,7 +76,7 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
         settings_section_heading("Tabs").with_key("customize-tabs-heading"),
         settings_toggle_card_with_description(
             "Show accounts as separate tabs",
-            Some("Give each enabled Claude account its own icon with a numbered badge. Replaces the profile switcher."),
+            Some("Give each enabled Codex or Claude account its own icon with a numbered badge. Replaces the profile switcher."),
             ctx.show_accounts_as_tabs,
             {
                 let set_value = ctx.set_show_accounts_as_tabs.clone();

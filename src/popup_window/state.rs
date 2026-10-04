@@ -122,6 +122,15 @@ impl AppState {
         true
     }
 
+    pub(super) fn apply_codex_profile_names(&self, settings: &Settings) -> bool {
+        let mut limits = self.current_limits().get(ProviderKind::Codex).clone();
+        if !crate::codex::apply_profile_names(&mut limits, settings) {
+            return false;
+        }
+        self.replace_limits(ProviderKind::Codex, limits);
+        true
+    }
+
     pub(super) fn replace_limits(&self, provider: ProviderKind, mut limits: RateLimits) {
         let persisted = if let Ok(mut current) = self.limits.lock() {
             // Quota polling must not erase the independently refreshed usage
@@ -371,8 +380,11 @@ pub(super) struct UiState {
     pub(super) replace_chatgpt_logo_with_codex: bool,
     pub(super) codex_path: Option<std::path::PathBuf>,
     pub(super) claude_path: Option<std::path::PathBuf>,
+    pub(super) codex_profiles: Vec<crate::settings::CodexProfile>,
     pub(super) claude_profiles: Vec<crate::settings::ClaudeProfile>,
+    pub(super) codex_home_excluded_profiles: Vec<String>,
     pub(super) claude_home_excluded_profiles: Vec<String>,
+    pub(super) codex_credentials_revision: u64,
     pub(super) claude_credentials_revision: u64,
     pub(super) cursor_path: Option<std::path::PathBuf>,
     pub(super) antigravity_path: Option<std::path::PathBuf>,
@@ -432,8 +444,11 @@ impl Default for UiState {
             replace_chatgpt_logo_with_codex: false,
             codex_path: None,
             claude_path: None,
+            codex_profiles: Vec::new(),
             claude_profiles: Vec::new(),
+            codex_home_excluded_profiles: Vec::new(),
             claude_home_excluded_profiles: Vec::new(),
+            codex_credentials_revision: 0,
             claude_credentials_revision: 0,
             cursor_path: None,
             antigravity_path: None,
@@ -454,6 +469,13 @@ impl UiState {
         Self {
             usage_stats_excluded_providers: settings.effective_usage_stats_excluded_providers(),
             popup_two_columns: settings.popup_two_columns,
+            show_accounts_as_tabs: settings.show_accounts_as_tabs,
+            codex_profiles: settings.codex_profiles.clone(),
+            claude_profiles: settings.claude_profiles.clone(),
+            codex_home_excluded_profiles: settings.codex_home_excluded_profiles.clone(),
+            claude_home_excluded_profiles: settings.claude_home_excluded_profiles.clone(),
+            codex_credentials_revision: settings.codex_credentials_revision,
+            claude_credentials_revision: settings.claude_credentials_revision,
             popup_right_column: settings.popup_right_column.clone(),
             ..Self::default()
         }

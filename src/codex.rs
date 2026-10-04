@@ -33,14 +33,34 @@ const WHAM_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const WHAM_RESET_CREDITS_URL: &str =
     "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 
+pub(crate) mod profile_oauth;
+mod profiles;
+pub use profiles::{
+    apply_profile_names, prepare_profile_refresh, prepare_startup_limits, profiles_for_settings,
+    save_profile_credential,
+};
+pub(crate) use profiles::{
+    load_profile_credential, profiles_with_default, set_home_profile_visibility,
+};
+
+pub fn cleanup_abandoned_logins() -> Result<()> {
+    profile_oauth::cleanup_abandoned_logins()
+}
+
 pub struct CodexClient {
     executable: PathBuf,
     timeout: StdDuration,
+    profiles: Vec<crate::settings::CodexProfile>,
+    snapshots: Vec<crate::limits::CodexProfileSnapshot>,
+    rate_limited: bool,
 }
 
 impl LimitProvider for CodexClient {
     fn read_limits(&mut self) -> Result<RateLimits> {
-        self.read_rate_limits()
+        self.read_profile_limits()
+    }
+    fn take_rate_limit_response(&mut self) -> bool {
+        std::mem::take(&mut self.rate_limited)
     }
 }
 
@@ -151,7 +171,90 @@ impl CodexClient {
         Self {
             executable: executable.into(),
             timeout: StdDuration::from_secs(10),
+            profiles: profiles_for_settings(&crate::settings::Settings::default()),
+            snapshots: Vec::new(),
+            rate_limited: false,
         }
+    }
+
+    pub fn with_profiles(mut self, profiles: Vec<crate::settings::CodexProfile>) -> Self {
+        self.profiles = profiles;
+        self
+    }
+
+    pub fn with_cached_limits(mut self, limits: &RateLimits) -> Self {
+        self.snapshots = profiles::profile_samples(limits, &self.profiles);
+        self
+    }
+
+    fn read_profile_limits(&mut self) -> Result<RateLimits> {
+        let enabled = self
+            .profiles
+            .iter()
+            .filter(|p| p.enabled)
+            .cloned()
+            .collect::<Vec<_>>();
+        if let [profile] = enabled.as_slice()
+            && self.profiles.len() == 1
+            && profile.is_default()
+            && profile.name == "Default"
+        {
+            return self.read_rate_limits();
+        }
+        anyhow::ensure!(
+            !enabled.is_empty(),
+            "Every Codex account is turned off. Turn one on in Settings > Providers > Codex."
+        );
+        let results = enabled
+            .into_iter()
+            .map(|profile| {
+                let result = if profile.is_default() {
+                    self.read_rate_limits()
+                } else {
+                    self.read_saved_profile(&profile.id)
+                };
+                (profile, result)
+            })
+            .collect();
+        self.merge_profile_results(results)
+    }
+
+    fn merge_profile_results(
+        &mut self,
+        results: Vec<(crate::settings::CodexProfile, Result<RateLimits>)>,
+    ) -> Result<RateLimits> {
+        self.rate_limited |= results.iter().any(|(_, result)| {
+            result
+                .as_ref()
+                .err()
+                .is_some_and(crate::worker::is_rate_limited_error)
+        });
+        let limits = profiles::merge_profiles(results, &self.snapshots, Utc::now())?;
+        self.snapshots = limits.codex_profiles.clone();
+        Ok(limits)
+    }
+
+    fn read_saved_profile(&self, id: &str) -> Result<RateLimits> {
+        let agent = self.oauth_agent()?;
+        let _guard = profile_oauth::credential_guard()?;
+        let raw = load_profile_credential(id)?
+            .context("Codex account has no saved login. Sign in again in its settings.")?;
+        let session = profile_oauth::resolve(&agent, id, &raw, false)?;
+        match self.read_credentials(&agent, &session.credentials()) {
+            Err(error) if error.downcast_ref::<OAuthUnauthorized>().is_some() => {
+                let session = profile_oauth::resolve(&agent, id, &session.encode()?, true)?;
+                self.read_credentials(&agent, &session.credentials())
+            }
+            result => result,
+        }
+    }
+
+    fn oauth_agent(&self) -> Result<ureq::Agent> {
+        let tls = ureq::native_tls::TlsConnector::new().context("create Windows TLS connector")?;
+        Ok(ureq::AgentBuilder::new()
+            .timeout(self.timeout)
+            .tls_connector(Arc::new(tls))
+            .build())
     }
 
     pub fn with_timeout(mut self, timeout: StdDuration) -> Self {
@@ -176,11 +279,16 @@ impl CodexClient {
 
     fn read_rate_limits_via_oauth(&self) -> Result<RateLimits> {
         let credentials = load_oauth_credentials()?;
-        let tls = ureq::native_tls::TlsConnector::new().context("create Windows TLS connector")?;
-        let agent = ureq::AgentBuilder::new()
-            .timeout(self.timeout)
-            .tls_connector(Arc::new(tls))
-            .build();
+        let mut limits = self.read_credentials(&self.oauth_agent()?, &credentials)?;
+        limits.account_name = local_account_name();
+        Ok(limits)
+    }
+
+    fn read_credentials(
+        &self,
+        agent: &ureq::Agent,
+        credentials: &OAuthCredentials,
+    ) -> Result<RateLimits> {
         let mut request = agent
             .get(WHAM_USAGE_URL)
             .set(
@@ -199,9 +307,7 @@ impl CodexClient {
             Ok(response) => response
                 .into_string()
                 .context("read Codex OAuth usage response")?,
-            Err(ureq::Error::Status(401, _)) => {
-                bail!("Codex OAuth token expired or invalid. Run `codex login`.")
-            }
+            Err(ureq::Error::Status(401, _)) => return Err(OAuthUnauthorized.into()),
             Err(ureq::Error::Status(429, _)) => {
                 return Err(crate::worker::rate_limit_error(
                     "Codex usage endpoint is rate limited. Try again in a few minutes.",
@@ -215,13 +321,10 @@ impl CodexClient {
         let value: Value =
             serde_json::from_str(&body).context("parse Codex OAuth usage response")?;
         let mut limits = parse_wham_usage(&value, Utc::now())?;
-        match fetch_wham_reset_credits(&agent, &credentials) {
+        match fetch_wham_reset_credits(agent, credentials) {
             Ok(reset_credits) => limits.reset_credits = reset_credits,
             Err(error) if crate::worker::is_rate_limited_error(&error) => return Err(error),
             Err(_) => {}
-        }
-        if let Some(account_name) = local_account_name() {
-            limits.account_name = Some(account_name);
         }
         Ok(limits)
     }
@@ -301,7 +404,15 @@ struct AuthTokens {
     account_id: Option<String>,
 }
 
-#[derive(Clone)]
+#[derive(Debug)]
+struct OAuthUnauthorized;
+impl std::fmt::Display for OAuthUnauthorized {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Codex login expired or invalid. Sign in again.")
+    }
+}
+impl std::error::Error for OAuthUnauthorized {}
+
 struct OAuthCredentials {
     access_token: String,
     account_id: Option<String>,
@@ -337,7 +448,7 @@ fn load_oauth_credentials() -> Result<OAuthCredentials> {
 }
 
 fn auth_json_path() -> Option<PathBuf> {
-    BaseDirs::new().map(|dirs| dirs.home_dir().join(".codex").join("auth.json"))
+    Some(crate::usage::codex_home().join("auth.json"))
 }
 
 fn local_account_name() -> Option<String> {
@@ -420,6 +531,7 @@ pub fn parse_wham_usage(response: &Value, sampled_at: DateTime<Utc>) -> Result<R
         spending: None,
         openrouter_accounts: Default::default(),
         claude_profiles: Default::default(),
+        codex_profiles: Default::default(),
         usage: Default::default(),
     }
     .normalized(sampled_at))
@@ -672,6 +784,7 @@ pub fn parse_rate_limits(
         spending: None,
         openrouter_accounts: Default::default(),
         claude_profiles: Default::default(),
+        codex_profiles: Default::default(),
         usage: Default::default(),
     }
     .normalized(sampled_at))

@@ -871,6 +871,23 @@ fn run_usage_task(
     );
 }
 
+/// Session activation always uses the ambient Default account, independent of
+/// the account order and the provider-level sample used for presentation.
+fn activation_limits(limits: &RateLimits) -> Option<&RateLimits> {
+    let profiles = if !limits.codex_profiles.is_empty() {
+        &limits.codex_profiles
+    } else {
+        &limits.claude_profiles
+    };
+    if profiles.is_empty() {
+        return Some(limits);
+    }
+    profiles
+        .iter()
+        .find(|p| p.id == "default" && p.error.is_none())
+        .map(|p| &p.limits)
+}
+
 fn tick(
     provider: &mut impl LimitProvider,
     activator: &mut impl Activator,
@@ -887,12 +904,9 @@ fn tick(
     // "this account has no session window" into a request to activate one.
     // Exhausted weekly also blocks auto-activation: burning a fresh 5h window
     // cannot help until the weekly quota returns.
-    let session_window_available = !limits.five_hour_disabled()
-        && limits
-            .claude_profiles
-            .first()
-            .is_none_or(|profile| profile.error.is_none());
-    let weekly_blocks_auto_activation = limits.weekly_exhausted();
+    let activation = activation_limits(&limits);
+    let session_window_available = activation.is_some_and(|sample| !sample.five_hour_disabled());
+    let weekly_blocks_auto_activation = activation.is_some_and(RateLimits::weekly_exhausted);
     let scheduled_due = session_window_available
         .then(|| scheduler::due_scheduled_activation(scheduled_activations, state, now))
         .flatten();
@@ -906,11 +920,13 @@ fn tick(
             scheduler::AUTO_ACTIVATION_SCHEDULE_GUARD,
         )
         && !state.recently_attempted(now)
-        && state.decide_with_unactivated(
-            &limits.primary,
-            limits.primary_window_is_unactivated,
-            limits.sampled_at,
-        ) == Decision::ActivateNow;
+        && activation.is_some_and(|sample| {
+            state.decide_with_unactivated(
+                &sample.primary,
+                sample.primary_window_is_unactivated,
+                sample.sampled_at,
+            ) == Decision::ActivateNow
+        });
     if scheduled_due.is_some() || automatic_due {
         state.record_attempt(Utc::now());
         events.push(WorkerEvent::ActivationStarted);
@@ -919,25 +935,31 @@ fn tick(
                 if let Ok(fresh) = provider.read_limits() {
                     limits = fresh;
                 }
-                let confirmed = if limits.primary_window_is_unactivated {
-                    confirm_unactivated_session(provider, &mut limits)
-                } else {
-                    true
+                let confirmed = match activation_limits(&limits) {
+                    Some(sample) if sample.primary_window_is_unactivated => {
+                        confirm_unactivated_session(provider, &mut limits)
+                    }
+                    Some(_) => true,
+                    None => false,
                 };
                 if confirmed {
                     // Treat the window as established so the next poll cannot
                     // spend another exec against the same 5-hour session.
-                    state.observe_with_unactivated(&limits.primary, false, limits.sampled_at);
+                    if let Some(sample) = activation_limits(&limits) {
+                        state.observe_with_unactivated(&sample.primary, false, sample.sampled_at);
+                    }
                     if let Some((rule, occurrence)) = scheduled_due {
                         state.record_scheduled_activation(&rule.id, occurrence);
                     }
                     events.push(WorkerEvent::ActivationSucceeded);
                 } else {
-                    state.observe_with_unactivated(
-                        &limits.primary,
-                        limits.primary_window_is_unactivated,
-                        limits.sampled_at,
-                    );
+                    if let Some(sample) = activation_limits(&limits) {
+                        state.observe_with_unactivated(
+                            &sample.primary,
+                            sample.primary_window_is_unactivated,
+                            sample.sampled_at,
+                        );
+                    }
                     events.push(WorkerEvent::ActivationFailed(
                         "Codex 5-hour session window is still inactive".into(),
                     ));
@@ -945,11 +967,11 @@ fn tick(
             }
             Err(error) => events.push(WorkerEvent::ActivationFailed(error.to_string())),
         }
-    } else {
+    } else if let Some(sample) = activation_limits(&limits) {
         state.observe_with_unactivated(
-            &limits.primary,
-            limits.primary_window_is_unactivated,
-            limits.sampled_at,
+            &sample.primary,
+            sample.primary_window_is_unactivated,
+            sample.sampled_at,
         );
     }
 
@@ -979,29 +1001,25 @@ fn activation_confirm_gap() -> Duration {
 /// A just-started Codex window still looks unactivated on one sample. Wait,
 /// read again, and only then decide whether the deadline froze.
 fn confirm_unactivated_session(provider: &mut impl LimitProvider, limits: &mut RateLimits) -> bool {
-    let first = limits.clone();
+    let Some(first) = activation_limits(limits).cloned() else {
+        return false;
+    };
     let gap = activation_confirm_gap();
     if !gap.is_zero() {
         thread::sleep(gap);
     }
     match provider.read_limits() {
         Ok(second) => {
-            let confirmed = scheduler::session_activation_confirmed(
-                &first.primary,
-                &second.primary,
-                second.primary_window_is_unactivated,
-            );
-            if confirmed {
-                crate::logger::info(format!(
-                    "Codex 5-hour window confirmed active: used={:?}%, reset={:?}",
-                    second.primary.used_percent, second.primary.resets_at
-                ));
-            } else {
-                crate::logger::info(format!(
-                    "Codex 5-hour window still inactive after exec: first_reset={:?} second_reset={:?}",
-                    first.primary.resets_at, second.primary.resets_at
-                ));
-            }
+            let confirmed = activation_limits(&second).is_some_and(|sample| {
+                scheduler::session_activation_confirmed(
+                    &first.primary,
+                    &sample.primary,
+                    sample.primary_window_is_unactivated,
+                )
+            });
+            crate::logger::info(format!(
+                "Codex Default 5-hour window activation confirmed={confirmed}"
+            ));
             *limits = second;
             confirmed
         }
@@ -1025,6 +1043,99 @@ mod tests {
     struct ScriptedProvider {
         samples: Vec<RateLimits>,
         index: usize,
+    }
+
+    fn reordered_codex_limits(default: RateLimits, saved: RateLimits) -> RateLimits {
+        let mut top = saved.clone();
+        top.codex_profiles = vec![
+            crate::limits::CodexProfileSnapshot {
+                id: "work".into(),
+                name: "Work".into(),
+                limits: saved,
+                error: None,
+            },
+            crate::limits::CodexProfileSnapshot {
+                id: "default".into(),
+                name: "Default".into(),
+                limits: default,
+                error: None,
+            },
+        ];
+        top
+    }
+
+    #[test]
+    fn automatic_activation_observes_default_even_after_a_saved_account() {
+        let mut saved = limits_at(22, 0);
+        saved.primary_window_is_unactivated = true;
+        let first = reordered_codex_limits(limits_at(10, 0), saved.clone());
+        let reset = reordered_codex_limits(limits_at(15, 0), saved);
+        let mut provider = ScriptedProvider::new(vec![first, reset.clone(), reset]);
+        let mut activator = CountingActivator(0);
+        let mut state = ActivationState::default();
+        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
+        assert_eq!(activator.0, 0);
+        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
+        assert_eq!(activator.0, 1);
+        assert_eq!(
+            state.last_seen_resets_at,
+            limits_at(15, 0).primary.resets_at
+        );
+    }
+
+    #[test]
+    fn scheduled_activation_uses_default_without_replacing_displayed_account() {
+        let local = Local::now();
+        let schedule = ScheduledActivation {
+            id: "due-now".into(),
+            provider_id: "codex".into(),
+            weekday: local.weekday().num_days_from_monday() as u8,
+            weekdays: vec![local.weekday().num_days_from_monday() as u8],
+            time_minutes: (local.hour() * 60 + local.minute()) as u16,
+            enabled: true,
+        };
+        let sample = reordered_codex_limits(limits_at(10, 0), limits_at(22, 0));
+        let mut provider = ScriptedProvider::new(vec![sample.clone(), sample]);
+        let mut activator = CountingActivator(0);
+        let mut state = ActivationState::default();
+        let events = tick(
+            &mut provider,
+            &mut activator,
+            &mut state,
+            false,
+            &[schedule],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(activator.0, 1);
+        assert_eq!(
+            state.last_seen_resets_at,
+            limits_at(10, 0).primary.resets_at
+        );
+        let displayed = events
+            .iter()
+            .find_map(|event| match event {
+                WorkerEvent::LimitsUpdated(limits) => Some(limits),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            displayed.primary.resets_at,
+            limits_at(22, 0).primary.resets_at
+        );
+    }
+
+    #[test]
+    fn activation_confirmation_compares_defaults_not_saved_account_deadlines() {
+        let mut default = limits_at(10, 0);
+        default.primary_window_is_unactivated = true;
+        let mut first = reordered_codex_limits(default.clone(), limits_at(22, 0));
+        let second = reordered_codex_limits(default, limits_at(23, 0));
+        assert!(confirm_unactivated_session(
+            &mut ScriptedProvider::new(vec![second]),
+            &mut first
+        ));
+        assert_eq!(first.primary.resets_at, limits_at(23, 0).primary.resets_at);
     }
 
     #[test]
@@ -1511,6 +1622,92 @@ mod tests {
                 name: "Default".into(),
                 limits: limits.clone(),
                 error: Some("fixture 429".into()),
+            });
+        let mut activator = CountingActivator(0);
+        let events = tick(
+            &mut ScriptedProvider::new(vec![limits]),
+            &mut activator,
+            &mut ActivationState::default(),
+            true,
+            &[schedule],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(activator.0, 0);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, WorkerEvent::LimitsUpdated(_)))
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, WorkerEvent::ActivationStarted))
+        );
+    }
+
+    #[test]
+    fn cached_failed_codex_profile_sample_does_not_trigger_scheduled_activation() {
+        let local_now = Local::now();
+        let schedule = ScheduledActivation {
+            id: "due-now".into(),
+            provider_id: crate::settings::ProviderKind::Codex.id().into(),
+            weekday: local_now.weekday().num_days_from_monday() as u8,
+            weekdays: vec![local_now.weekday().num_days_from_monday() as u8],
+            time_minutes: (local_now.hour() * 60 + local_now.minute()) as u16,
+            enabled: true,
+        };
+        let mut limits = limits_at(15, 0);
+        limits
+            .codex_profiles
+            .push(crate::limits::CodexProfileSnapshot {
+                id: "default".into(),
+                name: "Default".into(),
+                limits: limits.clone(),
+                error: Some("fixture 429".into()),
+            });
+        let mut activator = CountingActivator(0);
+        let events = tick(
+            &mut ScriptedProvider::new(vec![limits]),
+            &mut activator,
+            &mut ActivationState::default(),
+            true,
+            &[schedule],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(activator.0, 0);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, WorkerEvent::LimitsUpdated(_)))
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, WorkerEvent::ActivationStarted))
+        );
+    }
+
+    #[test]
+    fn saved_codex_account_never_triggers_ambient_scheduled_activation() {
+        let local_now = Local::now();
+        let schedule = ScheduledActivation {
+            id: "due-now".into(),
+            provider_id: crate::settings::ProviderKind::Codex.id().into(),
+            weekday: local_now.weekday().num_days_from_monday() as u8,
+            weekdays: vec![local_now.weekday().num_days_from_monday() as u8],
+            time_minutes: (local_now.hour() * 60 + local_now.minute()) as u16,
+            enabled: true,
+        };
+        let mut limits = limits_at(15, 0);
+        limits
+            .codex_profiles
+            .push(crate::limits::CodexProfileSnapshot {
+                id: "work".into(),
+                name: "Default".into(),
+                limits: limits.clone(),
+                error: None,
             });
         let mut activator = CountingActivator(0);
         let events = tick(
