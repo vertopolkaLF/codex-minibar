@@ -339,6 +339,7 @@ pub(super) struct ProviderDialog {
     error: Option<String>,
     checking: bool,
     claude_method: ProfileCredentialMethod,
+    login_control: crate::claude::profile_oauth::LoginControl,
 }
 
 impl PartialEq for ProviderDialog {
@@ -368,6 +369,7 @@ impl ProviderDialog {
             error: None,
             checking: false,
             claude_method: ProfileCredentialMethod::default(),
+            login_control: Default::default(),
         }
     }
 
@@ -375,6 +377,7 @@ impl ProviderDialog {
         Self {
             error: Some(error.into()),
             checking: false,
+            login_control: Default::default(),
             ..self.clone()
         }
     }
@@ -396,6 +399,19 @@ impl ProviderDialog {
 
     pub(super) fn is_checking(&self) -> bool {
         self.checking
+    }
+
+    fn is_sign_in(&self) -> bool {
+        self.claude_method == ProfileCredentialMethod::SignIn
+            && matches!(
+                self.kind,
+                ProviderDialogKind::AddClaudeProfile
+                    | ProviderDialogKind::UpdateClaudeCredential { .. }
+            )
+    }
+
+    pub(super) fn login_control(&self) -> crate::claude::profile_oauth::LoginControl {
+        self.login_control.clone()
     }
 }
 
@@ -741,7 +757,7 @@ fn persist_openrouter_credentials(
 /// advances the worker revision so queued reads from the old account set lose.
 fn persist_claude_profiles(
     settings_tx: Sender<Settings>,
-    credentials_changed: bool,
+    changed_credential: Option<&str>,
     mutate: impl FnOnce(&mut Vec<ClaudeProfile>) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
     try_persist_update_fallible(settings_tx, move |settings| {
@@ -756,7 +772,22 @@ fn persist_claude_profiles(
             .map(|p| (p.id.clone(), p.enabled))
             .collect::<Vec<_>>();
         settings.claude_profiles = profiles;
-        if credentials_changed || before != after {
+        settings
+            .claude_profile_credential_revisions
+            .retain(|id, _| {
+                settings
+                    .claude_profiles
+                    .iter()
+                    .any(|profile| profile.id == *id)
+            });
+        if let Some(id) = changed_credential {
+            let revision = settings
+                .claude_profile_credential_revisions
+                .entry(id.to_owned())
+                .or_default();
+            *revision = revision.wrapping_add(1);
+        }
+        if changed_credential.is_some() || before != after {
             settings.claude_credentials_revision =
                 settings.claude_credentials_revision.wrapping_add(1);
         }
@@ -771,9 +802,10 @@ fn persist_claude_credential(
     credential: &str,
     mutate: impl FnOnce(&mut Vec<ClaudeProfile>) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
+    let _guard = crate::claude::profile_oauth::credential_guard()?;
     let previous = crate::claude::load_profile_credential(profile_id)?;
     crate::claude::save_profile_credential(profile_id, Some(credential))?;
-    if let Err(error) = persist_claude_profiles(settings_tx, true, mutate) {
+    if let Err(error) = persist_claude_profiles(settings_tx, Some(profile_id), mutate) {
         return match crate::claude::save_profile_credential(profile_id, previous.as_deref()) {
             Ok(()) => Err(error),
             Err(rollback_error) => Err(anyhow::anyhow!(
@@ -781,6 +813,7 @@ fn persist_claude_credential(
             )),
         };
     }
+    crate::claude::profile_oauth::forget(profile_id);
     Ok(())
 }
 
@@ -1849,7 +1882,7 @@ fn claude_account_expander(profile: &ClaudeProfile, ctx: &SettingsPageContext<'_
                 .on_toggled(move |enabled| {
                     let profile_id = enabled_id.clone();
                     if let Err(error) =
-                        persist_claude_profiles(settings_tx.clone(), false, move |profiles| {
+                        persist_claude_profiles(settings_tx.clone(), None, move |profiles| {
                             if let Some(profile) = profiles.iter_mut().find(|p| p.id == profile_id)
                             {
                                 profile.enabled = enabled;
@@ -2622,6 +2655,12 @@ fn claude_login_command() -> Element {
 
 fn claude_method_instructions(method: ProfileCredentialMethod) -> Element {
     let mut steps: Vec<Element> = match method {
+        ProfileCredentialMethod::SignIn => vec![
+            instruction_text("Sign in to a Claude subscription in your browser. Minibar keeps this account separate from your current Claude Code and Desktop logins.").into(),
+            instruction_text("Requires native Windows Claude Code. Click Sign in, select the account you want in the browser, and finish authorization within five minutes.").into(),
+            instruction_text("Minibar stores the session encrypted for your Windows user and refreshes it automatically. You can cancel while waiting for the browser.").into(),
+            instruction_text("If the browser shows a code instead of completing sign-in, cancel and use the OAuth token tab for manual setup.").into(),
+        ],
         ProfileCredentialMethod::BrowserSession => vec![
             instruction_text("Recommended for another Claude subscription. Reads its session and weekly limits without switching this PC's Claude login.").into(),
             instruction_text("1. Open Claude in a separate browser profile or private window. Sign in to the account you want to add and confirm its email in Claude's settings.").into(),
@@ -2641,7 +2680,9 @@ fn claude_method_instructions(method: ProfileCredentialMethod) -> Element {
             instruction_text("Requires a Claude subscription login with usage access. API keys and Admin API keys do not show subscription limits.").into(),
         ],
     };
-    steps.push(instruction_text("Click Check and save. Minibar checks access and stores the credential encrypted for your Windows user.").into());
+    if method != ProfileCredentialMethod::SignIn {
+        steps.push(instruction_text("Click Check and save. Minibar checks access and stores the credential encrypted for your Windows user.").into());
+    }
     // The dialog body owns scrolling, including the instructions and input.
     vstack(steps)
         .spacing(10.0)
@@ -2657,6 +2698,7 @@ fn claude_credential_tabs(
     set_dialog: AsyncSetState<Option<ProviderDialog>>,
 ) -> Element {
     let tabs = [
+        ("Sign in", ProfileCredentialMethod::SignIn),
         ("Browser session", ProfileCredentialMethod::BrowserSession),
         ("OAuth token", ProfileCredentialMethod::OAuthToken),
     ]
@@ -2683,7 +2725,32 @@ fn claude_credential_fields(
     on_submit: impl Fn() + Clone + 'static,
 ) -> Element {
     let inputs = dialog.inputs();
+    if dialog.claude_method == ProfileCredentialMethod::SignIn {
+        let mut content = vec![
+            claude_credential_tabs(dialog, set_dialog),
+            claude_method_instructions(dialog.claude_method),
+        ];
+        if dialog.checking {
+            content.push(instruction_text("Waiting for browser sign-in…").into());
+        }
+        if let Some(error) = &dialog.error {
+            content.push(
+                text_block(error.clone())
+                    .foreground(ThemeRef::SystemCritical)
+                    .wrap()
+                    .into(),
+            );
+        }
+        return vstack(content)
+            .spacing(14.0)
+            .with_layout_animation(
+                LayoutAnimationConfig::linear(duration(CONTROL_NORMAL_ANIMATION))
+                    .animate_size(true),
+            )
+            .into();
+    }
     let (field, header, placeholder, value, key) = match dialog.claude_method {
+        ProfileCredentialMethod::SignIn => unreachable!(),
         ProfileCredentialMethod::BrowserSession => (
             DialogField::Key,
             "Session key",
@@ -2947,7 +3014,7 @@ pub(super) fn provider_dialog_overlay(
         ProviderDialogKind::AddClaudeProfile => {
             fields.push(dialog_name_box(
                 dialog,
-                Some("Shown on the profile's card and tab in Minibar."),
+                Some("Optional. Leave blank for Account 1, Account 2, and so on. You can rename it later."),
                 on_submit.clone(),
             ));
             fields.push(claude_credential_fields(
@@ -2955,7 +3022,15 @@ pub(super) fn provider_dialog_overlay(
                 actions.set_dialog.clone(),
                 on_submit.clone(),
             ));
-            ("Add Claude account".to_owned(), "Check and save", false)
+            (
+                "Add Claude account".to_owned(),
+                if dialog.claude_method == ProfileCredentialMethod::SignIn {
+                    "Sign in"
+                } else {
+                    "Check and save"
+                },
+                false,
+            )
         }
         ProviderDialogKind::UpdateClaudeCredential { .. } => {
             fields.push(claude_credential_fields(
@@ -2965,7 +3040,11 @@ pub(super) fn provider_dialog_overlay(
             ));
             (
                 "Update Claude credential".to_owned(),
-                "Check and save",
+                if dialog.claude_method == ProfileCredentialMethod::SignIn {
+                    "Sign in"
+                } else {
+                    "Check and save"
+                },
                 false,
             )
         }
@@ -3007,7 +3086,11 @@ pub(super) fn provider_dialog_overlay(
         let accounts = accounts.to_vec();
         let actions = actions.clone();
         let button = Button::new(if dialog.checking {
-            "Checking…"
+            if dialog.is_sign_in() {
+                "Signing in…"
+            } else {
+                "Checking…"
+            }
         } else {
             primary
         })
@@ -3022,10 +3105,18 @@ pub(super) fn provider_dialog_overlay(
     };
     let cancel_dialog = actions.set_dialog.clone();
     let can_cancel = !dialog.checking;
+    let login_pending = dialog.checking && dialog.is_sign_in();
+    let login_control = dialog.login_control.clone();
     let cancel_button = Button::new("Cancel")
-        .enabled(can_cancel)
+        .enabled(can_cancel || login_pending)
         .horizontal_alignment(HorizontalAlignment::Stretch)
-        .on_click(move || cancel_dialog.call(None))
+        .on_click(move || {
+            if login_pending {
+                login_control.cancel();
+            } else {
+                cancel_dialog.call(None);
+            }
+        })
         .grid_column(1);
 
     let claude_credential_dialog = matches!(
@@ -3096,6 +3187,7 @@ pub(super) fn provider_dialog_overlay(
 
     let dismiss = actions.set_dialog;
     let dismiss_escape = dismiss.clone();
+    let escape_control = dialog.login_control.clone();
     relative_panel::<Vec<Element>>(vec![
         border(Element::Empty)
             .background(DIALOG_SCRIM)
@@ -3121,7 +3213,9 @@ pub(super) fn provider_dialog_overlay(
         VirtualKey::Escape,
         VirtualKeyModifiers::None,
         move || {
-            if can_cancel {
+            if login_pending {
+                escape_control.cancel();
+            } else if can_cancel {
                 dismiss_escape.call(None);
             }
         },
@@ -3153,14 +3247,78 @@ fn run_dialog_work(
     work: impl FnOnce() -> anyhow::Result<DialogOutcome> + Send + 'static,
 ) {
     actions.set_dialog.call(Some(dialog.with_checking()));
-    thread::spawn(move || match work() {
-        Ok(outcome) => finish_dialog(&actions, outcome),
-        Err(error) => {
-            eprintln!("provider credential dialog failed: {error:#}");
-            actions
-                .set_dialog
-                .call(Some(dialog.with_error(format!("{error:#}"))));
+    thread::spawn(move || {
+        let result = work();
+        if dialog.login_control.cancelled() {
+            actions.set_dialog.call(None);
+            return;
         }
+        match result {
+            Ok(outcome) => finish_dialog(&actions, outcome),
+            Err(error) => {
+                eprintln!("provider credential dialog failed: {error:#}");
+                actions
+                    .set_dialog
+                    .call(Some(dialog.with_error(format!("{error:#}"))));
+            }
+        }
+    });
+}
+
+fn claude_profile_name(requested: &str, profiles: &[ClaudeProfile]) -> anyhow::Result<String> {
+    let requested = requested.trim();
+    if !requested.is_empty() {
+        anyhow::ensure!(
+            !profiles.iter().any(|profile| profile.name == requested),
+            "A profile with this name already exists."
+        );
+        return Ok(requested.to_owned());
+    }
+    // At most profiles.len() names are occupied, so this range has a free one.
+    Ok((1..=profiles.len() + 1)
+        .map(|number| format!("Account {number}"))
+        .find(|name| !profiles.iter().any(|profile| profile.name == *name))
+        .expect("account name range contains a free name"))
+}
+
+fn submit_claude_login(dialog: ProviderDialog, actions: ProviderDialogActions) {
+    let name = dialog.inputs().name.trim().to_owned();
+    let updating = match &dialog.kind {
+        ProviderDialogKind::UpdateClaudeCredential { profile_id } => Some(profile_id.clone()),
+        _ => None,
+    };
+    let control = dialog.login_control.clone();
+    let settings_tx = actions.settings_tx.clone();
+    run_dialog_work(dialog, actions, move || {
+        let settings = Settings::load_or_create(&Settings::default_path()?)?;
+        if updating.is_none() {
+            claude_profile_name(&name, &crate::claude::profiles_for_settings(&settings))?;
+        }
+        let credential =
+            crate::claude::profile_oauth::login(settings.claude_path.as_deref(), &control)?;
+        control.begin_save()?;
+        let mut profile = ClaudeProfile::new(name.clone());
+        let profile_id = updating.clone().unwrap_or_else(|| profile.id.clone());
+        let saved_id = profile_id.clone();
+        let added = updating.is_none();
+        persist_claude_credential(settings_tx, &profile_id, &credential, move |profiles| {
+            if added {
+                profile.name = claude_profile_name(&name, profiles)?;
+                profiles.push(profile);
+            } else {
+                anyhow::ensure!(
+                    profiles
+                        .iter()
+                        .any(|saved| saved.id == saved_id && !saved.is_default()),
+                    "This profile is no longer available."
+                );
+            }
+            Ok(())
+        })?;
+        Ok(DialogOutcome {
+            notice: "Claude account signed in. Its session refreshes automatically.".into(),
+            expand_card: added.then(|| format!("claude-account-{profile_id}")),
+        })
     });
 }
 
@@ -3174,6 +3332,16 @@ fn submit_provider_dialog(
     actions: ProviderDialogActions,
 ) {
     if dialog.checking {
+        return;
+    }
+    if dialog.claude_method == ProfileCredentialMethod::SignIn
+        && matches!(
+            dialog.kind,
+            ProviderDialogKind::AddClaudeProfile
+                | ProviderDialogKind::UpdateClaudeCredential { .. }
+        )
+    {
+        submit_claude_login(dialog, actions);
         return;
     }
     let inputs = dialog.inputs();
@@ -3561,13 +3729,11 @@ fn submit_provider_dialog(
         ProviderDialogKind::AddClaudeProfile => {
             let name = inputs.name.trim().to_owned();
             let credential = match dialog.claude_method {
+                ProfileCredentialMethod::SignIn => unreachable!(),
                 ProfileCredentialMethod::BrowserSession => inputs.key.trim(),
                 ProfileCredentialMethod::OAuthToken => inputs.second_key.trim(),
             }
             .to_owned();
-            if name.is_empty() {
-                return fail("Give the profile a name.");
-            }
             if credential.is_empty() {
                 return fail("Paste a credential first.");
             }
@@ -3577,34 +3743,21 @@ fn submit_provider_dialog(
             let settings_tx = actions.settings_tx.clone();
             run_dialog_work(dialog, actions, move || {
                 // Checked first: the credential check below costs a request.
-                let name_taken = Settings::default_path()
-                    .and_then(|path| Settings::load_or_create(&path))
-                    .is_ok_and(|settings| {
-                        crate::claude::profiles_for_settings(&settings)
-                            .iter()
-                            .any(|saved| saved.name == name)
-                    });
-                anyhow::ensure!(!name_taken, "A profile with this name already exists.");
+                let settings = Settings::load_or_create(&Settings::default_path()?)?;
+                claude_profile_name(&name, &crate::claude::profiles_for_settings(&settings))?;
                 crate::claude::verify_credential(&credential)?;
-                let profile = ClaudeProfile::new(name.clone());
+                let mut profile = ClaudeProfile::new(name.clone());
                 let profile_id = profile.id.clone();
-                let saved_name = name.clone();
-                persist_claude_credential(
-                    settings_tx,
-                    &profile_id,
-                    &credential,
-                    move |profiles| {
-                        anyhow::ensure!(
-                            !profiles.iter().any(|saved| saved.name == saved_name),
-                            "A profile with this name already exists."
-                        );
-                        profiles.push(profile);
-                        Ok(())
-                    },
-                )?;
+                let mut saved_name = String::new();
+                persist_claude_credential(settings_tx, &profile_id, &credential, |profiles| {
+                    saved_name = claude_profile_name(&name, profiles)?;
+                    profile.name = saved_name.clone();
+                    profiles.push(profile);
+                    Ok(())
+                })?;
                 Ok(DialogOutcome {
                     notice: format!(
-                        "Added {name}. Its credential is saved in Windows user storage."
+                        "Added {saved_name}. Its credential is saved in Windows user storage."
                     ),
                     expand_card: Some(format!("claude-account-{profile_id}")),
                 })
@@ -3612,6 +3765,7 @@ fn submit_provider_dialog(
         }
         ProviderDialogKind::UpdateClaudeCredential { profile_id } => {
             let credential = match dialog.claude_method {
+                ProfileCredentialMethod::SignIn => unreachable!(),
                 ProfileCredentialMethod::BrowserSession => inputs.key.trim(),
                 ProfileCredentialMethod::OAuthToken => inputs.second_key.trim(),
             }
@@ -3647,7 +3801,7 @@ fn submit_provider_dialog(
                 return fail("Give the profile a name.");
             }
             if let Err(error) =
-                persist_claude_profiles(actions.settings_tx.clone(), false, move |profiles| {
+                persist_claude_profiles(actions.settings_tx.clone(), None, move |profiles| {
                     anyhow::ensure!(
                         !profiles
                             .iter()
@@ -3672,26 +3826,24 @@ fn submit_provider_dialog(
             );
         }
         ProviderDialogKind::RemoveClaudeProfile { profile_id } => {
-            let removed_id = profile_id.clone();
-            if let Err(error) =
-                persist_claude_profiles(actions.settings_tx.clone(), false, move |profiles| {
+            let settings_tx = actions.settings_tx.clone();
+            run_dialog_work(dialog, actions, move || {
+                let _guard = crate::claude::profile_oauth::credential_guard()?;
+                let removed_id = profile_id.clone();
+                persist_claude_profiles(settings_tx, None, move |profiles| {
                     profiles.retain(|profile| profile.id != removed_id);
                     Ok(())
-                })
-            {
-                return fail(&format!("Could not remove the profile: {error:#}"));
-            }
-            // The profile is gone either way; a leftover credential is unused.
-            if let Err(error) = crate::claude::save_profile_credential(&profile_id, None) {
-                eprintln!("failed to delete the Claude profile credential: {error:#}");
-            }
-            finish_dialog(
-                &actions,
-                DialogOutcome {
+                })?;
+                // The profile is gone either way; a leftover credential is unused.
+                if let Err(error) = crate::claude::save_profile_credential(&profile_id, None) {
+                    eprintln!("failed to delete the Claude profile credential: {error:#}");
+                }
+                crate::claude::profile_oauth::forget(&profile_id);
+                Ok(DialogOutcome {
                     notice: "Profile removed.".into(),
                     expand_card: None,
-                },
-            );
+                })
+            });
         }
     }
 }

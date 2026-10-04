@@ -266,10 +266,18 @@ pub(super) fn start_background_bridge(
                 read_set(&ui.claude_profiles) != read_set(&settings.claude_profiles);
             let claude_credentials_changed =
                 ui.claude_credentials_revision != settings.claude_credentials_revision;
-            if claude_profiles_changed || claude_credentials_changed {
-                // Never show a removed or disabled profile's numbers while
-                // the restarted worker makes its first read.
-                state.replace_limits(ProviderKind::Claude, RateLimits::default());
+            if claude_profiles_changed
+                || claude_credentials_changed
+                || ui.claude_path != settings.claude_path
+            {
+                // Keep samples for unchanged profiles through reader replacement.
+                // Removed, disabled and credential-replaced profiles lose theirs.
+                let retained = crate::claude::prepare_profile_refresh(
+                    state.current_limits().get(ProviderKind::Claude),
+                    live_settings,
+                    &settings,
+                );
+                state.replace_limits(ProviderKind::Claude, retained);
                 ui.observe_limits_update();
             } else if state.apply_claude_profile_names(&settings) {
                 ui.observe_limits_update();

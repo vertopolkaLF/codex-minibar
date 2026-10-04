@@ -749,7 +749,7 @@ impl OpenRouterAccount {
 }
 
 /// A Claude account tracked by Minibar. The built-in `default` profile follows
-/// this PC's Claude login; every other profile uses a pasted credential kept
+/// this PC's Claude login; every other profile uses a saved OAuth session or pasted credential kept
 /// in the protected provider secret store.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaudeProfile {
@@ -1761,6 +1761,10 @@ pub struct Settings {
     /// profile's protected credential or enabled account set changes.
     #[serde(default)]
     pub claude_credentials_revision: u64,
+    /// Per-profile credential identity changes. Token refreshes do not advance
+    /// these; replacing a saved login invalidates only that profile's sample.
+    #[serde(default)]
+    pub claude_profile_credential_revisions: BTreeMap<String, u64>,
     pub tray_widgets: Vec<TrayWidget>,
     pub notifications: NotificationSettings,
     pub history_retention_days: u16,
@@ -1824,6 +1828,7 @@ impl Default for Settings {
             claude_profiles: Vec::new(),
             claude_home_excluded_profiles: Vec::new(),
             claude_credentials_revision: 0,
+            claude_profile_credential_revisions: BTreeMap::new(),
             // An empty list intentionally means "show the ordinary app icon".
             tray_widgets: Vec::new(),
             notifications: NotificationSettings::default(),

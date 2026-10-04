@@ -20,6 +20,20 @@ pub fn start_enabled_workers(
     activation_path: PathBuf,
     events: Sender<WorkerEvent>,
 ) -> (ProviderWorkers, Vec<(ProviderKind, String)>) {
+    start_enabled_workers_with_limits(
+        settings,
+        activation_path,
+        events,
+        &crate::limits::ProviderLimits::default(),
+    )
+}
+
+pub fn start_enabled_workers_with_limits(
+    settings: &Settings,
+    activation_path: PathBuf,
+    events: Sender<WorkerEvent>,
+    cached_limits: &crate::limits::ProviderLimits,
+) -> (ProviderWorkers, Vec<(ProviderKind, String)>) {
     let mut workers = ProviderWorkers::new();
     let mut errors = Vec::new();
     for provider in crate::provider_registry::PROVIDERS
@@ -29,7 +43,13 @@ pub fn start_enabled_workers(
         if !settings.providers.is_enabled(provider) {
             continue;
         }
-        match start_provider_worker(provider, settings, activation_path.clone(), events.clone()) {
+        match start_provider_worker_with_limits(
+            provider,
+            settings,
+            activation_path.clone(),
+            events.clone(),
+            Some(cached_limits.get(provider)),
+        ) {
             Ok(worker) => {
                 workers.insert(provider, worker);
             }
@@ -50,6 +70,16 @@ pub fn start_provider_worker(
     settings: &Settings,
     activation_path: PathBuf,
     events: Sender<WorkerEvent>,
+) -> Result<WorkerHandle> {
+    start_provider_worker_with_limits(provider, settings, activation_path, events, None)
+}
+
+pub(crate) fn start_provider_worker_with_limits(
+    provider: ProviderKind,
+    settings: &Settings,
+    activation_path: PathBuf,
+    events: Sender<WorkerEvent>,
+    cached_limits: Option<&crate::limits::RateLimits>,
 ) -> Result<WorkerHandle> {
     let activation_path = provider_activation_path(provider, activation_path);
     // The OpenRouter worker is replaced whenever this revision changes. Tag
@@ -80,11 +110,16 @@ pub fn start_provider_worker(
             )
         }
         ProviderKind::Claude => {
+            let mut client =
+                ClaudeClient::with_profiles(crate::claude::profiles_for_settings(settings));
+            if let Some(limits) = cached_limits {
+                client = client.with_cached_limits(limits);
+            }
             let executable = crate::claude::first_available(settings.claude_path.as_deref())
                 .unwrap_or_else(|| PathBuf::from("claude"));
             crate::logger::info(format!("Claude executable: {}", executable.display()));
             worker::start_worker(
-                ClaudeClient::with_profiles(crate::claude::profiles_for_settings(settings)),
+                client,
                 ClaudeClient::new(),
                 ClaudeActivator::new(Some(executable)),
                 activation_path,

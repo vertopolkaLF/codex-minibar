@@ -11,7 +11,7 @@ use codex_minibar::{
     app::{AppState, app},
     notifications,
     popup::{self, FALLBACK_CLIENT_HEIGHT_LIMIT, POPUP_WIDTH},
-    provider::start_enabled_workers,
+    provider::start_enabled_workers_with_limits,
     reset_feed,
     scheduler::ActivationState,
     settings::Settings,
@@ -63,8 +63,12 @@ fn run() -> Result<()> {
             eprintln!("failed to hydrate provider store: {error:#}");
             Default::default()
         });
-    let (workers, startup_provider_errors) =
-        start_enabled_workers(&settings, activation_path.clone(), worker_events_tx.clone());
+    let (workers, startup_provider_errors) = start_enabled_workers_with_limits(
+        &settings,
+        activation_path.clone(),
+        worker_events_tx.clone(),
+        &hydrated_limits,
+    );
     let commands = workers
         .iter()
         .map(|(provider, worker)| (*provider, worker.commands.clone()))
@@ -196,6 +200,9 @@ fn main() {
         }
     };
     single_instance::SingleInstance::hold(instance);
+    if let Err(error) = codex_minibar::claude::cleanup_abandoned_logins() {
+        eprintln!("could not clean abandoned Claude sign-in directories: {error:#}");
+    }
     if notifications::launched_via_toast_update() {
         let _ = notifications::publish_toast_update_request();
     }

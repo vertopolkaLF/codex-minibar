@@ -381,6 +381,14 @@ pub fn render(
     let (expanded_provider_cards, set_expanded_provider_cards) =
         cx.use_async_state(Vec::<String>::new());
     let (provider_dialog, set_provider_dialog) = cx.use_async_state(None::<ProviderDialog>);
+    let login_control = provider_dialog.as_ref().map(ProviderDialog::login_control);
+    cx.use_effect_with_cleanup(login_control.clone(), move || {
+        Some(move || {
+            if let Some(control) = login_control {
+                control.cancel();
+            }
+        })
+    });
     let (troubleshoot_picker, set_troubleshoot_picker) =
         cx.use_async_state(None::<crate::troubleshoot::ToolPickerState>);
     let (provider_notice, set_provider_notice) = cx.use_async_state(None::<String>);
@@ -1184,7 +1192,7 @@ pub fn render(
     let title_bar = TitleBar::new("Codex Minibar Settings")
         .content(title_bar_icon)
         .back_button_visible(providers_drill_in)
-        .back_button_enabled(providers_drill_in)
+        .back_button_enabled(providers_drill_in && provider_dialog.is_none())
         .on_back_requested({
             let set_nav_mode = set_nav_mode.clone();
             let set_root_selected = set_root_selected.clone();

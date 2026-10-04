@@ -143,6 +143,18 @@ pub(super) fn provider_cards(
             .iter()
             .enumerate()
             .map(|(index, profile)| {
+                let card_error = provider_error
+                    .as_ref()
+                    .filter(|_| profile.error.is_some() || !any_profile_error)
+                    .map(|(error, callback)| {
+                        (
+                            cached_profile_error_for_ui(
+                                &profile.limits,
+                                profile.error.as_deref().unwrap_or(error),
+                            ),
+                            callback.clone(),
+                        )
+                    });
                 vstack(provider_cards(
                     provider,
                     is_first && index == 0,
@@ -162,10 +174,9 @@ pub(super) fn provider_cards(
                     color_scheme,
                     drag_handle.take(),
                     None,
-                    provider_error
+                    card_error
                         .as_ref()
-                        .filter(|_| profile.error.is_some() || !any_profile_error)
-                        .map(|(error, on_error)| (*error, on_error.clone())),
+                        .map(|(error, callback)| (error.as_str(), callback.clone())),
                     forced_reset_hovered,
                     set_forced_reset_hovered.clone(),
                     reset_card_reveal,
@@ -247,9 +258,11 @@ pub(super) fn provider_cards(
         );
     }
     let has_provider_error = provider_error.is_some();
-    if let Some((_, on_error)) = provider_error {
+    if let Some((error, on_error)) = provider_error {
         title_parts.push(
-            provider_error_badge(16.0, on_error).vertical_alignment(VerticalAlignment::Center),
+            provider_error_badge(16.0, on_error)
+                .tooltip(error.to_owned())
+                .vertical_alignment(VerticalAlignment::Center),
         );
     }
     let title_row = hstack(title_parts)

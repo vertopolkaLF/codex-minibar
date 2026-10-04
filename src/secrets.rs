@@ -17,6 +17,14 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 const FILE_NAME: &str = "provider-secrets.json";
+// Serialize read/modify/replace across provider UI writes and token refreshes.
+static OPERATIONS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn operation_guard() -> Result<std::sync::MutexGuard<'static, ()>> {
+    OPERATIONS
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Provider secret storage is unavailable."))
+}
 
 #[derive(Default, Serialize, Deserialize)]
 struct SecretFile {
@@ -25,6 +33,7 @@ struct SecretFile {
 }
 
 pub fn load(name: &str) -> Result<Option<String>> {
+    let _guard = operation_guard()?;
     let path = path()?;
     load_from(&path, name)
 }
@@ -55,6 +64,7 @@ pub(crate) struct EncodedRollback {
 
 impl EncodedRollback {
     pub(crate) fn capture(names: impl IntoIterator<Item = impl AsRef<str>>) -> Result<Self> {
+        let _guard = operation_guard()?;
         let path = path()?;
         let names = names
             .into_iter()
@@ -64,6 +74,7 @@ impl EncodedRollback {
     }
 
     pub(crate) fn restore(self) -> Result<()> {
+        let _guard = operation_guard()?;
         let path = path()?;
         restore_encoded_to(&path, &self.entries)
     }
@@ -77,6 +88,7 @@ pub fn save(name: &str, value: Option<&str>) -> Result<()> {
 /// Validation and DPAPI encryption happen before the existing file changes,
 /// so account-level edits cannot leave only part of their keys updated.
 pub fn save_many(changes: &[(String, Option<String>)]) -> Result<()> {
+    let _guard = operation_guard()?;
     let path = path()?;
     save_many_to(&path, changes)
 }

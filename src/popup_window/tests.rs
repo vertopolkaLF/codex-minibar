@@ -7,6 +7,22 @@ use crate::claude::set_home_profile_visibility as set_claude_home_visibility;
 use crate::settings::{PopupSurface, PopupVisibility};
 
 #[test]
+fn cached_profile_error_keeps_sample_age_visible() {
+    let limits = RateLimits {
+        sampled_at: Utc::now() - chrono::Duration::minutes(2),
+        ..Default::default()
+    };
+    let message = cached_profile_error_for_ui(&limits, "fixture HTTP 429");
+    assert!(message.contains("Too many requests"));
+    assert!(message.contains("last successful sample"));
+    assert!(message.contains("Updated 2 minutes ago"));
+    assert!(
+        !cached_profile_error_for_ui(&RateLimits::default(), "fixture HTTP 429")
+            .contains("last successful sample")
+    );
+}
+
+#[test]
 fn home_account_visibility_filters_only_the_rendered_copy_and_can_restore_all() {
     use crate::settings::ClaudeProfile;
     let profiles = vec![

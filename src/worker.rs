@@ -128,6 +128,11 @@ fn effective_limit_poll_interval(
 
 pub trait LimitProvider: Send + 'static {
     fn read_limits(&mut self) -> Result<RateLimits>;
+    /// A partial result may contain usable samples and a sibling account's 429.
+    /// Consume that signal independently of whether the overall read succeeded.
+    fn take_rate_limit_response(&mut self) -> bool {
+        false
+    }
 }
 
 pub trait UsageProvider: Send + 'static {
@@ -547,6 +552,7 @@ fn run_limit_task(
                 }
             }
             let completed_at = Instant::now();
+            rate_limited |= provider.take_rate_limit_response();
             if rate_limited {
                 let remaining = record_provider_429(&rate_limit_pause, completed_at);
                 let _ = usage_commands.send(WorkerCommand::RateLimitPauseChanged);
@@ -881,7 +887,11 @@ fn tick(
     // "this account has no session window" into a request to activate one.
     // Exhausted weekly also blocks auto-activation: burning a fresh 5h window
     // cannot help until the weekly quota returns.
-    let session_window_available = !limits.five_hour_disabled();
+    let session_window_available = !limits.five_hour_disabled()
+        && limits
+            .claude_profiles
+            .first()
+            .is_none_or(|profile| profile.error.is_none());
     let weekly_blocks_auto_activation = limits.weekly_exhausted();
     let scheduled_due = session_window_available
         .then(|| scheduler::due_scheduled_activation(scheduled_activations, state, now))
@@ -1015,6 +1025,55 @@ mod tests {
     struct ScriptedProvider {
         samples: Vec<RateLimits>,
         index: usize,
+    }
+
+    #[test]
+    fn successful_partial_result_still_pauses_worker_after_429() {
+        struct PartialProvider;
+        impl LimitProvider for PartialProvider {
+            fn read_limits(&mut self) -> Result<RateLimits> {
+                Ok(limits_at(15, 0))
+            }
+            fn take_rate_limit_response(&mut self) -> bool {
+                true
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let state_path = directory.path().join("activation.toml");
+        let (commands_tx, commands_rx) = mpsc::channel();
+        let (events_tx, events_rx) = mpsc::channel();
+        let (usage_tx, usage_rx) = mpsc::channel();
+        let pause = Arc::new(Mutex::new(ProviderRateLimitPause::default()));
+        let task_pause = Arc::clone(&pause);
+        let ready = Arc::new(AtomicBool::new(false));
+        let task = thread::spawn(move || {
+            run_limit_task(
+                PartialProvider,
+                CountingActivator(0),
+                state_path,
+                false,
+                Vec::new(),
+                Vec::new(),
+                Duration::from_millis(1),
+                commands_rx,
+                events_tx,
+                ready,
+                task_pause,
+                usage_tx,
+            )
+        });
+        assert!(matches!(
+            usage_rx.recv_timeout(Duration::from_secs(3)).unwrap(),
+            WorkerCommand::RateLimitPauseChanged
+        ));
+        assert!(active_rate_limit_pause(&pause, Instant::now()).is_some());
+        assert!(
+            events_rx
+                .try_iter()
+                .any(|event| matches!(event, WorkerEvent::LimitsUpdated(_)))
+        );
+        commands_tx.send(WorkerCommand::Shutdown).unwrap();
+        task.join().unwrap();
     }
 
     impl ScriptedProvider {
@@ -1430,6 +1489,49 @@ mod tests {
         assert_eq!(
             state.last_seen_resets_at,
             limits_at(20, 0).primary.resets_at
+        );
+    }
+
+    #[test]
+    fn cached_failed_profile_sample_does_not_trigger_scheduled_activation() {
+        let local_now = Local::now();
+        let schedule = ScheduledActivation {
+            id: "due-now".into(),
+            provider_id: crate::settings::ProviderKind::Claude.id().into(),
+            weekday: local_now.weekday().num_days_from_monday() as u8,
+            weekdays: vec![local_now.weekday().num_days_from_monday() as u8],
+            time_minutes: (local_now.hour() * 60 + local_now.minute()) as u16,
+            enabled: true,
+        };
+        let mut limits = limits_at(15, 0);
+        limits
+            .claude_profiles
+            .push(crate::limits::ClaudeProfileSnapshot {
+                id: "default".into(),
+                name: "Default".into(),
+                limits: limits.clone(),
+                error: Some("fixture 429".into()),
+            });
+        let mut activator = CountingActivator(0);
+        let events = tick(
+            &mut ScriptedProvider::new(vec![limits]),
+            &mut activator,
+            &mut ActivationState::default(),
+            true,
+            &[schedule],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(activator.0, 0);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, WorkerEvent::LimitsUpdated(_)))
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, WorkerEvent::ActivationStarted))
         );
     }
 

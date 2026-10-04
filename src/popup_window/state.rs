@@ -47,6 +47,17 @@ pub(super) fn usage_error_message(statistics: &crate::usage::UsageStatistics) ->
     (!errors.is_empty()).then(|| errors.join("; "))
 }
 
+pub(super) fn cached_profile_error_for_ui(limits: &RateLimits, error: &str) -> String {
+    let message = UiState::error_for_ui(error);
+    if limits.sampled_at.timestamp() <= 0 {
+        return message;
+    }
+    format!(
+        "{message}\nShowing the last successful sample. {}.",
+        format_last_updated(limits.sampled_at, 0)
+    )
+}
+
 /// Shared startup state handed from `main` into the reactor render tree.
 pub struct AppState {
     pub settings: Settings,
@@ -263,11 +274,13 @@ impl AppState {
             {
                 continue;
             }
-            match crate::provider::start_provider_worker(
+            let cached_limits = self.current_limits();
+            match crate::provider::start_provider_worker_with_limits(
                 provider,
                 settings,
                 self.activation_path.clone(),
                 self.worker_events_tx.clone(),
+                Some(cached_limits.get(provider)),
             ) {
                 Ok(worker) => {
                     if let Ok(mut commands) = self.commands.lock() {

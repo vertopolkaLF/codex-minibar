@@ -89,12 +89,20 @@ Browser-session access is not used.
 
 ### Add another Claude account
 
-Open **Settings → Providers → Claude → Add account**, give the account a name,
+Open **Settings → Providers → Claude → Add account**, optionally give the account a name,
 and choose a connection method. The dialog includes instructions and clickable help links.
 The built-in **Default** profile follows this PC's Claude Code or desktop login;
 you can turn it off without removing your other profiles.
+An empty name becomes the first available **Account 1**, **Account 2**, and so on;
+you can rename it later.
 
-- **Browser session** (recommended): open [claude.ai](https://claude.ai) in a separate
+- **Sign in**: requires native Windows Claude Code. Click **Sign in**, choose the
+  subscription account in your browser, and complete authorization within five minutes.
+  Minibar uses an isolated temporary configuration directory, keeps the complete session
+  in Windows user-scoped encrypted storage, and refreshes its tokens automatically.
+  Your current CLI and Desktop logins stay in place. **Cancel** stops the pending login.
+  If the browser returns a code that needs a terminal, use the manual OAuth token method.
+- **Browser session**: open [claude.ai](https://claude.ai) in a separate
   browser profile or private window and sign in to the second account. In Chrome or Edge,
   press **F12 → Application → Storage → Cookies → https://claude.ai**. Find `sessionKey`,
   copy its **Value**, and paste it into Minibar. See [Chrome's cookie guide](https://developer.chrome.com/docs/devtools/application/cookies).
@@ -113,12 +121,17 @@ you can turn it off without removing your other profiles.
   If that file is unavailable, use Browser session. `claude setup-token` may lack usage
   access and is not a substitute for this login token.
 
-Click **Check and save**. Home shows the enabled profiles; the Claude tab lets you
+For pasted credentials, click **Check and save**. Home shows the enabled profiles; the Claude tab lets you
 switch between them. Expand the account card to change its name, toggle **Show on Home**,
 or use **Update credential** when a cookie or token expires:
 Minibar keeps the profile's name and enabled state. Pasted OAuth tokens are not
 automatically refreshed. API keys and Admin API keys are not offered for subscription
 account setup; organization API spending is a different metric.
+
+Adding an account keeps the last successful limits for unchanged profiles while
+the reader refreshes. If a refresh fails, those limits remain visible with their
+original update time and an error. Removing, disabling, or replacing a profile's
+credential clears only its sample. A partial HTTP 429 still pauses Claude polling.
 
 ## Install
 
