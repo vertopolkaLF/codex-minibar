@@ -633,6 +633,10 @@ pub(crate) struct AccountSecretRollback(secrets::EncodedRollback);
 
 impl AccountSecretRollback {
     pub(crate) fn restore(self) -> Result<()> {
+        let mut cache = SECRET_HINTS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *cache = None;
         self.0.restore()
     }
 }
@@ -643,10 +647,8 @@ pub(crate) fn apply_account_secret_changes(
     let mut cache = SECRET_HINTS
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    let rollback =
-        secrets::EncodedRollback::capture(changes.iter().map(|change| change.secret_name()))?;
     let writes = account_secret_writes(changes);
-    secrets::save_many(&writes)?;
+    let rollback = secrets::apply_with_rollback(&writes)?;
     invalidate_secret_hints(&mut cache, &writes);
     Ok(AccountSecretRollback(rollback))
 }

@@ -839,8 +839,7 @@ fn persist_opencode_manual_key(
     provider: ProviderKind,
     value: Option<String>,
 ) -> anyhow::Result<()> {
-    let rollback = crate::opencode::snapshot_manual_key(provider)?;
-    crate::opencode::save_manual_key(provider, value.as_deref())?;
+    let rollback = crate::opencode::apply_manual_key(provider, value.as_deref())?;
     if let Err(error) = bump_opencode_credentials(settings_tx, provider) {
         return match crate::opencode::restore_manual_key(rollback) {
             Ok(()) => Err(error),

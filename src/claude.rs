@@ -711,6 +711,13 @@ fn merge_profiles(
         .collect::<Vec<_>>();
     let mut limits = snapshots
         .first()
+        .filter(|snapshot| {
+            snapshot.error.is_none()
+                || previous.iter().any(|cached| {
+                    cached.id == snapshot.id && cached.limits.sampled_at.timestamp() > 0
+                })
+        })
+        .or_else(|| snapshots.iter().find(|snapshot| snapshot.error.is_none()))
         .map(|snapshot| snapshot.limits.clone())
         .unwrap_or_default();
     // Profile cards are told apart by the name the user gave them.
@@ -2005,6 +2012,67 @@ mod tests {
         assert_eq!(
             retained.claude_profiles[1].limits.primary.used_percent,
             Some(42)
+        );
+    }
+
+    #[test]
+    fn failed_first_profile_without_cache_uses_a_successful_profile_for_provider_quota() {
+        let default = profiles_for_settings(&Settings::default())[0].clone();
+        let work = ClaudeProfile::new("Work");
+        let sample = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(25),
+                ..Default::default()
+            },
+            sampled_at: Utc::now(),
+            account_name: Some("Work identity".into()),
+            ..Default::default()
+        };
+        let merged = merge_profiles(
+            vec![
+                (default, Err(anyhow::anyhow!("fixture failure"))),
+                (work, Ok(sample)),
+            ],
+            &[],
+            Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(merged.primary.used_percent, Some(25));
+        assert_eq!(merged.account_name.as_deref(), Some("Work identity"));
+        assert!(merged.claude_profiles[0].error.is_some());
+        assert_eq!(merged.claude_profiles[0].limits.primary.used_percent, None);
+    }
+
+    #[test]
+    fn failed_first_profile_with_cache_keeps_its_provider_quota() {
+        let default = profiles_for_settings(&Settings::default())[0].clone();
+        let sample = |percent| RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(percent),
+                ..Default::default()
+            },
+            sampled_at: Utc::now(),
+            ..Default::default()
+        };
+        let previous = vec![ClaudeProfileSnapshot {
+            id: default.id.clone(),
+            name: default.name.clone(),
+            limits: sample(10),
+            error: None,
+        }];
+        let merged = merge_profiles(
+            vec![
+                (default, Err(anyhow::anyhow!("fixture failure"))),
+                (ClaudeProfile::new("Work"), Ok(sample(40))),
+            ],
+            &previous,
+            Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(merged.primary.used_percent, Some(10));
+        assert_eq!(
+            merged.claude_profiles[1].limits.primary.used_percent,
+            Some(40)
         );
     }
 
