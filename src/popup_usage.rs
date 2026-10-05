@@ -322,8 +322,6 @@ pub(crate) fn segmented_tab(
     }
 }
 
-const SEGMENTED_TRACK_PAD: f64 = 4.0;
-
 fn segmented_tab_width(label: &str) -> f64 {
     (label.chars().count() as f64 * 8.0 + 22.0).max(48.0)
 }
@@ -333,8 +331,7 @@ pub(crate) fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: boo
     let selected = tabs.iter().position(|tab| tab.selected).unwrap_or(0);
     let anim = crate::theme::duration(crate::theme::CONTROL_FAST_ANIMATION);
     let cell_width = if stretch {
-        (f64::from(popup::client_width_dip()) - 2.0 - 32.0 - SEGMENTED_TRACK_PAD * 2.0)
-            / count as f64
+        (f64::from(popup::client_width_dip()) - 2.0 - 32.0) / count as f64
     } else {
         tabs.iter()
             .map(|tab| segmented_tab_width(&tab.label))
@@ -358,46 +355,44 @@ pub(crate) fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: boo
             let hide_divider =
                 index == 0 || selected == index || selected == index.saturating_sub(1);
             let pill = border(Element::Empty)
-                .corner_radius(6.0)
+                .corner_radius(8.0)
                 .background(ThemeRef::Accent)
                 .opacity(if index == selected { 1.0 } else { 0.0 })
                 .with_opacity_transition(anim)
-                .relative_align_left()
-                .relative_align_right()
-                .relative_align_top()
-                .relative_align_bottom()
+                .margin(Thickness::uniform(0.0))
+                .padding(Thickness::uniform(0.0))
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .vertical_alignment(VerticalAlignment::Stretch)
                 .with_key(format!("{key}-pill-{}", tab.label));
             let idle = caption(tab.label.clone())
                 .font_weight(600)
                 .foreground(ThemeRef::PrimaryText)
                 .opacity(if index == selected { 0.0 } else { 1.0 })
                 .with_opacity_transition(anim)
-                .relative_align_h_center()
-                .relative_align_v_center()
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center)
                 .with_key(format!("{key}-idle-{}", tab.label));
             let active = caption(tab.label.clone())
                 .font_weight(600)
                 .foreground(ThemeRef::custom("TextOnAccentFillColorPrimaryBrush"))
                 .opacity(if index == selected { 1.0 } else { 0.0 })
                 .with_opacity_transition(anim)
-                .relative_align_h_center()
-                .relative_align_v_center()
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center)
                 .with_key(format!("{key}-on-{}", tab.label));
             let text_layers: Vec<Element> = vec![idle.into(), active.into()];
-            let texts = border(relative_panel(text_layers))
+            let texts = border(grid(text_layers))
                 .padding(Thickness {
                     left: 10.0,
-                    top: 5.0,
+                    top: 9.0,
                     right: 10.0,
-                    bottom: 5.0,
+                    bottom: 9.0,
                 })
                 .background(Color::transparent())
-                .relative_align_left()
-                .relative_align_right()
-                .relative_align_top()
-                .relative_align_bottom();
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .vertical_alignment(VerticalAlignment::Stretch);
             let cell_layers: Vec<Element> = vec![pill.into(), texts.into()];
-            let label = relative_panel(cell_layers)
+            let label = grid(cell_layers)
                 .horizontal_alignment(HorizontalAlignment::Stretch)
                 .vertical_alignment(VerticalAlignment::Stretch)
                 .on_tapped(tab.on_click);
@@ -407,6 +402,7 @@ pub(crate) fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: boo
                 grid((
                     border(Element::Empty)
                         .width(1.0)
+                        .horizontal_alignment(HorizontalAlignment::Left)
                         .vertical_alignment(VerticalAlignment::Stretch)
                         .background(ThemeRef::DividerStroke)
                         .opacity(if hide_divider { 0.0 } else { 1.0 })
@@ -418,9 +414,8 @@ pub(crate) fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: boo
                             bottom: 6.0,
                         })
                         .with_key(format!("{key}-rule-{index}")),
-                    label.grid_column(1),
+                    label,
                 ))
-                .columns([GridLength::Pixel(1.0), GridLength::Star(1.0)])
                 .into()
             };
             cell.horizontal_alignment(HorizontalAlignment::Stretch)
@@ -430,7 +425,8 @@ pub(crate) fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: boo
         .collect::<Vec<_>>();
     let track = grid(cells)
         .columns(columns)
-        .horizontal_alignment(HorizontalAlignment::Stretch);
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Stretch);
     let track = if stretch {
         track
     } else {
@@ -438,7 +434,7 @@ pub(crate) fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: boo
     };
 
     border(track)
-        .padding(Thickness::uniform(SEGMENTED_TRACK_PAD))
+        .padding(Thickness::uniform(0.0))
         .corner_radius(8.0)
         .background(ThemeRef::ControlFill)
         .horizontal_alignment(if stretch {
