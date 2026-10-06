@@ -71,9 +71,6 @@ fn source(name: &str) -> Option<&'static str> {
         "clock-fill" => include_str!("../../../assets/icons/ph-clock-fill.svg"),
         "copy" => include_str!("../../../assets/icons/ph-copy.svg"),
         "desktop-fill" => include_str!("../../../assets/icons/ph-desktop-fill.svg"),
-        "dots-six-vertical-bold" => {
-            include_str!("../../../assets/icons/ph-dots-six-vertical-bold.svg")
-        }
         "dots-three-bold" => include_str!("../../../assets/icons/ph-dots-three-bold.svg"),
         "download-simple-fill" => include_str!("../../../assets/icons/ph-download-simple-fill.svg"),
         "export-fill" => include_str!("../../../assets/icons/ph-export-fill.svg"),
