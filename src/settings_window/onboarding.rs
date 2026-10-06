@@ -467,12 +467,12 @@ impl Render for OnboardingWindow {
                     .text_size(px(10.0))
                     .font_family(theme.icon_font.clone())
                     .window_control_area(area)
+                    .occlude()
                     .hover(move |style| style.bg(hover))
                     .child(glyph)
             };
         div()
             .id("onboarding-root")
-            .track_focus(&self.focus)
             .size_full()
             .flex()
             .flex_col()
@@ -515,8 +515,11 @@ impl Render for OnboardingWindow {
                     )),
             )
             .child(
+                // Focus is tracked below the title bar so title bar clicks
+                // reach Windows (see the Settings window).
                 div()
                     .id("onboarding-scroll")
+                    .track_focus(&self.focus)
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()

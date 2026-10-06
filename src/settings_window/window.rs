@@ -534,6 +534,9 @@ impl SettingsWindow {
                     .font_family(theme.icon_font.clone())
                     .text_color(theme.text)
                     .window_control_area(area)
+                    // Occlude the drag area beneath so the button, not the
+                    // caption, wins the non-client hit test.
+                    .occlude()
                     .hover(move |style| {
                         let style = style.bg(hover);
                         if close {
@@ -1115,7 +1118,6 @@ impl Render for SettingsWindow {
 
         div()
             .id("settings-root")
-            .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key_down))
             .relative()
             .size_full()
@@ -1126,7 +1128,12 @@ impl Render for SettingsWindow {
             .bg(theme.window_bg)
             .child(titlebar)
             .child(
+                // Focus is tracked below the title bar: a focusable element
+                // prevents default on mouse down, and GPUI then swallows the
+                // non-client click that would drag or press a caption button.
                 div()
+                    .id("settings-body")
+                    .track_focus(&self.focus)
                     .flex()
                     .flex_1()
                     .min_h_0()
