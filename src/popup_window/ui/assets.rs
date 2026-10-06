@@ -45,6 +45,62 @@ fn source(name: &str) -> Option<&'static str> {
         "grok" => include_str!("../../../assets/icons/grok.svg"),
         "kiro" => include_str!("../../../assets/icons/kiro-iconify.svg"),
         "chatgpt" => include_str!("../../../assets/icons/chatgpt-iconify.svg"),
+        "fluent-folder" => include_str!("../../../assets/icons/fluent-folder-16-filled.svg"),
+        "github" => include_str!("../../../assets/icons/github-iconify.svg"),
+        // Phosphor glyphs used by the Settings window, keyed by file stem.
+        "arrow-clockwise-bold" => include_str!("../../../assets/icons/ph-arrow-clockwise-bold.svg"),
+        "arrow-counter-clockwise-bold" => {
+            include_str!("../../../assets/icons/ph-arrow-counter-clockwise-bold.svg")
+        }
+        "arrow-down-bold" => include_str!("../../../assets/icons/ph-arrow-down-bold.svg"),
+        "arrow-square-out" => include_str!("../../../assets/icons/ph-arrow-square-out.svg"),
+        "arrow-up-bold" => include_str!("../../../assets/icons/ph-arrow-up-bold.svg"),
+        "at-fill" => include_str!("../../../assets/icons/ph-at-fill.svg"),
+        "bell-fill" => include_str!("../../../assets/icons/ph-bell-fill.svg"),
+        "broom-fill" => include_str!("../../../assets/icons/ph-broom-fill.svg"),
+        "caret-down" => include_str!("../../../assets/icons/ph-caret-down.svg"),
+        "caret-down-bold" => include_str!("../../../assets/icons/ph-caret-down-bold.svg"),
+        "caret-left" => include_str!("../../../assets/icons/ph-caret-left.svg"),
+        "caret-right" => include_str!("../../../assets/icons/ph-caret-right.svg"),
+        "caret-up" => include_str!("../../../assets/icons/ph-caret-up.svg"),
+        "chat-centered-text-fill" => {
+            include_str!("../../../assets/icons/ph-chat-centered-text-fill.svg")
+        }
+        "check-bold" => include_str!("../../../assets/icons/ph-check-bold.svg"),
+        "check-circle-fill" => include_str!("../../../assets/icons/ph-check-circle-fill.svg"),
+        "clock-fill" => include_str!("../../../assets/icons/ph-clock-fill.svg"),
+        "copy" => include_str!("../../../assets/icons/ph-copy.svg"),
+        "desktop-fill" => include_str!("../../../assets/icons/ph-desktop-fill.svg"),
+        "dots-six-vertical-bold" => {
+            include_str!("../../../assets/icons/ph-dots-six-vertical-bold.svg")
+        }
+        "dots-three-bold" => include_str!("../../../assets/icons/ph-dots-three-bold.svg"),
+        "download-simple-fill" => include_str!("../../../assets/icons/ph-download-simple-fill.svg"),
+        "export-fill" => include_str!("../../../assets/icons/ph-export-fill.svg"),
+        "file-text-fill" => include_str!("../../../assets/icons/ph-file-text-fill.svg"),
+        "flag-fill" => include_str!("../../../assets/icons/ph-flag-fill.svg"),
+        "folder-fill" => include_str!("../../../assets/icons/ph-folder-fill.svg"),
+        "folder-open-fill" => include_str!("../../../assets/icons/ph-folder-open-fill.svg"),
+        "github-logo-fill" => include_str!("../../../assets/icons/ph-github-logo-fill.svg"),
+        "house-fill" => include_str!("../../../assets/icons/ph-house-fill.svg"),
+        "info-fill" => include_str!("../../../assets/icons/ph-info-fill.svg"),
+        "key-fill" => include_str!("../../../assets/icons/ph-key-fill.svg"),
+        "package-fill" => include_str!("../../../assets/icons/ph-package-fill.svg"),
+        "paint-brush-fill" => include_str!("../../../assets/icons/ph-paint-brush-fill.svg"),
+        "pencil-simple-fill" => include_str!("../../../assets/icons/ph-pencil-simple-fill.svg"),
+        "plugs-connected-fill" => include_str!("../../../assets/icons/ph-plugs-connected-fill.svg"),
+        "plus-bold" => include_str!("../../../assets/icons/ph-plus-bold.svg"),
+        "plus-fill" => include_str!("../../../assets/icons/ph-plus-fill.svg"),
+        "scroll-fill" => include_str!("../../../assets/icons/ph-scroll-fill.svg"),
+        "sign-in-bold" => include_str!("../../../assets/icons/ph-sign-in-bold.svg"),
+        "sparkle-fill" => include_str!("../../../assets/icons/ph-sparkle-fill.svg"),
+        "squares-four-fill" => include_str!("../../../assets/icons/ph-squares-four-fill.svg"),
+        "terminal-window-fill" => include_str!("../../../assets/icons/ph-terminal-window-fill.svg"),
+        "trash-fill" => include_str!("../../../assets/icons/ph-trash-fill.svg"),
+        "upload-simple-fill" => include_str!("../../../assets/icons/ph-upload-simple-fill.svg"),
+        "user-fill" => include_str!("../../../assets/icons/ph-user-fill.svg"),
+        "warning-fill" => include_str!("../../../assets/icons/ph-warning-fill.svg"),
+        "x-circle-fill" => include_str!("../../../assets/icons/ph-x-circle-fill.svg"),
         _ => return None,
     })
 }
@@ -104,8 +160,44 @@ pub(crate) fn normalize_svg(svg: &str) -> String {
     )
 }
 
+/// Full-color assets painted with `img` (their own colors are kept).
+fn color_source(name: &str) -> Option<&'static [u8]> {
+    Some(match name {
+        "alert-badge-24" => include_bytes!("../../../assets/icons/fluent-color-alert-badge-24.svg"),
+        "apps-24" => include_bytes!("../../../assets/icons/fluent-color-apps-24.svg"),
+        "apps-list-24" => include_bytes!("../../../assets/icons/fluent-color-apps-list-24.svg"),
+        "book-open-24" => include_bytes!("../../../assets/icons/fluent-color-book-open-24.svg"),
+        "calendar-clock-24" => {
+            include_bytes!("../../../assets/icons/fluent-color-calendar-clock-24.svg")
+        }
+        "chat-24" => include_bytes!("../../../assets/icons/fluent-color-chat-24.svg"),
+        "history-24" => include_bytes!("../../../assets/icons/fluent-color-history-24.svg"),
+        "home-24" => include_bytes!("../../../assets/icons/fluent-color-home-24.svg"),
+        "paint-brush-24" => include_bytes!("../../../assets/icons/fluent-color-paint-brush-24.svg"),
+        "puzzle-piece-24" => {
+            include_bytes!("../../../assets/icons/fluent-color-puzzle-piece-24.svg")
+        }
+        "settings-24" => include_bytes!("../../../assets/icons/fluent-color-settings-24.svg"),
+        "app-icon" => include_bytes!("../../../assets/app-icon.png"),
+        "app-icon-32" => include_bytes!("../../../assets/icons/app-icon-32.png"),
+        _ => return None,
+    })
+}
+
+/// Whether `path` resolves to an embedded asset.
+#[cfg(test)]
+pub(crate) fn has_asset(path: &str) -> bool {
+    PopupAssets.load(path).ok().flatten().is_some()
+}
+
 impl AssetSource for PopupAssets {
     fn load(&self, path: &str) -> anyhow::Result<Option<Cow<'static, [u8]>>> {
+        if let Some(name) = path.strip_prefix("color/").and_then(|rest| {
+            rest.strip_suffix(".svg")
+                .or_else(|| rest.strip_suffix(".png"))
+        }) {
+            return Ok(color_source(name).map(Cow::Borrowed));
+        }
         let Some(name) = path
             .strip_prefix("icons/")
             .and_then(|rest| rest.strip_suffix(".svg"))

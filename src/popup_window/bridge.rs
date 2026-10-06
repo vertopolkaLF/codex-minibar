@@ -89,19 +89,13 @@ pub(super) fn update_version_from_phase(phase: &UpdatePhase) -> Option<String> {
     }
 }
 
-pub(super) fn start_background_bridge(
-    state: Arc<AppState>,
-    ui_dispatcher: windows_reactor::UiMarshaller,
-) {
+pub(super) fn start_background_bridge(state: Arc<AppState>) {
     // Use the already hydrated persistent snapshot while the first network
     // refresh is in flight. Opening Settings never starts another poll.
     // Account names live in settings, so overlay them before the first paint.
     let startup_settings = state.settings.clone();
     let _ = state.apply_openrouter_account_names(&startup_settings);
-    crate::settings_window::publish_openrouter_snapshot(
-        &state.current_limits(),
-        ui_dispatcher.clone(),
-    );
+    crate::settings_window::publish_openrouter_snapshot(&state.current_limits());
     let events = state.take_worker_events();
     let mut widgets = state
         .settings
@@ -171,7 +165,7 @@ pub(super) fn start_background_bridge(
                               tray: &mut TrayManager,
                               settings: Settings,
                               live_settings: &mut Settings| {
-            crate::settings_window::sync_open_window(settings.clone(), ui_dispatcher.clone());
+            crate::settings_window::sync_open_window(settings.clone());
             let phase = updates.snapshot();
             ui.settings_revision = ui.settings_revision.wrapping_add(1);
             // Names and badges are read by every surface; publish them
@@ -192,15 +186,10 @@ pub(super) fn start_background_bridge(
                 // Rename is settings-only. Overlay the new names before the
                 // first paint so the popup does not keep the previous label.
                 ui.observe_limits_update();
-                crate::settings_window::publish_openrouter_snapshot(
-                    &state.current_limits(),
-                    ui_dispatcher.clone(),
-                );
+                crate::settings_window::publish_openrouter_snapshot(&state.current_limits());
             }
             if ui.theme != settings.theme || ui.accent_color != settings.accent_color {
-                // Settings windows keep using WinUI's theme resources.
-                let (theme, accent) = (settings.theme, settings.accent_color);
-                ui_dispatcher.dispatch(move || crate::theme::apply_appearance(theme, accent));
+                crate::theme::apply_appearance(settings.theme, settings.accent_color);
             }
             ui.apply_settings(&settings);
             *notification_settings = settings.notifications.clone();
@@ -438,7 +427,7 @@ pub(super) fn start_background_bridge(
                     &mut live_settings,
                 );
                 drain_updates(&mut ui, &mut tray, &mut update_phase, &mut widgets);
-                if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings_tx, &state, &mut ui) {
+                if pump_tray_and_dismiss(&tray, &settings_tx, &state, &mut ui) {
                     drop(tray);
                     state.shutdown_worker();
                     std::process::exit(0);
@@ -471,7 +460,7 @@ pub(super) fn start_background_bridge(
                 &mut live_settings,
             );
             drain_updates(&mut ui, &mut tray, &mut update_phase, &mut widgets);
-            if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings_tx, &state, &mut ui) {
+            if pump_tray_and_dismiss(&tray, &settings_tx, &state, &mut ui) {
                 drop(tray);
                 state.shutdown_worker();
                 std::process::exit(0);
@@ -529,19 +518,13 @@ pub(super) fn start_background_bridge(
                     {
                         crate::openrouter::apply_account_names(&mut limits, instance);
                     }
-                    // Publish once, then let both native tray and WinUI render
+                    // Publish once, then let both native tray and GPUI render
                     // from that exact snapshot.
                     state.replace_limits(provider, limits);
                     ui.clear_provider_error(provider);
                     let limits = state.current_limits();
-                    crate::settings_window::publish_discovered_popup_bricks(
-                        &limits,
-                        ui_dispatcher.clone(),
-                    );
-                    crate::settings_window::publish_openrouter_snapshot(
-                        &limits,
-                        ui_dispatcher.clone(),
-                    );
+                    crate::settings_window::publish_discovered_popup_bricks(&limits);
+                    crate::settings_window::publish_openrouter_snapshot(&limits);
                     if ui.popup_visibility.absorb_discovered_bricks(&limits) {
                         let limits_for_settings = limits.clone();
                         crate::settings_window::persist_update(
@@ -755,9 +738,8 @@ pub(super) fn start_background_bridge(
 #[cfg(windows)]
 pub(super) fn pump_tray_and_dismiss(
     tray: &TrayManager,
-    _ui_dispatcher: &windows_reactor::UiMarshaller,
-    settings_tx: &Sender<Settings>,
-    state: &AppState,
+    _settings_tx: &Sender<Settings>,
+    _state: &AppState,
     ui: &mut UiState,
 ) -> bool {
     use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
@@ -798,22 +780,13 @@ pub(super) fn pump_tray_and_dismiss(
                 }
             }
             TrayMenuAction::Settings => {
-                let settings_tx = settings_tx.clone();
-                let usage_actions_tx = state.usage_actions_tx.clone();
-                let updates = Arc::clone(&state.updates);
                 flush_popup_ui(ui);
                 // Opening Settings from the tray menu provides the same
                 // always-visible live preview as opening it from the footer.
                 if !popup::is_visible() || popup::is_closing() {
                     popup::show_near_cursor();
                 }
-                crate::settings_runtime::dispatch_window(move || {
-                    if let Err(error) =
-                        crate::settings_window::open(settings_tx, usage_actions_tx, updates)
-                    {
-                        eprintln!("Could not open settings window: {error:?}");
-                    }
-                });
+                crate::settings_window::open();
             }
             TrayMenuAction::Exit => return true,
         }
@@ -834,7 +807,6 @@ pub(super) fn pump_tray_and_dismiss(
 #[cfg(not(windows))]
 pub(super) fn pump_tray_and_dismiss(
     _tray: &TrayManager,
-    _ui_dispatcher: &windows_reactor::UiMarshaller,
     _settings_tx: &Sender<Settings>,
     _state: &AppState,
     _ui: &mut UiState,

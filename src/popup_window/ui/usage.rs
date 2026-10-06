@@ -759,7 +759,7 @@ fn provider_tile(
                     16.0,
                     palette.provider_icon(entry.provider.kind(), colored),
                     entry.provider.badge().as_ref(),
-                    &palette,
+                    palette,
                 ))
                 .child(nowrap(components::body_strong(
                     descriptor.display_name,
@@ -867,7 +867,7 @@ fn model_breakdown_table(rows: &[BreakdownRow], palette: &Palette, colored: bool
                 14.0,
                 palette.provider_icon(provider.kind(), colored),
                 provider.badge().as_ref(),
-                &palette,
+                palette,
             ));
         }
         title = title.child(
@@ -940,7 +940,7 @@ fn day_breakdown_table(
                 14.0,
                 palette.provider_icon(provider.kind(), colored),
                 provider.badge().as_ref(),
-                &palette,
+                palette,
             ),
         ));
     }

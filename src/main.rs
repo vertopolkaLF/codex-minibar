@@ -98,20 +98,17 @@ fn run() -> Result<()> {
         move || state.shutdown_worker()
     });
 
-    let runtime = codex_minibar::settings_runtime::SettingsRuntime::new()?;
-    // With no WinUI root, these setters only retain the requested palette.
-    // They also initialize the tray's accent before any popup can be shown.
+    // Initializes the tray accent before any popup can be shown.
     codex_minibar::theme::apply_appearance(state.settings.theme, state.settings.accent_color);
-    codex_minibar::popup_window::start(Arc::clone(&state), runtime.marshaller());
+    codex_minibar::popup_window::start(Arc::clone(&state));
     if onboarding_needed {
-        let settings_tx = state.settings_tx.clone();
-        codex_minibar::settings_runtime::dispatch_window(move || {
-            if let Err(error) = codex_minibar::settings_window::open_onboarding(settings_tx) {
-                eprintln!("Could not open onboarding: {error:?}");
-            }
-        });
+        codex_minibar::settings_window::open_onboarding();
     }
-    runtime.run()
+    // The GPUI thread owns every window and the bridge thread owns the tray;
+    // both exit the process directly, so the main thread only stays alive.
+    loop {
+        std::thread::park();
+    }
 }
 
 fn show_error(message: &str) {

@@ -838,13 +838,11 @@ dependencies = [
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "tray-icon",
+ "unicode-segmentation",
  "ureq",
  "windows 0.62.2",
- "windows-collections 0.3.2",
  "windows-core 0.62.2 (git+https://github.com/microsoft/windows-rs?rev=07f344c019b8fdae4d398d4c2591596044cb416a)",
  "windows-numerics 0.3.1",
- "windows-reactor",
- "windows-reactor-setup",
  "windows-sys 0.59.0",
  "winresource",
  "zip",
@@ -6105,24 +6103,6 @@ dependencies = [
  "windows-core 0.62.2 (git+https://github.com/microsoft/windows-rs?rev=07f344c019b8fdae4d398d4c2591596044cb416a)",
  "windows-link 0.2.1 (git+https://github.com/microsoft/windows-rs?rev=07f344c019b8fdae4d398d4c2591596044cb416a)",
 ]
-
-[[package]]
-name = "windows-reactor"
-version = "0.0.0"
-dependencies = [
- "rustc-hash 2.1.3",
- "windows-collections 0.3.2",
- "windows-core 0.62.2 (git+https://github.com/microsoft/windows-rs?rev=07f344c019b8fdae4d398d4c2591596044cb416a)",
- "windows-future 0.3.2",
- "windows-numerics 0.3.1",
- "windows-reference",
- "windows-threading 0.2.1",
- "windows-time",
-]
-
-[[package]]
-name = "windows-reactor-setup"
-version = "0.100.0"
 
 [[package]]
 name = "windows-reference"

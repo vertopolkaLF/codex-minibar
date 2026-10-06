@@ -590,7 +590,7 @@ impl PopupRoot {
                                 16.0,
                                 palette.provider_icon(provider.kind(), colored),
                                 provider.badge().as_ref(),
-                                &palette,
+                                palette,
                             ))
                             .child(nowrap(components::body_strong(
                                 provider.qualified_name(),

@@ -1,4 +1,4 @@
-//! Shared animation tokens for both WinUI surfaces.
+//! Shared animation and accent tokens for the GPUI popup and Settings window.
 
 use std::{
     sync::atomic::{AtomicBool, AtomicU32, Ordering},
@@ -8,11 +8,11 @@ use std::{
 static APP_ANIMATIONS_ENABLED: AtomicBool = AtomicBool::new(true);
 static CURRENT_ACCENT_RGB: AtomicU32 = AtomicU32::new(0x0078D4);
 
-/// WinUI `ControlFasterAnimationDuration` — pointer-over / micro-interactions.
+/// Fluent `ControlFasterAnimationDuration` — pointer-over / micro-interactions.
 pub const CONTROL_FASTER_ANIMATION: Duration = Duration::from_millis(83);
-/// WinUI `ControlFastAnimationDuration`.
+/// Fluent `ControlFastAnimationDuration`.
 pub const CONTROL_FAST_ANIMATION: Duration = Duration::from_millis(167);
-/// WinUI `ControlNormalAnimationDuration`.
+/// Fluent `ControlNormalAnimationDuration`.
 pub const CONTROL_NORMAL_ANIMATION: Duration = Duration::from_millis(250);
 
 pub fn set_animations_enabled(enabled: bool) {
@@ -47,31 +47,14 @@ fn remember_accent((red, green, blue): (u8, u8, u8)) {
     );
 }
 
-pub fn apply_appearance(theme: crate::settings::AppTheme, accent: crate::settings::AccentColor) {
-    let requested = match theme {
-        crate::settings::AppTheme::Auto => windows_reactor::RequestedTheme::Default,
-        crate::settings::AppTheme::Light => windows_reactor::RequestedTheme::Light,
-        crate::settings::AppTheme::Dark => windows_reactor::RequestedTheme::Dark,
-    };
-    windows_reactor::set_requested_theme(requested);
-
-    let result = match accent.rgb() {
-        Some(color) => {
-            remember_accent(color);
-            windows_reactor::set_accent_color(color)
-        }
-        None => system_accent_palette().and_then(|palette| {
-            remember_accent(palette.base);
-            windows_reactor::set_accent_palette(palette)
-        }),
-    };
-    if let Err(error) = result {
-        eprintln!("failed to apply accent color: {error:?}");
-    }
+/// Record the configured accent for surfaces painted outside GPUI (the tray
+/// glyphs). The GPUI windows resolve theme and accent from settings on every
+/// frame, so nothing else has to be pushed anywhere.
+pub fn apply_appearance(_theme: crate::settings::AppTheme, accent: crate::settings::AccentColor) {
+    remember_accent(accent_ramp(accent).base);
 }
 
-/// Accent ramp shared by both UI stacks. GPUI uses it directly; WinUI
-/// receives the same values through [`windows_reactor::AccentPalette`].
+/// Accent ramp shared by every UI surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AccentRamp {
     pub base: (u8, u8, u8),
@@ -83,12 +66,28 @@ pub struct AccentRamp {
     pub dark3: (u8, u8, u8),
 }
 
+fn tone((r, g, b): (u8, u8, u8), amount: f64, lighter: bool) -> (u8, u8, u8) {
+    let target = if lighter { 255.0 } else { 0.0 };
+    let channel = |value: u8| {
+        (f64::from(value) + (target - f64::from(value)) * amount)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
+    (channel(r), channel(g), channel(b))
+}
+
 impl AccentRamp {
-    /// Windows-style ramp by mixing the accent toward white or black, the
-    /// same derivation `windows_reactor` applies for a fixed accent color.
+    /// Windows-style ramp by mixing the accent toward white or black.
     pub fn from_base(base: (u8, u8, u8)) -> Self {
-        let palette = windows_reactor::AccentPalette::from_base(base);
-        Self::from(palette)
+        Self {
+            base,
+            light1: tone(base, 0.25, true),
+            light2: tone(base, 0.45, true),
+            light3: tone(base, 0.70, true),
+            dark1: tone(base, 0.25, false),
+            dark2: tone(base, 0.45, false),
+            dark3: tone(base, 0.70, false),
+        }
     }
 
     /// Fill role (`AccentFillColorDefaultBrush`) for the resolved theme.
@@ -102,42 +101,26 @@ impl AccentRamp {
     }
 }
 
-impl From<windows_reactor::AccentPalette> for AccentRamp {
-    fn from(palette: windows_reactor::AccentPalette) -> Self {
-        Self {
-            base: palette.base,
-            light1: palette.light1,
-            light2: palette.light2,
-            light3: palette.light3,
-            dark1: palette.dark1,
-            dark2: palette.dark2,
-            dark3: palette.dark3,
-        }
-    }
-}
-
 /// Resolve the configured accent without touching any UI framework state.
 pub fn accent_ramp(accent: crate::settings::AccentColor) -> AccentRamp {
     match accent.rgb() {
         Some(color) => AccentRamp::from_base(color),
-        None => system_accent_palette()
-            .map(AccentRamp::from)
-            .unwrap_or_else(|_| AccentRamp::from_base((0, 120, 212))),
+        None => system_accent_ramp().unwrap_or_else(|| AccentRamp::from_base((0, 120, 212))),
     }
 }
 
 #[cfg(windows)]
-fn system_accent_palette() -> windows_core::Result<windows_reactor::AccentPalette> {
+fn system_accent_ramp() -> Option<AccentRamp> {
     use windows::UI::ViewManagement::{UIColorType, UISettings};
 
-    let settings = UISettings::new()?;
+    let settings = UISettings::new().ok()?;
     let rgb = |kind| {
         settings
             .GetColorValue(kind)
+            .ok()
             .map(|color| (color.R, color.G, color.B))
     };
-
-    Ok(windows_reactor::AccentPalette {
+    Some(AccentRamp {
         base: rgb(UIColorType::Accent)?,
         light1: rgb(UIColorType::AccentLight1)?,
         light2: rgb(UIColorType::AccentLight2)?,
@@ -149,6 +132,6 @@ fn system_accent_palette() -> windows_core::Result<windows_reactor::AccentPalett
 }
 
 #[cfg(not(windows))]
-fn system_accent_palette() -> windows_core::Result<windows_reactor::AccentPalette> {
-    Ok(windows_reactor::AccentPalette::from_base((0, 120, 212)))
+fn system_accent_ramp() -> Option<AccentRamp> {
+    None
 }

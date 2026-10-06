@@ -1,11 +1,31 @@
-use super::persistence::replace_settings;
-use super::platform::{close_open_window, is_open};
-use super::shared::settings_section_heading;
-use super::*;
+//! First-launch flow: choose providers, then a few general settings.
+//! Choices stay local until Done, so a dismissed window never
+//! half-configures provider workers.
+
+use std::sync::Arc;
+
+use gpui::{
+    AnyElement, App, Context, FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
+    WindowControlArea, div, px,
+};
+
+use super::general::{LIMIT_REFRESH_LABELS, USAGE_REFRESH_LABELS};
+use super::kit::{self, Button, Handler, Kit};
+use super::persistence::{load_settings_for_window, replace_settings};
+use super::theme::{Fonts, Theme};
+use crate::popup_window::AppState;
+use crate::popup_window::ui::fx;
+use crate::settings::{
+    LimitRefreshInterval, ProviderInstance, ProviderKind, Settings, TrayWidget,
+    UsageRefreshInterval,
+};
+
+const DRIVERS: usize = ProviderKind::ALL.len();
 
 /// Whether each driver (in [`ProviderKind::ALL`] order) is installed, using
 /// the paths of its first instance.
-pub(super) fn detected_providers(settings: &Settings) -> [bool; 9] {
+fn detected_providers(settings: &Settings) -> [bool; DRIVERS] {
     let first = |driver: ProviderKind| {
         settings
             .instances
@@ -38,8 +58,32 @@ pub(super) fn detected_providers(settings: &Settings) -> [bool; 9] {
     })
 }
 
+/// What the provider step says about each driver.
+fn detection_note(driver: ProviderKind, found: bool) -> &'static str {
+    match (driver, found) {
+        (ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo, true) => {
+            "Found in OpenCode auth or local history."
+        }
+        (ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo, false) => {
+            "Not found. Turn it on if it's set up elsewhere."
+        }
+        (ProviderKind::OpenRouter, true) => "Account credentials are already set.",
+        (ProviderKind::OpenRouter, false) => "Optional. Add accounts later in Providers.",
+        (ProviderKind::Antigravity, true) => "Found an official agy sign-in on this PC.",
+        (ProviderKind::Antigravity, false) => "Not found. Sign in with agy before enabling it.",
+        (ProviderKind::Grok, true) => "Found an official Grok CLI sign-in on this PC.",
+        (ProviderKind::Grok, false) => "Not found. Run grok login before enabling it.",
+        (ProviderKind::Kiro, true) => "Found Kiro IDE, Kiro Crew, or a signed-in Kiro CLI.",
+        (ProviderKind::Kiro, false) => {
+            "Not found. Install Kiro IDE or Kiro Crew, or sign in to Kiro CLI."
+        }
+        (_, true) => "Found on this PC.",
+        (_, false) => "Not found. Turn it on if it's installed somewhere else.",
+    }
+}
+
 /// Turns each driver's first instance on or off, adding it when missing.
-fn apply_onboarding_choices(settings: &mut Settings, enabled: [bool; 9], automatic: bool) {
+fn apply_onboarding_choices(settings: &mut Settings, enabled: [bool; DRIVERS], automatic: bool) {
     for (driver, enabled) in ProviderKind::ALL.into_iter().zip(enabled) {
         let provider = match settings
             .instances
@@ -62,426 +106,438 @@ fn apply_onboarding_choices(settings: &mut Settings, enabled: [bool; 9], automat
     }
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-enum OnboardingStep {
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+enum Step {
     #[default]
     Providers,
     General,
 }
 
-/// Compact first-launch surface. It deliberately reuses the same setting
-/// controls as the full editor, but persists exactly once on Done.
-pub(super) fn onboarding_render(
-    cx: &mut RenderCx,
-    settings: Arc<Settings>,
-    detected: [bool; 9],
-    settings_tx: Sender<Settings>,
-) -> Element {
-    let color_scheme = cx.use_color_scheme();
-    cx.use_effect(color_scheme, move || {
-        sync_settings_caption_button_theme(color_scheme);
-    });
-    let (step, set_step) = cx.use_state(OnboardingStep::default());
-    let (codex_enabled, set_codex_enabled) = cx.use_state(detected[0]);
-    let (claude_enabled, set_claude_enabled) = cx.use_state(detected[1]);
-    let (cursor_enabled, set_cursor_enabled) = cx.use_state(detected[2]);
-    let (opencode_zen_enabled, set_opencode_zen_enabled) = cx.use_state(detected[3]);
-    let (opencode_go_enabled, set_opencode_go_enabled) = cx.use_state(detected[4]);
-    let (openrouter_enabled, set_openrouter_enabled) = cx.use_state(detected[5]);
-    let (antigravity_enabled, set_antigravity_enabled) = cx.use_state(detected[6]);
-    let (grok_enabled, set_grok_enabled) = cx.use_state(detected[7]);
-    let (kiro_enabled, set_kiro_enabled) = cx.use_state(detected[8]);
-    let (start_at_login, set_start_at_login) = cx.use_state(settings.start_at_login);
-    let (automatic_activation, set_automatic_activation) = cx.use_state(
-        settings
-            .instances
-            .iter()
-            .any(|instance| instance.auto_activation),
-    );
-    let (limit_refresh_interval, set_limit_refresh_interval) =
-        cx.use_state(settings.limit_refresh_interval);
-    let (usage_refresh_interval, set_usage_refresh_interval) =
-        cx.use_state(settings.usage_refresh_interval);
-    let (show_used_percentage, set_show_used_percentage) =
-        cx.use_state(settings.show_used_percentage);
-    let (show_usage_pace, set_show_usage_pace) = cx.use_state(settings.show_usage_pace);
-    let (show_account_name, set_show_account_name) = cx.use_state(settings.show_account_name);
-    let (hovered_card_id, set_hovered_card_id) = cx.use_state(None::<String>);
-
-    let (heading, description, cards): (&str, &str, Vec<Element>) = match step {
-        OnboardingStep::Providers => (
-            "Choose providers",
-            "We turned on the providers found on this PC. You can change this later.",
-            vec![
-                settings_toggle_card_with_description(
-                    "Codex",
-                    Some(if detected[0] {
-                        "Found on this PC."
-                    } else {
-                        "Not found. Turn it on if it's installed somewhere else."
-                    }),
-                    codex_enabled,
-                    move |value| set_codex_enabled.call(value),
-                    "onboarding-codex",
-                    &hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("onboarding-codex"),
-                settings_toggle_card_with_description(
-                    "Claude",
-                    Some(if detected[1] {
-                        "Found on this PC."
-                    } else {
-                        "Not found. Turn it on if it's installed somewhere else."
-                    }),
-                    claude_enabled,
-                    move |value| set_claude_enabled.call(value),
-                    "onboarding-claude",
-                    &hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("onboarding-claude"),
-                settings_toggle_card_with_description(
-                    "Cursor",
-                    Some(if detected[2] {
-                        "Found on this PC."
-                    } else {
-                        "Not found. Turn it on if it's installed somewhere else."
-                    }),
-                    cursor_enabled,
-                    move |value| set_cursor_enabled.call(value),
-                    "onboarding-cursor",
-                    &hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("onboarding-cursor"),
-                settings_toggle_card_with_description(
-                    "OpenCode Zen",
-                    Some(if detected[3] {
-                        "Found in OpenCode auth or local history."
-                    } else {
-                        "Not found. Turn it on if it's set up elsewhere."
-                    }),
-                    opencode_zen_enabled,
-                    move |value| set_opencode_zen_enabled.call(value),
-                    "onboarding-opencode-zen",
-                    &hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("onboarding-opencode-zen"),
-                settings_toggle_card_with_description(
-                    "OpenCode Go",
-                    Some(if detected[4] {
-                        "Found in OpenCode auth or local history."
-                    } else {
-                        "Not found. Turn it on if it's set up elsewhere."
-                    }),
-                    opencode_go_enabled,
-                    move |value| set_opencode_go_enabled.call(value),
-                    "onboarding-opencode-go",
-                    &hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("onboarding-opencode-go"),
-                settings_toggle_card_with_description(
-                    "OpenRouter",
-                    Some(if detected[5] {
-                        "Account credentials are already set."
-                    } else {
-                        "Optional. Add accounts later in Providers."
-                    }),
-                    openrouter_enabled,
-                    move |value| set_openrouter_enabled.call(value),
-                    "onboarding-openrouter",
-                    &hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("onboarding-openrouter"),
-                settings_toggle_card_with_description(
-                    "Antigravity",
-                    Some(if detected[6] {
-                        "Found an official agy sign-in on this PC."
-                    } else {
-                        "Not found. Sign in with agy before enabling it."
-                    }),
-                    antigravity_enabled,
-                    move |value| set_antigravity_enabled.call(value),
-                    "onboarding-antigravity",
-                    &hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("onboarding-antigravity"),
-                settings_toggle_card_with_description(
-                    "Grok",
-                    Some(if detected[7] {
-                        "Found an official Grok CLI sign-in on this PC."
-                    } else {
-                        "Not found. Run grok login before enabling it."
-                    }),
-                    grok_enabled,
-                    move |value| set_grok_enabled.call(value),
-                    "onboarding-grok",
-                    &hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("onboarding-grok"),
-                settings_toggle_card_with_description(
-                    "Kiro",
-                    Some(if detected[8] {
-                        "Found Kiro IDE, Kiro Crew, or a signed-in Kiro CLI."
-                    } else {
-                        "Not found. Install Kiro IDE or Kiro Crew, or sign in to Kiro CLI."
-                    }),
-                    kiro_enabled,
-                    move |value| set_kiro_enabled.call(value),
-                    "onboarding-kiro",
-                    &hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("onboarding-kiro"),
-            ],
-        ),
-        OnboardingStep::General => (
-            "General settings",
-            "You can change these later in Settings.",
-            vec![
-                settings_section_heading("Startup").with_key("onboarding-startup-heading"),
-                settings_toggle_card(
-                    "Start with Windows",
-                    start_at_login,
-                    move |value| set_start_at_login.call(value),
-                    "onboarding-start-at-login",
-                    &hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("onboarding-start-at-login"),
-                settings_section_heading("Features").with_key("onboarding-features-heading"),
-                settings_toggle_card_with_description(
-                    "Start 5-hour sessions automatically",
-                    Some("Starts a new Codex or Claude session as soon as a window is available, instead of waiting for your first request."),
-                    automatic_activation,
-                    move |value| set_automatic_activation.call(value),
-                    "onboarding-automatic-activation",
-                    &hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("onboarding-automatic-activation"),
-                settings_control_card(
-                    "Refresh limits",
-                    None,
-                    ComboBox::new([
-                        "30 seconds",
-                        "1 minute",
-                        "5 minutes",
-                        "10 minutes",
-                        "15 minutes",
-                    ])
-                    .selected_index(limit_refresh_interval.index())
-                    .on_selection_changed(move |choice| {
-                        set_limit_refresh_interval.call(LimitRefreshInterval::from_index(choice));
-                    }),
-                    "onboarding-limit-refresh-interval",
-                    &hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("onboarding-limit-refresh-interval"),
-                settings_control_card(
-                    "Collect usage data",
-                    Some("Scans local provider history for Usage Stats."),
-                    ComboBox::new([
-                        "1 minute",
-                        "5 minutes",
-                        "10 minutes",
-                        "15 minutes",
-                        "30 minutes",
-                        "45 minutes",
-                        "60 minutes",
-                    ])
-                    .selected_index(usage_refresh_interval.index())
-                    .on_selection_changed(move |choice| {
-                        set_usage_refresh_interval
-                            .call(UsageRefreshInterval::from_index(choice));
-                    }),
-                    "onboarding-usage-refresh-interval",
-                    &hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("onboarding-usage-refresh-interval"),
-                settings_section_heading("Customization")
-                    .with_key("onboarding-customization-heading"),
-                settings_toggle_card(
-                    "Show used instead of remaining",
-                    show_used_percentage,
-                    move |value| set_show_used_percentage.call(value),
-                    "onboarding-show-used",
-                    &hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("onboarding-show-used"),
-                settings_toggle_card_with_description(
-                    "Show usage pace",
-                    Some("Marks whether you're burning quota faster or slower than an even pace."),
-                    show_usage_pace,
-                    move |value| set_show_usage_pace.call(value),
-                    "onboarding-show-usage-pace",
-                    &hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("onboarding-show-usage-pace"),
-                settings_toggle_card(
-                    "Show account name",
-                    show_account_name,
-                    move |value| set_show_account_name.call(value),
-                    "onboarding-show-account-name",
-                    &hovered_card_id,
-                    set_hovered_card_id.clone(),
-                )
-                .with_key("onboarding-show-account-name"),
-            ],
-        ),
-    };
-
-    let back_or_spacer: Element = match step {
-        OnboardingStep::Providers => border(Element::Empty).width(72.0).into(),
-        OnboardingStep::General => {
-            let set_step = set_step.clone();
-            Button::new("Back")
-                .on_click(move || set_step.call(OnboardingStep::Providers))
-                .into()
-        }
-    };
-    let action: Element = match step {
-        OnboardingStep::Providers => {
-            let set_step = set_step.clone();
-            Button::new("Continue")
-                .accent()
-                .on_click(move || set_step.call(OnboardingStep::General))
-                .into()
-        }
-        OnboardingStep::General => {
-            let settings_tx = settings_tx.clone();
-            let settings = Arc::clone(&settings);
-            Button::new("Done")
-                .accent()
-                .on_click(move || {
-                    let mut completed = (*settings).clone();
-                    completed.onboarding_completed = true;
-                    apply_onboarding_choices(
-                        &mut completed,
-                        [
-                            codex_enabled,
-                            claude_enabled,
-                            cursor_enabled,
-                            opencode_zen_enabled,
-                            opencode_go_enabled,
-                            openrouter_enabled,
-                            antigravity_enabled,
-                            grok_enabled,
-                            kiro_enabled,
-                        ],
-                        automatic_activation,
-                    );
-                    completed.tray_widgets = completed
-                        .enabled_providers()
-                        .into_iter()
-                        .filter(|provider| {
-                            !crate::provider_registry::descriptor(provider.kind())
-                                .default_tray_metrics
-                                .is_empty()
-                        })
-                        .map(TrayWidget::for_provider)
-                        .collect();
-                    completed.start_at_login = start_at_login;
-                    completed.limit_refresh_interval = limit_refresh_interval;
-                    completed.usage_refresh_interval = usage_refresh_interval;
-                    completed.show_used_percentage = show_used_percentage;
-                    completed.show_usage_pace = show_usage_pace;
-                    completed.show_account_name = show_account_name;
-                    if let Err(error) = replace_settings(settings_tx.clone(), completed) {
-                        eprintln!("failed to complete onboarding: {error:#}");
-                        return;
-                    }
-                    // Show the popup before dismissing onboarding so Done
-                    // always lands on it.
-                    crate::popup::show_near_cursor();
-                    close_open_window();
-                })
-                .into()
-        }
-    };
-
-    let content = scroll_viewer(
-        vstack((
-            text_block(heading).font_size(28.0).font_weight(600),
-            text_block(description).font_size(14.0).opacity(0.72).wrap(),
-            vstack(cards).spacing(10.0),
-        ))
-        .spacing(16.0)
-        .padding(Thickness {
-            left: 32.0,
-            top: 28.0,
-            right: 32.0,
-            bottom: 20.0,
-        })
-        .horizontal_alignment(HorizontalAlignment::Stretch),
-    )
-    .horizontal_scroll_bar_visibility(ScrollBarVisibility::Disabled)
-    .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
-    .grid_row(0);
-    let footer = border(
-        hstack((back_or_spacer, action))
-            .spacing(8.0)
-            .horizontal_alignment(HorizontalAlignment::Right),
-    )
-    .padding(Thickness {
-        left: 32.0,
-        top: 14.0,
-        right: 32.0,
-        bottom: 18.0,
-    })
-    .border_thickness(Thickness {
-        left: 0.0,
-        top: 1.0,
-        right: 0.0,
-        bottom: 0.0,
-    })
-    .border_brush(ThemeRef::CardStroke)
-    .grid_row(1);
-    let title_bar = TitleBar::new(ONBOARDING_WINDOW_TITLE)
-        .back_button_visible(false)
-        .pane_toggle_button_visible(false)
-        .tall(true);
-    let body = grid((content, footer))
-        .rows([GridLength::Star(1.0), GridLength::Auto])
-        .columns([GridLength::Star(1.0)])
-        .background(Color::transparent())
-        .grid_row(1);
-    grid((title_bar.grid_row(0), body))
-        .rows([GridLength::Auto, GridLength::Star(1.0)])
-        .columns([GridLength::Star(1.0)])
-        .background(Color::transparent())
-        .into()
+pub(crate) struct OnboardingWindow {
+    state: Arc<AppState>,
+    settings: Settings,
+    detected: [bool; DRIVERS],
+    enabled: [bool; DRIVERS],
+    automatic: bool,
+    step: Step,
+    kit: Kit,
+    fonts: Fonts,
+    focus: FocusHandle,
+    _subscriptions: Vec<Subscription>,
 }
 
-/// Resetting returns to the same first-launch path as a new install. Wait for
-/// the current native host to close before creating the onboarding host so the
-/// two settings surfaces can never overlap or fight over the host slot.
-pub(super) fn restart_onboarding_after_reset(
-    settings_tx: Sender<Settings>,
-    ui_dispatcher: UiMarshaller,
-) {
-    close_open_window();
-    thread::spawn(move || {
-        for _ in 0..20 {
-            if !is_open() {
-                break;
-            }
-            thread::sleep(Duration::from_millis(25));
-        }
-        ui_dispatcher.dispatch(move || {
-            if let Err(error) = open_onboarding(settings_tx) {
-                eprintln!("failed to reopen onboarding after settings reset: {error:?}");
-            }
+impl Focusable for OnboardingWindow {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+
+impl OnboardingWindow {
+    pub(crate) fn new(state: Arc<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let settings = load_settings_for_window();
+        let detected = detected_providers(&settings);
+        let automatic = settings
+            .instances
+            .iter()
+            .any(|instance| instance.auto_activation);
+        let mut subscriptions = vec![cx.observe_window_appearance(window, |_, _, cx| cx.notify())];
+        subscriptions.push(cx.on_release(|_, _| super::window_closed(true)));
+        window.on_window_should_close(cx, |_, _| {
+            super::window_closed(true);
+            true
         });
-    });
+        let focus = cx.focus_handle();
+        window.focus(&focus);
+        Self {
+            state,
+            settings,
+            detected,
+            enabled: detected,
+            automatic,
+            step: Step::Providers,
+            kit: Kit::default(),
+            fonts: Fonts::resolve(cx),
+            focus,
+            _subscriptions: subscriptions,
+        }
+    }
+
+    fn h<T: 'static>(
+        cx: &Context<Self>,
+        f: impl Fn(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
+    ) -> Handler<T> {
+        let this = cx.weak_entity();
+        std::rc::Rc::new(move |value, window, cx| {
+            let _ = this.update(cx, |this, cx| f(this, value, window, cx));
+        })
+    }
+
+    fn finish(&mut self, window: &mut Window) {
+        let mut completed = self.settings.clone();
+        completed.onboarding_completed = true;
+        apply_onboarding_choices(&mut completed, self.enabled, self.automatic);
+        completed.tray_widgets = completed
+            .enabled_providers()
+            .into_iter()
+            .filter(|provider| {
+                !crate::provider_registry::descriptor(provider.kind())
+                    .default_tray_metrics
+                    .is_empty()
+            })
+            .map(TrayWidget::for_provider)
+            .collect();
+        if let Err(error) = replace_settings(self.state.settings_tx.clone(), completed) {
+            eprintln!("failed to complete onboarding: {error:#}");
+            crate::notifications::show("Setup could not be saved", &format!("{error:#}"));
+            return;
+        }
+        // Show the popup before dismissing onboarding so Done always lands on it.
+        crate::popup::show_near_cursor();
+        super::window_closed(true);
+        window.remove_window();
+    }
+
+    fn providers_step(&mut self, k: &mut Kit, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let mut rows = Vec::new();
+        for (index, driver) in ProviderKind::ALL.into_iter().enumerate() {
+            let theme = &k.theme;
+            let on = self.enabled[index];
+            let mark = div()
+                .size(px(32.0))
+                .flex_none()
+                .rounded(px(8.0))
+                .border_1()
+                .border_color(theme.card_stroke)
+                .bg(theme.card)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(kit::icon(
+                    crate::provider_registry::icon(driver),
+                    16.0,
+                    if on {
+                        theme.brand(driver)
+                    } else {
+                        theme.glyph()
+                    },
+                ))
+                .into_any_element();
+            let found = self.detected[index];
+            let mut row = kit::Row::new(
+                format!("onboarding-{}", driver.display_name()),
+                driver.display_name(),
+            )
+            .icon(mark)
+            .description(k, detection_note(driver, found));
+            if found {
+                row = row.trailing(kit::chip(k, "Detected"));
+            }
+            let switch = kit::toggle(
+                k,
+                format!("onboarding-toggle-{index}"),
+                on,
+                false,
+                Self::h(cx, move |this, value: bool, _, cx| {
+                    this.enabled[index] = value;
+                    cx.notify();
+                }),
+            );
+            let toggle_row = Self::h(cx, move |this, (), _, cx| {
+                this.enabled[index] = !this.enabled[index];
+                cx.notify();
+            });
+            rows.push(row.trailing(switch).on_click(toggle_row).render(k));
+        }
+        vec![kit::card(k, rows)]
+    }
+
+    fn general_step(&mut self, k: &mut Kit, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let s = &self.settings;
+        let startup = kit::card_of(k, |k| {
+            vec![kit::toggle_row(
+                k,
+                "onboarding-start",
+                "Start with Windows",
+                None,
+                s.start_at_login,
+                Self::h(cx, |this, value: bool, _, cx| {
+                    this.settings.start_at_login = value;
+                    cx.notify();
+                }),
+            )]
+        });
+        let features = kit::card_of(k, |k| {
+            vec![
+                kit::toggle_row(
+                    k,
+                    "onboarding-automatic",
+                    "Start 5-hour sessions automatically",
+                    Some(
+                        "Starts a new Codex or Claude session as soon as a window is available, instead of waiting for your first request."
+                            .into(),
+                    ),
+                    self.automatic,
+                    Self::h(cx, |this, value: bool, _, cx| {
+                        this.automatic = value;
+                        cx.notify();
+                    }),
+                ),
+                kit::dropdown_row(
+                    k,
+                    "onboarding-limit-refresh",
+                    "Refresh limits",
+                    None,
+                    kit::options(&LIMIT_REFRESH_LABELS),
+                    s.limit_refresh_interval.index(),
+                    false,
+                    Self::h(cx, |this, index: usize, _, cx| {
+                        this.settings.limit_refresh_interval =
+                            LimitRefreshInterval::from_index(index as i32);
+                        cx.notify();
+                    }),
+                ),
+                kit::dropdown_row(
+                    k,
+                    "onboarding-usage-refresh",
+                    "Collect usage data",
+                    Some("Scans local provider history for Usage Stats."),
+                    kit::options(&USAGE_REFRESH_LABELS),
+                    s.usage_refresh_interval.index(),
+                    false,
+                    Self::h(cx, |this, index: usize, _, cx| {
+                        this.settings.usage_refresh_interval =
+                            UsageRefreshInterval::from_index(index as i32);
+                        cx.notify();
+                    }),
+                ),
+            ]
+        });
+        let customize = kit::card_of(k, |k| {
+            vec![
+                kit::toggle_row(
+                    k,
+                    "onboarding-show-used",
+                    "Show used instead of remaining",
+                    None,
+                    s.show_used_percentage,
+                    Self::h(cx, |this, value: bool, _, cx| {
+                        this.settings.show_used_percentage = value;
+                        cx.notify();
+                    }),
+                ),
+                kit::toggle_row(
+                    k,
+                    "onboarding-pace",
+                    "Show usage pace",
+                    Some(
+                        "Marks whether you're burning quota faster or slower than an even pace."
+                            .into(),
+                    ),
+                    s.show_usage_pace,
+                    Self::h(cx, |this, value: bool, _, cx| {
+                        this.settings.show_usage_pace = value;
+                        cx.notify();
+                    }),
+                ),
+                kit::toggle_row(
+                    k,
+                    "onboarding-account",
+                    "Show account name",
+                    None,
+                    s.show_account_name,
+                    Self::h(cx, |this, value: bool, _, cx| {
+                        this.settings.show_account_name = value;
+                        cx.notify();
+                    }),
+                ),
+            ]
+        });
+        vec![
+            kit::section_heading(k, "Startup"),
+            startup,
+            kit::section_heading(k, "Features"),
+            features,
+            kit::section_heading(k, "Customization"),
+            customize,
+        ]
+    }
+
+    fn step_dots(&self, k: &mut Kit) -> AnyElement {
+        let index = if self.step == Step::Providers {
+            0.0
+        } else {
+            1.0
+        };
+        let t = k.fx.value(fx::key("onboarding-step"), index, fx::NORMAL);
+        let theme = &k.theme;
+        let dot = |active: f32| {
+            div()
+                .h(px(6.0))
+                .w(px(6.0 + 14.0 * active))
+                .rounded_full()
+                .bg(theme
+                    .control_strong
+                    .opacity(0.5)
+                    .blend(theme.accent.opacity(active)))
+        };
+        div()
+            .flex()
+            .gap(px(6.0))
+            .child(dot(1.0 - t))
+            .child(dot(t))
+            .into_any_element()
+    }
+}
+
+impl Render for OnboardingWindow {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut k = std::mem::take(&mut self.kit);
+        k.begin_frame(Theme::resolve(
+            self.settings.theme,
+            self.settings.accent_color,
+            window.appearance(),
+            self.fonts.clone(),
+        ));
+        let (heading, description, rows) = match self.step {
+            Step::Providers => (
+                "Choose providers",
+                "We turned on the providers found on this PC. You can change this later.",
+                self.providers_step(&mut k, cx),
+            ),
+            Step::General => (
+                "General settings",
+                "You can change these later in Settings.",
+                self.general_step(&mut k, cx),
+            ),
+        };
+        let theme = k.theme.clone();
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .child(
+                div()
+                    .text_size(px(28.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(heading),
+            )
+            .child(div().pb(px(12.0)).child(kit::caption(&k, description)))
+            .children(rows)
+            .into_any_element();
+        let body = kit::appear(&k, format!("onboarding-{:?}", self.step), body);
+        let dots = self.step_dots(&mut k);
+        let back: AnyElement = match self.step {
+            Step::Providers => div().into_any_element(),
+            Step::General => Button::new("onboarding-back", "Back")
+                .on_click(Self::h(cx, |this, (), _, cx| {
+                    this.step = Step::Providers;
+                    cx.notify();
+                }))
+                .render(&k),
+        };
+        let action = match self.step {
+            Step::Providers => Button::new("onboarding-continue", "Continue")
+                .accent()
+                .on_click(Self::h(cx, |this, (), _, cx| {
+                    this.step = Step::General;
+                    cx.notify();
+                })),
+            Step::General => Button::new("onboarding-done", "Done")
+                .accent()
+                .on_click(Self::h(cx, |this, (), window, _| this.finish(window))),
+        }
+        .render(&k);
+        k.end_frame(window);
+        self.kit = k;
+
+        let caption =
+            |id: &'static str, glyph: &'static str, area: WindowControlArea, close: bool| {
+                let hover = if close {
+                    crate::popup_window::ui::theme::rgb8((0xC4, 0x2B, 0x1C))
+                } else {
+                    theme.subtle_hover
+                };
+                div()
+                    .id(id)
+                    .w(px(46.0))
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(10.0))
+                    .font_family(theme.icon_font.clone())
+                    .window_control_area(area)
+                    .hover(move |style| style.bg(hover))
+                    .child(glyph)
+            };
+        div()
+            .id("onboarding-root")
+            .track_focus(&self.focus)
+            .size_full()
+            .flex()
+            .flex_col()
+            .font_family(theme.font.clone())
+            .text_color(theme.text)
+            .bg(theme.window_bg)
+            .child(
+                div()
+                    .id("onboarding-titlebar")
+                    .flex()
+                    .items_center()
+                    .h(px(40.0))
+                    .flex_none()
+                    .window_control_area(WindowControlArea::Drag)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(12.0))
+                            .pl(px(16.0))
+                            .flex_1()
+                            .child(kit::image("color/app-icon-32.png", 16.0))
+                            .child(kit::text(
+                                SharedString::from(super::ONBOARDING_WINDOW_TITLE),
+                                12.0,
+                                theme.text_secondary,
+                            )),
+                    )
+                    .child(caption(
+                        "onboarding-min",
+                        "\u{E921}",
+                        WindowControlArea::Min,
+                        false,
+                    ))
+                    .child(caption(
+                        "onboarding-close",
+                        "\u{E8BB}",
+                        WindowControlArea::Close,
+                        true,
+                    )),
+            )
+            .child(
+                div()
+                    .id("onboarding-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px(px(36.0))
+                    .pt(px(12.0))
+                    .pb(px(20.0))
+                    .child(body),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .px(px(36.0))
+                    .py(px(16.0))
+                    .border_t_1()
+                    .border_color(theme.divider)
+                    .bg(theme.layer)
+                    .child(div().flex_1().child(dots))
+                    .child(back)
+                    .child(action),
+            )
+    }
 }

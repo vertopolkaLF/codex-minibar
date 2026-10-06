@@ -2,7 +2,7 @@
 //!
 //! Values mirror the WinUI 3 theme dictionaries the WinUI popup used through
 //! `ThemeRef`, so cards, strokes and text keep their exact contrast. The
-//! accent roles follow the same mapping `windows_reactor` installs for the
+//! accent roles follow the Fluent mapping shared with the
 //! Settings window (fill = Light2/Dark1, text = Light3/Dark2).
 
 use gpui::{Hsla, Rgba, SharedString};

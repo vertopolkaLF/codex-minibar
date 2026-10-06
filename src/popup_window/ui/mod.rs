@@ -1,16 +1,16 @@
 //! GPUI implementation of the tray popup.
 //!
-//! GPUI runs on a dedicated thread with its own message loop; WinUI keeps the
-//! process main thread for the Settings windows. The two only talk through
-//! [`super::PopupCommand`] (into GPUI) and the `UiMarshaller` (into WinUI).
+//! GPUI runs on a dedicated thread with its own message loop. It hosts the
+//! popup and the Settings/onboarding windows; other threads talk to it only
+//! through [`super::PopupCommand`].
 
 mod activity;
-mod assets;
+pub(crate) mod assets;
 mod cards;
 mod components;
 mod controls;
 mod footer;
-mod fx;
+pub(crate) mod fx;
 mod home;
 #[cfg(test)]
 pub(crate) use home::donut_segments;
@@ -19,7 +19,7 @@ mod backdrop;
 #[cfg(windows)]
 mod blur_effect;
 mod root;
-mod theme;
+pub(crate) mod theme;
 mod tooltip;
 mod usage;
 #[cfg(windows)]
@@ -143,7 +143,9 @@ fn run(
     Application::new()
         .with_assets(assets::PopupAssets)
         .run(move |cx| {
+            crate::settings_window::init(cx);
             let font_family = pick_font_family(cx);
+            let settings_state = Arc::clone(&state);
             // The tray starts hidden. Do not allocate large swap-chain/MSAA
             // surfaces before the user has even opened the popup.
             let initial = size(px(1.0), px(1.0));
@@ -194,6 +196,10 @@ fn run(
                     }
                 }
                 while let Some(command) = commands.next().await {
+                    if let PopupCommand::Settings(command) = command {
+                        crate::settings_window::handle(command, &settings_state, cx);
+                        continue;
+                    }
                     handle_command(command, &window, cx);
                 }
             })
@@ -258,6 +264,7 @@ fn handle_command(
         PopupCommand::AppearanceChanged => {
             let _ = window.update(cx, |root, window, cx| root.appearance_changed(window, cx));
         }
+        PopupCommand::Settings(_) => {}
         PopupCommand::Reposition => {
             #[cfg(windows)]
             {

@@ -1,4 +1,4 @@
-Always check docs and examples before doing UI work. LLM doesn't have great knowledge of WinUI 3. especially windows-rs.
+Always check docs and examples before doing UI work. LLM doesn't have great knowledge of GPUI; read the vendored `gpui` crate sources and its `examples/` in the cargo registry.
 
 Always run `cargo check` after changes related to the app to ensure the code is correct. No need to run it after changes related to the website.
 
@@ -8,11 +8,13 @@ All settings must take effect immediately in the running application. The user m
 
 ## Appearance initialization guardrails
 
-Theme and accent settings must be applied during application startup, before any window is shown. Do not rely on opening the Settings window, mounting an Appearance page, or a later rerender to initialize global appearance resources.
-
-WinUI accent brushes are application-global but their role mapping depends on the root element's resolved `ActualTheme`. If appearance is requested before a root exists, retain the requested palette without mutating brushes. After `SetContent`, install the requested theme on the root first, then resolve `ActualTheme` and apply the complete accent palette before activation or native popup display. Repeat the role mapping on every `ActualThemeChanged` event.
+Theme and accent settings must be applied during application startup, before any window is shown. Every GPUI window (popup, Settings, onboarding) resolves its palette from the current settings and `window.appearance()` on every frame; never cache a palette across appearance changes, and observe `observe_window_appearance` so Auto follows the system theme. `crate::theme::apply_appearance` only records the accent for the tray glyphs.
 
 Before finishing appearance work, review both cold-start paths (popup first and Settings first) for Auto, Light, and Dark themes. Opening or closing another window must never be required to correct colors. Always run `cargo check`; never launch the app for this verification.
+
+## Settings window
+
+The Settings and onboarding windows are GPUI windows in the same application as the popup (`src/settings_window`). Build UI from `kit.rs` components; every edit goes through `SettingsWindow::edit`, which updates the local snapshot immediately and queues the write on the serial settings writer. Committed changes from any surface flow back through `sync_open_window`.
 
 ## Provider UI guardrails
 

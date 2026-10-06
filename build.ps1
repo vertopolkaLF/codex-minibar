@@ -23,46 +23,10 @@ $AppExeName = "codex-minibar.exe"
 $NsisVersion = "3.11"
 $NsisUrl = "https://github.com/tauri-apps/binary-releases/releases/download/nsis-$NsisVersion/nsis-$NsisVersion.zip"
 
-# Windows App SDK / WinUI runtime files deployed by windows-reactor-setup::as_self_contained()
-# plus WebView2 Core DLL and the app binary.
+# GPUI renders every window, so the portable package is the app binary plus
+# its assets; no UI framework runtime is redistributed.
 $RuntimeFiles = @(
-    "codex-minibar.exe",
-    "CoreMessagingXP.dll",
-    "dcompi.dll",
-    "dwmcorei.dll",
-    "DwmSceneI.dll",
-    "DWriteCore.dll",
-    "marshal.dll",
-    "Microsoft.DirectManipulation.dll",
-    "Microsoft.Graphics.Imaging.dll",
-    "Microsoft.InputStateManager.dll",
-    "Microsoft.Internal.FrameworkUdk.dll",
-    "Microsoft.UI.Composition.OSSupport.dll",
-    "Microsoft.UI.dll",
-    "Microsoft.UI.Input.dll",
-    "Microsoft.UI.pri",
-    "Microsoft.UI.Windowing.Core.dll",
-    "Microsoft.UI.Windowing.dll",
-    "Microsoft.UI.Xaml.Controls.dll",
-    "Microsoft.UI.Xaml.Controls.pri",
-    "Microsoft.ui.xaml.dll",
-    "Microsoft.UI.Xaml.Internal.dll",
-    "Microsoft.UI.Xaml.Phone.dll",
-    "Microsoft.ui.xaml.resources.19h1.dll",
-    "Microsoft.ui.xaml.resources.common.dll",
-    "Microsoft.Web.WebView2.Core.dll",
-    "Microsoft.Windows.ApplicationModel.Resources.dll",
-    "Microsoft.WindowsAppRuntime.dll",
-    "Microsoft.WindowsAppRuntime.pri",
-    "MRM.dll",
-    "resources.pri",
-    "SessionHandleIPCProxyStub.dll",
-    "WinUIEdit.dll",
-    "wuceffectsi.dll"
-)
-
-$RuntimeDirs = @(
-    "Microsoft.UI.Xaml"
+    "codex-minibar.exe"
 )
 
 $TargetMap = [ordered]@{
@@ -82,11 +46,7 @@ function Get-CargoVersion {
 }
 
 $RequiredRuntimeFiles = @(
-    "codex-minibar.exe",
-    "Microsoft.ui.xaml.dll",
-    "Microsoft.WindowsAppRuntime.dll",
-    "Microsoft.Web.WebView2.Core.dll",
-    "resources.pri"
+    "codex-minibar.exe"
 )
 
 function Copy-RuntimeItem {
@@ -110,20 +70,6 @@ function Copy-RuntimeItem {
     }
 
     Copy-Item -LiteralPath $Source -Destination $Destination -Recurse -Force
-}
-
-function Clear-WasMsixExtractCache {
-    # windows-reactor-setup extracts MSIX into a shared folder without an arch
-    # suffix. Clear it before each target so cross-arch builds do not reuse the
-    # wrong native DLLs.
-    $candidates = @(
-        (Join-Path $env:LOCALAPPDATA "windows-reactor-setup\temp\Microsoft.WindowsAppSDK.Runtime-2.4.0\.msix_extract")
-    )
-    foreach ($path in $candidates) {
-        if (Test-Path -LiteralPath $path) {
-            Remove-Item -LiteralPath $path -Recurse -Force
-        }
-    }
 }
 
 function Ensure-RustTarget {
@@ -234,30 +180,9 @@ function New-PortablePackage {
             -Optional:$optional
     }
 
-    foreach ($name in $RuntimeDirs) {
-        Copy-RuntimeItem `
-            -Source (Join-Path $ReleaseDir $name) `
-            -Destination (Join-Path $PackageDir $name) `
-            -Optional
-    }
-
     Copy-RuntimeItem `
         -Source (Join-Path $Root "assets") `
         -Destination (Join-Path $PackageDir "assets")
-
-    $skipDirs = @("deps", "build", "incremental", "examples", ".fingerprint", "Microsoft.UI.Xaml")
-    $localeDirs = Get-ChildItem -LiteralPath $ReleaseDir -Directory | Where-Object {
-        $name = $_.Name
-        $name -notin $skipDirs -and (
-            (Test-Path -LiteralPath (Join-Path $_.FullName "Microsoft.ui.xaml.dll.mui")) -or
-            (Test-Path -LiteralPath (Join-Path $_.FullName "Microsoft.UI.Xaml.Phone.dll.mui")) -or
-            ($name -match '^[a-z]{2}(-[A-Za-z0-9]+)+$')
-        )
-    }
-
-    foreach ($dir in $localeDirs) {
-        Copy-RuntimeItem -Source $dir.FullName -Destination (Join-Path $PackageDir $dir.Name)
-    }
 }
 
 function New-ZipFromDirectory {
@@ -439,7 +364,6 @@ try {
         Write-Host "======== $archName ($triple) ========"
         Import-VisualStudioBuildEnvironment -Architecture $archName
         Ensure-RustTarget -Triple $triple
-        Clear-WasMsixExtractCache
 
         Write-Host "==> cargo build --release --target $triple"
         & cargo build --release --target $triple --locked
@@ -483,10 +407,6 @@ finally {
 Write-Host ""
 Write-Host "Cleaning staging..."
 Remove-Item -LiteralPath $StageRoot -Recurse -Force -ErrorAction SilentlyContinue
-
-# Leave the shared WAS extract cache empty so the next host `cargo run` does
-# not pick up the last cross-arch runtime DLLs.
-Clear-WasMsixExtractCache
 
 Write-Host ""
 Write-Host "Done."

@@ -1,24 +1,61 @@
-use super::platform::choose_settings_file;
-use super::*;
+//! Settings persistence shared by the Settings window, onboarding and popup.
+//!
+//! Every write reloads the file, applies one change, saves, applies runtime
+//! effects and broadcasts the result. Settings-window edits go through one
+//! serial writer thread so rapid toggles never interleave their
+//! load-modify-save cycles and never block the UI thread on disk I/O.
 
-pub(super) fn persist_bool(
-    setter: SetState<bool>,
+use std::sync::{
+    LazyLock, Mutex,
+    atomic::{AtomicUsize, Ordering},
+    mpsc::{self, Sender},
+};
+
+use anyhow::Context as _;
+
+use crate::settings::Settings;
+
+type Edit = Box<dyn FnOnce(&mut Settings) + Send>;
+type Job = (Sender<Settings>, Edit);
+
+/// Edits queued but not yet committed. While any are pending, live syncs of
+/// intermediate results are ignored so the window never flickers back.
+static PENDING: AtomicUsize = AtomicUsize::new(0);
+
+static WRITER: LazyLock<Mutex<Sender<Job>>> = LazyLock::new(|| {
+    let (tx, rx) = mpsc::channel::<Job>();
+    let spawned = std::thread::Builder::new()
+        .name("settings-writer".into())
+        .spawn(move || {
+            while let Ok((settings_tx, edit)) = rx.recv() {
+                persist_update(settings_tx, edit);
+                PENDING.fetch_sub(1, Ordering::SeqCst);
+            }
+        });
+    if let Err(error) = spawned {
+        eprintln!("could not start the settings writer: {error}");
+    }
+    Mutex::new(tx)
+});
+
+/// Queue an edit on the serial writer.
+pub(crate) fn queue(
     settings_tx: Sender<Settings>,
-    value: bool,
-    update: impl FnOnce(&mut Settings, bool),
+    edit: impl FnOnce(&mut Settings) + Send + 'static,
 ) {
-    setter.call(value);
-    persist_update(settings_tx, |settings| update(settings, value));
+    PENDING.fetch_add(1, Ordering::SeqCst);
+    let sent = WRITER
+        .lock()
+        .map(|writer| writer.send((settings_tx, Box::new(edit))).is_ok())
+        .unwrap_or(false);
+    if !sent {
+        PENDING.fetch_sub(1, Ordering::SeqCst);
+        eprintln!("failed to queue a settings change: writer unavailable");
+    }
 }
 
-pub(super) fn persist_u8(
-    setter: SetState<u8>,
-    settings_tx: Sender<Settings>,
-    value: u8,
-    update: impl FnOnce(&mut Settings, u8),
-) {
-    setter.call(value);
-    persist_update(settings_tx, |settings| update(settings, value));
+pub(crate) fn has_pending() -> bool {
+    PENDING.load(Ordering::SeqCst) > 0
 }
 
 pub(crate) fn persist_update(settings_tx: Sender<Settings>, update: impl FnOnce(&mut Settings)) {
@@ -63,7 +100,7 @@ pub(crate) fn try_persist_update_fallible(
     })
 }
 
-pub(super) fn replace_settings(
+pub(crate) fn replace_settings(
     settings_tx: Sender<Settings>,
     mut settings: Settings,
 ) -> anyhow::Result<()> {
@@ -79,17 +116,12 @@ pub(super) fn replace_settings(
     Ok(())
 }
 
-pub(super) fn export_settings() -> anyhow::Result<()> {
-    let Some(path) = choose_settings_file(true)? else {
-        return Ok(());
-    };
-    let current_path = Settings::default_path()?;
-    Settings::load_or_create(&current_path)?.save(&path)
-}
-
-pub(super) fn import_settings() -> anyhow::Result<Option<Settings>> {
-    let Some(path) = choose_settings_file(false)? else {
-        return Ok(None);
-    };
-    Settings::load_or_create(&path).map(Some)
+pub(crate) fn load_settings_for_window() -> Settings {
+    match Settings::default_path().and_then(|path| Settings::load_or_create(&path)) {
+        Ok(settings) => settings,
+        Err(error) => {
+            eprintln!("failed to load settings for window: {error:#}");
+            Settings::default()
+        }
+    }
 }

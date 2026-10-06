@@ -849,15 +849,7 @@ impl PopupRoot {
     }
 
     pub(super) fn open_settings(&mut self) {
-        let settings_tx = self.state.settings_tx.clone();
-        let usage_actions_tx = self.state.usage_actions_tx.clone();
-        let updates = Arc::clone(&self.state.updates);
-        crate::settings_runtime::dispatch_window(move || {
-            if let Err(error) = crate::settings_window::open(settings_tx, usage_actions_tx, updates)
-            {
-                eprintln!("Could not open settings window: {error:?}");
-            }
-        });
+        crate::settings_window::open();
     }
 
     pub(super) fn install_update(&mut self) {

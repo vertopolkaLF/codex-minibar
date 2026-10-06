@@ -20,14 +20,14 @@
   <img src="https://img.shields.io/github/downloads/vertopolkalf/codex-minibar/total?style=flat-square" alt="Downloads">
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-blue?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/Rust-2024-orange?style=flat-square" alt="Rust edition">
-  <img src="https://img.shields.io/badge/UI-WinUI%203-green?style=flat-square" alt="UI framework">
+  <img src="https://img.shields.io/badge/UI-GPUI-green?style=flat-square" alt="UI framework">
 </p>
 
 ---
 
 ## Overview
 
-Codex Minibar reads quota data from locally authenticated provider sessions and keeps subscription limits and reset times visible in the notification area. It is a native Windows application written in Rust: a GPUI tray popup and WinUI 3 settings.
+Codex Minibar reads quota data from locally authenticated provider sessions and keeps subscription limits and reset times visible in the notification area. It is a native Windows application written in Rust, with the tray popup and Settings both rendered by GPUI.
 
 > Codex Minibar is an independent project. It is not affiliated with, endorsed by, or sponsored by OpenAI.
 
@@ -197,10 +197,11 @@ This produces architecture-specific portable ZIP files and NSIS installers under
 
 ## Development
 
-The tray popup is rendered with [GPUI](https://gpui.rs) on its own thread, with an opaque
-theme-aware background. The Settings windows use [windows-reactor](https://github.com/microsoft/windows-rs/pull/4479)
-with WinUI 3; the Windows App SDK 2.4.0 runtime is bundled through `windows-reactor-setup`
-self-contained deployment.
+Every window is rendered with [GPUI](https://gpui.rs) on one dedicated UI thread: the tray
+popup, the Settings window and the first-launch onboarding. Settings controls (toggles,
+dropdowns, sliders, text inputs, dialogs) live in `src/settings_window/kit.rs` and
+`src/settings_window/input.rs`. No UI framework runtime is redistributed; the release
+package is the executable plus its `assets` folder.
 CI checks formatting, lints, and tests on Windows.
 
 ### Stream Deck companion

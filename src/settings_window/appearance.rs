@@ -1,230 +1,329 @@
-use super::persistence::{persist_bool, persist_update};
-use super::shared::settings_section_heading;
-use super::*;
+//! Appearance: theme, accent, icons, time format, popup material and motion.
 
-const RADIUS_SLIDER_WIDTH: f64 = 136.0;
+use gpui::{
+    AnyElement, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled, div, prelude::FluentBuilder, px, relative,
+};
 
-pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Element>) {
-    let theme = ctx.theme;
-    let accent_color = ctx.accent_color;
-    let animations_enabled = ctx.animations_enabled;
-    let bottom_bar_size = ctx.bottom_bar_size;
-    let popup_corner_radius = ctx.popup_corner_radius;
-    let popup_background_material = ctx.popup_background_material;
-    let time_format = ctx.time_format;
-    let use_colored_sidebar_icons = ctx.use_colored_sidebar_icons;
-    let set_theme = ctx.set_theme.clone();
-    let set_accent_color = ctx.set_accent_color.clone();
-    let set_animations_enabled = ctx.set_animations_enabled.clone();
-    let set_bottom_bar_size = ctx.set_bottom_bar_size.clone();
-    let set_popup_corner_radius = ctx.set_popup_corner_radius.clone();
-    let set_popup_background_material = ctx.set_popup_background_material.clone();
-    let set_time_format = ctx.set_time_format.clone();
-    let set_use_colored_sidebar_icons = ctx.set_use_colored_sidebar_icons.clone();
-    let theme_navigation_guard = ctx.theme_navigation_guard.clone();
-    let theme_navigation_guard_timer = ctx.theme_navigation_guard_timer.clone();
-    let hovered_card_id = ctx.hovered_card_id;
-    let set_hovered_card_id = ctx.set_hovered_card_id.clone();
-    let settings_tx = ctx.settings_tx.clone();
-    let apply_theme = settings_tx.clone();
-    let apply_accent_color = settings_tx.clone();
-    let apply_animations_enabled = settings_tx.clone();
-    let apply_bottom_bar_size = settings_tx.clone();
-    let apply_popup_corner_radius = settings_tx.clone();
-    let apply_popup_background_material = settings_tx.clone();
-    let apply_time_format = settings_tx.clone();
-    let apply_use_colored_sidebar_icons = settings_tx.clone();
-    let appearance_rows = vec![
-        settings_control_card(
-            "Color theme",
-            None,
-            ComboBox::new(["Windows", "Light", "Dark"])
-                .selected_index(theme.index())
-                .on_selection_changed(move |choice| {
-                    let value = AppTheme::from_index(choice);
-                    theme_navigation_guard.set(true);
-                    let guard = theme_navigation_guard.clone();
-                    match DispatcherTimer::new_one_shot(Duration::from_millis(350), move || {
-                        guard.set(false)
-                    }) {
-                        Ok(timer) => theme_navigation_guard_timer.set(Some(timer)),
-                        Err(_) => theme_navigation_guard.set(false),
-                    }
-                    set_theme.call(value);
-                    crate::theme::apply_appearance(value, accent_color);
-                    persist_update(apply_theme.clone(), move |settings| {
-                        settings.theme = value;
-                    });
-                }),
-            "appearance-theme",
-            hovered_card_id,
-            set_hovered_card_id.clone(),
-        )
-        .with_key("appearance-theme"),
-        settings_control_card(
-            "Accent color",
-            None,
-            ComboBox::new([
-                "Windows", "Blue", "Purple", "Pink", "Red", "Orange", "Green", "Teal",
-            ])
-            .selected_index(accent_color.index())
-            .on_selection_changed(move |choice| {
-                let value = AccentColor::from_index(choice);
-                set_accent_color.call(value);
-                crate::theme::apply_appearance(theme, value);
-                persist_update(apply_accent_color.clone(), move |settings| {
-                    settings.accent_color = value;
-                });
-            }),
-            "appearance-accent",
-            hovered_card_id,
-            set_hovered_card_id.clone(),
-        )
-        .with_key("appearance-accent"),
-        settings_toggle_card(
-            "Use monochrome icons",
-            !use_colored_sidebar_icons,
-            {
-                let set_use_colored_sidebar_icons = set_use_colored_sidebar_icons.clone();
-                let apply_use_colored_sidebar_icons = apply_use_colored_sidebar_icons.clone();
-                move |value: bool| {
-                    persist_bool(
-                        set_use_colored_sidebar_icons.clone(),
-                        apply_use_colored_sidebar_icons.clone(),
-                        !value,
-                        |settings, value| {
-                            settings.use_colored_sidebar_icons = value;
+use super::kit::{self, Kit, Row, SliderRange, eid};
+use super::window::SettingsWindow;
+use crate::popup_window::ui::theme::{HslaExt, rgb8};
+use crate::settings::{
+    AccentColor, AppTheme, BottomBarSize, PopupBackgroundMaterial, PopupCornerRadius, TimeFormat,
+};
+
+const ACCENTS: [AccentColor; 8] = [
+    AccentColor::Windows,
+    AccentColor::Blue,
+    AccentColor::Purple,
+    AccentColor::Pink,
+    AccentColor::Red,
+    AccentColor::Orange,
+    AccentColor::Green,
+    AccentColor::Teal,
+];
+
+impl SettingsWindow {
+    pub(super) fn appearance_page(
+        &mut self,
+        k: &mut Kit,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let s = &self.settings;
+        let (theme, accent) = (s.theme, s.accent_color);
+        let colored_sidebar = s.use_colored_sidebar_icons;
+        let time_format = s.time_format;
+        let material = s.popup_background_material;
+        let bar = s.bottom_bar_size;
+        let radius = s.popup_corner_radius;
+        let animations = s.animations_enabled;
+
+        let theme_cards = div().flex().gap(px(12.0)).w_full().children(
+            [
+                (AppTheme::Auto, "Windows"),
+                (AppTheme::Light, "Light"),
+                (AppTheme::Dark, "Dark"),
+            ]
+            .into_iter()
+            .map(|(value, label)| self.theme_card(k, value, label, value == theme, cx)),
+        );
+        let colors = self.accent_swatches(k, accent, cx);
+        let look = kit::card_of(k, |k| {
+            vec![
+                Row::new("appearance-theme", "Color theme")
+                    .description(k, "Applies to Settings, the popup and its tray menu.")
+                    .detail(div().pt(px(12.0)).child(theme_cards).into_any_element())
+                    .render(k),
+                Row::new("appearance-accent", "Accent color")
+                    .description(k, "Windows follows your system accent.")
+                    .detail(div().pt(px(12.0)).child(colors).into_any_element())
+                    .render(k),
+                kit::toggle_row(
+                    k,
+                    "appearance-mono-sidebar",
+                    "Use monochrome icons",
+                    Some("Show single-color glyphs in the Settings sidebar.".into()),
+                    !colored_sidebar,
+                    Self::h(cx, |this, mono: bool, _, cx| {
+                        this.edit(cx, move |settings| {
+                            settings.use_colored_sidebar_icons = !mono
+                        })
+                    }),
+                ),
+                Row::new("appearance-time", "Time format")
+                    .trailing(kit::segmented(
+                        k,
+                        "appearance-time-format",
+                        &["12-hour", "24-hour"],
+                        time_format.index().max(0) as usize,
+                        false,
+                        Self::h(cx, |this, index: usize, _, cx| {
+                            let value = TimeFormat::from_index(index as i32);
+                            value.apply();
+                            this.edit(cx, move |settings| settings.time_format = value)
+                        }),
+                    ))
+                    .render(k),
+            ]
+        });
+
+        let radius_value = radius.dip();
+        let popup = kit::card_of(k, |k| {
+            vec![
+                Row::new("appearance-material", "Popup background")
+                    .trailing(kit::segmented(
+                        k,
+                        "appearance-material",
+                        &["Acrylic", "Mica"],
+                        material.index().max(0) as usize,
+                        false,
+                        Self::h(cx, |this, index: usize, _, cx| {
+                            let value = PopupBackgroundMaterial::from_index(index as i32);
+                            this.edit(cx, move |settings| {
+                                settings.popup_background_material = value
+                            })
+                        }),
+                    ))
+                    .render(k),
+                Row::new("appearance-bar", "Bottom bar size")
+                    .trailing(kit::segmented(
+                        k,
+                        "appearance-bar",
+                        &["Comfortable", "Compact"],
+                        bar.index().max(0) as usize,
+                        false,
+                        Self::h(cx, |this, index: usize, _, cx| {
+                            let value = BottomBarSize::from_index(index as i32);
+                            this.edit(cx, move |settings| settings.bottom_bar_size = value)
+                        }),
+                    ))
+                    .render(k),
+                Row::new("appearance-radius", "Popup corner radius")
+                    .trailing(kit::slider(
+                        k,
+                        "appearance-radius",
+                        radius_value as f32,
+                        SliderRange {
+                            min: 0.0,
+                            max: 20.0,
+                            step: 4.0,
                         },
-                    );
+                        160.0,
+                        Self::h(cx, move |this, value: f32, _, cx| {
+                            let value = PopupCornerRadius::from_dip(value.round() as i32);
+                            if this.settings.popup_corner_radius != value {
+                                this.edit(cx, move |settings| settings.popup_corner_radius = value)
+                            }
+                        }),
+                    ))
+                    .trailing(
+                        div()
+                            .w(px(40.0))
+                            .text_right()
+                            .text_size(px(13.0))
+                            .text_color(k.theme.text_secondary)
+                            .child(format!("{radius_value} px"))
+                            .into_any_element(),
+                    )
+                    .render(k),
+            ]
+        });
+
+        let motion = kit::card_of(k, |k| {
+            vec![kit::toggle_row(
+                k,
+                "appearance-animations",
+                "Animation effects",
+                Some(
+                    "Glide transitions in the popup and Settings. Windows' own animation setting is also respected."
+                        .into(),
+                ),
+                animations,
+                Self::h(cx, |this, value: bool, _, cx| {
+                    crate::theme::set_animations_enabled(value);
+                    this.edit(cx, move |settings| settings.animations_enabled = value)
+                }),
+            )]
+        });
+
+        vec![
+            look,
+            kit::section_heading(k, "Popup"),
+            popup,
+            kit::section_heading(k, "Motion"),
+            motion,
+        ]
+    }
+
+    /// A miniature window preview for one theme choice.
+    fn theme_card(
+        &self,
+        k: &Kit,
+        value: AppTheme,
+        label: &'static str,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = &k.theme;
+        let accent = theme.accent;
+        let mock = |dark: bool| {
+            let (bg, card, line) = if dark {
+                (
+                    rgb8((0x20, 0x20, 0x20)),
+                    rgb8((0x2D, 0x2D, 0x2D)),
+                    rgb8((0x55, 0x55, 0x55)),
+                )
+            } else {
+                (
+                    rgb8((0xF3, 0xF3, 0xF3)),
+                    rgb8((0xFF, 0xFF, 0xFF)),
+                    rgb8((0xD0, 0xD0, 0xD0)),
+                )
+            };
+            div()
+                .flex_1()
+                .h_full()
+                .bg(bg)
+                .p(px(8.0))
+                .flex()
+                .flex_col()
+                .gap(px(5.0))
+                .child(div().h(px(6.0)).w(px(28.0)).rounded_full().bg(accent))
+                .child(
+                    div()
+                        .flex_1()
+                        .rounded(px(4.0))
+                        .bg(card)
+                        .p(px(6.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.0))
+                        .child(div().h(px(4.0)).w(relative(0.7)).rounded_full().bg(line))
+                        .child(div().h(px(4.0)).w(relative(0.45)).rounded_full().bg(line)),
+                )
+        };
+        let preview = div()
+            .h(px(78.0))
+            .w_full()
+            .flex()
+            .rounded(px(6.0))
+            .overflow_hidden()
+            .border_1()
+            .border_color(theme.card_stroke)
+            .map(|el| match value {
+                AppTheme::Auto => el.child(mock(false)).child(mock(true)),
+                AppTheme::Light => el.child(mock(false)),
+                AppTheme::Dark => el.child(mock(true)),
+            });
+        let hover = theme.card_hover;
+        div()
+            .id(eid(format!("theme-card-{label}")))
+            .flex_1()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .p(px(8.0))
+            .rounded(px(kit::CARD_RADIUS))
+            .border_2()
+            .border_color(if selected {
+                theme.accent
+            } else {
+                theme.card_stroke
+            })
+            .cursor_pointer()
+            .hover(move |style| style.bg(hover))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if this.settings.theme != value {
+                    this.edit(cx, move |settings| settings.theme = value);
                 }
-            },
-            "appearance-monochrome-sidebar-icons",
-            hovered_card_id,
-            set_hovered_card_id.clone(),
-        )
-        .with_key("appearance-monochrome-sidebar-icons"),
-        settings_control_card(
-            "Time format",
-            None,
-            ComboBox::new(["12-hour", "24-hour"])
-                .selected_index(time_format.index())
-                .on_selection_changed(move |choice| {
-                    let value = TimeFormat::from_index(choice);
-                    set_time_format.call(value);
-                    value.apply();
-                    persist_update(apply_time_format.clone(), move |settings| {
-                        settings.time_format = value;
-                    });
-                }),
-            "appearance-time-format",
-            hovered_card_id,
-            set_hovered_card_id.clone(),
-        )
-        .with_key("appearance-time-format"),
-        settings_section_heading("Popup").with_key("appearance-popup-heading"),
-        settings_control_card(
-            "Popup background",
-            None,
-            ComboBox::new(["Acrylic", "Mica"])
-                .selected_index(popup_background_material.index())
-                .on_selection_changed(move |choice| {
-                    let value = PopupBackgroundMaterial::from_index(choice);
-                    if value == popup_background_material {
-                        return;
-                    }
-                    set_popup_background_material.call(value);
-                    crate::popup::apply_popup_appearance(
-                        bottom_bar_size,
-                        popup_corner_radius,
-                        value,
-                    );
-                    persist_update(apply_popup_background_material.clone(), move |settings| {
-                        settings.popup_background_material = value;
-                    });
-                }),
-            "appearance-popup-background",
-            hovered_card_id,
-            set_hovered_card_id.clone(),
-        )
-        .with_key("appearance-popup-background"),
-        settings_control_card(
-            "Bottom bar size",
-            None,
-            ComboBox::new(["Comfortable", "Compact"])
-                .selected_index(bottom_bar_size.index())
-                .on_selection_changed(move |choice| {
-                    let value = BottomBarSize::from_index(choice);
-                    set_bottom_bar_size.call(value);
-                    crate::popup::apply_popup_appearance(
-                        value,
-                        popup_corner_radius,
-                        popup_background_material,
-                    );
-                    persist_update(apply_bottom_bar_size.clone(), move |settings| {
-                        settings.bottom_bar_size = value;
-                    });
-                }),
-            "appearance-bottom-bar-size",
-            hovered_card_id,
-            set_hovered_card_id.clone(),
-        )
-        .with_key("appearance-bottom-bar-size"),
-        settings_control_card(
-            "Popup corner radius",
-            None,
-            hstack((
-                Slider::new(f64::from(popup_corner_radius.dip()))
-                    .range(0.0, 20.0)
-                    .step(4.0)
-                    .on_value_changed(move |raw_value: f64| {
-                        let value = PopupCornerRadius::from_dip(raw_value.round() as i32);
-                        if value == popup_corner_radius {
-                            return;
+            }))
+            .child(preview)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .text_size(px(13.0))
+                    .when(selected, |el| el.font_weight(FontWeight::SEMIBOLD))
+                    .child(label),
+            )
+            .into_any_element()
+    }
+
+    fn accent_swatches(&self, k: &Kit, current: AccentColor, cx: &mut Context<Self>) -> AnyElement {
+        let theme = &k.theme;
+        let mut row = div().flex().flex_wrap().gap(px(10.0));
+        for (index, accent) in ACCENTS.into_iter().enumerate() {
+            let ramp = crate::theme::accent_ramp(accent);
+            let fill = rgb8(ramp.fill(theme.dark));
+            let selected = accent == current;
+            let label = [
+                "Windows", "Blue", "Purple", "Pink", "Red", "Orange", "Green", "Teal",
+            ][index];
+            let swatch = div()
+                .id(eid(format!("accent-{label}")))
+                .size(px(34.0))
+                .rounded_full()
+                .p(px(3.0))
+                .border_2()
+                .border_color(if selected {
+                    theme.text
+                } else {
+                    gpui::transparent_black()
+                })
+                .cursor_pointer()
+                .hover({
+                    let ring = theme.text.alpha(0.4);
+                    move |style| {
+                        if selected {
+                            style
+                        } else {
+                            style.border_color(ring)
                         }
-                        set_popup_corner_radius.call(value);
-                        crate::popup::apply_popup_appearance(
-                            bottom_bar_size,
-                            value,
-                            popup_background_material,
-                        );
-                        persist_update(apply_popup_corner_radius.clone(), move |settings| {
-                            settings.popup_corner_radius = value;
-                        });
-                    })
-                    .width(RADIUS_SLIDER_WIDTH)
-                    .height(32.0),
-                text_block(popup_corner_radius.dip().to_string())
-                    .font_size(14.0)
-                    .width(24.0)
-                    .horizontal_alignment(HorizontalAlignment::Right)
-                    .vertical_alignment(VerticalAlignment::Center),
-            ))
-            .spacing(8.0)
-            .vertical_alignment(VerticalAlignment::Center)
-            .horizontal_alignment(HorizontalAlignment::Stretch),
-            "appearance-popup-corner-radius",
-            hovered_card_id,
-            set_hovered_card_id.clone(),
-        )
-        .with_key("appearance-popup-corner-radius"),
-        settings_section_heading("Motion").with_key("appearance-motion-heading"),
-        settings_toggle_card(
-            "Animation effects",
-            animations_enabled,
-            move |value| {
-                crate::theme::set_animations_enabled(value);
-                persist_bool(
-                    set_animations_enabled.clone(),
-                    apply_animations_enabled.clone(),
-                    value,
-                    |settings, value| settings.animations_enabled = value,
+                    }
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if this.settings.accent_color != accent {
+                        this.edit(cx, move |settings| settings.accent_color = accent);
+                    }
+                }))
+                .child(
+                    div()
+                        .size_full()
+                        .rounded_full()
+                        .bg(fill)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .when(accent == AccentColor::Windows, |el| {
+                            el.child(kit::icon("desktop-fill", 12.0, theme.on_accent))
+                        })
+                        .when(selected && accent != AccentColor::Windows, |el| {
+                            el.child(kit::icon("check-bold", 12.0, theme.on_accent))
+                        }),
                 );
-            },
-            "appearance-animations",
-            hovered_card_id,
-            set_hovered_card_id.clone(),
-        )
-        .with_key("appearance-animations"),
-    ];
-    ("Appearance", appearance_rows)
+            row = row.child(kit::with_tooltip(k, swatch, label));
+        }
+        row.into_any_element()
+    }
 }

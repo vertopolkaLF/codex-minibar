@@ -1,78 +1,115 @@
-use super::shared::log_view_card;
-use super::*;
+//! Log: troubleshooting entry points and a live tail of log.txt.
 
-pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Element>) {
-    let log_content = ctx.log_content;
-    let hovered_card_id = ctx.hovered_card_id;
-    let set_hovered_card_id = ctx.set_hovered_card_id.clone();
-    // Troubleshooting uses the CLIs configured on the first instances.
-    let binary = |driver: ProviderKind| {
-        ctx.instances
-            .iter()
-            .find(|instance| instance.driver == driver)
-            .and_then(|instance| instance.binary_path.clone())
-    };
-    let codex_path = binary(ProviderKind::Codex);
-    let claude_path = binary(ProviderKind::Claude);
-    let set_troubleshoot_picker = ctx.set_troubleshoot_picker.clone();
-    (
-        "Log",
-        vec![
-            settings_action_card(
-                "Run Troubleshoot with AI",
-                "Choose tool",
-                move || {
-                    let tools = crate::troubleshoot::available_tools(
-                        codex_path.as_deref(),
-                        claude_path.as_deref(),
-                    );
-                    if tools.is_empty() {
-                        crate::notifications::show(
-                            "No supported AI tool found",
-                            "Install Codex or Claude Code and make it available to Minibar.",
-                        );
-                    } else {
-                        set_troubleshoot_picker
-                            .call(Some(crate::troubleshoot::ToolPickerState::new(tools)));
-                    }
-                },
-                "log-run-troubleshoot",
-                hovered_card_id,
-                set_hovered_card_id.clone(),
-            )
-            .with_key("log-run-troubleshoot"),
-            settings_action_card(
-                "Application log",
-                "Open log.txt",
-                || {
-                    if let Err(error) = crate::logger::open() {
-                        eprintln!("failed to open log.txt: {error:#}");
-                        crate::notifications::show("Could not open log.txt", &error.to_string());
-                    }
-                },
-                "log-open-file",
-                hovered_card_id,
-                set_hovered_card_id.clone(),
-            )
-            .with_key("log-open-file"),
-            settings_action_card(
-                "Logs folder",
-                "Open folder",
-                || {
-                    if let Err(error) = crate::logger::open_folder() {
-                        eprintln!("failed to open logs folder: {error:#}");
-                        crate::notifications::show(
-                            "Could not open logs folder",
-                            &error.to_string(),
-                        );
-                    }
-                },
-                "log-open-folder",
-                hovered_card_id,
-                set_hovered_card_id.clone(),
-            )
-            .with_key("log-open-folder"),
-            log_view_card(log_content).with_key("log-live-tail"),
-        ],
-    )
+use gpui::{
+    AnyElement, Context, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled, div, px,
+};
+
+use super::kit::{self, Button, Kit, Row};
+use super::window::SettingsWindow;
+use crate::settings::ProviderKind;
+
+impl SettingsWindow {
+    pub(super) fn log_page(&mut self, k: &mut Kit, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        if self.log.is_empty() {
+            self.log = crate::logger::tail_lines(100)
+                .unwrap_or_else(|error| error.to_string())
+                .into();
+        }
+        let actions = kit::card_of(k, |k| {
+            vec![
+                Row::new("log-troubleshoot", "Run Troubleshoot with AI")
+                    .icon(kit::row_icon(k, "sparkle-fill"))
+                    .description(
+                        k,
+                        "Let an installed AI CLI read the log and investigate a problem.",
+                    )
+                    .trailing(
+                        Button::new("log-troubleshoot", "Choose tool")
+                            .accent()
+                            .on_click(Self::h(cx, |this, (), _, cx| this.open_troubleshoot(cx)))
+                            .render(k),
+                    )
+                    .render(k),
+                Row::new("log-file", "Application log")
+                    .icon(kit::row_icon(k, "file-text-fill"))
+                    .description(k, "log.txt in the app data folder.")
+                    .trailing(
+                        Button::new("log-open-file", "Open log.txt")
+                            .on_click(kit::handler(|(), _, _| {
+                                if let Err(error) = crate::logger::open() {
+                                    eprintln!("failed to open log.txt: {error:#}");
+                                    crate::notifications::show(
+                                        "Could not open log.txt",
+                                        &error.to_string(),
+                                    );
+                                }
+                            }))
+                            .render(k),
+                    )
+                    .trailing(
+                        Button::icon_only("log-open-folder", "folder-open-fill")
+                            .tooltip("Open logs folder")
+                            .on_click(kit::handler(|(), _, _| {
+                                if let Err(error) = crate::logger::open_folder() {
+                                    eprintln!("failed to open logs folder: {error:#}");
+                                    crate::notifications::show(
+                                        "Could not open logs folder",
+                                        &error.to_string(),
+                                    );
+                                }
+                            }))
+                            .render(k),
+                    )
+                    .render(k),
+            ]
+        });
+        let theme = &k.theme;
+        let text = if self.log.is_empty() {
+            "No log events yet.".into()
+        } else {
+            self.log.clone()
+        };
+        let tail = div()
+            .id("log-tail")
+            .h(px(380.0))
+            .w_full()
+            .overflow_y_scroll()
+            .rounded(px(kit::CARD_RADIUS))
+            .border_1()
+            .border_color(theme.card_stroke)
+            .bg(theme.card)
+            .p(px(14.0))
+            .font_family(theme.mono_font.clone())
+            .text_size(px(12.0))
+            .line_height(px(18.0))
+            .text_color(theme.text_secondary)
+            .child(text)
+            .into_any_element();
+        vec![actions, kit::section_heading(k, "Live tail"), tail]
+    }
+
+    fn open_troubleshoot(&mut self, cx: &mut gpui::Context<Self>) {
+        // Troubleshooting uses the CLIs configured on the first instances.
+        let binary = |driver: ProviderKind| {
+            self.settings
+                .instances
+                .iter()
+                .find(|instance| instance.driver == driver)
+                .and_then(|instance| instance.binary_path.clone())
+        };
+        let tools = crate::troubleshoot::available_tools(
+            binary(ProviderKind::Codex).as_deref(),
+            binary(ProviderKind::Claude).as_deref(),
+        );
+        if tools.is_empty() {
+            crate::notifications::show(
+                "No supported AI tool found",
+                "Install Codex or Claude Code and make it available to Minibar.",
+            );
+        } else {
+            self.troubleshoot = Some(crate::troubleshoot::ToolPickerState::new(tools));
+            cx.notify();
+        }
+    }
 }

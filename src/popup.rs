@@ -1,9 +1,9 @@
 //! Thread-safe façade over the GPUI tray popup.
 //!
 //! The popup is rendered by GPUI on its own thread (see
-//! [`crate::popup_window::ui`]). The tray bridge, the Stream Deck server and
-//! the WinUI settings windows only post commands and read the shared flags
-//! below; none of them ever touches GPUI state directly.
+//! [`crate::popup_window::ui`]). The tray bridge and the Stream Deck server
+//! only post commands and read the shared flags below; none of them ever
+//! touches GPUI state directly.
 //!
 //! Geometry model: the native window is a fixed, monitor-sized technical host
 //! anchored to the monitor's right edge above the taskbar. The visible capsule
