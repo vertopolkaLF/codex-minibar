@@ -126,7 +126,7 @@ const INITIAL_HEIGHT: f32 = 300.0;
 /// Last measured Home block and column bounds (window coordinates).
 #[derive(Default)]
 pub(super) struct WidgetLayout {
-    pub(super) widgets: HashMap<PopupWidgetKind, Bounds<Pixels>>,
+    pub(super) widgets: HashMap<HomeWidgetId, Bounds<Pixels>>,
     pub(super) columns: [Option<Bounds<Pixels>>; 2],
 }
 
@@ -189,8 +189,8 @@ pub(crate) struct PopupRoot {
     pub(super) pages: HashMap<PopupView, PageMetrics>,
     pub(super) widget_bounds: Rc<RefCell<WidgetLayout>>,
     pub(super) usage_spinner_started: Option<Instant>,
-    pub(super) widget_drag: Option<PopupWidgetKind>,
-    pub(super) widget_drop: Option<(PopupWidgetKind, Option<usize>)>,
+    pub(super) widget_drag: Option<HomeWidgetId>,
+    pub(super) widget_drop: Option<(HomeWidgetId, Option<usize>)>,
     pub(super) tab_drag: Option<ProviderKind>,
     pub(super) tab_drop: Option<ProviderKind>,
     pub(super) refresh_started: Option<Instant>,
@@ -574,7 +574,7 @@ impl PopupRoot {
         self.pager.outgoing.is_none()
             && self.profile_fade_started.is_none()
             && self.widget_drag.is_none()
-            && PopupWidgetKind::ALL.iter().all(|widget| {
+            && self.widget_bounds.borrow().widgets.keys().all(|widget| {
                 self.fx
                     .is_at_target(fx::key(("widget-dim", widget.id())), 0.0)
             })
@@ -1541,6 +1541,7 @@ impl PopupRoot {
             show_provider_tabs: self.show_provider_tabs(),
             include_usage_stats: profile.is_none(),
             show_account_name: ui.show_account_name,
+            profile_id: profile.map(|profile| profile.id.as_str()),
             drag_handle: false,
             openrouter_actions: provider == ProviderKind::OpenRouter,
             provider_error: error_message.as_deref(),

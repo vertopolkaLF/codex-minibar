@@ -1229,6 +1229,30 @@ pub enum PopupWidgetKind {
     Kiro,
 }
 
+/// A separately reorderable Home block. Profile IDs survive display-name changes.
+#[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HomeWidgetId {
+    pub kind: PopupWidgetKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+}
+
+impl HomeWidgetId {
+    pub fn new(kind: PopupWidgetKind, profile: Option<&str>) -> Self {
+        Self {
+            kind,
+            profile: profile.map(str::to_owned),
+        }
+    }
+
+    pub fn id(&self) -> String {
+        match &self.profile {
+            Some(profile) => format!("{}:profile:{}:{profile}", self.kind.id(), profile.len()),
+            None => self.kind.id().into(),
+        }
+    }
+}
+
 impl PopupWidgetKind {
     pub const ALL: [Self; 10] = [
         Self::TotalSpend,
@@ -1444,6 +1468,9 @@ pub struct TrayIndicator {
     #[serde(rename = "provider")]
     pub provider_id: String,
     pub metric_id: String,
+    /// None selects the built-in Default, never a positional account fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
     #[serde(default)]
     pub limit_value: LimitValue,
     #[serde(default)]
@@ -1457,6 +1484,7 @@ impl TrayIndicator {
         Self {
             provider_id: provider.id().into(),
             metric_id: metric_id.into(),
+            profile_id: None,
             limit_value: LimitValue::Remaining,
             color_mode: TrayColorMode::Status,
             fixed_color: TrayFixedColor::default(),
@@ -1668,6 +1696,10 @@ pub struct Settings {
     /// Home widgets assigned to the right column, independent of visibility.
     /// None balances visible widgets automatically until the first user move.
     pub popup_right_column: Option<Vec<PopupWidgetKind>>,
+    /// Independent Home positions; empty inherits the existing provider order.
+    pub popup_home_order: Vec<HomeWidgetId>,
+    /// None inherits provider column assignments or automatically balances accounts.
+    pub popup_home_right_column: Option<Vec<HomeWidgetId>>,
     /// Brand-colored provider glyphs in the popup. Settings expose the inverse
     /// as "Use monochrome icons".
     pub use_colored_provider_icons: bool,
@@ -1808,6 +1840,8 @@ impl Default for Settings {
             popup_order: PopupWidgetKind::default_order(),
             popup_two_columns: false,
             popup_right_column: None,
+            popup_home_order: Vec::new(),
+            popup_home_right_column: None,
             use_colored_provider_icons: true,
             show_accounts_as_tabs: false,
             use_colored_sidebar_icons: true,

@@ -360,6 +360,8 @@ pub(super) fn start_background_bridge(
             ui.popup_order = settings.popup_order.clone();
             ui.popup_two_columns = settings.popup_two_columns;
             ui.popup_right_column = settings.popup_right_column.clone();
+            ui.popup_home_order = settings.popup_home_order.clone();
+            ui.popup_home_right_column = settings.popup_home_right_column.clone();
             ui.use_colored_provider_icons = settings.use_colored_provider_icons;
             ui.show_accounts_as_tabs = settings.show_accounts_as_tabs;
             ui.replace_chatgpt_logo_with_codex = settings.replace_chatgpt_logo_with_codex;

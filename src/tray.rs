@@ -70,28 +70,41 @@ fn widget_tooltip(widget: &TrayWidget, limits: &ProviderLimits) -> String {
     if widget.kind == TrayWidgetKind::AppIcon {
         return "Codex Minibar".into();
     }
-    let mut rows = Vec::<(ProviderKind, Vec<String>)>::new();
+    let mut rows = Vec::<(String, String, Vec<String>)>::new();
     for indicator in &widget.indicators {
         let Some(provider) = indicator.provider() else {
             continue;
         };
         let provider_limits = limits.get(provider);
-        let Some(metric) =
-            crate::widget_data::resolve_metric(provider, provider_limits, &indicator.metric_id)
-        else {
+        let Some(metric) = crate::widget_data::resolve_account_metric(
+            provider,
+            provider_limits,
+            indicator.profile_id.as_deref(),
+            &indicator.metric_id,
+        ) else {
             continue;
         };
         let value = percent(&metric.window, indicator.limit_value)
             .map(|value| format!("{value}%"))
             .unwrap_or_else(|| "?".into());
         let item = format!("{} {value}", metric.label);
-        if let Some((_, items)) = rows
+        let source_id =
+            crate::widget_data::account_source_id(provider, indicator.profile_id.as_deref());
+        let profile = provider_limits
+            .account_profiles(provider)
+            .iter()
+            .find(|p| p.id == indicator.profile_id.as_deref().unwrap_or("default"));
+        let title = match profile {
+            Some(profile) => format!("{} ? {}", provider.display_name(), profile.name),
+            None => provider.display_name().to_owned(),
+        };
+        if let Some((_, _, items)) = rows
             .iter_mut()
-            .find(|(row_provider, _)| *row_provider == provider)
+            .find(|(row_source, _, _)| *row_source == source_id)
         {
             items.push(item);
         } else {
-            rows.push((provider, vec![item]));
+            rows.push((source_id, title, vec![item]));
         }
     }
     if rows.is_empty() {
@@ -100,7 +113,7 @@ fn widget_tooltip(widget: &TrayWidget, limits: &ProviderLimits) -> String {
     truncate_tooltip(
         &rows
             .into_iter()
-            .map(|(provider, items)| format!("{}: {}", provider.display_name(), items.join(", ")))
+            .map(|(_, title, items)| format!("{title}: {}", items.join(", ")))
             .collect::<Vec<_>>()
             .join("\n"),
     )
@@ -280,15 +293,17 @@ fn resolve_indicators(
         .take(3)
         .filter_map(|indicator| {
             let provider = indicator.provider()?;
-            let metric = crate::widget_data::resolve_metric(
+            let metric = crate::widget_data::resolve_account_metric(
                 provider,
                 limits.get(provider),
+                indicator.profile_id.as_deref(),
                 &indicator.metric_id,
-            )?;
-            let remaining = metric.window.remaining_percent();
+            );
+            let window = metric.map(|metric| metric.window).unwrap_or_default();
+            let remaining = window.remaining_percent();
             Some(ResolvedIndicator {
-                displayed_percent: percent(&metric.window, indicator.limit_value),
-                reset: metric.window.resets_at,
+                displayed_percent: percent(&window, indicator.limit_value),
+                reset: window.resets_at,
                 color: indicator_color(indicator, provider, remaining, accent),
             })
         })
@@ -308,7 +323,10 @@ pub fn render_widget_with_accent(
         return app_icon_pixels().to_vec();
     }
     let indicators = resolve_indicators(widget, limits, accent);
-    if indicators.is_empty() {
+    if indicators
+        .iter()
+        .all(|indicator| indicator.displayed_percent.is_none() && indicator.reset.is_none())
+    {
         return app_icon_pixels().to_vec();
     }
     match widget.presentation.canonical_percentage() {
@@ -832,6 +850,47 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
+
+    #[test]
+    fn tray_accounts_resolve_independently_and_missing_accounts_keep_their_slot() {
+        let mut limits = ProviderLimits::default();
+        let profile = |id: &str, used| {
+            let mut snapshot = RateLimits::default();
+            snapshot.primary.used_percent = Some(used);
+            crate::limits::AccountProfileSnapshot {
+                id: id.into(),
+                name: "Same name".into(),
+                limits: snapshot,
+                error: None,
+            }
+        };
+        limits.get_mut(ProviderKind::Claude).claude_profiles =
+            vec![profile("work", 80), profile("default", 7)];
+        let mut widget = TrayWidget::custom_for_provider(ProviderKind::Claude);
+        let default = crate::settings::TrayIndicator::new(ProviderKind::Claude, "claude.session");
+        let mut work = default.clone();
+        work.profile_id = Some("work".into());
+        widget.indicators = vec![default, work];
+        let resolved = resolve_indicators(&widget, &limits, [0, 120, 212]);
+        assert_eq!(resolved[0].displayed_percent, Some(93));
+        assert_eq!(resolved[1].displayed_percent, Some(20));
+        assert_eq!(widget_tooltip(&widget, &limits).lines().count(), 2);
+        let settings = crate::settings::Settings {
+            tray_widgets: vec![widget.clone()],
+            ..Default::default()
+        };
+        let decoded: crate::settings::Settings =
+            toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(
+            decoded.tray_widgets[0].indicators[1].profile_id.as_deref(),
+            Some("work")
+        );
+        widget.indicators[0].profile_id = Some("removed".into());
+        let missing = resolve_indicators(&widget, &limits, [0, 120, 212]);
+        assert_eq!(missing.len(), 2);
+        assert_eq!(missing[0].displayed_percent, None);
+        assert_eq!(missing[1].displayed_percent, Some(20));
+    }
 
     fn limits() -> RateLimits {
         RateLimits {

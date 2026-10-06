@@ -141,6 +141,15 @@ struct ProviderInfo {
     name: String,
     icon: String,
     metrics: Vec<MetricInfo>,
+    accounts: Vec<AccountInfo>,
+}
+
+#[derive(Debug, Serialize)]
+struct AccountInfo {
+    id: String,
+    source_id: String,
+    name: String,
+    metrics: Vec<MetricInfo>,
 }
 
 #[derive(Debug, Serialize)]
@@ -333,6 +342,34 @@ fn build_catalog(state: &AppState) -> Vec<ProviderInfo> {
                 name: descriptor.display_name.into(),
                 icon: provider_registry::icon(provider).into(),
                 metrics,
+                accounts: widget_data::snapshot(provider, &limits)
+                    .accounts
+                    .into_iter()
+                    .map(|account| {
+                        let mut metrics = descriptor
+                            .metrics
+                            .iter()
+                            .map(|metric| MetricInfo {
+                                id: metric.id.into(),
+                                label: metric.label.into(),
+                            })
+                            .collect::<Vec<_>>();
+                        for metric in account.metrics {
+                            if !metrics.iter().any(|known| known.id == metric.id) {
+                                metrics.push(MetricInfo {
+                                    id: metric.id,
+                                    label: metric.label,
+                                });
+                            }
+                        }
+                        AccountInfo {
+                            id: account.profile_id.unwrap_or_else(|| "default".into()),
+                            source_id: account.source_id,
+                            name: account.account_name.unwrap_or_else(|| "Default".into()),
+                            metrics,
+                        }
+                    })
+                    .collect(),
             }
         })
         .collect()

@@ -931,6 +931,7 @@ pub fn render(
         });
     });
 
+    tray::sync_account_choices(&codex_profiles, &claude_profiles);
     let page_context = SettingsPageContext {
         theme,
         accent_color,

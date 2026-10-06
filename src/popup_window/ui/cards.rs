@@ -162,12 +162,20 @@ impl PopupRoot {
         }
         if let Some(error) = heading.error.as_ref() {
             let provider = heading.provider;
-            let id = fx::key(("heading-error", provider.id(), heading.first));
+            let id = fx::key((
+                "heading-error",
+                provider.id(),
+                heading.profile_id.as_deref(),
+                heading.first,
+            ));
             title = title.child(
                 div()
                     .id(eid(format!(
                         "heading-error-{}-{}",
-                        provider.id(),
+                        crate::widget_data::account_source_id(
+                            provider,
+                            heading.profile_id.as_deref()
+                        ),
                         heading.first
                     )))
                     .on_hover(self.hover_listener(id, Some(error.clone().into()), cx))
@@ -188,9 +196,13 @@ impl PopupRoot {
             ));
         }
         if heading.drag_handle {
-            trailing = trailing.child(
-                self.widget_drag_handle(PopupWidgetKind::from_provider(heading.provider), cx),
-            );
+            trailing = trailing.child(self.widget_drag_handle(
+                HomeWidgetId::new(
+                    PopupWidgetKind::from_provider(heading.provider),
+                    heading.profile_id.as_deref(),
+                ),
+                cx,
+            ));
         }
         components::split_row(title, trailing)
             .px(px(4.0))

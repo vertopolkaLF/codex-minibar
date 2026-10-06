@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test": "node scripts/test.mjs",
     "build": "rollup -c && node scripts/sync-manifest.mjs",
     "dev": "streamdeck dev",
     "reload": "streamdeck dev && streamdeck restart com.vertopolkalf.codex-minibar",

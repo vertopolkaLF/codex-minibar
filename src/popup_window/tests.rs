@@ -239,6 +239,7 @@ fn test_cards<'a>(
             show_provider_tabs,
             include_usage_stats,
             show_account_name,
+            profile_id: None,
             drag_handle: false,
             openrouter_actions: false,
             provider_error: None,
@@ -1326,6 +1327,133 @@ fn home_shows_every_claude_profile_as_its_own_strip() {
     );
     // One keyed strip per profile instead of one flat list of limit cards.
     assert_eq!(cards.len(), 2);
+}
+
+#[test]
+fn home_accounts_move_independently_and_restore_hidden_positions() {
+    for kind in [PopupWidgetKind::Claude, PopupWidgetKind::Codex] {
+        let default = HomeWidgetId::new(kind, Some("default"));
+        let personal = HomeWidgetId::new(kind, Some("personal"));
+        let cursor = HomeWidgetId::new(PopupWidgetKind::Cursor, None);
+        let saved = vec![
+            crate::settings::AccountProfile {
+                id: "default".into(),
+                name: "Same name".into(),
+                enabled: true,
+            },
+            crate::settings::AccountProfile {
+                id: "personal".into(),
+                name: "Same name".into(),
+                enabled: true,
+            },
+        ];
+        let mut ui = UiState {
+            cursor_enabled: true,
+            ..Default::default()
+        };
+        match kind {
+            PopupWidgetKind::Claude => {
+                ui.claude_enabled = true;
+                ui.claude_profiles = saved;
+            }
+            PopupWidgetKind::Codex => {
+                ui.codex_enabled = true;
+                ui.codex_profiles = saved;
+            }
+            _ => unreachable!(),
+        }
+        assert_ne!(default.id(), personal.id());
+        let initial = home_widget_order(&ui);
+        let default_was_right = home_widget_right_column(&ui, false).contains(&default);
+        let (order, right) =
+            home_widget_drop_layout(&ui, &personal, &cursor, Some(1), false).unwrap();
+        assert_eq!(
+            order.iter().position(|w| w == &default),
+            initial.iter().position(|w| w == &default)
+        );
+        assert!(right.contains(&personal));
+        assert_eq!(right.contains(&default), default_was_right);
+        ui.popup_home_order = order.clone();
+        ui.popup_home_right_column = Some(right.clone());
+        let settings = Settings {
+            popup_home_order: order,
+            popup_home_right_column: Some(right),
+            ..Default::default()
+        };
+        let restored: Settings = toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.popup_home_order, ui.popup_home_order);
+        assert_eq!(restored.popup_home_right_column, ui.popup_home_right_column);
+        let profiles = match kind {
+            PopupWidgetKind::Claude => &mut ui.claude_profiles,
+            _ => &mut ui.codex_profiles,
+        };
+        profiles[1].name = "Renamed".into();
+        profiles[1].enabled = false;
+        assert!(!visible_home_widgets(&ui, false).contains(&personal));
+        assert_eq!(home_widget_order(&ui), restored.popup_home_order);
+        // Reordering other visible widgets leaves the disabled account's slot intact.
+        let hidden_slot = home_widget_order(&ui)
+            .iter()
+            .position(|w| w == &personal)
+            .unwrap();
+        let (order, _) = home_widget_drop_layout(&ui, &default, &cursor, None, false).unwrap();
+        assert_eq!(order.iter().position(|w| w == &personal), Some(hidden_slot));
+        ui.popup_home_order = order;
+        match kind {
+            PopupWidgetKind::Claude => ui.claude_profiles[1].enabled = true,
+            _ => ui.codex_profiles[1].enabled = true,
+        };
+        assert!(visible_home_widgets(&ui, false).contains(&personal));
+        assert!(home_widget_right_column(&ui, false).contains(&personal));
+    }
+}
+
+#[test]
+fn home_account_layout_inherits_legacy_columns_and_places_new_accounts_near_their_provider() {
+    let mut ui = UiState {
+        claude_enabled: true,
+        cursor_enabled: true,
+        popup_right_column: Some(vec![PopupWidgetKind::Claude]),
+        ..Default::default()
+    };
+    let default = HomeWidgetId::new(PopupWidgetKind::Claude, Some("default"));
+    assert!(home_widget_right_column(&ui, false).contains(&default));
+    ui.popup_home_order = home_widget_order(&ui);
+    ui.claude_profiles.push(crate::settings::AccountProfile {
+        id: "work".into(),
+        name: "Work".into(),
+        enabled: true,
+    });
+    let work = HomeWidgetId::new(PopupWidgetKind::Claude, Some("work"));
+    let order = home_widget_order(&ui);
+    assert_eq!(
+        order.iter().position(|w| w == &work),
+        order
+            .iter()
+            .position(|w| w == &default)
+            .map(|index| index + 1)
+    );
+    assert!(home_widget_right_column(&ui, false).contains(&work));
+    let widgets = visible_home_widgets(
+        &UiState {
+            popup_right_column: None,
+            ..ui.clone()
+        },
+        false,
+    );
+    assert_eq!(
+        home_widget_right_column(
+            &UiState {
+                popup_right_column: None,
+                ..ui.clone()
+            },
+            false
+        ),
+        widgets.into_iter().skip(1).step_by(2).collect::<Vec<_>>()
+    );
+    let legacy: Settings = toml::from_str("version = 38\n").unwrap();
+    assert!(legacy.popup_home_order.is_empty());
+    assert!(legacy.popup_home_right_column.is_none());
 }
 
 #[test]

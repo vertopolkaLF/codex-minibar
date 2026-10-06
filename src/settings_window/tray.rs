@@ -23,10 +23,33 @@ struct TrayPreviewCacheEntry {
 }
 
 thread_local! {
+    static TRAY_ACCOUNT_CHOICES: RefCell<HashMap<ProviderKind, Vec<crate::settings::AccountProfile>>> = RefCell::new(HashMap::new());
     static TRAY_PREVIEW_MOUNTS: RefCell<HashMap<String, windows_core::IInspectable>> =
         RefCell::new(HashMap::new());
     static TRAY_PREVIEW_CACHE: RefCell<HashMap<String, TrayPreviewCacheEntry>> =
         RefCell::new(HashMap::new());
+}
+
+pub(super) fn sync_account_choices(
+    codex: &[crate::settings::CodexProfile],
+    claude: &[crate::settings::ClaudeProfile],
+) {
+    TRAY_ACCOUNT_CHOICES.with(|choices| {
+        let mut choices = choices.borrow_mut();
+        choices.insert(
+            ProviderKind::Codex,
+            crate::codex::profiles_with_default(codex),
+        );
+        choices.insert(
+            ProviderKind::Claude,
+            crate::claude::profiles_with_default(claude),
+        );
+    });
+}
+
+fn account_choices(provider: ProviderKind) -> Vec<crate::settings::AccountProfile> {
+    TRAY_ACCOUNT_CHOICES
+        .with(|choices| choices.borrow().get(&provider).cloned().unwrap_or_default())
 }
 
 pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Element>) {
@@ -111,10 +134,103 @@ fn tray_indicator_summary(indicator: &TrayIndicator) -> String {
         LimitValue::Used => "Used",
         LimitValue::Remaining => "Remaining",
     };
+    let account = indicator.profile_id.as_deref().map(|id| {
+        let profiles = account_choices(provider);
+        profiles
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| id.to_owned())
+    });
+    let provider_label = account.map_or_else(
+        || provider.display_name().to_owned(),
+        |name| format!("{} · {name}", provider.display_name()),
+    );
     format!(
         "{} · {metric} · {value} · {}",
-        provider.display_name(),
+        provider_label,
         tray_color_mode_label(indicator.color_mode)
+    )
+}
+
+fn tray_account_box(
+    widget_index: usize,
+    indicator_index: usize,
+    widgets: &[TrayWidget],
+    enabled_providers: &[ProviderKind],
+    set_widgets: SetState<Vec<TrayWidget>>,
+    settings_tx: Sender<Settings>,
+) -> Option<Element> {
+    let indicator = widgets.get(widget_index)?.indicators.get(indicator_index)?;
+    let provider = indicator.provider()?;
+    if !matches!(provider, ProviderKind::Claude | ProviderKind::Codex) {
+        return None;
+    }
+    let profiles = account_choices(provider);
+    let mut choices = profiles
+        .iter()
+        .filter(|p| p.enabled || p.id == "default")
+        .map(|p| {
+            (
+                p.id.clone(),
+                if p.enabled {
+                    p.name.clone()
+                } else {
+                    format!("{} (disabled)", p.name)
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    let wanted = indicator.profile_id.as_deref().unwrap_or("default");
+    let index = choices
+        .iter()
+        .position(|(id, _)| id == wanted)
+        .unwrap_or_else(|| {
+            choices.push((wanted.to_owned(), format!("Unavailable ({wanted})")));
+            choices.len() - 1
+        });
+    let labels = choices
+        .iter()
+        .map(|(id, name)| {
+            if choices.iter().filter(|(_, other)| other == name).count() > 1 {
+                format!(
+                    "{name} ? {}",
+                    id.chars()
+                        .rev()
+                        .take(8)
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                        .collect::<String>()
+                )
+            } else {
+                name.clone()
+            }
+        })
+        .collect::<Vec<_>>();
+    let widgets = widgets.to_vec();
+    let providers = enabled_providers.to_vec();
+    Some(
+        ComboBox::new(labels)
+            .header("Account")
+            .selected_index(index as i32)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .with_key(format!(
+                "tray-account-{}-{indicator_index}-{}",
+                widgets[widget_index].id, indicator.provider_id
+            ))
+            .on_selection_changed(move |choice| {
+                let Some((id, _)) = usize::try_from(choice)
+                    .ok()
+                    .and_then(|index| choices.get(index))
+                else {
+                    return;
+                };
+                let mut next = widgets.clone();
+                next[widget_index].indicators[indicator_index].profile_id = Some(id.clone());
+                persist_tray_widgets(set_widgets.clone(), settings_tx.clone(), next, &providers);
+            })
+            .into(),
     )
 }
 
@@ -895,6 +1011,7 @@ fn tray_time_parameter_fields(
                     .push(TrayIndicator::new(descriptor.kind, "unknown"));
             }
             next[widget_index].indicators[indicator_index].provider_id = descriptor.id.into();
+            next[widget_index].indicators[indicator_index].profile_id = None;
             next[widget_index].indicators[indicator_index].metric_id = descriptor
                 .default_tray_metrics
                 .first()
@@ -965,6 +1082,17 @@ fn tray_time_parameter_fields(
         });
 
     let mut fields = Vec::<Element>::new();
+    if let Some(account) = tray_account_box(
+        widget_index,
+        indicator_index,
+        widgets,
+        enabled_providers,
+        set_widgets.clone(),
+        settings_tx.clone(),
+    ) {
+        fields.push(account);
+    }
+
     fields.push(
         grid((
             provider_box.grid_column(0).grid_row(0),
@@ -1379,6 +1507,17 @@ fn tray_indicator_edit_form(
             .into(),
     );
 
+    if let Some(account) = tray_account_box(
+        widget_index,
+        indicator_index,
+        widgets,
+        enabled_providers,
+        set_widgets.clone(),
+        settings_tx.clone(),
+    ) {
+        fields.push(account);
+    }
+
     let widgets_for_provider = widgets.to_vec();
     let provider_setter = set_widgets.clone();
     let provider_tx = settings_tx.clone();
@@ -1394,6 +1533,7 @@ fn tray_indicator_edit_form(
             };
             let mut next = widgets_for_provider.clone();
             next[widget_index].indicators[indicator_index].provider_id = descriptor.id.into();
+            next[widget_index].indicators[indicator_index].profile_id = None;
             next[widget_index].indicators[indicator_index].metric_id = descriptor
                 .default_tray_metrics
                 .first()

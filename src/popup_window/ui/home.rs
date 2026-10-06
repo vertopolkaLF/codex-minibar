@@ -24,7 +24,7 @@ const HEADING_TOP: f32 = 8.0;
 /// Payload carried while a Home widget is dragged.
 #[derive(Clone)]
 pub(super) struct WidgetDrag {
-    widget: PopupWidgetKind,
+    widget: HomeWidgetId,
     label: SharedString,
     palette: Palette,
 }
@@ -56,25 +56,18 @@ impl Render for WidgetDrag {
     }
 }
 
-fn widget_label(widget: PopupWidgetKind) -> &'static str {
-    match widget.as_provider() {
-        Some(provider) => provider.display_name(),
-        None => "Usage Stats",
-    }
-}
-
 impl PopupRoot {
     pub(super) fn widget_drag_handle(
         &mut self,
-        widget: PopupWidgetKind,
+        widget: HomeWidgetId,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let hover_id = fx::key(("drag-handle", widget.id()));
-        let active = self.widget_drag == Some(widget);
+        let active = self.widget_drag.as_ref() == Some(&widget);
         let grip = self.drag_grip(hover_id, active);
         let drag = WidgetDrag {
-            widget,
-            label: widget_label(widget).into(),
+            widget: widget.clone(),
+            label: home_widget_label(&self.ui, &widget).into(),
             palette: self.palette.clone(),
         };
         let root = cx.entity();
@@ -82,7 +75,7 @@ impl PopupRoot {
             .id(eid(format!("drag-handle-{}", widget.id())))
             .on_hover(self.hover_listener(hover_id, Some("Drag to reorder".into()), cx))
             .on_drag(drag, move |drag, _, _, cx| {
-                let widget = drag.widget;
+                let widget = drag.widget.clone();
                 root.update(cx, |root, cx| {
                     root.widget_drag = Some(widget);
                     root.tip = None;
@@ -104,22 +97,9 @@ impl PopupRoot {
         let forced_resets = Rc::clone(&self.forced_resets);
         let show_tabs = self.show_provider_tabs();
         let show_spend = show_total_spend(&ui) && show_tabs;
-        let widgets = visible_popup_widgets(
-            &ui.popup_order,
-            show_spend,
-            &ui.popup_visibility,
-            ui.codex_enabled,
-            ui.claude_enabled,
-            ui.cursor_enabled,
-            ui.opencode_zen_enabled,
-            ui.opencode_go_enabled,
-            ui.openrouter_enabled,
-            ui.antigravity_enabled,
-            ui.grok_enabled,
-            ui.kiro_enabled,
-        );
+        let widgets = visible_home_widgets(&ui, show_spend);
         let two_columns = self.two_columns();
-        let right_column = home_right_column(&ui, show_spend);
+        let right_column = home_widget_right_column(&ui, show_spend);
         let can_reorder = widgets.len() > 1 || two_columns;
         let mut columns: [Vec<AnyElement>; 2] = [Vec::new(), Vec::new()];
         let mut placed = [0usize; 2];
@@ -130,64 +110,95 @@ impl PopupRoot {
                 0
             };
             let is_first = placed[column] == 0;
-            let section: Option<AnyElement> = match widget {
-                PopupWidgetKind::TotalSpend => {
-                    Some(self.render_total_spend(is_first, can_reorder, window, cx))
-                }
-                provider_widget => {
-                    let provider = provider_widget.as_provider().expect("provider widget");
-                    let snapshot = limits.get(provider);
-                    let home_limits = match provider {
-                        ProviderKind::Claude => claude_limits_for_home(
-                            snapshot,
-                            &ui.claude_profiles,
-                            &ui.claude_home_excluded_profiles,
-                        ),
-                        ProviderKind::Codex => codex_limits_for_home(
-                            snapshot,
-                            &ui.codex_profiles,
-                            &ui.codex_home_excluded_profiles,
-                        ),
-                        _ => Some(snapshot.clone()),
-                    };
-                    home_limits.map(|home_limits| {
-                        // A failing account profile marks its own card; the
-                        // provider-level slot only carries the click target.
-                        let provider_error = ui
-                            .provider_error(provider)
-                            .or_else(|| {
-                                home_limits
-                                    .account_profiles(provider)
-                                    .iter()
-                                    .find_map(|profile| profile.error.as_deref())
-                            })
-                            .map(str::to_owned);
-                        let options = CardOptions {
-                            popup_visibility: &ui.popup_visibility,
-                            surface: PopupSurface::HomeTab,
-                            show_provider_tabs: show_tabs,
-                            include_usage_stats: ui.usage_stats_provider_enabled(provider),
-                            show_account_name: ui.show_account_name,
-                            drag_handle: can_reorder,
-                            openrouter_actions: provider == ProviderKind::OpenRouter,
-                            provider_error: provider_error.as_deref(),
-                            now: Utc::now(),
+            let section = if widget.kind == PopupWidgetKind::TotalSpend {
+                Some(self.render_total_spend(is_first, can_reorder, window, cx))
+            } else {
+                let provider = widget.kind.as_provider().expect("provider widget");
+                let snapshot = limits.get(provider);
+                let home_limits = match provider {
+                    ProviderKind::Claude => claude_limits_for_home(
+                        snapshot,
+                        &ui.claude_profiles,
+                        &ui.claude_home_excluded_profiles,
+                    ),
+                    ProviderKind::Codex => codex_limits_for_home(
+                        snapshot,
+                        &ui.codex_profiles,
+                        &ui.codex_home_excluded_profiles,
+                    ),
+                    _ => Some(snapshot.clone()),
+                };
+                home_limits.and_then(|home_limits| {
+                    let profiles = home_limits.account_profiles(provider);
+                    let selected = widget
+                        .profile
+                        .as_deref()
+                        .and_then(|id| profiles.iter().find(|p| p.id == id));
+                    // Before the first account poll, the legacy snapshot belongs
+                    // only to the first enabled account, never to every new account.
+                    if widget.profile.is_some() && selected.is_none() {
+                        let first = match provider {
+                            ProviderKind::Claude => claude_account_tabs(&ui.claude_profiles),
+                            ProviderKind::Codex => codex_account_tabs(&ui.codex_profiles),
+                            _ => Vec::new(),
                         };
-                        let cards = provider_cards(
+                        if !profiles.is_empty()
+                            || first.first().map(|p| p.id.as_str()) != widget.profile.as_deref()
+                        {
+                            return None;
+                        }
+                    }
+                    let provider_error = selected.and_then(|p| p.error.as_deref()).or_else(|| {
+                        (!profiles.iter().any(|p| p.error.is_some()))
+                            .then(|| ui.provider_error(provider))
+                            .flatten()
+                    });
+                    let options = CardOptions {
+                        popup_visibility: &ui.popup_visibility,
+                        surface: PopupSurface::HomeTab,
+                        show_provider_tabs: show_tabs,
+                        include_usage_stats: widget.profile.is_none()
+                            && ui.usage_stats_provider_enabled(provider),
+                        show_account_name: widget.profile.is_some() || ui.show_account_name,
+                        profile_id: widget.profile.as_deref(),
+                        drag_handle: can_reorder,
+                        openrouter_actions: provider == ProviderKind::OpenRouter,
+                        provider_error,
+                        now: Utc::now(),
+                    };
+                    let account_limits = selected.map_or(&home_limits, |p| &p.limits);
+                    let mut cards = provider_cards(
+                        provider,
+                        is_first,
+                        account_limits,
+                        &forced_resets,
+                        &options,
+                    );
+                    // Local transcript statistics are shared across accounts;
+                    // keep one copy with the first account in the source snapshot.
+                    if widget.profile.is_some()
+                        && (profiles.is_empty()
+                            || selected.map(|p| p.id.as_str())
+                                == profiles.first().map(|p| p.id.as_str()))
+                    {
+                        cards.extend(shared_usage_statistics_card(
                             provider,
-                            is_first,
                             &home_limits,
-                            &forced_resets,
-                            &options,
-                        );
+                            ui.usage_stats_provider_enabled(provider),
+                            &ui.popup_visibility,
+                            PopupSurface::HomeTab,
+                            show_tabs,
+                        ));
+                    }
+                    Some(
                         div()
                             .flex()
                             .flex_col()
                             .gap(px(SECTION_GAP))
                             .children(self.render_cards(&cards, PopupSurface::HomeTab, window, cx))
-                            .into_any_element()
-                    })
-                }
+                            .into_any_element(),
+                    )
+                })
             };
             let Some(section) = section else {
                 continue;
@@ -254,7 +265,12 @@ impl PopupRoot {
         let dragging = self.widget_drag.is_some();
         if dragging || sections.is_empty() {
             let palette = self.palette.clone();
-            let over = self.widget_drop == self.widget_drag.map(|widget| (widget, Some(column)));
+            let over = self.widget_drop.as_ref()
+                == self
+                    .widget_drag
+                    .as_ref()
+                    .map(|widget| (widget.clone(), Some(column)))
+                    .as_ref();
             let reveal = self
                 .fx
                 .toggle(fx::key(("drop-zone", column)), dragging, fx::FAST);
@@ -279,7 +295,7 @@ impl PopupRoot {
                     .on_drag_move(cx.listener(
                         move |this, event: &DragMoveEvent<WidgetDrag>, _, cx| {
                             if event.bounds.contains(&event.event.position) {
-                                let next = Some((event.drag(cx).widget, Some(column)));
+                                let next = Some((event.drag(cx).widget.clone(), Some(column)));
                                 if this.widget_drop != next {
                                     this.widget_drop = next;
                                     cx.notify();
@@ -288,7 +304,12 @@ impl PopupRoot {
                         },
                     ))
                     .on_drop(cx.listener(move |this, drag: &WidgetDrag, _, cx| {
-                        this.commit_widget_drop(drag.widget, drag.widget, Some(column), cx);
+                        this.commit_widget_drop(
+                            drag.widget.clone(),
+                            drag.widget.clone(),
+                            Some(column),
+                            cx,
+                        );
                     }))
                     .into_any_element(),
             );
@@ -298,16 +319,16 @@ impl PopupRoot {
 
     fn widget_drop_target(
         &mut self,
-        widget: PopupWidgetKind,
+        widget: HomeWidgetId,
         section: AnyElement,
         column: Option<usize>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = self.palette.clone();
-        let active = self.widget_drag == Some(widget);
+        let active = self.widget_drag.as_ref() == Some(&widget);
         let over = self.widget_drag.is_some()
             && !active
-            && self.widget_drop.map(|(target, _)| target) == Some(widget);
+            && self.widget_drop.as_ref().map(|(target, _)| target) == Some(&widget);
         let outline = self
             .fx
             .toggle(fx::key(("widget-outline", widget.id())), over, fx::FASTER);
@@ -321,6 +342,8 @@ impl PopupRoot {
             .fx
             .value(fx::key(("widget-dy", widget.id())), 0.0, fx::NORMAL);
         let bounds = Rc::clone(&self.widget_bounds);
+        let measured_widget = widget.clone();
+        let hover_widget = widget.clone();
         let mut element = div()
             .id(eid(format!("widget-{}", widget.id())))
             .relative()
@@ -331,7 +354,10 @@ impl PopupRoot {
             .child(
                 canvas(
                     move |area, _, _| {
-                        bounds.borrow_mut().widgets.insert(widget, area);
+                        bounds
+                            .borrow_mut()
+                            .widgets
+                            .insert(measured_widget.clone(), area);
                     },
                     |_, _, _, _| {},
                 )
@@ -341,7 +367,7 @@ impl PopupRoot {
             .on_drag_move(
                 cx.listener(move |this, event: &DragMoveEvent<WidgetDrag>, _, cx| {
                     if event.bounds.contains(&event.event.position) {
-                        let next = Some((widget, column));
+                        let next = Some((hover_widget.clone(), column));
                         if this.widget_drop != next {
                             this.widget_drop = next;
                             cx.notify();
@@ -350,7 +376,7 @@ impl PopupRoot {
                 }),
             )
             .on_drop(cx.listener(move |this, drag: &WidgetDrag, _, cx| {
-                this.commit_widget_drop(drag.widget, widget, column, cx);
+                this.commit_widget_drop(drag.widget.clone(), widget.clone(), column, cx);
             }));
         if outline > 0.001 {
             element = element.child(
@@ -367,14 +393,20 @@ impl PopupRoot {
 
     fn commit_widget_drop(
         &mut self,
-        active: PopupWidgetKind,
-        over: PopupWidgetKind,
+        active: HomeWidgetId,
+        over: HomeWidgetId,
         column: Option<usize>,
         cx: &mut Context<Self>,
     ) {
         self.widget_drag = None;
         self.widget_drop = None;
-        let Some((order, right)) = widget_drop_layout(&self.ui, active, over, column) else {
+        let Some((order, right)) = home_widget_drop_layout(
+            &self.ui,
+            &active,
+            &over,
+            column,
+            show_total_spend(&self.ui) && self.show_provider_tabs(),
+        ) else {
             cx.notify();
             return;
         };
@@ -384,13 +416,12 @@ impl PopupRoot {
         self.persist(
             cx,
             |ui| {
-                ui.popup_order = local_order;
-                ui.popup_right_column = Some(local_right);
+                ui.popup_home_order = local_order;
+                ui.popup_home_right_column = Some(local_right);
             },
             move |settings| {
-                settings.popup_order = order;
-                settings.popup_right_column = Some(right);
-                settings.normalize_popup_order();
+                settings.popup_home_order = order;
+                settings.popup_home_right_column = Some(right);
             },
         );
     }
@@ -398,13 +429,13 @@ impl PopupRoot {
     /// FLIP: predict where each block lands in the new order (from the last
     /// measured heights) and glide it there from its old position, so the
     /// first frame of the new layout never jumps.
-    fn animate_widget_reflow(&mut self, order: &[PopupWidgetKind], right: &[PopupWidgetKind]) {
+    fn animate_widget_reflow(&mut self, order: &[HomeWidgetId], right: &[HomeWidgetId]) {
         if !self.fx.enabled() {
             return;
         }
         let measured = self.widget_bounds.borrow();
         let two_columns = self.two_columns();
-        let mut columns: [Vec<PopupWidgetKind>; 2] = [Vec::new(), Vec::new()];
+        let mut columns: [Vec<HomeWidgetId>; 2] = [Vec::new(), Vec::new()];
         for widget in order {
             if measured.widgets.contains_key(widget) {
                 let column = if two_columns {
@@ -412,10 +443,10 @@ impl PopupRoot {
                 } else {
                     0
                 };
-                columns[column].push(*widget);
+                columns[column].push(widget.clone());
             }
         }
-        let mut targets: HashMap<PopupWidgetKind, (f32, f32)> = HashMap::new();
+        let mut targets: HashMap<HomeWidgetId, (f32, f32)> = HashMap::new();
         for (column, widgets) in columns.iter().enumerate() {
             let Some(origin) = measured.columns[column].or(measured.columns[0]) else {
                 continue;
@@ -432,7 +463,7 @@ impl PopupRoot {
                     (false, true) => height -= HEADING_TOP,
                     _ => {}
                 }
-                targets.insert(*widget, (x, y));
+                targets.insert(widget.clone(), (x, y));
                 y += height + SECTION_GAP;
             }
         }
@@ -543,7 +574,9 @@ impl PopupRoot {
             .gap(px(4.0))
             .child(selector);
         if can_reorder {
-            trailing = trailing.child(self.widget_drag_handle(PopupWidgetKind::TotalSpend, cx));
+            trailing = trailing.child(
+                self.widget_drag_handle(HomeWidgetId::new(PopupWidgetKind::TotalSpend, None), cx),
+            );
         }
         let heading = components::split_row(title, trailing)
             .px(px(4.0))
@@ -735,10 +768,7 @@ impl PopupRoot {
 }
 
 /// Did this block start its column (no measured block above it)?
-fn old_is_first(
-    widgets: &HashMap<PopupWidgetKind, Bounds<Pixels>>,
-    bounds: Bounds<Pixels>,
-) -> bool {
+fn old_is_first(widgets: &HashMap<HomeWidgetId, Bounds<Pixels>>, bounds: Bounds<Pixels>) -> bool {
     !widgets.values().any(|other| {
         (f32::from(other.origin.x) - f32::from(bounds.origin.x)).abs() < 1.0
             && other.origin.y < bounds.origin.y

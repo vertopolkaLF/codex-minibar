@@ -375,6 +375,100 @@ mod tests {
     use super::*;
 
     #[test]
+    fn adding_a_profile_keeps_each_quota_animation_at_its_own_percentage() {
+        use crate::{
+            limits::{AccountProfileSnapshot, RateLimits},
+            popup_window::{PopupSurface, model::*},
+            settings::{PopupVisibility, ProviderKind},
+        };
+
+        for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+            for enabled in [true, false] {
+                let visibility = PopupVisibility::build_defaults();
+                let options = CardOptions {
+                    popup_visibility: &visibility,
+                    surface: PopupSurface::HomeTab,
+                    show_provider_tabs: true,
+                    include_usage_stats: false,
+                    show_account_name: true,
+                    profile_id: None,
+                    drag_handle: false,
+                    openrouter_actions: false,
+                    provider_error: None,
+                    now: chrono::Utc::now(),
+                };
+                let profile = |id: &str, session_used, weekly_used| {
+                    let mut limits = RateLimits::default();
+                    limits.primary.used_percent = Some(session_used);
+                    limits.secondary.used_percent = Some(weekly_used);
+                    AccountProfileSnapshot {
+                        id: id.into(),
+                        name: "Same display name".into(),
+                        limits,
+                        error: None,
+                    }
+                };
+                let mut profiles = vec![profile("default", 7, 20)];
+                let mut fx = Fx::default();
+                let started = Instant::now();
+                let mut original_keys = Vec::new();
+                for frame in 0..60 {
+                    if frame == 1 {
+                        profiles.push(profile("personal", 0, 0));
+                    }
+                    if frame == 30 {
+                        profiles.reverse();
+                    }
+                    let mut limits = RateLimits::default();
+                    match provider {
+                        ProviderKind::Claude => limits.claude_profiles = profiles.clone(),
+                        ProviderKind::Codex => limits.codex_profiles = profiles.clone(),
+                        _ => unreachable!(),
+                    }
+                    let cards = provider_cards(provider, true, &limits, &[], &options);
+                    fx.begin_frame(enabled);
+                    fx.now = Some(started + Duration::from_millis(frame * 16));
+                    let mut frame_keys = std::collections::HashSet::new();
+                    for (group, profile) in cards.iter().zip(&profiles) {
+                        for card in group.nested() {
+                            if let Card::Limit {
+                                key: card_key,
+                                window,
+                                disabled,
+                                ..
+                            } = card
+                            {
+                                assert!(frame_keys.insert(card_key.clone()), "duplicate quota key");
+                                let (_, target, _, _) =
+                                    limit_card_presentation(window, false, *disabled);
+                                let actual = fx.value(
+                                    key(("limit-progress", card_key)),
+                                    target as f32,
+                                    NORMAL,
+                                );
+                                assert_eq!(
+                                    actual, target as f32,
+                                    "{provider:?} {} frame {frame}",
+                                    profile.id
+                                );
+                                if profile.id == "default" {
+                                    if frame == 0 {
+                                        original_keys.push(card_key.clone());
+                                    } else {
+                                        assert!(original_keys.contains(card_key));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    assert_eq!(frame_keys.len(), profiles.len() * 2);
+                    assert!(!fx.is_animating(), "unchanged quotas must settle");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn indicator_stretches_then_settles_and_retargets_without_a_size_jump() {
         let started = Instant::now();
         let duration = Duration::from_millis(300);

@@ -23,6 +23,8 @@ pub(crate) struct CardOptions<'a> {
     pub(crate) show_provider_tabs: bool,
     pub(crate) include_usage_stats: bool,
     pub(crate) show_account_name: bool,
+    /// Stable profile identity, shared by Home and the selected provider page.
+    pub(crate) profile_id: Option<&'a str>,
     /// Home widgets carry a reorder handle on their first heading.
     pub(crate) drag_handle: bool,
     /// OpenRouter expired keys expose a remove action.
@@ -31,9 +33,23 @@ pub(crate) struct CardOptions<'a> {
     pub(crate) now: DateTime<Utc>,
 }
 
+impl CardOptions<'_> {
+    fn card_key(&self, provider: ProviderKind, metric: &str) -> String {
+        if matches!(provider, ProviderKind::Claude | ProviderKind::Codex) {
+            format!(
+                "{}:{metric}",
+                crate::widget_data::account_source_id(provider, self.profile_id)
+            )
+        } else {
+            format!("{}-{metric}", provider.id())
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct HeadingCard<'a> {
     pub(crate) provider: ProviderKind,
+    pub(crate) profile_id: Option<String>,
     pub(crate) first: bool,
     pub(crate) plan: Option<String>,
     pub(crate) account_name: Option<&'a str>,
@@ -143,6 +159,7 @@ pub(crate) fn provider_cards<'a>(
                     // profile, so they are shown once below the profiles.
                     include_usage_stats: false,
                     show_account_name: true,
+                    profile_id: Some(&profile.id),
                     drag_handle: std::mem::take(&mut drag_handle),
                     openrouter_actions: false,
                     provider_error: card_error.as_deref(),
@@ -183,6 +200,7 @@ pub(crate) fn provider_cards<'a>(
         provider == ProviderKind::OpenRouter && limits.openrouter_accounts.len() == 1;
     let heading = HeadingCard {
         provider,
+        profile_id: options.profile_id.map(str::to_owned),
         first: is_first,
         plan: (!single_openrouter_account)
             .then(|| {
@@ -303,7 +321,7 @@ pub(crate) fn provider_cards<'a>(
             ),
         };
         cards.push(Card::Limit {
-            key: format!("{}-{}", provider.id(), section.key()),
+            key: options.card_key(provider, section.key()),
             title: title.to_uppercase(),
             window,
             usage_amount,
@@ -317,7 +335,7 @@ pub(crate) fn provider_cards<'a>(
             continue;
         }
         cards.push(Card::Limit {
-            key: format!("{}-additional-{}", provider.id(), limit.id),
+            key: options.card_key(provider, &format!("additional-{}", limit.id)),
             title: limit.title.to_uppercase(),
             window: &limit.window,
             usage_amount: None,
@@ -329,7 +347,10 @@ pub(crate) fn provider_cards<'a>(
     if provider == ProviderKind::Claude
         && let Some(spending) = limits.spending.as_ref()
     {
-        cards.push(spending_card("claude-spending".into(), spending));
+        cards.push(spending_card(
+            options.card_key(provider, "spending"),
+            spending,
+        ));
     }
     if provider == ProviderKind::Codex {
         let upcoming = upcoming_forced_resets(forced_resets, options.now);
@@ -338,14 +359,13 @@ pub(crate) fn provider_cards<'a>(
         }
     }
     if visible(&resets_brick_id(provider)) && limits.available_reset_count() > 0 {
-        // The account keeps two Claude profiles from expanding together.
+        // Use profile identity rather than a mutable, potentially shared name.
         cards.push(Card::BankedResets {
             limits,
             expansion_key: format!(
-                "{}-{:?}-{}",
-                provider.id(),
+                "{}-{:?}",
+                options.card_key(provider, "banked-resets"),
                 options.surface,
-                limits.account_name.as_deref().unwrap_or_default()
             ),
         });
     }
@@ -630,6 +650,7 @@ pub(crate) fn profile_layout_key(
 
 /// Auto-distribute only the currently visible blocks until the user first moves one.
 /// Once assigned, hidden providers keep their saved column when they return.
+#[cfg(test)]
 pub(crate) fn home_right_column(ui: &UiState, show_total_spend: bool) -> Vec<PopupWidgetKind> {
     ui.popup_right_column.clone().unwrap_or_else(|| {
         visible_popup_widgets(
@@ -688,34 +709,147 @@ pub(crate) fn any_provider_enabled(ui: &UiState) -> bool {
         .any(|provider| provider_enabled(ui, provider))
 }
 
-/// Apply a finished Home widget drag to a scratch copy of the layout.
-/// Returns the new `(order, right column)` when anything moved.
-pub(crate) fn widget_drop_layout(
-    ui: &UiState,
-    active: PopupWidgetKind,
-    over: PopupWidgetKind,
-    column: Option<usize>,
-) -> Option<(Vec<PopupWidgetKind>, Vec<PopupWidgetKind>)> {
-    let show_total_spend = show_total_spend(ui);
-    let mut scratch = Settings {
-        popup_order: ui.popup_order.clone(),
-        popup_right_column: Some(home_right_column(ui, show_total_spend)),
-        providers: crate::settings::ProviderSettings::from_enabled(
-            crate::provider_registry::PROVIDERS
-                .iter()
-                .filter(|descriptor| provider_enabled(ui, descriptor.kind))
-                .map(|descriptor| descriptor.kind),
-        ),
-        show_total_spend_on_all_tab: ui.show_total_spend_on_all_tab,
-        ..Settings::default()
+fn home_profiles(ui: &UiState, kind: PopupWidgetKind) -> Vec<crate::settings::AccountProfile> {
+    match kind {
+        PopupWidgetKind::Claude => crate::claude::profiles_with_default(&ui.claude_profiles),
+        PopupWidgetKind::Codex => crate::codex::profiles_with_default(&ui.codex_profiles),
+        _ => Vec::new(),
+    }
+}
+
+pub(crate) fn home_widget_label(ui: &UiState, widget: &HomeWidgetId) -> String {
+    let Some(provider) = widget.kind.as_provider() else {
+        return "Usage Stats".into();
     };
-    let reordered = scratch.move_popup_widget(active, over, show_total_spend);
-    let moved_column =
-        column.is_some_and(|column| scratch.assign_popup_widget_column(active, column));
-    (reordered || moved_column).then(|| {
-        (
-            scratch.popup_order,
-            scratch.popup_right_column.unwrap_or_default(),
-        )
-    })
+    let profiles = home_profiles(ui, widget.kind);
+    match profiles
+        .iter()
+        .find(|p| Some(&p.id) == widget.profile.as_ref())
+    {
+        Some(profile) => format!("{} · {}", provider.display_name(), profile.name),
+        None => provider.display_name().into(),
+    }
+}
+
+/// Expand legacy provider slots into persistent account identities, retaining
+/// hidden accounts and inserting new accounts next to their provider's last slot.
+pub(crate) fn home_widget_order(ui: &UiState) -> Vec<HomeWidgetId> {
+    let mut available = Vec::new();
+    for kind in &ui.popup_order {
+        let profiles = home_profiles(ui, *kind);
+        if profiles.is_empty() {
+            available.push(HomeWidgetId::new(*kind, None));
+        } else {
+            available.extend(
+                profiles
+                    .iter()
+                    .map(|p| HomeWidgetId::new(*kind, Some(&p.id))),
+            );
+        }
+    }
+    if ui.popup_home_order.is_empty() {
+        return available;
+    }
+    let mut order = Vec::new();
+    for widget in &ui.popup_home_order {
+        if available.contains(widget) && !order.contains(widget) {
+            order.push(widget.clone());
+        }
+    }
+    for widget in available {
+        if !order.contains(&widget) {
+            let insert = order
+                .iter()
+                .rposition(|item| item.kind == widget.kind)
+                .map_or(order.len(), |index| index + 1);
+            order.insert(insert, widget);
+        }
+    }
+    order
+}
+
+pub(crate) fn visible_home_widgets(ui: &UiState, show_spend: bool) -> Vec<HomeWidgetId> {
+    home_widget_order(ui)
+        .into_iter()
+        .filter(|widget| {
+            if widget.kind == PopupWidgetKind::TotalSpend {
+                return show_spend;
+            }
+            let provider = widget.kind.as_provider().expect("provider widget");
+            if !provider_enabled(ui, provider)
+                || !ui.popup_visibility.provider_visible_on_all(provider)
+            {
+                return false;
+            }
+            let Some(id) = &widget.profile else {
+                return true;
+            };
+            let excluded = match provider {
+                ProviderKind::Claude => &ui.claude_home_excluded_profiles,
+                ProviderKind::Codex => &ui.codex_home_excluded_profiles,
+                _ => return false,
+            };
+            home_profiles(ui, widget.kind)
+                .iter()
+                .any(|p| p.id == *id && p.enabled)
+                && !excluded.contains(id)
+        })
+        .collect()
+}
+
+pub(crate) fn home_widget_right_column(ui: &UiState, show_spend: bool) -> Vec<HomeWidgetId> {
+    if let Some(right) = &ui.popup_home_right_column {
+        return right.clone();
+    }
+    if let Some(legacy) = &ui.popup_right_column {
+        return home_widget_order(ui)
+            .into_iter()
+            .filter(|w| legacy.contains(&w.kind))
+            .collect();
+    }
+    visible_home_widgets(ui, show_spend)
+        .into_iter()
+        .skip(1)
+        .step_by(2)
+        .collect()
+}
+
+pub(crate) fn home_widget_drop_layout(
+    ui: &UiState,
+    active: &HomeWidgetId,
+    over: &HomeWidgetId,
+    column: Option<usize>,
+    show_spend: bool,
+) -> Option<(Vec<HomeWidgetId>, Vec<HomeWidgetId>)> {
+    if column.is_some_and(|column| column > 1) {
+        return None;
+    }
+    let visible = visible_home_widgets(ui, show_spend);
+    let from = visible.iter().position(|w| w == active)?;
+    let to = visible.iter().position(|w| w == over)?;
+    let mut moved = visible.clone();
+    let item = moved.remove(from);
+    moved.insert(to, item);
+    let mut sequence = moved.into_iter();
+    let order = home_widget_order(ui)
+        .into_iter()
+        .map(|w| {
+            if visible.contains(&w) {
+                sequence.next().expect("visible slot")
+            } else {
+                w
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut right = home_widget_right_column(ui, show_spend);
+    let old_right = right.clone();
+    if let Some(column) = column
+        && right.contains(active) != (column == 1)
+    {
+        right.retain(|w| w != active);
+        if column == 1 {
+            right.push(active.clone());
+        }
+    }
+    (order != home_widget_order(ui) || right != old_right).then_some((order, right))
 }

@@ -167,6 +167,7 @@ pub(super) fn total_spend_provider_count(
     .count()
 }
 
+#[cfg(test)]
 pub(super) fn visible_popup_widgets(
     popup_order: &[PopupWidgetKind],
     show_total_spend: bool,

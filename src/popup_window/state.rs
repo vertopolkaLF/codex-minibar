@@ -368,6 +368,8 @@ pub(crate) struct UiState {
     pub(super) popup_order: Vec<PopupWidgetKind>,
     pub(super) popup_two_columns: bool,
     pub(super) popup_right_column: Option<Vec<PopupWidgetKind>>,
+    pub(super) popup_home_order: Vec<HomeWidgetId>,
+    pub(super) popup_home_right_column: Option<Vec<HomeWidgetId>>,
     pub(super) use_colored_provider_icons: bool,
     pub(super) show_accounts_as_tabs: bool,
     pub(super) replace_chatgpt_logo_with_codex: bool,
@@ -432,6 +434,8 @@ impl Default for UiState {
             popup_order: PopupWidgetKind::default_order(),
             popup_two_columns: false,
             popup_right_column: None,
+            popup_home_order: Vec::new(),
+            popup_home_right_column: None,
             use_colored_provider_icons: true,
             show_accounts_as_tabs: false,
             replace_chatgpt_logo_with_codex: false,
@@ -461,6 +465,7 @@ impl UiState {
     pub(super) fn popup_layout_from_settings(settings: &Settings) -> Self {
         Self {
             usage_stats_excluded_providers: settings.effective_usage_stats_excluded_providers(),
+            popup_order: settings.popup_order.clone(),
             popup_two_columns: settings.popup_two_columns,
             show_accounts_as_tabs: settings.show_accounts_as_tabs,
             codex_profiles: settings.codex_profiles.clone(),
@@ -470,6 +475,8 @@ impl UiState {
             codex_credentials_revision: settings.codex_credentials_revision,
             claude_credentials_revision: settings.claude_credentials_revision,
             popup_right_column: settings.popup_right_column.clone(),
+            popup_home_order: settings.popup_home_order.clone(),
+            popup_home_right_column: settings.popup_home_right_column.clone(),
             ..Self::default()
         }
     }

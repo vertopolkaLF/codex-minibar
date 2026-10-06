@@ -4,6 +4,16 @@ This is a thin Stream Deck plugin. It stores each key's configuration in the
 Stream Deck Property Inspector and reads sanitized quota snapshots from the
 running Codex Minibar process over loopback.
 
+Claude and Codex keys can select an individual account. Account selections use
+persistent profile IDs and remain independent for each provider when cycling.
+The Property Inspector refreshes the available accounts from Minibar; a removed
+or disabled account stays unavailable instead of showing another account's quota.
+Older keys continue to select the built-in Default account.
+
+The bridge keeps legacy provider and metric IDs and adds `profile_id`, globally
+unique `source_id` values, and independent `accounts` snapshots. These snapshots
+contain quota data and display names, never authentication credentials.
+
 ## Development
 
 From this directory:
@@ -11,6 +21,7 @@ From this directory:
 ```powershell
 npm install
 npm run build
+npm test
 npx streamdeck dev
 ```
 
