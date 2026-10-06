@@ -4,8 +4,8 @@ use super::*;
 ///
 /// This intentionally stays ephemeral: it is a view choice for the currently
 /// open popup, not an application preference that should survive a restart.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) enum PopupView {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) enum PopupView {
     #[default]
     Home,
     Usage,
@@ -116,22 +116,6 @@ pub(super) fn provider_order_from_popup(popup_order: &[PopupWidgetKind]) -> Vec<
         .collect()
 }
 
-pub(super) fn provider_order_key(providers: &[ProviderKind]) -> String {
-    providers
-        .iter()
-        .map(|provider| provider.id())
-        .collect::<Vec<_>>()
-        .join("-")
-}
-
-pub(super) fn popup_order_key(popup_order: &[PopupWidgetKind]) -> String {
-    popup_order
-        .iter()
-        .map(|widget| widget.id())
-        .collect::<Vec<_>>()
-        .join("-")
-}
-
 pub(super) fn provider_is_enabled(
     provider: ProviderKind,
     codex: bool,
@@ -183,6 +167,7 @@ pub(super) fn total_spend_provider_count(
     .count()
 }
 
+#[cfg(test)]
 pub(super) fn visible_popup_widgets(
     popup_order: &[PopupWidgetKind],
     show_total_spend: bool,
@@ -224,11 +209,6 @@ pub(super) fn visible_popup_widgets(
 pub(super) enum PagerDirection {
     Forward,
     Backward,
-}
-
-/// The viewport reconciles native hosts by role, independently of sibling slots.
-pub(super) fn popup_page_host_key(role: &str) -> String {
-    format!("popup-page-host-{role}")
 }
 
 pub(super) const PAGER_ANIMATION_DURATION: Duration = Duration::from_millis(250);
@@ -450,11 +430,4 @@ pub(super) fn section_brick_id(provider: ProviderKind, section: PopupSection) ->
         limit_section => limit_section_kind(limit_section)
             .and_then(|kind| limit_section_brick_id(provider, kind)),
     }
-}
-
-pub(super) fn popup_visibility_key(visibility: &PopupVisibility) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    visibility.hash(&mut hasher);
-    hasher.finish()
 }

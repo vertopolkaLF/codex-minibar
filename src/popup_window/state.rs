@@ -8,23 +8,16 @@ pub(super) fn refresh_all_workers(commands: &[(ProviderKind, Sender<WorkerComman
     requested
 }
 
-/// Hidden tray popups must not rebuild their WinUI tree on every provider poll.
-/// Remounting unmanaged SwapChainPanel/XAML children steadily grows the
-/// compositor working set (observed multi-GB after long idle runs).
-pub(super) fn popup_ui_should_publish() -> bool {
-    popup::is_visible() || crate::settings_window::is_open()
+/// Publish view state to the GPUI popup. Hidden popups only store it; the
+/// renderer repaints when it is shown, so background polls stay cheap.
+pub(super) fn publish_popup_ui(ui: &UiState) {
+    super::publish_ui(ui);
 }
 
-pub(super) fn publish_popup_ui(set_ui: &AsyncSetState<UiState>, ui: &UiState) {
-    if popup_ui_should_publish() {
-        set_ui.call(ui.clone());
-    }
-}
-
-/// Push the latest view state before a show so the first frame is current even
-/// after a stretch of suppressed background polls.
-pub(super) fn flush_popup_ui(set_ui: &AsyncSetState<UiState>, ui: &UiState) {
-    set_ui.call(ui.clone());
+/// Same as [`publish_popup_ui`]; kept separate to mark paths that must reach
+/// the renderer before the next show.
+pub(super) fn flush_popup_ui(ui: &UiState) {
+    super::publish_ui(ui);
 }
 
 /// Flatten provider usage errors, including per-account errors exposed by
@@ -323,7 +316,7 @@ impl AppState {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct UiState {
+pub(crate) struct UiState {
     pub(super) theme: AppTheme,
     pub(super) accent_color: AccentColor,
     pub(super) animations_enabled: bool,
@@ -375,6 +368,8 @@ pub(super) struct UiState {
     pub(super) popup_order: Vec<PopupWidgetKind>,
     pub(super) popup_two_columns: bool,
     pub(super) popup_right_column: Option<Vec<PopupWidgetKind>>,
+    pub(super) popup_home_order: Vec<HomeWidgetId>,
+    pub(super) popup_home_right_column: Option<Vec<HomeWidgetId>>,
     pub(super) use_colored_provider_icons: bool,
     pub(super) show_accounts_as_tabs: bool,
     pub(super) replace_chatgpt_logo_with_codex: bool,
@@ -439,6 +434,8 @@ impl Default for UiState {
             popup_order: PopupWidgetKind::default_order(),
             popup_two_columns: false,
             popup_right_column: None,
+            popup_home_order: Vec::new(),
+            popup_home_right_column: None,
             use_colored_provider_icons: true,
             show_accounts_as_tabs: false,
             replace_chatgpt_logo_with_codex: false,
@@ -468,6 +465,7 @@ impl UiState {
     pub(super) fn popup_layout_from_settings(settings: &Settings) -> Self {
         Self {
             usage_stats_excluded_providers: settings.effective_usage_stats_excluded_providers(),
+            popup_order: settings.popup_order.clone(),
             popup_two_columns: settings.popup_two_columns,
             show_accounts_as_tabs: settings.show_accounts_as_tabs,
             codex_profiles: settings.codex_profiles.clone(),
@@ -477,6 +475,8 @@ impl UiState {
             codex_credentials_revision: settings.codex_credentials_revision,
             claude_credentials_revision: settings.claude_credentials_revision,
             popup_right_column: settings.popup_right_column.clone(),
+            popup_home_order: settings.popup_home_order.clone(),
+            popup_home_right_column: settings.popup_home_right_column.clone(),
             ..Self::default()
         }
     }

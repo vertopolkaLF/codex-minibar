@@ -356,11 +356,9 @@ pub(super) fn onboarding_render(
                         eprintln!("failed to complete onboarding: {error:#}");
                         return;
                     }
-                    // The popup host shares this UI thread. Prepare it before
-                    // dismissing onboarding so Done always lands on the popup.
-                    if crate::popup::prepare_show_on_ui_thread() {
-                        crate::popup::show_near_cursor();
-                    }
+                    // Show the popup before dismissing onboarding so Done
+                    // always lands on it.
+                    crate::popup::show_near_cursor();
                     close_open_window();
                 })
                 .into()

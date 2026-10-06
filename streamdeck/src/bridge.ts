@@ -21,6 +21,14 @@ export interface ProviderInfo {
   name: string;
   icon: string;
   metrics: MetricInfo[];
+  accounts?: AccountInfo[];
+}
+
+export interface AccountInfo {
+  id: string;
+  source_id: string;
+  name: string;
+  metrics: MetricInfo[];
 }
 
 export interface WindowSnapshot {
@@ -38,6 +46,7 @@ export interface AdditionalSnapshot {
 }
 
 export interface MetricSnapshot {
+  source_id?: string;
   id: string;
   label: string;
   window: WindowSnapshot;
@@ -45,6 +54,9 @@ export interface MetricSnapshot {
 
 export interface ProviderSnapshot {
   id: string;
+  source_id?: string;
+  profile_id?: string | null;
+  accounts?: ProviderSnapshot[];
   name: string;
   icon: string;
   brand_rgb: [number, number, number];

@@ -19,6 +19,11 @@
   <label for="provider">Provider</label>
   <select id="provider"></select>
 
+  <div id="accountField" hidden>
+    <label for="account">Account</label>
+    <select id="account"></select>
+  </div>
+
   <label for="widget">Widget</label>
   <select id="widget">
     <option value="single_limit">Single limit</option>
@@ -104,12 +109,15 @@
       "opencode-go": { name: "OpenCode Go", metrics: [["opencode-go.session", "5h session"], ["opencode-go.weekly", "Weekly"], ["opencode-go.monthly", "Monthly"]] },
       openrouter: { name: "OpenRouter", metrics: [["openrouter.limit", "Spending limit"]] }
     };
-    const defaultSettings = { provider: "codex", widget: "single_limit", singleMetricId: "codex.session", metricIds: ["codex.session"], presentation: "rings", resetDisplay: "countdown", valueMode: "remaining", showPercentSymbol: true, showPace: true, font: "inter", providerMark: "hidden", coloredProviderMark: false, showCountdown: true, clickAction: "open_popup", cycleProviders: ["codex", "claude", "cursor"], cycleIndex: 0 };
+    const defaultSettings = { provider: "codex", profileIds: {}, widget: "single_limit", singleMetricId: "codex.session", metricIds: ["codex.session"], presentation: "rings", resetDisplay: "countdown", valueMode: "remaining", showPercentSymbol: true, showPace: true, font: "inter", providerMark: "hidden", coloredProviderMark: false, showCountdown: true, clickAction: "open_popup", cycleProviders: ["codex", "claude", "cursor"], cycleIndex: 0 };
     let settings = { ...defaultSettings };
+    let catalogProviders = {};
     let websocket;
     let context;
     let settingsPending = false;
     const providerSelect = document.querySelector("#provider");
+    const accountSelect = document.querySelector("#account");
+    const accountField = document.querySelector("#accountField");
     const widget = document.querySelector("#widget");
     const singleMetric = document.querySelector("#singleMetric");
     const dualHint = document.querySelector("#dualHint");
@@ -144,8 +152,34 @@
       if (!websocket || !context || websocket.readyState !== WebSocket.OPEN) return;
       websocket.send(JSON.stringify({ event: "getSettings", context }));
     }
-    function providerMetrics(provider = providers[providerSelect.value] ?? providers.codex) {
-      return provider?.metrics ?? [];
+    function requestCatalog() {
+      if (!websocket || !context || websocket.readyState !== WebSocket.OPEN) return;
+      websocket.send(JSON.stringify({ event: "sendToPlugin", action: "com.vertopolkalf.codex-minibar.quota-indicator", context, payload: { op: "catalog" } }));
+    }
+    function providerMetrics(provider = providers[providerSelect.value] ?? providers.codex, profileId = settings.profileIds?.[providerSelect.value] ?? "default") {
+      const providerId = Object.keys(providers).find(id => providers[id] === provider);
+      const live = catalogProviders[providerId];
+      const account = live?.accounts?.find(account => account.id === profileId);
+      const metrics = account?.metrics ?? live?.metrics;
+      return metrics?.map(metric => [metric.id, metric.label]) ?? provider?.metrics ?? [];
+    }
+    function renderAccounts() {
+      const providerId = settings.provider;
+      accountField.hidden = providerId !== "claude" && providerId !== "codex";
+      if (accountField.hidden) return;
+      const live = catalogProviders[providerId];
+      const choices = live?.accounts?.length ? [...live.accounts] : [{ id: "default", name: "Default" }];
+      const selected = settings.profileIds?.[providerId] ?? "default";
+      if (!choices.some(account => account.id === selected)) choices.push({ id: selected, name: `Unavailable (${selected})` });
+      accountSelect.replaceChildren();
+      for (const account of choices) {
+        const option = document.createElement("option");
+        option.value = account.id;
+        const duplicate = choices.filter(other => other.name === account.name).length > 1;
+        option.textContent = duplicate ? `${account.name} ? ${account.id.slice(-8)}` : account.name;
+        accountSelect.append(option);
+      }
+      accountSelect.value = selected;
     }
     function normalizeProviderMark(value, widgetKind) {
       if (value === "logo") return "logo";
@@ -155,7 +189,7 @@
     function normalizeSettings(input) {
       const incomingMetrics = Array.isArray(input?.metricIds) ? input.metricIds.filter(Boolean) : [];
       const provider = providers[input?.provider] ? input.provider : defaultSettings.provider;
-      const metrics = providerMetrics(providers[provider]);
+      const metrics = providerMetrics(providers[provider], input?.profileIds?.[provider] ?? "default");
       const widgetKind = input?.widget ?? (incomingMetrics.length > 1 ? "dual_limit" : defaultSettings.widget);
       const singleMetricId = input?.singleMetricId ?? incomingMetrics[0] ?? metrics[0]?.[0] ?? defaultSettings.singleMetricId;
       const reset = input?.resetDisplay
@@ -167,6 +201,7 @@
         ...defaultSettings,
         ...(input ?? {}),
         provider,
+        profileIds: Object.fromEntries(Object.entries(input?.profileIds ?? {}).filter(([, id]) => typeof id === "string")),
         widget: widgetKind === "dual_limit" ? "dual_limit" : "single_limit",
         singleMetricId,
         metricIds: incomingMetrics.length ? incomingMetrics : [singleMetricId],
@@ -235,9 +270,18 @@
       coloredProviderMark.disabled = (settings.providerMark ?? "hidden") === "hidden";
       clickAction.value = settings.clickAction;
       cycleOptions.hidden = settings.clickAction !== "cycle_provider";
+      renderAccounts();
       renderMetrics();
       renderCycleProviders();
     }
+    accountSelect.addEventListener("change", () => {
+      settings.profileIds = { ...settings.profileIds, [settings.provider]: accountSelect.value };
+      const metrics = providerMetrics();
+      if (!metrics.some(metric => metric[0] === settings.singleMetricId)) settings.singleMetricId = metrics[0]?.[0] ?? "";
+      settings.metricIds = metrics.slice(0, settings.widget === "dual_limit" ? 2 : 1).map(metric => metric[0]);
+      render();
+      sendSettings();
+    });
     providerSelect.addEventListener("change", () => {
       settings.provider = providerSelect.value;
       const metrics = providerMetrics(providers[settings.provider]);
@@ -286,6 +330,7 @@
       websocket = new WebSocket(`ws://127.0.0.1:${port}`);
       websocket.addEventListener("open", () => {
         websocket.send(JSON.stringify({ event: registerEvent, uuid }));
+        requestCatalog();
         if (settingsPending) {
           sendSettings();
         } else {
@@ -294,12 +339,20 @@
       });
       websocket.addEventListener("message", event => {
         const message = JSON.parse(event.data);
+        if (message.event === "sendToPropertyInspector" && message.payload?.type === "catalog") {
+          if (message.payload.ok) {
+            catalogProviders = Object.fromEntries(message.payload.providers.map(provider => [provider.id, provider]));
+            render();
+          }
+          return;
+        }
         if (message.event !== "didReceiveSettings" || !message.payload?.settings) return;
         settings = normalizeSettings(message.payload.settings);
         render();
       });
       render();
     };
+    setInterval(requestCatalog, 2000);
     render();
   </script>
 </body>

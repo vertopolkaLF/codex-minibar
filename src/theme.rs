@@ -70,6 +70,62 @@ pub fn apply_appearance(theme: crate::settings::AppTheme, accent: crate::setting
     }
 }
 
+/// Accent ramp shared by both UI stacks. GPUI uses it directly; WinUI
+/// receives the same values through [`windows_reactor::AccentPalette`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AccentRamp {
+    pub base: (u8, u8, u8),
+    pub light1: (u8, u8, u8),
+    pub light2: (u8, u8, u8),
+    pub light3: (u8, u8, u8),
+    pub dark1: (u8, u8, u8),
+    pub dark2: (u8, u8, u8),
+    pub dark3: (u8, u8, u8),
+}
+
+impl AccentRamp {
+    /// Windows-style ramp by mixing the accent toward white or black, the
+    /// same derivation `windows_reactor` applies for a fixed accent color.
+    pub fn from_base(base: (u8, u8, u8)) -> Self {
+        let palette = windows_reactor::AccentPalette::from_base(base);
+        Self::from(palette)
+    }
+
+    /// Fill role (`AccentFillColorDefaultBrush`) for the resolved theme.
+    pub const fn fill(self, dark: bool) -> (u8, u8, u8) {
+        if dark { self.light2 } else { self.dark1 }
+    }
+
+    /// Text role (`AccentTextFillColorPrimaryBrush`) for the resolved theme.
+    pub const fn text(self, dark: bool) -> (u8, u8, u8) {
+        if dark { self.light3 } else { self.dark2 }
+    }
+}
+
+impl From<windows_reactor::AccentPalette> for AccentRamp {
+    fn from(palette: windows_reactor::AccentPalette) -> Self {
+        Self {
+            base: palette.base,
+            light1: palette.light1,
+            light2: palette.light2,
+            light3: palette.light3,
+            dark1: palette.dark1,
+            dark2: palette.dark2,
+            dark3: palette.dark3,
+        }
+    }
+}
+
+/// Resolve the configured accent without touching any UI framework state.
+pub fn accent_ramp(accent: crate::settings::AccentColor) -> AccentRamp {
+    match accent.rgb() {
+        Some(color) => AccentRamp::from_base(color),
+        None => system_accent_palette()
+            .map(AccentRamp::from)
+            .unwrap_or_else(|_| AccentRamp::from_base((0, 120, 212))),
+    }
+}
+
 #[cfg(windows)]
 fn system_accent_palette() -> windows_core::Result<windows_reactor::AccentPalette> {
     use windows::UI::ViewManagement::{UIColorType, UISettings};

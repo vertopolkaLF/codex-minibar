@@ -1,0 +1,158 @@
+//! Embedded SVG icons for the GPUI popup.
+//!
+//! GPUI paints SVGs as alpha masks tinted by `text_color`, so the Iconify
+//! sources are used as-is for their geometry. Every icon is normalized to a
+//! square, centered view box first: GPUI scales by width only, and marks such
+//! as Kiro (256×312) would otherwise overflow their slot vertically.
+
+use std::borrow::Cow;
+
+use gpui::{AssetSource, SharedString};
+
+pub(crate) struct PopupAssets;
+
+/// Asset path for a popup icon name (the same names `crate::icons` uses).
+pub(crate) fn icon_path(name: &str) -> SharedString {
+    SharedString::from(format!("icons/{name}.svg"))
+}
+
+fn source(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "fluent-refresh" => include_str!("../../../assets/icons/fluent-arrow-sync-24-filled.svg"),
+        "fluent-arrow-download" => {
+            include_str!("../../../assets/icons/fluent-arrow-download-24-filled.svg")
+        }
+        "fluent-settings" => include_str!("../../../assets/icons/fluent-settings-20-filled.svg"),
+        "fluent-power" => include_str!("../../../assets/icons/fluent-power-20-filled.svg"),
+        "fluent-delete" => include_str!("../../../assets/icons/fluent-delete-20-regular.svg"),
+        "fluent-drag" => {
+            include_str!("../../../assets/icons/fluent-re-order-dots-vertical-16-filled.svg")
+        }
+        "fluent-chevron-down" => {
+            include_str!("../../../assets/icons/fluent-chevron-down-16-regular.svg")
+        }
+        "fluent-chart" => include_str!("../../../assets/icons/fluent-data-histogram-24-filled.svg"),
+        "fluent-home" => include_str!("../../../assets/icons/fluent-home-24-filled.svg"),
+        "fluent-error-circle" => {
+            include_str!("../../../assets/icons/fluent-error-circle-16-filled.svg")
+        }
+        "codex" => include_str!("../../../assets/icons/openai-iconify.svg"),
+        "claude" => include_str!("../../../assets/icons/claude-iconify.svg"),
+        "cursor" => include_str!("../../../assets/icons/cursor-iconify.svg"),
+        "opencode" => include_str!("../../../assets/icons/opencode-iconify.svg"),
+        "openrouter" => include_str!("../../../assets/icons/openrouter-iconify.svg"),
+        "antigravity" => include_str!("../../../assets/icons/antigravity.svg"),
+        "grok" => include_str!("../../../assets/icons/grok.svg"),
+        "kiro" => include_str!("../../../assets/icons/kiro-iconify.svg"),
+        "chatgpt" => include_str!("../../../assets/icons/chatgpt-iconify.svg"),
+        _ => return None,
+    })
+}
+
+fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let needle = format!(" {name}=\"");
+    let start = tag.find(&needle)? + needle.len();
+    let end = tag[start..].find('"')? + start;
+    Some(&tag[start..end])
+}
+
+fn strip_attribute(tag: &str, name: &str) -> String {
+    let needle = format!(" {name}=\"");
+    let Some(start) = tag.find(&needle) else {
+        return tag.to_owned();
+    };
+    let value_start = start + needle.len();
+    let Some(end) = tag[value_start..].find('"') else {
+        return tag.to_owned();
+    };
+    format!("{}{}", &tag[..start], &tag[value_start + end + 1..])
+}
+
+/// Rewrite the root `<svg>` tag to a square view box centered on the original
+/// artwork, with explicit pixel dimensions so usvg never resolves `em` units.
+pub(crate) fn normalize_svg(svg: &str) -> String {
+    let Some(open) = svg.find("<svg") else {
+        return svg.to_owned();
+    };
+    let Some(close) = svg[open..].find('>').map(|index| index + open) else {
+        return svg.to_owned();
+    };
+    let tag = &svg[open..close];
+    let numbers = attribute(tag, "viewBox")
+        .map(|value| {
+            value
+                .split(|c: char| c.is_whitespace() || c == ',')
+                .filter(|part| !part.is_empty())
+                .filter_map(|part| part.parse::<f64>().ok())
+                .collect::<Vec<_>>()
+        })
+        .filter(|numbers| numbers.len() == 4)
+        .unwrap_or_else(|| vec![0.0, 0.0, 24.0, 24.0]);
+    let (min_x, min_y, width, height) = (numbers[0], numbers[1], numbers[2], numbers[3]);
+    let side = width.max(height).max(f64::EPSILON);
+    let x = min_x - (side - width) / 2.0;
+    let y = min_y - (side - height) / 2.0;
+    let mut rewritten = tag.to_owned();
+    for name in ["viewBox", "width", "height"] {
+        rewritten = strip_attribute(&rewritten, name);
+    }
+    format!(
+        "{}{} width=\"{side}\" height=\"{side}\" viewBox=\"{x} {y} {side} {side}\"{}",
+        &svg[..open],
+        rewritten,
+        &svg[close..]
+    )
+}
+
+impl AssetSource for PopupAssets {
+    fn load(&self, path: &str) -> anyhow::Result<Option<Cow<'static, [u8]>>> {
+        let Some(name) = path
+            .strip_prefix("icons/")
+            .and_then(|rest| rest.strip_suffix(".svg"))
+        else {
+            return Ok(None);
+        };
+        Ok(source(name).map(|svg| Cow::Owned(normalize_svg(svg).into_bytes())))
+    }
+
+    fn list(&self, _path: &str) -> anyhow::Result<Vec<SharedString>> {
+        Ok(Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tall_marks_are_centered_in_a_square_view_box() {
+        let normalized = normalize_svg(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="0.83em" height="1em" viewBox="0 0 256 312"><path d="M0 0"/></svg>"#,
+        );
+        assert!(normalized.contains(r#"viewBox="-28 0 312 312""#));
+        assert!(normalized.contains(r#"width="312""#));
+        assert!(!normalized.contains("em\""));
+        assert!(normalized.ends_with("<path d=\"M0 0\"/></svg>"));
+    }
+
+    #[test]
+    fn every_popup_icon_is_embedded() {
+        for name in [
+            "fluent-refresh",
+            "fluent-arrow-download",
+            "fluent-settings",
+            "fluent-delete",
+            "fluent-drag",
+            "fluent-chevron-down",
+            "fluent-chart",
+            "fluent-home",
+            "fluent-error-circle",
+        ] {
+            assert!(source(name).is_some(), "{name}");
+        }
+        for descriptor in crate::provider_registry::PROVIDERS {
+            assert!(source(descriptor.icon).is_some(), "{}", descriptor.icon);
+        }
+        assert!(source("chatgpt").is_some());
+    }
+}

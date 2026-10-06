@@ -319,9 +319,24 @@ fn report_app_start_result(result: Result<()>) -> Result<()> {
     result
 }
 
+/// Prepare native DPI/COM state without starting or loading the XAML app.
+pub fn prepare_ui_thread() -> Result<()> {
+    init_app_platform()
+}
+
 fn init_app_platform() -> Result<()> {
+    static DPI: std::sync::OnceLock<std::result::Result<(), windows_core::HRESULT>> =
+        std::sync::OnceLock::new();
     // SAFETY: FFI call into user32; returns HRESULT and has no aliasing requirements.
-    unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2).ok()? };
+    // DPI must be set before GPUI starts, and a second call at lazy WinUI
+    // startup would otherwise fail with ERROR_ACCESS_DENIED.
+    DPI.get_or_init(|| unsafe {
+        SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
+            .ok()
+            .map_err(|error| error.code())
+    })
+    .as_ref()
+    .map_err(|code| Error::from(*code))?;
 
     // SAFETY: FFI call into ole32; null reserved arg is documented as required.
     let coinit_hr = unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) };

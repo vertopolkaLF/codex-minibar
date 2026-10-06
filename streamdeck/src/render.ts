@@ -23,6 +23,7 @@ export type ProviderMark = "hidden" | "text" | "logo";
 
 export interface ActionSettings extends JsonObject {
   provider: string;
+  profileIds: Record<string, string>;
   widget: WidgetKind;
   singleMetricId: string;
   metricIds: string[];
@@ -42,6 +43,7 @@ export interface ActionSettings extends JsonObject {
 
 export const DEFAULT_SETTINGS: ActionSettings = {
   provider: "codex",
+  profileIds: {},
   widget: "single_limit",
   singleMetricId: "codex.session",
   metricIds: ["codex.session"],
@@ -196,6 +198,7 @@ export function normalizeSettings(settings: Partial<ActionSettings> | undefined)
     ...DEFAULT_SETTINGS,
     ...settings,
     widget,
+    profileIds: Object.fromEntries(Object.entries(settings?.profileIds ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string")),
     singleMetricId: settings?.singleMetricId ?? legacyMetricIds[0] ?? DEFAULT_SETTINGS.singleMetricId,
     presentation: normalizePresentation(settings?.presentation),
     resetDisplay,
@@ -215,6 +218,17 @@ export function activeProvider(settings: ActionSettings): string {
     return settings.provider;
   }
   return settings.cycleProviders[settings.cycleIndex % settings.cycleProviders.length] ?? settings.provider;
+}
+
+/** Select by persistent account identity; never borrow another account's quota. */
+export function selectedProvider(snapshot: SnapshotResponse | null, settings: ActionSettings): ProviderSnapshot | null {
+  const providerId = activeProvider(settings);
+  const provider = snapshot?.providers.find(item => item.id === providerId) ?? null;
+  if (!provider) return null;
+  const profileId = settings.profileIds[providerId] ?? "default";
+  if (providerId !== "claude" && providerId !== "codex") return provider;
+  if (!provider.accounts?.length) return profileId === "default" ? provider : null;
+  return provider.accounts.find(account => account.profile_id === profileId) ?? null;
 }
 
 interface MetricRow {
@@ -874,6 +888,6 @@ function renderSvg(provider: ProviderSnapshot | null, settings: ActionSettings, 
 
 export function renderIndicator(snapshot: SnapshotResponse | null, settings: ActionSettings, connected: boolean): string {
   if (!connected) return `data:image/svg+xml,${encodeURIComponent(minibarLogoSvg())}`;
-  const provider = snapshot?.providers.find(item => item.id === activeProvider(settings)) ?? null;
+  const provider = selectedProvider(snapshot, settings);
   return `data:image/svg+xml,${encodeURIComponent(renderSvg(provider, settings, connected))}`;
 }

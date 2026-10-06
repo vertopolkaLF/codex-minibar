@@ -2,8 +2,10 @@ use std::collections::HashSet;
 
 use chrono::TimeZone;
 
+use super::model::*;
 use super::*;
 use crate::claude::set_home_profile_visibility as set_claude_home_visibility;
+use crate::limits::OpenRouterAccountSnapshot;
 use crate::settings::{PopupSurface, PopupVisibility};
 
 #[test]
@@ -141,16 +143,6 @@ fn claude_account_tabs_follow_enabled_profiles_and_fall_back_after_removal() {
         selected_claude_account_tab(&tabs, Some("removed")),
         Some("work")
     );
-    let mut reversed = tabs.clone();
-    reversed.reverse();
-    assert_ne!(
-        claude_account_tabs_key(&tabs),
-        claude_account_tabs_key(&reversed)
-    );
-    assert_ne!(
-        claude_account_tabs_key(&tabs),
-        claude_account_tabs_key(&tabs[..1])
-    );
     assert_eq!(selected_claude_account_tab(&[], Some("work")), None);
     let disabled = saved
         .into_iter()
@@ -223,6 +215,37 @@ fn plan_limits(plan_type: &str) -> RateLimits {
         },
         ..Default::default()
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn test_cards<'a>(
+    provider: ProviderKind,
+    is_first: bool,
+    limits: &'a RateLimits,
+    visibility: &PopupVisibility,
+    surface: PopupSurface,
+    show_provider_tabs: bool,
+    include_usage_stats: bool,
+    show_account_name: bool,
+) -> Vec<Card<'a>> {
+    provider_cards(
+        provider,
+        is_first,
+        limits,
+        &[],
+        &CardOptions {
+            popup_visibility: visibility,
+            surface,
+            show_provider_tabs,
+            include_usage_stats,
+            show_account_name,
+            profile_id: None,
+            drag_handle: false,
+            openrouter_actions: false,
+            provider_error: None,
+            now: Utc::now(),
+        },
+    )
 }
 
 fn all_visible() -> PopupVisibility {
@@ -337,25 +360,30 @@ fn combined_spend_uses_usage_tab_windows() {
             today
         )
     );
-    assert_eq!(format_spend(1_250_000), "$1.25");
+    assert_eq!(format_usd(1.25), "$1.25");
 }
 
 #[test]
-fn spend_donut_uses_native_arc_geometry() {
-    let xaml = combined_usage_donut_xaml(
+fn spend_donut_segments_cover_the_ring_with_gaps() {
+    let segments = ui::donut_segments(
         &[
             (ProviderKind::Cursor, 2_000_000),
             (ProviderKind::Claude, 1_000_000),
             (ProviderKind::Codex, 500_000),
         ],
         3_500_000,
-        ColorScheme::Dark,
     );
-
-    assert!(xaml.starts_with("<Grid"));
-    assert_eq!(xaml.matches("<Path ").count(), 3);
-    assert!(xaml.contains(" A 53.00 53.00 "));
-    assert!(!xaml.contains("Rectangle"));
+    assert_eq!(segments.len(), 3);
+    assert_eq!(segments[0].0, Some(ProviderKind::Cursor));
+    // Each slice keeps half of a 2° gap on both ends.
+    assert!((segments[0].1 - -89.0).abs() < 1e-3);
+    let sweep: f32 = segments.iter().map(|(_, start, end)| end - start).sum();
+    assert!((sweep - (360.0 - 6.0)).abs() < 1e-2);
+    assert_eq!(ui::donut_segments(&[], 0), vec![(None, -90.0, 270.0)]);
+    assert_eq!(
+        ui::donut_segments(&[(ProviderKind::Codex, 5)], 5),
+        vec![(Some(ProviderKind::Codex), -90.0, 270.0)]
+    );
 }
 
 #[test]
@@ -376,86 +404,41 @@ fn usage_statistics_section_respects_its_live_toggle() {
             .contains(&PopupSection::UsageStatistics)
     );
     let excluded_from_home = all_visible();
-    let home_cards = provider_cards(
+    let home_cards = test_cards(
         ProviderKind::OpenCodeZen,
         true,
         &limits,
-        &[],
-        false,
-        true,
-        false,
-        true,
         &excluded_from_home,
         PopupSurface::HomeTab,
         true,
         false,
         false,
-        ColorScheme::Dark,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-        None,
-        None,
-        None,
     );
     assert_eq!(home_cards.len(), 1);
 
-    let provider_page_cards = provider_cards(
+    let provider_page_cards = test_cards(
         ProviderKind::OpenCodeZen,
         true,
         &limits,
-        &[],
-        false,
-        true,
-        false,
-        true,
         &excluded_from_home,
         PopupSurface::ProviderTab,
         true,
         true,
         false,
-        ColorScheme::Dark,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-        None,
-        None,
-        None,
     );
     assert_eq!(provider_page_cards.len(), 2);
 
     let mut hidden_usage = all_visible();
     hidden_usage.set_brick("opencode.usage", false, false);
-    let cards = provider_cards(
+    let cards = test_cards(
         ProviderKind::OpenCodeZen,
         true,
         &limits,
-        &[],
-        false,
-        true,
-        false,
-        true,
         &hidden_usage,
         PopupSurface::ProviderTab,
         true,
         true,
         false,
-        ColorScheme::Dark,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-        None,
-        None,
-        None,
     );
     assert_eq!(cards.len(), 1);
 }
@@ -508,117 +491,6 @@ fn exhausted_limit_is_compact_in_both_percentage_modes() {
 }
 
 #[test]
-fn popup_body_key_changes_when_pace_label_appears_or_hides() {
-    let now = Utc::now();
-    let visible = RateLimits {
-        primary: LimitWindow {
-            used_percent: Some(20),
-            resets_at: Some(now + ChronoDuration::hours(4)),
-            duration_minutes: Some(300),
-        },
-        ..Default::default()
-    };
-    let hidden = RateLimits {
-        primary: LimitWindow {
-            used_percent: Some(20),
-            resets_at: Some(now + ChronoDuration::hours(4) + ChronoDuration::minutes(55)),
-            duration_minutes: Some(300),
-        },
-        ..Default::default()
-    };
-    let visible_key = popup_body_height_key(
-        &ProviderLimits::from_entries([(ProviderKind::Codex, visible)]),
-        PopupView::Codex,
-        false,
-        true,
-        0,
-    );
-    let hidden_key = popup_body_height_key(
-        &ProviderLimits::from_entries([(ProviderKind::Codex, hidden)]),
-        PopupView::Codex,
-        false,
-        true,
-        0,
-    );
-
-    assert_ne!(visible_key, hidden_key);
-
-    let no_tibo_key =
-        popup_body_height_key(&ProviderLimits::default(), PopupView::Codex, false, true, 0);
-    let two_tibo_key =
-        popup_body_height_key(&ProviderLimits::default(), PopupView::Codex, false, true, 2);
-    assert_ne!(no_tibo_key, two_tibo_key);
-}
-
-#[test]
-fn swap_chain_strip_keys_include_identity_inputs_without_hover_state() {
-    let providers = vec![ProviderKind::Codex, ProviderKind::Claude];
-    let same = provider_tabs_key(&providers, true, true, false, ColorScheme::Dark, &[]);
-    assert_eq!(
-        same,
-        provider_tabs_key(&providers, true, true, false, ColorScheme::Dark, &[])
-    );
-    assert_ne!(
-        same,
-        provider_tabs_key(
-            &[ProviderKind::Codex],
-            true,
-            true,
-            false,
-            ColorScheme::Dark,
-            &[],
-        )
-    );
-    assert_ne!(
-        same,
-        provider_tabs_key(
-            &[ProviderKind::Claude, ProviderKind::Codex],
-            true,
-            true,
-            false,
-            ColorScheme::Dark,
-            &[],
-        )
-    );
-    assert_ne!(
-        same,
-        provider_tabs_key(&providers, true, true, true, ColorScheme::Dark, &[])
-    );
-    assert_ne!(
-        same,
-        provider_tabs_key(&providers, true, true, false, ColorScheme::Light, &[])
-    );
-    assert_ne!(
-        same,
-        provider_tabs_key(
-            &providers,
-            true,
-            true,
-            false,
-            ColorScheme::Dark,
-            &[ProviderKind::Claude],
-        )
-    );
-
-    assert_ne!(
-        footer_actions_key(false, ColorScheme::Dark),
-        footer_actions_key(true, ColorScheme::Dark)
-    );
-    assert_ne!(
-        footer_actions_key(false, ColorScheme::Dark),
-        footer_actions_key(false, ColorScheme::Light)
-    );
-
-    let without_update = provider_tab_strip_viewport_width(false);
-    let with_update = provider_tab_strip_viewport_width(true);
-    let size = popup::bottom_bar_size();
-    assert_eq!(
-        without_update - with_update,
-        size.icon_button_size() + size.action_spacing()
-    );
-}
-
-#[test]
 fn popup_visibility_hides_codex_resets_on_all_but_shows_on_provider_tab() {
     let mut limits = plan_limits("plus");
     limits.reset_credits = Some(crate::limits::RateLimitResetCreditsSummary {
@@ -626,55 +498,25 @@ fn popup_visibility_hides_codex_resets_on_all_but_shows_on_provider_tab() {
         ..Default::default()
     });
     let visibility = visibility_with("codex.resets", false, true);
-    let all_cards = provider_cards(
+    let all_cards = test_cards(
         ProviderKind::Codex,
         true,
         &limits,
-        &[],
-        false,
-        true,
-        false,
-        true,
         &visibility,
         PopupSurface::HomeTab,
         true,
         true,
         false,
-        ColorScheme::Dark,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-        None,
-        None,
-        None,
     );
-    let tab_cards = provider_cards(
+    let tab_cards = test_cards(
         ProviderKind::Codex,
         true,
         &limits,
-        &[],
-        false,
-        true,
-        false,
-        true,
         &visibility,
         PopupSurface::ProviderTab,
         true,
         true,
         false,
-        ColorScheme::Dark,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-        None,
-        None,
-        None,
     );
     assert_eq!(all_cards.len(), 3);
     assert_eq!(tab_cards.len(), 4);
@@ -706,30 +548,15 @@ fn popup_section_all_off_drops_provider_from_home_tab() {
     );
     assert!(!widgets.contains(&PopupWidgetKind::Codex));
     let limits = plan_limits("plus");
-    let tab_cards = provider_cards(
+    let tab_cards = test_cards(
         ProviderKind::Codex,
         true,
         &limits,
-        &[],
-        false,
-        true,
-        false,
-        true,
         &visibility,
         PopupSurface::ProviderTab,
         true,
         true,
         false,
-        ColorScheme::Dark,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-        None,
-        None,
-        None,
     );
     assert!(!tab_cards.is_empty());
 }
@@ -823,33 +650,26 @@ fn provider_cards_include_each_additional_limit() {
             },
         });
 
-    let cards = provider_cards(
+    let cards = test_cards(
         ProviderKind::Claude,
         true,
         &limits,
-        &[],
-        false,
-        true,
-        false,
-        true,
         &all_visible(),
         PopupSurface::ProviderTab,
         true,
         true,
         false,
-        ColorScheme::Dark,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-        None,
-        None,
-        None,
     );
     // Heading + 5h + weekly + Fable (no separate plan metadata row).
     assert_eq!(cards.len(), 4);
+    assert_eq!(
+        cards
+            .iter()
+            .filter_map(Card::limit_title)
+            .collect::<Vec<_>>(),
+        vec!["5H SESSION", "WEEKLY", "FABLE"]
+    );
+    assert!(!cards.iter().any(Card::is_usage_statistics));
 }
 
 #[test]
@@ -1295,28 +1115,6 @@ fn stale_pager_completion_cannot_end_a_newer_transition() {
 
 #[test]
 fn openrouter_places_each_chart_inside_its_own_account_on_both_surfaces() {
-    fn chart_keys(element: &Element, keys: &mut Vec<String>) {
-        if let Some(key) = element
-            .key()
-            .filter(|key| key.starts_with("activity-chart-"))
-        {
-            keys.push(key.into());
-        }
-        match element {
-            Element::StackPanel(panel) => {
-                for child in &panel.children {
-                    chart_keys(child, keys);
-                }
-            }
-            Element::Grid(grid) => {
-                for child in &grid.children {
-                    chart_keys(child, keys);
-                }
-            }
-            Element::Border(border) => chart_keys(&border.child, keys),
-            _ => {}
-        }
-    }
     let date = Local::now().date_naive();
     let mut limits = RateLimits::default();
     for (id, requests) in [("first", 2), ("second", 7)] {
@@ -1338,55 +1136,39 @@ fn openrouter_places_each_chart_inside_its_own_account_on_both_surfaces() {
         stats.account_id = Some(id.into());
         limits.usage.accounts.insert(id.into(), stats);
     }
-    for scheme in [ColorScheme::Dark, ColorScheme::Light] {
+    {
         for surface in [PopupSurface::HomeTab, PopupSurface::ProviderTab] {
             for spending in [true, false] {
                 let mut visibility = all_visible();
                 visibility.set_brick("openrouter.spending", spending, spending);
                 visibility.set_brick("openrouter.usage", true, true);
-                let cards = provider_cards(
+                let cards = test_cards(
                     ProviderKind::OpenRouter,
                     true,
                     &limits,
-                    &[],
-                    false,
-                    true,
-                    false,
-                    true,
                     &visibility,
                     surface,
                     true,
                     true,
                     false,
-                    scheme,
-                    None,
-                    None,
-                    None,
-                    false,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
                 );
                 assert_eq!(cards.len(), 3); // provider heading and two account strips; no combined card.
                 for (index, id) in ["first", "second"].iter().enumerate() {
-                    let mut keys = Vec::new();
-                    chart_keys(&cards[index + 1], &mut keys);
-                    assert_eq!(keys, vec![format!("activity-chart-openrouter-{id}")]);
+                    let charts = cards[index + 1]
+                        .nested()
+                        .iter()
+                        .filter_map(|card| match card {
+                            Card::UsageStatistics { statistics, .. } => {
+                                statistics.account_id.as_deref()
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(charts, vec![*id]);
                 }
             }
         }
     }
-    let before = openrouter_accounts_strip_key(&limits);
-    limits
-        .usage
-        .accounts
-        .get_mut("first")
-        .unwrap()
-        .daily
-        .clear();
-    assert_ne!(before, openrouter_accounts_strip_key(&limits));
 }
 
 #[test]
@@ -1521,44 +1303,6 @@ fn popup_first_frame_excludes_openrouter_usage_without_a_management_key() {
 }
 
 #[test]
-fn pager_native_host_identity_survives_outgoing_page_removal() {
-    let current: Element = scroll_viewer(caption("provider"))
-        .with_key(popup_page_host_key("current"))
-        .into();
-    let outgoing: Element = scroll_viewer(caption("Home"))
-        .with_key(popup_page_host_key("outgoing"))
-        .into();
-    let during = grid(vec![outgoing, current.clone()]);
-    let after = grid(vec![current]);
-    assert_eq!(during.children[1].key(), after.children[0].key());
-    assert_ne!(during.children[0].key(), during.children[1].key());
-    assert!(during.children.iter().all(|page| page.key().is_some()));
-}
-
-#[test]
-fn two_column_native_host_stays_wide_on_every_compact_provider_page() {
-    for enabled in [false, true] {
-        let host_width = popup::native_host_width_for_layout(enabled);
-        assert_eq!(
-            host_width,
-            if enabled {
-                popup::POPUP_WIDE_WIDTH
-            } else {
-                popup::POPUP_WIDTH
-            }
-        );
-        for provider in ProviderKind::ALL {
-            let view = PopupView::from_provider(provider);
-            assert!(!view.uses_two_columns(enabled));
-            assert!(host_width >= popup::POPUP_WIDTH);
-            if enabled {
-                assert!(host_width > popup::POPUP_WIDTH);
-            }
-        }
-    }
-}
-
-#[test]
 fn home_shows_every_claude_profile_as_its_own_strip() {
     let mut limits = plan_limits("max");
     for id in ["default", "work"] {
@@ -1571,38 +1315,150 @@ fn home_shows_every_claude_profile_as_its_own_strip() {
                 error: None,
             });
     }
-    let cards = provider_cards(
+    let cards = test_cards(
         ProviderKind::Claude,
         true,
         &limits,
-        &[],
-        false,
-        true,
-        false,
-        true,
         &all_visible(),
         PopupSurface::HomeTab,
         true,
         true,
         false,
-        ColorScheme::Dark,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-        None,
-        None,
-        None,
     );
     // One keyed strip per profile instead of one flat list of limit cards.
     assert_eq!(cards.len(), 2);
 }
 
 #[test]
+fn home_accounts_move_independently_and_restore_hidden_positions() {
+    for kind in [PopupWidgetKind::Claude, PopupWidgetKind::Codex] {
+        let default = HomeWidgetId::new(kind, Some("default"));
+        let personal = HomeWidgetId::new(kind, Some("personal"));
+        let cursor = HomeWidgetId::new(PopupWidgetKind::Cursor, None);
+        let saved = vec![
+            crate::settings::AccountProfile {
+                id: "default".into(),
+                name: "Same name".into(),
+                enabled: true,
+            },
+            crate::settings::AccountProfile {
+                id: "personal".into(),
+                name: "Same name".into(),
+                enabled: true,
+            },
+        ];
+        let mut ui = UiState {
+            cursor_enabled: true,
+            ..Default::default()
+        };
+        match kind {
+            PopupWidgetKind::Claude => {
+                ui.claude_enabled = true;
+                ui.claude_profiles = saved;
+            }
+            PopupWidgetKind::Codex => {
+                ui.codex_enabled = true;
+                ui.codex_profiles = saved;
+            }
+            _ => unreachable!(),
+        }
+        assert_ne!(default.id(), personal.id());
+        let initial = home_widget_order(&ui);
+        let default_was_right = home_widget_right_column(&ui, false).contains(&default);
+        let (order, right) =
+            home_widget_drop_layout(&ui, &personal, &cursor, Some(1), false).unwrap();
+        assert_eq!(
+            order.iter().position(|w| w == &default),
+            initial.iter().position(|w| w == &default)
+        );
+        assert!(right.contains(&personal));
+        assert_eq!(right.contains(&default), default_was_right);
+        ui.popup_home_order = order.clone();
+        ui.popup_home_right_column = Some(right.clone());
+        let settings = Settings {
+            popup_home_order: order,
+            popup_home_right_column: Some(right),
+            ..Default::default()
+        };
+        let restored: Settings = toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.popup_home_order, ui.popup_home_order);
+        assert_eq!(restored.popup_home_right_column, ui.popup_home_right_column);
+        let profiles = match kind {
+            PopupWidgetKind::Claude => &mut ui.claude_profiles,
+            _ => &mut ui.codex_profiles,
+        };
+        profiles[1].name = "Renamed".into();
+        profiles[1].enabled = false;
+        assert!(!visible_home_widgets(&ui, false).contains(&personal));
+        assert_eq!(home_widget_order(&ui), restored.popup_home_order);
+        // Reordering other visible widgets leaves the disabled account's slot intact.
+        let hidden_slot = home_widget_order(&ui)
+            .iter()
+            .position(|w| w == &personal)
+            .unwrap();
+        let (order, _) = home_widget_drop_layout(&ui, &default, &cursor, None, false).unwrap();
+        assert_eq!(order.iter().position(|w| w == &personal), Some(hidden_slot));
+        ui.popup_home_order = order;
+        match kind {
+            PopupWidgetKind::Claude => ui.claude_profiles[1].enabled = true,
+            _ => ui.codex_profiles[1].enabled = true,
+        };
+        assert!(visible_home_widgets(&ui, false).contains(&personal));
+        assert!(home_widget_right_column(&ui, false).contains(&personal));
+    }
+}
+
+#[test]
+fn home_account_layout_inherits_legacy_columns_and_places_new_accounts_near_their_provider() {
+    let mut ui = UiState {
+        claude_enabled: true,
+        cursor_enabled: true,
+        popup_right_column: Some(vec![PopupWidgetKind::Claude]),
+        ..Default::default()
+    };
+    let default = HomeWidgetId::new(PopupWidgetKind::Claude, Some("default"));
+    assert!(home_widget_right_column(&ui, false).contains(&default));
+    ui.popup_home_order = home_widget_order(&ui);
+    ui.claude_profiles.push(crate::settings::AccountProfile {
+        id: "work".into(),
+        name: "Work".into(),
+        enabled: true,
+    });
+    let work = HomeWidgetId::new(PopupWidgetKind::Claude, Some("work"));
+    let order = home_widget_order(&ui);
+    assert_eq!(
+        order.iter().position(|w| w == &work),
+        order
+            .iter()
+            .position(|w| w == &default)
+            .map(|index| index + 1)
+    );
+    assert!(home_widget_right_column(&ui, false).contains(&work));
+    let widgets = visible_home_widgets(
+        &UiState {
+            popup_right_column: None,
+            ..ui.clone()
+        },
+        false,
+    );
+    assert_eq!(
+        home_widget_right_column(
+            &UiState {
+                popup_right_column: None,
+                ..ui.clone()
+            },
+            false
+        ),
+        widgets.into_iter().skip(1).step_by(2).collect::<Vec<_>>()
+    );
+    let legacy: Settings = toml::from_str("version = 38\n").unwrap();
+    assert!(legacy.popup_home_order.is_empty());
+    assert!(legacy.popup_home_right_column.is_none());
+}
+
+#[test]
 fn codex_and_claude_account_tabs_cover_all_provider_and_account_sets() {
-    let saved = vec![
+    let saved = [
         crate::settings::CodexProfile {
             id: "default".into(),
             name: "Default".into(),
@@ -1673,14 +1529,6 @@ fn codex_and_claude_account_tabs_cover_all_provider_and_account_sets() {
             }
         }
     }
-    assert_ne!(
-        codex_account_tabs_key(&saved),
-        codex_account_tabs_key(&saved[..1])
-    );
-    assert_ne!(
-        codex_account_tabs_key(&saved),
-        codex_account_tabs_key(&saved.iter().rev().cloned().collect::<Vec<_>>())
-    );
 }
 
 #[test]

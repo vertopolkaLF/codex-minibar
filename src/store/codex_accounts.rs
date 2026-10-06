@@ -130,6 +130,12 @@ pub(crate) fn current_id() -> String {
     id_from_observation(observe_auth(&codex_home().join("auth.json")))
 }
 
+/// Last account observed by the usage workers. Render paths must use this
+/// instead of reading and decoding auth.json on every animation frame.
+pub(crate) fn cached_current_id() -> String {
+    last_id().unwrap_or_else(|| UNKNOWN.into())
+}
+
 /// Stable identity for the usage worker. `None` means the file was unreadably
 /// mid-update; keep the previous account instead of flashing logged-out.
 pub(crate) fn poll_identity() -> Option<String> {
@@ -890,14 +896,18 @@ mod tests {
             session: None,
         });
         remember(None);
+        assert_eq!(cached_current_id(), UNKNOWN);
         assert_eq!(id_from_observation(account), "acct-a");
+        assert_eq!(cached_current_id(), "acct-a");
         assert_eq!(id_from_observation(Observation::Uncertain), "acct-a");
         assert_eq!(poll_from_observation(Observation::Uncertain), None);
+        assert_eq!(cached_current_id(), "acct-a");
         assert_eq!(
             poll_from_observation(Observation::LoggedOut).as_deref(),
             Some(UNKNOWN)
         );
         assert_eq!(id_from_observation(Observation::LoggedOut), UNKNOWN);
+        assert_eq!(cached_current_id(), UNKNOWN);
         remember(None);
     }
 

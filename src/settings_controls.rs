@@ -1179,3 +1179,146 @@ pub(crate) fn settings_brick_row(
     .with_key(format!("popup-brick-row-{row_key}"))
     .into()
 }
+
+/// Pill segmented control (WinUI) used by Settings dialogs.
+pub(crate) struct SegmentedTab {
+    label: String,
+    selected: bool,
+    on_click: Callback<()>,
+}
+
+pub(crate) fn segmented_tab(
+    label: impl Into<String>,
+    selected: bool,
+    on_click: impl IntoUnitCallback,
+) -> SegmentedTab {
+    SegmentedTab {
+        label: label.into(),
+        selected,
+        on_click: on_click.into_unit_callback(),
+    }
+}
+
+fn segmented_tab_width(label: &str) -> f64 {
+    (label.chars().count() as f64 * 8.0 + 22.0).max(48.0)
+}
+
+pub(crate) fn segmented_control(key: &str, tabs: Vec<SegmentedTab>, stretch: bool) -> Element {
+    let count = tabs.len().max(1);
+    let selected = tabs.iter().position(|tab| tab.selected).unwrap_or(0);
+    let anim = crate::theme::duration(crate::theme::CONTROL_FAST_ANIMATION);
+    let cell_width = if stretch {
+        (f64::from(crate::popup::POPUP_WIDTH) - 2.0 - 32.0) / count as f64
+    } else {
+        tabs.iter()
+            .map(|tab| segmented_tab_width(&tab.label))
+            .fold(0.0, f64::max)
+    };
+    let columns = vec![
+        if stretch {
+            GridLength::Star(1.0)
+        } else {
+            GridLength::Pixel(cell_width)
+        };
+        count
+    ];
+    // One pill per cell, faded with Opacity — the same channel that already
+    // animates the labels. A single overlay thumb (Margin / Translation /
+    // Offset) either teleports or gets laid out into limbo.
+    let cells = tabs
+        .into_iter()
+        .enumerate()
+        .map(|(index, tab)| {
+            let hide_divider =
+                index == 0 || selected == index || selected == index.saturating_sub(1);
+            let pill = border(Element::Empty)
+                .corner_radius(8.0)
+                .background(ThemeRef::Accent)
+                .opacity(if index == selected { 1.0 } else { 0.0 })
+                .with_opacity_transition(anim)
+                .margin(Thickness::uniform(0.0))
+                .padding(Thickness::uniform(0.0))
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .vertical_alignment(VerticalAlignment::Stretch)
+                .with_key(format!("{key}-pill-{}", tab.label));
+            let idle = caption(tab.label.clone())
+                .font_weight(600)
+                .foreground(ThemeRef::PrimaryText)
+                .opacity(if index == selected { 0.0 } else { 1.0 })
+                .with_opacity_transition(anim)
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center)
+                .with_key(format!("{key}-idle-{}", tab.label));
+            let active = caption(tab.label.clone())
+                .font_weight(600)
+                .foreground(ThemeRef::custom("TextOnAccentFillColorPrimaryBrush"))
+                .opacity(if index == selected { 1.0 } else { 0.0 })
+                .with_opacity_transition(anim)
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center)
+                .with_key(format!("{key}-on-{}", tab.label));
+            let text_layers: Vec<Element> = vec![idle.into(), active.into()];
+            let texts = border(grid(text_layers))
+                .padding(Thickness {
+                    left: 10.0,
+                    top: 9.0,
+                    right: 10.0,
+                    bottom: 9.0,
+                })
+                .background(Color::transparent())
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .vertical_alignment(VerticalAlignment::Stretch);
+            let cell_layers: Vec<Element> = vec![pill.into(), texts.into()];
+            let label = grid(cell_layers)
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .vertical_alignment(VerticalAlignment::Stretch)
+                .on_tapped(tab.on_click);
+            let cell: Element = if index == 0 {
+                label.into()
+            } else {
+                grid((
+                    border(Element::Empty)
+                        .width(1.0)
+                        .horizontal_alignment(HorizontalAlignment::Left)
+                        .vertical_alignment(VerticalAlignment::Stretch)
+                        .background(ThemeRef::DividerStroke)
+                        .opacity(if hide_divider { 0.0 } else { 1.0 })
+                        .with_opacity_transition(anim)
+                        .margin(Thickness {
+                            left: 0.0,
+                            top: 6.0,
+                            right: 0.0,
+                            bottom: 6.0,
+                        })
+                        .with_key(format!("{key}-rule-{index}")),
+                    label,
+                ))
+                .into()
+            };
+            cell.horizontal_alignment(HorizontalAlignment::Stretch)
+                .grid_column(index as i32)
+                .with_key(format!("{key}-tab-{}", tab.label))
+        })
+        .collect::<Vec<_>>();
+    let track = grid(cells)
+        .columns(columns)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Stretch);
+    let track = if stretch {
+        track
+    } else {
+        track.width(cell_width * count as f64)
+    };
+
+    border(track)
+        .padding(Thickness::uniform(0.0))
+        .corner_radius(8.0)
+        .background(ThemeRef::ControlFill)
+        .horizontal_alignment(if stretch {
+            HorizontalAlignment::Stretch
+        } else {
+            HorizontalAlignment::Left
+        })
+        .with_key(format!("{key}-{count}"))
+        .into()
+}
