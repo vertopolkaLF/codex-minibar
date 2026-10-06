@@ -1068,19 +1068,45 @@ impl Render for PopupRoot {
             cx,
         ));
 
-        let mut shell = div().flex().flex_col().size_full().child(
-            div()
-                .id("popup-page-viewport")
-                .relative()
-                .flex_1()
-                .min_h_0()
-                .overflow_hidden()
-                .children(pages),
-        );
+        let shell = div()
+            .id("popup-page-viewport")
+            .absolute()
+            .top(px(CHROME_INSET))
+            .left(px(CHROME_INSET))
+            .right(px(CHROME_INSET))
+            .bottom(px(self.chrome_height() - CHROME_INSET))
+            .overflow_hidden()
+            .children(pages);
+
+        // Anchor persistent chrome to the FIXED technical host, not to the
+        // animated capsule's top/height or a flex page layout. Otherwise
+        // rounding top and height separately can move the footer by a pixel
+        // as the height spring progresses. Only horizontal open/width motion
+        // is shared with the capsule; the footer's vertical bounds stay fixed.
+        let chrome_right = margin - offset + CHROME_INSET;
+        let chrome_width = (capsule_w - CHROME_INSET * 2.0).max(0.0);
+        let footer = div()
+            .id("popup-pinned-footer")
+            .absolute()
+            .right(px(chrome_right))
+            .bottom(px(CHROME_INSET))
+            .w(px(chrome_width))
+            .h(px(self.footer_height()))
+            .child(self.render_footer(capsule_w, window, cx));
+        let mut chrome = vec![footer.into_any_element()];
         if self.show_profile_strip() {
-            shell = shell.child(self.render_profile_strip(window, cx));
+            chrome.push(
+                div()
+                    .id("popup-pinned-profiles")
+                    .absolute()
+                    .right(px(chrome_right))
+                    .bottom(px(CHROME_INSET + self.footer_height()))
+                    .w(px(chrome_width))
+                    .h(px(PROFILE_STRIP_HEIGHT))
+                    .child(self.render_profile_strip(window, cx))
+                    .into_any_element(),
+            );
         }
-        shell = shell.child(self.render_footer(capsule_w, window, cx));
 
         let mut capsule = div()
             .id("popup-capsule")
@@ -1113,7 +1139,7 @@ impl Render for PopupRoot {
                     .rounded(px(radius))
                     .bg(palette.solid_background),
             )
-            .child(div().absolute().inset_0().p(px(CHROME_INSET)).child(shell))
+            .child(shell)
             // A hairline keeps the capsule edge crisp against any wallpaper.
             .child(
                 div()
@@ -1140,7 +1166,12 @@ impl Render for PopupRoot {
             .size_full()
             .relative()
             .font_weight(FontWeight::NORMAL)
+            .font_family(palette.font_family.clone())
+            .text_color(palette.text_primary)
+            .text_size(px(14.0))
+            .line_height(px(20.0))
             .child(capsule)
+            .children(chrome)
     }
 }
 
