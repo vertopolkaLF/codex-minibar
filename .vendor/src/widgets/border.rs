@@ -4,6 +4,8 @@ use super::*;
 pub struct Border {
     pub key: Option<String>,
     pub modifiers: Modifiers,
+    pub mounted: Option<Callback<Option<windows_core::IInspectable>>>,
+    pub unmounted: Option<Callback<Option<windows_core::IInspectable>>>,
     pub corner_radius: Option<f64>,
     pub corner_radii: Option<CornerRadii>,
     pub border_brush: Option<BrushBinding>,
@@ -15,6 +17,8 @@ impl Border {
         Self {
             key: None,
             modifiers: Modifiers::default(),
+            mounted: None,
+            unmounted: None,
             corner_radius: None,
             corner_radii: None,
             border_brush: None,
@@ -28,6 +32,27 @@ impl Border {
     pub fn corner_radius(mut self, v: f64) -> Self {
         self.corner_radius = Some(v);
         self.corner_radii = None;
+        self
+    }
+
+    /// Crop all descendants to this border's uniform rounded contour.
+    /// Call after `corner_radius`; the clip follows the arranged size.
+    pub fn clip_contents(mut self) -> Self {
+        let radius = self.corner_radius.unwrap_or(0.0);
+        self.mounted = Some(Callback::new(
+            move |native: Option<windows_core::IInspectable>| {
+                if let Some(native) = native {
+                    let _ = install_rounded_clip(native, radius);
+                }
+            },
+        ));
+        self.unmounted = Some(Callback::new(
+            |native: Option<windows_core::IInspectable>| {
+                if let Some(native) = native {
+                    let _ = clear_rounded_clip(native);
+                }
+            },
+        ));
         self
     }
 
@@ -64,6 +89,8 @@ impl Default for Border {
         Self {
             key: None,
             modifiers: Modifiers::default(),
+            mounted: None,
+            unmounted: None,
             corner_radius: None,
             corner_radii: None,
             border_brush: None,
@@ -98,6 +125,12 @@ impl Widget for Border {
     }
     fn children(&self) -> Children<'_> {
         Children::PositionalSingle(&self.child)
+    }
+    fn on_mounted_callback(&self) -> Option<&Callback<Option<windows_core::IInspectable>>> {
+        self.mounted.as_ref()
+    }
+    fn on_unmounted_callback(&self) -> Option<&Callback<Option<windows_core::IInspectable>>> {
+        self.unmounted.as_ref()
     }
 }
 

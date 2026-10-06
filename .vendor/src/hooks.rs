@@ -3,6 +3,47 @@ use std::time::Duration;
 use super::*;
 use bindings::*;
 
+/// Clip a mounted element and its descendants to its live rounded bounds.
+pub fn install_rounded_clip(native: windows_core::IInspectable, radius: f64) -> Result<()> {
+    use crate::clip_bindings as clip;
+    let ui = native.cast::<UIElement>()?;
+    let visual = ElementCompositionPreview::GetElementVisual(&ui)?;
+    let compositor = visual.cast::<ICompositionObject>()?.Compositor()?;
+    let rectangle = compositor
+        .cast::<clip::ICompositor7>()?
+        .CreateRectangleClip()?;
+    let corners = windows_numerics::Vector2 {
+        x: radius as f32,
+        y: radius as f32,
+    };
+    rectangle.SetTopLeftRadius(corners)?;
+    rectangle.SetTopRightRadius(corners)?;
+    rectangle.SetBottomLeftRadius(corners)?;
+    rectangle.SetBottomRightRadius(corners)?;
+    // Composition expressions track resizing and layout animations without
+    // a SizeChanged subscription or a one-frame stale clip.
+    for (edge, expression) in [("Right", "card.Size.X"), ("Bottom", "card.Size.Y")] {
+        let animation = compositor
+            .cast::<clip::ICompositor>()?
+            .CreateExpressionAnimationWithExpression(expression)?;
+        animation
+            .cast::<clip::ICompositionAnimation>()?
+            .SetReferenceParameter("card", &visual.cast::<clip::CompositionObject>()?)?;
+        rectangle
+            .cast::<clip::ICompositionObject>()?
+            .StartAnimation(edge, &animation.cast::<clip::CompositionAnimation>()?)?;
+    }
+    visual.cast::<IVisual>()?.SetClip(Some(&rectangle.cast()?))
+}
+
+/// Clear clips before the reconciler can reuse a native element.
+pub fn clear_rounded_clip(native: windows_core::IInspectable) -> Result<()> {
+    let ui = native.cast::<UIElement>()?;
+    ElementCompositionPreview::GetElementVisual(&ui)?
+        .cast::<IVisual>()?
+        .SetClip(None)
+}
+
 /// RAII timer wrapper; stops and unhooks on drop.
 pub struct DispatcherTimer {
     timer: DispatcherQueueTimer,

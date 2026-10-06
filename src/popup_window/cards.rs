@@ -533,6 +533,20 @@ pub(super) fn provider_cards(
         if !popup_visibility.is_visible(&brick_id, surface, show_provider_tabs) {
             return None;
         }
+        if provider == ProviderKind::Claude && limit.id == "iguana_necktie" {
+            return Some(
+                cloud_session_credits_card(
+                    &limit.window,
+                    limits.cloud_session_credits.as_ref(),
+                    show_used_percentage,
+                    compact_usage_cards,
+                    color_scheme,
+                )
+                .with_key(format!(
+                    "Claude-additional-iguana_necktie-{compact_usage_cards}"
+                )),
+            );
+        }
         Some(
             limit_card(
                 &limit.title,
@@ -631,6 +645,173 @@ pub(super) fn shared_usage_statistics_card(
         usage_statistics_card(provider, limits)
             .with_key(format!("{}-usage-statistics", provider.display_name()))
     })
+}
+
+fn cloud_session_credits_presentation(
+    window: &LimitWindow,
+    credits: Option<&crate::limits::CloudSessionCredits>,
+    show_used: bool,
+    now: DateTime<Utc>,
+) -> (String, f64, bool) {
+    if window.resets_at.is_some_and(|at| at <= now) {
+        return ("Expired".into(), 0.0, false);
+    }
+    if credits.is_some_and(|credits| credits.locked) {
+        return ("Unavailable".into(), 0.0, false);
+    }
+    let (percentage, progress, _, _) = limit_card_presentation(window, show_used, false);
+    let label = credits.map_or(percentage, |credits| {
+        let amount = if show_used {
+            credits.used_dollars
+        } else {
+            credits.remaining_dollars
+        };
+        format!(
+            "{} of {} {}",
+            format_usd(amount),
+            format_usd(credits.limit_dollars),
+            if show_used { "used" } else { "left" }
+        )
+    });
+    (label, progress, true)
+}
+
+fn cloud_session_credits_card(
+    window: &LimitWindow,
+    credits: Option<&crate::limits::CloudSessionCredits>,
+    show_used: bool,
+    compact: bool,
+    color_scheme: ColorScheme,
+) -> Element {
+    let (label, progress, available) =
+        cloud_session_credits_presentation(window, credits, show_used, Utc::now());
+    let mut metadata = Vec::new();
+    if let Some(expires) = window.resets_at {
+        let local = expires.with_timezone(&Local);
+        metadata.push(card_metadata(
+            format!(
+                "{}, {}",
+                local.format("%b %-d"),
+                TimeFormat::current().format_hm(local)
+            ),
+            HorizontalAlignment::Right,
+        ));
+        if available {
+            metadata.push(card_status_row(
+                "Expires in",
+                format_reset_in(Some(expires)),
+            ));
+        }
+    }
+    // Match ordinary two-line quota cards: name/balance left, date/countdown right.
+    let content: Element = border(
+        grid((
+            vstack((
+                caption("CLOUD SESSION CREDITS").foreground(ThemeRef::SecondaryText),
+                text_block(label)
+                    .font_weight(600)
+                    .foreground(ThemeRef::Accent),
+            ))
+            .spacing(0.0)
+            .vertical_alignment(VerticalAlignment::Center),
+            vstack(metadata)
+                .spacing(0.0)
+                .horizontal_alignment(HorizontalAlignment::Right)
+                .vertical_alignment(VerticalAlignment::Center)
+                .grid_column(1),
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Auto])
+        .rows([GridLength::Auto])
+        .column_spacing(12.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch),
+    )
+    .padding(Thickness::uniform(12.0))
+    .into();
+    let radius = f64::from(popup::CARD_CORNER_RADIUS_DIP);
+    let mut layers = Vec::new();
+    if compact && available {
+        layers.push(limit_card_progress_layer(
+            progress,
+            ThemeRef::Accent,
+            radius,
+        ));
+    }
+    layers.push(content.grid_column(0).grid_row(0));
+    let mut body = vec![
+        grid(layers)
+            .columns([GridLength::Star(1.0)])
+            .rows([GridLength::Auto])
+            .into(),
+    ];
+    if !compact && available {
+        body.push(
+            border(rounded_progress(
+                progress,
+                ThemeRef::Accent,
+                None,
+                color_scheme,
+                0,
+            ))
+            .padding(Thickness {
+                left: 12.0,
+                top: 0.0,
+                right: 12.0,
+                bottom: 12.0,
+            })
+            .into(),
+        );
+    }
+    border(vstack(body).spacing(0.0))
+        .corner_radius(radius)
+        .clip_contents()
+        .background(ThemeRef::CardBackground)
+        .border_thickness(Thickness::uniform(1.0))
+        .border_brush(ThemeRef::CardStroke)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .into()
+}
+
+#[cfg(test)]
+mod cloud_credit_tests {
+    use super::*;
+
+    #[test]
+    fn balances_use_dollars_and_expired_or_locked_credits_have_no_progress() {
+        let now = Utc::now();
+        let mut window = LimitWindow {
+            used_percent: Some(1),
+            resets_at: Some(now + ChronoDuration::days(1)),
+            ..Default::default()
+        };
+        let mut credits = crate::limits::CloudSessionCredits {
+            limit_dollars: 100.0,
+            used_dollars: 1.0,
+            remaining_dollars: 99.0,
+            locked: false,
+        };
+        assert_eq!(
+            cloud_session_credits_presentation(&window, Some(&credits), false, now),
+            ("$99.00 of $100.00 left".into(), 99.0, true)
+        );
+        assert_eq!(
+            cloud_session_credits_presentation(&window, Some(&credits), true, now),
+            ("$1.00 of $100.00 used".into(), 1.0, true)
+        );
+        assert_eq!(
+            cloud_session_credits_presentation(&window, None, false, now).0,
+            "99% left"
+        );
+        credits.locked = true;
+        assert_eq!(
+            cloud_session_credits_presentation(&window, Some(&credits), false, now),
+            ("Unavailable".into(), 0.0, false)
+        );
+        window.resets_at = Some(now);
+        assert_eq!(
+            cloud_session_credits_presentation(&window, Some(&credits), false, now),
+            ("Expired".into(), 0.0, false)
+        );
+    }
 }
 
 pub(super) fn spending_card(
@@ -1533,6 +1714,7 @@ fn limit_card_base(
             .vertical_alignment(VerticalAlignment::Center),
         )
         .corner_radius(f64::from(popup::CARD_CORNER_RADIUS_DIP))
+        .clip_contents()
         .padding(Thickness::uniform(12.0))
         .background(ThemeRef::CardBackground)
         .border_thickness(Thickness::uniform(1.0))
@@ -1604,6 +1786,7 @@ fn limit_card_base(
         .spacing(8.0),
     )
     .corner_radius(f64::from(popup::CARD_CORNER_RADIUS_DIP))
+    .clip_contents()
     .padding(Thickness::uniform(12.0))
     .background(ThemeRef::CardBackground)
     .border_thickness(Thickness::uniform(1.0))
@@ -1796,6 +1979,7 @@ fn limit_card_compact(
     )
     .corner_radius(radius)
     .background(ThemeRef::CardBackground)
+    .clip_contents()
     .border_thickness(Thickness::uniform(1.0))
     .border_brush(ThemeRef::CardStroke)
     .horizontal_alignment(HorizontalAlignment::Stretch)
