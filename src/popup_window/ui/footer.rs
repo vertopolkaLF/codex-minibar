@@ -181,17 +181,21 @@ impl PopupRoot {
         let selected_index = tabs.iter().position(|tab| tab.selected);
         // One sliding selection indicator instead of per-tab fades.
         if let Some(index) = selected_index {
-            let x = self
-                .fx
-                .value(fx::key("tab-indicator"), index as f32 * step, fx::NORMAL);
+            let resting_width = button - 18.0;
+            let (x, indicator_width) = self.fx.indicator(
+                fx::key("tab-indicator"),
+                index as f32 * step,
+                resting_width,
+                std::time::Duration::from_millis(300),
+            );
             strip = strip.child(
                 div()
                     .absolute()
                     .bottom_0()
-                    .left(px(x + 9.0))
-                    .w(px(button - 18.0))
-                    .h(px(2.0))
-                    .rounded(px(1.0))
+                    .left(px(x + 9.0 - (indicator_width - resting_width) * 0.5))
+                    .w(px(indicator_width))
+                    .h(px(3.0))
+                    .rounded(px(1.5))
                     .bg(palette.accent),
             );
         }

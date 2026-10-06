@@ -21,11 +21,18 @@ pub(crate) const TEXT_FADE: Duration = Duration::from_millis(200);
 pub(crate) const NORMAL: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Copy, Debug)]
+enum Easing {
+    EaseOut,
+    Smooth,
+}
+
+#[derive(Clone, Copy, Debug)]
 struct Tween {
     from: f32,
     to: f32,
     started: Instant,
     duration: Duration,
+    easing: Easing,
     last_frame: u64,
 }
 
@@ -39,7 +46,11 @@ impl Tween {
         if t >= 1.0 {
             return self.to;
         }
-        self.from + (self.to - self.from) * ease_out_cubic(t)
+        let progress = match self.easing {
+            Easing::EaseOut => ease_out_cubic(t),
+            Easing::Smooth => cubic_bezier(0.9, 0.0, 0.1, 1.0, f64::from(t)) as f32,
+        };
+        self.from + (self.to - self.from) * progress
     }
 
     fn done(&self, now: Instant) -> bool {
@@ -106,10 +117,37 @@ pub(crate) fn fluent(x: f64) -> f64 {
 #[derive(Default)]
 pub(crate) struct Fx {
     tweens: HashMap<u64, Tween>,
+    stretches: HashMap<u64, IndicatorStretch>,
     frame: u64,
     now: Option<Instant>,
     enabled: bool,
     animating: bool,
+}
+
+#[derive(Clone, Copy)]
+struct IndicatorStretch {
+    from: f32,
+    to: f32,
+    started: Instant,
+    duration: Duration,
+    last_frame: u64,
+}
+
+impl IndicatorStretch {
+    fn width(&self, now: Instant) -> f32 {
+        if self.duration.is_zero() {
+            return self.to;
+        }
+        let t = (now.saturating_duration_since(self.started).as_secs_f32()
+            / self.duration.as_secs_f32())
+        .clamp(0.0, 1.0);
+        let progress = cubic_bezier(0.9, 0.0, 0.1, 1.0, f64::from(t)) as f32;
+        let base = self.from + (self.to - self.from) * progress;
+        // Grow smoothly in the middle, capped at 30% above resting width.
+        // Retargeting starts from the current width, not a fresh pulse at zero.
+        let pulse = (std::f32::consts::PI * t).sin().powi(2);
+        base + (self.to * 1.3 - base).max(0.0) * pulse
+    }
 }
 
 /// Stable identity for an animated property (e.g. `("tab-hover", id)`).
@@ -130,6 +168,8 @@ impl Fx {
             let frame = self.frame;
             self.tweens
                 .retain(|_, tween| frame.wrapping_sub(tween.last_frame) < 240);
+            self.stretches
+                .retain(|_, stretch| frame.wrapping_sub(stretch.last_frame) < 240);
         }
     }
 
@@ -143,6 +183,54 @@ impl Fx {
 
     /// Current value of `id`, gliding toward `target` over `duration`.
     pub(crate) fn value(&mut self, id: u64, target: f32, duration: Duration) -> f32 {
+        self.value_eased(id, target, duration, Easing::EaseOut)
+    }
+
+    /// A slow launch, fast middle and soft landing for the moving tab marker.
+    pub(crate) fn value_smooth(&mut self, id: u64, target: f32, duration: Duration) -> f32 {
+        self.value_eased(id, target, duration, Easing::Smooth)
+    }
+
+    /// Position and resting-width pulse for the bottom-bar selection marker.
+    pub(crate) fn indicator(
+        &mut self,
+        id: u64,
+        target: f32,
+        width: f32,
+        duration: Duration,
+    ) -> (f32, f32) {
+        let retargeted = self
+            .tweens
+            .get(&id)
+            .is_some_and(|tween| (tween.to - target).abs() > f32::EPSILON);
+        let x = self.value_smooth(id, target, duration);
+        let now = self.now();
+        let frame = self.frame;
+        let stretch = self.stretches.entry(id).or_insert(IndicatorStretch {
+            from: width,
+            to: width,
+            started: now,
+            duration: Duration::ZERO,
+            last_frame: frame,
+        });
+        stretch.last_frame = frame;
+        if !self.enabled {
+            stretch.from = width;
+            stretch.to = width;
+            stretch.duration = Duration::ZERO;
+        } else if retargeted || (stretch.to - width).abs() > f32::EPSILON {
+            stretch.from = stretch.width(now);
+            stretch.to = width;
+            stretch.started = now;
+            stretch.duration = duration;
+        }
+        if now.saturating_duration_since(stretch.started) < stretch.duration {
+            self.animating = true;
+        }
+        (x, stretch.width(now))
+    }
+
+    fn value_eased(&mut self, id: u64, target: f32, duration: Duration, easing: Easing) -> f32 {
         let now = self.now();
         let frame = self.frame;
         let enabled = self.enabled;
@@ -151,6 +239,7 @@ impl Fx {
             to: target,
             started: now,
             duration: Duration::ZERO,
+            easing,
             last_frame: frame,
         });
         tween.last_frame = frame;
@@ -166,6 +255,7 @@ impl Fx {
             tween.to = target;
             tween.started = now;
             tween.duration = duration;
+            tween.easing = easing;
         }
         let value = tween.value(now);
         if !tween.done(now) {
@@ -190,6 +280,7 @@ impl Fx {
                 to: target,
                 started: now,
                 duration: Duration::ZERO,
+                easing: Easing::EaseOut,
                 last_frame: frame,
             },
         );
@@ -282,6 +373,50 @@ impl Spring {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indicator_stretches_then_settles_and_retargets_without_a_size_jump() {
+        let started = Instant::now();
+        let duration = Duration::from_millis(300);
+        let mut fx = Fx::default();
+        fx.begin_frame(true);
+        fx.now = Some(started);
+        assert_eq!(fx.indicator(1, 0.0, 24.0, duration), (0.0, 24.0));
+        assert_eq!(fx.indicator(1, 100.0, 24.0, duration), (0.0, 24.0));
+        fx.now = Some(started + duration / 2);
+        let before = fx.indicator(1, 100.0, 24.0, duration);
+        assert!(before.1 > 30.0 && before.1 <= 24.0 * 1.3);
+        assert_eq!(fx.indicator(1, -50.0, 24.0, duration), before);
+        fx.now = Some(started + duration + duration / 2);
+        let settled = fx.indicator(1, -50.0, 24.0, duration);
+        assert_eq!(settled.0, -50.0);
+        assert!((settled.1 - 24.0).abs() < 0.001);
+        fx.begin_frame(false);
+        assert_eq!(fx.indicator(1, 100.0, 24.0, duration), (100.0, 24.0));
+        assert!(!fx.is_animating());
+    }
+
+    #[test]
+    fn smooth_indicator_retargets_without_jumping_and_respects_disabled_motion() {
+        let started = Instant::now();
+        let duration = Duration::from_millis(400);
+        let mut fx = Fx::default();
+        fx.begin_frame(true);
+        fx.now = Some(started);
+        assert_eq!(fx.value_smooth(1, 0.0, duration), 0.0);
+        assert_eq!(fx.value_smooth(1, 100.0, duration), 0.0);
+        fx.now = Some(started + Duration::from_millis(100));
+        assert!(fx.value_smooth(1, 100.0, duration) < 15.0);
+        fx.now = Some(started + Duration::from_millis(300));
+        let before = fx.value_smooth(1, 100.0, duration);
+        assert!(before > 85.0 && before < 100.0);
+        assert_eq!(fx.value_smooth(1, 200.0, duration), before);
+        fx.now = Some(started + Duration::from_millis(700));
+        assert_eq!(fx.value_smooth(1, 200.0, duration), 200.0);
+        fx.begin_frame(false);
+        assert_eq!(fx.value_smooth(1, 0.0, duration), 0.0);
+        assert!(!fx.is_animating());
+    }
 
     #[test]
     fn spring_converges_without_overshooting() {
