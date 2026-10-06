@@ -7,8 +7,8 @@
 mod activity;
 pub(crate) mod assets;
 mod cards;
-mod components;
-mod controls;
+pub(crate) mod components;
+pub(crate) mod controls;
 mod footer;
 pub(crate) mod fx;
 mod home;

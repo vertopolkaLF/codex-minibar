@@ -1,10 +1,11 @@
-//! Interactive controls shared by several pages.
+//! Interactive controls shared by several pages (and, for the segmented
+//! control, by the Settings window).
 
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    SharedString, StatefulInteractiveElement, Styled, Window, div, px, relative,
+    AnyElement, ClickEvent, Context, FontWeight, Hsla, InteractiveElement, IntoElement,
+    ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div, px, relative,
 };
 
 use super::{
@@ -50,131 +51,57 @@ impl PopupRoot {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let (labels, badges): (Vec<SharedString>, Vec<_>) = segments.into_iter().unzip();
         let palette = self.palette.clone();
-        let count = labels.len().max(1);
-        let selected = selected.min(count - 1);
-        let on_select = Rc::new(on_select);
-        let fixed_width = labels
-            .iter()
-            .zip(&badges)
-            .map(|(label, badge)| {
-                segment_width(label)
-                    + badge
-                        .as_ref()
-                        .map_or(0.0, |badge: &crate::instances::Badge| {
-                            badge.text.chars().count() as f32 * 7.0 + 12.0
-                        })
+        let segments = segments
+            .into_iter()
+            .map(|(label, badge)| Segment {
+                label,
+                badge_width: badge
+                    .as_ref()
+                    .map_or(0.0, |badge| badge.text.chars().count() as f32 * 7.0 + 12.0),
+                badge: badge.map(|badge| {
+                    components::badge_plate(&badge, 14.0, &palette).into_any_element()
+                }),
             })
-            .fold(0.0_f32, f32::max);
-        // The thumb glides between cells as a fraction of the track.
-        let thumb = self.fx.value(
-            fx::key(("segment-thumb", key)),
-            selected as f32 / count as f32,
-            fx::FAST,
-        );
-        let mut track = div()
-            .id(eid(format!("segmented-{key}")))
-            .relative()
-            .flex()
-            .flex_row()
-            .h(px(SEGMENT_HEIGHT))
-            .rounded(px(8.0))
-            .overflow_hidden()
-            .bg(palette.control_fill)
-            .flex_none();
-        track = if stretch {
-            track.w_full()
-        } else {
-            track.w(px(fixed_width * count as f32))
+            .collect();
+        let style = SegmentStyle {
+            track: palette.control_fill,
+            thumb: palette.accent,
+            text: palette.text_primary,
+            text_on_thumb: palette.text_on_accent,
+            hover: palette.subtle_fill,
+            divider: palette.divider,
         };
-        track = track.child(
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left(relative(thumb))
-                .w(relative(1.0 / count as f32))
-                .rounded(px(8.0))
-                .bg(palette.accent),
-        );
-        for (index, label) in labels.into_iter().enumerate() {
-            let on = self.fx.toggle(
-                fx::key(("segment-on", key, index)),
-                index == selected,
-                fx::FAST,
-            );
-            let hover_id = fx::key(("segment-hover", key, index));
-            let hovered = self.hovered(hover_id) && index != selected;
-            let hover =
-                self.fx
-                    .toggle(fx::key(("segment-hover-fx", hover_id)), hovered, fx::FASTER);
-            let hide_divider = index == 0 || selected == index || selected + 1 == index;
-            let divider = self.fx.toggle(
-                fx::key(("segment-rule", key, index)),
-                !hide_divider,
-                fx::FAST,
-            );
-            let color = palette.text_primary.mix(palette.text_on_accent, on);
+        let on_select = Rc::new(on_select);
+        let hover_ids = (0..64)
+            .map(|index| fx::key(("segment-hover", key, index)))
+            .collect::<Vec<_>>();
+        let hovered = hover_ids
+            .iter()
+            .map(|id| self.hovered(*id))
+            .collect::<Vec<_>>();
+        // The listeners borrow `self`; the tweens are swapped out meanwhile.
+        let mut tweens = std::mem::take(&mut self.fx);
+        let mut wire = |index: usize, cell: gpui::Stateful<gpui::Div>| {
             let on_select = Rc::clone(&on_select);
-            let mut cell = div()
-                .id(eid(format!("segment-{key}-{index}")))
-                .relative()
-                .h_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .px(px(10.0))
-                .on_hover(self.hover_listener(hover_id, None, cx))
+            cell.on_hover(self.hover_listener(hover_ids[index.min(63)], None, cx))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     on_select(this, index, cx);
                     cx.notify();
-                }));
-            // flex_none() leaves flex_basis unchanged in GPUI. Applying
-            // flex_1() first would retain a zero basis and collapse fixed
-            // cells to their padding while the thumb keeps its full width.
-            cell = if stretch {
-                cell.flex_1().min_w_0()
-            } else {
-                cell.flex_none().w(px(fixed_width))
-            };
-            if hover > 0.001 {
-                cell = cell.child(
-                    div()
-                        .absolute()
-                        .inset(px(2.0))
-                        .rounded(px(6.0))
-                        .bg(palette.subtle_fill.opacity(hover)),
-                );
-            }
-            if divider > 0.001 {
-                cell = cell.child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .top(px(6.0))
-                        .bottom(px(6.0))
-                        .w(px(1.0))
-                        .bg(palette.divider.alpha(divider)),
-                );
-            }
-            let mut content = div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(5.0))
-                .min_w_0();
-            if let Some(badge) = badges.get(index).and_then(Option::as_ref) {
-                content = content.child(components::badge_plate(badge, 14.0, &palette));
-            }
-            content = content.child(
-                components::nowrap(components::caption(label, color))
-                    .font_weight(FontWeight::SEMIBOLD),
-            );
-            cell = cell.child(content);
-            track = track.child(cell);
-        }
-        track.into_any_element()
+                }))
+        };
+        let control = segmented_track(
+            &mut tweens,
+            key,
+            segments,
+            selected,
+            stretch,
+            style,
+            &|index| hovered.get(index).copied().unwrap_or(false),
+            &mut wire,
+        );
+        self.fx = tweens;
+        control
     }
 
     /// Text tabs (Today / Yesterday / 30 days) with crossfaded colors.
@@ -243,4 +170,160 @@ impl PopupRoot {
             palette.chrome_icon.mix(palette.chrome_icon_hover, fill),
         ))
     }
+}
+
+/// Colors of a [`segmented_track`]: the popup derives them from its palette,
+/// Settings from its theme, so both surfaces draw the same control.
+#[derive(Clone, Copy)]
+pub(crate) struct SegmentStyle {
+    pub(crate) track: Hsla,
+    pub(crate) thumb: Hsla,
+    pub(crate) text: Hsla,
+    pub(crate) text_on_thumb: Hsla,
+    pub(crate) hover: Hsla,
+    pub(crate) divider: Hsla,
+}
+
+pub(crate) struct Segment {
+    pub(crate) label: SharedString,
+    /// Leading mark (an instance badge), with its width for fixed layouts.
+    pub(crate) badge: Option<AnyElement>,
+    pub(crate) badge_width: f32,
+}
+
+impl Segment {
+    pub(crate) fn text(label: impl Into<SharedString>) -> Self {
+        Self {
+            label: label.into(),
+            badge: None,
+            badge_width: 0.0,
+        }
+    }
+}
+
+/// Pill segmented control with a sliding accent thumb, hover fills and
+/// dividers that fade around the selection. `wire` attaches each cell's
+/// hover/click listeners for the hosting view.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn segmented_track(
+    fx: &mut fx::Fx,
+    key: u64,
+    segments: Vec<Segment>,
+    selected: usize,
+    stretch: bool,
+    style: SegmentStyle,
+    hovered: &dyn Fn(usize) -> bool,
+    wire: &mut dyn FnMut(usize, gpui::Stateful<gpui::Div>) -> gpui::Stateful<gpui::Div>,
+) -> AnyElement {
+    let count = segments.len().max(1);
+    let selected = selected.min(count - 1);
+    let fixed_width = segments
+        .iter()
+        .map(|segment| segment_width(&segment.label) + segment.badge_width)
+        .fold(0.0_f32, f32::max);
+    // The thumb glides between cells as a fraction of the track.
+    let thumb = fx.value(
+        fx::key(("segment-thumb", key)),
+        selected as f32 / count as f32,
+        fx::FAST,
+    );
+    let mut track = div()
+        .id(eid(format!("segmented-{key}")))
+        .relative()
+        .flex()
+        .flex_row()
+        .h(px(SEGMENT_HEIGHT))
+        .rounded(px(8.0))
+        .overflow_hidden()
+        .bg(style.track)
+        .flex_none();
+    track = if stretch {
+        track.w_full()
+    } else {
+        track.w(px(fixed_width * count as f32))
+    };
+    track = track.child(
+        div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left(relative(thumb))
+            .w(relative(1.0 / count as f32))
+            .rounded(px(8.0))
+            .bg(style.thumb),
+    );
+    for (index, segment) in segments.into_iter().enumerate() {
+        let on = fx.toggle(
+            fx::key(("segment-on", key, index)),
+            index == selected,
+            fx::FAST,
+        );
+        let hover = fx.toggle(
+            fx::key(("segment-hover-fx", key, index)),
+            hovered(index) && index != selected,
+            fx::FASTER,
+        );
+        let hide_divider = index == 0 || selected == index || selected + 1 == index;
+        let divider = fx.toggle(
+            fx::key(("segment-rule", key, index)),
+            !hide_divider,
+            fx::FAST,
+        );
+        let color = style.text.mix(style.text_on_thumb, on);
+        let mut cell = div()
+            .id(eid(format!("segment-{key}-{index}")))
+            .relative()
+            .h_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .px(px(10.0));
+        if index != selected {
+            cell = wire(index, cell.cursor_pointer());
+        }
+        // flex_none() leaves flex_basis unchanged in GPUI. Applying
+        // flex_1() first would retain a zero basis and collapse fixed
+        // cells to their padding while the thumb keeps its full width.
+        cell = if stretch {
+            cell.flex_1().min_w_0()
+        } else {
+            cell.flex_none().w(px(fixed_width))
+        };
+        if hover > 0.001 {
+            cell = cell.child(
+                div()
+                    .absolute()
+                    .inset(px(2.0))
+                    .rounded(px(6.0))
+                    .bg(style.hover.opacity(hover)),
+            );
+        }
+        if divider > 0.001 {
+            cell = cell.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top(px(6.0))
+                    .bottom(px(6.0))
+                    .w(px(1.0))
+                    .bg(style.divider.alpha(divider)),
+            );
+        }
+        let mut content = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(5.0))
+            .min_w_0();
+        if let Some(badge) = segment.badge {
+            content = content.child(badge);
+        }
+        content = content.child(
+            components::nowrap(components::caption(segment.label, color))
+                .font_weight(FontWeight::SEMIBOLD),
+        );
+        cell = cell.child(content);
+        track = track.child(cell);
+    }
+    track.into_any_element()
 }

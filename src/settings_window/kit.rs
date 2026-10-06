@@ -24,6 +24,7 @@ use super::input::TextInput;
 use super::theme::Theme;
 use crate::popup_window::ui::{
     assets,
+    controls::{Segment, SegmentStyle, segmented_track},
     fx::{self, Fx},
     theme::HslaExt,
 };
@@ -51,6 +52,8 @@ pub(crate) struct Kit {
     heights: HashMap<u64, Rc<Cell<f32>>>,
     pub(crate) menus: Menus,
     sliders: Rc<RefCell<Option<SharedString>>>,
+    /// Hovered segments of segmented controls.
+    hovered: Rc<RefCell<std::collections::HashSet<u64>>>,
 }
 
 impl Kit {
@@ -923,7 +926,7 @@ pub(crate) fn checkbox(
     el.into_any_element()
 }
 
-/// Pill segmented control with a sliding accent thumb.
+/// The popup's segmented control ([`segmented_track`]) in Settings colors.
 pub(crate) fn segmented(
     k: &mut Kit,
     id: impl Into<SharedString>,
@@ -933,71 +936,57 @@ pub(crate) fn segmented(
     on_select: Handler<usize>,
 ) -> AnyElement {
     let id: SharedString = id.into();
-    let count = labels.len().max(1);
-    let selected = selected.min(count - 1);
-    let thumb = k.fx.value(
-        fx::key(("segment", id.as_ref())),
-        selected as f32 / count as f32,
-        fx::FAST,
-    );
+    let key = fx::key(("settings-segmented", id.as_ref()));
     let theme = &k.theme;
-    let mut track = div()
-        .id(eid(format!("segmented-{id}")))
-        .relative()
-        .flex()
-        .h(px(CONTROL_HEIGHT))
-        .p(px(3.0))
-        .rounded(px(7.0))
-        .border_1()
-        .border_color(theme.control_stroke)
-        .bg(theme.subtle_hover)
-        .child(
-            div()
-                .absolute()
-                .top(px(3.0))
-                .bottom(px(3.0))
-                .left(px(3.0))
-                .right(px(3.0))
-                .child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .bottom_0()
-                        .left(relative(thumb))
-                        .w(relative(1.0 / count as f32))
-                        .rounded(px(5.0))
-                        .bg(if disabled {
-                            theme.control_disabled
-                        } else {
-                            theme.accent
-                        }),
-                ),
-        );
-    for (index, label) in labels.iter().enumerate() {
-        let on = index == selected;
-        let on_select = Rc::clone(&on_select);
-        let hover = theme.subtle_hover;
-        let mut cell = div()
-            .id(eid(format!("segment-{id}-{index}")))
-            .relative()
-            .flex_1()
-            .flex()
-            .items_center()
-            .justify_center()
-            .px(px(12.0))
-            .rounded(px(5.0))
-            .text_size(px(13.0))
-            .text_color(if on { theme.on_accent } else { theme.text })
-            .child(SharedString::from(label.to_string()));
-        if !disabled && !on {
-            cell = cell
-                .cursor_pointer()
-                .hover(move |style| style.bg(hover))
-                .on_click(move |_, window, cx| on_select(index, window, cx));
+    let style = SegmentStyle {
+        track: theme.control,
+        thumb: if disabled {
+            theme.control_disabled
+        } else {
+            theme.accent
+        },
+        text: if disabled {
+            theme.text_disabled
+        } else {
+            theme.text
+        },
+        text_on_thumb: if disabled {
+            theme.text_disabled
+        } else {
+            theme.on_accent
+        },
+        hover: theme.subtle_hover,
+        divider: theme.divider,
+    };
+    let segments = labels
+        .iter()
+        .map(|label| Segment::text(label.to_string()))
+        .collect();
+    let hover_set = Rc::clone(&k.hovered);
+    let hovered = |index: usize| hover_set.borrow().contains(&fx::key((key, index)));
+    let hover_cells = Rc::clone(&k.hovered);
+    let mut wire = |index: usize, cell: gpui::Stateful<gpui::Div>| {
+        if disabled {
+            return cell.cursor_default();
         }
-        track = track.child(cell);
-    }
-    track.into_any_element()
+        let on_select = Rc::clone(&on_select);
+        let hover_cells = Rc::clone(&hover_cells);
+        let hover_id = fx::key((key, index));
+        cell.on_hover(move |hovered, window, _| {
+            let changed = if *hovered {
+                hover_cells.borrow_mut().insert(hover_id)
+            } else {
+                hover_cells.borrow_mut().remove(&hover_id)
+            };
+            if changed {
+                window.refresh();
+            }
+        })
+        .on_click(move |_, window, cx| on_select(index, window, cx))
+    };
+    segmented_track(
+        &mut k.fx, key, segments, selected, false, style, &hovered, &mut wire,
+    )
 }
 
 // ---------------------------------------------------------------------------
