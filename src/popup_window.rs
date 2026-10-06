@@ -100,12 +100,13 @@ pub(crate) fn publish_ui(ui: &UiState) {
 
 /// Start the popup: the GPUI renderer thread and the tray/worker bridge.
 ///
-/// `ui_dispatcher` targets the WinUI thread that owns the Settings windows.
+/// `ui_dispatcher` targets the main STA; it forwards to WinUI only after the
+/// first Settings/onboarding request starts the XAML application.
 pub fn start(state: Arc<AppState>, ui_dispatcher: windows_reactor::UiMarshaller) {
     let Some(receiver) = COMMANDS.1.lock().ok().and_then(|mut slot| slot.take()) else {
         return;
     };
-    ui::start(Arc::clone(&state), ui_dispatcher.clone(), receiver);
+    ui::start(Arc::clone(&state), receiver);
     start_background_bridge(state, ui_dispatcher);
 }
 

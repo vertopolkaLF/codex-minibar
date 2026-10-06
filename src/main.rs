@@ -18,7 +18,6 @@ use codex_minibar::{
     },
     worker::WorkerEvent,
 };
-use windows_reactor::*;
 
 fn run() -> Result<()> {
     notifications::initialize();
@@ -103,42 +102,20 @@ fn run() -> Result<()> {
         move || state.shutdown_worker()
     });
 
-    App::new()
-        .run_custom(move |_| {
-            codex_minibar::theme::apply_appearance(
-                state.settings.theme,
-                state.settings.accent_color,
-            );
-            // The popup itself is a GPUI window on its own thread. WinUI keeps
-            // this thread for Settings; a never-activated host window keeps
-            // the XAML dispatcher alive after the last Settings window closes.
-            let keepalive = ReactorHost::new_with_window_options(
-                "Codex Minibar Host",
-                Some(WindowSize {
-                    width: 1.0,
-                    height: 1.0,
-                }),
-                InnerConstraints {
-                    min_width: None,
-                    min_height: None,
-                    max_width: None,
-                    max_height: None,
-                },
-                Box::new(|_: &(), _: &mut RenderCx| Element::Empty),
-                |_| {},
-            )?;
-            let _ = keepalive.set_shown_in_switchers(false);
-            let ui_dispatcher = WinUIDispatcher::for_current_thread()?.marshaller();
-            codex_minibar::popup_window::start(Arc::clone(&state), ui_dispatcher);
-            if onboarding_needed {
-                // First launch configures providers before any worker has a
-                // chance to poll. The regular popup stays parked until Done.
-                codex_minibar::settings_window::open_onboarding(state.settings_tx.clone())?;
+    let runtime = codex_minibar::settings_runtime::SettingsRuntime::new()?;
+    // With no WinUI root, these setters only retain the requested palette.
+    // They also initialize the tray's accent before any popup can be shown.
+    codex_minibar::theme::apply_appearance(state.settings.theme, state.settings.accent_color);
+    codex_minibar::popup_window::start(Arc::clone(&state), runtime.marshaller());
+    if onboarding_needed {
+        let settings_tx = state.settings_tx.clone();
+        codex_minibar::settings_runtime::dispatch_window(move || {
+            if let Err(error) = codex_minibar::settings_window::open_onboarding(settings_tx) {
+                eprintln!("Could not open onboarding: {error:?}");
             }
-            let _host = Box::leak(Box::new(keepalive));
-            Ok(())
-        })
-        .map_err(|error| anyhow!("windows-reactor failed: {error:?}"))
+        });
+    }
+    runtime.run()
 }
 
 fn show_error(message: &str) {

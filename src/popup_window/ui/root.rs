@@ -159,7 +159,6 @@ pub(super) enum SnapshotSlot {
 
 pub(crate) struct PopupRoot {
     pub(super) state: Arc<AppState>,
-    pub(super) ui_dispatcher: windows_reactor::UiMarshaller,
     pub(super) ui: Rc<UiState>,
     pub(super) limits: Rc<ProviderLimits>,
     pub(super) forced_resets: Rc<Vec<ForcedReset>>,
@@ -203,7 +202,6 @@ pub(crate) struct PopupRoot {
 impl PopupRoot {
     pub(crate) fn new(
         state: Arc<AppState>,
-        ui_dispatcher: windows_reactor::UiMarshaller,
         font_family: SharedString,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -248,7 +246,6 @@ impl PopupRoot {
             limits: Rc::new(state.current_limits()),
             forced_resets: Rc::new(state.current_forced_resets()),
             state,
-            ui_dispatcher,
             ui: Rc::new(ui),
             palette,
             accent,
@@ -789,7 +786,7 @@ impl PopupRoot {
         let settings_tx = self.state.settings_tx.clone();
         let usage_actions_tx = self.state.usage_actions_tx.clone();
         let updates = Arc::clone(&self.state.updates);
-        self.ui_dispatcher.dispatch(move || {
+        crate::settings_runtime::dispatch_window(move || {
             if let Err(error) = crate::settings_window::open(settings_tx, usage_actions_tx, updates)
             {
                 eprintln!("Could not open settings window: {error:?}");

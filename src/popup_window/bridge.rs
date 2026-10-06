@@ -1061,7 +1061,7 @@ pub(super) fn start_background_bridge(
 #[cfg(windows)]
 pub(super) fn pump_tray_and_dismiss(
     tray: &TrayManager,
-    ui_dispatcher: &windows_reactor::UiMarshaller,
+    _ui_dispatcher: &windows_reactor::UiMarshaller,
     settings_tx: &Sender<Settings>,
     state: &AppState,
     ui: &mut UiState,
@@ -1113,7 +1113,7 @@ pub(super) fn pump_tray_and_dismiss(
                 if !popup::is_visible() || popup::is_closing() {
                     popup::show_near_cursor();
                 }
-                ui_dispatcher.dispatch(move || {
+                crate::settings_runtime::dispatch_window(move || {
                     if let Err(error) =
                         crate::settings_window::open(settings_tx, usage_actions_tx, updates)
                     {

@@ -25,6 +25,7 @@ pub mod scheduler;
 pub mod secrets;
 pub mod settings;
 mod settings_controls;
+pub mod settings_runtime;
 pub mod settings_window;
 pub mod single_instance;
 pub mod store;

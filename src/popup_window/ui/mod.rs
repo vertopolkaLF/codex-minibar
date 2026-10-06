@@ -122,12 +122,11 @@ fn pick_font_family(cx: &mut gpui::App) -> SharedString {
 
 pub(crate) fn start(
     state: Arc<AppState>,
-    ui_dispatcher: windows_reactor::UiMarshaller,
     commands: futures::channel::mpsc::UnboundedReceiver<PopupCommand>,
 ) {
     let spawned = std::thread::Builder::new()
         .name("popup-gpui".into())
-        .spawn(move || run(state, ui_dispatcher, commands));
+        .spawn(move || run(state, commands));
     if let Err(error) = spawned {
         eprintln!("could not start the popup UI thread: {error}");
     }
@@ -135,7 +134,6 @@ pub(crate) fn start(
 
 fn run(
     state: Arc<AppState>,
-    ui_dispatcher: windows_reactor::UiMarshaller,
     mut commands: futures::channel::mpsc::UnboundedReceiver<PopupCommand>,
 ) {
     Application::new()
@@ -166,7 +164,7 @@ fn run(
                 tabbing_identifier: None,
             };
             let window = match cx.open_window(options, |window, cx| {
-                cx.new(|cx| PopupRoot::new(state, ui_dispatcher, font_family, window, cx))
+                cx.new(|cx| PopupRoot::new(state, font_family, window, cx))
             }) {
                 Ok(window) => window,
                 Err(error) => {
