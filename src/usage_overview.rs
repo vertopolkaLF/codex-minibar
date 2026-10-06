@@ -219,9 +219,9 @@ fn assemble_overview_snapshot(
         .iter()
         .copied()
         .filter(|provider| {
-            provider_registry::PROVIDERS
-                .iter()
-                .any(|descriptor| descriptor.kind == provider.kind() && descriptor.include_in_total_spend)
+            provider_registry::PROVIDERS.iter().any(|descriptor| {
+                descriptor.kind == provider.kind() && descriptor.include_in_total_spend
+            })
         })
         .collect();
 
@@ -287,31 +287,23 @@ fn assemble_overview_snapshot(
 
     let (provider_daily, provider_hourly, provider_sessions, mut model_rows) = store_data;
     let codex = ProviderId::primary(ProviderKind::Codex);
-    let codex_has_usage = provider_daily
-        .get(&codex)
-        .is_some_and(|days| {
-            days.iter().any(|entry| {
-                entry.date >= start_date
-                    && entry.date <= end_date
-                    && (entry.usage.requests > 0 || entry.usage.total_tokens() > 0)
-            })
-        });
-    let codex_missing_models = !model_rows
-        .keys()
-        .any(|(provider, _)| *provider == codex);
+    let codex_has_usage = provider_daily.get(&codex).is_some_and(|days| {
+        days.iter().any(|entry| {
+            entry.date >= start_date
+                && entry.date <= end_date
+                && (entry.usage.requests > 0 || entry.usage.total_tokens() > 0)
+        })
+    });
+    let codex_missing_models = !model_rows.keys().any(|(provider, _)| *provider == codex);
     if spend_providers.contains(&codex) && codex_has_usage && codex_missing_models {
         // Incremental Codex saves used to wipe usage_model_daily. Rebuild
         // from session logs instead of asking the user to delete the store.
         if crate::usage::refresh_usage_statistics(codex, None, load_days).is_ok()
-            && let Ok(rows) = store::with_store(|store| {
-                store.load_model_breakdown(codex, start_date, end_date)
-            })
+            && let Ok(rows) =
+                store::with_store(|store| store.load_model_breakdown(codex, start_date, end_date))
         {
             for (model, usage) in rows {
-                model_rows
-                    .entry((codex, model))
-                    .or_default()
-                    .add(&usage);
+                model_rows.entry((codex, model)).or_default().add(&usage);
             }
         }
     }
@@ -320,8 +312,7 @@ fn assemble_overview_snapshot(
     // scan completes. Never bypass attribution with a raw-log scan here:
     // an empty active-account history may coexist with another account's logs.
 
-    let mut daily_by_date: BTreeMap<NaiveDate, BTreeMap<ProviderId, TokenUsage>> =
-        BTreeMap::new();
+    let mut daily_by_date: BTreeMap<NaiveDate, BTreeMap<ProviderId, TokenUsage>> = BTreeMap::new();
     for (provider, days) in &provider_daily {
         for entry in days {
             if entry.date < start_date || entry.date > end_date {
@@ -628,7 +619,7 @@ mod tests {
         let snapshot = OverviewSnapshot {
             providers: vec![
                 ProviderOverview {
-                    provider: ProviderKind::Claude,
+                    provider: crate::instances::ProviderId::from(ProviderKind::Claude),
                     usage: TokenUsage {
                         estimated_cost_microusd: 500_000,
                         ..Default::default()
@@ -636,7 +627,7 @@ mod tests {
                     ..Default::default()
                 },
                 ProviderOverview {
-                    provider: ProviderKind::Codex,
+                    provider: crate::instances::ProviderId::from(ProviderKind::Codex),
                     usage: TokenUsage {
                         estimated_cost_microusd: 2_000_000,
                         ..Default::default()
@@ -649,8 +640,8 @@ mod tests {
         assert_eq!(
             spend_entries(&snapshot),
             vec![
-                (ProviderKind::Codex, 2_000_000),
-                (ProviderKind::Claude, 500_000),
+                (ProviderKind::Codex.into(), 2_000_000),
+                (ProviderKind::Claude.into(), 500_000),
             ]
         );
     }

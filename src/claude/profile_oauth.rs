@@ -165,8 +165,7 @@ pub(crate) fn login(explicit: Option<&Path>, folder: &Path, control: &LoginContr
             .is_some_and(|ext| ext.eq_ignore_ascii_case("exe")),
         "Sign-in requires native Windows Claude Code. Install its native executable, or switch Source to Manual."
     );
-    std::fs::create_dir_all(folder)
-        .with_context(|| format!("create {}", folder.display()))?;
+    std::fs::create_dir_all(folder).with_context(|| format!("create {}", folder.display()))?;
     ensure!(
         !is_link(&std::fs::symlink_metadata(folder)?),
         "The config folder must not be a link."
@@ -262,11 +261,17 @@ mod tests {
             )
             .unwrap();
         };
-        write(serde_json::json!({"accessToken":"sk-ant-oat-x","refreshToken":"","scopes":["user:profile"]}));
+        write(
+            serde_json::json!({"accessToken":"sk-ant-oat-x","refreshToken":"","scopes":["user:profile"]}),
+        );
         assert!(read_login(folder.path()).is_err());
-        write(serde_json::json!({"accessToken":"sk-ant-oat-x","refreshToken":"r","scopes":["user:inference"]}));
+        write(
+            serde_json::json!({"accessToken":"sk-ant-oat-x","refreshToken":"r","scopes":["user:inference"]}),
+        );
         assert!(read_login(folder.path()).is_err());
-        write(serde_json::json!({"accessToken":"sk-ant-oat-x","refreshToken":"r","scopes":["user:profile"]}));
+        write(
+            serde_json::json!({"accessToken":"sk-ant-oat-x","refreshToken":"r","scopes":["user:profile"]}),
+        );
         assert!(read_login(folder.path()).is_ok());
     }
 

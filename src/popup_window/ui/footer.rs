@@ -3,9 +3,9 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, AppContext, ClickEvent, Context, DragMoveEvent, Hsla,
-    InteractiveElement, IntoElement, ParentElement, Render, ScrollWheelEvent, SharedString,
-    StatefulInteractiveElement, Styled, Transformation, Window, div, px, radians,
+    AnyElement, AppContext, ClickEvent, Context, DragMoveEvent, Hsla, InteractiveElement,
+    IntoElement, ParentElement, Render, ScrollWheelEvent, SharedString, StatefulInteractiveElement,
+    Styled, Transformation, Window, div, px, radians,
 };
 
 use super::{

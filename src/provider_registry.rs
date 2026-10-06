@@ -701,7 +701,9 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.toml");
         let mut settings = crate::settings::Settings::default();
-        let mut widget = crate::settings::TrayWidget::custom_for_provider(ProviderKind::Claude);
+        let mut widget = crate::settings::TrayWidget::custom_for_provider(
+            crate::instances::ProviderId::from(ProviderKind::Claude),
+        );
         widget.indicators[0].metric_id = id.clone();
         settings.tray_widgets = vec![widget];
         settings.save(&path).unwrap();

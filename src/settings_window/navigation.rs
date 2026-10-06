@@ -227,7 +227,11 @@ pub(super) fn providers_nav_items(
     if !disabled.is_empty() && !items.is_empty() {
         items.push(NavViewItem::separator());
     }
-    items.extend(disabled.into_iter().map(|instance| item(instance).dimmed(true)));
+    items.extend(
+        disabled
+            .into_iter()
+            .map(|instance| item(instance).dimmed(true)),
+    );
     items
 }
 
@@ -344,6 +348,9 @@ mod provider_navigation_tests {
             Some(instances[2].provider_id())
         );
         assert_eq!(first_provider_in_order(&[]), None);
-        assert!(matches!(first_provider_page(&[]), RenderedPage::NoProviders));
+        assert!(matches!(
+            first_provider_page(&[]),
+            RenderedPage::NoProviders
+        ));
     }
 }

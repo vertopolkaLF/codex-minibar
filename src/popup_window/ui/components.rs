@@ -62,7 +62,10 @@ pub(crate) fn icon(name: &str, size: f32, color: Hsla) -> gpui::Svg {
 pub(crate) fn badge_plate(badge: &crate::instances::Badge, height: f32, palette: &Palette) -> Div {
     let (background, foreground) = match badge.color.rgb() {
         Some(rgb) => (super::theme::rgb8(rgb), gpui::white()),
-        None => (palette.text_secondary, palette.solid_background.opacity(1.0)),
+        None => (
+            palette.text_secondary,
+            palette.solid_background.opacity(1.0),
+        ),
     };
     let size = (height * 0.68).max(7.0);
     div()
@@ -78,9 +81,14 @@ pub(crate) fn badge_plate(badge: &crate::instances::Badge, height: f32, palette:
         .items_center()
         .justify_center()
         .child(
-            text(SharedString::from(badge.text.clone()), size, height, foreground)
-                .font_weight(FontWeight::BOLD)
-                .whitespace_nowrap(),
+            text(
+                SharedString::from(badge.text.clone()),
+                size,
+                height,
+                foreground,
+            )
+            .font_weight(FontWeight::BOLD)
+            .whitespace_nowrap(),
         )
 }
 

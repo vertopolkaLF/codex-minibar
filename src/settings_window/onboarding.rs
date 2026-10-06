@@ -24,9 +24,9 @@ pub(super) fn detected_providers(settings: &Settings) -> [bool; 9] {
             ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
                 crate::opencode::is_installed(driver)
             }
-            ProviderKind::OpenRouter => crate::openrouter::is_installed_for_accounts(
-                instance.openrouter.as_slice(),
-            ),
+            ProviderKind::OpenRouter => {
+                crate::openrouter::is_installed_for_accounts(instance.openrouter.as_slice())
+            }
             ProviderKind::Antigravity => crate::antigravity::is_installed(path),
             ProviderKind::Grok => crate::grok::is_installed(path),
             ProviderKind::Kiro => crate::kiro::source_is_ready(

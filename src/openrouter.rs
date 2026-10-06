@@ -11,12 +11,12 @@ use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, TimeZone
 use serde::Deserialize;
 
 use crate::{
+    instances::{ProviderId, ProviderInstance},
     limits::{
         LimitWindow, OpenRouterAccountSnapshot, OpenRouterApiKeySnapshot, RateLimits,
         SpendingSummary,
     },
     secrets,
-    instances::{ProviderId, ProviderInstance},
     settings::OpenRouterAccount,
     usage::UsageStatistics,
     worker::{Activator, LimitProvider, UsageProvider},
@@ -1311,6 +1311,7 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
+    use crate::settings::ProviderKind;
 
     #[test]
     fn secret_hint_errors_are_retried_and_never_cached_as_missing() {
@@ -1697,15 +1698,13 @@ mod tests {
 
     #[test]
     fn applies_renamed_account_names_onto_a_live_snapshot() {
-        let settings = Settings {
-            openrouter_accounts: vec![OpenRouterAccount {
-                id: "acc".into(),
-                name: "TESTdfwfwer".into(),
-                api_key_ids: vec!["key".into()],
-                api_key_names: Default::default(),
-            }],
-            ..Default::default()
-        };
+        let mut settings = ProviderInstance::primary(ProviderKind::OpenRouter);
+        settings.openrouter = Some(OpenRouterAccount {
+            id: "acc".into(),
+            name: "TESTdfwfwer".into(),
+            api_key_ids: vec!["key".into()],
+            api_key_names: Default::default(),
+        });
         let mut limits = RateLimits::default();
         limits.openrouter_accounts.push(OpenRouterAccountSnapshot {
             id: "acc".into(),
@@ -1756,10 +1755,8 @@ mod tests {
         account
             .api_key_names
             .insert(key_id.clone(), "Local name".into());
-        let mut settings = Settings {
-            openrouter_accounts: vec![account.clone()],
-            ..Default::default()
-        };
+        let mut settings = ProviderInstance::primary(ProviderKind::OpenRouter);
+        settings.openrouter = Some(account.clone());
         let mut limits = RateLimits::default();
         limits.openrouter_accounts.push(OpenRouterAccountSnapshot {
             id: account.id.clone(),
@@ -1779,7 +1776,7 @@ mod tests {
         // Adding/replacing a management key restarts the worker at a new
         // credential revision. Its directory can now return a different name,
         // but the saved user override must still win on the fresh snapshot.
-        settings.openrouter_credentials_revision += 1;
+        settings.credentials_revision += 1;
         limits.openrouter_accounts[0].api_keys[0] = OpenRouterApiKeySnapshot {
             id: key_id.clone(),
             label: Some("Name from management directory".into()),
@@ -1792,14 +1789,14 @@ mod tests {
             Some("Local name")
         );
         assert_eq!(
-            settings.openrouter_accounts[0].api_key_names[&key_id],
+            settings.openrouter.as_ref().unwrap().api_key_names[&key_id],
             "Local name"
         );
 
         // Fresh worker snapshots contain only remote metadata.
         limits.openrouter_accounts[0].api_keys[0].local_name = None;
         assert!(apply_account_names(&mut limits, &settings));
-        settings.openrouter_accounts[0].api_key_names.clear();
+        settings.openrouter.as_mut().unwrap().api_key_names.clear();
         assert!(apply_account_names(&mut limits, &settings));
         let key = &limits.openrouter_accounts[0].api_keys[0];
         assert!(key.local_name.is_none());
@@ -1809,13 +1806,16 @@ mod tests {
             serde_json::from_str(r#"{"id":"old","name":"Personal","api_key_ids":["key"]}"#)
                 .unwrap();
         assert!(old.api_key_names.is_empty());
-        settings.openrouter_accounts[0]
+        settings
+            .openrouter
+            .as_mut()
+            .unwrap()
             .api_key_names
             .insert(key_id.clone(), "Saved name".into());
         let saved = toml::to_string(&settings).unwrap();
-        let restored: Settings = toml::from_str(&saved).unwrap();
+        let restored: ProviderInstance = toml::from_str(&saved).unwrap();
         assert_eq!(
-            restored.openrouter_accounts[0].api_key_names[&key_id],
+            restored.openrouter.as_ref().unwrap().api_key_names[&key_id],
             "Saved name"
         );
     }

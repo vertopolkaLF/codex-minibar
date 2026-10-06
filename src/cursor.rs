@@ -20,9 +20,9 @@ use rusqlite::{Connection, OpenFlags};
 use serde_json::{Value, json};
 
 use crate::{
+    instances::ProviderId,
     limits::{AdditionalLimit, LimitWindow, RateLimits},
     pricing,
-    instances::ProviderId,
     settings::ProviderKind,
     store,
     usage::{DailyTokenUsage, TokenUsage, UsageStatistics, statistics_from_daily},
@@ -237,15 +237,10 @@ impl CursorClient {
             }
             let start = crate::usage::truncate_local_hour(Local::now() - ChronoDuration::hours(47));
             let end = crate::usage::truncate_local_hour(Local::now());
-            if store
-                .load_usage_hourly(CURSOR, start, end)?
-                .is_empty()
-            {
+            if store.load_usage_hourly(CURSOR, start, end)?.is_empty() {
                 return Ok(None);
             }
-            store
-                .load_usage_daily(CURSOR, history_days)
-                .map(Some)
+            store.load_usage_daily(CURSOR, history_days).map(Some)
         })?;
         if let Some(statistics) = cached {
             return Ok(statistics);
@@ -263,10 +258,9 @@ impl CursorClient {
             // Keep showing the last verified activity rather than making a
             // healthy usage card disappear on a transient network failure.
             Err(error) => {
-                let cached = store::with_store(|store| {
-                    store.load_usage_daily(CURSOR, history_days)
-                })
-                .context("read cached Cursor usage after export failure")?;
+                let cached =
+                    store::with_store(|store| store.load_usage_daily(CURSOR, history_days))
+                        .context("read cached Cursor usage after export failure")?;
                 if cached.has_data() {
                     if crate::worker::is_rate_limited_error(&error) {
                         Ok(UsageStatistics {

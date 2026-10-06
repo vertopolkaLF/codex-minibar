@@ -200,7 +200,9 @@ pub fn publish_openrouter_snapshot(
         if provider.kind() != ProviderKind::OpenRouter || limits.openrouter_accounts.is_empty() {
             continue;
         }
-        snapshot.accounts.extend(limits.openrouter_accounts.iter().cloned());
+        snapshot
+            .accounts
+            .extend(limits.openrouter_accounts.iter().cloned());
         snapshot.sampled_at = snapshot.sampled_at.max(Some(limits.sampled_at));
     }
     if let Ok(mut slot) = OPENROUTER_SNAPSHOT.lock() {
@@ -414,7 +416,17 @@ pub fn render(
             )
         })
         .collect::<Vec<_>>();
-    let last_detection_inputs = cx.use_ref(None::<Vec<(String, ProviderKind, Option<PathBuf>, Option<PathBuf>, Option<PathBuf>)>>);
+    let last_detection_inputs = cx.use_ref(
+        None::<
+            Vec<(
+                String,
+                ProviderKind,
+                Option<PathBuf>,
+                Option<PathBuf>,
+                Option<PathBuf>,
+            )>,
+        >,
+    );
     let status_instances = instances.clone();
     let status_current = install_statuses.clone();
     cx.use_effect(
@@ -432,7 +444,10 @@ pub fn render(
                     .as_ref()
                     .is_some_and(|previous| previous.contains(input));
                 if !unchanged || !seeded.contains_key(&input.0) {
-                    seeded.insert(input.0.clone(), ProviderInstallStatus::checking_for(input.1));
+                    seeded.insert(
+                        input.0.clone(),
+                        ProviderInstallStatus::checking_for(input.1),
+                    );
                 }
             }
             if seeded != status_current {
@@ -485,9 +500,10 @@ pub fn render(
             Callback::new(move |(from, to): (String, String)| {
                 let setter = setter.clone();
                 persist_update(tx.clone(), |settings| {
-                    let (Some(from), Some(to)) =
-                        (settings.resolve_provider(&from), settings.resolve_provider(&to))
-                    else {
+                    let (Some(from), Some(to)) = (
+                        settings.resolve_provider(&from),
+                        settings.resolve_provider(&to),
+                    ) else {
                         return;
                     };
                     let enabled = settings.is_enabled(from);
@@ -647,13 +663,13 @@ pub fn render(
                     let set_dialog = set_provider_dialog.clone();
                     move || set_dialog.call(Some(ProviderDialog::add_instance()))
                 }))
-                    .padding(Thickness {
-                        left: 12.0,
-                        top: 0.0,
-                        right: 12.0,
-                        bottom: 2.0,
-                    })
-                    .background(Color::transparent()),
+                .padding(Thickness {
+                    left: 12.0,
+                    top: 0.0,
+                    right: 12.0,
+                    bottom: 2.0,
+                })
+                .background(Color::transparent()),
             ),
     };
 

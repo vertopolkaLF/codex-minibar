@@ -123,11 +123,23 @@ impl ProviderId {
     }
 
     /// Resolves a persisted instance id against the published settings.
+    /// Before settings are published, a primary id resolves to its driver and
+    /// a generated `<driver>-…` id to that driver.
     pub fn lookup(id: &str) -> Option<Self> {
         labels()
             .get(id)
             .map(|label| Self::new(label.kind, id))
             .or_else(|| ProviderKind::from_id(id).map(Self::primary))
+            .or_else(|| {
+                ProviderKind::ALL
+                    .into_iter()
+                    .filter(|kind| {
+                        id.strip_prefix(kind.id())
+                            .is_some_and(|rest| rest.starts_with('-'))
+                    })
+                    .max_by_key(|kind| kind.id().len())
+                    .map(|kind| Self::new(kind, id))
+            })
     }
 }
 
@@ -148,8 +160,7 @@ static LABELS: LazyLock<RwLock<HashMap<&'static str, InstanceLabel>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
 /// Every configured instance in display order with its enabled flag.
-static ORDER: LazyLock<RwLock<Vec<(ProviderId, bool)>>> =
-    LazyLock::new(|| RwLock::new(Vec::new()));
+static ORDER: LazyLock<RwLock<Vec<(ProviderId, bool)>>> = LazyLock::new(|| RwLock::new(Vec::new()));
 
 /// Configured instances in display order, as last published. Lets surfaces
 /// without a settings copy (Stream Deck bridge) enumerate instances.
@@ -512,7 +523,10 @@ pub fn badge_text(explicit: &str, name: &str) -> String {
             .filter_map(|word| word.chars().find(|ch| ch.is_alphanumeric()))
             .collect::<String>()
     } else {
-        name.chars().filter(|ch| ch.is_alphanumeric()).take(2).collect()
+        name.chars()
+            .filter(|ch| ch.is_alphanumeric())
+            .take(2)
+            .collect()
     };
     text.to_uppercase()
 }
@@ -523,7 +537,10 @@ pub fn managed_folder(id: &str) -> anyhow::Result<PathBuf> {
     use anyhow::Context;
     let dirs = directories::ProjectDirs::from("dev", "Codex Minibar", "Codex Minibar")
         .context("could not resolve the application data directory")?;
-    Ok(dirs.data_local_dir().join("instances").join(sanitize_id(id)))
+    Ok(dirs
+        .data_local_dir()
+        .join("instances")
+        .join(sanitize_id(id)))
 }
 
 fn sanitize_id(id: &str) -> String {
@@ -618,9 +635,10 @@ impl Capabilities {
         let folder_driver = matches!(instance.driver, ProviderKind::Claude | ProviderKind::Codex);
         // OpenCode's local history is one database for this PC; only the
         // primary instance reads it so it is never counted twice.
-        let shared_local_history =
-            matches!(instance.driver, ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo)
-                && !instance.is_primary();
+        let shared_local_history = matches!(
+            instance.driver,
+            ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo
+        ) && !instance.is_primary();
         Self {
             limits: true,
             usage_stats: crate::provider_registry::supports_usage_stats(instance.driver)
@@ -656,7 +674,10 @@ impl Capabilities {
         }
         Some(match capability {
             Capability::UsageStats
-                if matches!(instance.driver, ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo) =>
+                if matches!(
+                    instance.driver,
+                    ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo
+                ) =>
             {
                 "OpenCode's local history is tracked by the first OpenCode instance."
             }
@@ -723,6 +744,20 @@ mod tests {
         };
         let conflicts = folder_conflicts(&[primary, work, twin.clone()]);
         assert_eq!(conflicts.get(&twin.id).map(String::as_str), Some("Work"));
+    }
+
+    #[test]
+    fn unpublished_generated_ids_resolve_to_their_driver() {
+        let go = ProviderId::lookup("opencode-go-1a2b-3").unwrap();
+        assert_eq!(go.kind(), ProviderKind::OpenCodeGo);
+        assert_eq!(go.id(), "opencode-go-1a2b-3");
+        let zen = ProviderId::lookup("opencode-9f-1").unwrap();
+        assert_eq!(zen.kind(), ProviderKind::OpenCodeZen);
+        assert_eq!(
+            ProviderId::lookup("claude"),
+            Some(ProviderId::primary(ProviderKind::Claude))
+        );
+        assert_eq!(ProviderId::lookup("future-provider"), None);
     }
 
     #[test]

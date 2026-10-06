@@ -109,10 +109,9 @@ pub(super) fn instance_install_status(instance: &ProviderInstance) -> ProviderIn
             &path(&instance.kiro_cli_path),
         ),
         ProviderKind::OpenRouter => {
-            let detected = instance
-                .openrouter
-                .as_ref()
-                .is_some_and(|account| crate::openrouter::is_installed_for_accounts(std::slice::from_ref(account)));
+            let detected = instance.openrouter.as_ref().is_some_and(|account| {
+                crate::openrouter::is_installed_for_accounts(std::slice::from_ref(account))
+            });
             ProviderInstallStatus {
                 app: detected.then(|| "OpenRouter account credentials are configured".into()),
                 used: detected.then_some(ProviderInstallSource::App),
@@ -791,7 +790,9 @@ fn persist_openrouter_account(
         let provider = find_account_instance(&settings.instances, &account_id)
             .map(ProviderInstance::provider_id)
             .ok_or_else(|| anyhow::anyhow!("OpenRouter account no longer exists"))?;
-        let instance = settings.instance_mut(provider).expect("instance just found");
+        let instance = settings
+            .instance_mut(provider)
+            .expect("instance just found");
         let account = instance
             .openrouter
             .as_mut()
@@ -1429,7 +1430,10 @@ pub(super) fn no_providers_page(ctx: &SettingsPageContext<'_>) -> Element {
         .into()
 }
 
-pub(super) fn provider_page_content(provider: ProviderId, ctx: &SettingsPageContext<'_>) -> Element {
+pub(super) fn provider_page_content(
+    provider: ProviderId,
+    ctx: &SettingsPageContext<'_>,
+) -> Element {
     let Some(instance) = ctx.instance(provider).cloned() else {
         return no_providers_page(ctx);
     };
@@ -1639,7 +1643,11 @@ fn account_sections(instance: &ProviderInstance, ctx: &SettingsPageContext<'_>) 
         _ => return Vec::new(),
     }
     let mut out = vec![section_header("Account", None, None).with_key("account-header")];
-    let identity = ctx.openrouter_snapshot.identities.get(&instance.id).cloned();
+    let identity = ctx
+        .openrouter_snapshot
+        .identities
+        .get(&instance.id)
+        .cloned();
     if instance.uses_manual_credential() {
         let saved = crate::claude::load_manual_credential(&instance.id)
             .ok()
@@ -1671,7 +1679,10 @@ fn account_sections(instance: &ProviderInstance, ctx: &SettingsPageContext<'_>) 
                 "Add credential"
             })
             .on_click(move || {
-                open_dialog(&set_dialog, ProviderDialogKind::ManualCredential { provider })
+                open_dialog(
+                    &set_dialog,
+                    ProviderDialogKind::ManualCredential { provider },
+                )
             })
             .into(),
         );
@@ -1690,10 +1701,8 @@ fn account_sections(instance: &ProviderInstance, ctx: &SettingsPageContext<'_>) 
         .config_folder()
         .or_else(|| crate::instances::default_folder(instance.driver));
     let set_dialog = ctx.set_provider_dialog.clone();
-    let sign_in_reason = crate::instances::Capabilities::reason(
-        instance,
-        crate::instances::Capability::SignIn,
-    );
+    let sign_in_reason =
+        crate::instances::Capabilities::reason(instance, crate::instances::Capability::SignIn);
     let detail = match &identity {
         Some(identity) => format!("Signed in as {identity}"),
         None => "Not signed in yet, or no limits read so far.".into(),
@@ -1865,10 +1874,7 @@ fn source_settings(instance: &ProviderInstance, ctx: &SettingsPageContext<'_>) -
     } else {
         crate::instances::managed_folder(&instance.id).ok()
     };
-    let placeholder = default
-        .as_deref()
-        .map(display_fs_path)
-        .unwrap_or_default();
+    let placeholder = default.as_deref().map(display_fs_path).unwrap_or_default();
     let conflicts = crate::instances::folder_conflicts(ctx.instances);
     let mut body: Vec<Element> = vec![
         secondary_text(format!(
@@ -2080,7 +2086,10 @@ fn advanced_folder_expander(
     )
 }
 
-fn opencode_source_row(status: &ProviderInstallStatus, ctx: &SettingsPageContext<'_>) -> Vec<Element> {
+fn opencode_source_row(
+    status: &ProviderInstallStatus,
+    ctx: &SettingsPageContext<'_>,
+) -> Vec<Element> {
     if status.checking {
         return vec![checking_card(status).with_key("sources-checking")];
     }
@@ -2121,7 +2130,10 @@ fn opencode_source_row(status: &ProviderInstallStatus, ctx: &SettingsPageContext
     ]
 }
 
-fn opencode_key_section(instance: &ProviderInstance, ctx: &SettingsPageContext<'_>) -> Vec<Element> {
+fn opencode_key_section(
+    instance: &ProviderInstance,
+    ctx: &SettingsPageContext<'_>,
+) -> Vec<Element> {
     let provider = instance.provider_id();
     let mut out = vec![section_header("Account", None, None).with_key("account-header")];
     let saved_key = crate::opencode::manual_key(provider)
@@ -2218,8 +2230,13 @@ fn openrouter_sections(instance: &ProviderInstance, ctx: &SettingsPageContext<'_
         .find(|snapshot| snapshot.id == account.id);
     let management_hint = crate::openrouter::management_key_hint(&account.id);
     out.push(
-        provider_card(openrouter_account_body(&account, snapshot, management_hint, ctx))
-            .with_key(format!("openrouter-account-{}", account.id)),
+        provider_card(openrouter_account_body(
+            &account,
+            snapshot,
+            management_hint,
+            ctx,
+        ))
+        .with_key(format!("openrouter-account-{}", account.id)),
     );
     out
 }
@@ -2248,9 +2265,8 @@ fn openrouter_account_body(
         Ok(Some(hint)) => {
             let set_dialog = set_dialog.clone();
             let account_id = account_id.clone();
-            let mut detail = vec![
-                secondary_text("Credit balance and account-wide usage history").into(),
-            ];
+            let mut detail =
+                vec![secondary_text("Credit balance and account-wide usage history").into()];
             if let Some(balance) = snapshot.and_then(|snapshot| snapshot.balance_microusd) {
                 detail.push(secondary_text(format!("{} credit", money(balance))).into());
             }
@@ -2833,7 +2849,12 @@ fn claude_credential_fields(
         );
     }
     let mut instructions: Vec<Element> = Vec::new();
-    instructions.push(instruction_text("The saved credential is replaced only after the new one passes the check.").into());
+    instructions.push(
+        instruction_text(
+            "The saved credential is replaced only after the new one passes the check.",
+        )
+        .into(),
+    );
     instructions.push(claude_method_instructions(dialog.claude_method));
     vstack((
         claude_credential_tabs(dialog, set_dialog),
@@ -3084,9 +3105,7 @@ pub(super) fn provider_dialog_overlay(
             (format!("Sign in to {name}"), "Sign in")
         }
         ProviderDialogKind::ManualCredential { provider } => {
-            fields.push(
-                secondary_text(format!("For {}.", instance_name(provider))).into(),
-            );
+            fields.push(secondary_text(format!("For {}.", instance_name(provider))).into());
             fields.push(claude_credential_fields(
                 dialog,
                 actions.set_dialog.clone(),
@@ -3404,7 +3423,9 @@ fn submit_sign_in(dialog: ProviderDialog, provider: ProviderId, actions: Provide
             _ => anyhow::bail!("This provider has no sign-in."),
         }
         control.begin_save()?;
-        if !instance.is_primary() && matches!(instance.source, InstanceSource::ConfigFolder { path: None }) {
+        if !instance.is_primary()
+            && matches!(instance.source, InstanceSource::ConfigFolder { path: None })
+        {
             // Pin the managed folder so later changes to the default location
             // never move an existing login.
             let managed = folder.clone();

@@ -178,7 +178,7 @@ fn tray_preview_limits() -> crate::limits::ProviderLimits {
                     ..Default::default()
                 },
             ),
-                ]
+        ]
     };
     crate::limits::ProviderLimits::from_entries(
         crate::instances::published_providers()
@@ -602,11 +602,10 @@ fn tray_settings_cards(
                         if next[index].presentation.is_reset_clock() {
                             next[index].indicators.truncate(1);
                             if next[index].indicators.is_empty() {
-                                let provider = providers_for_empty
-                                    .first()
-                                    .copied()
-                                    .unwrap_or_default();
-                                let descriptor = crate::provider_registry::descriptor(provider.kind());
+                                let provider =
+                                    providers_for_empty.first().copied().unwrap_or_default();
+                                let descriptor =
+                                    crate::provider_registry::descriptor(provider.kind());
                                 let metric = descriptor
                                     .default_tray_metrics
                                     .first()
@@ -771,10 +770,7 @@ fn tray_settings_cards(
         rows.push(row);
     }
 
-    let first_enabled = enabled_providers
-        .first()
-        .copied()
-        .unwrap_or_default();
+    let first_enabled = enabled_providers.first().copied().unwrap_or_default();
     let mut add_actions = Vec::<Element>::new();
     let widgets_for_custom = widgets.to_vec();
     let custom_setter = set_widgets.clone();
@@ -836,10 +832,7 @@ fn tray_time_parameter_fields(
     settings_tx: Sender<Settings>,
 ) -> Element {
     let indicator = widget.indicators.first().cloned().unwrap_or_else(|| {
-        let provider = enabled_providers
-            .first()
-            .copied()
-            .unwrap_or_default();
+        let provider = enabled_providers.first().copied().unwrap_or_default();
         let descriptor = crate::provider_registry::descriptor(provider.kind());
         let metric = descriptor
             .default_tray_metrics
@@ -857,7 +850,11 @@ fn tray_time_parameter_fields(
         .map(|provider| tray_provider_label(*provider))
         .collect::<Vec<_>>();
     let provider_index = known_provider
-        .and_then(|provider| provider_options.iter().position(|option| *option == provider))
+        .and_then(|provider| {
+            provider_options
+                .iter()
+                .position(|option| *option == provider)
+        })
         .unwrap_or_else(|| {
             provider_labels.push(format!("Unsupported ({})", indicator.provider_id));
             provider_labels.len() - 1
@@ -1318,7 +1315,11 @@ fn tray_indicator_edit_form(
         .map(|provider| tray_provider_label(*provider))
         .collect::<Vec<_>>();
     let provider_index = known_provider
-        .and_then(|provider| provider_options.iter().position(|option| *option == provider))
+        .and_then(|provider| {
+            provider_options
+                .iter()
+                .position(|option| *option == provider)
+        })
         .unwrap_or_else(|| {
             provider_labels.push(format!("Unsupported ({})", indicator.provider_id));
             provider_labels.len() - 1

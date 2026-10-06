@@ -18,11 +18,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::limits::{ProviderLimits, RateLimits};
-use crate::{instances::ProviderId, settings::ProviderKind};
 use crate::usage::{
     CachedClaudeSessionFile, CachedClaudeUsageEntry, CachedSessionFile, ClaudeUsageCache,
     DailyTokenUsage, TokenUsage, UsageCache, UsageStatistics, statistics_from_daily,
 };
+use crate::{instances::ProviderId, settings::ProviderKind};
 
 pub(crate) mod codex_accounts;
 
@@ -252,9 +252,10 @@ impl ProviderStore {
         // Samples cached per account before accounts became instances seed
         // each migrated instance until its own first read.
         for account in legacy_accounts {
-            let Some(provider) = providers.iter().find(|provider| {
-                !provider.is_primary() && provider.id() == account.id
-            }) else {
+            let Some(provider) = providers
+                .iter()
+                .find(|provider| !provider.is_primary() && provider.id() == account.id)
+            else {
                 continue;
             };
             let snapshot = limits.get_mut(*provider);
@@ -335,7 +336,9 @@ impl ProviderStore {
         provider: ProviderId,
         history_days: u16,
     ) -> Result<UsageStatistics> {
-        if provider.kind() == ProviderKind::OpenRouter && self.load_openrouter_analytics(provider)?.is_none() {
+        if provider.kind() == ProviderKind::OpenRouter
+            && self.load_openrouter_analytics(provider)?.is_none()
+        {
             return Ok(UsageStatistics::default());
         }
         if provider == ProviderId::primary(ProviderKind::Codex) && self.use_codex_account_data()? {
@@ -804,12 +807,7 @@ impl ProviderStore {
                     fork_copy_anchor_ms: file.fork_copy_anchor_ms,
                     session_id: file.session_id.clone(),
                 })?;
-                scan.execute(params![
-                    provider.id(),
-                    path,
-                    file.offset as i64,
-                    meta
-                ])?;
+                scan.execute(params![provider.id(), path, file.offset as i64, meta])?;
                 for entry in &file.daily {
                     retained_days.insert((path.clone(), entry.date.to_string()));
                     daily.execute(params![
@@ -1174,7 +1172,9 @@ impl ProviderStore {
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<Vec<(String, TokenUsage)>> {
-        if provider.kind() == ProviderKind::OpenRouter && self.load_openrouter_analytics(provider)?.is_none() {
+        if provider.kind() == ProviderKind::OpenRouter
+            && self.load_openrouter_analytics(provider)?.is_none()
+        {
             return Ok(Vec::new());
         }
         if provider == ProviderId::primary(ProviderKind::Codex) && self.use_codex_account_data()? {
@@ -1215,7 +1215,9 @@ impl ProviderStore {
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<Vec<(String, NaiveDate, TokenUsage)>> {
-        if provider.kind() == ProviderKind::OpenRouter && self.load_openrouter_analytics(provider)?.is_none() {
+        if provider.kind() == ProviderKind::OpenRouter
+            && self.load_openrouter_analytics(provider)?.is_none()
+        {
             return Ok(Vec::new());
         }
         if provider == ProviderId::primary(ProviderKind::Codex) && self.use_codex_account_data()? {
@@ -1662,6 +1664,10 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn id(kind: ProviderKind) -> ProviderId {
+        ProviderId::primary(kind)
+    }
+
     fn test_store(path: &Path) -> ProviderStore {
         let conn = Connection::open(path).unwrap();
         conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
@@ -1682,7 +1688,7 @@ mod tests {
         };
         store
             .replace_usage_model_daily(
-                ProviderKind::Codex,
+                id(ProviderKind::Codex),
                 &[
                     ("a".into(), day, usage.clone()),
                     ("a".into(), day + Duration::days(1), usage.clone()),
@@ -1693,12 +1699,16 @@ mod tests {
             .unwrap();
         store
             .replace_usage_model_daily(
-                ProviderKind::Claude,
+                id(ProviderKind::Claude),
                 &[("other".into(), day, usage.clone())],
             )
             .unwrap();
         let rows = store
-            .load_model_daily(ProviderKind::Codex, day, day + Duration::days(1))
+            .load_model_daily(
+                crate::instances::ProviderId::from(ProviderKind::Codex),
+                day,
+                day + Duration::days(1),
+            )
             .unwrap();
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0], ("a".into(), day, usage.clone()));
@@ -1760,6 +1770,7 @@ mod tests {
         };
         store
             .save_openrouter_analytics(
+                id(ProviderKind::OpenRouter),
                 "first",
                 std::slice::from_ref(&day),
                 &[("model".into(), day.date, day.usage.clone())],
@@ -1772,6 +1783,7 @@ mod tests {
         assert!(
             store
                 .save_openrouter_analytics(
+                    id(ProviderKind::OpenRouter),
                     "second",
                     &[changed.clone()],
                     &[("model".into(), changed.date, changed.usage)],
@@ -1781,18 +1793,29 @@ mod tests {
         );
         assert_eq!(
             store
-                .load_usage_daily(ProviderKind::OpenRouter, 30)
+                .load_usage_daily(
+                    crate::instances::ProviderId::from(ProviderKind::OpenRouter),
+                    30
+                )
                 .unwrap()
                 .history
                 .requests,
             2
         );
         assert_eq!(
-            store.load_openrouter_analytics().unwrap().as_deref(),
+            store
+                .load_openrouter_analytics(id(ProviderKind::OpenRouter))
+                .unwrap()
+                .as_deref(),
             Some("first")
         );
         store.clear_usage_data().unwrap();
-        assert!(store.load_openrouter_analytics().unwrap().is_none());
+        assert!(
+            store
+                .load_openrouter_analytics(id(ProviderKind::OpenRouter))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1810,6 +1833,7 @@ mod tests {
         };
         store
             .save_openrouter_analytics(
+                id(ProviderKind::OpenRouter),
                 "old",
                 std::slice::from_ref(&day),
                 &[("model".into(), day.date, day.usage.clone())],
@@ -1823,10 +1847,18 @@ mod tests {
                 [],
             )
             .unwrap();
-        assert!(store.load_openrouter_analytics().unwrap().is_none());
+        assert!(
+            store
+                .load_openrouter_analytics(id(ProviderKind::OpenRouter))
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(
             store
-                .load_usage_daily(ProviderKind::OpenRouter, 30)
+                .load_usage_daily(
+                    crate::instances::ProviderId::from(ProviderKind::OpenRouter),
+                    30
+                )
                 .unwrap()
                 .history
                 .estimated_cost_microusd,
@@ -1834,13 +1866,21 @@ mod tests {
         );
         assert!(
             store
-                .load_model_breakdown(ProviderKind::OpenRouter, day.date, day.date)
+                .load_model_breakdown(
+                    crate::instances::ProviderId::from(ProviderKind::OpenRouter),
+                    day.date,
+                    day.date
+                )
                 .unwrap()
                 .is_empty()
         );
         assert!(
             store
-                .load_model_daily(ProviderKind::OpenRouter, day.date, day.date)
+                .load_model_daily(
+                    crate::instances::ProviderId::from(ProviderKind::OpenRouter),
+                    day.date,
+                    day.date
+                )
                 .unwrap()
                 .is_empty()
         );
@@ -1853,6 +1893,7 @@ mod tests {
         };
         store
             .save_openrouter_analytics(
+                id(ProviderKind::OpenRouter),
                 "fresh",
                 std::slice::from_ref(&fresh),
                 &[("model".into(), day.date, fresh.usage.clone())],
@@ -1861,7 +1902,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             store
-                .load_usage_daily(ProviderKind::OpenRouter, 30)
+                .load_usage_daily(
+                    crate::instances::ProviderId::from(ProviderKind::OpenRouter),
+                    30
+                )
                 .unwrap()
                 .history
                 .estimated_cost_microusd,
@@ -1886,9 +1930,14 @@ mod tests {
             },
         }];
         store
-            .replace_usage_daily(ProviderKind::Cursor, &days)
+            .replace_usage_daily(
+                crate::instances::ProviderId::from(ProviderKind::Cursor),
+                &days,
+            )
             .unwrap();
-        let stats = store.load_usage_daily(ProviderKind::Cursor, 30).unwrap();
+        let stats = store
+            .load_usage_daily(crate::instances::ProviderId::from(ProviderKind::Cursor), 30)
+            .unwrap();
         assert_eq!(stats.daily.len(), 1);
         assert_eq!(stats.history.requests, 1);
     }
@@ -1900,7 +1949,7 @@ mod tests {
         let today = Local::now().date_naive();
         store
             .replace_usage_daily(
-                ProviderKind::Cursor,
+                id(ProviderKind::Cursor),
                 &[DailyTokenUsage {
                     date: today,
                     usage: TokenUsage {
@@ -1912,21 +1961,24 @@ mod tests {
             )
             .unwrap();
         store
-            .set_usage_fetched_at(ProviderKind::Cursor, Utc::now())
+            .set_usage_fetched_at(
+                crate::instances::ProviderId::from(ProviderKind::Cursor),
+                Utc::now(),
+            )
             .unwrap();
 
         store.clear_usage_data().unwrap();
 
         assert!(
             store
-                .load_usage_daily(ProviderKind::Cursor, 30)
+                .load_usage_daily(crate::instances::ProviderId::from(ProviderKind::Cursor), 30)
                 .unwrap()
                 .daily
                 .is_empty()
         );
         assert!(
             store
-                .usage_fetched_at(ProviderKind::Cursor)
+                .usage_fetched_at(crate::instances::ProviderId::from(ProviderKind::Cursor))
                 .unwrap()
                 .is_none()
         );
@@ -1938,9 +1990,13 @@ mod tests {
         let store = test_store(&dir.path().join("test.sqlite"));
         let cache = sample_codex_cache();
 
-        store.save_codex_cache(&cache).unwrap();
+        store
+            .save_codex_cache(id(ProviderKind::Codex), &cache)
+            .unwrap();
         let changes_after_first_save = store.conn.total_changes();
-        store.save_codex_cache(&cache).unwrap();
+        store
+            .save_codex_cache(id(ProviderKind::Codex), &cache)
+            .unwrap();
 
         assert_eq!(store.conn.total_changes(), changes_after_first_save);
     }
@@ -1957,7 +2013,7 @@ mod tests {
         .unwrap();
 
         assert!(store.import_codex_json(&legacy_path).unwrap());
-        let migrated = store.load_codex_cache().unwrap();
+        let migrated = store.load_codex_cache(id(ProviderKind::Codex)).unwrap();
         let file = migrated.files.get("sessions/sample.jsonl").unwrap();
         assert_eq!(file.offset, 42);
         assert_eq!(file.daily[0].usage.total_tokens(), 15);
@@ -1969,7 +2025,7 @@ mod tests {
         );
         assert_eq!(
             store
-                .load_usage_daily(ProviderKind::Codex, 30)
+                .load_usage_daily(crate::instances::ProviderId::from(ProviderKind::Codex), 30)
                 .unwrap()
                 .history
                 .requests,
@@ -2006,11 +2062,17 @@ mod tests {
                 },
             )]),
         };
-        store.save_claude_cache(&cache).unwrap();
+        store
+            .save_claude_cache(id(ProviderKind::Claude), &cache)
+            .unwrap();
         let today = Local::now().date_naive();
         assert_eq!(
             store
-                .count_session_paths(ProviderKind::Claude, today, today)
+                .count_session_paths(
+                    crate::instances::ProviderId::from(ProviderKind::Claude),
+                    today,
+                    today
+                )
                 .unwrap(),
             1
         );
@@ -2020,8 +2082,10 @@ mod tests {
     fn round_trips_codex_model_daily_into_breakdown() {
         let dir = tempdir().unwrap();
         let store = test_store(&dir.path().join("test.sqlite"));
-        store.save_codex_cache(&sample_codex_cache()).unwrap();
-        let loaded = store.load_codex_cache().unwrap();
+        store
+            .save_codex_cache(id(ProviderKind::Codex), &sample_codex_cache())
+            .unwrap();
+        let loaded = store.load_codex_cache(id(ProviderKind::Codex)).unwrap();
         let file = loaded.files.get("sessions/sample.jsonl").unwrap();
         assert_eq!(
             file.model_daily
@@ -2031,7 +2095,11 @@ mod tests {
         );
         let today = Local::now().date_naive();
         let models = store
-            .load_model_breakdown(ProviderKind::Codex, today, today)
+            .load_model_breakdown(
+                crate::instances::ProviderId::from(ProviderKind::Codex),
+                today,
+                today,
+            )
             .unwrap();
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].0, "gpt-5");

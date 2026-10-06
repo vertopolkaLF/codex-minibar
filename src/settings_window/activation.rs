@@ -583,11 +583,13 @@ fn scheduled_activation_cards(
         let mut fields = Vec::<Element>::new();
         if choices.is_empty() {
             fields.push(
-                text_block("Turn on Codex or Claude in Providers first, with a config folder login.")
-                    .font_size(12.0)
-                    .foreground(ThemeRef::SecondaryText)
-                    .wrap()
-                    .into(),
+                text_block(
+                    "Turn on Codex or Claude in Providers first, with a config folder login.",
+                )
+                .font_size(12.0)
+                .foreground(ThemeRef::SecondaryText)
+                .wrap()
+                .into(),
             );
         } else if choices.len() > 1 || schedule.provider().is_none() {
             let schedules_for_provider = schedules.to_vec();
@@ -771,11 +773,13 @@ fn auto_activation_pause_cards(
         let mut fields = Vec::<Element>::new();
         if choices.is_empty() {
             fields.push(
-                text_block("Turn on Codex or Claude in Providers first, with a config folder login.")
-                    .font_size(12.0)
-                    .foreground(ThemeRef::SecondaryText)
-                    .wrap()
-                    .into(),
+                text_block(
+                    "Turn on Codex or Claude in Providers first, with a config folder login.",
+                )
+                .font_size(12.0)
+                .foreground(ThemeRef::SecondaryText)
+                .wrap()
+                .into(),
             );
         } else if choices.len() > 1 || pause.provider().is_none() {
             let pauses_for_provider = pauses.to_vec();

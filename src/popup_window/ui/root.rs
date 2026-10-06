@@ -379,7 +379,9 @@ impl PopupRoot {
                 ui.grouped_tab_selection.insert(local_driver, local_id);
             },
             move |settings| {
-                settings.grouped_tab_selection.insert(driver_id, instance_id);
+                settings
+                    .grouped_tab_selection
+                    .insert(driver_id, instance_id);
             },
         );
     }
@@ -1530,12 +1532,7 @@ impl PopupRoot {
             .unwrap_or(0);
         let segments = members
             .iter()
-            .map(|member| {
-                (
-                    SharedString::from(member.display_name()),
-                    member.badge(),
-                )
-            })
+            .map(|member| (SharedString::from(member.display_name()), member.badge()))
             .collect::<Vec<_>>();
         // Membership is part of the key so a changed instance set never
         // reuses another instance's segment state.

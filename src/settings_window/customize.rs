@@ -354,7 +354,10 @@ pub(super) fn provider_settings_cards(
     vec![
         settings_checkbox_expander(
             if shared {
-                format!("Popup cards (shared by every {} instance)", provider.display_name())
+                format!(
+                    "Popup cards (shared by every {} instance)",
+                    provider.display_name()
+                )
             } else {
                 "Popup cards".to_owned()
             },

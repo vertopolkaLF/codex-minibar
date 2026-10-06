@@ -378,7 +378,7 @@ fn write_response(stream: &mut TcpStream, response: &Response) -> io::Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::limits::LimitWindow;
+    use crate::{limits::LimitWindow, settings::ProviderKind};
 
     #[test]
     fn window_snapshot_exposes_remaining_without_provider_credentials() {

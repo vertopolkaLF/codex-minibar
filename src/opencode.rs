@@ -14,9 +14,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
+    instances::ProviderId,
     limits::{AdditionalLimit, LimitWindow, RateLimits},
     secrets,
-    instances::ProviderId,
     settings::ProviderKind,
     store,
     usage::{DailyTokenUsage, TokenUsage, UsageStatistics, statistics_from_daily},
@@ -258,9 +258,7 @@ impl OpenCodeClient {
             }
         }
         let hourly_rows = hourly.into_iter().collect::<Vec<_>>();
-        let _ = store::with_store(|store| {
-            store.replace_usage_hourly(self.provider, &hourly_rows)
-        });
+        let _ = store::with_store(|store| store.replace_usage_hourly(self.provider, &hourly_rows));
         let days = daily
             .into_iter()
             .map(|(date, usage)| DailyTokenUsage { date, usage })
@@ -289,11 +287,11 @@ impl UsageProvider for OpenCodeClient {
                 })?;
                 Ok(statistics)
             }
-            Err(error) => store::with_store(|store| {
-                store.load_usage_daily(self.provider, history_days)
-            })
-            .context("refresh OpenCode local usage")
-            .or(Err(error)),
+            Err(error) => {
+                store::with_store(|store| store.load_usage_daily(self.provider, history_days))
+                    .context("refresh OpenCode local usage")
+                    .or(Err(error))
+            }
         }
     }
 
@@ -700,7 +698,10 @@ mod tests {
         insert("malformed", today_ms, "not-json");
         drop(connection);
 
-        let zen = OpenCodeClient::new(ProviderKind::OpenCodeZen).unwrap();
+        let zen = OpenCodeClient::new(crate::instances::ProviderId::from(
+            ProviderKind::OpenCodeZen,
+        ))
+        .unwrap();
         let zen_stats = zen.read_local_usage_from_path(&path, 30).unwrap();
         assert_eq!(zen_stats.history.requests, 1);
         assert_eq!(zen_stats.today.estimated_cost_microusd, 1_250_000);
@@ -708,7 +709,8 @@ mod tests {
         assert_eq!(zen_stats.today.output_tokens, 7);
         assert_eq!(zen_stats.today.cached_input_tokens, 2);
 
-        let go = OpenCodeClient::new(ProviderKind::OpenCodeGo).unwrap();
+        let go = OpenCodeClient::new(crate::instances::ProviderId::from(ProviderKind::OpenCodeGo))
+            .unwrap();
         let go_stats = go.read_local_usage_from_path(&path, 30).unwrap();
         assert_eq!(go_stats.history.requests, 1);
         assert_eq!(go_stats.history.estimated_cost_microusd, 0);

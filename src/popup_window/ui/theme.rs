@@ -233,12 +233,15 @@ impl Palette {
         if let Some(rgb) = provider.badge().and_then(|badge| badge.color.rgb()) {
             return rgb8(rgb);
         }
-        let hash = provider
-            .id()
-            .bytes()
-            .fold(0_u32, |hash, byte| hash.wrapping_mul(31).wrapping_add(u32::from(byte)));
+        let hash = provider.id().bytes().fold(0_u32, |hash, byte| {
+            hash.wrapping_mul(31).wrapping_add(u32::from(byte))
+        });
         let amount = [0.3, 0.45, 0.6][(hash % 3) as usize];
-        let toward = if self.dark { gpui::black() } else { gpui::white() };
+        let toward = if self.dark {
+            gpui::black()
+        } else {
+            gpui::white()
+        };
         base.mix(toward, amount)
     }
 

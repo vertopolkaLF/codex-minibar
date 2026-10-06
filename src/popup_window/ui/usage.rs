@@ -1321,13 +1321,13 @@ mod tests {
             start_date: date - Duration::days(2),
             end_date: date,
             providers: vec![ProviderOverview {
-                provider: ProviderKind::Codex,
+                provider: crate::instances::ProviderId::from(ProviderKind::Codex),
                 ..Default::default()
             }],
             daily_series: vec![DailySeriesPoint {
                 at: start_of_local_day(date),
                 date,
-                by_provider: BTreeMap::from([(ProviderKind::Codex, 100)]),
+                by_provider: BTreeMap::from([(ProviderKind::Codex.into(), 100)]),
                 total: 100,
             }],
             ..Default::default()
@@ -1347,7 +1347,7 @@ mod tests {
         let mut updated = (*snapshot).clone();
         updated.daily_series[0]
             .by_provider
-            .insert(ProviderKind::Codex, 200);
+            .insert(crate::instances::ProviderId::from(ProviderKind::Codex), 200);
         let updated = Arc::new(updated);
         assert!(!cache.matches(&updated, OverviewMetric::Cost));
         let next = UsageChartCache::new(updated, OverviewMetric::Cost);

@@ -694,8 +694,8 @@ pub(super) fn start_background_bridge(
                     );
                     let combine_activation_notification =
                         crate::provider::automatic_activation(provider, &live_settings)
-                        && notification_settings.limits_changed
-                        && notification_settings.activation_success;
+                            && notification_settings.limits_changed
+                            && notification_settings.activation_success;
                     if combine_activation_notification {
                         pending_auto_activation_successes.insert(provider);
                     } else if notification_settings.activation_success {

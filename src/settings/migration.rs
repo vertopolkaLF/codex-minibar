@@ -130,14 +130,8 @@ pub(super) fn migrate_to_instances(document: &mut toml::Value) -> Result<()> {
     let migrated = instances_from_legacy(&legacy);
 
     root.insert("instances".into(), to_value(&migrated.instances)?);
-    root.insert(
-        "popup_tab_mode".into(),
-        to_value(&PopupTabMode::default())?,
-    );
-    root.insert(
-        "popup_home_order".into(),
-        to_value(&migrated.home_order)?,
-    );
+    root.insert("popup_tab_mode".into(), to_value(&PopupTabMode::default())?);
+    root.insert("popup_home_order".into(), to_value(&migrated.home_order)?);
     match &migrated.home_right_column {
         Some(right) => {
             root.insert("popup_home_right_column".into(), to_value(right)?);
@@ -177,7 +171,10 @@ fn profile_instance_id(driver: ProviderKind, profile: Option<&str>) -> String {
 
 fn profiles_with_default(saved: &[LegacyProfile]) -> Vec<LegacyProfile> {
     let mut profiles = saved.to_vec();
-    if !profiles.iter().any(|profile| profile.id == DEFAULT_PROFILE_ID) {
+    if !profiles
+        .iter()
+        .any(|profile| profile.id == DEFAULT_PROFILE_ID)
+    {
         profiles.insert(
             0,
             LegacyProfile {
@@ -201,13 +198,8 @@ fn instances_from_legacy(legacy: &LegacyV38) -> Migrated {
             drivers.push(driver);
         }
     }
-    let driver_enabled = |driver: ProviderKind| {
-        legacy
-            .providers
-            .enabled
-            .iter()
-            .any(|id| id == driver.id())
-    };
+    let driver_enabled =
+        |driver: ProviderKind| legacy.providers.enabled.iter().any(|id| id == driver.id());
     let shown_on_home = |driver: ProviderKind| {
         legacy
             .popup_visibility
@@ -362,12 +354,7 @@ fn instances_from_legacy(legacy: &LegacyV38) -> Migrated {
     }
     let home_right_column = match (&legacy.popup_home_right_column, &legacy.popup_right_column) {
         (Some(right), _) => Some(right.iter().flat_map(widget_ids).collect()),
-        (None, Some(right)) => Some(
-            right
-                .iter()
-                .flat_map(|kind| driver_widgets(kind))
-                .collect(),
-        ),
+        (None, Some(right)) => Some(right.iter().flat_map(|kind| driver_widgets(kind)).collect()),
         (None, None) => None,
     };
     Migrated {
@@ -602,7 +589,10 @@ enabled = false
         let claude = settings.instance_by_id("claude").unwrap();
         assert_eq!(claude.name, "Personal");
         assert!(claude.enabled && claude.auto_activation && claude.show_on_home);
-        assert_eq!(claude.binary_path, Some(PathBuf::from(r"C:\tools\claude.exe")));
+        assert_eq!(
+            claude.binary_path,
+            Some(PathBuf::from(r"C:\tools\claude.exe"))
+        );
         let work = settings.instance_by_id("work").unwrap();
         assert!(work.enabled && !work.auto_activation && !work.show_on_home);
         assert_eq!(work.source, InstanceSource::Manual);

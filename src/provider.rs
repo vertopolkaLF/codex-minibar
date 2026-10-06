@@ -182,7 +182,10 @@ pub(crate) fn start_provider_worker_with_limits(
     Ok(worker)
 }
 
-fn start_driver_worker(instance: &ProviderInstance, options: WorkerOptions) -> Result<WorkerHandle> {
+fn start_driver_worker(
+    instance: &ProviderInstance,
+    options: WorkerOptions,
+) -> Result<WorkerHandle> {
     let provider = instance.provider_id();
     macro_rules! start_worker {
         ($limits:expr, $usage:expr, $activator:expr, $activation:expr) => {
@@ -343,7 +346,13 @@ fn provider_activation_path(provider: ProviderId, base_path: PathBuf) -> PathBuf
         let id = provider
             .id()
             .chars()
-            .map(|ch| if ch.is_ascii_alphanumeric() || ch == '-' { ch } else { '_' })
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || ch == '-' {
+                    ch
+                } else {
+                    '_'
+                }
+            })
             .collect::<String>();
         return base_path.with_file_name(format!("activation-{id}.toml"));
     }

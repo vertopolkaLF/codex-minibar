@@ -1094,8 +1094,7 @@ impl PopupVisibility {
             for (brick_id, _) in crate::provider_registry::discovered_additional_brick_labels(
                 provider.kind(),
                 snapshot,
-            )
-            {
+            ) {
                 if self.bricks.contains_key(&brick_id) {
                     continue;
                 }
@@ -2173,7 +2172,11 @@ impl Settings {
     /// ignored and instances missing from `ids` keep their relative order at
     /// the end.
     pub fn apply_instance_order(&mut self, ids: &[String]) -> bool {
-        let before = self.instances.iter().map(|i| i.id.clone()).collect::<Vec<_>>();
+        let before = self
+            .instances
+            .iter()
+            .map(|i| i.id.clone())
+            .collect::<Vec<_>>();
         let mut remaining = std::mem::take(&mut self.instances);
         for id in ids {
             if let Some(index) = remaining.iter().position(|instance| &instance.id == id) {
@@ -2181,7 +2184,12 @@ impl Settings {
             }
         }
         self.instances.append(&mut remaining);
-        before != self.instances.iter().map(|i| i.id.clone()).collect::<Vec<_>>()
+        before
+            != self
+                .instances
+                .iter()
+                .map(|i| i.id.clone())
+                .collect::<Vec<_>>()
     }
 
     /// Moves an instance one slot earlier or later.
@@ -2381,8 +2389,7 @@ fn backup_before_migration(path: &Path, version: u32) -> Result<()> {
     if backup.exists() {
         return Ok(());
     }
-    fs::copy(path, &backup)
-        .with_context(|| format!("back up settings to {}", backup.display()))?;
+    fs::copy(path, &backup).with_context(|| format!("back up settings to {}", backup.display()))?;
     Ok(())
 }
 
@@ -3098,52 +3105,71 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn id(kind: ProviderKind) -> ProviderId {
+        ProviderId::primary(kind)
+    }
+
     #[test]
     fn openrouter_usage_tracks_management_key_availability_without_overriding_opt_out() {
         let mut settings = Settings::default();
-        settings.sync_openrouter_usage_availability(false, false);
-        assert!(!settings.usage_stats_provider_enabled(ProviderKind::OpenRouter));
-        assert!(settings.usage_stats_provider_enabled(ProviderKind::Codex));
+        let openrouter = id(ProviderKind::OpenRouter);
+        settings.sync_openrouter_usage_availability(openrouter, false, false);
+        assert!(!settings.usage_stats_provider_enabled(openrouter));
+        assert!(settings.usage_stats_provider_enabled(id(ProviderKind::Codex)));
 
-        settings.sync_openrouter_usage_availability(false, true);
-        assert!(settings.usage_stats_provider_enabled(ProviderKind::OpenRouter));
-        settings.set_usage_stats_provider_enabled(ProviderKind::OpenRouter, false);
+        settings.sync_openrouter_usage_availability(openrouter, false, true);
+        assert!(settings.usage_stats_provider_enabled(openrouter));
+        settings.set_usage_stats_provider_enabled(openrouter, false);
         // Refresh, replacement, or removal of one of several management keys
         // must preserve a manual opt-out while another key is still present.
-        settings.sync_openrouter_usage_availability(true, true);
-        assert!(!settings.usage_stats_provider_enabled(ProviderKind::OpenRouter));
-        settings.set_usage_stats_provider_enabled(ProviderKind::OpenRouter, true);
-        settings.sync_openrouter_usage_availability(true, false);
-        assert!(!settings.usage_stats_provider_enabled(ProviderKind::OpenRouter));
-        settings.sync_openrouter_usage_availability(false, true);
-        assert!(settings.usage_stats_provider_enabled(ProviderKind::OpenRouter));
+        settings.sync_openrouter_usage_availability(openrouter, true, true);
+        assert!(!settings.usage_stats_provider_enabled(openrouter));
+        settings.set_usage_stats_provider_enabled(openrouter, true);
+        settings.sync_openrouter_usage_availability(openrouter, true, false);
+        assert!(!settings.usage_stats_provider_enabled(openrouter));
+        settings.sync_openrouter_usage_availability(openrouter, false, true);
+        assert!(settings.usage_stats_provider_enabled(openrouter));
 
         // Adding a key must not switch the global master toggle back on.
         settings.usage_stats_enabled = false;
-        settings.sync_openrouter_usage_availability(false, true);
+        settings.sync_openrouter_usage_availability(openrouter, false, true);
         assert!(!settings.usage_stats_enabled);
     }
 
     #[test]
     fn openrouter_usage_is_unavailable_without_management_credentials_on_startup() {
         let settings = Settings::default();
-        assert!(settings.openrouter_accounts.is_empty());
-        assert!(!settings.usage_stats_collection_enabled(ProviderKind::OpenRouter));
-        assert!(
-            settings
-                .effective_usage_stats_excluded_providers()
-                .iter()
-                .any(|id| id == ProviderKind::OpenRouter.id())
-        );
-        assert!(settings.usage_stats_collection_enabled(ProviderKind::Codex));
-        assert!(settings.usage_stats_collection_enabled(ProviderKind::Claude));
+        let openrouter = id(ProviderKind::OpenRouter);
+        let account = settings
+            .instance(openrouter)
+            .unwrap()
+            .openrouter
+            .clone()
+            .unwrap();
+        assert!(!crate::openrouter::has_management_key(
+            std::slice::from_ref(&account)
+        ));
+        assert!(!settings.usage_stats_collection_enabled(openrouter));
+        assert!(!settings.usage_stats_providers().contains(&openrouter));
+        assert!(settings.usage_stats_collection_enabled(id(ProviderKind::Codex)));
+        assert!(settings.usage_stats_collection_enabled(id(ProviderKind::Claude)));
     }
 
     #[test]
     fn defaults_match_product_decisions() {
         let value = Settings::default();
-        assert!(!value.providers.is_enabled(ProviderKind::Codex));
-        assert!(!value.providers.is_enabled(ProviderKind::Claude));
+        assert!(!value.is_enabled(id(ProviderKind::Codex)));
+        assert!(!value.is_enabled(id(ProviderKind::Claude)));
+        assert_eq!(
+            value
+                .instances
+                .iter()
+                .map(|instance| instance.driver)
+                .collect::<Vec<_>>(),
+            ProviderKind::ALL
+        );
+        assert!(value.instances.iter().all(ProviderInstance::is_primary));
+        assert_eq!(value.popup_tab_mode, PopupTabMode::Separate);
         assert_eq!(value.theme, AppTheme::Auto);
         assert_eq!(value.accent_color, AccentColor::Windows);
         assert!(value.animations_enabled);
@@ -3157,12 +3183,16 @@ mod tests {
         assert!(value.use_colored_provider_icons);
         assert!(value.use_colored_sidebar_icons);
         assert!(!value.replace_chatgpt_logo_with_codex);
-        assert!(!value.automatic_activation);
+        assert!(
+            value
+                .instances
+                .iter()
+                .all(|instance| !instance.auto_activation)
+        );
         assert!(value.auto_activation_pauses.is_empty());
         assert!(value.usage_stats_enabled);
-        assert!(value.usage_stats_excluded_providers.is_empty());
         for provider in ProviderKind::ALL {
-            assert!(value.usage_stats_provider_enabled(provider));
+            assert!(value.usage_stats_provider_enabled(id(provider)));
         }
         assert_eq!(value.limit_refresh_interval, LimitRefreshInterval::Minute1);
         assert_eq!(
@@ -3196,8 +3226,9 @@ mod tests {
         assert!(
             value
                 .popup_visibility
-                .provider_shown_on_all(ProviderKind::Codex)
+                .driver_visible_on_home(ProviderKind::Codex)
         );
+        assert!(value.instances.iter().all(|instance| instance.show_on_home));
         assert!(value.show_total_spend_on_all_tab);
         assert_eq!(
             value.total_spend_presentation,
@@ -3206,7 +3237,7 @@ mod tests {
         assert_eq!(value.total_spend_period, TotalSpendPeriod::ThirtyDays);
         assert_eq!(value.history_retention_days, 30);
         assert!(value.tray_widgets.is_empty());
-        assert_eq!(value.popup_order, PopupWidgetKind::default_order());
+        assert!(value.popup_home_order.is_empty());
         assert_eq!(
             value.reset_announcement_refresh_interval,
             ResetAnnouncementRefreshInterval::Hour1
@@ -3295,25 +3326,21 @@ mod tests {
     fn usage_stats_provider_selection_defaults_enabled_and_round_trips() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.toml");
+        let openrouter = id(ProviderKind::OpenRouter);
         let mut settings = Settings::default();
-        settings.set_usage_stats_provider_enabled(ProviderKind::OpenRouter, false);
-        assert!(!settings.usage_stats_provider_enabled(ProviderKind::OpenRouter));
-        assert!(settings.usage_stats_provider_enabled(ProviderKind::Codex));
+        settings.set_usage_stats_provider_enabled(openrouter, false);
+        assert!(!settings.usage_stats_provider_enabled(openrouter));
+        assert!(settings.usage_stats_provider_enabled(id(ProviderKind::Codex)));
         settings.save(&path).unwrap();
 
         let loaded = Settings::load_or_create(&path).unwrap();
-        assert!(!loaded.usage_stats_provider_enabled(ProviderKind::OpenRouter));
-        assert!(loaded.usage_stats_provider_enabled(ProviderKind::Claude));
+        assert!(!loaded.usage_stats_provider_enabled(openrouter));
+        assert!(loaded.usage_stats_provider_enabled(id(ProviderKind::Claude)));
 
         let mut reenabled = loaded;
-        reenabled.set_usage_stats_provider_enabled(ProviderKind::OpenRouter, true);
-        assert!(reenabled.usage_stats_provider_enabled(ProviderKind::OpenRouter));
-        assert!(
-            !reenabled
-                .usage_stats_excluded_providers
-                .iter()
-                .any(|id| id == ProviderKind::OpenRouter.id())
-        );
+        reenabled.set_usage_stats_provider_enabled(openrouter, true);
+        assert!(reenabled.usage_stats_provider_enabled(openrouter));
+        assert!(reenabled.instance(openrouter).unwrap().usage_stats);
     }
 
     #[test]
@@ -3325,13 +3352,11 @@ mod tests {
         let loaded = Settings::load_or_create(&path).unwrap();
 
         assert_eq!(loaded.version, SETTINGS_VERSION);
-        assert!(loaded.usage_stats_excluded_providers.is_empty());
-        assert!(loaded.usage_stats_provider_enabled(ProviderKind::OpenRouter));
-        assert!(
-            fs::read_to_string(path)
-                .unwrap()
-                .contains("usage_stats_excluded_providers = []")
-        );
+        assert!(loaded.usage_stats_provider_enabled(id(ProviderKind::OpenRouter)));
+        let raw = fs::read_to_string(path).unwrap();
+        // The selection now lives on each instance.
+        assert!(!raw.contains("usage_stats_excluded_providers"));
+        assert!(raw.contains("usage_stats = true"));
     }
 
     #[test]
@@ -3343,13 +3368,11 @@ mod tests {
         let loaded = Settings::load_or_create(&path).unwrap();
 
         assert_eq!(loaded.version, SETTINGS_VERSION);
-        assert!(loaded.usage_stats_excluded_providers.is_empty());
-        assert!(loaded.usage_stats_provider_enabled(ProviderKind::OpenRouter));
-        assert!(
-            fs::read_to_string(path)
-                .unwrap()
-                .contains("usage_stats_excluded_providers = []")
-        );
+        assert!(loaded.usage_stats_provider_enabled(id(ProviderKind::OpenRouter)));
+        let raw = fs::read_to_string(path).unwrap();
+        // The selection now lives on each instance.
+        assert!(!raw.contains("usage_stats_excluded_providers"));
+        assert!(raw.contains("usage_stats = true"));
     }
 
     #[test]
@@ -3413,18 +3436,17 @@ show_usage_stats = false
     }
 
     #[test]
-    fn provider_all_tab_hides_the_whole_section_without_touching_bricks() {
+    fn driver_home_visibility_follows_its_bricks() {
         let mut visibility = PopupVisibility::build_defaults();
         assert!(visibility.is_visible("codex.session", PopupSurface::HomeTab, true));
-        assert!(visibility.provider_visible_on_all(ProviderKind::Codex));
-
-        visibility.set_provider_all_tab(ProviderKind::Codex, false);
-        assert!(!visibility.provider_shown_on_all(ProviderKind::Codex));
-        assert!(!visibility.provider_visible_on_all(ProviderKind::Codex));
-        assert!(!visibility.is_visible("codex.session", PopupSurface::HomeTab, true));
+        assert!(visibility.driver_visible_on_home(ProviderKind::Codex));
+        for brick in crate::provider_registry::catalog_brick_ids(ProviderKind::Codex) {
+            let tab = visibility.visibility_for(&brick).provider_tab;
+            visibility.set_brick(brick, false, tab);
+        }
+        assert!(!visibility.driver_visible_on_home(ProviderKind::Codex));
         assert!(visibility.is_visible("codex.session", PopupSurface::ProviderTab, true));
-        assert!(visibility.visibility_for("codex.session").all_tab);
-        assert!(!visibility.is_visible("codex.session", PopupSurface::HomeTab, false));
+        assert!(visibility.driver_visible_on_home(ProviderKind::Claude));
     }
 
     #[test]
@@ -3437,7 +3459,7 @@ show_usage_stats = false
         assert!(!settings.popup_visibility.bricks.contains_key(&brick_id));
 
         let limits = crate::limits::ProviderLimits::from_entries([(
-            ProviderKind::Claude,
+            id(ProviderKind::Claude),
             crate::limits::RateLimits {
                 additional_limits: vec![crate::limits::AdditionalLimit {
                     id: "seven_day_runtime_lane".into(),
@@ -3460,28 +3482,26 @@ show_usage_stats = false
     }
 
     #[test]
-    fn opencode_provider_ids_and_popup_ids_are_distinct_and_stable() {
+    fn opencode_provider_ids_and_home_ids_are_distinct_and_stable() {
         assert_eq!(ProviderKind::OpenCodeZen.id(), "opencode");
         assert_eq!(ProviderKind::OpenCodeGo.id(), "opencode-go");
         assert_eq!(ProviderKind::OpenRouter.id(), "openrouter");
+        // Home blocks are keyed by instance id; primaries keep the driver id.
         assert_eq!(
-            PopupWidgetKind::from_provider(ProviderKind::OpenCodeZen).id(),
-            "open_code_zen"
+            HomeWidgetId::provider(id(ProviderKind::OpenCodeZen)).id(),
+            "opencode"
         );
         assert_eq!(
-            PopupWidgetKind::from_provider(ProviderKind::OpenCodeGo).id(),
-            "open_code_go"
+            HomeWidgetId::provider(id(ProviderKind::OpenCodeGo)).id(),
+            "opencode-go"
         );
-        assert_eq!(
-            PopupWidgetKind::from_provider(ProviderKind::OpenRouter).id(),
-            "openrouter"
-        );
+        assert_ne!(HomeWidgetId::total_spend().id(), "opencode");
     }
 
     #[test]
     fn zen_cannot_create_a_fake_tray_metric_widget() {
-        assert!(TrayWidget::for_provider(ProviderKind::OpenCodeZen).is_app_icon());
-        assert!(TrayWidget::custom_for_provider(ProviderKind::OpenCodeZen).is_app_icon());
+        assert!(TrayWidget::for_provider(id(ProviderKind::OpenCodeZen)).is_app_icon());
+        assert!(TrayWidget::custom_for_provider(id(ProviderKind::OpenCodeZen)).is_app_icon());
     }
 
     #[test]
@@ -3549,7 +3569,12 @@ tray_widgets = []
 
         let migrated = Settings::load_or_create(&path).unwrap();
         assert_eq!(migrated.version, SETTINGS_VERSION);
-        assert!(!migrated.automatic_activation);
+        assert!(
+            migrated
+                .instances
+                .iter()
+                .all(|instance| !instance.auto_activation)
+        );
         assert!(migrated.start_at_login);
         assert!(migrated.show_usage_pace);
         assert!(!migrated.compact_usage_cards);
@@ -3683,8 +3708,8 @@ enabled = ["codex", "claude"]
 
         let migrated = Settings::load_or_create(&path).unwrap();
         assert_eq!(migrated.time_format, TimeFormat::from_windows());
-        assert!(migrated.providers.is_enabled(ProviderKind::Codex));
-        assert!(migrated.providers.is_enabled(ProviderKind::Claude));
+        assert!(migrated.is_enabled(id(ProviderKind::Codex)));
+        assert!(migrated.is_enabled(id(ProviderKind::Claude)));
         let raw = fs::read_to_string(path).unwrap();
         assert!(raw.contains("time_format"));
         assert!(raw.contains(migrated.time_format.as_str()));
@@ -3728,8 +3753,8 @@ enabled = ["codex", "claude"]
         fs::write(&path, "version = 7\nprovider = 'claude'\n").unwrap();
 
         let migrated = Settings::load_or_create(&path).unwrap();
-        assert!(!migrated.providers.is_enabled(ProviderKind::Codex));
-        assert!(migrated.providers.is_enabled(ProviderKind::Claude));
+        assert!(!migrated.is_enabled(id(ProviderKind::Codex)));
+        assert!(migrated.is_enabled(id(ProviderKind::Claude)));
         assert!(
             fs::read_to_string(path)
                 .unwrap()
@@ -3761,7 +3786,7 @@ enabled = ["codex", "claude"]
     }
 
     #[test]
-    fn migrates_v27_settings_to_openrouter_accounts() {
+    fn migrates_v27_settings_to_one_openrouter_instance() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.toml");
         fs::write(&path, "version = 27\n").unwrap();
@@ -3769,28 +3794,41 @@ enabled = ["codex", "claude"]
         let loaded = Settings::load_or_create(&path).unwrap();
 
         assert_eq!(loaded.version, SETTINGS_VERSION);
-        assert!(loaded.openrouter_accounts.is_empty());
+        let openrouter = loaded
+            .instances
+            .iter()
+            .filter(|instance| instance.driver == ProviderKind::OpenRouter)
+            .collect::<Vec<_>>();
+        assert_eq!(openrouter.len(), 1);
+        assert!(openrouter[0].is_primary());
+        assert!(openrouter[0].openrouter.is_some());
         assert!(
-            fs::read_to_string(path)
+            !fs::read_to_string(path)
                 .unwrap()
-                .contains("openrouter_accounts = []")
+                .contains("openrouter_accounts")
         );
     }
 
     #[test]
-    fn round_trips_openrouter_account_metadata_and_key_ids() {
+    fn round_trips_openrouter_instance_metadata_and_key_ids() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.toml");
-        let account = OpenRouterAccount::new("Work account");
-        let settings = Settings {
-            openrouter_accounts: vec![account.clone()],
-            ..Settings::default()
-        };
+        let mut settings = Settings::default();
+        let mut work = settings.new_instance(ProviderKind::OpenRouter, "Work account");
+        work.openrouter.as_mut().unwrap().api_key_ids = vec!["key-a".into(), "key-b".into()];
+        work.openrouter
+            .as_mut()
+            .unwrap()
+            .api_key_names
+            .insert("key-a".into(), "Laptop".into());
+        let provider = settings.add_instance(work.clone());
         settings.save(&path).unwrap();
 
         let loaded = Settings::load_or_create(&path).unwrap();
 
-        assert_eq!(loaded.openrouter_accounts, vec![account]);
+        let saved = loaded.instance(provider).unwrap();
+        assert_eq!(saved.openrouter, work.openrouter);
+        assert_eq!(saved.name, "Work account");
     }
 
     #[test]
@@ -3799,135 +3837,82 @@ enabled = ["codex", "claude"]
         assert!(!legacy.popup_two_columns);
         let mut settings = legacy;
         settings.popup_two_columns = true;
-        let original_order = settings.popup_order.clone();
-        for widget in PopupWidgetKind::ALL {
-            settings.assign_popup_widget_column(widget, 0);
-            assert!(settings.assign_popup_widget_column(widget, 1));
-            assert!(!settings.assign_popup_widget_column(widget, 1));
-            assert!(!settings.assign_popup_widget_column(widget, 2));
+        let right = vec![
+            HomeWidgetId::total_spend(),
+            HomeWidgetId::provider(id(ProviderKind::Claude)),
+        ];
+        settings.popup_home_right_column = Some(right.clone());
+        for instance in &mut settings.instances {
+            instance.enabled = false;
         }
-        assert_eq!(settings.popup_order, original_order);
-        assert_eq!(
-            settings.popup_right_column.as_ref().unwrap().len(),
-            PopupWidgetKind::ALL.len()
-        );
-        settings.providers = ProviderSettings::from_enabled([]);
         let encoded = toml::to_string(&settings).unwrap();
-        let mut decoded: Settings = toml::from_str(&encoded).unwrap();
-        assert_eq!(decoded.popup_right_column, settings.popup_right_column);
-        decoded.popup_two_columns = false;
-        decoded.providers = ProviderSettings::from_enabled(ProviderKind::ALL);
-        assert_eq!(decoded.popup_right_column, settings.popup_right_column);
-        for widget in PopupWidgetKind::ALL {
-            assert!(decoded.assign_popup_widget_column(widget, 0));
-        }
-        assert!(decoded.popup_right_column.as_ref().unwrap().is_empty());
+        let decoded: Settings = toml::from_str(&encoded).unwrap();
+        // Hidden instances keep their column.
+        assert_eq!(decoded.popup_home_right_column, Some(right));
     }
 
     #[test]
-    fn normalizes_and_reorders_popup_order() {
-        let mut settings = Settings {
-            popup_order: vec![
-                PopupWidgetKind::Cursor,
-                PopupWidgetKind::Cursor,
-                PopupWidgetKind::Codex,
-            ],
-            providers: ProviderSettings::from_enabled([ProviderKind::Codex, ProviderKind::Cursor]),
-            show_total_spend_on_all_tab: true,
-            ..Settings::default()
-        };
-        assert!(settings.normalize_popup_order());
-        assert_eq!(
-            settings.popup_order,
-            vec![
-                PopupWidgetKind::Cursor,
-                PopupWidgetKind::Codex,
-                PopupWidgetKind::TotalSpend,
-                PopupWidgetKind::Claude,
-                PopupWidgetKind::OpenCodeZen,
-                PopupWidgetKind::OpenCodeGo,
-                PopupWidgetKind::OpenRouter,
-                PopupWidgetKind::Antigravity,
-                PopupWidgetKind::Grok,
-                PopupWidgetKind::Kiro,
-            ]
-        );
-        assert!(settings.move_popup_widget(
-            PopupWidgetKind::Codex,
-            PopupWidgetKind::TotalSpend,
-            true
-        ));
-        assert_eq!(
-            settings.ordered_visible_popup_widgets(true),
-            vec![
-                PopupWidgetKind::Cursor,
-                PopupWidgetKind::TotalSpend,
-                PopupWidgetKind::Codex,
-            ]
-        );
-        assert!(settings.move_provider(ProviderKind::Codex, true));
-        assert_eq!(
-            settings.ordered_enabled_providers(),
-            vec![ProviderKind::Codex, ProviderKind::Cursor]
-        );
+    fn instances_reorder_and_move_within_the_shared_order() {
+        let mut settings = Settings::default();
+        let (codex, cursor) = (id(ProviderKind::Codex), id(ProviderKind::Cursor));
+        settings.set_enabled(codex, true);
+        settings.set_enabled(cursor, true);
+        assert_eq!(settings.enabled_providers(), vec![codex, cursor]);
+        assert!(settings.move_provider(cursor, true));
+        assert!(settings.move_provider(cursor, true));
+        assert_eq!(settings.enabled_providers(), vec![cursor, codex]);
+        assert!(!settings.move_provider(cursor, true));
+        assert!(settings.reorder_providers(cursor, codex, &[codex, cursor]));
+        assert_eq!(settings.enabled_providers(), vec![codex, cursor]);
+        let ids = settings
+            .instances
+            .iter()
+            .rev()
+            .map(|instance| instance.id.clone())
+            .collect::<Vec<_>>();
+        assert!(settings.apply_instance_order(&ids));
+        assert_eq!(settings.instances.last().unwrap().id, "codex");
+        assert!(!settings.apply_instance_order(&ids));
     }
 
     #[test]
     fn provider_drag_preserves_hidden_slots_for_every_membership_and_pair() {
-        let original = PopupWidgetKind::default_order();
-        let providers = ProviderKind::default_order();
-        for mask in 0..(1_u32 << providers.len()) {
-            let visible: Vec<_> = providers
+        let original = Settings::default().provider_ids();
+        for mask in 0..(1_u32 << original.len()) {
+            let visible: Vec<_> = original
                 .iter()
                 .enumerate()
                 .filter(|(index, _)| mask & (1 << index) != 0)
                 .map(|(_, provider)| *provider)
                 .collect();
-            for from in &providers {
-                for to in &providers {
-                    let mut settings = Settings {
-                        popup_order: original.clone(),
-                        ..Settings::default()
-                    };
+            for from in &original {
+                for to in &original {
+                    let mut settings = Settings::default();
                     let changed = settings.reorder_providers(*from, *to, &visible);
                     let expected_change =
                         from != to && visible.contains(from) && visible.contains(to);
                     assert_eq!(changed, expected_change);
-                    let mut expected_visible: Vec<_> = original
-                        .iter()
-                        .filter_map(|widget| widget.as_provider())
-                        .filter(|provider| visible.contains(provider))
-                        .collect();
+                    let mut expected_visible = visible.clone();
                     if expected_change {
-                        let from_index = expected_visible
-                            .iter()
-                            .position(|provider| provider == from)
-                            .unwrap();
-                        let to_index = expected_visible
-                            .iter()
-                            .position(|provider| provider == to)
-                            .unwrap();
+                        let from_index = expected_visible.iter().position(|p| p == from).unwrap();
+                        let to_index = expected_visible.iter().position(|p| p == to).unwrap();
                         let provider = expected_visible.remove(from_index);
                         expected_visible.insert(to_index, provider);
                     }
+                    let order = settings.provider_ids();
                     assert_eq!(
-                        settings
-                            .provider_order()
-                            .into_iter()
+                        order
+                            .iter()
+                            .copied()
                             .filter(|provider| visible.contains(provider))
                             .collect::<Vec<_>>(),
                         expected_visible
                     );
-                    for (index, widget) in original.iter().enumerate() {
-                        if !widget
-                            .as_provider()
-                            .is_some_and(|provider| visible.contains(&provider))
-                        {
-                            assert_eq!(&settings.popup_order[index], widget);
+                    for (index, provider) in original.iter().enumerate() {
+                        if !visible.contains(provider) {
+                            assert_eq!(&order[index], provider);
                         }
                     }
-                    let mut normalized = settings.clone();
-                    assert!(!normalized.normalize_popup_order());
                 }
             }
         }
@@ -3940,32 +3925,36 @@ enabled = ["codex", "claude"]
             .popup_visibility
             .set_brick("codex.session", false, true);
         settings
-            .popup_visibility
-            .set_provider_all_tab(ProviderKind::Claude, false);
+            .instance_mut(id(ProviderKind::Claude))
+            .unwrap()
+            .show_on_home = false;
         let visibility = settings.popup_visibility.clone();
-        assert!(settings.reorder_providers(
-            ProviderKind::Grok,
-            ProviderKind::Codex,
-            &ProviderKind::default_order()
-        ));
+        let all = settings.provider_ids();
+        assert!(settings.reorder_providers(id(ProviderKind::Grok), id(ProviderKind::Codex), &all));
         let encoded = toml::to_string(&settings).unwrap();
         let decoded: Settings = toml::from_str(&encoded).unwrap();
-        assert_eq!(decoded.popup_order, settings.popup_order);
+        assert_eq!(decoded.provider_ids(), settings.provider_ids());
         assert_eq!(decoded.popup_visibility, visibility);
+        assert!(
+            !decoded
+                .instance(id(ProviderKind::Claude))
+                .unwrap()
+                .show_on_home
+        );
     }
 
     #[test]
     fn disabled_provider_references_are_preserved() {
         let mut settings = Settings {
-            providers: ProviderSettings::from_enabled([ProviderKind::Claude]),
             tray_widgets: vec![TrayWidget::default_user_widget()],
             ..Settings::default()
         };
+        settings.set_enabled(id(ProviderKind::Claude), true);
 
         assert!(!settings.normalize_tray_widgets());
         assert_eq!(
             settings.tray_widgets[0].indicators[0].provider(),
-            Some(ProviderKind::Codex)
+            Some(id(ProviderKind::Codex))
         );
     }
 
@@ -3973,18 +3962,18 @@ enabled = ["codex", "claude"]
     fn loading_preserves_a_widget_for_a_disabled_provider() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.toml");
-        let stale = Settings {
-            providers: ProviderSettings::from_enabled([ProviderKind::Claude]),
+        let mut stale = Settings {
             tray_widgets: vec![TrayWidget::default_user_widget()],
             ..Settings::default()
         };
+        stale.set_enabled(id(ProviderKind::Claude), true);
         stale.save(&path).unwrap();
 
         let loaded = Settings::load_or_create(&path).unwrap();
 
         assert_eq!(
             loaded.tray_widgets[0].indicators[0].provider(),
-            Some(ProviderKind::Codex)
+            Some(id(ProviderKind::Codex))
         );
         assert!(
             fs::read_to_string(path)
@@ -4001,8 +3990,7 @@ enabled = ["codex", "claude"]
             version: SETTINGS_VERSION,
             ..Default::default()
         };
-        settings.providers.enabled.push("future-provider".into());
-        let mut widget = TrayWidget::custom_for_provider(ProviderKind::Codex);
+        let mut widget = TrayWidget::custom_for_provider(id(ProviderKind::Codex));
         widget.indicators[0].provider_id = "future-provider".into();
         widget.indicators[0].metric_id = "future-provider.daily".into();
         settings.tray_widgets.push(widget);
@@ -4010,7 +3998,6 @@ enabled = ["codex", "claude"]
 
         let loaded = Settings::load_or_create(&path).unwrap();
 
-        assert!(loaded.providers.enabled.contains(&"future-provider".into()));
         assert_eq!(
             loaded.tray_widgets[0].indicators[0].provider_id,
             "future-provider"
@@ -4041,7 +4028,7 @@ cursor_enabled = false
 
         let loaded = Settings::load_or_create(&path).unwrap();
 
-        assert_eq!(loaded.providers.enabled, vec!["claude"]);
+        assert_eq!(loaded.enabled_providers(), vec![id(ProviderKind::Claude)]);
         assert_eq!(loaded.tray_widgets.len(), 1);
         assert_eq!(loaded.tray_widgets[0].id, "legacy-tray-0");
         assert_eq!(loaded.tray_widgets[0].indicators.len(), 2);
@@ -4139,7 +4126,7 @@ enabled = ["codex"]
         let loaded = Settings::load_or_create(&path).unwrap();
         assert!(!loaded.start_at_login);
         assert!(loaded.tray_widgets.is_empty());
-        assert!(loaded.providers.is_enabled(ProviderKind::Codex));
+        assert!(loaded.is_enabled(id(ProviderKind::Codex)));
     }
 
     #[test]

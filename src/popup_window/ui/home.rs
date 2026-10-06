@@ -515,9 +515,7 @@ impl PopupRoot {
             .gap(px(4.0))
             .child(selector);
         if can_reorder {
-            trailing = trailing.child(
-                self.widget_drag_handle(HomeWidgetId::total_spend(), cx),
-            );
+            trailing = trailing.child(self.widget_drag_handle(HomeWidgetId::total_spend(), cx));
         }
         let heading = components::split_row(title, trailing)
             .px(px(4.0))

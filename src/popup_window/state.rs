@@ -124,11 +124,7 @@ impl AppState {
         }
     }
 
-    pub(super) fn replace_usage(
-        &self,
-        provider: ProviderId,
-        usage: crate::usage::UsageStatistics,
-    ) {
+    pub(super) fn replace_usage(&self, provider: ProviderId, usage: crate::usage::UsageStatistics) {
         if let Ok(mut current) = self.limits.lock() {
             current.get_mut(provider).usage = usage;
         }
@@ -136,7 +132,10 @@ impl AppState {
 
     pub(super) fn clear_usage_snapshot(&self) {
         if let Ok(mut limits) = self.limits.lock() {
-            let providers = limits.iter().map(|(provider, _)| provider).collect::<Vec<_>>();
+            let providers = limits
+                .iter()
+                .map(|(provider, _)| provider)
+                .collect::<Vec<_>>();
             for provider in providers {
                 limits.get_mut(provider).usage = crate::usage::UsageStatistics::default();
             }
@@ -229,7 +228,8 @@ impl AppState {
             worker.shutdown();
         }
         if let Ok(mut commands) = self.commands.lock() {
-            commands.retain(|provider, _| enabled.contains(provider) && !restart.contains(provider));
+            commands
+                .retain(|provider, _| enabled.contains(provider) && !restart.contains(provider));
         }
         if let Ok(mut limits) = self.limits.lock() {
             // Disabled instances drop their live sample; removed ones vanish.
@@ -445,7 +445,8 @@ impl UiState {
     }
 
     pub(super) fn provider_enabled(&self, provider: ProviderId) -> bool {
-        self.instance(provider).is_some_and(|instance| instance.enabled)
+        self.instance(provider)
+            .is_some_and(|instance| instance.enabled)
     }
 
     /// Enabled instances of one driver, in display order.

@@ -150,7 +150,11 @@ impl PopupRoot {
                     heading.provider.badge().as_ref(),
                     &palette,
                 )
-                .mr(px(if heading.provider.badge().is_some() { 10.0 } else { 4.0 })),
+                .mr(px(if heading.provider.badge().is_some() {
+                    10.0
+                } else {
+                    4.0
+                })),
             );
         }
         title = title.child(nowrap(components::body_strong(
@@ -191,9 +195,8 @@ impl PopupRoot {
             ));
         }
         if heading.drag_handle {
-            trailing = trailing.child(
-                self.widget_drag_handle(HomeWidgetId::provider(heading.provider), cx),
-            );
+            trailing = trailing
+                .child(self.widget_drag_handle(HomeWidgetId::provider(heading.provider), cx));
         }
         components::split_row(title, trailing)
             .px(px(4.0))

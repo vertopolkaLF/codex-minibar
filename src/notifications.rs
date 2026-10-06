@@ -127,7 +127,10 @@ pub fn show_activation_succeeded(provider: ProviderId) {
 
 /// Toast after automatic activation follows a newly reset 5-hour window.
 pub fn show_activation_succeeded_after_reset(provider: ProviderId) {
-    show("5-hour limit reset and activated", &provider.qualified_name());
+    show(
+        "5-hour limit reset and activated",
+        &provider.qualified_name(),
+    );
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]

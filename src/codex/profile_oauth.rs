@@ -96,7 +96,11 @@ fn read_login(directory: &Path) -> Result<()> {
     let file: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|_| anyhow::anyhow!("Codex saved an unreadable login."))?;
     let tokens = &file["tokens"];
-    let present = |key: &str| tokens[key].as_str().is_some_and(|value| !value.trim().is_empty());
+    let present = |key: &str| {
+        tokens[key]
+            .as_str()
+            .is_some_and(|value| !value.trim().is_empty())
+    };
     ensure!(
         present("access_token") && present("refresh_token"),
         "Codex did not save a refreshable ChatGPT login."
@@ -160,8 +164,7 @@ pub(crate) fn login(explicit: Option<&Path>, folder: &Path, control: &LoginContr
             .is_some_and(|ext| ext.eq_ignore_ascii_case("exe")),
         "Sign-in requires native Windows Codex CLI or Codex desktop. Install Codex desktop or the native CLI and try again."
     );
-    std::fs::create_dir_all(folder)
-        .with_context(|| format!("create {}", folder.display()))?;
+    std::fs::create_dir_all(folder).with_context(|| format!("create {}", folder.display()))?;
     ensure!(
         !crate::claude::profile_oauth::is_link(&std::fs::symlink_metadata(folder)?),
         "The config folder must not be a link."
