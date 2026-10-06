@@ -1064,7 +1064,7 @@ impl SettingsWindow {
                     .right_0()
                     .flex()
                     .justify_center()
-                    .child(div().max_w(px(520.0)).child(notice))
+                    .child(div().w_full().max_w(px(520.0)).px(px(24.0)).child(notice))
             }))
             .into_any_element()
     }

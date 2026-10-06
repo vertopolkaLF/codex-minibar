@@ -274,13 +274,18 @@ fn appear_in(k: &Kit, id: impl Into<SharedString>, element: AnyElement, fill: bo
     if !k.animate() {
         return element;
     }
+    // The wrapper must size exactly like the element it replaces: full
+    // width (and height when filling), and an offset that never moves its
+    // siblings.
     div()
-        .when(fill, |el| el.size_full())
+        .relative()
+        .w_full()
+        .when(fill, |el| el.h_full())
         .child(element)
         .with_animation(
             eid(id),
             Animation::new(Duration::from_millis(220)).with_easing(fx::ease_out_cubic),
-            |el, delta| el.opacity(delta).mt(px((1.0 - delta) * 6.0)),
+            |el, delta| el.opacity(delta).top(px((1.0 - delta) * 6.0)),
         )
         .into_any_element()
 }
@@ -1517,6 +1522,7 @@ pub(crate) fn dialog(
     let theme = &k.theme;
     let card = div()
         .id(eid(format!("dialog-card-{id}")))
+        .relative()
         .occlude()
         .flex()
         .flex_col()
@@ -1561,7 +1567,7 @@ pub(crate) fn dialog(
         card.with_animation(
             eid(format!("dialog-anim-{id}")),
             Animation::new(Duration::from_millis(220)).with_easing(fx::ease_out_cubic),
-            |el, delta| el.opacity(delta).mt(px((1.0 - delta) * 16.0)),
+            |el, delta| el.opacity(delta).top(px((1.0 - delta) * 16.0)),
         )
         .into_any_element()
     } else {
