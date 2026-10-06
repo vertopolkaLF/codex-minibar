@@ -475,6 +475,8 @@ pub enum LimitRefreshInterval {
     Seconds30,
     #[default]
     Minute1,
+    Minutes2,
+    Minutes3,
     Minutes5,
     Minutes10,
     Minutes15,
@@ -485,6 +487,8 @@ impl LimitRefreshInterval {
         match self {
             Self::Seconds30 => 30,
             Self::Minute1 => 60,
+            Self::Minutes2 => 2 * 60,
+            Self::Minutes3 => 3 * 60,
             Self::Minutes5 => 5 * 60,
             Self::Minutes10 => 10 * 60,
             Self::Minutes15 => 15 * 60,
@@ -495,18 +499,22 @@ impl LimitRefreshInterval {
         match self {
             Self::Seconds30 => 0,
             Self::Minute1 => 1,
-            Self::Minutes5 => 2,
-            Self::Minutes10 => 3,
-            Self::Minutes15 => 4,
+            Self::Minutes2 => 2,
+            Self::Minutes3 => 3,
+            Self::Minutes5 => 4,
+            Self::Minutes10 => 5,
+            Self::Minutes15 => 6,
         }
     }
 
     pub const fn from_index(index: i32) -> Self {
         match index {
             0 => Self::Seconds30,
-            2 => Self::Minutes5,
-            3 => Self::Minutes10,
-            4 => Self::Minutes15,
+            2 => Self::Minutes2,
+            3 => Self::Minutes3,
+            4 => Self::Minutes5,
+            5 => Self::Minutes10,
+            6 => Self::Minutes15,
             _ => Self::Minute1,
         }
     }

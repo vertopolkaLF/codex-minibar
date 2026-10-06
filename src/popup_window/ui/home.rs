@@ -18,7 +18,7 @@ use crate::popup_window::{model::*, *};
 use crate::usage_overview::OverviewSnapshot;
 
 const SECTION_GAP: f32 = 6.0;
-const COLUMN_GAP: f32 = 12.0;
+const COLUMN_GAP: f32 = 20.0;
 const HEADING_TOP: f32 = 8.0;
 
 /// Payload carried while a Home widget is dragged.

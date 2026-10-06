@@ -8,9 +8,11 @@ use crate::settings::{
     LimitRefreshInterval, ProviderKind, ResetAnnouncementRefreshInterval, UsageRefreshInterval,
 };
 
-pub(super) const LIMIT_REFRESH_LABELS: [&str; 5] = [
+pub(super) const LIMIT_REFRESH_LABELS: [&str; 7] = [
     "30 seconds",
     "1 minute",
+    "2 minutes",
+    "3 minutes",
     "5 minutes",
     "10 minutes",
     "15 minutes",

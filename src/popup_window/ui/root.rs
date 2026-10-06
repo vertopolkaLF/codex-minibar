@@ -33,6 +33,10 @@ use crate::{
 /// Fluent motion tokens used by Windows edge panels.
 const OPEN_ANIMATION: Duration = Duration::from_millis(250);
 const CLOSE_ANIMATION: Duration = Duration::from_millis(167);
+/// Longest frame the open slide advances through; slower frames are hitches.
+const SLIDE_MAX_FRAME_STEP: Duration = Duration::from_millis(34);
+/// Invisible frames rendered at launch before the popup host is parked.
+const PREWARM_FRAMES: u32 = 3;
 /// Pinned profile switcher between the page and the footer.
 pub(super) const PROFILE_STRIP_HEIGHT: f32 = 46.0;
 /// Small inner inset keeps page/footer content clear of the capsule stroke.
@@ -51,6 +55,9 @@ fn measured_page_height(height: f32, scale: f32) -> f32 {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Phase {
     Hidden,
+    /// Launch-time invisible render (empty region) that warms the renderer,
+    /// composition, glyph/icon atlases and usage snapshots before first open.
+    Prewarm,
     Opening(Instant),
     Open,
     /// Closing from the given starting slide offset (DIP).
@@ -70,6 +77,10 @@ pub(super) struct Host {
     pub(super) offset: f32,
     pub(super) last_region: Option<(i32, i32, i32, i32, i32)>,
     pub(super) scale: f32,
+    /// Previous frame of the open slide; long gaps are not counted as motion.
+    pub(super) slide_frame: Option<Instant>,
+    /// Frames rendered during `Phase::Prewarm`.
+    pub(super) prewarm_frames: u32,
 }
 
 impl Host {
@@ -86,6 +97,8 @@ impl Host {
             offset: 0.0,
             last_region: None,
             scale: 1.0,
+            slide_frame: None,
+            prewarm_frames: 0,
         }
     }
 
@@ -473,7 +486,7 @@ impl PopupRoot {
             }
         }
         let already_visible = matches!(self.host.phase, Phase::Open | Phase::Opening(_));
-        let was_hidden = matches!(self.host.phase, Phase::Hidden);
+        let was_hidden = matches!(self.host.phase, Phase::Hidden | Phase::Prewarm);
         let anchor = anchor.unwrap_or_else(|| {
             let rect = super::win32::window_rect(hwnd);
             (rect.right - 1, rect.bottom - 1)
@@ -515,6 +528,10 @@ impl PopupRoot {
             } else {
                 Phase::Open
             };
+            // The first frame after a cold start (swap-chain growth, glyph
+            // and icon rasterization) can outlast the whole slide. Count the
+            // wait until that frame as a hitch so the entrance still plays.
+            self.host.slide_frame = Some(Instant::now());
             self.host.last_region = None;
             self.tip = None;
             self.hover.clear();
@@ -528,6 +545,56 @@ impl PopupRoot {
         })
     }
 
+    /// Prepares an invisible launch-time render at full host size, so the
+    /// first real open does not pay for swap-chain growth, composition setup,
+    /// glyph/icon rasterization or the first usage aggregation mid-slide.
+    #[cfg(windows)]
+    pub(crate) fn begin_prewarm(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<super::ShowPlan> {
+        let hwnd = self.host.hwnd?;
+        if self.host.phase != Phase::Hidden {
+            return None;
+        }
+        // The primary monitor owns the taskbar tray in the common setup.
+        let monitor = super::win32::monitor_for_point(0, 0);
+        self.host.monitor = Some(monitor);
+        self.host.scale = monitor.scale() as f32;
+        self.refresh_palette(window);
+        self.limits = Rc::new(self.state.current_limits());
+        self.forced_resets = Rc::new(self.state.current_forced_resets());
+        let target_height = self.target_height(self.pager.current);
+        self.host.height.snap(f64::from(target_height));
+        let target_width = self.target_width(self.pager.current);
+        self.host.width.snap(f64::from(target_width));
+        self.host.phase = Phase::Prewarm;
+        self.host.prewarm_frames = 0;
+        self.host.last_region = None;
+        cx.notify();
+        Some(super::ShowPlan {
+            hwnd,
+            rect: super::host_rect(monitor),
+            first_show: true,
+        })
+    }
+
+    /// The prewarm rendered enough frames and its usage snapshots landed, or
+    /// a real open already took over.
+    pub(crate) fn prewarm_settled(&self) -> bool {
+        self.host.phase != Phase::Prewarm
+            || (self.host.prewarm_frames >= PREWARM_FRAMES
+                && self.snapshots.values().all(|cache| cache.pending.is_none()))
+    }
+
+    pub(crate) fn end_prewarm(&mut self, cx: &mut Context<Self>) {
+        if self.host.phase == Phase::Prewarm {
+            self.finish_hide(cx);
+            cx.notify();
+        }
+    }
+
     fn finish_pager_animation_now(&mut self) {
         while self.pager.outgoing.is_some() {
             let id = self.pager.animation_id;
@@ -537,7 +604,7 @@ impl PopupRoot {
 
     pub(crate) fn begin_hide(&mut self, cx: &mut Context<Self>) {
         match self.host.phase {
-            Phase::Hidden | Phase::Closing(..) => {}
+            Phase::Hidden | Phase::Prewarm | Phase::Closing(..) => {}
             _ => {
                 let from = self.host.offset;
                 if super::animations_enabled(&self.ui) {
@@ -563,9 +630,16 @@ impl PopupRoot {
         self.tip = None;
         self.widget_drag = None;
         self.tab_drag = None;
-        // Keep only interaction choices and tiny page measurements while
-        // hidden. Drop derived usage/model data and cancel outstanding loads.
-        self.snapshots = HashMap::new();
+        // Keep only interaction choices, tiny page measurements and the last
+        // committed usage snapshots while hidden. The snapshots are small and
+        // let the next open paint the previous totals (stale-while-revalidate)
+        // instead of a "Loading" placeholder that shifts the layout. Cancel
+        // outstanding loads; a reopen recomputes against fresh data.
+        self.snapshots.retain(|_, cache| cache.key.is_some());
+        for cache in self.snapshots.values_mut() {
+            cache.pending = None;
+            cache.task = None;
+        }
         self.usage_chart_cache = None;
         self.usage_plot = None;
         for chart in self.charts.values_mut() {
@@ -658,9 +732,26 @@ impl PopupRoot {
 
     /// Advance window motion for this frame. Returns `(width, height, offset)`.
     fn step_motion(&mut self, now: Instant, cx: &mut Context<Self>) -> (f32, f32, f32) {
+        if let Phase::Opening(started) = self.host.phase {
+            // Advance the slide by at most one long frame per frame: a stalled
+            // first paint must not skip the entrance.
+            if let Some(last) = self.host.slide_frame {
+                let stall = now
+                    .saturating_duration_since(last)
+                    .saturating_sub(SLIDE_MAX_FRAME_STEP);
+                if !stall.is_zero() {
+                    self.host.phase = Phase::Opening(started + stall);
+                }
+            }
+            self.host.slide_frame = Some(now);
+        } else {
+            self.host.slide_frame = None;
+        }
         let target_h = self.target_height(self.pager.current);
         let target_w = self.target_width(self.pager.current);
-        let animate = super::animations_enabled(&self.ui) && self.host.visible();
+        let animate = super::animations_enabled(&self.ui)
+            && self.host.visible()
+            && self.host.phase != Phase::Prewarm;
         let opening_early = matches!(self.host.phase, Phase::Opening(started)
             if now.saturating_duration_since(started).as_secs_f32() < OPEN_ANIMATION.as_secs_f32() * 0.35);
         if animate && !opening_early {
@@ -679,7 +770,7 @@ impl PopupRoot {
         }
         let travel = width + self.host.margin();
         let offset = match self.host.phase {
-            Phase::Hidden | Phase::Open => 0.0,
+            Phase::Hidden | Phase::Prewarm | Phase::Open => 0.0,
             Phase::Opening(started) => {
                 let progress = now.saturating_duration_since(started).as_secs_f64()
                     / OPEN_ANIMATION.as_secs_f64();
@@ -732,6 +823,15 @@ impl PopupRoot {
                     height * scale,
                     crate::popup::corner_radius_dip() as f32 * scale,
                 );
+            }
+            if self.host.phase == Phase::Prewarm {
+                // Render everything, show nothing, publish no hit bounds.
+                const EMPTY: (i32, i32, i32, i32, i32) = (0, 0, 0, 0, 0);
+                if self.host.last_region != Some(EMPTY) {
+                    self.host.last_region = Some(EMPTY);
+                    super::win32::set_region(hwnd, None, 0);
+                }
+                return;
             }
             let viewport = window.viewport_size();
             let window_w = (f32::from(viewport.width) * scale).round() as i32;
@@ -1224,6 +1324,12 @@ impl Render for PopupRoot {
             .render_tip(capsule_w, capsule_h, window, cx)
             .map(|tip| gpui::deferred(tip).with_priority(usize::MAX));
 
+        if self.host.phase == Phase::Prewarm {
+            self.host.prewarm_frames = self.host.prewarm_frames.saturating_add(1);
+            if self.host.prewarm_frames < PREWARM_FRAMES {
+                window.request_animation_frame();
+            }
+        }
         if self.fx.is_animating() || (ui.refreshing && self.host.visible()) {
             window.request_animation_frame();
         }

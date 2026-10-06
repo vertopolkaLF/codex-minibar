@@ -193,6 +193,7 @@ fn run(
                             root.attach_native_host(hwnd);
                         });
                         win32::park_hidden(hwnd);
+                        cx.spawn(async move |cx| prewarm(window, cx).await).detach();
                     }
                 }
                 while let Some(command) = commands.next().await {
@@ -307,6 +308,46 @@ fn handle_command(
             }
         }
     }
+}
+
+/// The popup is the app's main surface: render it once invisibly at launch so
+/// the first tray click gets a warm renderer and a fully played open slide.
+/// A real Show during the prewarm simply takes over the already shown host.
+#[cfg(windows)]
+async fn prewarm(window: gpui::WindowHandle<PopupRoot>, cx: &mut gpui::AsyncApp) {
+    use std::time::{Duration, Instant};
+    const LIMIT: Duration = Duration::from_secs(3);
+    let Some(plan) = window
+        .update(cx, |root, window, cx| root.begin_prewarm(window, cx))
+        .ok()
+        .flatten()
+    else {
+        return;
+    };
+    win32::set_region(plan.hwnd, None, 0);
+    win32::place(plan.hwnd, plan.rect);
+    if win32::window_rect(plan.hwnd) != plan.rect {
+        win32::place(plan.hwnd, plan.rect);
+    }
+    let _ = window.update(cx, |root, window, cx| {
+        root.host.last_region = None;
+        window.refresh();
+        cx.notify();
+    });
+    win32::show(plan.hwnd);
+    let started = Instant::now();
+    loop {
+        cx.background_executor()
+            .timer(Duration::from_millis(50))
+            .await;
+        let settled = window
+            .update(cx, |root, _, _| root.prewarm_settled())
+            .unwrap_or(true);
+        if settled || started.elapsed() >= LIMIT {
+            break;
+        }
+    }
+    let _ = window.update(cx, |root, _, cx| root.end_prewarm(cx));
 }
 
 fn root_animations(window: &gpui::WindowHandle<PopupRoot>, cx: &mut gpui::AsyncApp) -> bool {
