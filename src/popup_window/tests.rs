@@ -1260,3 +1260,41 @@ fn only_read_relevant_changes_restart_an_instance_worker() {
     codex.credentials_revision += 1;
     assert_eq!(bridge::instances_needing_restart(&before, &after).len(), 2);
 }
+
+#[test]
+fn cloud_credit_balances_use_dollars_and_expired_or_locked_credits_have_no_progress() {
+    let now = Utc::now();
+    let mut window = LimitWindow {
+        used_percent: Some(1),
+        resets_at: Some(now + ChronoDuration::days(1)),
+        ..Default::default()
+    };
+    let mut credits = crate::limits::CloudSessionCredits {
+        limit_dollars: 100.0,
+        used_dollars: 1.0,
+        remaining_dollars: 99.0,
+        locked: false,
+    };
+    assert_eq!(
+        cloud_session_credits_presentation(&window, Some(&credits), false, now),
+        ("$99.00 of $100.00 left".into(), 99.0, true)
+    );
+    assert_eq!(
+        cloud_session_credits_presentation(&window, Some(&credits), true, now),
+        ("$1.00 of $100.00 used".into(), 1.0, true)
+    );
+    assert_eq!(
+        cloud_session_credits_presentation(&window, None, false, now).0,
+        "99% left"
+    );
+    credits.locked = true;
+    assert_eq!(
+        cloud_session_credits_presentation(&window, Some(&credits), false, now),
+        ("Unavailable".into(), 0.0, false)
+    );
+    window.resets_at = Some(now);
+    assert_eq!(
+        cloud_session_credits_presentation(&window, Some(&credits), false, now),
+        ("Expired".into(), 0.0, false)
+    );
+}

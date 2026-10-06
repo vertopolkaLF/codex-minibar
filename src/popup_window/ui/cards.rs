@@ -91,6 +91,11 @@ impl PopupRoot {
                 row.px(px(4.0)).mt(px(8.0)).into_any_element()
             }
             Card::ForcedResets(resets) => self.render_forced_resets(resets, cx),
+            Card::CloudCredits {
+                key,
+                window: limit,
+                credits,
+            } => self.render_cloud_credits(key, limit, *credits, style),
             Card::BankedResets {
                 limits,
                 expansion_key,
@@ -324,6 +329,90 @@ impl PopupRoot {
             ))
             .child(footer)
             .into_any_element()
+    }
+
+    fn render_cloud_credits(
+        &mut self,
+        key: &str,
+        limit: &LimitWindow,
+        credits: Option<&crate::limits::CloudSessionCredits>,
+        style: CardStyle,
+    ) -> AnyElement {
+        let palette = self.palette.clone();
+        let (label, progress, available) = cloud_session_credits_presentation(
+            limit,
+            credits,
+            style.show_used_percentage,
+            Utc::now(),
+        );
+        let progress = self.fx.value(
+            fx::key(("limit-progress", key)),
+            progress as f32,
+            fx::NORMAL,
+        );
+        // Name/balance left, expiry date/countdown right, like two-line quota cards.
+        let mut metadata = div().flex().flex_col().items_end();
+        if let Some(expires) = limit.resets_at {
+            let local = expires.with_timezone(&Local);
+            metadata = metadata.child(card_metadata(
+                format!(
+                    "{}, {}",
+                    local.format("%b %-d"),
+                    TimeFormat::current().format_hm(local)
+                ),
+                &palette,
+            ));
+            if available {
+                metadata = metadata.child(status_row(
+                    "Expires in",
+                    format_reset_in(Some(expires)),
+                    &palette,
+                ));
+            }
+        }
+        let content = components::split_row(
+            div()
+                .flex()
+                .flex_col()
+                .min_w_0()
+                .child(nowrap(caption(
+                    "CLOUD SESSION CREDITS",
+                    palette.text_secondary,
+                )))
+                .child(nowrap(components::body_strong(label, palette.accent))),
+            metadata,
+        );
+
+        if style.compact {
+            let mut element = card(&palette).relative().overflow_hidden();
+            if available {
+                for layer in
+                    components::compact_progress_layers(progress, None, 0, palette.accent, &palette)
+                {
+                    element = element.child(layer);
+                }
+            }
+            return element
+                .child(div().relative().p(px(12.0)).child(content))
+                .into_any_element();
+        }
+        let mut element = card(&palette)
+            .overflow_hidden()
+            .p(px(12.0))
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .child(content);
+        if available {
+            element = element.child(components::progress_track(
+                progress,
+                None,
+                0,
+                palette.accent,
+                &palette,
+            ));
+        }
+        element.into_any_element()
     }
 
     #[allow(clippy::too_many_arguments)]

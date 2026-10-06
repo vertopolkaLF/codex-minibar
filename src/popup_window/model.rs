@@ -76,6 +76,13 @@ pub(crate) enum Card<'a> {
         balance_microusd: Option<u64>,
     },
     ForcedResets(Vec<&'a crate::reset_feed::ForcedReset>),
+    /// Claude's promotional cloud-session credits: a dollar balance that
+    /// expires instead of resetting.
+    CloudCredits {
+        key: String,
+        window: &'a LimitWindow,
+        credits: Option<&'a crate::limits::CloudSessionCredits>,
+    },
     BankedResets {
         limits: &'a RateLimits,
         expansion_key: String,
@@ -275,6 +282,14 @@ pub(crate) fn provider_cards<'a>(
         if !visible(&additional_limit_brick_id(kind, &limit.id)) {
             continue;
         }
+        if kind == ProviderKind::Claude && limit.id == CLOUD_SESSION_CREDITS_LIMIT_ID {
+            cards.push(Card::CloudCredits {
+                key: card_key(provider, &format!("additional-{}", limit.id)),
+                window: &limit.window,
+                credits: limits.cloud_session_credits.as_ref(),
+            });
+            continue;
+        }
         cards.push(Card::Limit {
             key: card_key(provider, &format!("additional-{}", limit.id)),
             title: limit.title.to_uppercase(),
@@ -363,6 +378,41 @@ pub(crate) fn upcoming_forced_resets(
         .filter(|reset| reset.reset_at > now)
         .take(2)
         .collect()
+}
+
+/// Claude's additional window that carries cloud-session credit dollars.
+pub(crate) const CLOUD_SESSION_CREDITS_LIMIT_ID: &str = "iguana_necktie";
+
+/// `(label, progress, available)` for a cloud-credit balance. Expired or
+/// locked credits show no progress; dollars are never estimated from the
+/// rounded utilization.
+pub(crate) fn cloud_session_credits_presentation(
+    window: &LimitWindow,
+    credits: Option<&crate::limits::CloudSessionCredits>,
+    show_used: bool,
+    now: DateTime<Utc>,
+) -> (String, f64, bool) {
+    if window.resets_at.is_some_and(|at| at <= now) {
+        return ("Expired".into(), 0.0, false);
+    }
+    if credits.is_some_and(|credits| credits.locked) {
+        return ("Unavailable".into(), 0.0, false);
+    }
+    let (percentage, progress, _, _) = limit_card_presentation(window, show_used, false);
+    let label = credits.map_or(percentage, |credits| {
+        let amount = if show_used {
+            credits.used_dollars
+        } else {
+            credits.remaining_dollars
+        };
+        format!(
+            "{} of {} {}",
+            format_usd(amount),
+            format_usd(credits.limit_dollars),
+            if show_used { "used" } else { "left" }
+        )
+    });
+    (label, progress, true)
 }
 
 /// Resolve the label/progress pair while keeping compactness tied to the

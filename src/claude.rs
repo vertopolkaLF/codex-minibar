@@ -707,7 +707,7 @@ fn read_web_usage(agent: &ureq::Agent, cookie: &str) -> Result<RateLimits> {
     };
     let organization = pick_organization(&get(WEB_ORGANIZATIONS_URL)?)?;
     let body = get(&format!(
-        "{WEB_ORGANIZATIONS_URL}/{}/usage",
+        "{WEB_ORGANIZATIONS_URL}/{}/usage?cedar_ember=1",
         organization.uuid
     ))?;
     let mut limits = parse_usage_response(&body, Utc::now())?;
@@ -804,12 +804,21 @@ impl LimitProvider for ClaudeClient {
 /// Claude Code's own User-Agent, versioned after the CLI bundled with Claude
 /// Desktop when present so the server sees a current client.
 fn cli_user_agent() -> String {
-    let version = claude_desktop::bundled_cli()
-        .as_deref()
-        .and_then(Path::parent)
-        .and_then(Path::file_name)
-        .and_then(|name| name.to_str())
-        .map(str::to_owned)
+    cli_user_agent_for(claude_desktop::bundled_cli().as_deref())
+}
+
+fn cli_user_agent_for(executable: Option<&Path>) -> String {
+    // Desktop may nest the executable under a build hash, below the version.
+    let version = executable
+        .and_then(|path| {
+            path.ancestors().skip(1).take(2).find_map(|parent| {
+                parent
+                    .file_name()?
+                    .to_str()
+                    .and_then(|name| semver::Version::parse(name).ok())
+            })
+        })
+        .map(|version| version.to_string())
         .unwrap_or_else(|| FALLBACK_CLAUDE_CODE_VERSION.to_owned());
     format!("claude-cli/{version} (external, cli)")
 }
@@ -1074,12 +1083,27 @@ pub fn parse_usage_response(response: &str, sampled_at: DateTime<Utc>) -> Result
         serde_json::from_str(response).context("parse Claude OAuth usage")?;
     let primary = parse_window(response.five_hour, Some(5 * 60));
     let secondary = parse_window(response.seven_day, Some(7 * 24 * 60));
+    let cloud_session_credits = response
+        .additional_windows
+        .get("iguana_necktie")
+        .and_then(parse_cloud_session_credits);
     let mut additional_limits = response
         .additional_windows
         .into_iter()
         .filter_map(|(id, value)| {
             let window = serde_json::from_value::<OAuthUsageWindow>(value).ok()?;
-            let window = parse_window(Some(window), inferred_duration_minutes(&id));
+            let mut window = parse_window(Some(window), inferred_duration_minutes(&id));
+            if id == "iguana_necktie"
+                && let Some(credits) = &cloud_session_credits
+            {
+                window.used_percent = Some(
+                    (credits.used_dollars / credits.limit_dollars * 100.0)
+                        .round()
+                        .clamp(0.0, 100.0) as u8,
+                );
+                // Promotional credits expire; there is no recurring pace.
+                window.duration_minutes = None;
+            }
             (!window.is_empty()).then(|| AdditionalLimit {
                 title: additional_limit_title(&id),
                 id,
@@ -1098,6 +1122,7 @@ pub fn parse_usage_response(response: &str, sampled_at: DateTime<Utc>) -> Result
         primary,
         secondary,
         additional_limits,
+        cloud_session_credits,
         sampled_at,
         account_name: non_empty(response.organization_name),
         reset_credits: response
@@ -1153,6 +1178,29 @@ fn parse_timestamp(value: Option<&str>) -> Option<DateTime<Utc>> {
     value
         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
         .map(|value| value.with_timezone(&Utc))
+}
+
+fn parse_cloud_session_credits(value: &Value) -> Option<crate::limits::CloudSessionCredits> {
+    let limit = value.get("limit_dollars")?.as_f64()?;
+    if !limit.is_finite() || limit <= 0.0 {
+        return None;
+    }
+    let amount = |key| -> Option<f64> {
+        let amount = value.get(key)?.as_f64()?;
+        (amount.is_finite() && (0.0..=limit).contains(&amount)).then_some(amount)
+    };
+    // Do not estimate dollars from rounded utilization or the subscription tier.
+    let remaining =
+        amount("remaining_dollars").or_else(|| amount("used_dollars").map(|used| limit - used))?;
+    Some(crate::limits::CloudSessionCredits {
+        limit_dollars: limit,
+        used_dollars: limit - remaining,
+        remaining_dollars: remaining,
+        locked: value
+            .get("locked_reason")
+            .and_then(Value::as_str)
+            .is_some_and(|reason| !reason.trim().is_empty()),
+    })
 }
 
 /// Identity and plan both come from the profile endpoint. The former
@@ -1358,6 +1406,9 @@ fn inferred_duration_minutes(id: &str) -> Option<u32> {
 }
 
 fn additional_limit_title(id: &str) -> String {
+    if id == "iguana_necktie" {
+        return "Cloud session credits".into();
+    }
     let name = id
         .strip_prefix("seven_day_")
         .or_else(|| id.strip_prefix("five_hour_"))
@@ -1616,6 +1667,62 @@ mod tests {
         .unwrap();
         assert!(limits.reset_credits.is_none());
         assert_eq!(limits.available_reset_count(), 0);
+    }
+
+    #[test]
+    fn reset_inventory_user_agent_uses_version_not_desktop_build_hash() {
+        for path in [
+            "Claude/claude-code/2.1.286/claude.exe",
+            "Claude/claude-code/2.1.286/635c1867224a/claude.exe",
+        ] {
+            assert_eq!(
+                cli_user_agent_for(Some(Path::new(path))),
+                "claude-cli/2.1.286 (external, cli)"
+            );
+        }
+        assert_eq!(
+            cli_user_agent_for(None),
+            format!("claude-cli/{FALLBACK_CLAUDE_CODE_VERSION} (external, cli)")
+        );
+    }
+
+    #[test]
+    fn cloud_credits_preserve_exact_dollars_and_override_rounded_percentage() {
+        let limits = parse_usage_response(r#"{"five_hour":{"utilization":100},"iguana_necktie":{"utilization":0,"limit_dollars":100,"used_dollars":0,"remaining_dollars":99,"resets_at":"2026-11-05T07:59:00Z"}}"#, Utc::now()).unwrap();
+        let credits = limits.cloud_session_credits.unwrap();
+        assert_eq!(credits.remaining_dollars, 99.0);
+        assert_eq!(credits.used_dollars, 1.0);
+        assert_eq!(limits.additional_limits[0].title, "Cloud session credits");
+        assert_eq!(limits.additional_limits[0].window.used_percent, Some(1));
+        assert_eq!(limits.additional_limits[0].window.duration_minutes, None);
+        let restored: RateLimits = serde_json::from_str(
+            &serde_json::to_string(&RateLimits {
+                cloud_session_credits: Some(credits.clone()),
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(restored.cloud_session_credits, Some(credits));
+    }
+
+    #[test]
+    fn cloud_credit_dollars_are_not_invented_from_utilization() {
+        let limits = parse_usage_response(r#"{"five_hour":{"utilization":12},"iguana_necktie":{"utilization":25,"resets_at":"2026-11-05T07:59:00Z"}}"#, Utc::now()).unwrap();
+        assert!(limits.cloud_session_credits.is_none());
+        assert_eq!(limits.additional_limits[0].window.used_percent, Some(25));
+        assert!(
+            parse_cloud_session_credits(
+                &serde_json::json!({"limit_dollars":100,"remaining_dollars":101})
+            )
+            .is_none()
+        );
+        let derived = parse_cloud_session_credits(
+            &serde_json::json!({"limit_dollars":100,"used_dollars":25,"locked_reason":"locked"}),
+        )
+        .unwrap();
+        assert_eq!(derived.remaining_dollars, 75.0);
+        assert!(derived.locked);
     }
 
     #[test]

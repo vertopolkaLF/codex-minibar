@@ -13,6 +13,9 @@ mod bindings;
 // and stock layout transitions; the existing projection only exposed targets.
 #[allow(non_snake_case, non_upper_case_globals, dead_code)]
 mod reorder_bindings;
+// Narrow projection for rounded, size-following card clips.
+#[allow(non_snake_case, non_upper_case_globals, dead_code)]
+mod clip_bindings;
 
 mod app;
 mod app_shim;

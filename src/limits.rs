@@ -33,6 +33,15 @@ pub struct UsageAmount {
     pub limit: f64,
 }
 
+/// Promotional Claude cloud-session amounts, reported directly in USD.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CloudSessionCredits {
+    pub limit_dollars: f64,
+    pub used_dollars: f64,
+    pub remaining_dollars: f64,
+    pub locked: bool,
+}
+
 /// A named quota window supplied in addition to the standard session and
 /// weekly limits. Claude adds model- and feature-specific windows over time,
 /// so these must remain data-driven rather than being discarded by a fixed
@@ -246,6 +255,8 @@ pub struct RateLimits {
     pub reset_credits: Option<RateLimitResetCreditsSummary>,
     /// Provider-specific quota windows beyond primary and secondary.
     pub additional_limits: Vec<AdditionalLimit>,
+    #[serde(default)]
+    pub cloud_session_credits: Option<CloudSessionCredits>,
     /// Optional provider-reported spending summary, such as an OpenRouter key
     /// budget. Existing providers leave this unset.
     #[serde(default)]
