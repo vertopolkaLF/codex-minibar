@@ -5,7 +5,7 @@ use std::{collections::HashMap, f32::consts::PI, rc::Rc};
 use gpui::{
     AnyElement, AppContext, Bounds, ClickEvent, Context, DragMoveEvent, Hsla, InteractiveElement,
     IntoElement, ParentElement, PathBuilder, Pixels, Render, SharedString,
-    StatefulInteractiveElement, Styled, Window, canvas, div, point, px, relative,
+    StatefulInteractiveElement, Styled, Window, canvas, div, point, px,
 };
 
 use super::{
@@ -495,10 +495,19 @@ impl PopupRoot {
         );
         let title = div()
             .id("usage-stats-title")
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(8.0))
             .on_hover(self.hover_listener(title_id, None, cx))
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.navigate(PopupView::Usage, cx);
             }))
+            .child(components::icon(
+                "fluent-chart",
+                16.0,
+                palette.text_secondary.mix(palette.accent, title_hover),
+            ))
             .child(components::body_strong(
                 "Usage Stats",
                 palette.text_secondary.mix(palette.accent, title_hover),
@@ -537,7 +546,7 @@ impl PopupRoot {
             trailing = trailing.child(self.widget_drag_handle(PopupWidgetKind::TotalSpend, cx));
         }
         let heading = components::split_row(title, trailing)
-            .mx(px(4.0))
+            .px(px(4.0))
             .mt(px(if is_first { 0.0 } else { HEADING_TOP }))
             .mb(px(2.0));
 
@@ -590,12 +599,11 @@ impl PopupRoot {
     fn spend_hero_content(&self, entries: &[(ProviderKind, u64)], total: u64) -> AnyElement {
         let palette = &self.palette;
         let colored = self.ui.use_colored_provider_icons;
-        let mut tiles = div().flex().flex_row().flex_wrap().gap_y(px(16.0));
+        let mut tiles = div().grid().grid_cols(3).gap_x(px(8.0)).gap_y(px(16.0));
         for (provider, spend) in entries {
             tiles = tiles.child(
                 div()
-                    .w(relative(1.0 / 3.0))
-                    .pr(px(8.0))
+                    .min_w_0()
                     .flex()
                     .flex_col()
                     .gap(px(4.0))

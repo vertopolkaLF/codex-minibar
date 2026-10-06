@@ -210,11 +210,12 @@ impl PopupRoot {
         let palette = self.palette.clone();
         let bubble = div()
             .absolute()
-            .left(px(left))
-            .top(px(top + (1.0 - reveal) * 4.0))
-            .opacity(reveal)
+            .left(self.capsule_origin.x + px(left))
+            .top(self.capsule_origin.y + px(top + (1.0 - reveal) * 4.0))
             .rounded(px(if follows_cursor { 6.0 } else { 4.0 }))
-            .bg(palette.tooltip_background)
+            // Reveal by motion only: the surface must occlude underlying UI
+            // from its first visible frame rather than fading its background.
+            .bg(palette.tooltip_background.alpha(1.0))
             .border_1()
             .border_color(palette.card_stroke.opacity(4.0))
             .shadow_md();

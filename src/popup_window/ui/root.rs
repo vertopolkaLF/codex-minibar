@@ -1193,7 +1193,7 @@ impl Render for PopupRoot {
             .is_some_and(|backdrop| backdrop.available());
         #[cfg(not(windows))]
         let frosted = false;
-        let mut capsule = div()
+        let capsule = div()
             .id("popup-capsule")
             .absolute()
             .left(px(capsule_x))
@@ -1238,9 +1238,12 @@ impl Render for PopupRoot {
                         theme::rgba8(0, 0, 0, 0x12)
                     }),
             );
-        if let Some(tip) = self.render_tip(capsule_w, capsule_h, window, cx) {
-            capsule = capsule.child(tip);
-        }
+        // Paint tooltips after pages, pinned chrome and any other deferred UI.
+        // Their coordinates are window-relative; render_tip still clamps them
+        // to the capsule so the native region cannot cut off the bubble.
+        let tip = self
+            .render_tip(capsule_w, capsule_h, window, cx)
+            .map(|tip| gpui::deferred(tip).with_priority(usize::MAX));
 
         if self.fx.is_animating() || (ui.refreshing && self.host.visible()) {
             window.request_animation_frame();
@@ -1257,6 +1260,7 @@ impl Render for PopupRoot {
             .line_height(px(20.0))
             .child(capsule)
             .children(chrome)
+            .children(tip)
     }
 }
 

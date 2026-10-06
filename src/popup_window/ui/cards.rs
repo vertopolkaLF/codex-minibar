@@ -39,7 +39,7 @@ impl PopupRoot {
     ) -> AnyElement {
         let style = self.card_style();
         match card_spec {
-            Card::Heading(heading) => self.render_heading(heading, cx),
+            Card::Heading(heading) => self.render_heading(heading, surface, cx),
             Card::Limit {
                 key,
                 title,
@@ -88,7 +88,7 @@ impl PopupRoot {
                     ),
                     None => div().child(name),
                 };
-                row.mx(px(4.0)).mt(px(8.0)).into_any_element()
+                row.px(px(4.0)).mt(px(8.0)).into_any_element()
             }
             Card::ForcedResets(resets) => self.render_forced_resets(resets, cx),
             Card::BankedResets {
@@ -127,18 +127,33 @@ impl PopupRoot {
         }
     }
 
-    fn render_heading(&mut self, heading: &HeadingCard<'_>, cx: &mut Context<Self>) -> AnyElement {
+    fn render_heading(
+        &mut self,
+        heading: &HeadingCard<'_>,
+        surface: PopupSurface,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let palette = self.palette.clone();
         let mut title = div()
             .flex()
             .flex_row()
             .items_center()
             .gap(px(4.0))
-            .min_w_0()
-            .child(components::body_strong(
-                heading.provider.display_name(),
-                palette.text_secondary,
-            ));
+            .min_w_0();
+        if matches!(surface, PopupSurface::HomeTab) {
+            title = title.child(
+                icon(
+                    crate::provider_registry::icon(heading.provider),
+                    16.0,
+                    palette.provider_icon(heading.provider, self.ui.use_colored_provider_icons),
+                )
+                .mr(px(4.0)),
+            );
+        }
+        title = title.child(components::body_strong(
+            heading.provider.display_name(),
+            palette.text_secondary,
+        ));
         if let Some(plan) = heading.plan.as_ref() {
             title = title.child(nowrap(components::body(
                 plan.clone(),
@@ -178,7 +193,7 @@ impl PopupRoot {
             );
         }
         components::split_row(title, trailing)
-            .mx(px(4.0))
+            .px(px(4.0))
             .mt(px(if heading.first { 0.0 } else { 8.0 }))
             .mb(px(2.0))
             .into_any_element()
