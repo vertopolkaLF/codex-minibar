@@ -922,7 +922,7 @@ impl SettingsWindow {
             k,
             format!("provider-{}-usage", provider.id()),
             "Usage statistics",
-            Some("Scans this instance's local history for the Usage tab and cost totals.".into()),
+            Some("Scans this instance's local history for its usage card. Turn off to stop collecting entirely.".into()),
             instance.usage_stats,
             Capabilities::reason(instance, Capability::UsageStats).map(SharedString::from),
             Self::h(cx, move |this, value: bool, _, cx| {

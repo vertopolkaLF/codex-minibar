@@ -77,6 +77,9 @@ pub(crate) enum PopupCommand {
     SelectView(PopupView),
     AppearanceChanged,
     Reposition,
+    /// Another window took the foreground; restore the popup to the top of
+    /// the topmost band if it is visible.
+    Raise,
     /// Settings/onboarding window requests, executed on the GPUI thread.
     Settings(crate::settings_window::Command),
 }

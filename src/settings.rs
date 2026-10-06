@@ -2132,6 +2132,12 @@ impl Settings {
         }
     }
 
+    pub fn set_usage_overview_included(&mut self, provider: ProviderId, included: bool) {
+        if let Some(instance) = self.instance_mut(provider) {
+            instance.in_usage_overview = included;
+        }
+    }
+
     pub fn set_usage_stats_provider_enabled(&mut self, provider: ProviderId, enabled: bool) {
         if let Some(instance) = self.instance_mut(provider) {
             instance.usage_stats = enabled;

@@ -265,6 +265,18 @@ fn handle_command(
             let _ = window.update(cx, |root, window, cx| root.appearance_changed(window, cx));
         }
         PopupCommand::Settings(_) => {}
+        PopupCommand::Raise => {
+            #[cfg(windows)]
+            {
+                let hwnd = window
+                    .update(cx, |root, _, _| root.host.hwnd.filter(|_| root.host.visible()))
+                    .ok()
+                    .flatten();
+                if let Some(hwnd) = hwnd {
+                    win32::raise(hwnd);
+                }
+            }
+        }
         PopupCommand::Reposition => {
             #[cfg(windows)]
             {

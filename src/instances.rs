@@ -325,6 +325,9 @@ pub struct ProviderInstance {
     pub show_on_home: bool,
     pub auto_activation: bool,
     pub usage_stats: bool,
+    /// Counts toward the machine-wide Usage tab and Home total spend. Off
+    /// keeps collecting for this instance's own page.
+    pub in_usage_overview: bool,
     /// Explicit CLI or app location. Empty keeps automatic discovery.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub binary_path: Option<PathBuf>,
@@ -360,6 +363,7 @@ impl ProviderInstance {
             show_on_home: true,
             auto_activation: false,
             usage_stats: true,
+            in_usage_overview: true,
             binary_path: None,
             source: InstanceSource::default(),
             kiro_crew_path: None,

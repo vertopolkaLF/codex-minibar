@@ -200,8 +200,12 @@ impl SettingsWindow {
                 (instance.driver == ProviderKind::OpenRouter
                     && !crate::openrouter::has_management_key(instance.openrouter.as_slice()))
                 .then_some("Add a management key")
+            })
+            .or_else(|| {
+                (!instance.usage_stats)
+                    .then_some("Usage statistics are off on this provider's page")
             });
-            let checked = reason.is_none() && instance.usage_stats;
+            let checked = reason.is_none() && instance.in_usage_overview;
             let check = kit::checkbox(
                 k,
                 format!("usage-provider-{}", provider.id()),
@@ -210,7 +214,7 @@ impl SettingsWindow {
                 Some(provider.qualified_name().into()),
                 Self::h(cx, move |this, checked: bool, _, cx| {
                     this.edit(cx, move |settings| {
-                        settings.set_usage_stats_provider_enabled(provider, checked)
+                        settings.set_usage_overview_included(provider, checked)
                     })
                 }),
             );
@@ -225,7 +229,7 @@ impl SettingsWindow {
         Row::new("general-usage-providers", "Included providers")
             .description(
                 k,
-                "Choose which providers contribute to the Usage tab and Home card. Provider pages keep their usage card, and existing data is never deleted.",
+                "Choose which accounts count toward this machine's Usage tab and Home total. Excluded accounts keep collecting and still show usage on their own page.",
             )
             .detail(div().pt(px(10.0)).child(grid).into_any_element())
             .disabled(!usage_enabled)

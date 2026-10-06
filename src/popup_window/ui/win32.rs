@@ -21,12 +21,14 @@ use windows_sys::Win32::{
         },
     },
     UI::{
+        Accessibility::{HWINEVENTHOOK, SetWinEventHook},
         HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
         Shell::{DefSubclassProc, SetWindowSubclass},
         WindowsAndMessaging::{
             GWL_EXSTYLE, GWL_STYLE, GetWindowLongPtrW, GetWindowRect, HTCLIENT, HWND_TOPMOST,
             SW_HIDE, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-            SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+            SWP_NOOWNERZORDER, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+            EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
             WM_DISPLAYCHANGE, WM_NCCALCSIZE, WM_NCHITTEST, WM_SETTINGCHANGE, WS_CAPTION,
             WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
             WS_EX_TOPMOST, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
@@ -142,6 +144,51 @@ pub(crate) fn configure(hwnd: HWND) {
             0,
             0,
             SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+        );
+
+        // The popup can stay open for a long time (e.g. as the live preview
+        // beside Settings). Another topmost window that takes the foreground
+        // lands above it, so re-raise whenever a foreign window activates.
+        // Out-of-context hooks run on this (GPUI) thread's message loop.
+        SetWinEventHook(
+            EVENT_SYSTEM_FOREGROUND,
+            EVENT_SYSTEM_FOREGROUND,
+            std::ptr::null_mut(),
+            Some(foreground_changed),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+        );
+    }
+}
+
+unsafe extern "system" fn foreground_changed(
+    _hook: HWINEVENTHOOK,
+    _event: u32,
+    _hwnd: HWND,
+    _object: i32,
+    _child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    // SetWindowPos re-enters GPUI; defer to the foreground command task.
+    if crate::popup::is_visible() {
+        crate::popup_window::send_command(crate::popup_window::PopupCommand::Raise);
+    }
+}
+
+/// Restore the visible popup to the top of the topmost band. Outside any GPUI
+/// borrow only.
+pub(crate) fn raise(hwnd: HWND) {
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER,
         );
     }
 }

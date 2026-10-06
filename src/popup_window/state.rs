@@ -635,6 +635,15 @@ impl UiState {
         self.usage_stats_providers.contains(&provider)
     }
 
+    /// Collected and counted toward the Usage tab and Home total spend.
+    pub(super) fn usage_overview_included(&self, provider: ProviderId) -> bool {
+        self.usage_stats_provider_enabled(provider)
+            && self
+                .instances
+                .iter()
+                .any(|instance| instance.provider_id() == provider && instance.in_usage_overview)
+    }
+
     pub(super) fn request_started(&mut self, provider: ProviderId, kind: RequestKind) {
         self.active_requests.push((provider, kind));
         self.refreshing = true;

@@ -599,12 +599,12 @@ pub(crate) fn tab_for_provider(ui: &UiState, provider: ProviderId) -> Option<Pop
     tabs.into_iter().find(|tab| tab.shows(provider))
 }
 
-/// Instances eligible for the combined Usage Stats spend.
+/// Instances counted in the Usage tab and combined total spend.
 pub(crate) fn spend_providers(ui: &UiState) -> Vec<ProviderId> {
     ui.enabled_providers()
         .into_iter()
         .filter(|provider| {
-            ui.usage_stats_provider_enabled(*provider)
+            ui.usage_overview_included(*provider)
                 && crate::provider_registry::descriptor(provider.kind()).include_in_total_spend
         })
         .collect()
