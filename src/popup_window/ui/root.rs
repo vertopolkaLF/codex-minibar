@@ -35,8 +35,7 @@ const OPEN_ANIMATION: Duration = Duration::from_millis(250);
 const CLOSE_ANIMATION: Duration = Duration::from_millis(167);
 /// Pinned profile switcher between the page and the footer.
 pub(super) const PROFILE_STRIP_HEIGHT: f32 = 46.0;
-/// One physical pixel of chrome around the content keeps anti-aliased
-/// corners inside the region's aliased edge.
+/// Small inner inset keeps page/footer content clear of the capsule stroke.
 const CHROME_INSET: f32 = 1.0;
 const PAGE_PADDING: f32 = 16.0;
 const PAGE_SPACING: f32 = 6.0;

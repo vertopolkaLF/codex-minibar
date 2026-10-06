@@ -268,27 +268,39 @@ pub(crate) fn activate(hwnd: HWND) {
     }
 }
 
-/// Clip the HWND to `rect` (window-relative pixels) with rounded corners.
+/// Coarse visibility/input envelope around `rect` (window-relative pixels).
+/// GPUI and the composition backdrop paint the actual antialiased outline.
+/// Keep this binary GDI clip outside their edge coverage, otherwise it chops
+/// partially transparent corner pixels into a staircase.
 /// `None` hides every pixel while keeping the compositor surface alive.
 ///
 /// `SetWindowRgn` only sends position-change notifications without moving or
 /// sizing the window, which GPUI ignores, so it is safe during a frame.
 pub(crate) fn set_region(hwnd: HWND, rect: Option<Rect>, radius_px: i32) {
+    // Physical pixels, independent of display scaling. Two cover the renderer's
+    // antialias fringe plus the half-pixel rounding of animated capsule bounds.
+    const AA_PADDING_PX: i32 = 2;
     unsafe {
         let region = match rect.filter(|rect| rect.width() > 0 && rect.height() > 0) {
             None => CreateRectRgn(0, 0, 0, 0),
             Some(rect) if radius_px <= 0 => {
-                CreateRectRgn(rect.left, rect.top, rect.right, rect.bottom)
+                CreateRectRgn(
+                    rect.left - AA_PADDING_PX,
+                    rect.top - AA_PADDING_PX,
+                    rect.right + AA_PADDING_PX,
+                    rect.bottom + AA_PADDING_PX,
+                )
             }
             Some(rect) => {
-                let arc = radius_px.saturating_mul(2);
+                // Grow radius with bounds to keep the corner centers fixed.
+                let arc = radius_px.saturating_add(AA_PADDING_PX).saturating_mul(2);
                 // GDI round regions exclude the right/bottom edge; extend by
                 // one pixel so the capsule keeps its full size.
                 CreateRoundRectRgn(
-                    rect.left,
-                    rect.top,
-                    rect.right + 1,
-                    rect.bottom + 1,
+                    rect.left - AA_PADDING_PX,
+                    rect.top - AA_PADDING_PX,
+                    rect.right + AA_PADDING_PX + 1,
+                    rect.bottom + AA_PADDING_PX + 1,
                     arc,
                     arc,
                 )
