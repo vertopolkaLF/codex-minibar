@@ -3,24 +3,63 @@ use super::platform::{close_open_window, is_open};
 use super::shared::settings_section_heading;
 use super::*;
 
+/// Whether each driver (in [`ProviderKind::ALL`] order) is installed, using
+/// the paths of its first instance.
 pub(super) fn detected_providers(settings: &Settings) -> [bool; 9] {
-    [
-        crate::codex::is_installed(settings.codex_path.as_deref()),
-        crate::claude::is_installed(settings.claude_path.as_deref()),
-        crate::cursor::is_installed(settings.cursor_path.as_deref()),
-        crate::opencode::is_installed(ProviderKind::OpenCodeZen),
-        crate::opencode::is_installed(ProviderKind::OpenCodeGo),
-        crate::openrouter::is_installed_for_accounts(&crate::openrouter::accounts_for_settings(
-            settings,
-        )),
-        crate::antigravity::is_installed(settings.antigravity_path.as_deref()),
-        crate::grok::is_installed(settings.grok_path.as_deref()),
-        crate::kiro::source_is_ready(
-            settings.kiro_path.as_deref(),
-            settings.kiro_crew_path.as_deref(),
-            settings.kiro_cli_path.as_deref(),
-        ),
-    ]
+    let first = |driver: ProviderKind| {
+        settings
+            .instances
+            .iter()
+            .find(|instance| instance.driver == driver)
+            .cloned()
+            .unwrap_or_else(|| ProviderInstance::primary(driver))
+    };
+    ProviderKind::ALL.map(|driver| {
+        let instance = first(driver);
+        let path = instance.binary_path.as_deref();
+        match driver {
+            ProviderKind::Codex => crate::codex::is_installed(path),
+            ProviderKind::Claude => crate::claude::is_installed(path),
+            ProviderKind::Cursor => crate::cursor::is_installed(path),
+            ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
+                crate::opencode::is_installed(driver)
+            }
+            ProviderKind::OpenRouter => {
+                crate::openrouter::is_installed_for_accounts(instance.openrouter.as_slice())
+            }
+            ProviderKind::Antigravity => crate::antigravity::is_installed(path),
+            ProviderKind::Grok => crate::grok::is_installed(path),
+            ProviderKind::Kiro => crate::kiro::source_is_ready(
+                path,
+                instance.kiro_crew_path.as_deref(),
+                instance.kiro_cli_path.as_deref(),
+            ),
+        }
+    })
+}
+
+/// Turns each driver's first instance on or off, adding it when missing.
+fn apply_onboarding_choices(settings: &mut Settings, enabled: [bool; 9], automatic: bool) {
+    for (driver, enabled) in ProviderKind::ALL.into_iter().zip(enabled) {
+        let provider = match settings
+            .instances
+            .iter()
+            .find(|instance| instance.driver == driver)
+        {
+            Some(instance) => instance.provider_id(),
+            None if enabled => {
+                let instance = settings.new_instance(driver, driver.display_name());
+                settings.add_instance(instance)
+            }
+            None => continue,
+        };
+        if let Some(instance) = settings.instance_mut(provider) {
+            instance.enabled = enabled;
+            if crate::instances::Capabilities::of(instance).auto_activation {
+                instance.auto_activation = automatic;
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -53,8 +92,12 @@ pub(super) fn onboarding_render(
     let (grok_enabled, set_grok_enabled) = cx.use_state(detected[7]);
     let (kiro_enabled, set_kiro_enabled) = cx.use_state(detected[8]);
     let (start_at_login, set_start_at_login) = cx.use_state(settings.start_at_login);
-    let (automatic_activation, set_automatic_activation) =
-        cx.use_state(settings.automatic_activation);
+    let (automatic_activation, set_automatic_activation) = cx.use_state(
+        settings
+            .instances
+            .iter()
+            .any(|instance| instance.auto_activation),
+    );
     let (limit_refresh_interval, set_limit_refresh_interval) =
         cx.use_state(settings.limit_refresh_interval);
     let (usage_refresh_interval, set_usage_refresh_interval) =
@@ -323,30 +366,32 @@ pub(super) fn onboarding_render(
                 .on_click(move || {
                     let mut completed = (*settings).clone();
                     completed.onboarding_completed = true;
-                    completed.providers = crate::settings::ProviderSettings::from_enabled(
-                        crate::provider_registry::PROVIDERS
-                            .iter()
-                            .filter(|provider| match provider.kind {
-                                ProviderKind::Codex => codex_enabled,
-                                ProviderKind::Claude => claude_enabled,
-                                ProviderKind::Cursor => cursor_enabled,
-                                ProviderKind::OpenCodeZen => opencode_zen_enabled,
-                                ProviderKind::OpenCodeGo => opencode_go_enabled,
-                                ProviderKind::OpenRouter => openrouter_enabled,
-                                ProviderKind::Antigravity => antigravity_enabled,
-                                ProviderKind::Grok => grok_enabled,
-                                ProviderKind::Kiro => kiro_enabled,
-                            })
-                            .map(|provider| provider.kind),
+                    apply_onboarding_choices(
+                        &mut completed,
+                        [
+                            codex_enabled,
+                            claude_enabled,
+                            cursor_enabled,
+                            opencode_zen_enabled,
+                            opencode_go_enabled,
+                            openrouter_enabled,
+                            antigravity_enabled,
+                            grok_enabled,
+                            kiro_enabled,
+                        ],
+                        automatic_activation,
                     );
-                    completed.tray_widgets = crate::provider_registry::PROVIDERS
-                        .iter()
-                        .filter(|provider| completed.providers.is_enabled(provider.kind))
-                        .filter(|provider| !provider.default_tray_metrics.is_empty())
-                        .map(|provider| TrayWidget::for_provider(provider.kind))
+                    completed.tray_widgets = completed
+                        .enabled_providers()
+                        .into_iter()
+                        .filter(|provider| {
+                            !crate::provider_registry::descriptor(provider.kind())
+                                .default_tray_metrics
+                                .is_empty()
+                        })
+                        .map(TrayWidget::for_provider)
                         .collect();
                     completed.start_at_login = start_at_login;
-                    completed.automatic_activation = automatic_activation;
                     completed.limit_refresh_interval = limit_refresh_interval;
                     completed.usage_refresh_interval = usage_refresh_interval;
                     completed.show_used_percentage = show_used_percentage;

@@ -20,20 +20,27 @@ pub(crate) fn remove_openrouter_api_key(
     };
     if let Err(error) =
         crate::settings_window::try_persist_update_fallible(settings_tx, move |settings| {
-            let mut accounts = crate::openrouter::accounts_for_settings(settings);
-            let account = accounts
+            let instance = settings
+                .instances
                 .iter_mut()
-                .find(|account| account.id == account_id)
+                .find(|instance| {
+                    instance
+                        .openrouter
+                        .as_ref()
+                        .is_some_and(|account| account.id == account_id)
+                })
                 .ok_or_else(|| anyhow::anyhow!("OpenRouter account no longer exists"))?;
+            let account = instance
+                .openrouter
+                .as_mut()
+                .expect("matched an OpenRouter account");
             let before = account.api_key_ids.len();
             account.api_key_ids.retain(|id| id != &key_id);
             anyhow::ensure!(
                 account.api_key_ids.len() != before,
                 "OpenRouter API key no longer exists"
             );
-            settings.openrouter_accounts = accounts;
-            settings.openrouter_credentials_revision =
-                settings.openrouter_credentials_revision.wrapping_add(1);
+            instance.credentials_revision = instance.credentials_revision.wrapping_add(1);
             Ok(())
         })
     {

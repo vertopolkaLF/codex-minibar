@@ -32,25 +32,25 @@ fn rendered_page_keys_keep_root_and_provider_identity() {
         "settings-scroll-customize"
     );
     assert_eq!(
-        RenderedPage::Provider(ProviderKind::OpenRouter).page_key(),
+        RenderedPage::Provider(crate::instances::ProviderId::from(ProviderKind::OpenRouter))
+            .page_key(),
         "settings-page-provider-openrouter"
     );
 }
 
 #[test]
-fn provider_order_follows_popup_order() {
-    let order = vec![
-        PopupWidgetKind::OpenRouter,
-        PopupWidgetKind::TotalSpend,
-        PopupWidgetKind::Claude,
-        PopupWidgetKind::OpenCodeGo,
-    ];
+fn provider_pages_are_keyed_by_instance() {
+    let work = crate::instances::ProviderId::new(ProviderKind::Claude, "claude-work");
     assert_eq!(
-        navigation::provider_order_from_popup(&order),
-        vec![
-            ProviderKind::OpenRouter,
-            ProviderKind::Claude,
-            ProviderKind::OpenCodeGo,
-        ]
+        RenderedPage::Provider(work).page_key(),
+        "settings-page-provider-claude-work"
+    );
+    assert_ne!(
+        RenderedPage::Provider(work).scroll_key(),
+        RenderedPage::Provider(ProviderKind::Claude.into()).scroll_key()
+    );
+    assert_eq!(
+        RenderedPage::NoProviders.page_key(),
+        "settings-page-no-providers"
     );
 }

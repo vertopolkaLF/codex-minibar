@@ -18,11 +18,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::limits::{ProviderLimits, RateLimits};
-use crate::settings::ProviderKind;
 use crate::usage::{
     CachedClaudeSessionFile, CachedClaudeUsageEntry, CachedSessionFile, ClaudeUsageCache,
     DailyTokenUsage, TokenUsage, UsageCache, UsageStatistics, statistics_from_daily,
 };
+use crate::{instances::ProviderId, settings::ProviderKind};
 
 pub(crate) mod codex_accounts;
 
@@ -236,12 +236,34 @@ impl ProviderStore {
         Ok(())
     }
 
-    pub fn hydrate_provider_limits(&self, history_days: u16) -> Result<ProviderLimits> {
+    pub fn hydrate_provider_limits(
+        &self,
+        providers: &[ProviderId],
+        history_days: u16,
+    ) -> Result<ProviderLimits> {
         let mut limits = ProviderLimits::default();
-        for provider in ProviderKind::ALL {
-            let mut snapshot = self.load_limits(provider)?.unwrap_or_default();
-            snapshot.usage = self.load_usage_daily(provider, history_days)?;
-            *limits.get_mut(provider) = snapshot;
+        let mut legacy_accounts = Vec::new();
+        for provider in providers {
+            let mut snapshot = self.load_limits(*provider)?.unwrap_or_default();
+            legacy_accounts.extend(std::mem::take(&mut snapshot.legacy_accounts));
+            snapshot.usage = self.load_usage_daily(*provider, history_days)?;
+            *limits.get_mut(*provider) = snapshot;
+        }
+        // Samples cached per account before accounts became instances seed
+        // each migrated instance until its own first read.
+        for account in legacy_accounts {
+            let Some(provider) = providers
+                .iter()
+                .find(|provider| !provider.is_primary() && provider.id() == account.id)
+            else {
+                continue;
+            };
+            let snapshot = limits.get_mut(*provider);
+            if snapshot.sampled_at.timestamp() <= 0 {
+                let usage = std::mem::take(&mut snapshot.usage);
+                *snapshot = account.limits;
+                snapshot.usage = usage;
+            }
         }
         Ok(limits)
     }
@@ -275,7 +297,7 @@ impl ProviderStore {
         Ok(())
     }
 
-    pub fn load_limits(&self, provider: ProviderKind) -> Result<Option<RateLimits>> {
+    pub fn load_limits(&self, provider: ProviderId) -> Result<Option<RateLimits>> {
         let mut statement = self
             .conn
             .prepare("SELECT payload_json FROM limits WHERE provider = ?1")?;
@@ -292,7 +314,7 @@ impl ProviderStore {
         Ok(Some(limits))
     }
 
-    pub fn save_limits(&self, provider: ProviderKind, limits: &RateLimits) -> Result<()> {
+    pub fn save_limits(&self, provider: ProviderId, limits: &RateLimits) -> Result<()> {
         let mut persisted = limits.clone();
         persisted.usage = UsageStatistics::default();
         let payload = serde_json::to_string(&persisted).context("serialize rate limits")?;
@@ -311,13 +333,15 @@ impl ProviderStore {
 
     pub fn load_usage_daily(
         &self,
-        provider: ProviderKind,
+        provider: ProviderId,
         history_days: u16,
     ) -> Result<UsageStatistics> {
-        if provider == ProviderKind::OpenRouter && self.load_openrouter_analytics()?.is_none() {
+        if provider.kind() == ProviderKind::OpenRouter
+            && self.load_openrouter_analytics(provider)?.is_none()
+        {
             return Ok(UsageStatistics::default());
         }
-        if provider == ProviderKind::Codex && self.use_codex_account_data()? {
+        if provider == ProviderId::primary(ProviderKind::Codex) && self.use_codex_account_data()? {
             return self.account_statistics_for(&codex_accounts::current_id(), history_days);
         }
         let mut statement = self.conn.prepare(
@@ -363,7 +387,7 @@ impl ProviderStore {
             tx.execute(&format!("DELETE FROM {table}"), [])?;
         }
         tx.execute(
-            "DELETE FROM meta WHERE key IN ('openrouter.analytics.v1', 'openrouter.analytics.v2', 'openrouter.analytics.v3')",
+            "DELETE FROM meta WHERE key LIKE 'openrouter.analytics.%'",
             [],
         )?;
         // Rebuild existing attribution after a clear; never reassign history.
@@ -383,16 +407,16 @@ impl ProviderStore {
     /// timestamps; Codex/OpenCode read the hourly table filled on refresh.
     pub fn load_usage_hourly(
         &self,
-        provider: ProviderKind,
+        provider: ProviderId,
         start: DateTime<Local>,
         end: DateTime<Local>,
     ) -> Result<BTreeMap<DateTime<Local>, TokenUsage>> {
-        if provider == ProviderKind::Codex && self.use_codex_account_data()? {
+        if provider == ProviderId::primary(ProviderKind::Codex) && self.use_codex_account_data()? {
             return self.account_hourly(start, end);
         }
-        if provider == ProviderKind::OpenRouter {
+        if provider.kind() == ProviderKind::OpenRouter {
             let mut hours = BTreeMap::<DateTime<Local>, TokenUsage>::new();
-            for (_, at, usage) in self.load_openrouter_hourly_rows(start, end)? {
+            for (_, at, usage) in self.load_openrouter_hourly_rows(provider, start, end)? {
                 hours.entry(at).or_default().add(&usage);
             }
             return Ok(hours);
@@ -424,7 +448,7 @@ impl ProviderStore {
 
     fn load_event_hourly(
         &self,
-        provider: ProviderKind,
+        provider: ProviderId,
         start: DateTime<Local>,
         end: DateTime<Local>,
     ) -> Result<BTreeMap<DateTime<Local>, TokenUsage>> {
@@ -464,7 +488,7 @@ impl ProviderStore {
 
     pub fn replace_usage_hourly(
         &self,
-        provider: ProviderKind,
+        provider: ProviderId,
         hours: &[(DateTime<Local>, TokenUsage)],
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
@@ -508,7 +532,7 @@ impl ProviderStore {
 
     pub fn replace_usage_daily(
         &self,
-        provider: ProviderKind,
+        provider: ProviderId,
         days: &[DailyTokenUsage],
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
@@ -519,7 +543,7 @@ impl ProviderStore {
 
     fn replace_usage_daily_in_transaction(
         &self,
-        provider: ProviderKind,
+        provider: ProviderId,
         days: &[DailyTokenUsage],
     ) -> Result<()> {
         let mut retained = BTreeSet::new();
@@ -579,7 +603,7 @@ impl ProviderStore {
         Ok(())
     }
 
-    pub fn usage_fetched_at(&self, provider: ProviderKind) -> Result<Option<DateTime<Utc>>> {
+    pub fn usage_fetched_at(&self, provider: ProviderId) -> Result<Option<DateTime<Utc>>> {
         let mut statement = self
             .conn
             .prepare("SELECT usage_fetched_at FROM provider_meta WHERE provider = ?1")?;
@@ -594,7 +618,7 @@ impl ProviderStore {
 
     pub fn set_usage_fetched_at(
         &self,
-        provider: ProviderKind,
+        provider: ProviderId,
         fetched_at: DateTime<Utc>,
     ) -> Result<()> {
         self.upsert_provider_meta(
@@ -605,18 +629,18 @@ impl ProviderStore {
         )
     }
 
-    pub fn cursor_usage_version(&self) -> Result<u8> {
+    pub fn cursor_usage_version(&self, provider: ProviderId) -> Result<u8> {
         let mut statement = self
             .conn
             .prepare("SELECT schema_version FROM provider_meta WHERE provider = ?1")?;
         let version: Option<i64> = statement
-            .query_row(params![ProviderKind::Cursor.id()], |row| row.get(0))
+            .query_row(params![provider.id()], |row| row.get(0))
             .optional()?;
         Ok(version.unwrap_or(0) as u8)
     }
 
-    pub(crate) fn load_codex_cache(&self) -> Result<UsageCache> {
-        let flags = self.provider_flags(ProviderKind::Codex)?;
+    pub(crate) fn load_codex_cache(&self, provider: ProviderId) -> Result<UsageCache> {
+        let flags = self.provider_flags(provider)?;
         let mut pricing_rebuild_needed = flags
             .get("pricing_rebuild_needed")
             .and_then(|value| value.as_bool())
@@ -634,7 +658,7 @@ impl ProviderStore {
             let mut statement = self
                 .conn
                 .prepare("SELECT path, offset, meta_json FROM scan_files WHERE provider = ?1")?;
-            let rows = statement.query_map(params![ProviderKind::Codex.id()], |row| {
+            let rows = statement.query_map(params![provider.id()], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, i64>(1)? as u64,
@@ -667,7 +691,7 @@ impl ProviderStore {
                         requests, estimated_cost_microusd, priced_requests, cache_savings_microusd
                  FROM usage_file_daily WHERE provider = ?1",
             )?;
-            let rows = statement.query_map(params![ProviderKind::Codex.id()], |row| {
+            let rows = statement.query_map(params![provider.id()], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     parse_date(&row.get::<_, String>(1)?),
@@ -686,7 +710,7 @@ impl ProviderStore {
                         requests, estimated_cost_microusd, priced_requests, cache_savings_microusd
                  FROM usage_file_model_daily WHERE provider = ?1",
             )?;
-            let rows = statement.query_map(params![ProviderKind::Codex.id()], |row| {
+            let rows = statement.query_map(params![provider.id()], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     parse_date(&row.get::<_, String>(1)?),
@@ -716,7 +740,7 @@ impl ProviderStore {
         })
     }
 
-    pub(crate) fn save_codex_cache(&self, cache: &UsageCache) -> Result<()> {
+    pub(crate) fn save_codex_cache(&self, provider: ProviderId, cache: &UsageCache) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         let mut retained_files = BTreeSet::new();
         let mut retained_days = BTreeSet::new();
@@ -783,16 +807,11 @@ impl ProviderStore {
                     fork_copy_anchor_ms: file.fork_copy_anchor_ms,
                     session_id: file.session_id.clone(),
                 })?;
-                scan.execute(params![
-                    ProviderKind::Codex.id(),
-                    path,
-                    file.offset as i64,
-                    meta
-                ])?;
+                scan.execute(params![provider.id(), path, file.offset as i64, meta])?;
                 for entry in &file.daily {
                     retained_days.insert((path.clone(), entry.date.to_string()));
                     daily.execute(params![
-                        ProviderKind::Codex.id(),
+                        provider.id(),
                         path,
                         entry.date.to_string(),
                         entry.usage.input_tokens as i64,
@@ -812,7 +831,7 @@ impl ProviderStore {
                             model.clone(),
                         ));
                         models.execute(params![
-                            ProviderKind::Codex.id(),
+                            provider.id(),
                             path,
                             entry.date.to_string(),
                             model,
@@ -828,7 +847,13 @@ impl ProviderStore {
                 }
             }
         }
-        delete_stale_file_rows(&tx, &retained_files, &retained_days, &retained_models)?;
+        delete_stale_file_rows(
+            &tx,
+            provider,
+            &retained_files,
+            &retained_days,
+            &retained_models,
+        )?;
         tx.commit()?;
 
         let flags = json!({
@@ -836,21 +861,21 @@ impl ProviderStore {
             "pricing_rebuild_needed": cache.pricing_rebuild_needed,
         });
         self.upsert_provider_meta(
-            ProviderKind::Codex,
+            provider,
             None,
             i64::from(cache.version),
             Some(flags.to_string()),
         )?;
         self.replace_usage_daily(
-            ProviderKind::Codex,
+            provider,
             &aggregate_codex_daily(cache, CACHE_RETENTION_DAYS as u16),
         )?;
-        self.replace_usage_model_daily(ProviderKind::Codex, &aggregate_codex_model_daily(cache))?;
+        self.replace_usage_model_daily(provider, &aggregate_codex_model_daily(cache))?;
         Ok(())
     }
 
-    pub(crate) fn load_claude_cache(&self) -> Result<ClaudeUsageCache> {
-        let flags = self.provider_flags(ProviderKind::Claude)?;
+    pub(crate) fn load_claude_cache(&self, provider: ProviderId) -> Result<ClaudeUsageCache> {
+        let flags = self.provider_flags(provider)?;
         let version = flags
             .get("cache_version")
             .and_then(|value| value.as_u64())
@@ -864,7 +889,7 @@ impl ProviderStore {
             let mut statement = self
                 .conn
                 .prepare("SELECT path, offset FROM scan_files WHERE provider = ?1")?;
-            let rows = statement.query_map(params![ProviderKind::Claude.id()], |row| {
+            let rows = statement.query_map(params![provider.id()], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
             })?;
             for row in rows {
@@ -888,7 +913,7 @@ impl ProviderStore {
                  WHERE provider = ?1
                  ORDER BY path ASC, event_ord ASC",
             )?;
-            let rows = statement.query_map(params![ProviderKind::Claude.id()], |row| {
+            let rows = statement.query_map(params![provider.id()], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     CachedClaudeUsageEntry {
@@ -910,7 +935,11 @@ impl ProviderStore {
         Ok(ClaudeUsageCache { version, files })
     }
 
-    pub(crate) fn save_claude_cache(&self, cache: &ClaudeUsageCache) -> Result<()> {
+    pub(crate) fn save_claude_cache(
+        &self,
+        provider: ProviderId,
+        cache: &ClaudeUsageCache,
+    ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         let mut retained_files = BTreeSet::new();
         let mut retained_events = BTreeSet::new();
@@ -958,11 +987,11 @@ impl ProviderStore {
             )?;
             for (path, file) in &cache.files {
                 retained_files.insert(path.clone());
-                scan.execute(params![ProviderKind::Claude.id(), path, file.offset as i64])?;
+                scan.execute(params![provider.id(), path, file.offset as i64])?;
                 for (event_ord, entry) in file.entries.iter().enumerate() {
                     retained_events.insert((path.clone(), event_ord as i64));
                     events.execute(params![
-                        ProviderKind::Claude.id(),
+                        provider.id(),
                         path,
                         event_ord as i64,
                         entry.timestamp.to_rfc3339(),
@@ -982,12 +1011,12 @@ impl ProviderStore {
                 }
             }
         }
-        delete_stale_event_rows(&tx, &retained_files, &retained_events)?;
+        delete_stale_event_rows(&tx, provider, &retained_files, &retained_events)?;
         tx.commit()?;
 
         let flags = json!({ "cache_version": cache.version });
         self.upsert_provider_meta(
-            ProviderKind::Claude,
+            provider,
             None,
             i64::from(cache.version),
             Some(flags.to_string()),
@@ -995,7 +1024,7 @@ impl ProviderStore {
         Ok(())
     }
 
-    fn provider_flags(&self, provider: ProviderKind) -> Result<serde_json::Value> {
+    fn provider_flags(&self, provider: ProviderId) -> Result<serde_json::Value> {
         let mut statement = self
             .conn
             .prepare("SELECT flags_json FROM provider_meta WHERE provider = ?1")?;
@@ -1009,7 +1038,7 @@ impl ProviderStore {
 
     fn upsert_provider_meta(
         &self,
-        provider: ProviderKind,
+        provider: ProviderId,
         usage_fetched_at: Option<DateTime<Utc>>,
         schema_version: i64,
         flags_json: Option<String>,
@@ -1039,10 +1068,11 @@ impl ProviderStore {
 
     pub(crate) fn load_openrouter_hourly_rows(
         &self,
+        provider: ProviderId,
         start: DateTime<Local>,
         end: DateTime<Local>,
     ) -> Result<Vec<(String, DateTime<Local>, TokenUsage)>> {
-        match self.load_openrouter_analytics()? {
+        match self.load_openrouter_analytics(provider)? {
             Some(raw) => crate::openrouter::analytics::cached_hourly_rows(&raw, start, end),
             None => Ok(Vec::new()),
         }
@@ -1050,11 +1080,12 @@ impl ProviderStore {
 
     pub(crate) fn load_openrouter_account_models(
         &self,
+        provider: ProviderId,
         account: &str,
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<Vec<(String, NaiveDate, TokenUsage)>> {
-        match self.load_openrouter_analytics()? {
+        match self.load_openrouter_analytics(provider)? {
             Some(raw) => {
                 crate::openrouter::analytics::cached_account_models(&raw, account, start, end)
             }
@@ -1062,12 +1093,12 @@ impl ProviderStore {
         }
     }
 
-    pub(crate) fn load_openrouter_analytics(&self) -> Result<Option<String>> {
+    pub(crate) fn load_openrouter_analytics(&self, provider: ProviderId) -> Result<Option<String>> {
         Ok(self
             .conn
             .query_row(
-                "SELECT value FROM meta WHERE key = 'openrouter.analytics.v3'",
-                [],
+                "SELECT value FROM meta WHERE key = ?1",
+                params![openrouter_analytics_key(provider)],
                 |row| row.get(0),
             )
             .optional()?)
@@ -1075,16 +1106,17 @@ impl ProviderStore {
 
     pub(crate) fn save_openrouter_analytics(
         &self,
+        provider: ProviderId,
         cache: &str,
         daily: &[DailyTokenUsage],
         models: &[(String, NaiveDate, TokenUsage)],
         at: DateTime<Utc>,
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
-        self.replace_usage_daily_in_transaction(ProviderKind::OpenRouter, daily)?;
-        self.replace_usage_model_daily_in_transaction(ProviderKind::OpenRouter, models)?;
-        self.set_meta("openrouter.analytics.v3", cache)?;
-        self.set_usage_fetched_at(ProviderKind::OpenRouter, at)?;
+        self.replace_usage_daily_in_transaction(provider, daily)?;
+        self.replace_usage_model_daily_in_transaction(provider, models)?;
+        self.set_meta(&openrouter_analytics_key(provider), cache)?;
+        self.set_usage_fetched_at(provider, at)?;
         tx.commit()?;
         Ok(())
     }
@@ -1101,11 +1133,11 @@ impl ProviderStore {
 
     pub fn count_session_paths(
         &self,
-        provider: ProviderKind,
+        provider: ProviderId,
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<u64> {
-        if provider == ProviderKind::Codex && self.use_codex_account_data()? {
+        if provider == ProviderId::primary(ProviderKind::Codex) && self.use_codex_account_data()? {
             return self.account_sessions(start, end);
         }
         let from_files: i64 = self.conn.query_row(
@@ -1136,14 +1168,16 @@ impl ProviderStore {
 
     pub fn load_model_breakdown(
         &self,
-        provider: ProviderKind,
+        provider: ProviderId,
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<Vec<(String, TokenUsage)>> {
-        if provider == ProviderKind::OpenRouter && self.load_openrouter_analytics()?.is_none() {
+        if provider.kind() == ProviderKind::OpenRouter
+            && self.load_openrouter_analytics(provider)?.is_none()
+        {
             return Ok(Vec::new());
         }
-        if provider == ProviderKind::Codex && self.use_codex_account_data()? {
+        if provider == ProviderId::primary(ProviderKind::Codex) && self.use_codex_account_data()? {
             let mut merged = BTreeMap::<String, TokenUsage>::new();
             for (model, _, usage) in
                 self.account_daily_for(&codex_accounts::current_id(), start, end)?
@@ -1177,14 +1211,16 @@ impl ProviderStore {
     /// as the Usage screen. Call off the UI thread; no provider requests.
     pub(crate) fn load_model_daily(
         &self,
-        provider: ProviderKind,
+        provider: ProviderId,
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<Vec<(String, NaiveDate, TokenUsage)>> {
-        if provider == ProviderKind::OpenRouter && self.load_openrouter_analytics()?.is_none() {
+        if provider.kind() == ProviderKind::OpenRouter
+            && self.load_openrouter_analytics(provider)?.is_none()
+        {
             return Ok(Vec::new());
         }
-        if provider == ProviderKind::Codex && self.use_codex_account_data()? {
+        if provider == ProviderId::primary(ProviderKind::Codex) && self.use_codex_account_data()? {
             return self.account_daily_for(&codex_accounts::current_id(), start, end);
         }
         let mut statement = self.conn.prepare(
@@ -1211,7 +1247,7 @@ impl ProviderStore {
 
     pub(crate) fn replace_usage_model_daily(
         &self,
-        provider: ProviderKind,
+        provider: ProviderId,
         rows: &[(String, NaiveDate, TokenUsage)],
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
@@ -1222,7 +1258,7 @@ impl ProviderStore {
 
     fn replace_usage_model_daily_in_transaction(
         &self,
-        provider: ProviderKind,
+        provider: ProviderId,
         rows: &[(String, NaiveDate, TokenUsage)],
     ) -> Result<()> {
         let mut retained = BTreeSet::new();
@@ -1294,7 +1330,7 @@ impl ProviderStore {
 
         let codex = config.join("usage-cache.json");
         if self
-            .provider_has_scan_cache(ProviderKind::Codex)
+            .provider_has_scan_cache(ProviderId::primary(ProviderKind::Codex))
             .unwrap_or(false)
             || self.import_codex_json(&codex).unwrap_or(false)
         {
@@ -1303,7 +1339,7 @@ impl ProviderStore {
 
         let claude = config.join("claude-usage-cache.json");
         if self
-            .provider_has_scan_cache(ProviderKind::Claude)
+            .provider_has_scan_cache(ProviderId::primary(ProviderKind::Claude))
             .unwrap_or(false)
             || self.import_claude_json(&claude).unwrap_or(false)
         {
@@ -1312,7 +1348,7 @@ impl ProviderStore {
 
         let cursor = config.join("cursor-usage-cache.json");
         if self
-            .provider_has_daily_cache(ProviderKind::Cursor)
+            .provider_has_daily_cache(ProviderId::primary(ProviderKind::Cursor))
             .unwrap_or(false)
             || self.import_cursor_json(&cursor).unwrap_or(false)
         {
@@ -1320,7 +1356,7 @@ impl ProviderStore {
         }
     }
 
-    fn provider_has_scan_cache(&self, provider: ProviderKind) -> Result<bool> {
+    fn provider_has_scan_cache(&self, provider: ProviderId) -> Result<bool> {
         Ok(self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM scan_files WHERE provider = ?1)",
             params![provider.id()],
@@ -1328,7 +1364,7 @@ impl ProviderStore {
         )?)
     }
 
-    fn provider_has_daily_cache(&self, provider: ProviderKind) -> Result<bool> {
+    fn provider_has_daily_cache(&self, provider: ProviderId) -> Result<bool> {
         Ok(self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM usage_daily WHERE provider = ?1)",
             params![provider.id()],
@@ -1349,7 +1385,7 @@ impl ProviderStore {
         if cache.version != CODEX_CACHE_VERSION {
             cache.pricing_rebuild_needed = true;
         }
-        self.save_codex_cache(&cache)?;
+        self.save_codex_cache(ProviderId::primary(ProviderKind::Codex), &cache)?;
         Ok(true)
     }
 
@@ -1363,11 +1399,11 @@ impl ProviderStore {
         if cache.version != CLAUDE_CACHE_VERSION {
             return Ok(false);
         }
-        self.save_claude_cache(&cache)?;
+        self.save_claude_cache(ProviderId::primary(ProviderKind::Claude), &cache)?;
         let stats = crate::usage::statistics_from_claude_cache(&cache, CACHE_RETENTION_DAYS as u16);
-        self.replace_usage_daily(ProviderKind::Claude, &stats.daily)?;
+        self.replace_usage_daily(ProviderId::primary(ProviderKind::Claude), &stats.daily)?;
         self.replace_usage_model_daily(
-            ProviderKind::Claude,
+            ProviderId::primary(ProviderKind::Claude),
             &aggregate_claude_model_daily(&cache),
         )?;
         Ok(true)
@@ -1383,8 +1419,8 @@ impl ProviderStore {
         if cache.version != CURSOR_USAGE_VERSION {
             return Ok(false);
         }
-        self.replace_usage_daily(ProviderKind::Cursor, &cache.daily)?;
-        self.set_usage_fetched_at(ProviderKind::Cursor, cache.fetched_at)?;
+        self.replace_usage_daily(ProviderId::primary(ProviderKind::Cursor), &cache.daily)?;
+        self.set_usage_fetched_at(ProviderId::primary(ProviderKind::Cursor), cache.fetched_at)?;
         Ok(true)
     }
 }
@@ -1396,13 +1432,23 @@ struct LegacyCursorUsageCache {
     daily: Vec<DailyTokenUsage>,
 }
 
+/// The primary instance keeps the original key so existing analytics survive.
+fn openrouter_analytics_key(provider: ProviderId) -> String {
+    if provider.is_primary() {
+        "openrouter.analytics.v3".into()
+    } else {
+        format!("openrouter.analytics.v3.{}", provider.id())
+    }
+}
+
 fn delete_stale_file_rows(
     tx: &rusqlite::Transaction<'_>,
+    provider: ProviderId,
     retained_files: &BTreeSet<String>,
     retained_days: &BTreeSet<(String, String)>,
     retained_models: &BTreeSet<(String, String, String)>,
 ) -> Result<()> {
-    let provider = ProviderKind::Codex.id();
+    let provider = provider.id();
     let existing_files = {
         let mut statement = tx.prepare("SELECT path FROM scan_files WHERE provider = ?1")?;
         let rows = statement.query_map(params![provider], |row| row.get::<_, String>(0))?;
@@ -1460,10 +1506,11 @@ fn delete_stale_file_rows(
 
 fn delete_stale_event_rows(
     tx: &rusqlite::Transaction<'_>,
+    provider: ProviderId,
     retained_files: &BTreeSet<String>,
     retained_events: &BTreeSet<(String, i64)>,
 ) -> Result<()> {
-    let provider = ProviderKind::Claude.id();
+    let provider = provider.id();
     let existing_files = {
         let mut statement = tx.prepare("SELECT path FROM scan_files WHERE provider = ?1")?;
         let rows = statement.query_map(params![provider], |row| row.get::<_, String>(0))?;
@@ -1617,6 +1664,10 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn id(kind: ProviderKind) -> ProviderId {
+        ProviderId::primary(kind)
+    }
+
     fn test_store(path: &Path) -> ProviderStore {
         let conn = Connection::open(path).unwrap();
         conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
@@ -1637,7 +1688,7 @@ mod tests {
         };
         store
             .replace_usage_model_daily(
-                ProviderKind::Codex,
+                id(ProviderKind::Codex),
                 &[
                     ("a".into(), day, usage.clone()),
                     ("a".into(), day + Duration::days(1), usage.clone()),
@@ -1648,12 +1699,16 @@ mod tests {
             .unwrap();
         store
             .replace_usage_model_daily(
-                ProviderKind::Claude,
+                id(ProviderKind::Claude),
                 &[("other".into(), day, usage.clone())],
             )
             .unwrap();
         let rows = store
-            .load_model_daily(ProviderKind::Codex, day, day + Duration::days(1))
+            .load_model_daily(
+                crate::instances::ProviderId::from(ProviderKind::Codex),
+                day,
+                day + Duration::days(1),
+            )
             .unwrap();
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0], ("a".into(), day, usage.clone()));
@@ -1715,6 +1770,7 @@ mod tests {
         };
         store
             .save_openrouter_analytics(
+                id(ProviderKind::OpenRouter),
                 "first",
                 std::slice::from_ref(&day),
                 &[("model".into(), day.date, day.usage.clone())],
@@ -1727,6 +1783,7 @@ mod tests {
         assert!(
             store
                 .save_openrouter_analytics(
+                    id(ProviderKind::OpenRouter),
                     "second",
                     &[changed.clone()],
                     &[("model".into(), changed.date, changed.usage)],
@@ -1736,18 +1793,29 @@ mod tests {
         );
         assert_eq!(
             store
-                .load_usage_daily(ProviderKind::OpenRouter, 30)
+                .load_usage_daily(
+                    crate::instances::ProviderId::from(ProviderKind::OpenRouter),
+                    30
+                )
                 .unwrap()
                 .history
                 .requests,
             2
         );
         assert_eq!(
-            store.load_openrouter_analytics().unwrap().as_deref(),
+            store
+                .load_openrouter_analytics(id(ProviderKind::OpenRouter))
+                .unwrap()
+                .as_deref(),
             Some("first")
         );
         store.clear_usage_data().unwrap();
-        assert!(store.load_openrouter_analytics().unwrap().is_none());
+        assert!(
+            store
+                .load_openrouter_analytics(id(ProviderKind::OpenRouter))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1765,6 +1833,7 @@ mod tests {
         };
         store
             .save_openrouter_analytics(
+                id(ProviderKind::OpenRouter),
                 "old",
                 std::slice::from_ref(&day),
                 &[("model".into(), day.date, day.usage.clone())],
@@ -1778,10 +1847,18 @@ mod tests {
                 [],
             )
             .unwrap();
-        assert!(store.load_openrouter_analytics().unwrap().is_none());
+        assert!(
+            store
+                .load_openrouter_analytics(id(ProviderKind::OpenRouter))
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(
             store
-                .load_usage_daily(ProviderKind::OpenRouter, 30)
+                .load_usage_daily(
+                    crate::instances::ProviderId::from(ProviderKind::OpenRouter),
+                    30
+                )
                 .unwrap()
                 .history
                 .estimated_cost_microusd,
@@ -1789,13 +1866,21 @@ mod tests {
         );
         assert!(
             store
-                .load_model_breakdown(ProviderKind::OpenRouter, day.date, day.date)
+                .load_model_breakdown(
+                    crate::instances::ProviderId::from(ProviderKind::OpenRouter),
+                    day.date,
+                    day.date
+                )
                 .unwrap()
                 .is_empty()
         );
         assert!(
             store
-                .load_model_daily(ProviderKind::OpenRouter, day.date, day.date)
+                .load_model_daily(
+                    crate::instances::ProviderId::from(ProviderKind::OpenRouter),
+                    day.date,
+                    day.date
+                )
                 .unwrap()
                 .is_empty()
         );
@@ -1808,6 +1893,7 @@ mod tests {
         };
         store
             .save_openrouter_analytics(
+                id(ProviderKind::OpenRouter),
                 "fresh",
                 std::slice::from_ref(&fresh),
                 &[("model".into(), day.date, fresh.usage.clone())],
@@ -1816,7 +1902,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             store
-                .load_usage_daily(ProviderKind::OpenRouter, 30)
+                .load_usage_daily(
+                    crate::instances::ProviderId::from(ProviderKind::OpenRouter),
+                    30
+                )
                 .unwrap()
                 .history
                 .estimated_cost_microusd,
@@ -1841,9 +1930,14 @@ mod tests {
             },
         }];
         store
-            .replace_usage_daily(ProviderKind::Cursor, &days)
+            .replace_usage_daily(
+                crate::instances::ProviderId::from(ProviderKind::Cursor),
+                &days,
+            )
             .unwrap();
-        let stats = store.load_usage_daily(ProviderKind::Cursor, 30).unwrap();
+        let stats = store
+            .load_usage_daily(crate::instances::ProviderId::from(ProviderKind::Cursor), 30)
+            .unwrap();
         assert_eq!(stats.daily.len(), 1);
         assert_eq!(stats.history.requests, 1);
     }
@@ -1855,7 +1949,7 @@ mod tests {
         let today = Local::now().date_naive();
         store
             .replace_usage_daily(
-                ProviderKind::Cursor,
+                id(ProviderKind::Cursor),
                 &[DailyTokenUsage {
                     date: today,
                     usage: TokenUsage {
@@ -1867,21 +1961,24 @@ mod tests {
             )
             .unwrap();
         store
-            .set_usage_fetched_at(ProviderKind::Cursor, Utc::now())
+            .set_usage_fetched_at(
+                crate::instances::ProviderId::from(ProviderKind::Cursor),
+                Utc::now(),
+            )
             .unwrap();
 
         store.clear_usage_data().unwrap();
 
         assert!(
             store
-                .load_usage_daily(ProviderKind::Cursor, 30)
+                .load_usage_daily(crate::instances::ProviderId::from(ProviderKind::Cursor), 30)
                 .unwrap()
                 .daily
                 .is_empty()
         );
         assert!(
             store
-                .usage_fetched_at(ProviderKind::Cursor)
+                .usage_fetched_at(crate::instances::ProviderId::from(ProviderKind::Cursor))
                 .unwrap()
                 .is_none()
         );
@@ -1893,9 +1990,13 @@ mod tests {
         let store = test_store(&dir.path().join("test.sqlite"));
         let cache = sample_codex_cache();
 
-        store.save_codex_cache(&cache).unwrap();
+        store
+            .save_codex_cache(id(ProviderKind::Codex), &cache)
+            .unwrap();
         let changes_after_first_save = store.conn.total_changes();
-        store.save_codex_cache(&cache).unwrap();
+        store
+            .save_codex_cache(id(ProviderKind::Codex), &cache)
+            .unwrap();
 
         assert_eq!(store.conn.total_changes(), changes_after_first_save);
     }
@@ -1912,7 +2013,7 @@ mod tests {
         .unwrap();
 
         assert!(store.import_codex_json(&legacy_path).unwrap());
-        let migrated = store.load_codex_cache().unwrap();
+        let migrated = store.load_codex_cache(id(ProviderKind::Codex)).unwrap();
         let file = migrated.files.get("sessions/sample.jsonl").unwrap();
         assert_eq!(file.offset, 42);
         assert_eq!(file.daily[0].usage.total_tokens(), 15);
@@ -1924,7 +2025,7 @@ mod tests {
         );
         assert_eq!(
             store
-                .load_usage_daily(ProviderKind::Codex, 30)
+                .load_usage_daily(crate::instances::ProviderId::from(ProviderKind::Codex), 30)
                 .unwrap()
                 .history
                 .requests,
@@ -1961,11 +2062,17 @@ mod tests {
                 },
             )]),
         };
-        store.save_claude_cache(&cache).unwrap();
+        store
+            .save_claude_cache(id(ProviderKind::Claude), &cache)
+            .unwrap();
         let today = Local::now().date_naive();
         assert_eq!(
             store
-                .count_session_paths(ProviderKind::Claude, today, today)
+                .count_session_paths(
+                    crate::instances::ProviderId::from(ProviderKind::Claude),
+                    today,
+                    today
+                )
                 .unwrap(),
             1
         );
@@ -1975,8 +2082,10 @@ mod tests {
     fn round_trips_codex_model_daily_into_breakdown() {
         let dir = tempdir().unwrap();
         let store = test_store(&dir.path().join("test.sqlite"));
-        store.save_codex_cache(&sample_codex_cache()).unwrap();
-        let loaded = store.load_codex_cache().unwrap();
+        store
+            .save_codex_cache(id(ProviderKind::Codex), &sample_codex_cache())
+            .unwrap();
+        let loaded = store.load_codex_cache(id(ProviderKind::Codex)).unwrap();
         let file = loaded.files.get("sessions/sample.jsonl").unwrap();
         assert_eq!(
             file.model_daily
@@ -1986,7 +2095,11 @@ mod tests {
         );
         let today = Local::now().date_naive();
         let models = store
-            .load_model_breakdown(ProviderKind::Codex, today, today)
+            .load_model_breakdown(
+                crate::instances::ProviderId::from(ProviderKind::Codex),
+                today,
+                today,
+            )
             .unwrap();
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].0, "gpt-5");

@@ -214,8 +214,39 @@ impl Palette {
         }
     }
 
+    /// Share-bar / donut / legend color of one instance. The primary instance
+    /// keeps the driver color; others use their badge color, or a shade of
+    /// the driver color, so instances of one driver stay distinguishable.
+    pub(crate) fn spend_color(&self, provider: crate::instances::ProviderId) -> Hsla {
+        self.instance_shade(provider, self.driver_spend_color(provider.kind()))
+    }
+
+    /// Area-chart series color of one instance on the Usage tab.
+    pub(crate) fn series_color(&self, provider: crate::instances::ProviderId) -> Hsla {
+        self.instance_shade(provider, self.driver_series_color(provider.kind()))
+    }
+
+    fn instance_shade(&self, provider: crate::instances::ProviderId, base: Hsla) -> Hsla {
+        if provider.is_primary() {
+            return base;
+        }
+        if let Some(rgb) = provider.badge().and_then(|badge| badge.color.rgb()) {
+            return rgb8(rgb);
+        }
+        let hash = provider.id().bytes().fold(0_u32, |hash, byte| {
+            hash.wrapping_mul(31).wrapping_add(u32::from(byte))
+        });
+        let amount = [0.3, 0.45, 0.6][(hash % 3) as usize];
+        let toward = if self.dark {
+            gpui::black()
+        } else {
+            gpui::white()
+        };
+        base.mix(toward, amount)
+    }
+
     /// Share-bar / donut / legend color used by combined spend surfaces.
-    pub(crate) fn spend_color(&self, provider: ProviderKind) -> Hsla {
+    pub(crate) fn driver_spend_color(&self, provider: ProviderKind) -> Hsla {
         let dark = self.dark;
         rgb8(match provider {
             ProviderKind::Codex => (128, 159, 255),
@@ -248,7 +279,7 @@ impl Palette {
     }
 
     /// Area-chart series color on the Usage tab.
-    pub(crate) fn series_color(&self, provider: ProviderKind) -> Hsla {
+    pub(crate) fn driver_series_color(&self, provider: ProviderKind) -> Hsla {
         let dark = self.dark;
         rgb8(match provider {
             ProviderKind::Cursor => {

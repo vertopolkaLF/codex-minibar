@@ -20,6 +20,7 @@ use rusqlite::{Connection, OpenFlags};
 use serde_json::{Value, json};
 
 use crate::{
+    instances::ProviderId,
     limits::{AdditionalLimit, LimitWindow, RateLimits},
     pricing,
     settings::ProviderKind,
@@ -88,6 +89,9 @@ impl Default for CursorClient {
         Self::new()
     }
 }
+
+/// Cursor reads this PC's single login, so it only ever has one instance.
+const CURSOR: ProviderId = ProviderId::primary(ProviderKind::Cursor);
 
 impl CursorClient {
     pub fn new() -> Self {
@@ -222,10 +226,10 @@ impl CursorClient {
 
     fn usage_statistics(&self, history_days: u16) -> Result<UsageStatistics> {
         let cached = store::with_store(|store| {
-            if store.cursor_usage_version()? != USAGE_CACHE_VERSION {
+            if store.cursor_usage_version(CURSOR)? != USAGE_CACHE_VERSION {
                 return Ok(None);
             }
-            let Some(fetched_at) = store.usage_fetched_at(ProviderKind::Cursor)? else {
+            let Some(fetched_at) = store.usage_fetched_at(CURSOR)? else {
                 return Ok(None);
             };
             if Utc::now() - fetched_at >= USAGE_CACHE_TTL {
@@ -233,15 +237,10 @@ impl CursorClient {
             }
             let start = crate::usage::truncate_local_hour(Local::now() - ChronoDuration::hours(47));
             let end = crate::usage::truncate_local_hour(Local::now());
-            if store
-                .load_usage_hourly(ProviderKind::Cursor, start, end)?
-                .is_empty()
-            {
+            if store.load_usage_hourly(CURSOR, start, end)?.is_empty() {
                 return Ok(None);
             }
-            store
-                .load_usage_daily(ProviderKind::Cursor, history_days)
-                .map(Some)
+            store.load_usage_daily(CURSOR, history_days).map(Some)
         })?;
         if let Some(statistics) = cached {
             return Ok(statistics);
@@ -250,8 +249,8 @@ impl CursorClient {
         match self.download_usage_statistics(history_days) {
             Ok(statistics) => {
                 store::with_store(|store| {
-                    store.replace_usage_daily(ProviderKind::Cursor, &statistics.daily)?;
-                    store.set_usage_fetched_at(ProviderKind::Cursor, Utc::now())
+                    store.replace_usage_daily(CURSOR, &statistics.daily)?;
+                    store.set_usage_fetched_at(CURSOR, Utc::now())
                 })?;
                 Ok(statistics)
             }
@@ -259,10 +258,9 @@ impl CursorClient {
             // Keep showing the last verified activity rather than making a
             // healthy usage card disappear on a transient network failure.
             Err(error) => {
-                let cached = store::with_store(|store| {
-                    store.load_usage_daily(ProviderKind::Cursor, history_days)
-                })
-                .context("read cached Cursor usage after export failure")?;
+                let cached =
+                    store::with_store(|store| store.load_usage_daily(CURSOR, history_days))
+                        .context("read cached Cursor usage after export failure")?;
                 if cached.has_data() {
                     if crate::worker::is_rate_limited_error(&error) {
                         Ok(UsageStatistics {
@@ -312,7 +310,7 @@ impl LimitProvider for CursorClient {
 
 impl UsageProvider for CursorClient {
     fn load_cached_usage_statistics(&mut self, history_days: u16) -> Result<UsageStatistics> {
-        store::with_store(|store| store.load_usage_daily(ProviderKind::Cursor, history_days))
+        store::with_store(|store| store.load_usage_daily(CURSOR, history_days))
             .or_else(|_| Ok(UsageStatistics::default()))
     }
 
@@ -427,9 +425,9 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
         bail!("Cursor usage export contained no valid usage rows");
     }
     store::with_store(|store| {
-        store.replace_usage_model_daily(ProviderKind::Cursor, &model_rows)?;
+        store.replace_usage_model_daily(CURSOR, &model_rows)?;
         if !hourly_rows.is_empty() {
-            store.replace_usage_hourly(ProviderKind::Cursor, &hourly_rows)?;
+            store.replace_usage_hourly(CURSOR, &hourly_rows)?;
         }
         Ok(())
     })?;

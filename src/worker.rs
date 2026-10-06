@@ -216,20 +216,20 @@ pub enum WorkerEvent {
     /// A provider-scoped event emitted by the multi-provider coordinator.
     /// The `u64` after the provider is the credential revision captured when
     /// that worker started, allowing the UI to reject queued stale output.
-    ProviderRequestStarted(crate::settings::ProviderKind, u64, RequestKind),
-    ProviderRequestFinished(crate::settings::ProviderKind, u64, RequestKind),
-    ProviderLimitsUpdated(crate::settings::ProviderKind, u64, RateLimits),
-    ProviderUsageUpdated(crate::settings::ProviderKind, u64, UsageStatistics),
-    ProviderUsageLoadedFromCache(crate::settings::ProviderKind, u64, UsageStatistics),
+    ProviderRequestStarted(crate::instances::ProviderId, u64, RequestKind),
+    ProviderRequestFinished(crate::instances::ProviderId, u64, RequestKind),
+    ProviderLimitsUpdated(crate::instances::ProviderId, u64, RateLimits),
+    ProviderUsageUpdated(crate::instances::ProviderId, u64, UsageStatistics),
+    ProviderUsageLoadedFromCache(crate::instances::ProviderId, u64, UsageStatistics),
     /// Barrier acknowledgement for `ClearUsageData`; the `u64` is the clear
     /// generation, not a credential revision. It remains valid when the
     /// acknowledged worker is replaced while that clear is in flight.
-    ProviderUsageDataCleared(crate::settings::ProviderKind, u64),
-    ProviderUsageRefreshFailed(crate::settings::ProviderKind, u64, String),
-    ProviderActivationStarted(crate::settings::ProviderKind, u64),
-    ProviderActivationSucceeded(crate::settings::ProviderKind, u64),
-    ProviderActivationFailed(crate::settings::ProviderKind, u64, String),
-    ProviderPollFailed(crate::settings::ProviderKind, u64, String),
+    ProviderUsageDataCleared(crate::instances::ProviderId, u64),
+    ProviderUsageRefreshFailed(crate::instances::ProviderId, u64, String),
+    ProviderActivationStarted(crate::instances::ProviderId, u64),
+    ProviderActivationSucceeded(crate::instances::ProviderId, u64),
+    ProviderActivationFailed(crate::instances::ProviderId, u64, String),
+    ProviderPollFailed(crate::instances::ProviderId, u64, String),
     /// Snapshot from the public Codex forced-reset announcement feed.
     ForcedResetsUpdated(crate::reset_feed::ResetFeedSnapshot),
     /// The feed refresh failed; cached forced resets remain usable.
@@ -871,21 +871,10 @@ fn run_usage_task(
     );
 }
 
-/// Session activation always uses the ambient Default account, independent of
-/// the account order and the provider-level sample used for presentation.
+/// Each instance reads exactly one login, so its sample is also the one that
+/// decides activation.
 fn activation_limits(limits: &RateLimits) -> Option<&RateLimits> {
-    let profiles = if !limits.codex_profiles.is_empty() {
-        &limits.codex_profiles
-    } else {
-        &limits.claude_profiles
-    };
-    if profiles.is_empty() {
-        return Some(limits);
-    }
-    profiles
-        .iter()
-        .find(|p| p.id == "default" && p.error.is_none())
-        .map(|p| &p.limits)
+    Some(limits)
 }
 
 fn tick(
@@ -1043,99 +1032,6 @@ mod tests {
     struct ScriptedProvider {
         samples: Vec<RateLimits>,
         index: usize,
-    }
-
-    fn reordered_codex_limits(default: RateLimits, saved: RateLimits) -> RateLimits {
-        let mut top = saved.clone();
-        top.codex_profiles = vec![
-            crate::limits::CodexProfileSnapshot {
-                id: "work".into(),
-                name: "Work".into(),
-                limits: saved,
-                error: None,
-            },
-            crate::limits::CodexProfileSnapshot {
-                id: "default".into(),
-                name: "Default".into(),
-                limits: default,
-                error: None,
-            },
-        ];
-        top
-    }
-
-    #[test]
-    fn automatic_activation_observes_default_even_after_a_saved_account() {
-        let mut saved = limits_at(22, 0);
-        saved.primary_window_is_unactivated = true;
-        let first = reordered_codex_limits(limits_at(10, 0), saved.clone());
-        let reset = reordered_codex_limits(limits_at(15, 0), saved);
-        let mut provider = ScriptedProvider::new(vec![first, reset.clone(), reset]);
-        let mut activator = CountingActivator(0);
-        let mut state = ActivationState::default();
-        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
-        assert_eq!(activator.0, 0);
-        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
-        assert_eq!(activator.0, 1);
-        assert_eq!(
-            state.last_seen_resets_at,
-            limits_at(15, 0).primary.resets_at
-        );
-    }
-
-    #[test]
-    fn scheduled_activation_uses_default_without_replacing_displayed_account() {
-        let local = Local::now();
-        let schedule = ScheduledActivation {
-            id: "due-now".into(),
-            provider_id: "codex".into(),
-            weekday: local.weekday().num_days_from_monday() as u8,
-            weekdays: vec![local.weekday().num_days_from_monday() as u8],
-            time_minutes: (local.hour() * 60 + local.minute()) as u16,
-            enabled: true,
-        };
-        let sample = reordered_codex_limits(limits_at(10, 0), limits_at(22, 0));
-        let mut provider = ScriptedProvider::new(vec![sample.clone(), sample]);
-        let mut activator = CountingActivator(0);
-        let mut state = ActivationState::default();
-        let events = tick(
-            &mut provider,
-            &mut activator,
-            &mut state,
-            false,
-            &[schedule],
-            &[],
-        )
-        .unwrap();
-        assert_eq!(activator.0, 1);
-        assert_eq!(
-            state.last_seen_resets_at,
-            limits_at(10, 0).primary.resets_at
-        );
-        let displayed = events
-            .iter()
-            .find_map(|event| match event {
-                WorkerEvent::LimitsUpdated(limits) => Some(limits),
-                _ => None,
-            })
-            .unwrap();
-        assert_eq!(
-            displayed.primary.resets_at,
-            limits_at(22, 0).primary.resets_at
-        );
-    }
-
-    #[test]
-    fn activation_confirmation_compares_defaults_not_saved_account_deadlines() {
-        let mut default = limits_at(10, 0);
-        default.primary_window_is_unactivated = true;
-        let mut first = reordered_codex_limits(default.clone(), limits_at(22, 0));
-        let second = reordered_codex_limits(default, limits_at(23, 0));
-        assert!(confirm_unactivated_session(
-            &mut ScriptedProvider::new(vec![second]),
-            &mut first
-        ));
-        assert_eq!(first.primary.resets_at, limits_at(23, 0).primary.resets_at);
     }
 
     #[test]
@@ -1600,135 +1496,6 @@ mod tests {
         assert_eq!(
             state.last_seen_resets_at,
             limits_at(20, 0).primary.resets_at
-        );
-    }
-
-    #[test]
-    fn cached_failed_profile_sample_does_not_trigger_scheduled_activation() {
-        let local_now = Local::now();
-        let schedule = ScheduledActivation {
-            id: "due-now".into(),
-            provider_id: crate::settings::ProviderKind::Claude.id().into(),
-            weekday: local_now.weekday().num_days_from_monday() as u8,
-            weekdays: vec![local_now.weekday().num_days_from_monday() as u8],
-            time_minutes: (local_now.hour() * 60 + local_now.minute()) as u16,
-            enabled: true,
-        };
-        let mut limits = limits_at(15, 0);
-        limits
-            .claude_profiles
-            .push(crate::limits::ClaudeProfileSnapshot {
-                id: "default".into(),
-                name: "Default".into(),
-                limits: limits.clone(),
-                error: Some("fixture 429".into()),
-            });
-        let mut activator = CountingActivator(0);
-        let events = tick(
-            &mut ScriptedProvider::new(vec![limits]),
-            &mut activator,
-            &mut ActivationState::default(),
-            true,
-            &[schedule],
-            &[],
-        )
-        .unwrap();
-        assert_eq!(activator.0, 0);
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, WorkerEvent::LimitsUpdated(_)))
-        );
-        assert!(
-            !events
-                .iter()
-                .any(|event| matches!(event, WorkerEvent::ActivationStarted))
-        );
-    }
-
-    #[test]
-    fn cached_failed_codex_profile_sample_does_not_trigger_scheduled_activation() {
-        let local_now = Local::now();
-        let schedule = ScheduledActivation {
-            id: "due-now".into(),
-            provider_id: crate::settings::ProviderKind::Codex.id().into(),
-            weekday: local_now.weekday().num_days_from_monday() as u8,
-            weekdays: vec![local_now.weekday().num_days_from_monday() as u8],
-            time_minutes: (local_now.hour() * 60 + local_now.minute()) as u16,
-            enabled: true,
-        };
-        let mut limits = limits_at(15, 0);
-        limits
-            .codex_profiles
-            .push(crate::limits::CodexProfileSnapshot {
-                id: "default".into(),
-                name: "Default".into(),
-                limits: limits.clone(),
-                error: Some("fixture 429".into()),
-            });
-        let mut activator = CountingActivator(0);
-        let events = tick(
-            &mut ScriptedProvider::new(vec![limits]),
-            &mut activator,
-            &mut ActivationState::default(),
-            true,
-            &[schedule],
-            &[],
-        )
-        .unwrap();
-        assert_eq!(activator.0, 0);
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, WorkerEvent::LimitsUpdated(_)))
-        );
-        assert!(
-            !events
-                .iter()
-                .any(|event| matches!(event, WorkerEvent::ActivationStarted))
-        );
-    }
-
-    #[test]
-    fn saved_codex_account_never_triggers_ambient_scheduled_activation() {
-        let local_now = Local::now();
-        let schedule = ScheduledActivation {
-            id: "due-now".into(),
-            provider_id: crate::settings::ProviderKind::Codex.id().into(),
-            weekday: local_now.weekday().num_days_from_monday() as u8,
-            weekdays: vec![local_now.weekday().num_days_from_monday() as u8],
-            time_minutes: (local_now.hour() * 60 + local_now.minute()) as u16,
-            enabled: true,
-        };
-        let mut limits = limits_at(15, 0);
-        limits
-            .codex_profiles
-            .push(crate::limits::CodexProfileSnapshot {
-                id: "work".into(),
-                name: "Default".into(),
-                limits: limits.clone(),
-                error: None,
-            });
-        let mut activator = CountingActivator(0);
-        let events = tick(
-            &mut ScriptedProvider::new(vec![limits]),
-            &mut activator,
-            &mut ActivationState::default(),
-            true,
-            &[schedule],
-            &[],
-        )
-        .unwrap();
-        assert_eq!(activator.0, 0);
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, WorkerEvent::LimitsUpdated(_)))
-        );
-        assert!(
-            !events
-                .iter()
-                .any(|event| matches!(event, WorkerEvent::ActivationStarted))
         );
     }
 

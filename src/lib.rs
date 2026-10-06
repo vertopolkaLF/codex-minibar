@@ -8,6 +8,7 @@ pub mod cursor;
 pub mod discovery;
 pub mod grok;
 pub mod icons;
+pub mod instances;
 pub mod kiro;
 pub mod limits;
 pub mod logger;

@@ -36,6 +36,9 @@ pub struct ProviderDescriptor {
     pub supports_activation: bool,
     /// Whether the provider contributes date-scoped token history to Usage Stats.
     pub include_in_total_spend: bool,
+    /// Whether more than one instance can be configured. Only drivers with an
+    /// isolating parameter (config folder or API key) qualify.
+    pub supports_multiple_instances: bool,
     /// Stable metrics shown before runtime-discovered provider-specific lanes.
     pub metrics: &'static [MetricDescriptor],
     /// Ordered metrics used by onboarding and the provider preset.
@@ -161,6 +164,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         brand_rgb: (128, 159, 255),
         supports_activation: true,
         include_in_total_spend: true,
+        supports_multiple_instances: true,
         metrics: CODEX_METRICS,
         default_tray_metrics: &["codex.session", "codex.weekly"],
     },
@@ -172,6 +176,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         brand_rgb: (217, 119, 87),
         supports_activation: true,
         include_in_total_spend: true,
+        supports_multiple_instances: true,
         metrics: CLAUDE_METRICS,
         default_tray_metrics: &["claude.session", "claude.weekly"],
     },
@@ -183,6 +188,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         brand_rgb: (145, 151, 164),
         supports_activation: false,
         include_in_total_spend: true,
+        supports_multiple_instances: false,
         metrics: CURSOR_METRICS,
         default_tray_metrics: &["cursor.auto", "cursor.api"],
     },
@@ -194,6 +200,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         brand_rgb: (128, 128, 128),
         supports_activation: false,
         include_in_total_spend: true,
+        supports_multiple_instances: true,
         metrics: OPENCODE_ZEN_METRICS,
         default_tray_metrics: &[],
     },
@@ -205,6 +212,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         brand_rgb: (128, 128, 128),
         supports_activation: false,
         include_in_total_spend: true,
+        supports_multiple_instances: true,
         metrics: OPENCODE_GO_METRICS,
         default_tray_metrics: &[
             "opencode-go.session",
@@ -220,6 +228,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         brand_rgb: (200, 255, 0),
         supports_activation: false,
         include_in_total_spend: true,
+        supports_multiple_instances: true,
         metrics: OPENROUTER_METRICS,
         default_tray_metrics: &["openrouter.limit"],
     },
@@ -231,6 +240,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         brand_rgb: (66, 133, 244),
         supports_activation: false,
         include_in_total_spend: false,
+        supports_multiple_instances: false,
         metrics: ANTIGRAVITY_METRICS,
         default_tray_metrics: &["antigravity.gemini", "antigravity.thirdParty"],
     },
@@ -242,6 +252,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         brand_rgb: (92, 92, 92),
         supports_activation: false,
         include_in_total_spend: false,
+        supports_multiple_instances: false,
         metrics: GROK_METRICS,
         default_tray_metrics: &["grok.credits"],
     },
@@ -253,6 +264,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         brand_rgb: (151, 125, 255),
         supports_activation: false,
         include_in_total_spend: false,
+        supports_multiple_instances: false,
         metrics: KIRO_METRICS,
         default_tray_metrics: &["kiro.additional.credits"],
     },
@@ -689,7 +701,9 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.toml");
         let mut settings = crate::settings::Settings::default();
-        let mut widget = crate::settings::TrayWidget::custom_for_provider(ProviderKind::Claude);
+        let mut widget = crate::settings::TrayWidget::custom_for_provider(
+            crate::instances::ProviderId::from(ProviderKind::Claude),
+        );
         widget.indicators[0].metric_id = id.clone();
         settings.tray_widgets = vec![widget];
         settings.save(&path).unwrap();

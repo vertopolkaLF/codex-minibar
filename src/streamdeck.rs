@@ -18,9 +18,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    instances::ProviderId,
     popup_window::AppState,
     provider_registry,
-    settings::{ProviderKind, Settings},
+    settings::Settings,
     widget_data::{self, ProviderSnapshot},
 };
 
@@ -80,7 +81,7 @@ const LOOPBACK_HOST: &str = "127.0.0.1";
 /// Commands that must be executed by the existing tray/UI bridge thread.
 #[derive(Clone, Debug)]
 pub enum Command {
-    OpenPopup { provider: Option<ProviderKind> },
+    OpenPopup { provider: Option<ProviderId> },
     RefreshData,
 }
 
@@ -135,20 +136,16 @@ enum Response {
     },
 }
 
+/// One provider instance. `id` is the instance id (the primary instance
+/// keeps the driver id) and `kind` the driver id shared by its instances.
 #[derive(Debug, Serialize)]
 struct ProviderInfo {
     id: String,
+    kind: String,
     name: String,
+    badge: Option<String>,
+    enabled: bool,
     icon: String,
-    metrics: Vec<MetricInfo>,
-    accounts: Vec<AccountInfo>,
-}
-
-#[derive(Debug, Serialize)]
-struct AccountInfo {
-    id: String,
-    source_id: String,
-    name: String,
     metrics: Vec<MetricInfo>,
 }
 
@@ -287,7 +284,7 @@ fn handle_request(
         },
         Request::OpenPopup { provider, .. } => {
             let provider = match provider {
-                Some(id) => match ProviderKind::from_id(&id) {
+                Some(id) => match ProviderId::lookup(&id) {
                     Some(provider) => Some(provider),
                     None => {
                         return Response::Error {
@@ -314,10 +311,12 @@ fn build_catalog(state: &AppState) -> Vec<ProviderInfo> {
         .limits
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    ProviderKind::ALL
+    let enabled = crate::instances::published_enabled_providers();
+    crate::instances::published_providers()
         .into_iter()
         .map(|provider| {
-            let descriptor = provider_registry::descriptor(provider);
+            let kind = provider.kind();
+            let descriptor = provider_registry::descriptor(kind);
             let live_limits = limits.get(provider);
             let mut metrics = descriptor
                 .metrics
@@ -328,8 +327,7 @@ fn build_catalog(state: &AppState) -> Vec<ProviderInfo> {
                 })
                 .collect::<Vec<_>>();
             for additional in &live_limits.additional_limits {
-                let metric_id =
-                    provider_registry::additional_limit_brick_id(provider, &additional.id);
+                let metric_id = provider_registry::additional_limit_brick_id(kind, &additional.id);
                 if metrics.iter().all(|metric| metric.id != metric_id) {
                     metrics.push(MetricInfo {
                         id: metric_id,
@@ -338,38 +336,13 @@ fn build_catalog(state: &AppState) -> Vec<ProviderInfo> {
                 }
             }
             ProviderInfo {
-                id: descriptor.id.into(),
-                name: descriptor.display_name.into(),
-                icon: provider_registry::icon(provider).into(),
+                id: provider.id().into(),
+                kind: descriptor.id.into(),
+                name: provider.qualified_name(),
+                badge: provider.badge().map(|badge| badge.text),
+                enabled: enabled.contains(&provider),
+                icon: provider_registry::icon(kind).into(),
                 metrics,
-                accounts: widget_data::snapshot(provider, &limits)
-                    .accounts
-                    .into_iter()
-                    .map(|account| {
-                        let mut metrics = descriptor
-                            .metrics
-                            .iter()
-                            .map(|metric| MetricInfo {
-                                id: metric.id.into(),
-                                label: metric.label.into(),
-                            })
-                            .collect::<Vec<_>>();
-                        for metric in account.metrics {
-                            if !metrics.iter().any(|known| known.id == metric.id) {
-                                metrics.push(MetricInfo {
-                                    id: metric.id,
-                                    label: metric.label,
-                                });
-                            }
-                        }
-                        AccountInfo {
-                            id: account.profile_id.unwrap_or_else(|| "default".into()),
-                            source_id: account.source_id,
-                            name: account.account_name.unwrap_or_else(|| "Default".into()),
-                            metrics,
-                        }
-                    })
-                    .collect(),
             }
         })
         .collect()
@@ -388,7 +361,7 @@ fn build_snapshot(state: &AppState) -> Response {
             .ok()
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_default(),
-        providers: ProviderKind::ALL
+        providers: crate::instances::published_providers()
             .into_iter()
             .map(|provider| widget_data::snapshot(provider, &limits))
             .collect(),
@@ -405,7 +378,7 @@ fn write_response(stream: &mut TcpStream, response: &Response) -> io::Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::limits::LimitWindow;
+    use crate::{limits::LimitWindow, settings::ProviderKind};
 
     #[test]
     fn window_snapshot_exposes_remaining_without_provider_credentials() {

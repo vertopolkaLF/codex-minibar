@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Weekday};
 
 use crate::{
+    instances::ProviderId,
     limits::ProviderLimits,
     provider_registry,
     settings::{ProviderKind, TotalSpendPeriod},
@@ -59,7 +60,7 @@ pub enum BreakdownMode {
 
 #[derive(Clone, Debug, Default)]
 pub struct ProviderOverview {
-    pub provider: ProviderKind,
+    pub provider: ProviderId,
     pub sessions: u64,
     pub usage: TokenUsage,
     pub share_cost: f64,
@@ -70,7 +71,7 @@ pub struct ProviderOverview {
 pub struct DailySeriesPoint {
     pub at: DateTime<Local>,
     pub date: NaiveDate,
-    pub by_provider: BTreeMap<ProviderKind, u64>,
+    pub by_provider: BTreeMap<ProviderId, u64>,
     pub total: u64,
 }
 
@@ -78,13 +79,13 @@ pub struct DailySeriesPoint {
 pub struct BreakdownRow {
     pub label: String,
     pub weekday: Option<String>,
-    pub provider: Option<ProviderKind>,
+    pub provider: Option<ProviderId>,
     pub cost_microusd: u64,
     pub tokens: u64,
     pub requests: u64,
     pub priced_requests: u64,
     pub share: f64,
-    pub by_provider: BTreeMap<ProviderKind, TokenUsage>,
+    pub by_provider: BTreeMap<ProviderId, TokenUsage>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -121,7 +122,7 @@ pub fn dates_for_total_spend(period: TotalSpendPeriod) -> (NaiveDate, NaiveDate)
     }
 }
 
-pub fn spend_entries(snapshot: &OverviewSnapshot) -> Vec<(ProviderKind, u64)> {
+pub fn spend_entries(snapshot: &OverviewSnapshot) -> Vec<(ProviderId, u64)> {
     let mut entries: Vec<_> = snapshot
         .providers
         .iter()
@@ -133,7 +134,7 @@ pub fn spend_entries(snapshot: &OverviewSnapshot) -> Vec<(ProviderKind, u64)> {
 
 pub fn total_spend_snapshot(
     limits: &ProviderLimits,
-    enabled: &[ProviderKind],
+    enabled: &[ProviderId],
     period: TotalSpendPeriod,
 ) -> OverviewSnapshot {
     match period {
@@ -158,7 +159,7 @@ pub fn total_spend_snapshot(
 
 pub fn build_overview_snapshot(
     limits: &ProviderLimits,
-    enabled: &[ProviderKind],
+    enabled: &[ProviderId],
     metric: OverviewMetric,
     range: OverviewRange,
 ) -> OverviewSnapshot {
@@ -177,7 +178,7 @@ pub fn build_overview_snapshot(
 
 fn build_overview_snapshot_for_dates(
     limits: &ProviderLimits,
-    enabled: &[ProviderKind],
+    enabled: &[ProviderId],
     metric: OverviewMetric,
     start_date: NaiveDate,
     end_date: NaiveDate,
@@ -187,7 +188,7 @@ fn build_overview_snapshot_for_dates(
 
 fn assemble_overview_snapshot(
     limits: &ProviderLimits,
-    enabled: &[ProviderKind],
+    enabled: &[ProviderId],
     metric: OverviewMetric,
     start_date: NaiveDate,
     end_date: NaiveDate,
@@ -214,13 +215,13 @@ fn assemble_overview_snapshot(
         ..Default::default()
     };
 
-    let spend_providers: Vec<ProviderKind> = enabled
+    let spend_providers: Vec<ProviderId> = enabled
         .iter()
         .copied()
         .filter(|provider| {
-            provider_registry::PROVIDERS
-                .iter()
-                .any(|descriptor| descriptor.kind == *provider && descriptor.include_in_total_spend)
+            provider_registry::PROVIDERS.iter().any(|descriptor| {
+                descriptor.kind == provider.kind() && descriptor.include_in_total_spend
+            })
         })
         .collect();
 
@@ -232,7 +233,7 @@ fn assemble_overview_snapshot(
         let mut provider_daily = BTreeMap::new();
         let mut provider_hourly = BTreeMap::new();
         let mut provider_sessions = BTreeMap::new();
-        let mut model_rows = BTreeMap::<(ProviderKind, String), TokenUsage>::new();
+        let mut model_rows = BTreeMap::<(ProviderId, String), TokenUsage>::new();
         for provider in &spend_providers {
             let statistics = store
                 .load_usage_daily(*provider, load_days)
@@ -252,9 +253,9 @@ fn assemble_overview_snapshot(
                     .count_session_paths(*provider, start_date, end_date)
                     .unwrap_or(0),
             );
-            let breakdown = if hourly && *provider == ProviderKind::OpenRouter {
+            let breakdown = if hourly && provider.kind() == ProviderKind::OpenRouter {
                 store
-                    .load_openrouter_hourly_rows(start_hour, end_hour)?
+                    .load_openrouter_hourly_rows(*provider, start_hour, end_hour)?
                     .into_iter()
                     .map(|(model, _, usage)| (model, usage))
                     .collect()
@@ -264,7 +265,7 @@ fn assemble_overview_snapshot(
                     .unwrap_or_default()
             };
             for (model, usage) in breakdown {
-                let model = if *provider == ProviderKind::Cursor {
+                let model = if provider.kind() == ProviderKind::Cursor {
                     crate::cursor::normalize_cursor_model_name(&model)
                 } else {
                     model
@@ -285,31 +286,24 @@ fn assemble_overview_snapshot(
     .unwrap_or_default();
 
     let (provider_daily, provider_hourly, provider_sessions, mut model_rows) = store_data;
-    let codex_has_usage = provider_daily
-        .get(&ProviderKind::Codex)
-        .is_some_and(|days| {
-            days.iter().any(|entry| {
-                entry.date >= start_date
-                    && entry.date <= end_date
-                    && (entry.usage.requests > 0 || entry.usage.total_tokens() > 0)
-            })
-        });
-    let codex_missing_models = !model_rows
-        .keys()
-        .any(|(provider, _)| *provider == ProviderKind::Codex);
-    if spend_providers.contains(&ProviderKind::Codex) && codex_has_usage && codex_missing_models {
+    let codex = ProviderId::primary(ProviderKind::Codex);
+    let codex_has_usage = provider_daily.get(&codex).is_some_and(|days| {
+        days.iter().any(|entry| {
+            entry.date >= start_date
+                && entry.date <= end_date
+                && (entry.usage.requests > 0 || entry.usage.total_tokens() > 0)
+        })
+    });
+    let codex_missing_models = !model_rows.keys().any(|(provider, _)| *provider == codex);
+    if spend_providers.contains(&codex) && codex_has_usage && codex_missing_models {
         // Incremental Codex saves used to wipe usage_model_daily. Rebuild
         // from session logs instead of asking the user to delete the store.
-        if crate::usage::refresh_usage_statistics(load_days).is_ok()
-            && let Ok(rows) = store::with_store(|store| {
-                store.load_model_breakdown(ProviderKind::Codex, start_date, end_date)
-            })
+        if crate::usage::refresh_usage_statistics(codex, None, load_days).is_ok()
+            && let Ok(rows) =
+                store::with_store(|store| store.load_model_breakdown(codex, start_date, end_date))
         {
             for (model, usage) in rows {
-                model_rows
-                    .entry((ProviderKind::Codex, model))
-                    .or_default()
-                    .add(&usage);
+                model_rows.entry((codex, model)).or_default().add(&usage);
             }
         }
     }
@@ -318,8 +312,7 @@ fn assemble_overview_snapshot(
     // scan completes. Never bypass attribution with a raw-log scan here:
     // an empty active-account history may coexist with another account's logs.
 
-    let mut daily_by_date: BTreeMap<NaiveDate, BTreeMap<ProviderKind, TokenUsage>> =
-        BTreeMap::new();
+    let mut daily_by_date: BTreeMap<NaiveDate, BTreeMap<ProviderId, TokenUsage>> = BTreeMap::new();
     for (provider, days) in &provider_daily {
         for entry in days {
             if entry.date < start_date || entry.date > end_date {
@@ -345,7 +338,7 @@ fn assemble_overview_snapshot(
             }
             // Cursor (and anyone else without timestamps) still has daily rows.
             if usage.requests == 0
-                && *provider != ProviderKind::OpenRouter
+                && provider.kind() != ProviderKind::OpenRouter
                 && let Some(days) = provider_daily.get(provider)
             {
                 for entry in days {
@@ -626,7 +619,7 @@ mod tests {
         let snapshot = OverviewSnapshot {
             providers: vec![
                 ProviderOverview {
-                    provider: ProviderKind::Claude,
+                    provider: crate::instances::ProviderId::from(ProviderKind::Claude),
                     usage: TokenUsage {
                         estimated_cost_microusd: 500_000,
                         ..Default::default()
@@ -634,7 +627,7 @@ mod tests {
                     ..Default::default()
                 },
                 ProviderOverview {
-                    provider: ProviderKind::Codex,
+                    provider: crate::instances::ProviderId::from(ProviderKind::Codex),
                     usage: TokenUsage {
                         estimated_cost_microusd: 2_000_000,
                         ..Default::default()
@@ -647,8 +640,8 @@ mod tests {
         assert_eq!(
             spend_entries(&snapshot),
             vec![
-                (ProviderKind::Codex, 2_000_000),
-                (ProviderKind::Claude, 500_000),
+                (ProviderKind::Codex.into(), 2_000_000),
+                (ProviderKind::Claude.into(), 500_000),
             ]
         );
     }

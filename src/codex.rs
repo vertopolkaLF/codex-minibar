@@ -16,6 +16,7 @@ use directories::BaseDirs;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::instances::{ProviderId, ProviderInstance};
 use crate::limits::{
     AdditionalLimit, Credits, LimitWindow, RateLimitResetCredit, RateLimitResetCreditsSummary,
     RateLimits,
@@ -34,30 +35,30 @@ const WHAM_RESET_CREDITS_URL: &str =
     "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 
 pub(crate) mod profile_oauth;
-mod profiles;
-pub use profiles::{
-    apply_profile_names, prepare_profile_refresh, prepare_startup_limits, profiles_for_settings,
-    save_profile_credential,
-};
-pub(crate) use profiles::{
-    load_profile_credential, profiles_with_default, set_home_profile_visibility,
-};
 
+/// Removes leftovers of the former temporary sign-in folders.
 pub fn cleanup_abandoned_logins() -> Result<()> {
     profile_oauth::cleanup_abandoned_logins()
 }
 
+/// Reads one Codex instance's quota from its own `CODEX_HOME`.
 pub struct CodexClient {
     executable: PathBuf,
     timeout: StdDuration,
-    profiles: Vec<crate::settings::CodexProfile>,
-    snapshots: Vec<crate::limits::CodexProfileSnapshot>,
+    provider: ProviderId,
+    /// `None` reads this PC's standard Codex login.
+    home: Option<PathBuf>,
     rate_limited: bool,
 }
 
 impl LimitProvider for CodexClient {
     fn read_limits(&mut self) -> Result<RateLimits> {
-        self.read_profile_limits()
+        let result = self.read_rate_limits();
+        self.rate_limited |= result
+            .as_ref()
+            .err()
+            .is_some_and(crate::worker::is_rate_limited_error);
+        result
     }
     fn take_rate_limit_response(&mut self) -> bool {
         std::mem::take(&mut self.rate_limited)
@@ -66,7 +67,11 @@ impl LimitProvider for CodexClient {
 
 impl UsageProvider for CodexClient {
     fn account_identity(&self) -> Option<String> {
-        crate::store::codex_accounts::poll_identity()
+        // Only the standard login can switch accounts underneath one session
+        // log; every other instance has a folder of its own.
+        self.tracks_account_switches()
+            .then(crate::store::codex_accounts::poll_identity)
+            .flatten()
     }
     fn identity_poll_interval(&self) -> StdDuration {
         StdDuration::from_secs(1)
@@ -76,17 +81,18 @@ impl UsageProvider for CodexClient {
         &mut self,
         history_days: u16,
     ) -> Result<usage::UsageStatistics> {
-        usage::load_cached_usage_statistics(history_days)
+        usage::load_cached_usage_statistics(self.provider, history_days)
     }
 
     fn refresh_usage_statistics(&mut self, history_days: u16) -> Result<usage::UsageStatistics> {
-        usage::refresh_usage_statistics(history_days)
+        usage::refresh_usage_statistics(self.provider, self.home.as_deref(), history_days)
     }
 }
 
 pub struct CodexActivator {
     executable: PathBuf,
     timeout: StdDuration,
+    home: Option<PathBuf>,
 }
 
 impl CodexActivator {
@@ -94,20 +100,27 @@ impl CodexActivator {
         Self {
             executable: executable.into(),
             timeout: StdDuration::from_secs(120),
+            home: None,
         }
+    }
+
+    /// Runs activation against an instance's own `CODEX_HOME`.
+    pub fn with_home(mut self, home: Option<PathBuf>) -> Self {
+        self.home = home;
+        self
     }
 
     pub fn activate_minimal(&self) -> Result<()> {
         // Persist a real (tiny) session so the ChatGPT 5-hour window starts.
         // `--ephemeral` previously returned exit 0 without opening quota.
-        let workspace = activation_workspace_dir()?;
+        let workspace = activation_workspace_dir(self.home.as_deref())?;
         let last_message_path = workspace.join("last-message.txt");
         crate::logger::info(format!(
             "Codex activation exec model={} reasoning_effort=low",
             ACTIVATION_MODEL
         ));
         let args = activation_args(&workspace, &last_message_path);
-        let mut child = command_for_codex(&self.executable, &args)
+        let mut child = command_for_codex(&self.executable, &args, self.home.as_deref())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -171,82 +184,22 @@ impl CodexClient {
         Self {
             executable: executable.into(),
             timeout: StdDuration::from_secs(10),
-            profiles: profiles_for_settings(&crate::settings::Settings::default()),
-            snapshots: Vec::new(),
+            provider: ProviderId::primary(crate::settings::ProviderKind::Codex),
+            home: None,
             rate_limited: false,
         }
     }
 
-    pub fn with_profiles(mut self, profiles: Vec<crate::settings::CodexProfile>) -> Self {
-        self.profiles = profiles;
-        self
-    }
-
-    pub fn with_cached_limits(mut self, limits: &RateLimits) -> Self {
-        self.snapshots = profiles::profile_samples(limits, &self.profiles);
-        self
-    }
-
-    fn read_profile_limits(&mut self) -> Result<RateLimits> {
-        let enabled = self
-            .profiles
-            .iter()
-            .filter(|p| p.enabled)
-            .cloned()
-            .collect::<Vec<_>>();
-        if let [profile] = enabled.as_slice()
-            && self.profiles.len() == 1
-            && profile.is_default()
-            && profile.name == "Default"
-        {
-            return self.read_rate_limits();
+    pub fn for_instance(executable: impl Into<PathBuf>, instance: &ProviderInstance) -> Self {
+        Self {
+            provider: instance.provider_id(),
+            home: instance.config_folder(),
+            ..Self::new(executable)
         }
-        anyhow::ensure!(
-            !enabled.is_empty(),
-            "Every Codex account is turned off. Turn one on in Settings > Providers > Codex."
-        );
-        let results = enabled
-            .into_iter()
-            .map(|profile| {
-                let result = if profile.is_default() {
-                    self.read_rate_limits()
-                } else {
-                    self.read_saved_profile(&profile.id)
-                };
-                (profile, result)
-            })
-            .collect();
-        self.merge_profile_results(results)
     }
 
-    fn merge_profile_results(
-        &mut self,
-        results: Vec<(crate::settings::CodexProfile, Result<RateLimits>)>,
-    ) -> Result<RateLimits> {
-        self.rate_limited |= results.iter().any(|(_, result)| {
-            result
-                .as_ref()
-                .err()
-                .is_some_and(crate::worker::is_rate_limited_error)
-        });
-        let limits = profiles::merge_profiles(results, &self.snapshots, Utc::now())?;
-        self.snapshots = limits.codex_profiles.clone();
-        Ok(limits)
-    }
-
-    fn read_saved_profile(&self, id: &str) -> Result<RateLimits> {
-        let agent = self.oauth_agent()?;
-        let _guard = profile_oauth::credential_guard()?;
-        let raw = load_profile_credential(id)?
-            .context("Codex account has no saved login. Sign in again in its settings.")?;
-        let session = profile_oauth::resolve(&agent, id, &raw, false)?;
-        match self.read_credentials(&agent, &session.credentials()) {
-            Err(error) if error.downcast_ref::<OAuthUnauthorized>().is_some() => {
-                let session = profile_oauth::resolve(&agent, id, &session.encode()?, true)?;
-                self.read_credentials(&agent, &session.credentials())
-            }
-            result => result,
-        }
+    fn tracks_account_switches(&self) -> bool {
+        self.provider.is_primary() && self.home.is_none()
     }
 
     fn oauth_agent(&self) -> Result<ureq::Agent> {
@@ -278,9 +231,10 @@ impl CodexClient {
     }
 
     fn read_rate_limits_via_oauth(&self) -> Result<RateLimits> {
-        let credentials = load_oauth_credentials()?;
+        let auth = auth_json_path(self.home.as_deref());
+        let credentials = load_oauth_credentials(&auth)?;
         let mut limits = self.read_credentials(&self.oauth_agent()?, &credentials)?;
-        limits.account_name = local_account_name();
+        limits.account_name = local_account_name(&auth);
         Ok(limits)
     }
 
@@ -333,9 +287,11 @@ impl CodexClient {
         // Desktop Codex dropped the legacy `untrusted` approval policy; only
         // `never` / `on-request` remain. Keep `-a never` so rate-limit polls
         // never block on an interactive approval prompt.
+        // The app-server refreshes an expired login in CODEX_HOME by itself.
         let mut child = spawn_codex(
             &self.executable,
             &["-s", "read-only", "-a", "never", "app-server"],
+            self.home.as_deref(),
         )?;
         let stderr = child.stderr.take();
         let result = self.exchange(&mut child);
@@ -348,7 +304,7 @@ impl CodexClient {
             // The account name is a display-only claim from the locally
             // authenticated Codex session. Never let a missing or malformed
             // identity token make otherwise valid quota data unavailable.
-            limits.account_name = local_account_name();
+            limits.account_name = local_account_name(&auth_json_path(self.home.as_deref()));
             limits
         })
     }
@@ -424,9 +380,8 @@ struct IdTokenClaims {
     email: Option<String>,
 }
 
-fn load_oauth_credentials() -> Result<OAuthCredentials> {
-    let path = auth_json_path().context("resolve Codex auth.json")?;
-    let contents = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+fn load_oauth_credentials(path: &Path) -> Result<OAuthCredentials> {
+    let contents = fs::read(path).with_context(|| format!("read {}", path.display()))?;
     let auth: AuthFile =
         serde_json::from_slice(&contents).with_context(|| format!("parse {}", path.display()))?;
     let tokens = auth
@@ -447,12 +402,13 @@ fn load_oauth_credentials() -> Result<OAuthCredentials> {
     })
 }
 
-fn auth_json_path() -> Option<PathBuf> {
-    Some(crate::usage::codex_home().join("auth.json"))
+fn auth_json_path(home: Option<&Path>) -> PathBuf {
+    home.map_or_else(crate::usage::codex_home, Path::to_path_buf)
+        .join("auth.json")
 }
 
-fn local_account_name() -> Option<String> {
-    let contents = fs::read(auth_json_path()?).ok()?;
+fn local_account_name(auth: &Path) -> Option<String> {
+    let contents = fs::read(auth).ok()?;
     let auth: AuthFile = serde_json::from_slice(&contents).ok()?;
     let token = auth.tokens?.id_token?;
     account_name_from_id_token(&token)
@@ -527,11 +483,11 @@ pub fn parse_wham_usage(response: &Value, sampled_at: DateTime<Utc>) -> Result<R
         secondary_limit_name: None,
         credits: parse_wham_credits(response.get("credits")),
         reset_credits: parse_wham_reset_credits(response.get("rate_limit_reset_credits")),
+        cloud_session_credits: None,
         additional_limits: parse_wham_additional_limits(response.get("additional_rate_limits")),
         spending: None,
         openrouter_accounts: Default::default(),
-        claude_profiles: Default::default(),
-        codex_profiles: Default::default(),
+        legacy_accounts: Default::default(),
         usage: Default::default(),
     }
     .normalized(sampled_at))
@@ -780,11 +736,11 @@ pub fn parse_rate_limits(
         secondary_limit_name: None,
         credits: parse_credits(limits.get("credits")),
         reset_credits: parse_reset_credits(response.pointer("/result/rateLimitResetCredits")),
+        cloud_session_credits: None,
         additional_limits: Default::default(),
         spending: None,
         openrouter_accounts: Default::default(),
-        claude_profiles: Default::default(),
-        codex_profiles: Default::default(),
+        legacy_accounts: Default::default(),
         usage: Default::default(),
     }
     .normalized(sampled_at))
@@ -873,12 +829,15 @@ fn parse_timestamp(value: Option<&Value>) -> Option<chrono::DateTime<Utc>> {
         .and_then(|timestamp| Utc.timestamp_opt(timestamp, 0).single())
 }
 
-fn activation_workspace_dir() -> Result<PathBuf> {
-    let dir = BaseDirs::new()
-        .context("resolve home directory")?
-        .home_dir()
-        .join(".codex")
-        .join("minibar-activation");
+fn activation_workspace_dir(home: Option<&Path>) -> Result<PathBuf> {
+    let home = match home {
+        Some(home) => home.to_path_buf(),
+        None => BaseDirs::new()
+            .context("resolve home directory")?
+            .home_dir()
+            .join(".codex"),
+    };
+    let dir = home.join("minibar-activation");
     fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     Ok(dir)
 }
@@ -935,8 +894,8 @@ fn activation_args(workspace: &Path, last_message: &Path) -> Vec<String> {
     args
 }
 
-fn spawn_codex(executable: &Path, args: &[&str]) -> Result<Child> {
-    command_for_codex(executable, args)
+fn spawn_codex(executable: &Path, args: &[&str], home: Option<&Path>) -> Result<Child> {
+    command_for_codex(executable, args, home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -947,6 +906,7 @@ fn spawn_codex(executable: &Path, args: &[&str]) -> Result<Child> {
 fn command_for_codex(
     executable: &Path,
     args: impl IntoIterator<Item = impl AsRef<OsStr>>,
+    home: Option<&Path>,
 ) -> Command {
     let extension = executable
         .extension()
@@ -976,6 +936,10 @@ fn command_for_codex(
             command.args(args);
             command
         };
+    if let Some(home) = home {
+        command.env("CODEX_HOME", home);
+        command.env_remove("OPENAI_API_KEY");
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

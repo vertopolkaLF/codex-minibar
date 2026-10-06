@@ -10,7 +10,7 @@ use chrono::{DateTime, Duration, Local, NaiveDate, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{pricing, settings::ProviderKind, store};
+use crate::{instances::ProviderId, pricing, settings::ProviderKind, store};
 
 // Version 9 upgrades attributed event identity to include the record offset.
 // Version 8 rebuilt event source links after the account-source migration.
@@ -200,23 +200,33 @@ impl CachedSessionFile {
 
 /// Returns an immediately available snapshot from the persisted local cache.
 /// It never opens or scans Codex session logs.
-pub fn load_cached_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
-    store::with_store(|store| store.load_usage_daily(ProviderKind::Codex, history_days))
+pub fn load_cached_usage_statistics(
+    provider: ProviderId,
+    history_days: u16,
+) -> Result<UsageStatistics> {
+    store::with_store(|store| store.load_usage_daily(provider, history_days))
 }
 
 /// Incorporates only JSONL bytes appended since the previous scan, persists the
 /// cache, and returns the refreshed aggregate. Truncated/replaced files are
 /// safely rebuilt from their beginning.
-pub fn refresh_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
+pub fn refresh_usage_statistics(
+    provider: ProviderId,
+    home: Option<&Path>,
+    history_days: u16,
+) -> Result<UsageStatistics> {
     // Overview repair and the background worker may both request a scan.
     static SCAN: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _scan = SCAN
         .lock()
         .map_err(|_| anyhow::anyhow!("Codex scan lock poisoned"))?;
+    if !provider.is_primary() {
+        return refresh_instance_usage_statistics(provider, home, history_days);
+    }
     let before = store::codex_accounts::identity();
     let attribution = store::with_store(|store| store.initialize_codex_attribution())?;
-    let codex_root = codex_home();
-    let mut cache = store::with_store(|store| store.load_codex_cache())?;
+    let codex_root = home.map_or_else(codex_home, Path::to_path_buf);
+    let mut cache = store::with_store(|store| store.load_codex_cache(provider))?;
     if !attribution.ready {
         cache.files.clear();
     }
@@ -272,8 +282,40 @@ pub fn refresh_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
             end,
         )
     })?;
-    store::with_store(|store| store.save_codex_cache(&cache))?;
-    load_cached_usage_statistics(history_days)
+    store::with_store(|store| store.save_codex_cache(provider, &cache))?;
+    load_cached_usage_statistics(provider, history_days)
+}
+
+/// Additional Codex instances read their own `CODEX_HOME`, which only ever
+/// holds that instance's account, so no cross-account attribution is needed.
+fn refresh_instance_usage_statistics(
+    provider: ProviderId,
+    home: Option<&Path>,
+    history_days: u16,
+) -> Result<UsageStatistics> {
+    let Some(home) = home else {
+        return load_cached_usage_statistics(provider, history_days);
+    };
+    let mut cache = store::with_store(|store| store.load_codex_cache(provider))?;
+    if cache.pricing_rebuild_needed || cache.version != CODEX_CACHE_VERSION {
+        cache.files.clear();
+        cache.pricing_rebuild_needed = false;
+        cache.version = CODEX_CACHE_VERSION;
+    }
+    let files = collect_codex_session_files(home)?;
+    let known_paths: BTreeSet<String> = files.iter().map(|(_, key)| key.clone()).collect();
+    cache.files.retain(|path, _| known_paths.contains(path));
+    let oldest = Local::now().date_naive() - Duration::days(CACHE_RETENTION_DAYS - 1);
+    for (path, key) in files {
+        let cached = cache.files.entry(key.clone()).or_default();
+        if cached.model_daily.is_empty() && !cached.daily.is_empty() {
+            cached.reset_scan_state();
+        }
+        scan_file_delta(&path, &key, cached)?;
+        cached.prune_before(oldest);
+    }
+    store::with_store(|store| store.save_codex_cache(provider, &cache))?;
+    load_cached_usage_statistics(provider, history_days)
 }
 
 pub(crate) fn truncate_local_hour(timestamp: DateTime<Local>) -> DateTime<Local> {
@@ -634,16 +676,23 @@ pub(crate) struct CachedClaudeSessionFile {
 }
 
 /// Returns Claude Code usage from the on-disk cache without opening a log.
-pub fn load_cached_claude_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
-    store::with_store(|store| store.load_usage_daily(ProviderKind::Claude, history_days))
+pub fn load_cached_claude_usage_statistics(
+    provider: ProviderId,
+    history_days: u16,
+) -> Result<UsageStatistics> {
+    store::with_store(|store| store.load_usage_daily(provider, history_days))
 }
 
 /// Scans Claude Code's `projects/**/*.jsonl` logs incrementally. The cache is
 /// separate from Codex's and stores a byte offset per file, so reopening the
 /// popup never causes a full re-read of an ever-growing Claude history.
-pub fn refresh_claude_usage_statistics(history_days: u16) -> Result<UsageStatistics> {
-    let mut cache = store::with_store(|store| store.load_claude_cache())?;
-    let files = collect_claude_session_files();
+pub fn refresh_claude_usage_statistics(
+    provider: ProviderId,
+    config_folder: Option<&Path>,
+    history_days: u16,
+) -> Result<UsageStatistics> {
+    let mut cache = store::with_store(|store| store.load_claude_cache(provider))?;
+    let files = collect_claude_session_files(config_folder);
     let known_paths: BTreeSet<String> = files
         .iter()
         .map(|path| path.to_string_lossy().into_owned())
@@ -662,10 +711,10 @@ pub fn refresh_claude_usage_statistics(history_days: u16) -> Result<UsageStatist
     cache.version = CLAUDE_CACHE_VERSION;
     let stats = statistics_from_claude_cache(&cache, history_days);
     store::with_store(|store| {
-        store.save_claude_cache(&cache)?;
-        store.replace_usage_daily(ProviderKind::Claude, &stats.daily)?;
+        store.save_claude_cache(provider, &cache)?;
+        store.replace_usage_daily(provider, &stats.daily)?;
         store.replace_usage_model_daily(
-            ProviderKind::Claude,
+            provider,
             &aggregate_claude_model_daily(&cache)
                 .into_iter()
                 .map(|(date, model, usage)| (model, date, usage))
@@ -883,9 +932,13 @@ fn claude_usage_from_line(line: &[u8]) -> Option<CachedClaudeUsageEntry> {
     })
 }
 
-fn collect_claude_session_files() -> Vec<PathBuf> {
+/// `config_folder` is an instance's own `CLAUDE_CONFIG_DIR`; `None` keeps the
+/// standard discovery used by the primary instance.
+fn collect_claude_session_files(config_folder: Option<&Path>) -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    if let Some(config_dirs) = std::env::var_os("CLAUDE_CONFIG_DIR") {
+    if let Some(folder) = config_folder {
+        roots.push(folder.to_path_buf());
+    } else if let Some(config_dirs) = std::env::var_os("CLAUDE_CONFIG_DIR") {
         // Claude Code accepts comma-separated roots; Windows also commonly
         // receives a normal PATH-style list from launchers, so tolerate both.
         let raw = config_dirs.to_string_lossy();

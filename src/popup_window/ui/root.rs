@@ -173,8 +173,6 @@ pub(crate) struct PopupRoot {
     pub(super) host: Host,
     pub(super) pager: PagerState,
     pub(super) pager_started: Instant,
-    pub(super) claude_profile: Option<String>,
-    pub(super) codex_profile: Option<String>,
     pub(super) overview_metric: OverviewMetric,
     pub(super) overview_range: OverviewRange,
     pub(super) overview_breakdown: BreakdownMode,
@@ -191,8 +189,8 @@ pub(crate) struct PopupRoot {
     pub(super) usage_spinner_started: Option<Instant>,
     pub(super) widget_drag: Option<HomeWidgetId>,
     pub(super) widget_drop: Option<(HomeWidgetId, Option<usize>)>,
-    pub(super) tab_drag: Option<ProviderKind>,
-    pub(super) tab_drop: Option<ProviderKind>,
+    pub(super) tab_drag: Option<PopupView>,
+    pub(super) tab_drop: Option<PopupView>,
     pub(super) refresh_started: Option<Instant>,
     pub(super) profile_layout: String,
     pub(super) profile_fade_started: Option<Instant>,
@@ -258,8 +256,6 @@ impl PopupRoot {
             host: Host::new(),
             pager: PagerState::default(),
             pager_started: Instant::now(),
-            claude_profile: None,
-            codex_profile: None,
             overview_metric: OverviewMetric::default(),
             overview_range: OverviewRange::default(),
             overview_breakdown: BreakdownMode::default(),
@@ -336,7 +332,21 @@ impl PopupRoot {
         cx.notify();
     }
 
+    /// Opens a page. An instance inside a grouped tab opens its group with
+    /// that instance selected in the switcher.
     pub(crate) fn select_view(&mut self, view: PopupView, cx: &mut Context<Self>) {
+        let view = match view {
+            PopupView::Provider(provider) => {
+                let Some(tab) = model::tab_for_provider(&self.ui, provider) else {
+                    return;
+                };
+                if let PopupView::Group(driver) = tab {
+                    self.select_group_member(driver, provider, cx);
+                }
+                tab
+            }
+            other => other,
+        };
         if self.view_available(view) {
             self.navigate(view, cx);
         }
@@ -346,14 +356,38 @@ impl PopupRoot {
         match view {
             PopupView::Home => true,
             PopupView::Usage => self.ui.usage_stats_enabled,
-            other => other
-                .provider()
-                .is_some_and(|provider| model::provider_enabled(&self.ui, provider)),
+            other => model::provider_tabs(&self.ui).contains(&other),
         }
     }
 
+    /// Persists the instance shown by a grouped tab's switcher.
+    pub(super) fn select_group_member(
+        &mut self,
+        driver: ProviderKind,
+        provider: ProviderId,
+        cx: &mut Context<Self>,
+    ) {
+        if model::selected_group_member(&self.ui, driver) == Some(provider) {
+            return;
+        }
+        let driver_id = driver.id().to_owned();
+        let instance_id = provider.id().to_owned();
+        let (local_driver, local_id) = (driver_id.clone(), instance_id.clone());
+        self.persist(
+            cx,
+            move |ui| {
+                ui.grouped_tab_selection.insert(local_driver, local_id);
+            },
+            move |settings| {
+                settings
+                    .grouped_tab_selection
+                    .insert(driver_id, instance_id);
+            },
+        );
+    }
+
     fn sync_pager_with_settings(&mut self) {
-        let order = provider_order_from_popup(&self.ui.popup_order);
+        let order = model::provider_tabs(&self.ui);
         self.pager = reduce_pager(self.pager.clone(), PagerAction::SetProviderOrder(order));
         if !self.view_available(self.pager.current) {
             self.pager = reduce_pager(self.pager.clone(), PagerAction::Select(PopupView::Home));
@@ -596,15 +630,10 @@ impl PopupRoot {
         crate::popup::bottom_bar_size().footer_height_dip() as f32
     }
 
+    /// The instance switcher shows on a grouped tab in switcher mode.
     pub(super) fn show_profile_strip(&self) -> bool {
-        let view = self.pager.current;
-        let provider = match view {
-            PopupView::Codex => ProviderKind::Codex,
-            PopupView::Claude => ProviderKind::Claude,
-            _ => return false,
-        };
-        !self.ui.show_accounts_as_tabs
-            && self.limits.get(provider).account_profiles(provider).len() > 1
+        matches!(self.pager.current, PopupView::Group(_))
+            && self.ui.popup_tab_mode == PopupTabMode::GroupedSwitcher
     }
 
     pub(super) fn chrome_height(&self) -> f32 {
@@ -863,8 +892,8 @@ impl PopupRoot {
         &mut self,
         slot: SnapshotSlot,
         key: String,
-        enabled: Vec<ProviderKind>,
-        query: impl FnOnce(&ProviderLimits, &[ProviderKind]) -> OverviewSnapshot + Send + 'static,
+        enabled: Vec<ProviderId>,
+        query: impl FnOnce(&ProviderLimits, &[ProviderId]) -> OverviewSnapshot + Send + 'static,
         cx: &mut Context<Self>,
     ) -> Arc<OverviewSnapshot> {
         let cache = self.snapshots.entry(slot).or_default();
@@ -920,20 +949,8 @@ impl PopupRoot {
     }
 }
 
-pub(super) fn view_key(view: PopupView) -> u8 {
-    match view {
-        PopupView::Home => 0,
-        PopupView::Usage => 1,
-        PopupView::Codex => 2,
-        PopupView::Claude => 3,
-        PopupView::Cursor => 4,
-        PopupView::OpenCodeZen => 5,
-        PopupView::OpenCodeGo => 6,
-        PopupView::OpenRouter => 7,
-        PopupView::Antigravity => 8,
-        PopupView::Grok => 9,
-        PopupView::Kiro => 10,
-    }
+pub(super) fn view_key(view: PopupView) -> String {
+    view.key()
 }
 
 fn closing_offset(started: Instant, from: f32, width: f32, margin: f32) -> f32 {
@@ -954,49 +971,21 @@ fn system_dark(window: &Window) -> bool {
 /// reflects persisted settings, before the bridge publishes.
 fn initial_ui_state(state: &AppState) -> UiState {
     let settings = &state.settings;
-    UiState {
-        theme: settings.theme,
-        accent_color: settings.accent_color,
-        animations_enabled: settings.animations_enabled,
-        popup_background_material: settings.popup_background_material,
-        time_format: settings.time_format,
+    let mut ui = UiState {
         provider_errors: state
             .startup_provider_errors
             .iter()
             .map(|(provider, error)| (*provider, UiState::error_for_ui(error)))
             .collect(),
         last_activation: format_last_activation(&RateLimits::default(), state.last_activation_at),
-        show_used_percentage: settings.show_used_percentage,
-        show_usage_values: settings.show_usage_values,
-        show_usage_pace: settings.show_usage_pace,
-        compact_usage_cards: settings.compact_usage_cards,
-        popup_visibility: settings.popup_visibility.clone(),
-        usage_stats_enabled: settings.usage_stats_enabled,
-        show_total_spend_on_all_tab: settings.show_total_spend_on_all_tab,
-        total_spend_presentation: settings.total_spend_presentation,
-        total_spend_period: settings.total_spend_period,
-        show_account_name: settings.show_account_name,
-        codex_enabled: settings.providers.is_enabled(ProviderKind::Codex),
-        claude_enabled: settings.providers.is_enabled(ProviderKind::Claude),
-        cursor_enabled: settings.providers.is_enabled(ProviderKind::Cursor),
-        opencode_zen_enabled: settings.providers.is_enabled(ProviderKind::OpenCodeZen),
-        opencode_go_enabled: settings.providers.is_enabled(ProviderKind::OpenCodeGo),
-        opencode_zen_credentials_revision: settings.opencode_zen_credentials_revision,
-        opencode_go_credentials_revision: settings.opencode_go_credentials_revision,
-        openrouter_enabled: settings.providers.is_enabled(ProviderKind::OpenRouter),
-        antigravity_enabled: settings.providers.is_enabled(ProviderKind::Antigravity),
-        grok_enabled: settings.providers.is_enabled(ProviderKind::Grok),
-        kiro_enabled: settings.providers.is_enabled(ProviderKind::Kiro),
-        openrouter_credentials_revision: settings.openrouter_credentials_revision,
-        popup_order: settings.popup_order.clone(),
-        use_colored_provider_icons: settings.use_colored_provider_icons,
-        replace_chatgpt_logo_with_codex: settings.replace_chatgpt_logo_with_codex,
         update_version: state
             .updates
             .available_update()
             .map(|update| update.version),
         ..UiState::popup_layout_from_settings(settings)
-    }
+    };
+    ui.apply_settings(settings);
+    ui
 }
 
 // ----- render -------------------------------------------------------------------
@@ -1034,29 +1023,27 @@ impl Render for PopupRoot {
         let ui = Rc::clone(&self.ui);
         let limits = Rc::clone(&self.limits);
 
-        // Account switches with a different card layout fade the page in so
+        // Switcher changes with a different card layout fade the page in so
         // the remeasured height is not seen as cards jumping.
-        let profile_layout = format!(
-            "{}|{}",
-            profile_layout_key(
-                ProviderKind::Claude,
-                limits.get(ProviderKind::Claude),
-                self.claude_profile.as_deref(),
-                ui.show_used_percentage,
-                ui.show_usage_pace,
-            ),
-            profile_layout_key(
-                ProviderKind::Codex,
-                limits.get(ProviderKind::Codex),
-                self.codex_profile.as_deref(),
-                ui.show_used_percentage,
-                ui.show_usage_pace,
-            )
-        );
+        let profile_layout = match self.pager.current {
+            PopupView::Group(driver) if self.show_profile_strip() => {
+                model::selected_group_member(&ui, driver).map_or_else(String::new, |member| {
+                    format!(
+                        "{}|{}",
+                        member.id(),
+                        instance_layout_key(
+                            limits.get(member),
+                            ui.has_provider_error(member),
+                            ui.show_used_percentage,
+                            ui.show_usage_pace,
+                        )
+                    )
+                })
+            }
+            _ => String::new(),
+        };
         if profile_layout != self.profile_layout {
-            if !self.profile_layout.is_empty()
-                && matches!(self.pager.current, PopupView::Claude | PopupView::Codex)
-            {
+            if !self.profile_layout.is_empty() && !profile_layout.is_empty() {
                 self.profile_fade_started = Some(now);
             }
             self.profile_layout = profile_layout;
@@ -1402,12 +1389,12 @@ impl PopupRoot {
                 .into_any_element(),
             );
         }
-        if let Some(provider) = view.provider()
+        if let Some(provider) = self.page_provider(view)
             && let Some(error) = ui.provider_error(provider)
         {
             body.push(
                 components::info_bar(
-                    format!("{} error", provider.display_name()),
+                    format!("{} error", provider.qualified_name()),
                     error.to_owned(),
                     Severity::Error,
                     &palette,
@@ -1422,7 +1409,7 @@ impl PopupRoot {
                     if let Some(error) = ui.provider_error(provider) {
                         body.push(
                             components::info_bar(
-                                format!("{} error", provider.display_name()),
+                                format!("{} error", provider.qualified_name()),
                                 error.to_owned(),
                                 Severity::Error,
                                 &palette,
@@ -1449,125 +1436,78 @@ impl PopupRoot {
         body
     }
 
-    pub(super) fn enabled_provider_order(&self) -> Vec<ProviderKind> {
-        provider_order_from_popup(&self.ui.popup_order)
-            .into_iter()
-            .filter(|provider| model::provider_enabled(&self.ui, *provider))
-            .collect()
-    }
-
-    pub(super) fn enabled_spend(&self) -> Vec<ProviderKind> {
-        self.enabled_provider_order()
-            .into_iter()
-            .filter(|provider| {
-                self.ui.usage_stats_provider_enabled(*provider)
-                    && crate::provider_registry::descriptor(*provider).include_in_total_spend
-            })
-            .collect()
-    }
-
-    pub(super) fn claude_tabs(&self) -> Vec<crate::settings::ClaudeProfile> {
-        if self.ui.show_accounts_as_tabs && self.ui.claude_enabled {
-            claude_account_tabs(&self.ui.claude_profiles)
-        } else {
-            Vec::new()
-        }
-    }
-
-    pub(super) fn codex_tabs(&self) -> Vec<crate::settings::CodexProfile> {
-        if self.ui.show_accounts_as_tabs && self.ui.codex_enabled {
-            codex_account_tabs(&self.ui.codex_profiles)
-        } else {
-            Vec::new()
-        }
+    pub(super) fn enabled_spend(&self) -> Vec<ProviderId> {
+        model::spend_providers(&self.ui)
     }
 
     pub(super) fn show_provider_tabs(&self) -> bool {
-        provider_icon_tab_count(
-            &self.enabled_provider_order(),
-            &self.claude_tabs(),
-            &self.codex_tabs(),
-        ) > 0
+        model::show_provider_tabs(&self.ui)
     }
 
-    /// Provider tab content for one provider page.
+    /// The single instance a page is about: the instance tab itself, or the
+    /// switcher's selection on a grouped tab. Stacked groups have none.
+    pub(super) fn page_provider(&self, view: PopupView) -> Option<ProviderId> {
+        match view {
+            PopupView::Provider(provider) => Some(provider),
+            PopupView::Group(driver) if self.ui.popup_tab_mode == PopupTabMode::GroupedSwitcher => {
+                model::selected_group_member(&self.ui, driver)
+            }
+            _ => None,
+        }
+    }
+
+    /// Provider tab content: one instance, or every instance of a stacked
+    /// group with a badge + name header per instance.
     fn render_provider_page(
         &mut self,
         view: PopupView,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        let Some(provider) = view.provider() else {
-            return Vec::new();
+        let members = match self.page_provider(view) {
+            Some(provider) => vec![provider],
+            None => tab_members(&self.ui.instances, view),
         };
+        let stacked = members.len() > 1;
         let ui = Rc::clone(&self.ui);
         let limits = Rc::clone(&self.limits);
         let forced_resets = Rc::clone(&self.forced_resets);
-        let palette = self.palette.clone();
-        let limits_for_provider = limits.get(provider);
-        let profile = match provider {
-            ProviderKind::Codex => limits_for_provider.codex_profile(self.codex_profile.as_deref()),
-            ProviderKind::Claude => {
-                limits_for_provider.claude_profile(self.claude_profile.as_deref())
-            }
-            _ => None,
-        };
-        let mut body = Vec::new();
-        if let Some(selected) = profile
-            && let Some(error) = &selected.error
-        {
-            body.push(
-                components::info_bar(
-                    format!("{} error", selected.name),
-                    cached_profile_error_for_ui(&selected.limits, error),
-                    Severity::Error,
-                    &palette,
-                )
-                .into_any_element(),
+        let show_tabs = self.show_provider_tabs();
+        let mut sections = Vec::with_capacity(members.len());
+        for (index, provider) in members.into_iter().enumerate() {
+            // A stacked page has no page-wide bar for one instance; each
+            // section's heading carries its own error marker.
+            let error_message = ui.provider_error(provider).map(str::to_owned);
+            let options = CardOptions {
+                popup_visibility: &ui.popup_visibility,
+                surface: PopupSurface::ProviderTab,
+                show_provider_tabs: show_tabs,
+                include_usage_stats: ui.usage_stats_provider_enabled(provider),
+                show_account_name: ui.show_account_name,
+                drag_handle: false,
+                openrouter_actions: provider.kind() == ProviderKind::OpenRouter,
+                provider_error: error_message.as_deref(),
+                now: Utc::now(),
+            };
+            let cards = provider_cards(
+                provider,
+                index == 0,
+                stacked,
+                limits.get(provider),
+                &forced_resets,
+                &options,
+            );
+            sections.push(
+                div()
+                    .id(eid(format!("provider-section-{}", provider.id())))
+                    .flex()
+                    .flex_col()
+                    .gap(px(PAGE_SPACING))
+                    .children(self.render_cards(&cards, PopupSurface::ProviderTab, window, cx))
+                    .into_any_element(),
             );
         }
-        let error_message = ui
-            .provider_error(provider)
-            .or(profile.and_then(|profile| profile.error.as_deref()))
-            .map(|error| {
-                profile.map_or_else(
-                    || error.to_owned(),
-                    |selected| cached_profile_error_for_ui(&selected.limits, error),
-                )
-            });
-        let options = CardOptions {
-            popup_visibility: &ui.popup_visibility,
-            surface: PopupSurface::ProviderTab,
-            show_provider_tabs: self.show_provider_tabs(),
-            include_usage_stats: profile.is_none(),
-            show_account_name: ui.show_account_name,
-            profile_id: profile.map(|profile| profile.id.as_str()),
-            drag_handle: false,
-            openrouter_actions: provider == ProviderKind::OpenRouter,
-            provider_error: error_message.as_deref(),
-            now: Utc::now(),
-        };
-        let snapshot = profile.map_or(limits_for_provider, |profile| &profile.limits);
-        let mut cards = provider_cards(provider, true, snapshot, &forced_resets, &options);
-        if profile.is_some() {
-            cards.extend(shared_usage_statistics_card(
-                provider,
-                limits_for_provider,
-                true,
-                &ui.popup_visibility,
-                PopupSurface::ProviderTab,
-                options.show_provider_tabs,
-            ));
-        }
-        body.push(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(PAGE_SPACING))
-                .children(self.render_cards(&cards, PopupSurface::ProviderTab, window, cx))
-                .into_any_element(),
-        );
-        body
+        sections
     }
 
     pub(super) fn card_style(&self) -> CardStyle {
@@ -1579,43 +1519,36 @@ impl PopupRoot {
         }
     }
 
-    /// Account switcher pinned above the footer for multi-account providers.
+    /// Instance switcher pinned above the footer for a grouped tab.
     fn render_profile_strip(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        let provider = if self.pager.current == PopupView::Codex {
-            ProviderKind::Codex
-        } else {
-            ProviderKind::Claude
+        let PopupView::Group(driver) = self.pager.current else {
+            return div();
         };
-        let limits = Rc::clone(&self.limits);
-        let profiles = limits.get(provider).account_profiles(provider);
-        let selected_id = if provider == ProviderKind::Codex {
-            self.codex_profile.clone()
-        } else {
-            self.claude_profile.clone()
-        };
-        let selected = profiles
+        let members = self.ui.enabled_instances_of(driver);
+        let selected_id = model::selected_group_member(&self.ui, driver);
+        let selected = members
             .iter()
-            .position(|profile| Some(profile.id.as_str()) == selected_id.as_deref())
+            .position(|member| Some(*member) == selected_id)
             .unwrap_or(0);
-        let labels = profiles
+        let segments = members
             .iter()
-            .map(|profile| SharedString::from(profile.name.clone()))
+            .map(|member| (SharedString::from(member.display_name()), member.badge()))
             .collect::<Vec<_>>();
-        let ids = profiles
-            .iter()
-            .map(|profile| profile.id.clone())
-            .collect::<Vec<_>>();
-        let control = self.segmented_control(
-            fx::key(("profiles", provider.id())),
-            labels,
+        // Membership is part of the key so a changed instance set never
+        // reuses another instance's segment state.
+        let key = fx::key((
+            "profiles",
+            driver.id(),
+            members.iter().map(|member| member.id()).collect::<Vec<_>>(),
+        ));
+        let control = self.segmented_control_badged(
+            key,
+            segments,
             selected,
             true,
             move |this, index, cx| {
-                let id = ids.get(index).cloned();
-                if provider == ProviderKind::Codex {
-                    this.codex_profile = id;
-                } else {
-                    this.claude_profile = id;
+                if let Some(member) = members.get(index).copied() {
+                    this.select_group_member(driver, member, cx);
                 }
                 cx.notify();
             },

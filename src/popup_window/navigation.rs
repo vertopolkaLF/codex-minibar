@@ -1,6 +1,7 @@
 use super::*;
 
-/// The popup either shows the Home feed or one enabled provider.
+/// The popup either shows the Home feed, the Usage page, one provider
+/// instance, or one driver whose instances share a grouped tab.
 ///
 /// This intentionally stays ephemeral: it is a view choice for the currently
 /// open popup, not an application preference that should survive a restart.
@@ -9,15 +10,10 @@ pub(crate) enum PopupView {
     #[default]
     Home,
     Usage,
-    Codex,
-    Claude,
-    Cursor,
-    OpenCodeZen,
-    OpenCodeGo,
-    OpenRouter,
-    Antigravity,
-    Grok,
-    Kiro,
+    /// One provider instance.
+    Provider(ProviderId),
+    /// Every enabled instance of one driver behind a single grouped tab.
+    Group(ProviderKind),
 }
 
 impl PopupView {
@@ -25,184 +21,131 @@ impl PopupView {
         enabled && matches!(self, Self::Home | Self::Usage)
     }
 
-    pub(super) const fn from_provider(provider: ProviderKind) -> Self {
-        match provider {
-            ProviderKind::Codex => Self::Codex,
-            ProviderKind::Claude => Self::Claude,
-            ProviderKind::Cursor => Self::Cursor,
-            ProviderKind::OpenCodeZen => Self::OpenCodeZen,
-            ProviderKind::OpenCodeGo => Self::OpenCodeGo,
-            ProviderKind::OpenRouter => Self::OpenRouter,
-            ProviderKind::Antigravity => Self::Antigravity,
-            ProviderKind::Grok => Self::Grok,
-            ProviderKind::Kiro => Self::Kiro,
-        }
+    pub(super) const fn from_provider(provider: ProviderId) -> Self {
+        Self::Provider(provider)
     }
 
-    pub(super) const fn provider(self) -> Option<ProviderKind> {
+    pub(super) const fn provider(self) -> Option<ProviderId> {
         match self {
-            Self::Home | Self::Usage => None,
-            Self::Codex => Some(ProviderKind::Codex),
-            Self::Claude => Some(ProviderKind::Claude),
-            Self::Cursor => Some(ProviderKind::Cursor),
-            Self::OpenCodeZen => Some(ProviderKind::OpenCodeZen),
-            Self::OpenCodeGo => Some(ProviderKind::OpenCodeGo),
-            Self::OpenRouter => Some(ProviderKind::OpenRouter),
-            Self::Antigravity => Some(ProviderKind::Antigravity),
-            Self::Grok => Some(ProviderKind::Grok),
-            Self::Kiro => Some(ProviderKind::Kiro),
+            Self::Provider(provider) => Some(provider),
+            _ => None,
         }
     }
 
-    pub(super) fn order(self, provider_order: &[ProviderKind]) -> i32 {
+    /// Whether this view shows `provider`, directly or through its group.
+    pub(super) fn shows(self, provider: ProviderId) -> bool {
+        match self {
+            Self::Provider(shown) => shown == provider,
+            Self::Group(kind) => kind == provider.kind(),
+            _ => false,
+        }
+    }
+
+    /// Stable string identity for animation and element keys.
+    pub(super) fn key(self) -> String {
+        match self {
+            Self::Home => "home".into(),
+            Self::Usage => "usage".into(),
+            Self::Provider(provider) => format!("provider:{}", provider.id()),
+            Self::Group(kind) => format!("group:{}", kind.id()),
+        }
+    }
+
+    pub(super) fn order(self, tab_order: &[PopupView]) -> i32 {
         match self {
             Self::Home => 0,
             Self::Usage => 1,
             other => {
-                let provider = other.provider().expect("provider view");
-                2 + provider_order
+                let position = tab_order
                     .iter()
-                    .position(|item| *item == provider)
-                    .unwrap_or(0) as i32
+                    .position(|item| *item == other)
+                    .or_else(|| {
+                        // An instance inside a grouped tab sits at its group.
+                        other.provider().and_then(|provider| {
+                            tab_order.iter().position(|item| item.shows(provider))
+                        })
+                    })
+                    .unwrap_or(0);
+                2 + position as i32
             }
         }
     }
 }
 
-#[cfg(test)]
-pub(super) fn enabled_popup_views(
-    popup_order: &[PopupWidgetKind],
-    usage_enabled: bool,
-    codex: bool,
-    claude: bool,
-    cursor: bool,
-    opencode_zen: bool,
-    opencode_go: bool,
-    openrouter: bool,
-    antigravity: bool,
-    grok: bool,
-    kiro: bool,
+/// Provider tabs in display order for the enabled instances.
+///
+/// Separate mode yields one tab per instance. Grouped modes yield one tab per
+/// driver at the slot of its first enabled instance; a driver with a single
+/// enabled instance keeps its plain instance tab.
+pub(super) fn provider_tab_views(
+    instances: &[ProviderInstance],
+    mode: PopupTabMode,
 ) -> Vec<PopupView> {
-    let mut views = vec![PopupView::Home];
-    if usage_enabled {
-        views.push(PopupView::Usage);
-    }
-    for widget in popup_order {
-        let Some(provider) = widget.as_provider() else {
-            continue;
+    let enabled = instances
+        .iter()
+        .filter(|instance| instance.enabled)
+        .collect::<Vec<_>>();
+    let mut views = Vec::with_capacity(enabled.len());
+    for instance in &enabled {
+        let shared = enabled
+            .iter()
+            .filter(|other| other.driver == instance.driver)
+            .count()
+            > 1;
+        let view = if mode.is_grouped() && shared {
+            PopupView::Group(instance.driver)
+        } else {
+            PopupView::Provider(instance.provider_id())
         };
-        let enabled = match provider {
-            ProviderKind::Codex => codex,
-            ProviderKind::Claude => claude,
-            ProviderKind::Cursor => cursor,
-            ProviderKind::OpenCodeZen => opencode_zen,
-            ProviderKind::OpenCodeGo => opencode_go,
-            ProviderKind::OpenRouter => openrouter,
-            ProviderKind::Antigravity => antigravity,
-            ProviderKind::Grok => grok,
-            ProviderKind::Kiro => kiro,
-        };
-        if enabled {
-            views.push(PopupView::from_provider(provider));
+        if !views.contains(&view) {
+            views.push(view);
         }
     }
     views
 }
 
-pub(super) fn provider_order_from_popup(popup_order: &[PopupWidgetKind]) -> Vec<ProviderKind> {
-    popup_order
+/// Instances shown by one provider tab, in display order.
+pub(super) fn tab_members(instances: &[ProviderInstance], view: PopupView) -> Vec<ProviderId> {
+    instances
         .iter()
-        .filter_map(|widget| widget.as_provider())
+        .filter(|instance| instance.enabled && view.shows(instance.provider_id()))
+        .map(ProviderInstance::provider_id)
         .collect()
 }
 
-pub(super) fn provider_is_enabled(
-    provider: ProviderKind,
-    codex: bool,
-    claude: bool,
-    cursor: bool,
-    opencode_zen: bool,
-    opencode_go: bool,
-    openrouter: bool,
-    antigravity: bool,
-    grok: bool,
-    kiro: bool,
-) -> bool {
-    match provider {
-        ProviderKind::Codex => codex,
-        ProviderKind::Claude => claude,
-        ProviderKind::Cursor => cursor,
-        ProviderKind::OpenCodeZen => opencode_zen,
-        ProviderKind::OpenCodeGo => opencode_go,
-        ProviderKind::OpenRouter => openrouter,
-        ProviderKind::Antigravity => antigravity,
-        ProviderKind::Grok => grok,
-        ProviderKind::Kiro => kiro,
+/// New instance order after dragging tab `from` onto tab `to`. Every tab
+/// moves as one block, so a grouped driver keeps its instances together;
+/// disabled instances keep their slots.
+pub(super) fn reordered_instance_ids(
+    instances: &[ProviderInstance],
+    tabs: &[PopupView],
+    from: PopupView,
+    to: PopupView,
+) -> Option<Vec<String>> {
+    let source = tabs.iter().position(|tab| *tab == from)?;
+    let target = tabs.iter().position(|tab| *tab == to)?;
+    if source == target {
+        return None;
     }
-}
-
-pub(super) fn total_spend_provider_count(
-    codex: bool,
-    claude: bool,
-    cursor: bool,
-    opencode_zen: bool,
-    opencode_go: bool,
-    openrouter: bool,
-    excluded_providers: &[String],
-) -> usize {
-    [
-        (ProviderKind::Codex, codex),
-        (ProviderKind::Claude, claude),
-        (ProviderKind::Cursor, cursor),
-        (ProviderKind::OpenCodeZen, opencode_zen),
-        (ProviderKind::OpenCodeGo, opencode_go),
-        (ProviderKind::OpenRouter, openrouter),
-    ]
-    .into_iter()
-    .filter(|(provider, enabled)| {
-        *enabled
-            && !excluded_providers.iter().any(|id| id == provider.id())
-            && crate::provider_registry::descriptor(*provider).include_in_total_spend
-    })
-    .count()
-}
-
-#[cfg(test)]
-pub(super) fn visible_popup_widgets(
-    popup_order: &[PopupWidgetKind],
-    show_total_spend: bool,
-    popup_visibility: &PopupVisibility,
-    codex: bool,
-    claude: bool,
-    cursor: bool,
-    opencode_zen: bool,
-    opencode_go: bool,
-    openrouter: bool,
-    antigravity: bool,
-    grok: bool,
-    kiro: bool,
-) -> Vec<PopupWidgetKind> {
-    popup_order
+    let blocks = tabs
         .iter()
-        .copied()
-        .filter(|widget| match widget {
-            PopupWidgetKind::TotalSpend => show_total_spend,
-            other => other.as_provider().is_some_and(|provider| {
-                provider_is_enabled(
-                    provider,
-                    codex,
-                    claude,
-                    cursor,
-                    opencode_zen,
-                    opencode_go,
-                    openrouter,
-                    antigravity,
-                    grok,
-                    kiro,
-                ) && popup_visibility.provider_visible_on_all(provider)
-            }),
-        })
-        .collect()
+        .map(|tab| tab_members(instances, *tab))
+        .collect::<Vec<_>>();
+    let mut moved = blocks.clone();
+    let block = moved.remove(source);
+    moved.insert(target, block);
+    let mut order = Vec::with_capacity(instances.len());
+    for instance in instances {
+        let provider = instance.provider_id();
+        match blocks.iter().position(|block| block.contains(&provider)) {
+            Some(index) if blocks[index].first() == Some(&provider) => {
+                order.extend(moved[index].iter().map(|member| member.id().to_owned()));
+            }
+            Some(_) => {}
+            None => order.push(instance.id.clone()),
+        }
+    }
+    Some(order)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -244,7 +187,7 @@ pub(super) fn refresh_rotation_at(elapsed: Duration) -> f64 {
 }
 
 impl PagerDirection {
-    pub(super) fn between(from: PopupView, to: PopupView, provider_order: &[ProviderKind]) -> Self {
+    pub(super) fn between(from: PopupView, to: PopupView, provider_order: &[PopupView]) -> Self {
         if to.order(provider_order) > from.order(provider_order) {
             Self::Forward
         } else {
@@ -281,7 +224,7 @@ pub(super) struct PagerState {
     pub(super) pending: Option<PopupView>,
     pub(super) direction: PagerDirection,
     pub(super) animation_id: u64,
-    pub(super) provider_order: Vec<ProviderKind>,
+    pub(super) provider_order: Vec<PopupView>,
 }
 
 impl Default for PagerState {
@@ -292,7 +235,7 @@ impl Default for PagerState {
             pending: None,
             direction: PagerDirection::Forward,
             animation_id: 0,
-            provider_order: ProviderKind::default_order(),
+            provider_order: Vec::new(),
         }
     }
 }
@@ -300,7 +243,7 @@ impl Default for PagerState {
 #[derive(Clone, Debug)]
 pub(super) enum PagerAction {
     Select(PopupView),
-    SetProviderOrder(Vec<ProviderKind>),
+    SetProviderOrder(Vec<PopupView>),
     AnimationFinished(u64),
 }
 

@@ -17174,6 +17174,22 @@ impl windows_core::RuntimeType for IVisual {
         windows_core::imp::ConstBuffer::for_interface::<Self>();
 }
 impl IVisual {
+    pub(crate) fn SetClip(
+        &self,
+        clip: Option<&windows_core::IInspectable>,
+    ) -> windows_core::Result<()> {
+        unsafe {
+            type Set = unsafe extern "system" fn(
+                *mut core::ffi::c_void,
+                *mut core::ffi::c_void,
+            ) -> windows_core::HRESULT;
+            let set: Set = core::mem::transmute(windows_core::Interface::vtable(self).SetClip);
+            set(
+                windows_core::Interface::as_raw(self),
+                clip.map_or(core::ptr::null_mut(), windows_core::Interface::as_raw),
+            ).ok()
+        }
+    }
     pub(crate) fn Offset(&self) -> windows_core::Result<windows_numerics::Vector3> {
         unsafe {
             let mut result__ = core::mem::zeroed();

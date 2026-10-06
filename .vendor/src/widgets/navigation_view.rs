@@ -13,6 +13,9 @@ pub struct NavViewItem {
     pub trailing_icon_path: Option<(String, String)>,
     /// Numeric InfoBadge shown before the trailing status dot.
     pub info_badge: Option<i32>,
+    /// Short text plate before the label: `(text, background, foreground)`
+    /// as XAML color strings (e.g. an instance badge).
+    pub text_badge: Option<(String, String, String)>,
     /// Small filled status ellipse at the trailing edge (XAML color string).
     pub status_dot: Option<String>,
     /// Render the whole item at reduced opacity (e.g. a disabled provider).
@@ -64,6 +67,15 @@ impl NavViewItem {
     }
     pub fn info_badge(mut self, value: i32) -> Self {
         self.info_badge = Some(value);
+        self
+    }
+    pub fn text_badge(
+        mut self,
+        text: impl Into<String>,
+        background: impl Into<String>,
+        foreground: impl Into<String>,
+    ) -> Self {
+        self.text_badge = Some((text.into(), background.into(), foreground.into()));
         self
     }
     pub fn status_dot(mut self, color: impl Into<String>) -> Self {

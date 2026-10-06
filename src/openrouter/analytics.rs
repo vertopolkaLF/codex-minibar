@@ -192,7 +192,7 @@ fn combine_accounts(cache: &mut Cache) {
 }
 
 fn cache(client: &OpenRouterClient) -> Result<Cache> {
-    let raw = store::with_store(|s| s.load_openrouter_analytics())?;
+    let raw = store::with_store(|s| s.load_openrouter_analytics(client.provider))?;
     let mut cached: Cache = raw
         .map(|s| serde_json::from_str(&s))
         .transpose()?
@@ -235,7 +235,7 @@ fn statistics(cache: &Cache, history_days: u16) -> UsageStatistics {
     }
     combined
 }
-fn persist(cache: &Cache, at: DateTime<Utc>) -> Result<()> {
+fn persist(client: &OpenRouterClient, cache: &Cache, at: DateTime<Utc>) -> Result<()> {
     let models: Vec<_> = cache
         .days
         .iter()
@@ -246,7 +246,9 @@ fn persist(cache: &Cache, at: DateTime<Utc>) -> Result<()> {
         })
         .collect();
     let encoded = serde_json::to_string(cache)?;
-    store::with_store(|s| s.save_openrouter_analytics(&encoded, &daily(cache), &models, at))
+    store::with_store(|s| {
+        s.save_openrouter_analytics(client.provider, &encoded, &daily(cache), &models, at)
+    })
 }
 
 pub(crate) fn cached_account_models(
@@ -272,7 +274,7 @@ pub(crate) fn cached_account_models(
 pub(super) fn load(client: &OpenRouterClient, history_days: u16) -> Result<UsageStatistics> {
     let cached = cache(client)?;
     // Keep overview totals consistent with account removal/key replacement too.
-    persist(&cached, Utc::now())?;
+    persist(client, &cached, Utc::now())?;
     Ok(statistics(&cached, history_days))
 }
 fn boundaries(date: NaiveDate) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
@@ -505,7 +507,7 @@ pub(super) fn refresh(client: &OpenRouterClient, history_days: u16) -> Result<Us
             );
             if client.cancelled.load(Ordering::Acquire) {
                 combine_accounts(&mut cache);
-                persist(&cache, Utc::now())?;
+                persist(client, &cache, Utc::now())?;
                 anyhow::bail!("OpenRouter analytics refresh cancelled");
             }
             account.error = result.err().map(|error| error.to_string());
@@ -515,7 +517,7 @@ pub(super) fn refresh(client: &OpenRouterClient, history_days: u16) -> Result<Us
         // from that point instead of repeating the entire 90-day recovery.
         wait_for_request(&client.cancelled, StdDuration::ZERO)?;
         combine_accounts(&mut cache);
-        persist(&cache, Utc::now())?;
+        persist(client, &cache, Utc::now())?;
     }
     Ok(statistics(&cache, history_days))
 }

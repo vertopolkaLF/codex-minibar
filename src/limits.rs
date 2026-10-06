@@ -1,7 +1,7 @@
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::settings::ProviderKind;
+use crate::instances::ProviderId;
 use crate::usage::UsageStatistics;
 
 /// Windows longer than this are treated as weekly (or similar), not the 5h session.
@@ -31,6 +31,15 @@ pub struct LimitWindow {
 pub struct UsageAmount {
     pub used: f64,
     pub limit: f64,
+}
+
+/// Promotional Claude cloud-session amounts, reported directly in USD.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CloudSessionCredits {
+    pub limit_dollars: f64,
+    pub used_dollars: f64,
+    pub remaining_dollars: f64,
+    pub locked: bool,
 }
 
 /// A named quota window supplied in addition to the standard session and
@@ -110,18 +119,13 @@ pub struct OpenRouterAccountSnapshot {
     pub total_credits_microusd: Option<u64>,
 }
 
-/// One provider account's quota. `limits` keeps the last successful read, so a
-/// failing profile still shows its previous numbers next to `error`.
+/// A per-account sample cached before accounts became provider instances.
+/// Only read, so startup can seed each migrated instance with its last quota.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct AccountProfileSnapshot {
+pub struct LegacyAccountSnapshot {
     pub id: String,
-    pub name: String,
     pub limits: RateLimits,
-    pub error: Option<String>,
 }
-
-pub type ClaudeProfileSnapshot = AccountProfileSnapshot;
-pub type CodexProfileSnapshot = AccountProfileSnapshot;
 
 /// Pace tip on a usage progress bar (even-burn marker position).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -251,6 +255,8 @@ pub struct RateLimits {
     pub reset_credits: Option<RateLimitResetCreditsSummary>,
     /// Provider-specific quota windows beyond primary and secondary.
     pub additional_limits: Vec<AdditionalLimit>,
+    #[serde(default)]
+    pub cloud_session_credits: Option<CloudSessionCredits>,
     /// Optional provider-reported spending summary, such as an OpenRouter key
     /// budget. Existing providers leave this unset.
     #[serde(default)]
@@ -259,14 +265,14 @@ pub struct RateLimits {
     /// configured. Other providers leave this empty.
     #[serde(default)]
     pub openrouter_accounts: Vec<OpenRouterAccountSnapshot>,
-    /// Every enabled Claude profile when more than one is tracked. The fields
-    /// above then describe the first profile. Other providers leave this empty.
-    #[serde(default)]
-    pub claude_profiles: Vec<ClaudeProfileSnapshot>,
-    /// Independent enabled Codex accounts. Provider-level fields hold the
-    /// primary account sample used by tray widgets and activation guards.
-    #[serde(default)]
-    pub codex_profiles: Vec<CodexProfileSnapshot>,
+    /// Per-account samples written before provider instances existed.
+    #[serde(
+        default,
+        rename = "claude_profiles",
+        alias = "codex_profiles",
+        skip_serializing
+    )]
+    pub legacy_accounts: Vec<LegacyAccountSnapshot>,
     /// Token statistics computed from local Codex session logs.
     pub usage: UsageStatistics,
 }
@@ -275,28 +281,36 @@ pub struct RateLimits {
 /// merged: a Claude weekly limit must not overwrite Codex's five-hour window.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ProviderLimits {
-    values: std::collections::HashMap<ProviderKind, RateLimits>,
+    values: std::collections::HashMap<ProviderId, RateLimits>,
 }
 
 impl ProviderLimits {
-    pub fn get(&self, provider: ProviderKind) -> &RateLimits {
+    pub fn get(&self, provider: ProviderId) -> &RateLimits {
         static EMPTY: std::sync::OnceLock<RateLimits> = std::sync::OnceLock::new();
         self.values
             .get(&provider)
             .unwrap_or_else(|| EMPTY.get_or_init(RateLimits::default))
     }
 
-    pub fn get_mut(&mut self, provider: ProviderKind) -> &mut RateLimits {
+    pub fn get_mut(&mut self, provider: ProviderId) -> &mut RateLimits {
         self.values.entry(provider).or_default()
     }
 
-    pub fn from_entries(entries: impl IntoIterator<Item = (ProviderKind, RateLimits)>) -> Self {
+    pub fn remove(&mut self, provider: ProviderId) {
+        self.values.remove(&provider);
+    }
+
+    pub fn retain(&mut self, mut keep: impl FnMut(ProviderId) -> bool) {
+        self.values.retain(|provider, _| keep(*provider));
+    }
+
+    pub fn from_entries(entries: impl IntoIterator<Item = (ProviderId, RateLimits)>) -> Self {
         Self {
             values: entries.into_iter().collect(),
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (ProviderKind, &RateLimits)> {
+    pub fn iter(&self) -> impl Iterator<Item = (ProviderId, &RateLimits)> {
         self.values
             .iter()
             .map(|(provider, limits)| (*provider, limits))
@@ -304,32 +318,6 @@ impl ProviderLimits {
 }
 
 impl RateLimits {
-    /// The Claude profile a single-profile view shows: the selected one, or
-    /// the first when nothing valid is selected.
-    pub fn claude_profile(&self, selected: Option<&str>) -> Option<&ClaudeProfileSnapshot> {
-        self.claude_profiles
-            .iter()
-            .find(|profile| selected == Some(profile.id.as_str()))
-            .or(self.claude_profiles.first())
-    }
-
-    /// The Codex profile a single-profile view shows: the selected one, or
-    /// the first when nothing valid is selected.
-    pub fn codex_profile(&self, selected: Option<&str>) -> Option<&CodexProfileSnapshot> {
-        self.codex_profiles
-            .iter()
-            .find(|profile| selected == Some(profile.id.as_str()))
-            .or(self.codex_profiles.first())
-    }
-
-    pub fn account_profiles(&self, provider: ProviderKind) -> &[AccountProfileSnapshot] {
-        match provider {
-            ProviderKind::Codex => &self.codex_profiles,
-            ProviderKind::Claude => &self.claude_profiles,
-            _ => &[],
-        }
-    }
-
     /// OpenAI sometimes drops the 5h window and leaves weekly data in `primary`.
     /// Remap that so the UI/tray keep treating primary as the short session.
     pub fn normalized(mut self, now: DateTime<Utc>) -> Self {

@@ -57,6 +57,68 @@ pub(crate) fn icon(name: &str, size: f32, color: Hsla) -> gpui::Svg {
         .text_color(color)
 }
 
+/// Instance badge plate: up to three letters on the badge color, or on a
+/// neutral plate that follows the theme for `Auto`.
+pub(crate) fn badge_plate(badge: &crate::instances::Badge, height: f32, palette: &Palette) -> Div {
+    let (background, foreground) = match badge.color.rgb() {
+        Some(rgb) => (super::theme::rgb8(rgb), gpui::white()),
+        None => (
+            palette.text_secondary,
+            palette.solid_background.opacity(1.0),
+        ),
+    };
+    let size = (height * 0.68).max(7.0);
+    div()
+        .flex_none()
+        .h(px(height))
+        .min_w(px(height))
+        .px(px((height * 0.22).max(2.0)))
+        .rounded(px(height * 0.3))
+        .bg(background)
+        .border_1()
+        .border_color(palette.solid_background.opacity(0.9))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            text(
+                SharedString::from(badge.text.clone()),
+                size,
+                height,
+                foreground,
+            )
+            .font_weight(FontWeight::BOLD)
+            .whitespace_nowrap(),
+        )
+}
+
+/// A driver icon with the instance badge in its lower-right corner. The
+/// badge is drawn only while the driver has several enabled instances.
+pub(crate) fn provider_mark(
+    icon_name: &str,
+    size: f32,
+    color: Hsla,
+    badge: Option<&crate::instances::Badge>,
+    palette: &Palette,
+) -> Div {
+    let mut mark = div()
+        .relative()
+        .flex_none()
+        .size(px(size))
+        .child(icon(icon_name, size, color));
+    if let Some(badge) = badge {
+        let height = (size * 0.62).clamp(9.0, 14.0);
+        mark = mark.child(
+            div()
+                .absolute()
+                .right(px(-height * 0.45))
+                .bottom(px(-height * 0.3))
+                .child(badge_plate(badge, height, palette)),
+        );
+    }
+    mark
+}
+
 /// Standard Fluent card surface.
 pub(crate) fn card(palette: &Palette) -> Div {
     div()

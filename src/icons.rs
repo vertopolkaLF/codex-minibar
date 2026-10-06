@@ -75,6 +75,7 @@ pub fn geom(name: &str) -> IconGeom {
         "bell" => include_str!("../assets/icons/ph-bell-fill.svg"),
         "info" => include_str!("../assets/icons/ph-info-fill.svg"),
         "key" => include_str!("../assets/icons/ph-key-fill.svg"),
+        "user" => include_str!("../assets/icons/ph-user-fill.svg"),
         "desktop" => include_str!("../assets/icons/ph-desktop-fill.svg"),
         "terminal-window" => include_str!("../assets/icons/ph-terminal-window-fill.svg"),
         _ => panic!("unknown icon: {name}"),

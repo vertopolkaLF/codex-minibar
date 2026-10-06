@@ -1,19 +1,9 @@
-use super::persistence::{
-    persist_bool, persist_update, try_persist_update, try_persist_update_fallible,
-};
+use super::persistence::{persist_bool, try_persist_update_fallible};
 use super::platform::{choose_provider_folder, copy_text_to_clipboard, reveal_in_explorer};
 use super::*;
 use crate::claude::ProfileCredentialMethod;
 use crate::limits::{OpenRouterAccountSnapshot, OpenRouterApiKeySnapshot, SpendingSummary};
-
-static CODEX_PATH_SAVE_GEN: AtomicU64 = AtomicU64::new(0);
-static CLAUDE_PATH_SAVE_GEN: AtomicU64 = AtomicU64::new(0);
-static CURSOR_PATH_SAVE_GEN: AtomicU64 = AtomicU64::new(0);
-static ANTIGRAVITY_PATH_SAVE_GEN: AtomicU64 = AtomicU64::new(0);
-static GROK_PATH_SAVE_GEN: AtomicU64 = AtomicU64::new(0);
-static KIRO_APP_PATH_SAVE_GEN: AtomicU64 = AtomicU64::new(0);
-static KIRO_CREW_PATH_SAVE_GEN: AtomicU64 = AtomicU64::new(0);
-static KIRO_CLI_PATH_SAVE_GEN: AtomicU64 = AtomicU64::new(0);
+use std::sync::LazyLock;
 
 #[derive(Clone, PartialEq)]
 pub(super) struct ProviderInstallStatus {
@@ -35,6 +25,21 @@ enum ProviderInstallSource {
 }
 
 impl ProviderInstallStatus {
+    /// The "Checking…" placeholder with the sources a driver can report.
+    pub(super) fn checking_for(provider: ProviderKind) -> Self {
+        match provider {
+            ProviderKind::Kiro => Self::checking_kiro(),
+            ProviderKind::Grok => Self::checking_cli(),
+            ProviderKind::Codex | ProviderKind::Claude | ProviderKind::Antigravity => {
+                Self::checking()
+            }
+            ProviderKind::Cursor
+            | ProviderKind::OpenCodeZen
+            | ProviderKind::OpenCodeGo
+            | ProviderKind::OpenRouter => Self::checking_app(),
+        }
+    }
+
     pub(super) fn checking() -> Self {
         Self {
             app: None,
@@ -88,6 +93,57 @@ impl ProviderInstallStatus {
     }
 }
 
+/// Detects what one instance reads from: its binary/app (explicit path or
+/// discovery) and, for key-based drivers, its own saved credentials.
+pub(super) fn instance_install_status(instance: &ProviderInstance) -> ProviderInstallStatus {
+    let path = |path: &Option<PathBuf>| {
+        path.as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
+    let provider = instance.provider_id();
+    match instance.driver {
+        ProviderKind::Kiro => provider_install_status_kiro(
+            &path(&instance.binary_path),
+            &path(&instance.kiro_crew_path),
+            &path(&instance.kiro_cli_path),
+        ),
+        ProviderKind::OpenRouter => {
+            let detected = instance.openrouter.as_ref().is_some_and(|account| {
+                crate::openrouter::is_installed_for_accounts(std::slice::from_ref(account))
+            });
+            ProviderInstallStatus {
+                app: detected.then(|| "OpenRouter account credentials are configured".into()),
+                used: detected.then_some(ProviderInstallSource::App),
+                ..provider_install_status(ProviderKind::OpenRouter, "")
+            }
+        }
+        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo if !provider.is_primary() => {
+            // Secondary OpenCode instances read only their own API key.
+            let detected = crate::opencode::key_is_configured(provider);
+            ProviderInstallStatus {
+                app: detected.then(|| "Saved API key".into()),
+                used: detected.then_some(ProviderInstallSource::App),
+                ..provider_install_status(instance.driver, "")
+            }
+        }
+        ProviderKind::Claude if instance.uses_manual_credential() => {
+            let detected = crate::claude::load_manual_credential(&instance.id)
+                .ok()
+                .flatten()
+                .is_some_and(|value| !value.trim().is_empty());
+            ProviderInstallStatus {
+                app: detected.then(|| "Saved credential".into()),
+                cli: None,
+                used: detected.then_some(ProviderInstallSource::App),
+                cli_applicable: false,
+                ..provider_install_status(ProviderKind::Claude, "")
+            }
+        }
+        driver => provider_install_status(driver, &path(&instance.binary_path)),
+    }
+}
+
 pub(super) fn provider_install_status(
     provider: ProviderKind,
     configured_folder: &str,
@@ -138,11 +194,7 @@ pub(super) fn provider_install_status(
             let detail = detected.then(|| "OpenCode auth.json or local database".into());
             (detail, None, detected.then_some(ProviderInstallSource::App))
         }
-        ProviderKind::OpenRouter => {
-            let detected = crate::openrouter::is_installed();
-            let detail = detected.then(|| "OpenRouter account credentials are configured".into());
-            (detail, None, detected.then_some(ProviderInstallSource::App))
-        }
+        ProviderKind::OpenRouter => (None, None, None),
         ProviderKind::Antigravity => {
             let app = crate::antigravity::desktop_app(configured_folder);
             let cli = crate::antigravity::cli_available(configured_folder);
@@ -254,6 +306,9 @@ const DIALOG_SCRIM: Color = Color {
 pub(crate) struct OpenRouterSettingsSnapshot {
     pub(crate) accounts: Vec<OpenRouterAccountSnapshot>,
     pub(crate) sampled_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Signed-in account name of every instance that reported one, keyed by
+    /// instance id. Shown in each instance's Account section.
+    pub(crate) identities: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -275,7 +330,20 @@ pub(super) fn provider_readiness(status: &ProviderInstallStatus) -> ProviderRead
 
 #[derive(Clone, PartialEq)]
 pub(super) enum ProviderDialogKind {
-    AddOpenRouterAccount,
+    /// "+ Add provider": driver, name, badge and color.
+    AddInstance,
+    /// Delete an instance and everything Minibar stored for it.
+    DeleteInstance {
+        provider: ProviderId,
+    },
+    /// Run the CLI's own login with the instance's config folder.
+    SignIn {
+        provider: ProviderId,
+    },
+    /// Paste a Claude credential for a manual-source instance.
+    ManualCredential {
+        provider: ProviderId,
+    },
     /// `key_id: None` adds a new key slot; `Some` replaces that slot's secret.
     OpenRouterApiKey {
         account_id: String,
@@ -284,9 +352,6 @@ pub(super) enum ProviderDialogKind {
     OpenRouterManagementKey {
         account_id: String,
         replace: bool,
-    },
-    RenameOpenRouterAccount {
-        account_id: String,
     },
     RenameOpenRouterApiKey {
         account_id: String,
@@ -299,35 +364,12 @@ pub(super) enum ProviderDialogKind {
     RemoveOpenRouterManagementKey {
         account_id: String,
     },
-    RemoveOpenRouterAccount {
-        account_id: String,
-    },
     OpenCodeKey {
-        provider: ProviderKind,
+        provider: ProviderId,
         replace: bool,
     },
     RemoveOpenCodeKey {
-        provider: ProviderKind,
-    },
-    AddCodexProfile,
-    UpdateCodexCredential {
-        profile_id: String,
-    },
-    RenameCodexProfile {
-        profile_id: String,
-    },
-    RemoveCodexProfile {
-        profile_id: String,
-    },
-    AddClaudeProfile,
-    UpdateClaudeCredential {
-        profile_id: String,
-    },
-    RenameClaudeProfile {
-        profile_id: String,
-    },
-    RemoveClaudeProfile {
-        profile_id: String,
+        provider: ProviderId,
     },
 }
 
@@ -336,6 +378,11 @@ struct DialogInputs {
     name: String,
     key: String,
     second_key: String,
+    /// Add provider: the chosen driver.
+    driver: Option<ProviderKind>,
+    /// Add provider: badge override and color.
+    badge: String,
+    badge_color: BadgeColor,
 }
 
 /// Modal state for provider credential dialogs. Typed values live behind a
@@ -412,15 +459,12 @@ impl ProviderDialog {
     }
 
     fn is_sign_in(&self) -> bool {
-        matches!(
-            self.kind,
-            ProviderDialogKind::AddCodexProfile | ProviderDialogKind::UpdateCodexCredential { .. }
-        ) || self.claude_method == ProfileCredentialMethod::SignIn
-            && matches!(
-                self.kind,
-                ProviderDialogKind::AddClaudeProfile
-                    | ProviderDialogKind::UpdateClaudeCredential { .. }
-            )
+        matches!(self.kind, ProviderDialogKind::SignIn { .. })
+    }
+
+    /// The "Add provider" dialog with no driver chosen yet.
+    pub(super) fn add_instance() -> Self {
+        Self::new(ProviderDialogKind::AddInstance)
     }
 
     pub(super) fn login_control(&self) -> crate::claude::profile_oauth::LoginControl {
@@ -439,6 +483,8 @@ pub(super) struct ProviderDialogActions {
     pub(super) status_revision: u64,
     pub(super) set_status_revision: AsyncSetState<u64>,
     pub(super) settings_tx: Sender<Settings>,
+    /// Opens an instance's page (after Add provider or Delete).
+    pub(super) select_provider: Option<Arc<dyn Fn(ProviderId) + Send + Sync>>,
 }
 
 struct DialogOutcome {
@@ -454,24 +500,17 @@ fn money(microusd: u64) -> String {
     format!("${:.2}", microusd as f64 / 1_000_000.0)
 }
 
-fn account_display_name(account: &OpenRouterAccount) -> String {
-    let name = account.name.trim();
-    if name.is_empty() {
-        "Unnamed account".into()
-    } else {
-        name.to_owned()
-    }
-}
-
-fn find_account<'a>(
-    accounts: &'a [OpenRouterAccount],
+/// The OpenRouter instance that owns `account_id`.
+fn find_account_instance<'a>(
+    instances: &'a [ProviderInstance],
     account_id: &str,
-) -> Option<&'a OpenRouterAccount> {
-    accounts.iter().find(|account| account.id == account_id)
-}
-
-fn account_card_id(account_id: &str) -> String {
-    format!("openrouter-account-{account_id}")
+) -> Option<&'a ProviderInstance> {
+    instances.iter().find(|instance| {
+        instance
+            .openrouter
+            .as_ref()
+            .is_some_and(|account| account.id == account_id)
+    })
 }
 
 fn secondary_text(text: impl Into<String>) -> TextBlock {
@@ -705,38 +744,66 @@ fn show_provider_notice(set_notice: AsyncSetState<Option<String>>, message: Stri
 // Persistence
 // ---------------------------------------------------------------------------
 
-/// Apply an OpenRouter account-list change against on-disk settings, never a
-/// stale UI snapshot. Accounts are addressed by stable id so list shifts cannot
-/// move keys between accounts. The open window picks the result up through the
-/// live settings sync. Popup headings overlay these names onto the live quota
-/// snapshot, so a rename must not bump the credentials revision.
-fn persist_openrouter_accounts(
+/// Applies a change to one instance against on-disk settings, never a stale
+/// UI snapshot. The open window picks the result up through the live sync.
+fn persist_instance(
     settings_tx: Sender<Settings>,
-    bump_credentials: bool,
-    mutate: impl FnOnce(&mut Vec<OpenRouterAccount>) -> anyhow::Result<()> + 'static,
-) -> anyhow::Result<()> {
-    persist_openrouter_accounts_with_availability(settings_tx, bump_credentials, None, mutate)
-}
-
-fn persist_openrouter_accounts_with_availability(
-    settings_tx: Sender<Settings>,
-    bump_credentials: bool,
-    previous_availability: Option<bool>,
-    mutate: impl FnOnce(&mut Vec<OpenRouterAccount>) -> anyhow::Result<()> + 'static,
+    provider: ProviderId,
+    mutate: impl FnOnce(&mut ProviderInstance) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
     try_persist_update_fallible(settings_tx, move |settings| {
-        // Include the synthetic legacy account when present so edits land on
-        // the same identities the Settings UI is showing.
-        let mut accounts = crate::openrouter::accounts_for_settings(settings);
-        mutate(&mut accounts)?;
-        settings.openrouter_accounts = accounts;
-        if let Some(before) = previous_availability {
-            let after = crate::openrouter::has_management_key(&settings.openrouter_accounts);
-            settings.sync_openrouter_usage_availability(before, after);
-        }
+        let instance = settings
+            .instance_mut(provider)
+            .ok_or_else(|| anyhow::anyhow!("This provider no longer exists."))?;
+        mutate(instance)?;
+        instance.normalize();
+        Ok(())
+    })
+}
+
+/// Fire-and-forget variant for toggles and text fields; failures are shown
+/// as a notification instead of a dialog error.
+fn update_instance(
+    settings_tx: Sender<Settings>,
+    provider: ProviderId,
+    mutate: impl FnOnce(&mut ProviderInstance),
+) {
+    if let Err(error) = persist_instance(settings_tx, provider, |instance| {
+        mutate(instance);
+        Ok(())
+    }) {
+        crate::notifications::show("Could not save provider", &format!("{error:#}"));
+    }
+}
+
+/// Apply a change to one OpenRouter account. Accounts are addressed by stable
+/// id so list shifts cannot move keys between instances. Renaming key labels
+/// must not bump the credentials revision; popup headings overlay names.
+fn persist_openrouter_account(
+    settings_tx: Sender<Settings>,
+    account_id: String,
+    bump_credentials: bool,
+    previous_availability: Option<bool>,
+    mutate: impl FnOnce(&mut OpenRouterAccount) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    try_persist_update_fallible(settings_tx, move |settings| {
+        let provider = find_account_instance(&settings.instances, &account_id)
+            .map(ProviderInstance::provider_id)
+            .ok_or_else(|| anyhow::anyhow!("OpenRouter account no longer exists"))?;
+        let instance = settings
+            .instance_mut(provider)
+            .expect("instance just found");
+        let account = instance
+            .openrouter
+            .as_mut()
+            .expect("OpenRouter instance has an account");
+        mutate(account)?;
+        let after = crate::openrouter::has_management_key(std::slice::from_ref(account));
         if bump_credentials {
-            settings.openrouter_credentials_revision =
-                settings.openrouter_credentials_revision.wrapping_add(1);
+            instance.credentials_revision = instance.credentials_revision.wrapping_add(1);
+        }
+        if let Some(before) = previous_availability {
+            settings.sync_openrouter_usage_availability(provider, before, after);
         }
         Ok(())
     })
@@ -747,14 +814,19 @@ fn persist_openrouter_accounts_with_availability(
 /// is restored to its exact previous values so neither side can be orphaned.
 fn persist_openrouter_credentials(
     settings_tx: Sender<Settings>,
+    account_id: String,
     changes: Vec<crate::openrouter::AccountSecretChange>,
-    mutate: impl FnOnce(&mut Vec<OpenRouterAccount>) -> anyhow::Result<()> + 'static,
+    mutate: impl FnOnce(&mut OpenRouterAccount) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
     let current = Settings::load_or_create(&Settings::default_path()?)?;
-    let before = crate::openrouter::has_management_key(&current.openrouter_accounts);
+    let before = find_account_instance(&current.instances, &account_id)
+        .and_then(|instance| instance.openrouter.as_ref())
+        .is_some_and(|account| {
+            crate::openrouter::has_management_key(std::slice::from_ref(account))
+        });
     let rollback = crate::openrouter::apply_account_secret_changes(&changes)?;
     if let Err(error) =
-        persist_openrouter_accounts_with_availability(settings_tx, true, Some(before), mutate)
+        persist_openrouter_account(settings_tx, account_id, true, Some(before), mutate)
     {
         return match rollback.restore() {
             Ok(()) => Err(error),
@@ -766,154 +838,20 @@ fn persist_openrouter_credentials(
     Ok(())
 }
 
-/// Rename in place; changing the enabled account set or protected credentials
-/// advances the worker revision so queued reads from the old account set lose.
-fn persist_claude_profiles(
-    settings_tx: Sender<Settings>,
-    changed_credential: Option<&str>,
-    mutate: impl FnOnce(&mut Vec<ClaudeProfile>) -> anyhow::Result<()>,
-) -> anyhow::Result<()> {
-    try_persist_update_fallible(settings_tx, move |settings| {
-        let mut profiles = crate::claude::profiles_for_settings(settings);
-        let before = profiles
-            .iter()
-            .map(|p| (p.id.clone(), p.enabled))
-            .collect::<Vec<_>>();
-        mutate(&mut profiles)?;
-        let after = profiles
-            .iter()
-            .map(|p| (p.id.clone(), p.enabled))
-            .collect::<Vec<_>>();
-        settings.claude_profiles = profiles;
-        settings
-            .claude_profile_credential_revisions
-            .retain(|id, _| {
-                settings
-                    .claude_profiles
-                    .iter()
-                    .any(|profile| profile.id == *id)
-            });
-        if let Some(id) = changed_credential {
-            let revision = settings
-                .claude_profile_credential_revisions
-                .entry(id.to_owned())
-                .or_default();
-            *revision = revision.wrapping_add(1);
-        }
-        if changed_credential.is_some() || before != after {
-            settings.claude_credentials_revision =
-                settings.claude_credentials_revision.wrapping_add(1);
-        }
+fn bump_credentials(settings_tx: Sender<Settings>, provider: ProviderId) -> anyhow::Result<()> {
+    persist_instance(settings_tx, provider, |instance| {
+        instance.credentials_revision = instance.credentials_revision.wrapping_add(1);
         Ok(())
-    })
-}
-
-/// Keep the existing credential when validation or the settings commit fails.
-fn persist_claude_credential(
-    settings_tx: Sender<Settings>,
-    profile_id: &str,
-    credential: &str,
-    mutate: impl FnOnce(&mut Vec<ClaudeProfile>) -> anyhow::Result<()>,
-) -> anyhow::Result<()> {
-    let _guard = crate::claude::profile_oauth::credential_guard()?;
-    let previous = crate::claude::load_profile_credential(profile_id)?;
-    crate::claude::save_profile_credential(profile_id, Some(credential))?;
-    if let Err(error) = persist_claude_profiles(settings_tx, Some(profile_id), mutate) {
-        return match crate::claude::save_profile_credential(profile_id, previous.as_deref()) {
-            Ok(()) => Err(error),
-            Err(rollback_error) => Err(anyhow::anyhow!(
-                "Could not save profile settings ({error:#}); restoring its previous credential also failed ({rollback_error:#})."
-            )),
-        };
-    }
-    crate::claude::profile_oauth::forget(profile_id);
-    Ok(())
-}
-
-fn persist_codex_profiles(
-    settings_tx: Sender<Settings>,
-    changed_credential: Option<&str>,
-    mutate: impl FnOnce(&mut Vec<CodexProfile>) -> anyhow::Result<()>,
-) -> anyhow::Result<()> {
-    try_persist_update_fallible(settings_tx, move |settings| {
-        let mut profiles = crate::codex::profiles_for_settings(settings);
-        let before = profiles
-            .iter()
-            .map(|p| (p.id.clone(), p.enabled))
-            .collect::<Vec<_>>();
-        mutate(&mut profiles)?;
-        let after = profiles
-            .iter()
-            .map(|p| (p.id.clone(), p.enabled))
-            .collect::<Vec<_>>();
-        settings.codex_profiles = profiles;
-        settings.codex_profile_credential_revisions.retain(|id, _| {
-            settings
-                .codex_profiles
-                .iter()
-                .any(|profile| profile.id == *id)
-        });
-        if let Some(id) = changed_credential {
-            let revision = settings
-                .codex_profile_credential_revisions
-                .entry(id.to_owned())
-                .or_default();
-            *revision = revision.wrapping_add(1);
-        }
-        if changed_credential.is_some() || before != after {
-            settings.codex_credentials_revision =
-                settings.codex_credentials_revision.wrapping_add(1);
-        }
-        Ok(())
-    })
-}
-
-/// Keep the existing credential when validation or the settings commit fails.
-fn persist_codex_credential(
-    settings_tx: Sender<Settings>,
-    profile_id: &str,
-    credential: &str,
-    mutate: impl FnOnce(&mut Vec<CodexProfile>) -> anyhow::Result<()>,
-) -> anyhow::Result<()> {
-    let _guard = crate::codex::profile_oauth::credential_guard()?;
-    let previous = crate::codex::load_profile_credential(profile_id)?;
-    crate::codex::save_profile_credential(profile_id, Some(credential))?;
-    if let Err(error) = persist_codex_profiles(settings_tx, Some(profile_id), mutate) {
-        return match crate::codex::save_profile_credential(profile_id, previous.as_deref()) {
-            Ok(()) => Err(error),
-            Err(rollback_error) => Err(anyhow::anyhow!(
-                "Could not save profile settings ({error:#}); restoring its previous credential also failed ({rollback_error:#})."
-            )),
-        };
-    }
-    crate::codex::profile_oauth::forget(profile_id);
-    Ok(())
-}
-
-fn bump_opencode_credentials(
-    settings_tx: Sender<Settings>,
-    provider: ProviderKind,
-) -> anyhow::Result<()> {
-    try_persist_update(settings_tx, move |settings| match provider {
-        ProviderKind::OpenCodeZen => {
-            settings.opencode_zen_credentials_revision =
-                settings.opencode_zen_credentials_revision.wrapping_add(1);
-        }
-        ProviderKind::OpenCodeGo => {
-            settings.opencode_go_credentials_revision =
-                settings.opencode_go_credentials_revision.wrapping_add(1);
-        }
-        _ => {}
     })
 }
 
 fn persist_opencode_manual_key(
     settings_tx: Sender<Settings>,
-    provider: ProviderKind,
+    provider: ProviderId,
     value: Option<String>,
 ) -> anyhow::Result<()> {
     let rollback = crate::opencode::apply_manual_key(provider, value.as_deref())?;
-    if let Err(error) = bump_opencode_credentials(settings_tx, provider) {
+    if let Err(error) = bump_credentials(settings_tx, provider) {
         return match crate::opencode::restore_manual_key(rollback) {
             Ok(()) => Err(error),
             Err(rollback_error) => Err(anyhow::anyhow!(
@@ -924,114 +862,175 @@ fn persist_opencode_manual_key(
     Ok(())
 }
 
-#[derive(Clone, Copy)]
-enum ProviderPathTarget {
-    Provider(ProviderKind),
-    KiroApp,
-    KiroCrew,
-    KiroCli,
+/// Keep the existing credential when validation or the settings commit fails.
+fn persist_claude_manual_credential(
+    settings_tx: Sender<Settings>,
+    provider: ProviderId,
+    credential: &str,
+) -> anyhow::Result<()> {
+    let previous = crate::claude::load_manual_credential(provider.id())?;
+    crate::claude::save_manual_credential(provider.id(), Some(credential))?;
+    if let Err(error) = bump_credentials(settings_tx, provider) {
+        return match crate::claude::save_manual_credential(provider.id(), previous.as_deref()) {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(anyhow::anyhow!(
+                "Could not save provider settings ({error:#}); restoring its previous credential also failed ({rollback_error:#})."
+            )),
+        };
+    }
+    Ok(())
 }
 
-impl ProviderPathTarget {
-    fn display_name(self) -> &'static str {
+/// Forgets every secret Minibar stored for a deleted instance. Config folders
+/// belong to the CLI and are left on disk.
+fn forget_instance_secrets(instance: &ProviderInstance) {
+    let provider = instance.provider_id();
+    match instance.driver {
+        ProviderKind::Claude => {
+            if let Err(error) = crate::claude::save_manual_credential(&instance.id, None) {
+                eprintln!("failed to delete the Claude credential: {error:#}");
+            }
+        }
+        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
+            if let Err(error) = crate::opencode::save_manual_key(provider, None) {
+                eprintln!("failed to delete the OpenCode key: {error:#}");
+            }
+        }
+        ProviderKind::OpenRouter => {
+            if let Some(account) = &instance.openrouter {
+                let mut changes = account
+                    .api_key_ids
+                    .iter()
+                    .map(|key_id| {
+                        crate::openrouter::AccountSecretChange::api_key(
+                            account.id.clone(),
+                            key_id.clone(),
+                            None,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                changes.push(crate::openrouter::AccountSecretChange::management(
+                    account.id.clone(),
+                    None,
+                ));
+                if let Err(error) = crate::openrouter::apply_account_secret_changes(&changes) {
+                    eprintln!("failed to delete the OpenRouter keys: {error:#}");
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Paths
+// ---------------------------------------------------------------------------
+
+/// Which path field of an instance a folder picker edits.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum PathField {
+    /// CLI/app location (Kiro: IDE).
+    Binary,
+    KiroCrew,
+    KiroCli,
+    /// `CLAUDE_CONFIG_DIR` / `CODEX_HOME`.
+    ConfigFolder,
+}
+
+impl PathField {
+    fn key(self) -> &'static str {
         match self {
-            Self::Provider(provider) => provider.display_name(),
-            Self::KiroApp | Self::KiroCrew | Self::KiroCli => "Kiro",
+            Self::Binary => "binary",
+            Self::KiroCrew => "kiro-crew",
+            Self::KiroCli => "kiro-cli",
+            Self::ConfigFolder => "config-folder",
+        }
+    }
+
+    fn read(self, instance: &ProviderInstance) -> String {
+        let path = match self {
+            Self::Binary => instance.binary_path.as_ref(),
+            Self::KiroCrew => instance.kiro_crew_path.as_ref(),
+            Self::KiroCli => instance.kiro_cli_path.as_ref(),
+            Self::ConfigFolder => match &instance.source {
+                InstanceSource::ConfigFolder { path } => path.as_ref(),
+                InstanceSource::Manual => None,
+            },
+        };
+        path.map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+
+    fn write(self, instance: &mut ProviderInstance, folder: Option<PathBuf>) {
+        match self {
+            Self::Binary => instance.binary_path = folder,
+            Self::KiroCrew => instance.kiro_crew_path = folder,
+            Self::KiroCli => instance.kiro_cli_path = folder,
+            Self::ConfigFolder => {
+                instance.source = InstanceSource::ConfigFolder { path: folder };
+            }
         }
     }
 }
 
-fn persist_path_target(target: ProviderPathTarget, value: String, settings_tx: Sender<Settings>) {
-    let generation = path_save_generation(target);
-    let revision = generation.fetch_add(1, Ordering::Relaxed) + 1;
+static PATH_SAVE_GEN: LazyLock<Mutex<HashMap<String, u64>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Debounced path save, so typing a folder does not restart the worker on
+/// every keystroke.
+fn persist_path(
+    provider: ProviderId,
+    field: PathField,
+    value: String,
+    settings_tx: Sender<Settings>,
+) {
+    let key = format!("{}:{}", provider.id(), field.key());
+    let revision = {
+        let mut generations = PATH_SAVE_GEN.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = generations.entry(key.clone()).or_default();
+        *entry += 1;
+        *entry
+    };
     thread::spawn(move || {
         thread::sleep(Duration::from_millis(300));
-        if generation.load(Ordering::Relaxed) != revision {
+        let current = PATH_SAVE_GEN
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+            .copied();
+        if current != Some(revision) {
             return;
         }
         let folder = (!value.trim().is_empty()).then(|| PathBuf::from(value.trim()));
-        persist_update(settings_tx, move |settings| {
-            assign_provider_folder(settings, target, folder);
+        update_instance(settings_tx, provider, move |instance| {
+            field.write(instance, folder);
         });
     });
 }
 
-fn path_save_generation(target: ProviderPathTarget) -> &'static AtomicU64 {
-    match target {
-        ProviderPathTarget::Provider(provider) => match provider {
-            ProviderKind::Codex => &CODEX_PATH_SAVE_GEN,
-            ProviderKind::Claude => &CLAUDE_PATH_SAVE_GEN,
-            ProviderKind::Cursor => &CURSOR_PATH_SAVE_GEN,
-            ProviderKind::Antigravity => &ANTIGRAVITY_PATH_SAVE_GEN,
-            ProviderKind::Grok => &GROK_PATH_SAVE_GEN,
-            ProviderKind::OpenCodeZen
-            | ProviderKind::OpenCodeGo
-            | ProviderKind::OpenRouter
-            | ProviderKind::Kiro => unreachable!("provider has no generic custom path"),
-        },
-        ProviderPathTarget::KiroApp => &KIRO_APP_PATH_SAVE_GEN,
-        ProviderPathTarget::KiroCrew => &KIRO_CREW_PATH_SAVE_GEN,
-        ProviderPathTarget::KiroCli => &KIRO_CLI_PATH_SAVE_GEN,
-    }
-}
-
-fn assign_provider_folder(
-    settings: &mut Settings,
-    target: ProviderPathTarget,
-    folder: Option<PathBuf>,
-) {
-    match target {
-        ProviderPathTarget::KiroApp => settings.kiro_path = folder,
-        ProviderPathTarget::KiroCrew => settings.kiro_crew_path = folder,
-        ProviderPathTarget::KiroCli => settings.kiro_cli_path = folder,
-        ProviderPathTarget::Provider(provider) => match provider {
-            ProviderKind::Codex => settings.codex_path = folder,
-            ProviderKind::Claude => settings.claude_path = folder,
-            ProviderKind::Cursor => settings.cursor_path = folder,
-            ProviderKind::Antigravity => settings.antigravity_path = folder,
-            ProviderKind::Grok => settings.grok_path = folder,
-            ProviderKind::OpenCodeZen
-            | ProviderKind::OpenCodeGo
-            | ProviderKind::OpenRouter
-            | ProviderKind::Kiro => {}
-        },
-    }
-}
-
-fn pick_provider_folder(
-    target: ProviderPathTarget,
-    setter: SetState<String>,
-    settings_tx: Sender<Settings>,
-) {
+fn pick_folder(provider: ProviderId, field: PathField, settings_tx: Sender<Settings>) {
     match choose_provider_folder() {
         Ok(Some(folder)) => {
-            let value = folder.display().to_string();
-            setter.call(value.clone());
-            persist_path_target(target, value, settings_tx);
+            persist_path(provider, field, folder.display().to_string(), settings_tx);
         }
         Ok(None) => {}
-        Err(error) => eprintln!(
-            "failed to choose {} folder: {error:#}",
-            target.display_name()
-        ),
+        Err(error) => eprintln!("failed to choose a folder: {error:#}"),
     }
 }
 
-fn provider_folder_picker(
-    target: ProviderPathTarget,
-    path: &str,
+fn folder_picker(
+    provider: ProviderId,
+    field: PathField,
+    path: String,
     placeholder: &str,
-    setter: SetState<String>,
     settings_tx: Sender<Settings>,
 ) -> Element {
-    let picker_setter = setter.clone();
     let picker_tx = settings_tx.clone();
     grid((
         text_box(path)
             .placeholder_text(placeholder)
             .on_commit(move |value: String| {
-                setter.call(value.clone());
-                persist_path_target(target, value, settings_tx.clone());
+                persist_path(provider, field, value, settings_tx.clone());
             })
             .height(32.0)
             .grid_column(0),
@@ -1040,216 +1039,94 @@ fn provider_folder_picker(
             .width(44.0)
             .height(32.0)
             .tooltip("Choose folder")
-            .on_click(move || {
-                pick_provider_folder(target, picker_setter.clone(), picker_tx.clone())
-            })
+            .on_click(move || pick_folder(provider, field, picker_tx.clone()))
             .grid_column(1),
     ))
     .columns([GridLength::Star(1.0), GridLength::Auto])
     .column_spacing(8.0)
     .horizontal_alignment(HorizontalAlignment::Stretch)
+    // The text box keeps its typed text; remount when the stored path
+    // changes elsewhere so it never shows a stale value.
+    .with_key(format!("{}-{}", provider.id(), field.key()))
     .into()
 }
 
-fn persist_provider_enabled(
-    setter: SetState<bool>,
-    widgets_setter: SetState<Vec<TrayWidget>>,
-    settings_tx: Sender<Settings>,
-    provider: ProviderKind,
-    enabled: bool,
-    widgets: Vec<TrayWidget>,
-) {
-    setter.call(enabled);
-    widgets_setter.call(widgets);
-    persist_update(settings_tx, move |settings| {
-        settings.providers.set_enabled(provider, enabled);
-    });
-}
-
-// ---------------------------------------------------------------------------
-// Per-provider lookups
-// ---------------------------------------------------------------------------
-
-fn provider_enabled_state(
-    provider: ProviderKind,
-    ctx: &SettingsPageContext<'_>,
-) -> (bool, SetState<bool>) {
-    match provider {
-        ProviderKind::Codex => (ctx.codex_enabled, ctx.set_codex_enabled.clone()),
-        ProviderKind::Claude => (ctx.claude_enabled, ctx.set_claude_enabled.clone()),
-        ProviderKind::Cursor => (ctx.cursor_enabled, ctx.set_cursor_enabled.clone()),
-        ProviderKind::OpenCodeZen => (
-            ctx.opencode_zen_enabled,
-            ctx.set_opencode_zen_enabled.clone(),
-        ),
-        ProviderKind::OpenCodeGo => (ctx.opencode_go_enabled, ctx.set_opencode_go_enabled.clone()),
-        ProviderKind::OpenRouter => (ctx.openrouter_enabled, ctx.set_openrouter_enabled.clone()),
-        ProviderKind::Antigravity => (ctx.antigravity_enabled, ctx.set_antigravity_enabled.clone()),
-        ProviderKind::Grok => (ctx.grok_enabled, ctx.set_grok_enabled.clone()),
-        ProviderKind::Kiro => (ctx.kiro_enabled, ctx.set_kiro_enabled.clone()),
-    }
-}
-
-fn provider_install_status_for<'a>(
-    provider: ProviderKind,
-    ctx: &SettingsPageContext<'a>,
-) -> &'a ProviderInstallStatus {
-    match provider {
-        ProviderKind::Codex => ctx.codex_install_status,
-        ProviderKind::Claude => ctx.claude_install_status,
-        ProviderKind::Cursor => ctx.cursor_install_status,
-        ProviderKind::OpenCodeZen => ctx.opencode_zen_install_status,
-        ProviderKind::OpenCodeGo => ctx.opencode_go_install_status,
-        ProviderKind::OpenRouter => ctx.openrouter_install_status,
-        ProviderKind::Antigravity => ctx.antigravity_install_status,
-        ProviderKind::Grok => ctx.grok_install_status,
-        ProviderKind::Kiro => ctx.kiro_install_status,
-    }
-}
-
-fn provider_description(provider: ProviderKind) -> &'static str {
-    match provider {
-        ProviderKind::Codex => "Reads the signed-in Codex CLI or desktop app.",
-        ProviderKind::Claude => "Reads your existing Claude Code login.",
-        ProviderKind::Cursor => "Reads the signed-in Cursor app for this billing cycle.",
-        ProviderKind::OpenCodeZen => "Reads Zen auth and local OpenCode history.",
-        ProviderKind::OpenCodeGo => "Reads Go quota windows and local OpenCode history.",
-        ProviderKind::OpenRouter => {
-            "Reads API-key usage and spend limits. A management key also enables usage history and credit balance."
-        }
-        ProviderKind::Antigravity => {
-            "Reads subscription quota from your existing official agy Windows sign-in."
-        }
-        ProviderKind::Grok => {
-            "Reads SuperGrok subscription credits from your existing official Grok CLI sign-in."
-        }
-        ProviderKind::Kiro => {
-            "Fetches Kiro's live monthly credits with its shared sign-in; recognizes IDE, Crew, and CLI installs."
-        }
-    }
-}
-
-/// Display names for the app, Crew app, and CLI sources a provider can read from.
-fn source_labels(provider: ProviderKind) -> (&'static str, &'static str, &'static str) {
-    match provider {
-        ProviderKind::Codex => ("Codex desktop app", "", "Codex CLI"),
-        ProviderKind::Claude => ("Claude desktop app", "", "Claude Code CLI"),
-        ProviderKind::Cursor => ("Cursor app", "", ""),
-        ProviderKind::Antigravity => ("Antigravity app", "", "agy CLI"),
-        ProviderKind::Grok => ("", "", "Grok CLI"),
-        ProviderKind::Kiro => ("Kiro IDE", "Kiro Crew", "Kiro CLI"),
-        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo | ProviderKind::OpenRouter => {
-            ("", "", "")
-        }
-    }
-}
-
-struct FolderConfig<'a> {
-    target: ProviderPathTarget,
-    key: &'static str,
-    path: &'a str,
-    setter: SetState<String>,
+struct FolderConfig {
+    field: PathField,
     label: &'static str,
     description: &'static str,
     placeholder: &'static str,
 }
 
-fn folder_configs<'a>(
-    provider: ProviderKind,
-    ctx: &SettingsPageContext<'a>,
-) -> Vec<FolderConfig<'a>> {
-    let provider_config = match provider {
-        ProviderKind::Codex => Some(FolderConfig {
-            target: ProviderPathTarget::Provider(provider),
-            key: "codex-cli",
-            path: ctx.codex_path,
-            setter: ctx.set_codex_path.clone(),
-            label: "Custom Codex CLI folder",
-            description: "Folder with codex.exe, codex.cmd, or codex.ps1. Leave empty to find it automatically.",
-            placeholder: r"C:\Users\you\AppData\Roaming\npm",
-        }),
-        ProviderKind::Claude => Some(FolderConfig {
-            target: ProviderPathTarget::Provider(provider),
-            key: "claude-cli",
-            path: ctx.claude_path,
-            setter: ctx.set_claude_path.clone(),
-            label: "Custom Claude Code CLI folder",
-            description: "Folder with claude.exe, claude.cmd, or claude.ps1. Leave empty to find it automatically.",
-            placeholder: r"C:\Users\you\AppData\Roaming\npm",
-        }),
-        ProviderKind::Cursor => Some(FolderConfig {
-            target: ProviderPathTarget::Provider(provider),
-            key: "cursor-app",
-            path: ctx.cursor_path,
-            setter: ctx.set_cursor_path.clone(),
-            label: "Custom Cursor app folder",
-            description: "Folder with Cursor.exe. Leave empty to find it automatically. Usage still comes from the signed-in profile.",
-            placeholder: r"C:\Users\you\AppData\Local\Programs\Cursor",
-        }),
-        ProviderKind::Antigravity => Some(FolderConfig {
-            target: ProviderPathTarget::Provider(provider),
-            key: "agy-cli",
-            path: ctx.antigravity_path,
-            setter: ctx.set_antigravity_path.clone(),
-            label: "Custom agy CLI folder",
-            description: "Folder with agy.exe, agy.cmd, or agy.ps1. Leave empty to find it automatically.",
-            placeholder: r"C:\Users\you\AppData\Local\agy\bin",
-        }),
-        ProviderKind::Grok => Some(FolderConfig {
-            target: ProviderPathTarget::Provider(provider),
-            key: "grok-cli",
-            path: ctx.grok_path,
-            setter: ctx.set_grok_path.clone(),
-            label: "Custom Grok CLI folder",
-            description: "Folder with grok.exe, grok.cmd, or grok.ps1. Leave empty to find it automatically.",
-            placeholder: r"C:\Users\you\.grok\bin",
-        }),
-        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo | ProviderKind::OpenRouter => None,
-        ProviderKind::Kiro => None,
+fn folder_configs(driver: ProviderKind) -> Vec<FolderConfig> {
+    let binary = |label, description, placeholder| FolderConfig {
+        field: PathField::Binary,
+        label,
+        description,
+        placeholder,
     };
-    if provider == ProviderKind::Kiro {
-        vec![
+    match driver {
+        ProviderKind::Codex => vec![binary(
+            "Codex CLI folder",
+            "Folder with codex.exe, codex.cmd, or codex.ps1. Leave empty to find it automatically.",
+            r"C:\Users\you\AppData\Roaming\npm",
+        )],
+        ProviderKind::Claude => vec![binary(
+            "Claude Code CLI folder",
+            "Folder with claude.exe, claude.cmd, or claude.ps1. Leave empty to find it automatically.",
+            r"C:\Users\you\AppData\Roaming\npm",
+        )],
+        ProviderKind::Cursor => vec![binary(
+            "Cursor app folder",
+            "Folder with Cursor.exe. Leave empty to find it automatically. Usage still comes from the signed-in profile.",
+            r"C:\Users\you\AppData\Local\Programs\Cursor",
+        )],
+        ProviderKind::Antigravity => vec![binary(
+            "agy CLI folder",
+            "Folder with agy.exe, agy.cmd, or agy.ps1. Leave empty to find it automatically.",
+            r"C:\Users\you\AppData\Local\agy\bin",
+        )],
+        ProviderKind::Grok => vec![binary(
+            "Grok CLI folder",
+            "Folder with grok.exe, grok.cmd, or grok.ps1. Leave empty to find it automatically.",
+            r"C:\Users\you\.grok\bin",
+        )],
+        ProviderKind::Kiro => vec![
+            binary(
+                "Kiro IDE folder",
+                "Folder containing Kiro.exe, or the executable itself. Leave empty to find it automatically.",
+                r"C:\Users\you\AppData\Local\Programs\Kiro",
+            ),
             FolderConfig {
-                target: ProviderPathTarget::KiroApp,
-                key: "kiro-app",
-                path: ctx.kiro_path,
-                setter: ctx.set_kiro_path.clone(),
-                label: "Custom Kiro IDE folder",
-                description: "Folder containing Kiro.exe, or the executable itself. Leave empty to find it automatically.",
-                placeholder: r"C:\Users\you\AppData\Local\Programs\Kiro",
-            },
-            FolderConfig {
-                target: ProviderPathTarget::KiroCrew,
-                key: "kiro-crew-app",
-                path: ctx.kiro_crew_path,
-                setter: ctx.set_kiro_crew_path.clone(),
-                label: "Custom Kiro Crew app path",
+                field: PathField::KiroCrew,
+                label: "Kiro Crew app path",
                 description: "Folder containing KiroCrew.exe, or the executable itself. Leave empty to detect per-user and all-users installs automatically.",
                 placeholder: r"C:\Users\you\AppData\Local\Programs\KiroCrew",
             },
             FolderConfig {
-                target: ProviderPathTarget::KiroCli,
-                key: "kiro-cli",
-                path: ctx.kiro_cli_path,
-                setter: ctx.set_kiro_cli_path.clone(),
-                label: "Custom Kiro CLI folder",
+                field: PathField::KiroCli,
+                label: "Kiro CLI folder",
                 description: "Folder containing kiro-cli.exe, or the executable itself. Leave empty to find it automatically.",
                 placeholder: r"C:\Users\you\AppData\Local\kiro-cli",
             },
-        ]
-    } else {
-        provider_config.into_iter().collect()
+        ],
+        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo | ProviderKind::OpenRouter => {
+            Vec::new()
+        }
     }
 }
 
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
+
 /// One-line status shared by the page header and the sidebar dot.
 fn provider_status_line(
-    provider: ProviderKind,
-    enabled: bool,
+    instance: &ProviderInstance,
     status: &ProviderInstallStatus,
-    ctx: &SettingsPageContext<'_>,
 ) -> (String, Option<ThemeRef>) {
-    if !enabled {
+    let provider = instance.driver;
+    if !instance.enabled {
         return ("Off".into(), None);
     }
     let readiness = provider_readiness(status);
@@ -1259,34 +1136,44 @@ fn provider_status_line(
         ProviderReadiness::NeedsSetup => Some(ThemeRef::SystemCaution),
     };
     if provider == ProviderKind::OpenRouter {
-        let accounts = ctx.openrouter_accounts;
-        if accounts.is_empty() {
-            return ("No accounts yet".into(), Some(ThemeRef::SystemCaution));
+        let keys = instance
+            .openrouter
+            .as_ref()
+            .map_or(0, |account| account.api_key_ids.len());
+        let management = instance.openrouter.as_ref().is_some_and(|account| {
+            crate::openrouter::has_management_key(std::slice::from_ref(account))
+        });
+        if keys == 0 && !management {
+            return ("No keys yet".into(), Some(ThemeRef::SystemCaution));
         }
-        let keys = accounts
-            .iter()
-            .map(|account| account.api_key_ids.len())
-            .sum::<usize>();
-        return (
-            format!(
-                "{} · {}",
-                plural(accounts.len(), "account"),
-                plural(keys, "API key")
-            ),
-            dot,
-        );
+        let mut text = plural(keys, "API key");
+        if management {
+            text.push_str(" · management key");
+        }
+        return (text, dot);
+    }
+    if instance.uses_manual_credential() {
+        return match readiness {
+            ProviderReadiness::Ready => ("Using a saved credential".into(), dot),
+            ProviderReadiness::Checking => ("Checking…".into(), dot),
+            ProviderReadiness::NeedsSetup => ("Paste a credential under Account".into(), dot),
+        };
     }
     let text = match readiness {
         ProviderReadiness::Checking => "Checking…".to_owned(),
         ProviderReadiness::NeedsSetup => match provider {
             ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
-                "Needs an API key or OpenCode sign-in".to_owned()
+                if instance.is_primary() {
+                    "Needs an API key or OpenCode sign-in".to_owned()
+                } else {
+                    "Needs an API key".to_owned()
+                }
             }
-            _ => "Not found. Set its folder under Advanced.".to_owned(),
+            _ => "Not found. Set its folder under Runtime.".to_owned(),
         },
         ProviderReadiness::Ready => match provider {
             ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
-                if crate::opencode::key_is_configured(provider) {
+                if crate::opencode::key_is_configured(instance.provider_id()) {
                     "Using a saved API key".to_owned()
                 } else {
                     "Using OpenCode sign-in or local history".to_owned()
@@ -1305,25 +1192,77 @@ fn provider_status_line(
     (text, dot)
 }
 
-// ---------------------------------------------------------------------------
-// Page
-// ---------------------------------------------------------------------------
+/// A small rounded chip next to the status line (e.g. `Limits only`).
+fn status_chip(label: &str) -> Element {
+    border(
+        text_block(label)
+            .font_size(11.0)
+            .semibold()
+            .foreground(ThemeRef::SecondaryText),
+    )
+    .padding(Thickness {
+        left: 6.0,
+        top: 1.0,
+        right: 6.0,
+        bottom: 2.0,
+    })
+    .corner_radius(4.0)
+    .background(ThemeRef::ControlFillSecondary)
+    .border_thickness(Thickness::uniform(1.0))
+    .border_brush(ThemeRef::CardStroke)
+    .vertical_alignment(VerticalAlignment::Center)
+    .into()
+}
+
+/// A badge plate as drawn in the sidebar and popup.
+fn badge_plate(badge: &crate::instances::Badge, color_scheme: ColorScheme) -> Element {
+    let (background, foreground) = match badge.color.rgb() {
+        Some((r, g, b)) => (Color::rgb(r, g, b), Color::rgb(255, 255, 255)),
+        None => match color_scheme {
+            ColorScheme::Dark => (Color::rgb(200, 200, 200), Color::rgb(28, 28, 28)),
+            ColorScheme::Light => (Color::rgb(90, 90, 90), Color::rgb(255, 255, 255)),
+        },
+    };
+    border(
+        text_block(badge.text.clone())
+            .font_size(11.0)
+            .bold()
+            .foreground(foreground)
+            .horizontal_alignment(HorizontalAlignment::Center)
+            .vertical_alignment(VerticalAlignment::Center),
+    )
+    .padding(Thickness {
+        left: 4.0,
+        top: 0.0,
+        right: 4.0,
+        bottom: 1.0,
+    })
+    .min_width(20.0)
+    .height(18.0)
+    .corner_radius(4.0)
+    .background(background)
+    .vertical_alignment(VerticalAlignment::Center)
+    .into()
+}
 
 fn provider_header(
-    provider: ProviderKind,
-    enabled: bool,
+    instance: &ProviderInstance,
     status_text: String,
     dot: Option<ThemeRef>,
-    color_scheme: ColorScheme,
-    on_toggled: impl Fn(bool) + 'static,
+    show_badge: bool,
+    ctx: &SettingsPageContext<'_>,
 ) -> Element {
-    let icon_name = crate::provider_registry::icon(provider);
+    let provider = instance.provider_id();
+    let driver = instance.driver;
+    let enabled = instance.enabled;
+    let color_scheme = ctx.color_scheme;
+    let icon_name = crate::provider_registry::icon(driver);
     let scheme_tag = match color_scheme {
         ColorScheme::Dark => "dark",
         ColorScheme::Light => "light",
     };
     let icon_color = if enabled {
-        crate::icons::provider_brand_color(provider, color_scheme)
+        crate::icons::provider_brand_color(driver, color_scheme)
     } else {
         match color_scheme {
             ColorScheme::Dark => Color::rgb(230, 230, 230),
@@ -1341,6 +1280,24 @@ fn provider_header(
             .vertical_alignment(VerticalAlignment::Center)
             .into(),
     );
+    if crate::instances::Capabilities::of(instance).limits_only() {
+        status.push(status_chip("Limits only"));
+    }
+    let mut title: Vec<Element> = Vec::new();
+    if show_badge {
+        title.push(badge_plate(&instance.badge(), color_scheme));
+    }
+    title.push(
+        text_block(instance.display_name())
+            .font_size(28.0)
+            .bold()
+            .vertical_alignment(VerticalAlignment::Center)
+            .into(),
+    );
+    let settings_tx = ctx.settings_tx.clone();
+    let widgets = ctx.tray_widgets.to_vec();
+    let widgets_setter = ctx.set_tray_widgets.clone();
+    let delete_dialog = ctx.set_provider_dialog.clone();
     grid(vec![
         border(
             crate::icons::element(icon_name, 24.0, icon_color)
@@ -1364,9 +1321,8 @@ fn provider_header(
         ))
         .into(),
         vstack((
-            text_block(provider.display_name())
-                .font_size(28.0)
-                .bold()
+            hstack(title)
+                .spacing(10.0)
                 // Title line-box is ~36px for a 28px Segoe face. Trim the extra
                 // leading so the name+status group optically matches the 48px icon.
                 .margin(Thickness {
@@ -1389,10 +1345,30 @@ fn provider_header(
             ToggleSwitch::new(enabled)
                 .on_content("")
                 .off_content("")
-                .on_toggled(on_toggled)
+                .on_toggled(move |value: bool| {
+                    widgets_setter.call(widgets.clone());
+                    update_instance(settings_tx.clone(), provider, move |instance| {
+                        instance.enabled = value;
+                    });
+                })
                 .min_width(0.0)
                 .max_width(50.0)
                 .width(50.0)
+                .vertical_alignment(VerticalAlignment::Center),
+            Button::new("")
+                .icon(Symbol::Delete)
+                .subtle()
+                .tooltip("Delete provider")
+                .on_click(move || {
+                    open_dialog(
+                        &delete_dialog,
+                        ProviderDialogKind::DeleteInstance { provider },
+                    )
+                })
+                .width(36.0)
+                .height(32.0)
+                .min_width(0.0)
+                .padding(Thickness::uniform(0.0))
                 .vertical_alignment(VerticalAlignment::Center),
         ))
         .spacing(12.0)
@@ -1412,39 +1388,15 @@ fn provider_header(
     .into()
 }
 
-pub(super) fn provider_page_content(
-    provider: ProviderKind,
-    ctx: &SettingsPageContext<'_>,
-) -> Element {
-    let (enabled, set_enabled) = provider_enabled_state(provider, ctx);
-    let status = provider_install_status_for(provider, ctx);
-    let (status_text, dot) = provider_status_line(provider, enabled, status, ctx);
-    let on_toggled = {
-        let widgets_setter = ctx.set_tray_widgets.clone();
-        let widgets = ctx.tray_widgets.to_vec();
-        let settings_tx = ctx.settings_tx.clone();
-        move |value: bool| {
-            persist_provider_enabled(
-                set_enabled.clone(),
-                widgets_setter.clone(),
-                settings_tx.clone(),
-                provider,
-                value,
-                widgets.clone(),
-            )
-        }
-    };
-
+/// Shown in the Providers pane when no instance is configured.
+pub(super) fn no_providers_page(ctx: &SettingsPageContext<'_>) -> Element {
+    let set_dialog = ctx.set_provider_dialog.clone();
     let mut rows: Vec<Element> = vec![
-        provider_header(
-            provider,
-            enabled,
-            status_text,
-            dot,
-            ctx.color_scheme,
-            on_toggled,
-        )
-        .with_key("provider-header"),
+        text_block("Providers")
+            .font_size(28.0)
+            .bold()
+            .with_key("no-providers-title")
+            .into(),
     ];
     if let Some(notice) = ctx.provider_notice {
         rows.push(
@@ -1455,49 +1407,79 @@ pub(super) fn provider_page_content(
                 .into(),
         );
     }
-    if !enabled {
+    rows.push(
+        provider_card(
+            vstack((
+                secondary_text("No providers yet. Add one to start reading limits.")
+                    .horizontal_alignment(HorizontalAlignment::Center),
+                Button::new("Add provider")
+                    .icon(Symbol::Add)
+                    .accent()
+                    .on_click(move || set_dialog.call(Some(ProviderDialog::add_instance())))
+                    .horizontal_alignment(HorizontalAlignment::Center),
+            ))
+            .spacing(10.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch),
+        )
+        .with_key("no-providers-card"),
+    );
+    vstack(rows)
+        .spacing(8.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .vertical_alignment(VerticalAlignment::Top)
+        .into()
+}
+
+pub(super) fn provider_page_content(
+    provider: ProviderId,
+    ctx: &SettingsPageContext<'_>,
+) -> Element {
+    let Some(instance) = ctx.instance(provider).cloned() else {
+        return no_providers_page(ctx);
+    };
+    let status = ctx.install_status(provider);
+    let (status_text, dot) = provider_status_line(&instance, &status);
+    let show_badge = ctx
+        .instances
+        .iter()
+        .filter(|other| other.driver == instance.driver)
+        .count()
+        > 1;
+
+    let mut rows: Vec<Element> = vec![
+        provider_header(&instance, status_text, dot, show_badge, ctx).with_key("provider-header"),
+    ];
+    if let Some(notice) = ctx.provider_notice {
+        rows.push(
+            InfoBar::new(notice.clone())
+                .success()
+                .is_closable(false)
+                .with_key("provider-notice")
+                .into(),
+        );
+    }
+    if !instance.enabled {
         rows.push(
             provider_card(secondary_text(format!(
                 "{} is off, so it doesn't appear in the minibar or tray. Turn it on to start reading usage.",
-                provider.display_name()
+                instance.display_name()
             )))
             .with_key("provider-off-note"),
         );
     }
-    let mut sections = match provider {
-        ProviderKind::OpenRouter => openrouter_sections(ctx),
-        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
-            opencode_sections(provider, status, ctx)
-        }
-        ProviderKind::Codex => {
-            let mut sections = codex_profile_sections(ctx);
-            sections.extend(install_sections(provider, status, ctx));
-            sections
-        }
-        ProviderKind::Claude => {
-            let mut sections = claude_profile_sections(ctx);
-            sections.extend(install_sections(provider, status, ctx));
-            sections
-        }
-        _ => install_sections(provider, status, ctx),
-    };
-    let appearance_position = sections
-        .iter()
-        .position(|section| section.key() == Some("advanced-header"))
-        .unwrap_or(sections.len());
-    let mut appearance = Vec::new();
-    if !sections
-        .iter()
-        .any(|section| section.key() == Some("appearance-header"))
-    {
-        appearance.push(section_header("Appearance", None, None).with_key("appearance-header"));
+    let mut sections = general_sections(&instance, ctx);
+    sections.extend(account_sections(&instance, ctx));
+    sections.extend(runtime_sections(&instance, &status, ctx));
+    sections.extend(feature_sections(&instance, ctx));
+    sections.push(section_header("Appearance", None, None).with_key("appearance-header"));
+    if instance.driver == ProviderKind::Codex {
+        sections.push(codex_logo_toggle(ctx).with_key("codex-replace-logo"));
     }
-    appearance.extend(super::customize::provider_settings_cards(provider, ctx));
-    sections.splice(appearance_position..appearance_position, appearance);
+    sections.extend(super::customize::provider_settings_cards(&instance, ctx));
     rows.push(
         vstack(sections)
             .spacing(4.0)
-            .opacity(if enabled { 1.0 } else { 0.5 })
+            .opacity(if instance.enabled { 1.0 } else { 0.5 })
             .with_opacity_transition(duration(CONTROL_FAST_ANIMATION))
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .with_key(format!("provider-{}-sections", provider.id()))
@@ -1514,116 +1496,474 @@ pub(super) fn provider_page_content(
         .into()
 }
 
-fn checking_card(status: &ProviderInstallStatus) -> Element {
-    let message = if status.crew_applicable {
-        "Checking Kiro IDE, Kiro Crew, and CLI…"
-    } else if status.app_applicable && status.cli_applicable {
-        "Checking installed app and CLI…"
-    } else if status.cli_applicable {
-        "Checking CLI…"
-    } else {
-        "Checking installed app…"
-    };
-    provider_card(secondary_text(message))
+/// A labeled control row inside a provider card.
+fn control_row(title: &str, description: &str, control: Element) -> Element {
+    provider_card(provider_row(
+        None,
+        title,
+        vec![secondary_text(description).into()],
+        vec![control],
+    ))
 }
 
-fn install_sections(
-    provider: ProviderKind,
+/// A toggle row that stays visible but disabled, with the reason, when the
+/// instance lacks the capability. Losing a capability never resets the
+/// stored value.
+fn capability_toggle(
+    title: &str,
+    description: &str,
+    value: bool,
+    reason: Option<&'static str>,
+    on_toggled: impl Fn(bool) + 'static,
+) -> Element {
+    let available = reason.is_none();
+    let mut detail: Vec<Element> = vec![secondary_text(description).into()];
+    if let Some(reason) = reason {
+        detail.push(
+            text_block(reason)
+                .font_size(12.0)
+                .foreground(ThemeRef::SystemCaution)
+                .wrap()
+                .into(),
+        );
+    }
+    provider_card(provider_row(
+        None,
+        title,
+        detail,
+        vec![
+            ToggleSwitch::new(value && available)
+                .on_content("")
+                .off_content("")
+                .enabled(available)
+                .on_toggled(on_toggled)
+                .min_width(0.0)
+                .width(50.0)
+                .vertical_alignment(VerticalAlignment::Center)
+                .into(),
+        ],
+    ))
+}
+
+fn general_sections(instance: &ProviderInstance, ctx: &SettingsPageContext<'_>) -> Vec<Element> {
+    let provider = instance.provider_id();
+    let mut out = vec![section_header("General", None, None).with_key("general-header")];
+    let name_tx = ctx.settings_tx.clone();
+    out.push(
+        control_row(
+            "Display name",
+            "Shown on popup tabs, Home cards, the tray and notifications.",
+            text_box(instance.name.clone())
+                .placeholder_text(instance.driver.display_name())
+                .on_commit(move |value: String| {
+                    update_instance(name_tx.clone(), provider, move |instance| {
+                        instance.name = value;
+                    });
+                })
+                .width(220.0)
+                .height(32.0)
+                .vertical_alignment(VerticalAlignment::Center)
+                .into(),
+        )
+        .with_key(format!("instance-name-{}", instance.name)),
+    );
+    let badge_tx = ctx.settings_tx.clone();
+    out.push(
+        control_row(
+            "Badge",
+            "Up to three letters. Leave empty to use the name's initials. Shown while a provider has more than one instance turned on.",
+            hstack((
+                badge_plate(&instance.badge(), ctx.color_scheme),
+                text_box(instance.badge.clone())
+                    .placeholder_text(instance.badge().text)
+                    .on_commit(move |value: String| {
+                        update_instance(badge_tx.clone(), provider, move |instance| {
+                            instance.badge = crate::instances::sanitize_badge(&value);
+                        });
+                    })
+                    .width(96.0)
+                    .height(32.0),
+            ))
+            .spacing(8.0)
+            .vertical_alignment(VerticalAlignment::Center)
+            .into(),
+        )
+        .with_key(format!("instance-badge-{}", instance.badge)),
+    );
+    let color_tx = ctx.settings_tx.clone();
+    out.push(
+        control_row(
+            "Badge color",
+            "Auto uses a neutral plate that follows the theme.",
+            ComboBox::new(BadgeColor::ALL.map(BadgeColor::label))
+                .selected_index(instance.badge_color.index())
+                .on_selection_changed(move |index: i32| {
+                    let color = BadgeColor::from_index(index);
+                    update_instance(color_tx.clone(), provider, move |instance| {
+                        instance.badge_color = color;
+                    });
+                })
+                .width(160.0)
+                .vertical_alignment(VerticalAlignment::Center)
+                .into(),
+        )
+        .with_key("instance-badge-color"),
+    );
+    let home_tx = ctx.settings_tx.clone();
+    out.push(
+        control_row(
+            "Show on Home",
+            "Its provider tab stays available when hidden from Home.",
+            ToggleSwitch::new(instance.show_on_home)
+                .on_content("")
+                .off_content("")
+                .on_toggled(move |value: bool| {
+                    update_instance(home_tx.clone(), provider, move |instance| {
+                        instance.show_on_home = value;
+                    });
+                })
+                .min_width(0.0)
+                .width(50.0)
+                .vertical_alignment(VerticalAlignment::Center)
+                .into(),
+        )
+        .with_key("instance-show-on-home"),
+    );
+    out
+}
+
+fn account_sections(instance: &ProviderInstance, ctx: &SettingsPageContext<'_>) -> Vec<Element> {
+    let provider = instance.provider_id();
+    match instance.driver {
+        ProviderKind::Claude | ProviderKind::Codex => {}
+        ProviderKind::OpenRouter => return openrouter_sections(instance, ctx),
+        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
+            return opencode_key_section(instance, ctx);
+        }
+        _ => return Vec::new(),
+    }
+    let mut out = vec![section_header("Account", None, None).with_key("account-header")];
+    let identity = ctx
+        .openrouter_snapshot
+        .identities
+        .get(&instance.id)
+        .cloned();
+    if instance.uses_manual_credential() {
+        let saved = crate::claude::load_manual_credential(&instance.id)
+            .ok()
+            .flatten()
+            .filter(|value| !value.trim().is_empty());
+        let set_dialog = ctx.set_provider_dialog.clone();
+        let mut detail: Vec<Element> = vec![
+            secondary_text(match (&saved, &identity) {
+                (Some(_), Some(identity)) => format!("Signed in as {identity}"),
+                (Some(_), None) => "Saved in Windows user storage".into(),
+                (None, _) => "Paste a sessionKey or an OAuth access token.".into(),
+            })
+            .into(),
+        ];
+        if saved.is_some() {
+            detail.push(
+                secondary_text("Reads limits only. Minibar cannot refresh a pasted credential.")
+                    .into(),
+            );
+        }
+        let mut trailing: Vec<Element> = Vec::new();
+        if let Some(saved) = &saved {
+            trailing.push(masked_key_text(crate::secrets::masked_hint(saved)));
+        }
+        trailing.push(
+            Button::new(if saved.is_some() {
+                "Replace credential"
+            } else {
+                "Add credential"
+            })
+            .on_click(move || {
+                open_dialog(
+                    &set_dialog,
+                    ProviderDialogKind::ManualCredential { provider },
+                )
+            })
+            .into(),
+        );
+        out.push(
+            provider_card(provider_row(
+                Some(row_icon("key", ctx.color_scheme)),
+                "Credential",
+                detail,
+                trailing,
+            ))
+            .with_key("account-manual"),
+        );
+        return out;
+    }
+    let folder = instance
+        .config_folder()
+        .or_else(|| crate::instances::default_folder(instance.driver));
+    let set_dialog = ctx.set_provider_dialog.clone();
+    let sign_in_reason =
+        crate::instances::Capabilities::reason(instance, crate::instances::Capability::SignIn);
+    let detail = match &identity {
+        Some(identity) => format!("Signed in as {identity}"),
+        None => "Not signed in yet, or no limits read so far.".into(),
+    };
+    let mut detail: Vec<Element> = vec![secondary_text(detail).into()];
+    if let Some(folder) = &folder {
+        detail.push(
+            text_block(display_fs_path(folder))
+                .font_size(12.0)
+                .foreground(ThemeRef::TertiaryText)
+                .max_lines(1)
+                .tooltip(display_fs_path(folder))
+                .into(),
+        );
+    }
+    out.push(
+        provider_card(provider_row(
+            Some(row_icon("user", ctx.color_scheme)),
+            "Signed-in account",
+            detail,
+            vec![
+                Button::new(if identity.is_some() {
+                    "Sign in again"
+                } else {
+                    "Sign in"
+                })
+                .enabled(sign_in_reason.is_none())
+                .on_click(move || open_dialog(&set_dialog, ProviderDialogKind::SignIn { provider }))
+                .into(),
+            ],
+        ))
+        .with_key("account-sign-in"),
+    );
+    out
+}
+
+fn runtime_sections(
+    instance: &ProviderInstance,
     status: &ProviderInstallStatus,
     ctx: &SettingsPageContext<'_>,
 ) -> Vec<Element> {
-    let caption = format!(
-        "{} Minibar finds these automatically.",
-        provider_description(provider)
-    );
-    let mut out = vec![section_header("Sources", Some(&caption), None).with_key("sources-header")];
-    if status.checking {
-        out.push(checking_card(status).with_key("sources-checking"));
-    } else {
-        let (app_label, crew_label, cli_label) = source_labels(provider);
-        if status.app_applicable {
-            out.push(
-                source_row(
-                    provider,
-                    "desktop",
-                    app_label,
-                    status.app.as_deref(),
-                    status.used == Some(ProviderInstallSource::App),
-                    provider == ProviderKind::Cursor,
-                    ctx,
-                )
-                .with_key("source-app"),
-            );
+    let provider = instance.provider_id();
+    let driver = instance.driver;
+    let mut out = vec![
+        section_header(
+            "Runtime",
+            Some(&format!(
+                "{} Minibar finds these automatically.",
+                provider_description(driver)
+            )),
+            None,
+        )
+        .with_key("runtime-header"),
+    ];
+    if matches!(driver, ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo) {
+        if instance.is_primary() {
+            out.extend(opencode_source_row(status, ctx));
         }
-        if status.crew_applicable {
-            out.push(
-                source_row(
-                    provider,
-                    "desktop",
-                    crew_label,
-                    status.crew.as_deref(),
-                    status.used == Some(ProviderInstallSource::Crew),
-                    false,
-                    ctx,
-                )
-                .with_key("source-crew"),
-            );
-        }
-        if status.cli_applicable {
-            out.push(
-                source_row(
-                    provider,
-                    "terminal-window",
-                    cli_label,
-                    status.cli.as_deref(),
-                    status.used == Some(ProviderInstallSource::Cli),
-                    provider != ProviderKind::Kiro,
-                    ctx,
-                )
-                .with_key("source-cli"),
-            );
+        return out;
+    }
+    if driver == ProviderKind::OpenRouter {
+        out.pop();
+        return out;
+    }
+    if !instance.uses_manual_credential() {
+        if status.checking {
+            out.push(checking_card(status).with_key("sources-checking"));
+        } else {
+            let (app_label, crew_label, cli_label) = source_labels(driver);
+            if status.app_applicable {
+                out.push(
+                    source_row(
+                        provider,
+                        "desktop",
+                        app_label,
+                        status.app.as_deref(),
+                        status.used == Some(ProviderInstallSource::App),
+                        driver == ProviderKind::Cursor,
+                        ctx,
+                    )
+                    .with_key("source-app"),
+                );
+            }
+            if status.crew_applicable {
+                out.push(
+                    source_row(
+                        provider,
+                        "desktop",
+                        crew_label,
+                        status.crew.as_deref(),
+                        status.used == Some(ProviderInstallSource::Crew),
+                        false,
+                        ctx,
+                    )
+                    .with_key("source-crew"),
+                );
+            }
+            if status.cli_applicable {
+                out.push(
+                    source_row(
+                        provider,
+                        "terminal-window",
+                        cli_label,
+                        status.cli.as_deref(),
+                        status.used == Some(ProviderInstallSource::Cli),
+                        driver != ProviderKind::Kiro,
+                        ctx,
+                    )
+                    .with_key("source-cli"),
+                );
+            }
         }
     }
-    if provider == ProviderKind::Codex {
-        out.push(section_header("Appearance", None, None).with_key("appearance-header"));
-        out.push(codex_logo_toggle(ctx).with_key("codex-replace-logo"));
+    if matches!(driver, ProviderKind::Claude | ProviderKind::Codex) {
+        out.extend(source_settings(instance, ctx));
     }
-    let folder_configs = folder_configs(provider, ctx);
-    if !folder_configs.is_empty() {
-        out.push(section_header("Advanced", None, None).with_key("advanced-header"));
-        out.extend(folder_configs.into_iter().map(|config| {
-            let key = config.key;
-            advanced_folder_expander(provider, config, ctx).with_key(key)
-        }));
+    for config in folder_configs(driver) {
+        let key = config.field.key();
+        out.push(advanced_folder_expander(instance, config, ctx).with_key(key));
     }
     out
 }
 
-fn codex_logo_toggle(ctx: &SettingsPageContext<'_>) -> Element {
-    let set_replace_chatgpt_logo_with_codex = ctx.set_replace_chatgpt_logo_with_codex.clone();
-    let settings_tx = ctx.settings_tx.clone();
-    settings_toggle_card(
-        "Replace ChatGPT logo with Codex",
-        ctx.replace_chatgpt_logo_with_codex,
-        move |value| {
-            crate::provider_registry::apply_logo_settings(value);
-            persist_bool(
-                set_replace_chatgpt_logo_with_codex.clone(),
-                settings_tx.clone(),
-                value,
-                |settings, value| {
-                    settings.replace_chatgpt_logo_with_codex = value;
+/// Source selector (Claude) and config folder for Claude/Codex instances.
+fn source_settings(instance: &ProviderInstance, ctx: &SettingsPageContext<'_>) -> Vec<Element> {
+    let provider = instance.provider_id();
+    let mut out = Vec::new();
+    if instance.driver == ProviderKind::Claude {
+        let source_tx = ctx.settings_tx.clone();
+        let manual = instance.uses_manual_credential();
+        out.push(
+            control_row(
+                "Source",
+                "Config folder reads the Claude Code login in CLAUDE_CONFIG_DIR. Manual credential reads limits only from a pasted credential.",
+                ComboBox::new(["Config folder", "Manual credential"])
+                    .selected_index(i32::from(manual))
+                    .on_selection_changed(move |index: i32| {
+                        let manual = index == 1;
+                        update_instance(source_tx.clone(), provider, move |instance| {
+                            if manual == instance.uses_manual_credential() {
+                                return;
+                            }
+                            instance.source = if manual {
+                                InstanceSource::Manual
+                            } else {
+                                InstanceSource::default()
+                            };
+                            instance.credentials_revision =
+                                instance.credentials_revision.wrapping_add(1);
+                        });
+                    })
+                    .width(180.0)
+                    .vertical_alignment(VerticalAlignment::Center)
+                    .into(),
+            )
+            .with_key("instance-source"),
+        );
+        if manual {
+            return out;
+        }
+    }
+    let env = if instance.driver == ProviderKind::Claude {
+        "CLAUDE_CONFIG_DIR"
+    } else {
+        "CODEX_HOME"
+    };
+    let default = if instance.is_primary() {
+        crate::instances::default_folder(instance.driver)
+    } else {
+        crate::instances::managed_folder(&instance.id).ok()
+    };
+    let placeholder = default.as_deref().map(display_fs_path).unwrap_or_default();
+    let conflicts = crate::instances::folder_conflicts(ctx.instances);
+    let mut body: Vec<Element> = vec![
+        secondary_text(format!(
+            "Passed to the CLI as {env}. Leave empty to use {}.",
+            if instance.is_primary() {
+                "the standard folder"
+            } else {
+                "a folder Minibar creates for this instance"
+            }
+        ))
+        .into(),
+        folder_picker(
+            provider,
+            PathField::ConfigFolder,
+            PathField::ConfigFolder.read(instance),
+            &placeholder,
+            ctx.settings_tx.clone(),
+        ),
+    ];
+    if let Some(other) = conflicts.get(&instance.id) {
+        body.push(
+            text_block(format!(
+                "{other} already reads this folder. Two instances must not share a login, or usage is counted twice."
+            ))
+            .font_size(12.0)
+            .foreground(ThemeRef::SystemCritical)
+            .wrap()
+            .with_key("folder-conflict")
+            .into(),
+        );
+    }
+    out.push(
+        provider_card(
+            vstack((
+                text_block("Config folder").font_size(14.0).wrap(),
+                vstack(body)
+                    .spacing(8.0)
+                    .horizontal_alignment(HorizontalAlignment::Stretch),
+            ))
+            .spacing(6.0)
+            .horizontal_alignment(HorizontalAlignment::Stretch),
+        )
+        .with_key("instance-config-folder"),
+    );
+    out
+}
+
+fn feature_sections(instance: &ProviderInstance, ctx: &SettingsPageContext<'_>) -> Vec<Element> {
+    use crate::instances::{Capabilities, Capability};
+    let provider = instance.provider_id();
+    let descriptor = crate::provider_registry::descriptor(instance.driver);
+    let mut out = vec![section_header("Features", None, None).with_key("features-header")];
+    if descriptor.supports_activation {
+        let tx = ctx.settings_tx.clone();
+        out.push(
+            capability_toggle(
+                "Automatic activation",
+                "Starts this account's 5-hour window when it resets, using its own login. Schedules and pauses are under Limit activation.",
+                instance.auto_activation,
+                Capabilities::reason(instance, Capability::AutoActivation),
+                move |value| {
+                    update_instance(tx.clone(), provider, move |instance| {
+                        instance.auto_activation = value;
+                    })
                 },
-            );
-        },
-        "codex-replace-logo",
-        ctx.hovered_card_id,
-        ctx.set_hovered_card_id.clone(),
-    )
+            )
+            .with_key("instance-auto-activation"),
+        );
+    }
+    let tx = ctx.settings_tx.clone();
+    out.push(
+        capability_toggle(
+            "Usage statistics",
+            "Scans this instance's local history for the Usage tab and cost totals.",
+            instance.usage_stats,
+            Capabilities::reason(instance, Capability::UsageStats),
+            move |value| {
+                update_instance(tx.clone(), provider, move |instance| {
+                    instance.usage_stats = value;
+                })
+            },
+        )
+        .with_key("instance-usage-stats"),
+    );
+    out
 }
 
 fn source_row(
-    provider: ProviderKind,
+    provider: ProviderId,
     icon: &'static str,
     label: &str,
     path: Option<&str>,
@@ -1682,16 +2022,12 @@ fn source_row(
                     .vertical_alignment(VerticalAlignment::Center)
                     .into(),
             ];
-            if can_choose_folder
-                && let Some(config) = folder_configs(provider, ctx).into_iter().next()
-            {
-                let setter = config.setter;
-                let target = config.target;
+            if can_choose_folder {
                 let settings_tx = ctx.settings_tx.clone();
                 trailing.push(
                     Button::new("Choose folder…")
                         .on_click(move || {
-                            pick_provider_folder(target, setter.clone(), settings_tx.clone())
+                            pick_folder(provider, PathField::Binary, settings_tx.clone())
                         })
                         .vertical_alignment(VerticalAlignment::Center)
                         .into(),
@@ -1715,11 +2051,12 @@ fn source_row(
 }
 
 fn advanced_folder_expander(
-    provider: ProviderKind,
-    config: FolderConfig<'_>,
+    instance: &ProviderInstance,
+    config: FolderConfig,
     ctx: &SettingsPageContext<'_>,
 ) -> Element {
-    let card_id = format!("provider-{}-advanced-{}", provider.id(), config.key);
+    let provider = instance.provider_id();
+    let card_id = format!("provider-{}-advanced-{}", provider.id(), config.field.key());
     let expanded = ctx.expanded_provider_cards.contains(&card_id);
     let toggle_header = toggle_expanded_card(card_id.clone(), ctx);
     settings_content_expander(
@@ -1736,11 +2073,11 @@ fn advanced_folder_expander(
         ctx.set_hovered_card_id.clone(),
         vstack((
             secondary_text(config.description),
-            provider_folder_picker(
-                config.target,
-                config.path,
+            folder_picker(
+                provider,
+                config.field,
+                config.field.read(instance),
                 config.placeholder,
-                config.setter,
                 ctx.settings_tx.clone(),
             ),
         ))
@@ -1749,56 +2086,56 @@ fn advanced_folder_expander(
     )
 }
 
-fn opencode_sections(
-    provider: ProviderKind,
+fn opencode_source_row(
     status: &ProviderInstallStatus,
     ctx: &SettingsPageContext<'_>,
 ) -> Vec<Element> {
-    let caption = format!(
-        "{} Minibar finds these automatically.",
-        provider_description(provider)
-    );
-    let mut out = vec![section_header("Sources", Some(&caption), None).with_key("sources-header")];
     if status.checking {
-        out.push(checking_card(status).with_key("sources-checking"));
-    } else {
-        let found = status.used.is_some();
-        let trailing: Vec<Element> = if found {
-            vec![
-                status_dot(ThemeRef::SystemSuccess),
-                text_block("Found")
-                    .font_size(12.0)
-                    .foreground(ThemeRef::SecondaryText)
-                    .vertical_alignment(VerticalAlignment::Center)
-                    .into(),
-            ]
-        } else {
-            vec![
-                text_block("Not found")
-                    .font_size(12.0)
-                    .foreground(ThemeRef::SecondaryText)
-                    .vertical_alignment(VerticalAlignment::Center)
-                    .into(),
-            ]
-        };
-        out.push(
-            provider_card(provider_row(
-                Some(row_icon("terminal-window", ctx.color_scheme)),
-                "OpenCode sign-in or local history",
-                vec![
-                    secondary_text(if found {
-                        "Found in OpenCode auth, environment, a saved key, or local history."
-                    } else {
-                        "Nothing found in OpenCode auth, environment, or local history."
-                    })
-                    .into(),
-                ],
-                trailing,
-            ))
-            .with_key("source-opencode"),
-        );
+        return vec![checking_card(status).with_key("sources-checking")];
     }
+    let found = status.used.is_some();
+    let trailing: Vec<Element> = if found {
+        vec![
+            status_dot(ThemeRef::SystemSuccess),
+            text_block("Found")
+                .font_size(12.0)
+                .foreground(ThemeRef::SecondaryText)
+                .vertical_alignment(VerticalAlignment::Center)
+                .into(),
+        ]
+    } else {
+        vec![
+            text_block("Not found")
+                .font_size(12.0)
+                .foreground(ThemeRef::SecondaryText)
+                .vertical_alignment(VerticalAlignment::Center)
+                .into(),
+        ]
+    };
+    vec![
+        provider_card(provider_row(
+            Some(row_icon("terminal-window", ctx.color_scheme)),
+            "OpenCode sign-in or local history",
+            vec![
+                secondary_text(if found {
+                    "Found in OpenCode auth, environment, a saved key, or local history."
+                } else {
+                    "Nothing found in OpenCode auth, environment, or local history."
+                })
+                .into(),
+            ],
+            trailing,
+        ))
+        .with_key("source-opencode"),
+    ]
+}
 
+fn opencode_key_section(
+    instance: &ProviderInstance,
+    ctx: &SettingsPageContext<'_>,
+) -> Vec<Element> {
+    let provider = instance.provider_id();
+    let mut out = vec![section_header("Account", None, None).with_key("account-header")];
     let saved_key = crate::opencode::manual_key(provider)
         .ok()
         .flatten()
@@ -1832,10 +2169,10 @@ fn opencode_sections(
             Some(row_icon("key", ctx.color_scheme)),
             "API key",
             vec![
-                secondary_text(if status.used.is_some() {
-                    "Optional. Only needed without OpenCode sign-in."
+                secondary_text(if instance.is_primary() {
+                    "Optional. Only needed without OpenCode sign-in on this PC."
                 } else {
-                    "Add a key if you don't use OpenCode sign-in on this PC."
+                    "Add the key of the account this instance tracks."
                 })
                 .into(),
             ],
@@ -1860,452 +2197,21 @@ fn opencode_sections(
 }
 
 // ---------------------------------------------------------------------------
-// Claude
-// ---------------------------------------------------------------------------
-
-fn claude_profile_sections(ctx: &SettingsPageContext<'_>) -> Vec<Element> {
-    let set_dialog = ctx.set_provider_dialog.clone();
-    let mut out = vec![
-        section_header(
-            "Accounts",
-            Some(
-                "Track work and personal accounts together. Default follows this PC's Claude login. Add account includes instructions for connecting another account.",
-            ),
-            Some(
-                Button::new("Add account")
-                    .icon(Symbol::Add)
-                    .on_click(move || open_dialog(&set_dialog, ProviderDialogKind::AddClaudeProfile))
-                    .into(),
-            ),
-        )
-        .with_key("claude-profiles-header"),
-    ];
-    for profile in ctx.claude_profiles {
-        out.push(
-            claude_account_expander(profile, ctx)
-                .with_key(format!("claude-account-{}", profile.id)),
-        );
-    }
-    out
-}
-
-// ---------------------------------------------------------------------------
 // OpenRouter
 // ---------------------------------------------------------------------------
 
-fn claude_account_expander(profile: &ClaudeProfile, ctx: &SettingsPageContext<'_>) -> Element {
-    let card_id = format!("claude-account-{}", profile.id);
-    let expanded = ctx.expanded_provider_cards.contains(&card_id);
-    let toggle_header = toggle_expanded_card(card_id.clone(), ctx);
-    let initial = profile
-        .name
-        .chars()
-        .next()
-        .map(|letter| letter.to_uppercase().collect::<String>())
-        .unwrap_or_else(|| "?".into());
-    let header = hstack((
-        border(
-            text_block(initial)
-                .font_size(13.0)
-                .semibold()
-                .horizontal_alignment(HorizontalAlignment::Center)
-                .vertical_alignment(VerticalAlignment::Center),
-        )
-        .width(32.0)
-        .height(32.0)
-        .corner_radius(16.0)
-        .background(ThemeRef::ControlFillSecondary)
-        .vertical_alignment(VerticalAlignment::Center),
-        vstack((
-            text_block(profile.name.clone()).font_size(14.0),
-            secondary_text(if !profile.enabled {
-                "Disabled"
-            } else if profile.is_default() {
-                "Follows this PC's Claude login"
-            } else {
-                "Saved credential"
-            }),
-        ))
-        .vertical_alignment(VerticalAlignment::Center),
-    ))
-    .spacing(12.0)
-    .on_tapped(move || toggle_header(!expanded));
-
-    let rename_dialog = ctx.set_provider_dialog.clone();
-    let rename_id = profile.id.clone();
-    let name = profile.name.clone();
-    let mut actions: Vec<Element> = vec![
-        Button::new("Rename")
-            .on_click(move || {
-                rename_dialog.call(Some(ProviderDialog::with_name(
-                    ProviderDialogKind::RenameClaudeProfile {
-                        profile_id: rename_id.clone(),
-                    },
-                    name.clone(),
-                )))
-            })
-            .into(),
-    ];
-    let settings_tx = ctx.settings_tx.clone();
-    let enabled_id = profile.id.clone();
-    let enabled_row = provider_row(
-        None,
-        "Enabled",
-        vec![secondary_text("Fetch limits and make this account available in the popup.").into()],
-        vec![
-            ToggleSwitch::new(profile.enabled)
-                .on_content("")
-                .off_content("")
-                .on_toggled(move |enabled| {
-                    let profile_id = enabled_id.clone();
-                    if let Err(error) =
-                        persist_claude_profiles(settings_tx.clone(), None, move |profiles| {
-                            if let Some(profile) = profiles.iter_mut().find(|p| p.id == profile_id)
-                            {
-                                profile.enabled = enabled;
-                            }
-                            Ok(())
-                        })
-                    {
-                        crate::notifications::show("Could not save account", &format!("{error:#}"));
-                    }
-                })
-                .min_width(0.0)
-                .width(50.0)
-                .vertical_alignment(VerticalAlignment::Center)
-                .into(),
-        ],
-    );
-    let settings_tx = ctx.settings_tx.clone();
-    let home_id = profile.id.clone();
-    let set_excluded = ctx.set_claude_home_excluded_profiles.clone();
-    let home_row = provider_row(
-        None,
-        "Show on Home",
-        vec![secondary_text("Its provider tab stays available when hidden from Home.").into()],
-        vec![
-            ToggleSwitch::new(!ctx.claude_home_excluded_profiles.contains(&profile.id))
-                .on_content("")
-                .off_content("")
-                .on_toggled(move |visible| {
-                    let mut excluded = Vec::new();
-                    let result = try_persist_update_fallible(settings_tx.clone(), |settings| {
-                        crate::claude::set_home_profile_visibility(
-                            &mut settings.claude_home_excluded_profiles,
-                            &home_id,
-                            visible,
-                        );
-                        excluded = settings.claude_home_excluded_profiles.clone();
-                        Ok(())
-                    });
-                    match result {
-                        Ok(()) => set_excluded.call(excluded),
-                        Err(error) => crate::notifications::show(
-                            "Could not save Home visibility",
-                            &format!("{error:#}"),
-                        ),
-                    }
-                })
-                .min_width(0.0)
-                .width(50.0)
-                .vertical_alignment(VerticalAlignment::Center)
-                .into(),
-        ],
-    );
-    let mut rows = vec![enabled_row, home_row];
-    if !profile.is_default() {
-        let update_dialog = ctx.set_provider_dialog.clone();
-        let update_id = profile.id.clone();
-        let remove_dialog = ctx.set_provider_dialog.clone();
-        let remove_id = profile.id.clone();
-        actions.extend([
-            Button::new("Update credential")
-                .on_click(move || {
-                    open_dialog(
-                        &update_dialog,
-                        ProviderDialogKind::UpdateClaudeCredential {
-                            profile_id: update_id.clone(),
-                        },
-                    )
-                })
-                .into(),
-            Button::new("Remove account")
-                .danger()
-                .on_click(move || {
-                    open_dialog(
-                        &remove_dialog,
-                        ProviderDialogKind::RemoveClaudeProfile {
-                            profile_id: remove_id.clone(),
-                        },
-                    )
-                })
-                .into(),
-        ]);
-    }
-    rows.push(
-        hstack(actions)
-            .spacing(4.0)
-            .horizontal_alignment(HorizontalAlignment::Right)
-            .margin(Thickness {
-                left: 0.0,
-                top: 12.0,
-                right: 0.0,
-                bottom: 0.0,
-            })
-            .into(),
-    );
-    settings_content_expander(
-        header,
-        expanded,
-        toggle_expanded_card(card_id.clone(), ctx),
-        card_id,
-        ctx.hovered_card_id,
-        ctx.set_hovered_card_id.clone(),
-        vstack(rows)
-            .spacing(12.0)
-            .horizontal_alignment(HorizontalAlignment::Stretch),
-    )
-}
-fn codex_profile_sections(ctx: &SettingsPageContext<'_>) -> Vec<Element> {
-    let set_dialog = ctx.set_provider_dialog.clone();
+fn openrouter_sections(instance: &ProviderInstance, ctx: &SettingsPageContext<'_>) -> Vec<Element> {
+    let Some(account) = instance.openrouter.clone() else {
+        return Vec::new();
+    };
     let mut out = vec![
         section_header(
-            "Accounts",
-            Some(
-                "Track work and personal accounts together. Default follows this PC's Codex login. Sign in to connect another ChatGPT account.",
-            ),
-            Some(
-                Button::new("Add account")
-                    .icon(Symbol::Add)
-                    .on_click(move || open_dialog(&set_dialog, ProviderDialogKind::AddCodexProfile))
-                    .into(),
-            ),
-        )
-        .with_key("codex-profiles-header"),
-    ];
-    for profile in ctx.codex_profiles {
-        out.push(
-            codex_account_expander(profile, ctx).with_key(format!("codex-account-{}", profile.id)),
-        );
-    }
-    out
-}
-
-// ---------------------------------------------------------------------------
-// OpenRouter
-// ---------------------------------------------------------------------------
-
-fn codex_account_expander(profile: &CodexProfile, ctx: &SettingsPageContext<'_>) -> Element {
-    let card_id = format!("codex-account-{}", profile.id);
-    let expanded = ctx.expanded_provider_cards.contains(&card_id);
-    let toggle_header = toggle_expanded_card(card_id.clone(), ctx);
-    let initial = profile
-        .name
-        .chars()
-        .next()
-        .map(|letter| letter.to_uppercase().collect::<String>())
-        .unwrap_or_else(|| "?".into());
-    let header = hstack((
-        border(
-            text_block(initial)
-                .font_size(13.0)
-                .semibold()
-                .horizontal_alignment(HorizontalAlignment::Center)
-                .vertical_alignment(VerticalAlignment::Center),
-        )
-        .width(32.0)
-        .height(32.0)
-        .corner_radius(16.0)
-        .background(ThemeRef::ControlFillSecondary)
-        .vertical_alignment(VerticalAlignment::Center),
-        vstack((
-            text_block(profile.name.clone()).font_size(14.0),
-            secondary_text(if !profile.enabled {
-                "Disabled"
-            } else if profile.is_default() {
-                "Follows this PC's Codex login"
-            } else {
-                "Saved credential"
-            }),
-        ))
-        .vertical_alignment(VerticalAlignment::Center),
-    ))
-    .spacing(12.0)
-    .on_tapped(move || toggle_header(!expanded));
-
-    let rename_dialog = ctx.set_provider_dialog.clone();
-    let rename_id = profile.id.clone();
-    let name = profile.name.clone();
-    let mut actions: Vec<Element> = vec![
-        Button::new("Rename")
-            .on_click(move || {
-                rename_dialog.call(Some(ProviderDialog::with_name(
-                    ProviderDialogKind::RenameCodexProfile {
-                        profile_id: rename_id.clone(),
-                    },
-                    name.clone(),
-                )))
-            })
-            .into(),
-    ];
-    let settings_tx = ctx.settings_tx.clone();
-    let enabled_id = profile.id.clone();
-    let enabled_row = provider_row(
-        None,
-        "Enabled",
-        vec![secondary_text("Fetch limits and make this account available in the popup.").into()],
-        vec![
-            ToggleSwitch::new(profile.enabled)
-                .on_content("")
-                .off_content("")
-                .on_toggled(move |enabled| {
-                    let profile_id = enabled_id.clone();
-                    if let Err(error) =
-                        persist_codex_profiles(settings_tx.clone(), None, move |profiles| {
-                            if let Some(profile) = profiles.iter_mut().find(|p| p.id == profile_id)
-                            {
-                                profile.enabled = enabled;
-                            }
-                            Ok(())
-                        })
-                    {
-                        crate::notifications::show("Could not save account", &format!("{error:#}"));
-                    }
-                })
-                .min_width(0.0)
-                .width(50.0)
-                .vertical_alignment(VerticalAlignment::Center)
-                .into(),
-        ],
-    );
-    let settings_tx = ctx.settings_tx.clone();
-    let home_id = profile.id.clone();
-    let set_excluded = ctx.set_codex_home_excluded_profiles.clone();
-    let home_row = provider_row(
-        None,
-        "Show on Home",
-        vec![secondary_text("Its provider tab stays available when hidden from Home.").into()],
-        vec![
-            ToggleSwitch::new(!ctx.codex_home_excluded_profiles.contains(&profile.id))
-                .on_content("")
-                .off_content("")
-                .on_toggled(move |visible| {
-                    let mut excluded = Vec::new();
-                    let result = try_persist_update_fallible(settings_tx.clone(), |settings| {
-                        crate::codex::set_home_profile_visibility(
-                            &mut settings.codex_home_excluded_profiles,
-                            &home_id,
-                            visible,
-                        );
-                        excluded = settings.codex_home_excluded_profiles.clone();
-                        Ok(())
-                    });
-                    match result {
-                        Ok(()) => set_excluded.call(excluded),
-                        Err(error) => crate::notifications::show(
-                            "Could not save Home visibility",
-                            &format!("{error:#}"),
-                        ),
-                    }
-                })
-                .min_width(0.0)
-                .width(50.0)
-                .vertical_alignment(VerticalAlignment::Center)
-                .into(),
-        ],
-    );
-    let mut rows = vec![enabled_row, home_row];
-    if !profile.is_default() {
-        let update_dialog = ctx.set_provider_dialog.clone();
-        let update_id = profile.id.clone();
-        let remove_dialog = ctx.set_provider_dialog.clone();
-        let remove_id = profile.id.clone();
-        actions.extend([
-            Button::new("Sign in again")
-                .on_click(move || {
-                    open_dialog(
-                        &update_dialog,
-                        ProviderDialogKind::UpdateCodexCredential {
-                            profile_id: update_id.clone(),
-                        },
-                    )
-                })
-                .into(),
-            Button::new("Remove account")
-                .danger()
-                .on_click(move || {
-                    open_dialog(
-                        &remove_dialog,
-                        ProviderDialogKind::RemoveCodexProfile {
-                            profile_id: remove_id.clone(),
-                        },
-                    )
-                })
-                .into(),
-        ]);
-    }
-    rows.push(
-        hstack(actions)
-            .spacing(4.0)
-            .horizontal_alignment(HorizontalAlignment::Right)
-            .margin(Thickness {
-                left: 0.0,
-                top: 12.0,
-                right: 0.0,
-                bottom: 0.0,
-            })
-            .into(),
-    );
-    settings_content_expander(
-        header,
-        expanded,
-        toggle_expanded_card(card_id.clone(), ctx),
-        card_id,
-        ctx.hovered_card_id,
-        ctx.set_hovered_card_id.clone(),
-        vstack(rows)
-            .spacing(12.0)
-            .horizontal_alignment(HorizontalAlignment::Stretch),
-    )
-}
-
-fn openrouter_sections(ctx: &SettingsPageContext<'_>) -> Vec<Element> {
-    let set_dialog = ctx.set_provider_dialog.clone();
-    let mut out = vec![
-        section_header(
-            "Accounts",
+            "Keys",
             Some("A management key shows credit balance and usage history. API keys show spend per key."),
-            Some(
-                Button::new("Add account")
-                    .icon(Symbol::Add)
-                    .on_click(move || {
-                        open_dialog(&set_dialog, ProviderDialogKind::AddOpenRouterAccount)
-                    })
-                    .into(),
-            ),
+            None,
         )
-        .with_key("openrouter-accounts-header"),
+        .with_key("openrouter-keys-header"),
     ];
-    if ctx.openrouter_accounts.is_empty() {
-        let set_dialog = ctx.set_provider_dialog.clone();
-        out.push(
-            provider_card(
-                vstack((
-                    secondary_text("No OpenRouter accounts yet.")
-                        .horizontal_alignment(HorizontalAlignment::Center),
-                    Button::new("Add account")
-                        .accent()
-                        .on_click(move || {
-                            open_dialog(&set_dialog, ProviderDialogKind::AddOpenRouterAccount)
-                        })
-                        .horizontal_alignment(HorizontalAlignment::Center),
-                ))
-                .spacing(10.0)
-                .horizontal_alignment(HorizontalAlignment::Stretch),
-            )
-            .with_key("openrouter-empty"),
-        );
-    }
     if let Some(at) = ctx.openrouter_snapshot.sampled_at {
         out.push(
             secondary_text(format!(
@@ -2317,72 +2223,22 @@ fn openrouter_sections(ctx: &SettingsPageContext<'_>) -> Vec<Element> {
             .into(),
         );
     }
-    for account in ctx.openrouter_accounts {
-        out.push(openrouter_account_expander(account, ctx).with_key(account_card_id(&account.id)));
-    }
-    out
-}
-
-fn openrouter_account_expander(
-    account: &OpenRouterAccount,
-    ctx: &SettingsPageContext<'_>,
-) -> Element {
     let snapshot = ctx
         .openrouter_snapshot
         .accounts
         .iter()
         .find(|snapshot| snapshot.id == account.id);
     let management_hint = crate::openrouter::management_key_hint(&account.id);
-    let key_count = plural(account.api_key_ids.len(), "API key");
-    let summary = match (
-        &management_hint,
-        snapshot.and_then(|snapshot| snapshot.balance_microusd),
-    ) {
-        (Ok(Some(_)), Some(balance)) => format!("{} credit · {key_count}", money(balance)),
-        (Ok(Some(_)), None) => format!("Management key saved · {key_count}"),
-        (Ok(None), _) => format!("No management key · {key_count}"),
-        (Err(_), _) => format!("Could not read management key · {key_count}"),
-    };
-    let name = account_display_name(account);
-    let initial = name
-        .chars()
-        .next()
-        .map(|letter| letter.to_uppercase().collect::<String>())
-        .unwrap_or_else(|| "?".into());
-    let header = hstack((
-        border(
-            text_block(initial)
-                .font_size(13.0)
-                .semibold()
-                .horizontal_alignment(HorizontalAlignment::Center)
-                .vertical_alignment(VerticalAlignment::Center),
-        )
-        .width(32.0)
-        .height(32.0)
-        .corner_radius(16.0)
-        .background(ThemeRef::ControlFillSecondary)
-        .vertical_alignment(VerticalAlignment::Center),
-        vstack((
-            text_block(name).font_size(14.0),
-            text_block(summary)
-                .font_size(12.0)
-                .foreground(ThemeRef::SecondaryText),
+    out.push(
+        provider_card(openrouter_account_body(
+            &account,
+            snapshot,
+            management_hint,
+            ctx,
         ))
-        .vertical_alignment(VerticalAlignment::Center),
-    ))
-    .spacing(12.0);
-    let card_id = account_card_id(&account.id);
-    let expanded = ctx.expanded_provider_cards.contains(&card_id);
-    let toggle_header = toggle_expanded_card(card_id.clone(), ctx);
-    settings_content_expander(
-        header.on_tapped(move || toggle_header(!expanded)),
-        expanded,
-        toggle_expanded_card(card_id.clone(), ctx),
-        card_id,
-        ctx.hovered_card_id,
-        ctx.set_hovered_card_id.clone(),
-        openrouter_account_body(account, snapshot, management_hint, ctx),
-    )
+        .with_key(format!("openrouter-account-{}", account.id)),
+    );
+    out
 }
 
 fn openrouter_account_body(
@@ -2409,10 +2265,15 @@ fn openrouter_account_body(
         Ok(Some(hint)) => {
             let set_dialog = set_dialog.clone();
             let account_id = account_id.clone();
+            let mut detail =
+                vec![secondary_text("Credit balance and account-wide usage history").into()];
+            if let Some(balance) = snapshot.and_then(|snapshot| snapshot.balance_microusd) {
+                detail.push(secondary_text(format!("{} credit", money(balance))).into());
+            }
             provider_row(
                 Some(row_icon("key", ctx.color_scheme)),
                 "Management key",
-                vec![secondary_text("Credit balance and account-wide usage history").into()],
+                detail,
                 vec![
                     masked_key_text(hint),
                     more_menu(
@@ -2474,8 +2335,8 @@ fn openrouter_account_body(
             .into(),
     );
 
-    let add_key_dialog = set_dialog.clone();
-    let add_key_account = account_id.clone();
+    let add_key_dialog = set_dialog;
+    let add_key_account = account_id;
     rows.push(
         grid((
             text_block("API keys")
@@ -2507,45 +2368,82 @@ fn openrouter_account_body(
     );
     rows.push(openrouter_key_table(account, snapshot, ctx).with_key("keys-table"));
 
-    rows.push(divider(ctx.color_scheme).with_key("footer-divider").into());
-    let rename_dialog = set_dialog.clone();
-    let rename_account = account.clone();
-    let remove_dialog = set_dialog;
-    let remove_account = account_id;
-    rows.push(
-        hstack((
-            Button::new("Rename").subtle().on_click(move || {
-                rename_dialog.call(Some(ProviderDialog::with_name(
-                    ProviderDialogKind::RenameOpenRouterAccount {
-                        account_id: rename_account.id.clone(),
-                    },
-                    rename_account.name.clone(),
-                )))
-            }),
-            Button::new("Remove account").danger().on_click(move || {
-                open_dialog(
-                    &remove_dialog,
-                    ProviderDialogKind::RemoveOpenRouterAccount {
-                        account_id: remove_account.clone(),
-                    },
-                )
-            }),
-        ))
-        .spacing(4.0)
-        .margin(Thickness {
-            left: 0.0,
-            top: 12.0,
-            right: 0.0,
-            bottom: 0.0,
-        })
-        .horizontal_alignment(HorizontalAlignment::Right)
-        .with_key("account-footer")
-        .into(),
-    );
-
     vstack(rows)
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .into()
+}
+
+fn provider_description(provider: ProviderKind) -> &'static str {
+    match provider {
+        ProviderKind::Codex => "Reads the signed-in Codex CLI or desktop app.",
+        ProviderKind::Claude => "Reads your existing Claude Code login.",
+        ProviderKind::Cursor => "Reads the signed-in Cursor app for this billing cycle.",
+        ProviderKind::OpenCodeZen => "Reads Zen auth and local OpenCode history.",
+        ProviderKind::OpenCodeGo => "Reads Go quota windows and local OpenCode history.",
+        ProviderKind::OpenRouter => {
+            "Reads API-key usage and spend limits. A management key also enables usage history and credit balance."
+        }
+        ProviderKind::Antigravity => {
+            "Reads subscription quota from your existing official agy Windows sign-in."
+        }
+        ProviderKind::Grok => {
+            "Reads SuperGrok subscription credits from your existing official Grok CLI sign-in."
+        }
+        ProviderKind::Kiro => {
+            "Fetches Kiro's live monthly credits with its shared sign-in; recognizes IDE, Crew, and CLI installs."
+        }
+    }
+}
+
+/// Display names for the app, Crew app, and CLI sources a provider can read from.
+fn source_labels(provider: ProviderKind) -> (&'static str, &'static str, &'static str) {
+    match provider {
+        ProviderKind::Codex => ("Codex desktop app", "", "Codex CLI"),
+        ProviderKind::Claude => ("Claude desktop app", "", "Claude Code CLI"),
+        ProviderKind::Cursor => ("Cursor app", "", ""),
+        ProviderKind::Antigravity => ("Antigravity app", "", "agy CLI"),
+        ProviderKind::Grok => ("", "", "Grok CLI"),
+        ProviderKind::Kiro => ("Kiro IDE", "Kiro Crew", "Kiro CLI"),
+        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo | ProviderKind::OpenRouter => {
+            ("", "", "")
+        }
+    }
+}
+
+fn checking_card(status: &ProviderInstallStatus) -> Element {
+    let message = if status.crew_applicable {
+        "Checking Kiro IDE, Kiro Crew, and CLI…"
+    } else if status.app_applicable && status.cli_applicable {
+        "Checking installed app and CLI…"
+    } else if status.cli_applicable {
+        "Checking CLI…"
+    } else {
+        "Checking installed app…"
+    };
+    provider_card(secondary_text(message))
+}
+
+fn codex_logo_toggle(ctx: &SettingsPageContext<'_>) -> Element {
+    let set_replace_chatgpt_logo_with_codex = ctx.set_replace_chatgpt_logo_with_codex.clone();
+    let settings_tx = ctx.settings_tx.clone();
+    settings_toggle_card(
+        "Replace ChatGPT logo with Codex",
+        ctx.replace_chatgpt_logo_with_codex,
+        move |value| {
+            crate::provider_registry::apply_logo_settings(value);
+            persist_bool(
+                set_replace_chatgpt_logo_with_codex.clone(),
+                settings_tx.clone(),
+                value,
+                |settings, value| {
+                    settings.replace_chatgpt_logo_with_codex = value;
+                },
+            );
+        },
+        "codex-replace-logo",
+        ctx.hovered_card_id,
+        ctx.set_hovered_card_id.clone(),
+    )
 }
 
 fn key_table_columns() -> [GridLength; 5] {
@@ -2818,10 +2716,6 @@ fn openrouter_key_table(
         .into()
 }
 
-// ---------------------------------------------------------------------------
-// Dialogs
-// ---------------------------------------------------------------------------
-
 #[derive(Clone, Copy)]
 enum DialogField {
     Name,
@@ -2869,30 +2763,6 @@ fn dialog_password(
     .into()
 }
 
-fn dialog_name_box(
-    dialog: &ProviderDialog,
-    help: Option<&str>,
-    on_submit: impl Fn() + Clone + 'static,
-) -> Element {
-    let mut children: Vec<Element> = vec![
-        text_box(dialog.initial_name.clone())
-            .header("Account name")
-            .placeholder_text("e.g. Personal")
-            .enabled(!dialog.checking)
-            .on_text_changed(dialog_field_handler(dialog, DialogField::Name))
-            .keyboard_accelerator(dialog_submit_enter(on_submit))
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .into(),
-    ];
-    if let Some(help) = help {
-        children.push(secondary_text(help).into());
-    }
-    vstack(children)
-        .spacing(4.0)
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .into()
-}
-
 fn instruction_link(label: &str, url: &str) -> Element {
     HyperlinkButton::new(label)
         .navigate_uri(url)
@@ -2909,75 +2779,11 @@ fn instruction_text(text: impl Into<String>) -> TextBlock {
         .wrap()
 }
 
-fn claude_login_command() -> Element {
-    const COMMAND: &str =
-        "$env:CLAUDE_CONFIG_DIR = Join-Path $env:USERPROFILE '.claude-minibar-work'\nclaude";
-    text_block(COMMAND)
-        .font_family("Consolas")
-        .font_size(14.0)
-        .foreground(ThemeRef::PrimaryText)
-        .wrap()
-        .tooltip("Click to copy both lines")
-        .on_tapped(
-            || match copy_text_to_clipboard(&COMMAND.replace('\n', "\r\n")) {
-                Ok(()) => crate::notifications::show(
-                    "Command copied",
-                    "Paste it into a separate PowerShell window.",
-                ),
-                Err(error) => {
-                    crate::notifications::show("Could not copy command", &format!("{error:#}"))
-                }
-            },
-        )
-        .into()
-}
-
-fn claude_method_instructions(method: ProfileCredentialMethod) -> Element {
-    let mut steps: Vec<Element> = match method {
-        ProfileCredentialMethod::SignIn => vec![
-            instruction_text("Sign in to a Claude subscription in your browser. Minibar keeps this account separate from your current Claude Code and Desktop logins.").into(),
-            instruction_text("Requires native Windows Claude Code. Click Sign in, select the account you want in the browser, and finish authorization within five minutes.").into(),
-            instruction_text("Minibar stores the session encrypted for your Windows user and refreshes it automatically. You can cancel while waiting for the browser.").into(),
-            instruction_text("If the browser shows a code instead of completing sign-in, cancel and use the OAuth token tab for manual setup.").into(),
-        ],
-        ProfileCredentialMethod::BrowserSession => vec![
-            instruction_text("Recommended for another Claude subscription. Reads its session and weekly limits without switching this PC's Claude login.").into(),
-            instruction_text("1. Open Claude in a separate browser profile or private window. Sign in to the account you want to add and confirm its email in Claude's settings.").into(),
-            instruction_link("Open claude.ai", "https://claude.ai"),
-            instruction_text("2. In Chrome or Edge, press F12. Open Application > Storage > Cookies and select https://claude.ai.").into(),
-            instruction_text("3. Find sessionKey. Copy its Value, not its name or the whole cookie table, and paste it into the field above.").into(),
-            instruction_link("How to view cookies in Chrome", "https://developer.chrome.com/docs/devtools/application/cookies"),
-            instruction_text("A Cookie header containing sessionKey also works. If the session expires, sign in again and use Update credential in this account's settings.").into(),
-        ],
-        ProfileCredentialMethod::OAuthToken => vec![
-            instruction_text("Use the access token from a Claude Code subscription login. Minibar saves a copy; it cannot refresh this pasted token automatically.").into(),
-            instruction_text("1. For a second account, open a separate PowerShell window. Give Claude Code its own configuration directory, then sign in to that account:").into(),
-            claude_login_command(),
-            instruction_link("Claude Code: log in with multiple accounts", "https://code.claude.com/docs/en/authentication#log-in-with-multiple-accounts"),
-            instruction_text("2. Open %USERPROFILE%\\.claude-minibar-work\\.credentials.json. Copy only claudeAiOauth.accessToken (starts with sk-ant-oat), without quotes. If the file is missing, use Browser session instead.").into(),
-            instruction_text("3. Paste that token into the field above. Do not use claude setup-token: it may lack usage access. When this copy expires, get a fresh accessToken and use Update credential in this account's settings.").into(),
-            instruction_text("Requires a Claude subscription login with usage access. API keys and Admin API keys do not show subscription limits.").into(),
-        ],
-    };
-    if method != ProfileCredentialMethod::SignIn {
-        steps.push(instruction_text("Click Check and save. Minibar checks access and stores the credential encrypted for your Windows user.").into());
-    }
-    // The dialog body owns scrolling, including the instructions and input.
-    vstack(steps)
-        .spacing(10.0)
-        .with_layout_animation(
-            LayoutAnimationConfig::linear(duration(CONTROL_NORMAL_ANIMATION)).animate_size(true),
-        )
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .into()
-}
-
 fn claude_credential_tabs(
     dialog: &ProviderDialog,
     set_dialog: AsyncSetState<Option<ProviderDialog>>,
 ) -> Element {
     let tabs = [
-        ("Sign in", ProfileCredentialMethod::SignIn),
         ("Browser session", ProfileCredentialMethod::BrowserSession),
         ("OAuth token", ProfileCredentialMethod::OAuthToken),
     ]
@@ -3004,32 +2810,7 @@ fn claude_credential_fields(
     on_submit: impl Fn() + Clone + 'static,
 ) -> Element {
     let inputs = dialog.inputs();
-    if dialog.claude_method == ProfileCredentialMethod::SignIn {
-        let mut content = vec![
-            claude_credential_tabs(dialog, set_dialog),
-            claude_method_instructions(dialog.claude_method),
-        ];
-        if dialog.checking {
-            content.push(instruction_text("Waiting for browser sign-in…").into());
-        }
-        if let Some(error) = &dialog.error {
-            content.push(
-                text_block(error.clone())
-                    .foreground(ThemeRef::SystemCritical)
-                    .wrap()
-                    .into(),
-            );
-        }
-        return vstack(content)
-            .spacing(14.0)
-            .with_layout_animation(
-                LayoutAnimationConfig::linear(duration(CONTROL_NORMAL_ANIMATION))
-                    .animate_size(true),
-            )
-            .into();
-    }
     let (field, header, placeholder, value, key) = match dialog.claude_method {
-        ProfileCredentialMethod::SignIn => unreachable!(),
         ProfileCredentialMethod::BrowserSession => (
             DialogField::Key,
             "Session key",
@@ -3068,12 +2849,12 @@ fn claude_credential_fields(
         );
     }
     let mut instructions: Vec<Element> = Vec::new();
-    if matches!(
-        dialog.kind,
-        ProviderDialogKind::UpdateClaudeCredential { .. }
-    ) {
-        instructions.push(instruction_text("Replace this profile's credential. Its name and enabled state are kept. The old credential stays in place if the check fails.").into());
-    }
+    instructions.push(
+        instruction_text(
+            "The saved credential is replaced only after the new one passes the check.",
+        )
+        .into(),
+    );
     instructions.push(claude_method_instructions(dialog.claude_method));
     vstack((
         claude_credential_tabs(dialog, set_dialog),
@@ -3108,58 +2889,235 @@ fn dialog_key_name_box(dialog: &ProviderDialog, on_submit: impl Fn() + Clone + '
     .into()
 }
 
+fn claude_method_instructions(method: ProfileCredentialMethod) -> Element {
+    let steps: Vec<Element> = match method {
+        ProfileCredentialMethod::BrowserSession => vec![
+            instruction_text("Reads the session and weekly limits of a Claude subscription without a Claude Code login.").into(),
+            instruction_text("1. Open Claude in a separate browser profile or private window. Sign in to the account you want to track and confirm its email in Claude's settings.").into(),
+            instruction_link("Open claude.ai", "https://claude.ai"),
+            instruction_text("2. In Chrome or Edge, press F12. Open Application > Storage > Cookies and select https://claude.ai.").into(),
+            instruction_text("3. Find sessionKey. Copy its Value, not its name or the whole cookie table, and paste it into the field above.").into(),
+            instruction_link("How to view cookies in Chrome", "https://developer.chrome.com/docs/devtools/application/cookies"),
+            instruction_text("A Cookie header containing sessionKey also works. When the session expires, paste a fresh one here.").into(),
+        ],
+        ProfileCredentialMethod::OAuthToken => vec![
+            instruction_text("Use the access token from a Claude Code subscription login. Minibar cannot refresh a pasted token; prefer Source: Config folder when you can.").into(),
+            instruction_text("Copy only claudeAiOauth.accessToken (starts with sk-ant-oat) from that login's .credentials.json, without quotes. Do not use claude setup-token: it may lack usage access.").into(),
+            instruction_link("Claude Code: log in with multiple accounts", "https://code.claude.com/docs/en/authentication#log-in-with-multiple-accounts"),
+            instruction_text("Requires a Claude subscription login with usage access. API keys and Admin API keys do not show subscription limits.").into(),
+        ],
+    };
+    // The dialog body owns scrolling, including the instructions and input.
+    vstack(steps)
+        .spacing(10.0)
+        .with_layout_animation(
+            LayoutAnimationConfig::linear(duration(CONTROL_NORMAL_ANIMATION)).animate_size(true),
+        )
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .into()
+}
+
+/// Drivers offered by "Add provider", with the reason a driver can't be added.
+fn add_instance_choices(instances: &[ProviderInstance]) -> Vec<(ProviderKind, Option<String>)> {
+    ProviderKind::ALL
+        .into_iter()
+        .map(|driver| {
+            let exists = instances.iter().any(|instance| instance.driver == driver);
+            let single = !crate::provider_registry::descriptor(driver).supports_multiple_instances;
+            (
+                driver,
+                (exists && single)
+                    .then(|| format!("{} supports one instance", driver.display_name())),
+            )
+        })
+        .collect()
+}
+
+fn add_instance_fields(
+    dialog: &ProviderDialog,
+    instances: &[ProviderInstance],
+    set_dialog: AsyncSetState<Option<ProviderDialog>>,
+    on_submit: impl Fn() + Clone + 'static,
+) -> Vec<Element> {
+    let inputs = dialog.inputs();
+    let choices = add_instance_choices(instances);
+    let labels = choices
+        .iter()
+        .map(|(driver, blocked)| match blocked {
+            Some(_) => format!("{} (already added)", driver.display_name()),
+            None => driver.display_name().to_owned(),
+        })
+        .collect::<Vec<_>>();
+    let selected = inputs
+        .driver
+        .and_then(|driver| choices.iter().position(|(choice, _)| *choice == driver))
+        .map_or(-1, |index| index as i32);
+    let driver_dialog = dialog.clone();
+    let mut fields: Vec<Element> = vec![
+        ComboBox::new(labels)
+            .header("Provider")
+            .placeholder_text("Choose a provider")
+            .selected_index(selected)
+            .enabled(!dialog.checking)
+            .on_selection_changed(move |index: i32| {
+                let Some((driver, _)) = usize::try_from(index)
+                    .ok()
+                    .and_then(|index| choices.get(index))
+                else {
+                    return;
+                };
+                if let Ok(mut inputs) = driver_dialog.inputs.lock() {
+                    inputs.driver = Some(*driver);
+                }
+                // Re-render so the name placeholder follows the driver.
+                let mut next = driver_dialog.clone();
+                next.error = None;
+                set_dialog.call(Some(next));
+            })
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .into(),
+    ];
+    let placeholder = inputs
+        .driver
+        .map_or("e.g. Work", |driver| driver.display_name());
+    fields.push(
+        vstack((
+            text_box(dialog.initial_name.clone())
+                .header("Name")
+                .placeholder_text(placeholder)
+                .enabled(!dialog.checking)
+                .on_text_changed(dialog_field_handler(dialog, DialogField::Name))
+                .keyboard_accelerator(dialog_submit_enter(on_submit.clone()))
+                .horizontal_alignment(HorizontalAlignment::Stretch),
+            secondary_text("Shown on its tab, Home card, tray and notifications."),
+        ))
+        .spacing(4.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .into(),
+    );
+    let badge_inputs = dialog.inputs.clone();
+    let color_inputs = dialog.inputs.clone();
+    fields.push(
+        grid((
+            text_box(String::new())
+                .header("Badge")
+                .placeholder_text("Auto")
+                .enabled(!dialog.checking)
+                .on_text_changed(move |value: String| {
+                    if let Ok(mut inputs) = badge_inputs.lock() {
+                        inputs.badge = crate::instances::sanitize_badge(&value);
+                    }
+                })
+                .keyboard_accelerator(dialog_submit_enter(on_submit))
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .grid_column(0),
+            ComboBox::new(BadgeColor::ALL.map(BadgeColor::label))
+                .header("Badge color")
+                .selected_index(inputs.badge_color.index())
+                .enabled(!dialog.checking)
+                .on_selection_changed(move |index: i32| {
+                    if let Ok(mut inputs) = color_inputs.lock() {
+                        inputs.badge_color = BadgeColor::from_index(index);
+                    }
+                })
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .grid_column(1),
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
+        .column_spacing(8.0)
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .into(),
+    );
+    fields.push(
+        secondary_text("Up to three letters; empty uses the name's initials. Badges show while a provider has more than one instance turned on.").into(),
+    );
+    fields
+}
+
 pub(super) fn provider_dialog_overlay(
     dialog: &ProviderDialog,
-    accounts: &[OpenRouterAccount],
+    instances: &[ProviderInstance],
     actions: ProviderDialogActions,
 ) -> Element {
-    let account = |account_id: &str| find_account(accounts, account_id);
+    let instance_name = |provider: &ProviderId| {
+        instances
+            .iter()
+            .find(|instance| instance.id == provider.id())
+            .map(|instance| provider_label(instance, instances))
+            .unwrap_or_else(|| "this provider".into())
+    };
     let account_name = |account_id: &str| {
-        find_account(accounts, account_id)
-            .map(account_display_name)
+        find_account_instance(instances, account_id)
+            .map(|instance| provider_label(instance, instances))
             .unwrap_or_else(|| "this".into())
     };
 
     let on_submit = {
         let dialog = dialog.clone();
-        let accounts = accounts.to_vec();
+        let instances = instances.to_vec();
         let actions = actions.clone();
-        move || submit_provider_dialog(dialog.clone(), accounts.clone(), actions.clone())
+        move || submit_provider_dialog(dialog.clone(), instances.clone(), actions.clone())
     };
 
     let mut fields: Vec<Element> = Vec::new();
-    let (title, primary, _destructive) = match &dialog.kind {
-        ProviderDialogKind::AddOpenRouterAccount => {
-            fields.push(dialog_name_box(
+    let (title, primary) = match &dialog.kind {
+        ProviderDialogKind::AddInstance => {
+            fields.extend(add_instance_fields(
                 dialog,
-                Some("Only used to tell accounts apart in Minibar."),
+                instances,
+                actions.set_dialog.clone(),
                 on_submit.clone(),
             ));
-            fields.push(dialog_password(
+            ("Add provider".to_owned(), "Add")
+        }
+        ProviderDialogKind::DeleteInstance { provider } => {
+            let name = instance_name(provider);
+            let folder = instances
+                .iter()
+                .find(|instance| instance.id == provider.id())
+                .is_some_and(|instance| {
+                    matches!(instance.driver, ProviderKind::Claude | ProviderKind::Codex)
+                        && !instance.uses_manual_credential()
+                });
+            fields.push(
+                secondary_text(format!(
+                    "Minibar stops reading {name} and forgets its saved keys, schedules, tray indicators and Home position.{}",
+                    if folder {
+                        " Its config folder stays on disk."
+                    } else {
+                        ""
+                    }
+                ))
+                .into(),
+            );
+            (format!("Delete {name}?"), "Delete")
+        }
+        ProviderDialogKind::SignIn { provider } => {
+            let name = instance_name(provider);
+            let driver = provider.kind();
+            fields.push(secondary_text(if dialog.checking {
+                "Finish signing in in your browser. Cancel stops this login.".to_owned()
+            } else if driver == ProviderKind::Claude {
+                format!("Runs Claude Code's own login for {name} with its config folder as CLAUDE_CONFIG_DIR. The login stays in that folder, where Claude Code keeps it fresh. Requires native Windows Claude Code.")
+            } else {
+                format!("Runs Codex's own login for {name} with its config folder as CODEX_HOME. The login stays in that folder, where Codex keeps it fresh. Requires the native Codex CLI or desktop app.")
+            }).into());
+            (format!("Sign in to {name}"), "Sign in")
+        }
+        ProviderDialogKind::ManualCredential { provider } => {
+            fields.push(secondary_text(format!("For {}.", instance_name(provider))).into());
+            fields.push(claude_credential_fields(
                 dialog,
-                DialogField::Key,
-                "Management key",
-                "sk-or-v1-…",
-                "Recommended. Shows credit balance and usage history.",
+                actions.set_dialog.clone(),
                 on_submit.clone(),
             ));
-            fields.push(dialog_password(
-                dialog,
-                DialogField::SecondKey,
-                "API key",
-                "sk-or-v1-…",
-                "Optional. You can add more API keys later.",
-                on_submit.clone(),
-            ));
-            ("Add OpenRouter account".to_owned(), "Add account", false)
+            ("Claude credential".to_owned(), "Check and save")
         }
         ProviderDialogKind::OpenRouterApiKey { account_id, key_id } => {
             let replacing = key_id
                 .as_ref()
                 .is_some_and(|key_id| crate::openrouter::api_key_is_configured(account_id, key_id));
-            fields.push(
-                secondary_text(format!("For the {} account.", account_name(account_id))).into(),
-            );
+            fields.push(secondary_text(format!("For {}.", account_name(account_id))).into());
             if !replacing {
                 fields.push(dialog_key_name_box(dialog, on_submit.clone()));
             }
@@ -3179,16 +3137,13 @@ pub(super) fn provider_dialog_overlay(
                 }
                 .to_owned(),
                 "Check and save",
-                false,
             )
         }
         ProviderDialogKind::OpenRouterManagementKey {
             account_id,
             replace,
         } => {
-            fields.push(
-                secondary_text(format!("For the {} account.", account_name(account_id))).into(),
-            );
+            fields.push(secondary_text(format!("For {}.", account_name(account_id))).into());
             fields.push(dialog_password(
                 dialog,
                 DialogField::Key,
@@ -3205,16 +3160,11 @@ pub(super) fn provider_dialog_overlay(
                 }
                 .to_owned(),
                 "Check and save",
-                false,
             )
-        }
-        ProviderDialogKind::RenameOpenRouterAccount { .. } => {
-            fields.push(dialog_name_box(dialog, None, on_submit.clone()));
-            ("Rename account".to_owned(), "Rename", false)
         }
         ProviderDialogKind::RenameOpenRouterApiKey { .. } => {
             fields.push(dialog_key_name_box(dialog, on_submit.clone()));
-            ("Rename key".to_owned(), "Save", false)
+            ("Rename key".to_owned(), "Save")
         }
         ProviderDialogKind::RemoveOpenRouterApiKey { account_id, key_id } => {
             let hint = crate::openrouter::api_key_hint(account_id, key_id)
@@ -3227,7 +3177,7 @@ pub(super) fn provider_dialog_overlay(
                 ))
                 .into(),
             );
-            ("Remove API key?".to_owned(), "Remove", true)
+            ("Remove API key?".to_owned(), "Remove")
         }
         ProviderDialogKind::RemoveOpenRouterManagementKey { account_id } => {
             fields.push(
@@ -3237,30 +3187,10 @@ pub(super) fn provider_dialog_overlay(
                 ))
                 .into(),
             );
-            ("Remove management key?".to_owned(), "Remove", true)
-        }
-        ProviderDialogKind::RemoveOpenRouterAccount { account_id } => {
-            let key_count = account(account_id).map_or(0, |account| account.api_key_ids.len());
-            let management = if crate::openrouter::management_key_is_configured(account_id) {
-                ", its management key"
-            } else {
-                ""
-            };
-            fields.push(
-                secondary_text(format!(
-                    "Minibar forgets this account{management} and {}. Nothing changes on OpenRouter.",
-                    plural(key_count, "API key")
-                ))
-                .into(),
-            );
-            (
-                format!("Remove {}?", account_name(account_id)),
-                "Remove account",
-                true,
-            )
+            ("Remove management key?".to_owned(), "Remove")
         }
         ProviderDialogKind::OpenCodeKey { provider, replace } => {
-            fields.push(secondary_text(format!("For {}.", provider.display_name())).into());
+            fields.push(secondary_text(format!("For {}.", instance_name(provider))).into());
             fields.push(dialog_password(
                 dialog,
                 DialogField::Key,
@@ -3277,108 +3207,21 @@ pub(super) fn provider_dialog_overlay(
                 }
                 .to_owned(),
                 "Save key",
-                false,
             )
         }
         ProviderDialogKind::RemoveOpenCodeKey { provider } => {
             fields.push(
                 secondary_text(format!(
-                    "Minibar forgets the saved {} key. It keeps working with OpenCode.",
-                    provider.display_name()
+                    "Minibar forgets the saved key of {}. It keeps working with OpenCode.",
+                    instance_name(provider)
                 ))
                 .into(),
             );
-            ("Remove API key?".to_owned(), "Remove", true)
-        }
-        ProviderDialogKind::AddCodexProfile | ProviderDialogKind::UpdateCodexCredential { .. } => {
-            if matches!(dialog.kind, ProviderDialogKind::AddCodexProfile) {
-                fields.push(dialog_name_box(
-                    dialog,
-                    Some("Optional. Leave blank for Account 1, Account 2, and so on."),
-                    on_submit.clone(),
-                ));
-            }
-            fields.push(secondary_text(if dialog.checking {
-                "Finish signing in with the other ChatGPT account in your browser. Cancel stops this login."
-            } else {
-                "Sign in opens your browser through Codex CLI. Use the ChatGPT account you want to track. Minibar saves its session encrypted and refreshes it automatically. Your current CLI and desktop login stay unchanged. Native Codex CLI or Codex desktop must be installed."
-            }).into());
-            (
-                if matches!(dialog.kind, ProviderDialogKind::AddCodexProfile) {
-                    "Add Codex account"
-                } else {
-                    "Sign in to Codex account"
-                }
-                .to_owned(),
-                "Sign in",
-                false,
-            )
-        }
-        ProviderDialogKind::RenameCodexProfile { .. } => {
-            fields.push(dialog_name_box(dialog, None, on_submit.clone()));
-            ("Rename profile".to_owned(), "Rename", false)
-        }
-        ProviderDialogKind::RemoveCodexProfile { .. } => {
-            fields.push(secondary_text("Minibar forgets this account and its saved login. Your Codex CLI and desktop login stay unchanged.").into());
-            ("Remove account?".to_owned(), "Remove", true)
-        }
-        ProviderDialogKind::AddClaudeProfile => {
-            fields.push(dialog_name_box(
-                dialog,
-                Some("Optional. Leave blank for Account 1, Account 2, and so on. You can rename it later."),
-                on_submit.clone(),
-            ));
-            fields.push(claude_credential_fields(
-                dialog,
-                actions.set_dialog.clone(),
-                on_submit.clone(),
-            ));
-            (
-                "Add Claude account".to_owned(),
-                if dialog.claude_method == ProfileCredentialMethod::SignIn {
-                    "Sign in"
-                } else {
-                    "Check and save"
-                },
-                false,
-            )
-        }
-        ProviderDialogKind::UpdateClaudeCredential { .. } => {
-            fields.push(claude_credential_fields(
-                dialog,
-                actions.set_dialog.clone(),
-                on_submit.clone(),
-            ));
-            (
-                "Update Claude credential".to_owned(),
-                if dialog.claude_method == ProfileCredentialMethod::SignIn {
-                    "Sign in"
-                } else {
-                    "Check and save"
-                },
-                false,
-            )
-        }
-        ProviderDialogKind::RenameClaudeProfile { .. } => {
-            fields.push(dialog_name_box(dialog, None, on_submit.clone()));
-            ("Rename profile".to_owned(), "Rename", false)
-        }
-        ProviderDialogKind::RemoveClaudeProfile { .. } => {
-            fields.push(
-                secondary_text(
-                    "Minibar forgets this profile and its saved credential. Nothing changes on Claude.",
-                )
-                .into(),
-            );
-            ("Remove profile?".to_owned(), "Remove", true)
+            ("Remove API key?".to_owned(), "Remove")
         }
     };
     if let Some(error) = &dialog.error
-        && !matches!(
-            dialog.kind,
-            ProviderDialogKind::AddClaudeProfile
-                | ProviderDialogKind::UpdateClaudeCredential { .. }
-        )
+        && !matches!(dialog.kind, ProviderDialogKind::ManualCredential { .. })
     {
         fields.push(
             text_block(error.clone())
@@ -3394,7 +3237,7 @@ pub(super) fn provider_dialog_overlay(
 
     let primary_button = {
         let dialog = dialog.clone();
-        let accounts = accounts.to_vec();
+        let instances = instances.to_vec();
         let actions = actions.clone();
         let button = Button::new(if dialog.checking {
             if dialog.is_sign_in() {
@@ -3410,7 +3253,7 @@ pub(super) fn provider_dialog_overlay(
         .accent();
         button
             .on_click(move || {
-                submit_provider_dialog(dialog.clone(), accounts.clone(), actions.clone())
+                submit_provider_dialog(dialog.clone(), instances.clone(), actions.clone())
             })
             .grid_column(0)
     };
@@ -3430,17 +3273,11 @@ pub(super) fn provider_dialog_overlay(
         })
         .grid_column(1);
 
-    let claude_credential_dialog = matches!(
-        dialog.kind,
-        ProviderDialogKind::AddClaudeProfile
-            | ProviderDialogKind::UpdateClaudeCredential { .. }
-            | ProviderDialogKind::AddCodexProfile
-            | ProviderDialogKind::UpdateCodexCredential { .. }
-    );
+    let tall_dialog = matches!(dialog.kind, ProviderDialogKind::ManualCredential { .. });
     let dialog_body = vstack(body)
         .spacing(14.0)
         .horizontal_alignment(HorizontalAlignment::Stretch);
-    let dialog_body: Element = if claude_credential_dialog {
+    let dialog_body: Element = if tall_dialog {
         scroll_viewer(dialog_body.with_layout_animation(
             LayoutAnimationConfig::linear(duration(CONTROL_NORMAL_ANIMATION)).animate_size(true),
         ))
@@ -3464,7 +3301,7 @@ pub(super) fn provider_dialog_overlay(
         bottom: 0.0,
     })
     .border_brush(ThemeRef::CardStroke);
-    let card_content: Element = if claude_credential_dialog {
+    let card_content: Element = if tall_dialog {
         grid((body_panel.grid_row(0), button_panel.grid_row(1)))
             .rows([GridLength::Star(1.0), GridLength::Auto])
             .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -3479,18 +3316,14 @@ pub(super) fn provider_dialog_overlay(
         .corner_radius(8.0)
         .border_thickness(Thickness::uniform(1.0))
         .border_brush(ThemeRef::CardStroke)
-        .width(if claude_credential_dialog {
-            520.0
-        } else {
-            DIALOG_WIDTH
-        })
+        .width(if tall_dialog { 520.0 } else { DIALOG_WIDTH })
         .with_layout_animation(
             LayoutAnimationConfig::linear(duration(CONTROL_NORMAL_ANIMATION)).animate_size(true),
         )
         .horizontal_alignment(HorizontalAlignment::Center)
         .vertical_alignment(VerticalAlignment::Center)
         .on_tapped(|| {});
-    if claude_credential_dialog {
+    if tall_dialog {
         // A star-sized scrollable body and Auto footer keep both buttons
         // reachable when Settings is resized down to its 400-DIP minimum.
         card = card
@@ -3538,6 +3371,403 @@ pub(super) fn provider_dialog_overlay(
     .into()
 }
 
+/// `Claude · Work` when the driver has several instances, else the name.
+fn provider_label(instance: &ProviderInstance, instances: &[ProviderInstance]) -> String {
+    let shared = instances
+        .iter()
+        .filter(|other| other.driver == instance.driver)
+        .count()
+        > 1;
+    let name = instance.display_name();
+    if shared && name != instance.driver.display_name() {
+        format!("{} \u{00b7} {name}", instance.driver.display_name())
+    } else {
+        name
+    }
+}
+
+/// Runs the CLI's own login with the instance's config folder, then advances
+/// its credential revision so the worker re-reads the folder.
+fn submit_sign_in(dialog: ProviderDialog, provider: ProviderId, actions: ProviderDialogActions) {
+    let control = dialog.login_control.clone();
+    let settings_tx = actions.settings_tx.clone();
+    run_dialog_work(dialog, actions, move || {
+        let settings = Settings::load_or_create(&Settings::default_path()?)?;
+        let instance = settings
+            .instance(provider)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("This provider no longer exists."))?;
+        anyhow::ensure!(
+            !instance.uses_manual_credential(),
+            "Switch Source to Config folder to sign in."
+        );
+        let folder = instance
+            .config_folder()
+            .or_else(|| crate::instances::default_folder(instance.driver))
+            .ok_or_else(|| anyhow::anyhow!("This provider has no config folder."))?;
+        anyhow::ensure!(
+            !crate::instances::folder_conflicts(&settings.instances).contains_key(&instance.id),
+            "Another instance already reads this config folder. Choose a different folder first."
+        );
+        match instance.driver {
+            ProviderKind::Claude => crate::claude::profile_oauth::login(
+                instance.binary_path.as_deref(),
+                &folder,
+                &control,
+            )?,
+            ProviderKind::Codex => crate::codex::profile_oauth::login(
+                instance.binary_path.as_deref(),
+                &folder,
+                &control,
+            )?,
+            _ => anyhow::bail!("This provider has no sign-in."),
+        }
+        control.begin_save()?;
+        if !instance.is_primary()
+            && matches!(instance.source, InstanceSource::ConfigFolder { path: None })
+        {
+            // Pin the managed folder so later changes to the default location
+            // never move an existing login.
+            let managed = folder.clone();
+            persist_instance(settings_tx.clone(), provider, move |instance| {
+                instance.source = InstanceSource::ConfigFolder {
+                    path: Some(managed),
+                };
+                Ok(())
+            })?;
+        }
+        bump_credentials(settings_tx, provider)?;
+        Ok(DialogOutcome {
+            notice: format!(
+                "{} signed in. Its CLI keeps the login fresh in its config folder.",
+                instance.display_name()
+            ),
+            expand_card: None,
+        })
+    });
+}
+
+fn submit_add_instance(
+    dialog: ProviderDialog,
+    instances: Vec<ProviderInstance>,
+    actions: ProviderDialogActions,
+) {
+    let inputs = dialog.inputs();
+    let fail = |message: &str| actions.set_dialog.call(Some(dialog.with_error(message)));
+    let Some(driver) = inputs.driver else {
+        return fail("Choose a provider.");
+    };
+    if let Some((_, Some(reason))) = add_instance_choices(&instances)
+        .into_iter()
+        .find(|(choice, _)| *choice == driver)
+    {
+        return fail(&format!("{reason}. It is already in the list."));
+    }
+    let name = inputs.name.trim().to_owned();
+    let name = if name.is_empty() {
+        driver.display_name().to_owned()
+    } else {
+        name
+    };
+    let mut added = None;
+    let result = try_persist_update_fallible(actions.settings_tx.clone(), |settings| {
+        let mut instance = settings.new_instance(driver, name.clone());
+        instance.badge = inputs.badge.clone();
+        instance.badge_color = inputs.badge_color;
+        instance.enabled = true;
+        // A second instance of a CLI driver gets its own managed folder;
+        // reusing another instance's login would double-count it.
+        instance.normalize();
+        added = Some(settings.add_instance(instance));
+        Ok(())
+    });
+    match result {
+        Ok(()) => {
+            finish_dialog(
+                &actions,
+                DialogOutcome {
+                    notice: format!("Added {name}."),
+                    expand_card: None,
+                },
+            );
+            if let (Some(provider), Some(select)) = (added, actions.select_provider.as_ref()) {
+                select(provider);
+            }
+        }
+        Err(error) => fail(&format!("Could not add the provider: {error:#}")),
+    }
+}
+
+fn submit_provider_dialog(
+    dialog: ProviderDialog,
+    instances: Vec<ProviderInstance>,
+    actions: ProviderDialogActions,
+) {
+    if dialog.checking {
+        return;
+    }
+    let inputs = dialog.inputs();
+    let fail = |message: &str| actions.set_dialog.call(Some(dialog.with_error(message)));
+    let account = |account_id: &str| {
+        find_account_instance(&instances, account_id)
+            .and_then(|instance| instance.openrouter.clone())
+    };
+
+    match dialog.kind.clone() {
+        ProviderDialogKind::AddInstance => submit_add_instance(dialog, instances, actions),
+        ProviderDialogKind::SignIn { provider } => submit_sign_in(dialog, provider, actions),
+        ProviderDialogKind::DeleteInstance { provider } => {
+            let mut removed = None;
+            let result = try_persist_update_fallible(actions.settings_tx.clone(), |settings| {
+                removed = settings.remove_instance(provider);
+                anyhow::ensure!(removed.is_some(), "This provider no longer exists.");
+                Ok(())
+            });
+            match result {
+                Ok(()) => {
+                    // The instance is gone either way; leftover secrets are unused.
+                    if let Some(instance) = &removed {
+                        forget_instance_secrets(instance);
+                    }
+                    let name = removed
+                        .as_ref()
+                        .map(ProviderInstance::display_name)
+                        .unwrap_or_default();
+                    finish_dialog(
+                        &actions,
+                        DialogOutcome {
+                            notice: format!("{name} deleted."),
+                            expand_card: None,
+                        },
+                    );
+                    if let Some(select) = actions.select_provider.as_ref() {
+                        let remaining = instances
+                            .iter()
+                            .filter(|instance| instance.id != provider.id())
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        if let Some(next) = super::navigation::first_provider_in_order(&remaining) {
+                            select(next);
+                        }
+                    }
+                }
+                Err(error) => fail(&format!("Could not delete the provider: {error:#}")),
+            }
+        }
+        ProviderDialogKind::ManualCredential { provider } => {
+            let credential = match dialog.claude_method {
+                ProfileCredentialMethod::BrowserSession => inputs.key.trim(),
+                ProfileCredentialMethod::OAuthToken => inputs.second_key.trim(),
+            }
+            .to_owned();
+            if credential.is_empty() {
+                return fail("Paste a credential first.");
+            }
+            if let Err(error) = dialog.claude_method.validate(&credential) {
+                return fail(&error.to_string());
+            }
+            let settings_tx = actions.settings_tx.clone();
+            run_dialog_work(dialog, actions, move || {
+                crate::claude::verify_credential(&credential)?;
+                persist_claude_manual_credential(settings_tx, provider, &credential)?;
+                Ok(DialogOutcome {
+                    notice: "Credential saved in Windows user storage.".into(),
+                    expand_card: None,
+                })
+            });
+        }
+        ProviderDialogKind::OpenRouterApiKey { account_id, key_id } => {
+            let key = inputs.key.trim().to_owned();
+            let local_name = inputs.name.trim().to_owned();
+            if key.is_empty() {
+                return fail("Paste a key first.");
+            }
+            if !looks_like_openrouter_key(&key) {
+                return fail(NOT_OPENROUTER_KEY);
+            }
+            if account(&account_id).is_none() {
+                return fail("This account no longer exists.");
+            }
+            let settings_tx = actions.settings_tx.clone();
+            run_dialog_work(dialog, actions, move || {
+                crate::openrouter::verify_api_key(&key)?;
+                let key_id = key_id.unwrap_or_else(OpenRouterAccount::new_api_key_id);
+                let saved_key = key_id.clone();
+                persist_openrouter_credentials(
+                    settings_tx,
+                    account_id.clone(),
+                    vec![crate::openrouter::AccountSecretChange::api_key(
+                        account_id,
+                        key_id,
+                        Some(key),
+                    )],
+                    move |account| {
+                        if !account.api_key_ids.contains(&saved_key) {
+                            account.api_key_ids.push(saved_key.clone());
+                        }
+                        if !local_name.is_empty() {
+                            account.api_key_names.insert(saved_key, local_name);
+                        }
+                        Ok(())
+                    },
+                )?;
+                Ok(DialogOutcome {
+                    notice: "API key saved in Windows user storage.".into(),
+                    expand_card: None,
+                })
+            });
+        }
+        ProviderDialogKind::OpenRouterManagementKey {
+            account_id,
+            replace,
+        } => {
+            let key = inputs.key.trim().to_owned();
+            if key.is_empty() {
+                return fail("Paste a key first.");
+            }
+            if !looks_like_openrouter_key(&key) {
+                return fail(NOT_OPENROUTER_KEY);
+            }
+            if account(&account_id).is_none() {
+                return fail("This account no longer exists.");
+            }
+            let settings_tx = actions.settings_tx.clone();
+            run_dialog_work(dialog, actions, move || {
+                crate::openrouter::verify_management_key(&key)?;
+                persist_openrouter_credentials(
+                    settings_tx,
+                    account_id.clone(),
+                    vec![crate::openrouter::AccountSecretChange::management(
+                        account_id,
+                        Some(key),
+                    )],
+                    |_| Ok(()),
+                )?;
+                Ok(DialogOutcome {
+                    notice: if replace {
+                        "Management key replaced.".to_owned()
+                    } else {
+                        "Management key added.".to_owned()
+                    },
+                    expand_card: None,
+                })
+            });
+        }
+        ProviderDialogKind::RenameOpenRouterApiKey { account_id, key_id } => {
+            let name = inputs.name.trim().to_owned();
+            if let Err(error) = persist_openrouter_account(
+                actions.settings_tx.clone(),
+                account_id,
+                false,
+                None,
+                move |account| {
+                    anyhow::ensure!(
+                        account.api_key_ids.contains(&key_id),
+                        "OpenRouter API key no longer exists"
+                    );
+                    if name.is_empty() {
+                        account.api_key_names.remove(&key_id);
+                    } else {
+                        account.api_key_names.insert(key_id, name);
+                    }
+                    Ok(())
+                },
+            ) {
+                return fail(&format!("Could not rename the key: {error:#}"));
+            }
+            finish_dialog(
+                &actions,
+                DialogOutcome {
+                    notice: "API key renamed.".into(),
+                    expand_card: None,
+                },
+            );
+        }
+        ProviderDialogKind::RemoveOpenRouterApiKey { account_id, key_id } => {
+            let secret_change = crate::openrouter::AccountSecretChange::api_key(
+                account_id.clone(),
+                key_id.clone(),
+                None,
+            );
+            if let Err(error) = persist_openrouter_credentials(
+                actions.settings_tx.clone(),
+                account_id,
+                vec![secret_change],
+                move |account| {
+                    let before = account.api_key_ids.len();
+                    account.api_key_ids.retain(|id| id != &key_id);
+                    account.api_key_names.remove(&key_id);
+                    anyhow::ensure!(
+                        account.api_key_ids.len() != before,
+                        "OpenRouter API key no longer exists"
+                    );
+                    Ok(())
+                },
+            ) {
+                return fail(&format!("Could not remove the key: {error:#}"));
+            }
+            finish_dialog(
+                &actions,
+                DialogOutcome {
+                    notice: "API key removed.".into(),
+                    expand_card: None,
+                },
+            );
+        }
+        ProviderDialogKind::RemoveOpenRouterManagementKey { account_id } => {
+            if let Err(error) = persist_openrouter_credentials(
+                actions.settings_tx.clone(),
+                account_id.clone(),
+                vec![crate::openrouter::AccountSecretChange::management(
+                    account_id, None,
+                )],
+                |_| Ok(()),
+            ) {
+                return fail(&format!("Could not remove the key: {error:#}"));
+            }
+            finish_dialog(
+                &actions,
+                DialogOutcome {
+                    notice: "Management key removed.".into(),
+                    expand_card: None,
+                },
+            );
+        }
+        ProviderDialogKind::OpenCodeKey { provider, .. } => {
+            let key = inputs.key.trim().to_owned();
+            if key.is_empty() {
+                return fail("Paste a key first.");
+            }
+            if let Err(error) =
+                persist_opencode_manual_key(actions.settings_tx.clone(), provider, Some(key))
+            {
+                return fail(&format!("Could not save the key: {error:#}"));
+            }
+            finish_dialog(
+                &actions,
+                DialogOutcome {
+                    notice: "API key saved.".into(),
+                    expand_card: None,
+                },
+            );
+        }
+        ProviderDialogKind::RemoveOpenCodeKey { provider } => {
+            if let Err(error) =
+                persist_opencode_manual_key(actions.settings_tx.clone(), provider, None)
+            {
+                return fail(&format!("Could not remove the key: {error:#}"));
+            }
+            finish_dialog(
+                &actions,
+                DialogOutcome {
+                    notice: "API key removed.".into(),
+                    expand_card: None,
+                },
+            );
+        }
+    }
+}
+
 fn finish_dialog(actions: &ProviderDialogActions, outcome: DialogOutcome) {
     actions.set_dialog.call(None);
     if let Some(card) = outcome.expand_card {
@@ -3579,688 +3809,8 @@ fn run_dialog_work(
     });
 }
 
-fn account_profile_name(requested: &str, profiles: &[ClaudeProfile]) -> anyhow::Result<String> {
-    let requested = requested.trim();
-    if !requested.is_empty() {
-        anyhow::ensure!(
-            !profiles.iter().any(|profile| profile.name == requested),
-            "A profile with this name already exists."
-        );
-        return Ok(requested.to_owned());
-    }
-    // At most profiles.len() names are occupied, so this range has a free one.
-    Ok((1..=profiles.len() + 1)
-        .map(|number| format!("Account {number}"))
-        .find(|name| !profiles.iter().any(|profile| profile.name == *name))
-        .expect("account name range contains a free name"))
-}
-
-fn submit_claude_login(dialog: ProviderDialog, actions: ProviderDialogActions) {
-    let name = dialog.inputs().name.trim().to_owned();
-    let updating = match &dialog.kind {
-        ProviderDialogKind::UpdateClaudeCredential { profile_id } => Some(profile_id.clone()),
-        _ => None,
-    };
-    let control = dialog.login_control.clone();
-    let settings_tx = actions.settings_tx.clone();
-    run_dialog_work(dialog, actions, move || {
-        let settings = Settings::load_or_create(&Settings::default_path()?)?;
-        if updating.is_none() {
-            account_profile_name(&name, &crate::claude::profiles_for_settings(&settings))?;
-        }
-        let credential =
-            crate::claude::profile_oauth::login(settings.claude_path.as_deref(), &control)?;
-        control.begin_save()?;
-        let mut profile = ClaudeProfile::new(name.clone());
-        let profile_id = updating.clone().unwrap_or_else(|| profile.id.clone());
-        let saved_id = profile_id.clone();
-        let added = updating.is_none();
-        persist_claude_credential(settings_tx, &profile_id, &credential, move |profiles| {
-            if added {
-                profile.name = account_profile_name(&name, profiles)?;
-                profiles.push(profile);
-            } else {
-                anyhow::ensure!(
-                    profiles
-                        .iter()
-                        .any(|saved| saved.id == saved_id && !saved.is_default()),
-                    "This profile is no longer available."
-                );
-            }
-            Ok(())
-        })?;
-        Ok(DialogOutcome {
-            notice: "Claude account signed in. Its session refreshes automatically.".into(),
-            expand_card: added.then(|| format!("claude-account-{profile_id}")),
-        })
-    });
-}
-
-fn submit_codex_login(dialog: ProviderDialog, actions: ProviderDialogActions) {
-    let name = dialog.inputs().name.trim().to_owned();
-    let updating = match &dialog.kind {
-        ProviderDialogKind::UpdateCodexCredential { profile_id } => Some(profile_id.clone()),
-        _ => None,
-    };
-    let control = dialog.login_control.clone();
-    let settings_tx = actions.settings_tx.clone();
-    run_dialog_work(dialog, actions, move || {
-        let settings = Settings::load_or_create(&Settings::default_path()?)?;
-        if updating.is_none() {
-            account_profile_name(&name, &crate::codex::profiles_for_settings(&settings))?;
-        }
-        let credential =
-            crate::codex::profile_oauth::login(settings.codex_path.as_deref(), &control)?;
-        control.begin_save()?;
-        let mut profile = CodexProfile::new(name.clone());
-        let profile_id = updating.clone().unwrap_or_else(|| profile.id.clone());
-        let saved_id = profile_id.clone();
-        let added = updating.is_none();
-        persist_codex_credential(settings_tx, &profile_id, &credential, move |profiles| {
-            if added {
-                profile.name = account_profile_name(&name, profiles)?;
-                profiles.push(profile);
-            } else {
-                anyhow::ensure!(
-                    profiles
-                        .iter()
-                        .any(|saved| saved.id == saved_id && !saved.is_default()),
-                    "This profile is no longer available."
-                );
-            }
-            Ok(())
-        })?;
-        Ok(DialogOutcome {
-            notice: "Codex account signed in. Its session refreshes automatically.".into(),
-            expand_card: added.then(|| format!("codex-account-{profile_id}")),
-        })
-    });
-}
-
 fn looks_like_openrouter_key(value: &str) -> bool {
     value.starts_with("sk-or-")
-}
-
-fn submit_provider_dialog(
-    dialog: ProviderDialog,
-    accounts: Vec<OpenRouterAccount>,
-    actions: ProviderDialogActions,
-) {
-    if dialog.checking {
-        return;
-    }
-    if matches!(
-        dialog.kind,
-        ProviderDialogKind::AddCodexProfile | ProviderDialogKind::UpdateCodexCredential { .. }
-    ) {
-        submit_codex_login(dialog, actions);
-        return;
-    }
-    if dialog.claude_method == ProfileCredentialMethod::SignIn
-        && matches!(
-            dialog.kind,
-            ProviderDialogKind::AddClaudeProfile
-                | ProviderDialogKind::UpdateClaudeCredential { .. }
-        )
-    {
-        submit_claude_login(dialog, actions);
-        return;
-    }
-    let inputs = dialog.inputs();
-    let fail = |message: &str| actions.set_dialog.call(Some(dialog.with_error(message)));
-    let find_account = |account_id: &str| {
-        accounts
-            .iter()
-            .find(|account| account.id == account_id)
-            .cloned()
-    };
-
-    match dialog.kind.clone() {
-        ProviderDialogKind::AddOpenRouterAccount => {
-            let name = inputs.name.trim().to_owned();
-            let management_key = inputs.key.trim().to_owned();
-            let api_key = inputs.second_key.trim().to_owned();
-            if name.is_empty() {
-                return fail("Give the account a name.");
-            }
-            if management_key.is_empty() && api_key.is_empty() {
-                return fail("Add a management key, an API key, or both.");
-            }
-            if [&management_key, &api_key]
-                .iter()
-                .any(|key| !key.is_empty() && !looks_like_openrouter_key(key))
-            {
-                return fail(NOT_OPENROUTER_KEY);
-            }
-            let settings_tx = actions.settings_tx.clone();
-            run_dialog_work(dialog, actions, move || {
-                if !management_key.is_empty() {
-                    crate::openrouter::verify_management_key(&management_key)?;
-                }
-                if !api_key.is_empty() {
-                    crate::openrouter::verify_api_key(&api_key)?;
-                }
-                let mut account = OpenRouterAccount::new(name.clone());
-                account.api_key_ids.clear();
-                let mut secret_changes = Vec::new();
-                if !management_key.is_empty() {
-                    secret_changes.push(crate::openrouter::AccountSecretChange::management(
-                        account.id.clone(),
-                        Some(management_key),
-                    ));
-                }
-                if !api_key.is_empty() {
-                    let key_id = OpenRouterAccount::new_api_key_id();
-                    secret_changes.push(crate::openrouter::AccountSecretChange::api_key(
-                        account.id.clone(),
-                        key_id.clone(),
-                        Some(api_key),
-                    ));
-                    account.api_key_ids.push(key_id);
-                }
-                let card = account_card_id(&account.id);
-                persist_openrouter_credentials(settings_tx, secret_changes, move |accounts| {
-                    anyhow::ensure!(
-                        !accounts.iter().any(|existing| existing.id == account.id),
-                        "OpenRouter account already exists"
-                    );
-                    accounts.push(account);
-                    Ok(())
-                })?;
-                Ok(DialogOutcome {
-                    notice: format!("Added {name}. Keys are saved in Windows user storage."),
-                    expand_card: Some(card),
-                })
-            });
-        }
-        ProviderDialogKind::OpenRouterApiKey { account_id, key_id } => {
-            let key = inputs.key.trim().to_owned();
-            let local_name = inputs.name.trim().to_owned();
-            if key.is_empty() {
-                return fail("Paste a key first.");
-            }
-            if !looks_like_openrouter_key(&key) {
-                return fail(NOT_OPENROUTER_KEY);
-            }
-            let Some(account) = find_account(&account_id) else {
-                return fail("This account no longer exists.");
-            };
-            let settings_tx = actions.settings_tx.clone();
-            run_dialog_work(dialog, actions, move || {
-                crate::openrouter::verify_api_key(&key)?;
-                let name = account_display_name(&account);
-                let card = account_card_id(&account.id);
-                match key_id {
-                    Some(key_id) => {
-                        persist_openrouter_credentials(
-                            settings_tx,
-                            vec![crate::openrouter::AccountSecretChange::api_key(
-                                account.id.clone(),
-                                key_id.clone(),
-                                Some(key),
-                            )],
-                            move |accounts| {
-                                let saved = accounts
-                                    .iter_mut()
-                                    .find(|saved| saved.id == account.id)
-                                    .ok_or_else(|| {
-                                        anyhow::anyhow!("OpenRouter account no longer exists")
-                                    })?;
-                                anyhow::ensure!(
-                                    saved.api_key_ids.contains(&key_id),
-                                    "OpenRouter API key no longer exists"
-                                );
-                                if !local_name.is_empty() {
-                                    saved.api_key_names.insert(key_id, local_name);
-                                }
-                                Ok(())
-                            },
-                        )?;
-                        Ok(DialogOutcome {
-                            notice: format!("API key saved for {name}."),
-                            expand_card: Some(card),
-                        })
-                    }
-                    None => {
-                        let key_id = OpenRouterAccount::new_api_key_id();
-                        let account_id = account.id.clone();
-                        persist_openrouter_credentials(
-                            settings_tx,
-                            vec![crate::openrouter::AccountSecretChange::api_key(
-                                account_id.clone(),
-                                key_id.clone(),
-                                Some(key),
-                            )],
-                            move |accounts| {
-                                let account = accounts
-                                    .iter_mut()
-                                    .find(|account| account.id == account_id)
-                                    .ok_or_else(|| {
-                                        anyhow::anyhow!("OpenRouter account no longer exists")
-                                    })?;
-                                if !local_name.is_empty() {
-                                    account.api_key_names.insert(key_id.clone(), local_name);
-                                }
-                                account.api_key_ids.push(key_id);
-                                Ok(())
-                            },
-                        )?;
-                        Ok(DialogOutcome {
-                            notice: format!("API key added to {name}."),
-                            expand_card: Some(card),
-                        })
-                    }
-                }
-            });
-        }
-        ProviderDialogKind::OpenRouterManagementKey {
-            account_id,
-            replace,
-        } => {
-            let key = inputs.key.trim().to_owned();
-            if key.is_empty() {
-                return fail("Paste a key first.");
-            }
-            if !looks_like_openrouter_key(&key) {
-                return fail(NOT_OPENROUTER_KEY);
-            }
-            let Some(account) = find_account(&account_id) else {
-                return fail("This account no longer exists.");
-            };
-            let settings_tx = actions.settings_tx.clone();
-            run_dialog_work(dialog, actions, move || {
-                crate::openrouter::verify_management_key(&key)?;
-                let saved_account_id = account.id.clone();
-                persist_openrouter_credentials(
-                    settings_tx,
-                    vec![crate::openrouter::AccountSecretChange::management(
-                        saved_account_id.clone(),
-                        Some(key),
-                    )],
-                    move |accounts| {
-                        anyhow::ensure!(
-                            accounts.iter().any(|saved| saved.id == saved_account_id),
-                            "OpenRouter account no longer exists"
-                        );
-                        Ok(())
-                    },
-                )?;
-                Ok(DialogOutcome {
-                    notice: if replace {
-                        "Management key replaced.".to_owned()
-                    } else {
-                        format!(
-                            "Management key added to {}.",
-                            account_display_name(&account)
-                        )
-                    },
-                    expand_card: Some(account_card_id(&account.id)),
-                })
-            });
-        }
-        ProviderDialogKind::RenameOpenRouterAccount { account_id } => {
-            let name = inputs.name.trim().to_owned();
-            if name.is_empty() {
-                return fail("Give the account a name.");
-            }
-            if let Err(error) =
-                persist_openrouter_accounts(actions.settings_tx.clone(), false, move |accounts| {
-                    let account = accounts
-                        .iter_mut()
-                        .find(|account| account.id == account_id)
-                        .ok_or_else(|| anyhow::anyhow!("OpenRouter account no longer exists"))?;
-                    account.name = name;
-                    Ok(())
-                })
-            {
-                return fail(&format!("Could not rename the account: {error:#}"));
-            }
-            finish_dialog(
-                &actions,
-                DialogOutcome {
-                    notice: "Account renamed.".into(),
-                    expand_card: None,
-                },
-            );
-        }
-        ProviderDialogKind::RenameOpenRouterApiKey { account_id, key_id } => {
-            let name = inputs.name.trim().to_owned();
-            if let Err(error) =
-                persist_openrouter_accounts(actions.settings_tx.clone(), false, move |accounts| {
-                    let account = accounts
-                        .iter_mut()
-                        .find(|a| a.id == account_id)
-                        .ok_or_else(|| anyhow::anyhow!("OpenRouter account no longer exists"))?;
-                    anyhow::ensure!(
-                        account.api_key_ids.contains(&key_id),
-                        "OpenRouter API key no longer exists"
-                    );
-                    if name.is_empty() {
-                        account.api_key_names.remove(&key_id);
-                    } else {
-                        account.api_key_names.insert(key_id, name);
-                    }
-                    Ok(())
-                })
-            {
-                return fail(&format!("Could not rename the key: {error:#}"));
-            }
-            finish_dialog(
-                &actions,
-                DialogOutcome {
-                    notice: "API key renamed.".into(),
-                    expand_card: None,
-                },
-            );
-        }
-        ProviderDialogKind::RemoveOpenRouterApiKey { account_id, key_id } => {
-            let secret_change = crate::openrouter::AccountSecretChange::api_key(
-                account_id.clone(),
-                key_id.clone(),
-                None,
-            );
-            if let Err(error) = persist_openrouter_credentials(
-                actions.settings_tx.clone(),
-                vec![secret_change],
-                move |accounts| {
-                    let account = accounts
-                        .iter_mut()
-                        .find(|account| account.id == account_id)
-                        .ok_or_else(|| anyhow::anyhow!("OpenRouter account no longer exists"))?;
-                    let before = account.api_key_ids.len();
-                    account.api_key_ids.retain(|id| id != &key_id);
-                    account.api_key_names.remove(&key_id);
-                    anyhow::ensure!(
-                        account.api_key_ids.len() != before,
-                        "OpenRouter API key no longer exists"
-                    );
-                    Ok(())
-                },
-            ) {
-                return fail(&format!("Could not remove the key: {error:#}"));
-            }
-            finish_dialog(
-                &actions,
-                DialogOutcome {
-                    notice: "API key removed.".into(),
-                    expand_card: None,
-                },
-            );
-        }
-        ProviderDialogKind::RemoveOpenRouterManagementKey { account_id } => {
-            if let Err(error) = persist_openrouter_credentials(
-                actions.settings_tx.clone(),
-                vec![crate::openrouter::AccountSecretChange::management(
-                    account_id.clone(),
-                    None,
-                )],
-                move |accounts| {
-                    anyhow::ensure!(
-                        accounts.iter().any(|account| account.id == account_id),
-                        "OpenRouter account no longer exists"
-                    );
-                    Ok(())
-                },
-            ) {
-                return fail(&format!("Could not remove the key: {error:#}"));
-            }
-            finish_dialog(
-                &actions,
-                DialogOutcome {
-                    notice: "Management key removed.".into(),
-                    expand_card: None,
-                },
-            );
-        }
-        ProviderDialogKind::RemoveOpenRouterAccount { account_id } => {
-            let Some(account) = find_account(&account_id) else {
-                actions.set_dialog.call(None);
-                return;
-            };
-            let mut secret_changes = account
-                .api_key_ids
-                .iter()
-                .map(|key_id| {
-                    crate::openrouter::AccountSecretChange::api_key(
-                        account.id.clone(),
-                        key_id.clone(),
-                        None,
-                    )
-                })
-                .collect::<Vec<_>>();
-            secret_changes.push(crate::openrouter::AccountSecretChange::management(
-                account.id.clone(),
-                None,
-            ));
-            let name = account_display_name(&account);
-            if let Err(error) = persist_openrouter_credentials(
-                actions.settings_tx.clone(),
-                secret_changes,
-                move |accounts| {
-                    let before = accounts.len();
-                    accounts.retain(|account| account.id != account_id);
-                    anyhow::ensure!(
-                        accounts.len() != before,
-                        "OpenRouter account no longer exists"
-                    );
-                    Ok(())
-                },
-            ) {
-                return fail(&format!("Could not remove the account: {error:#}"));
-            }
-            finish_dialog(
-                &actions,
-                DialogOutcome {
-                    notice: format!("{name} removed."),
-                    expand_card: None,
-                },
-            );
-        }
-        ProviderDialogKind::OpenCodeKey { provider, .. } => {
-            let key = inputs.key.trim().to_owned();
-            if key.is_empty() {
-                return fail("Paste a key first.");
-            }
-            if let Err(error) =
-                persist_opencode_manual_key(actions.settings_tx.clone(), provider, Some(key))
-            {
-                return fail(&format!("Could not save the key: {error:#}"));
-            }
-            finish_dialog(
-                &actions,
-                DialogOutcome {
-                    notice: "API key saved.".into(),
-                    expand_card: None,
-                },
-            );
-        }
-        ProviderDialogKind::RemoveOpenCodeKey { provider } => {
-            if let Err(error) =
-                persist_opencode_manual_key(actions.settings_tx.clone(), provider, None)
-            {
-                return fail(&format!("Could not remove the key: {error:#}"));
-            }
-            finish_dialog(
-                &actions,
-                DialogOutcome {
-                    notice: "API key removed.".into(),
-                    expand_card: None,
-                },
-            );
-        }
-        ProviderDialogKind::AddClaudeProfile => {
-            let name = inputs.name.trim().to_owned();
-            let credential = match dialog.claude_method {
-                ProfileCredentialMethod::SignIn => unreachable!(),
-                ProfileCredentialMethod::BrowserSession => inputs.key.trim(),
-                ProfileCredentialMethod::OAuthToken => inputs.second_key.trim(),
-            }
-            .to_owned();
-            if credential.is_empty() {
-                return fail("Paste a credential first.");
-            }
-            if let Err(error) = dialog.claude_method.validate(&credential) {
-                return fail(&error.to_string());
-            }
-            let settings_tx = actions.settings_tx.clone();
-            run_dialog_work(dialog, actions, move || {
-                // Checked first: the credential check below costs a request.
-                let settings = Settings::load_or_create(&Settings::default_path()?)?;
-                account_profile_name(&name, &crate::claude::profiles_for_settings(&settings))?;
-                crate::claude::verify_credential(&credential)?;
-                let mut profile = ClaudeProfile::new(name.clone());
-                let profile_id = profile.id.clone();
-                let mut saved_name = String::new();
-                persist_claude_credential(settings_tx, &profile_id, &credential, |profiles| {
-                    saved_name = account_profile_name(&name, profiles)?;
-                    profile.name = saved_name.clone();
-                    profiles.push(profile);
-                    Ok(())
-                })?;
-                Ok(DialogOutcome {
-                    notice: format!(
-                        "Added {saved_name}. Its credential is saved in Windows user storage."
-                    ),
-                    expand_card: Some(format!("claude-account-{profile_id}")),
-                })
-            });
-        }
-        ProviderDialogKind::UpdateClaudeCredential { profile_id } => {
-            let credential = match dialog.claude_method {
-                ProfileCredentialMethod::SignIn => unreachable!(),
-                ProfileCredentialMethod::BrowserSession => inputs.key.trim(),
-                ProfileCredentialMethod::OAuthToken => inputs.second_key.trim(),
-            }
-            .to_owned();
-            if let Err(error) = dialog.claude_method.validate(&credential) {
-                return fail(&error.to_string());
-            }
-            let settings_tx = actions.settings_tx.clone();
-            run_dialog_work(dialog, actions, move || {
-                crate::claude::verify_credential(&credential)?;
-                let saved_id = profile_id.clone();
-                persist_claude_credential(
-                    settings_tx,
-                    &profile_id,
-                    &credential,
-                    move |profiles| {
-                        anyhow::ensure!(
-                            profiles.iter().any(|p| p.id == saved_id && !p.is_default()),
-                            "This profile is no longer available."
-                        );
-                        Ok(())
-                    },
-                )?;
-                Ok(DialogOutcome {
-                    notice: "Credential updated. Claude is refreshing this profile.".into(),
-                    expand_card: None,
-                })
-            });
-        }
-        ProviderDialogKind::RenameClaudeProfile { profile_id } => {
-            let name = inputs.name.trim().to_owned();
-            if name.is_empty() {
-                return fail("Give the profile a name.");
-            }
-            if let Err(error) =
-                persist_claude_profiles(actions.settings_tx.clone(), None, move |profiles| {
-                    anyhow::ensure!(
-                        !profiles
-                            .iter()
-                            .any(|saved| saved.id != profile_id && saved.name == name),
-                        "A profile with this name already exists."
-                    );
-                    if let Some(profile) = profiles.iter_mut().find(|saved| saved.id == profile_id)
-                    {
-                        profile.name = name;
-                    }
-                    Ok(())
-                })
-            {
-                return fail(&format!("Could not rename the profile: {error:#}"));
-            }
-            finish_dialog(
-                &actions,
-                DialogOutcome {
-                    notice: "Profile renamed.".into(),
-                    expand_card: None,
-                },
-            );
-        }
-        ProviderDialogKind::RemoveClaudeProfile { profile_id } => {
-            let settings_tx = actions.settings_tx.clone();
-            run_dialog_work(dialog, actions, move || {
-                let _guard = crate::claude::profile_oauth::credential_guard()?;
-                let removed_id = profile_id.clone();
-                persist_claude_profiles(settings_tx, None, move |profiles| {
-                    profiles.retain(|profile| profile.id != removed_id);
-                    Ok(())
-                })?;
-                // The profile is gone either way; a leftover credential is unused.
-                if let Err(error) = crate::claude::save_profile_credential(&profile_id, None) {
-                    eprintln!("failed to delete the Claude profile credential: {error:#}");
-                }
-                crate::claude::profile_oauth::forget(&profile_id);
-                Ok(DialogOutcome {
-                    notice: "Profile removed.".into(),
-                    expand_card: None,
-                })
-            });
-        }
-        ProviderDialogKind::AddCodexProfile | ProviderDialogKind::UpdateCodexCredential { .. } => {
-            unreachable!("Codex login handled above")
-        }
-        ProviderDialogKind::RenameCodexProfile { profile_id } => {
-            let name = inputs.name.trim().to_owned();
-            if name.is_empty() {
-                return fail("Give the profile a name.");
-            }
-            if let Err(error) =
-                persist_codex_profiles(actions.settings_tx.clone(), None, move |profiles| {
-                    anyhow::ensure!(
-                        !profiles
-                            .iter()
-                            .any(|saved| saved.id != profile_id && saved.name == name),
-                        "A profile with this name already exists."
-                    );
-                    if let Some(profile) = profiles.iter_mut().find(|saved| saved.id == profile_id)
-                    {
-                        profile.name = name;
-                    }
-                    Ok(())
-                })
-            {
-                return fail(&format!("Could not rename the profile: {error:#}"));
-            }
-            finish_dialog(
-                &actions,
-                DialogOutcome {
-                    notice: "Profile renamed.".into(),
-                    expand_card: None,
-                },
-            );
-        }
-        ProviderDialogKind::RemoveCodexProfile { profile_id } => {
-            let settings_tx = actions.settings_tx.clone();
-            run_dialog_work(dialog, actions, move || {
-                let _guard = crate::codex::profile_oauth::credential_guard()?;
-                let removed_id = profile_id.clone();
-                persist_codex_profiles(settings_tx, None, move |profiles| {
-                    profiles.retain(|profile| profile.id != removed_id);
-                    Ok(())
-                })?;
-                // The profile is gone either way; a leftover credential is unused.
-                if let Err(error) = crate::codex::save_profile_credential(&profile_id, None) {
-                    eprintln!("failed to delete the Codex profile credential: {error:#}");
-                }
-                crate::codex::profile_oauth::forget(&profile_id);
-                Ok(DialogOutcome {
-                    notice: "Profile removed.".into(),
-                    expand_card: None,
-                })
-            });
-        }
-    }
 }
 
 #[cfg(test)]

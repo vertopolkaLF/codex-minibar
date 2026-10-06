@@ -9,38 +9,14 @@ pub(super) struct SettingsWindowState {
     pub(super) popup_corner_radius: SetState<PopupCornerRadius>,
     pub(super) popup_background_material: SetState<PopupBackgroundMaterial>,
     pub(super) time_format: SetState<TimeFormat>,
-    pub(super) codex_enabled: SetState<bool>,
-    pub(super) claude_enabled: SetState<bool>,
-    pub(super) cursor_enabled: SetState<bool>,
-    pub(super) opencode_zen_enabled: SetState<bool>,
-    pub(super) opencode_go_enabled: SetState<bool>,
-    pub(super) openrouter_enabled: SetState<bool>,
-    pub(super) antigravity_enabled: SetState<bool>,
-    pub(super) grok_enabled: SetState<bool>,
-    pub(super) kiro_enabled: SetState<bool>,
-    pub(super) openrouter_accounts: SetState<Vec<OpenRouterAccount>>,
-    pub(super) codex_profiles: SetState<Vec<CodexProfile>>,
-    pub(super) claude_profiles: SetState<Vec<ClaudeProfile>>,
-    pub(super) codex_home_excluded_profiles: SetState<Vec<String>>,
-    pub(super) claude_home_excluded_profiles: SetState<Vec<String>>,
-    pub(super) codex_path: SetState<String>,
-    pub(super) claude_path: SetState<String>,
-    pub(super) cursor_path: SetState<String>,
-    pub(super) antigravity_path: SetState<String>,
-    pub(super) grok_path: SetState<String>,
-    pub(super) kiro_path: SetState<String>,
-    pub(super) kiro_crew_path: SetState<String>,
-    pub(super) kiro_cli_path: SetState<String>,
-    pub(super) popup_order: SetState<Vec<PopupWidgetKind>>,
+    pub(super) instances: SetState<Vec<ProviderInstance>>,
+    pub(super) popup_tab_mode: SetState<PopupTabMode>,
     pub(super) use_colored_provider_icons: SetState<bool>,
-    pub(super) show_accounts_as_tabs: SetState<bool>,
     pub(super) use_colored_sidebar_icons: SetState<bool>,
     pub(super) replace_chatgpt_logo_with_codex: SetState<bool>,
-    pub(super) automatic_activation: SetState<bool>,
     pub(super) scheduled_activations: SetState<Vec<ScheduledActivation>>,
     pub(super) auto_activation_pauses: SetState<Vec<AutoActivationPause>>,
     pub(super) usage_stats_enabled: SetState<bool>,
-    pub(super) usage_stats_excluded_providers: SetState<Vec<String>>,
     pub(super) limit_refresh_interval: SetState<LimitRefreshInterval>,
     pub(super) usage_refresh_interval: SetState<UsageRefreshInterval>,
     pub(super) reset_announcement_refresh_interval: SetState<ResetAnnouncementRefreshInterval>,
@@ -79,100 +55,19 @@ impl SettingsWindowState {
         self.popup_background_material
             .call(settings.popup_background_material);
         self.time_format.call(settings.time_format);
-        self.codex_enabled
-            .call(settings.providers.is_enabled(ProviderKind::Codex));
-        self.claude_enabled
-            .call(settings.providers.is_enabled(ProviderKind::Claude));
-        self.cursor_enabled
-            .call(settings.providers.is_enabled(ProviderKind::Cursor));
-        self.opencode_zen_enabled
-            .call(settings.providers.is_enabled(ProviderKind::OpenCodeZen));
-        self.opencode_go_enabled
-            .call(settings.providers.is_enabled(ProviderKind::OpenCodeGo));
-        self.openrouter_enabled
-            .call(settings.providers.is_enabled(ProviderKind::OpenRouter));
-        self.antigravity_enabled
-            .call(settings.providers.is_enabled(ProviderKind::Antigravity));
-        self.grok_enabled
-            .call(settings.providers.is_enabled(ProviderKind::Grok));
-        self.kiro_enabled
-            .call(settings.providers.is_enabled(ProviderKind::Kiro));
-        self.openrouter_accounts
-            .call(crate::openrouter::accounts_for_settings(settings));
-        self.codex_profiles
-            .call(crate::codex::profiles_for_settings(settings));
-        self.claude_profiles
-            .call(crate::claude::profiles_for_settings(settings));
-        self.codex_home_excluded_profiles
-            .call(settings.codex_home_excluded_profiles.clone());
-        self.claude_home_excluded_profiles
-            .call(settings.claude_home_excluded_profiles.clone());
-        self.codex_path.call(
-            settings
-                .codex_path
-                .as_ref()
-                .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
-        );
-        self.claude_path.call(
-            settings
-                .claude_path
-                .as_ref()
-                .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
-        );
-        self.cursor_path.call(
-            settings
-                .cursor_path
-                .as_ref()
-                .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
-        );
-        self.antigravity_path.call(
-            settings
-                .antigravity_path
-                .as_ref()
-                .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
-        );
-        self.grok_path.call(
-            settings
-                .grok_path
-                .as_ref()
-                .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
-        );
-        self.kiro_path.call(
-            settings
-                .kiro_path
-                .as_ref()
-                .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
-        );
-        self.kiro_crew_path.call(
-            settings
-                .kiro_crew_path
-                .as_ref()
-                .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
-        );
-        self.kiro_cli_path.call(
-            settings
-                .kiro_cli_path
-                .as_ref()
-                .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
-        );
-        self.popup_order.call(settings.popup_order.clone());
+        self.instances.call(settings.instances.clone());
+        self.popup_tab_mode.call(settings.popup_tab_mode);
         self.use_colored_provider_icons
             .call(settings.use_colored_provider_icons);
-        self.show_accounts_as_tabs
-            .call(settings.show_accounts_as_tabs);
         self.use_colored_sidebar_icons
             .call(settings.use_colored_sidebar_icons);
         self.replace_chatgpt_logo_with_codex
             .call(settings.replace_chatgpt_logo_with_codex);
-        self.automatic_activation
-            .call(settings.automatic_activation);
         self.scheduled_activations
             .call(settings.scheduled_activations.clone());
         self.auto_activation_pauses
             .call(settings.auto_activation_pauses.clone());
         self.usage_stats_enabled.call(settings.usage_stats_enabled);
-        self.usage_stats_excluded_providers
-            .call(settings.usage_stats_excluded_providers.clone());
         self.limit_refresh_interval
             .call(settings.limit_refresh_interval);
         self.usage_refresh_interval
@@ -229,53 +124,23 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) popup_corner_radius: PopupCornerRadius,
     pub(super) popup_background_material: PopupBackgroundMaterial,
     pub(super) time_format: TimeFormat,
-    pub(super) codex_enabled: bool,
-    pub(super) claude_enabled: bool,
-    pub(super) cursor_enabled: bool,
-    pub(super) opencode_zen_enabled: bool,
-    pub(super) opencode_go_enabled: bool,
-    pub(super) openrouter_enabled: bool,
-    pub(super) antigravity_enabled: bool,
-    pub(super) grok_enabled: bool,
-    pub(super) kiro_enabled: bool,
-    pub(super) codex_path: &'a str,
-    pub(super) claude_path: &'a str,
-    pub(super) cursor_path: &'a str,
-    pub(super) antigravity_path: &'a str,
-    pub(super) grok_path: &'a str,
-    pub(super) kiro_path: &'a str,
-    pub(super) kiro_crew_path: &'a str,
-    pub(super) kiro_cli_path: &'a str,
-    pub(super) codex_install_status: &'a ProviderInstallStatus,
-    pub(super) claude_install_status: &'a ProviderInstallStatus,
-    pub(super) cursor_install_status: &'a ProviderInstallStatus,
-    pub(super) opencode_zen_install_status: &'a ProviderInstallStatus,
-    pub(super) opencode_go_install_status: &'a ProviderInstallStatus,
-    pub(super) openrouter_install_status: &'a ProviderInstallStatus,
-    pub(super) antigravity_install_status: &'a ProviderInstallStatus,
-    pub(super) grok_install_status: &'a ProviderInstallStatus,
-    pub(super) kiro_install_status: &'a ProviderInstallStatus,
-    pub(super) openrouter_accounts: &'a [OpenRouterAccount],
-    pub(super) codex_profiles: &'a [CodexProfile],
-    pub(super) claude_profiles: &'a [ClaudeProfile],
-    pub(super) codex_home_excluded_profiles: &'a [String],
-    pub(super) claude_home_excluded_profiles: &'a [String],
+    /// Every configured provider instance in display order.
+    pub(super) instances: &'a [ProviderInstance],
+    /// Detection results keyed by instance id.
+    pub(super) install_statuses: &'a HashMap<String, ProviderInstallStatus>,
+    pub(super) popup_tab_mode: PopupTabMode,
     pub(super) openrouter_snapshot: &'a OpenRouterSettingsSnapshot,
     pub(super) expanded_provider_cards: &'a [String],
     pub(super) provider_notice: &'a Option<String>,
     pub(super) color_scheme: ColorScheme,
-    pub(super) popup_order: &'a [PopupWidgetKind],
     pub(super) use_colored_provider_icons: bool,
-    pub(super) show_accounts_as_tabs: bool,
     pub(super) use_colored_sidebar_icons: bool,
     pub(super) replace_chatgpt_logo_with_codex: bool,
-    pub(super) automatic_activation: bool,
     pub(super) scheduled_activations: &'a [ScheduledActivation],
     pub(super) auto_activation_pauses: &'a [AutoActivationPause],
     pub(super) expanded_scheduled_activation: &'a Option<String>,
     pub(super) expanded_auto_activation_pause: &'a Option<String>,
     pub(super) usage_stats_enabled: bool,
-    pub(super) usage_stats_excluded_providers: &'a [String],
     pub(super) limit_refresh_interval: LimitRefreshInterval,
     pub(super) usage_refresh_interval: UsageRefreshInterval,
     pub(super) reset_announcement_refresh_interval: ResetAnnouncementRefreshInterval,
@@ -314,7 +179,6 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) update_phase: &'a UpdatePhase,
     pub(super) log_content: &'a str,
     pub(super) streamdeck_install_phase: &'a crate::streamdeck::InstallPhase,
-    pub(super) set_codex_enabled: SetState<bool>,
     pub(super) set_theme: SetState<AppTheme>,
     pub(super) set_accent_color: SetState<AccentColor>,
     pub(super) set_animations_enabled: SetState<bool>,
@@ -322,42 +186,19 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) set_popup_corner_radius: SetState<PopupCornerRadius>,
     pub(super) set_popup_background_material: SetState<PopupBackgroundMaterial>,
     pub(super) set_time_format: SetState<TimeFormat>,
-    pub(super) set_claude_enabled: SetState<bool>,
-    pub(super) set_cursor_enabled: SetState<bool>,
-    pub(super) set_opencode_zen_enabled: SetState<bool>,
-    pub(super) set_opencode_go_enabled: SetState<bool>,
-    pub(super) set_openrouter_enabled: SetState<bool>,
-    pub(super) set_antigravity_enabled: SetState<bool>,
-    pub(super) set_grok_enabled: SetState<bool>,
-    pub(super) set_kiro_enabled: SetState<bool>,
-    pub(super) set_openrouter_accounts: SetState<Vec<OpenRouterAccount>>,
-    pub(super) set_codex_profiles: SetState<Vec<CodexProfile>>,
-    pub(super) set_claude_profiles: SetState<Vec<ClaudeProfile>>,
-    pub(super) set_codex_home_excluded_profiles: SetState<Vec<String>>,
-    pub(super) set_claude_home_excluded_profiles: SetState<Vec<String>>,
+    pub(super) set_instances: SetState<Vec<ProviderInstance>>,
+    pub(super) set_popup_tab_mode: SetState<PopupTabMode>,
     pub(super) set_expanded_provider_cards: AsyncSetState<Vec<String>>,
     pub(super) set_provider_dialog: AsyncSetState<Option<ProviderDialog>>,
     pub(super) set_provider_notice: AsyncSetState<Option<String>>,
-    pub(super) set_codex_path: SetState<String>,
-    pub(super) set_claude_path: SetState<String>,
-    pub(super) set_cursor_path: SetState<String>,
-    pub(super) set_antigravity_path: SetState<String>,
-    pub(super) set_grok_path: SetState<String>,
-    pub(super) set_kiro_path: SetState<String>,
-    pub(super) set_kiro_crew_path: SetState<String>,
-    pub(super) set_kiro_cli_path: SetState<String>,
-    pub(super) set_popup_order: SetState<Vec<PopupWidgetKind>>,
     pub(super) set_use_colored_provider_icons: SetState<bool>,
-    pub(super) set_show_accounts_as_tabs: SetState<bool>,
     pub(super) set_use_colored_sidebar_icons: SetState<bool>,
     pub(super) set_replace_chatgpt_logo_with_codex: SetState<bool>,
-    pub(super) set_automatic_activation: SetState<bool>,
     pub(super) set_scheduled_activations: SetState<Vec<ScheduledActivation>>,
     pub(super) set_auto_activation_pauses: SetState<Vec<AutoActivationPause>>,
     pub(super) set_expanded_scheduled_activation: SetState<Option<String>>,
     pub(super) set_expanded_auto_activation_pause: SetState<Option<String>>,
     pub(super) set_usage_stats_enabled: SetState<bool>,
-    pub(super) set_usage_stats_excluded_providers: SetState<Vec<String>>,
     pub(super) set_limit_refresh_interval: SetState<LimitRefreshInterval>,
     pub(super) set_usage_refresh_interval: SetState<UsageRefreshInterval>,
     pub(super) set_reset_announcement_refresh_interval: SetState<ResetAnnouncementRefreshInterval>,
@@ -368,7 +209,6 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) set_compact_usage_cards: SetState<bool>,
     pub(super) set_popup_two_columns: SetState<bool>,
     pub(super) set_popup_visibility: SetState<PopupVisibility>,
-    pub(super) set_discovered_popup_bricks: SetState<BTreeMap<String, String>>,
     pub(super) set_show_total_spend_on_all_tab: SetState<bool>,
     pub(super) set_total_spend_presentation: SetState<TotalSpendPresentation>,
     pub(super) set_show_account_name: SetState<bool>,
@@ -402,4 +242,19 @@ pub(super) struct SettingsPageContext<'a> {
     pub(super) usage_actions_tx: Sender<UsageAction>,
     pub(super) ui_dispatcher: UiMarshaller,
     pub(super) updates: Arc<UpdateController>,
+}
+
+impl SettingsPageContext<'_> {
+    pub(super) fn instance(&self, provider: ProviderId) -> Option<&ProviderInstance> {
+        self.instances
+            .iter()
+            .find(|instance| instance.id == provider.id())
+    }
+
+    pub(super) fn install_status(&self, provider: ProviderId) -> ProviderInstallStatus {
+        self.install_statuses
+            .get(provider.id())
+            .cloned()
+            .unwrap_or_else(|| ProviderInstallStatus::checking_for(provider.kind()))
+    }
 }

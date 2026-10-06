@@ -30,16 +30,42 @@ impl PopupRoot {
         selected: usize,
         stretch: bool,
         on_select: impl Fn(&mut Self, usize, &mut Context<Self>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let segments = labels.into_iter().map(|label| (label, None)).collect();
+        self.segmented_control_badged(key, segments, selected, stretch, on_select, window, cx)
+    }
+
+    /// [`Self::segmented_control`] whose segments may lead with an instance
+    /// badge.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn segmented_control_badged(
+        &mut self,
+        key: u64,
+        segments: Vec<(SharedString, Option<crate::instances::Badge>)>,
+        selected: usize,
+        stretch: bool,
+        on_select: impl Fn(&mut Self, usize, &mut Context<Self>) + 'static,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let (labels, badges): (Vec<SharedString>, Vec<_>) = segments.into_iter().unzip();
         let palette = self.palette.clone();
         let count = labels.len().max(1);
         let selected = selected.min(count - 1);
         let on_select = Rc::new(on_select);
         let fixed_width = labels
             .iter()
-            .map(|label| segment_width(label))
+            .zip(&badges)
+            .map(|(label, badge)| {
+                segment_width(label)
+                    + badge
+                        .as_ref()
+                        .map_or(0.0, |badge: &crate::instances::Badge| {
+                            badge.text.chars().count() as f32 * 7.0 + 12.0
+                        })
+            })
             .fold(0.0_f32, f32::max);
         // The thumb glides between cells as a fraction of the track.
         let thumb = self.fx.value(
@@ -132,10 +158,20 @@ impl PopupRoot {
                         .bg(palette.divider.alpha(divider)),
                 );
             }
-            cell = cell.child(
+            let mut content = div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(5.0))
+                .min_w_0();
+            if let Some(badge) = badges.get(index).and_then(Option::as_ref) {
+                content = content.child(components::badge_plate(badge, 14.0, &palette));
+            }
+            content = content.child(
                 components::nowrap(components::caption(label, color))
                     .font_weight(FontWeight::SEMIBOLD),
             );
+            cell = cell.child(content);
             track = track.child(cell);
         }
         track.into_any_element()

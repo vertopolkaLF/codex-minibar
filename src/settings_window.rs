@@ -4,9 +4,9 @@
 //! details; both surfaces share tokens from [`crate::theme`].
 
 use crate::settings::{
-    AccentColor, AppTheme, AutoActivationPause, BottomBarSize, ClaudeProfile, CodexProfile,
+    AccentColor, AppTheme, AutoActivationPause, BadgeColor, BottomBarSize, InstanceSource,
     LimitRefreshInterval, LimitValue, OpenRouterAccount, PopupBackgroundMaterial,
-    PopupCornerRadius, PopupVisibility, PopupWidgetKind, ProviderKind,
+    PopupCornerRadius, PopupTabMode, PopupVisibility, ProviderId, ProviderInstance, ProviderKind,
     ResetAnnouncementRefreshInterval, ScheduledActivation, Settings, TimeFormat,
     TotalSpendPresentation, TrayColorMode, TrayFixedColor, TrayIndicator, TrayPresentation,
     TrayWidget, TrayWidgetKind, UsageRefreshInterval,
@@ -63,7 +63,7 @@ mod tray;
 mod troubleshoot;
 
 use navigation::{
-    RenderedPage, SettingsNavMode, Tab, fade_to_rendered_page, first_provider_in_order,
+    RenderedPage, SettingsNavMode, Tab, fade_to_rendered_page, first_provider_page,
     providers_nav_items, providers_nav_signature, root_nav_items,
 };
 use onboarding::{detected_providers, onboarding_render};
@@ -74,7 +74,8 @@ use platform::{
 };
 use providers::{
     OpenRouterSettingsSnapshot, ProviderDialog, ProviderDialogActions, ProviderInstallStatus,
-    provider_dialog_overlay, provider_install_status, provider_page_content, provider_readiness,
+    instance_install_status, no_providers_page, provider_dialog_overlay, provider_page_content,
+    provider_readiness,
 };
 use shared::enabled_providers;
 use state::{SettingsPageContext, SettingsWindowState};
@@ -104,6 +105,15 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
+/// Pushes a settings snapshot into the open window's state on its own thread.
+fn apply_live_settings(settings: &Settings) {
+    LIVE_SETTINGS_STATE.with(|state| {
+        if let Some(state) = state.borrow().as_ref() {
+            state.apply(settings);
+        }
+    });
+}
+
 pub fn sync_open_window(settings: Settings, ui_dispatcher: UiMarshaller) {
     if !is_open() {
         return;
@@ -130,7 +140,7 @@ fn discovered_popup_brick_labels(
     let mut labels = BTreeMap::new();
     for (provider, snapshot) in limits.iter() {
         for (brick_id, title) in
-            crate::provider_registry::discovered_additional_brick_labels(provider, snapshot)
+            crate::provider_registry::discovered_additional_brick_labels(provider.kind(), snapshot)
         {
             labels.insert(brick_id, title);
         }
@@ -168,16 +178,33 @@ fn cached_openrouter_snapshot() -> OpenRouterSettingsSnapshot {
         .unwrap_or_default()
 }
 
-/// Publishes the latest OpenRouter key labels, spend and balances so the
-/// provider page can show them without fetching usage itself.
+/// Publishes the latest OpenRouter key labels, spend and balances of every
+/// OpenRouter instance, plus each instance's signed-in account name, so
+/// provider pages can show them without fetching anything themselves.
 pub fn publish_openrouter_snapshot(
-    limits: &crate::limits::RateLimits,
+    limits: &crate::limits::ProviderLimits,
     ui_dispatcher: UiMarshaller,
 ) {
-    let snapshot = OpenRouterSettingsSnapshot {
-        accounts: limits.openrouter_accounts.clone(),
-        sampled_at: (!limits.openrouter_accounts.is_empty()).then_some(limits.sampled_at),
-    };
+    let mut snapshot = OpenRouterSettingsSnapshot::default();
+    for (provider, limits) in limits.iter() {
+        if let Some(name) = limits
+            .account_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            snapshot
+                .identities
+                .insert(provider.id().to_owned(), name.to_owned());
+        }
+        if provider.kind() != ProviderKind::OpenRouter || limits.openrouter_accounts.is_empty() {
+            continue;
+        }
+        snapshot
+            .accounts
+            .extend(limits.openrouter_accounts.iter().cloned());
+        snapshot.sampled_at = snapshot.sampled_at.max(Some(limits.sampled_at));
+    }
     if let Ok(mut slot) = OPENROUTER_SNAPSHOT.lock() {
         *slot = Some(snapshot.clone());
     }
@@ -317,10 +344,8 @@ pub fn render(
     let (root_selected, set_root_selected) = cx.use_state(Tab::default());
     let (nav_mode, set_nav_mode) = cx.use_state(SettingsNavMode::Root);
     let (return_root_tab, set_return_root_tab) = cx.use_state(Tab::General);
-    let (selected_provider, set_selected_provider) = cx
-        .use_state(first_provider_in_order(&settings.popup_order, |provider| {
-            settings.providers.is_enabled(provider)
-        }));
+    let (selected_page, set_selected_page) =
+        cx.use_async_state(first_provider_page(&settings.instances));
     let (rendered_page, set_rendered_page) = cx.use_async_state(RenderedPage::default());
     let (page_visible, set_page_visible) = cx.use_async_state(true);
     let (log_content, set_log_content) = cx
@@ -338,8 +363,6 @@ pub fn render(
     let theme_navigation_guard = cx.use_ref(false);
     let theme_navigation_guard_timer = cx.use_ref(None::<DispatcherTimer>);
 
-    let (codex_enabled, set_codex_enabled) =
-        cx.use_state(settings.providers.is_enabled(ProviderKind::Codex));
     let (theme, set_theme) = cx.use_state(settings.theme);
     let (accent_color, set_accent_color) = cx.use_state(settings.accent_color);
     let (animations_enabled, set_animations_enabled) = cx.use_state(settings.animations_enabled);
@@ -356,32 +379,8 @@ pub fn render(
             time_format.apply();
         },
     );
-    let (claude_enabled, set_claude_enabled) =
-        cx.use_state(settings.providers.is_enabled(ProviderKind::Claude));
-    let (cursor_enabled, set_cursor_enabled) =
-        cx.use_state(settings.providers.is_enabled(ProviderKind::Cursor));
-    let (opencode_zen_enabled, set_opencode_zen_enabled) =
-        cx.use_state(settings.providers.is_enabled(ProviderKind::OpenCodeZen));
-    let (opencode_go_enabled, set_opencode_go_enabled) =
-        cx.use_state(settings.providers.is_enabled(ProviderKind::OpenCodeGo));
-    let (openrouter_enabled, set_openrouter_enabled) =
-        cx.use_state(settings.providers.is_enabled(ProviderKind::OpenRouter));
-    let (antigravity_enabled, set_antigravity_enabled) =
-        cx.use_state(settings.providers.is_enabled(ProviderKind::Antigravity));
-    let (grok_enabled, set_grok_enabled) =
-        cx.use_state(settings.providers.is_enabled(ProviderKind::Grok));
-    let (kiro_enabled, set_kiro_enabled) =
-        cx.use_state(settings.providers.is_enabled(ProviderKind::Kiro));
-    let (openrouter_accounts, set_openrouter_accounts) =
-        cx.use_state(crate::openrouter::accounts_for_settings(&settings));
-    let (codex_profiles, set_codex_profiles) =
-        cx.use_state(crate::codex::profiles_for_settings(&settings));
-    let (claude_profiles, set_claude_profiles) =
-        cx.use_state(crate::claude::profiles_for_settings(&settings));
-    let (codex_home_excluded_profiles, set_codex_home_excluded_profiles) =
-        cx.use_state(settings.codex_home_excluded_profiles.clone());
-    let (claude_home_excluded_profiles, set_claude_home_excluded_profiles) =
-        cx.use_state(settings.claude_home_excluded_profiles.clone());
+    let (instances, set_instances) = cx.use_state(settings.instances.clone());
+    let (popup_tab_mode, set_popup_tab_mode) = cx.use_state(settings.popup_tab_mode);
     let (openrouter_snapshot, set_openrouter_snapshot) = cx.use_state(cached_openrouter_snapshot());
     let (expanded_provider_cards, set_expanded_provider_cards) =
         cx.use_async_state(Vec::<String>::new());
@@ -398,163 +397,75 @@ pub fn render(
         cx.use_async_state(None::<crate::troubleshoot::ToolPickerState>);
     let (provider_notice, set_provider_notice) = cx.use_async_state(None::<String>);
     let (provider_status_revision, set_provider_status_revision) = cx.use_async_state(0_u64);
-    let (codex_path, set_codex_path) = cx.use_state(
-        settings
-            .codex_path
-            .as_ref()
-            .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
-    );
-    let (claude_path, set_claude_path) = cx.use_state(
-        settings
-            .claude_path
-            .as_ref()
-            .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
-    );
-    let (cursor_path, set_cursor_path) = cx.use_state(
-        settings
-            .cursor_path
-            .as_ref()
-            .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
-    );
-    let (antigravity_path, set_antigravity_path) = cx.use_state(
-        settings
-            .antigravity_path
-            .as_ref()
-            .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
-    );
-    let (grok_path, set_grok_path) = cx.use_state(
-        settings
-            .grok_path
-            .as_ref()
-            .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
-    );
-    let (kiro_path, set_kiro_path) = cx.use_state(
-        settings
-            .kiro_path
-            .as_ref()
-            .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
-    );
-    let (kiro_crew_path, set_kiro_crew_path) = cx.use_state(
-        settings
-            .kiro_crew_path
-            .as_ref()
-            .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
-    );
-    let (kiro_cli_path, set_kiro_cli_path) = cx.use_state(
-        settings
-            .kiro_cli_path
-            .as_ref()
-            .map_or_else(String::new, |path| path.to_string_lossy().into_owned()),
-    );
-    let (popup_order, set_popup_order) = cx.use_state(settings.popup_order.clone());
     let (use_colored_sidebar_icons, set_use_colored_sidebar_icons) =
         cx.use_state(settings.use_colored_sidebar_icons);
 
-    let (codex_install_status, set_codex_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking());
-    let (claude_install_status, set_claude_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking());
-    let (cursor_install_status, set_cursor_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking_app());
-    let (opencode_zen_install_status, set_opencode_zen_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking_app());
-    let (opencode_go_install_status, set_opencode_go_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking_app());
-    let (openrouter_install_status, set_openrouter_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking_app());
-    let (antigravity_install_status, set_antigravity_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking());
-    let (grok_install_status, set_grok_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking_cli());
-    let (kiro_install_status, set_kiro_install_status) =
-        cx.use_async_state(ProviderInstallStatus::checking_kiro());
-    let last_status_paths = cx.use_ref(None::<[String; 8]>);
-    let status_codex_path = codex_path.clone();
-    let status_claude_path = claude_path.clone();
-    let status_cursor_path = cursor_path.clone();
-    let status_antigravity_path = antigravity_path.clone();
-    let status_grok_path = grok_path.clone();
-    let status_kiro_path = kiro_path.clone();
-    let status_kiro_crew_path = kiro_crew_path.clone();
-    let status_kiro_cli_path = kiro_cli_path.clone();
+    let (install_statuses, set_install_statuses) =
+        cx.use_async_state(HashMap::<String, ProviderInstallStatus>::new());
+    // Detection depends only on each instance's driver and paths, so names,
+    // badges and toggles never re-run it.
+    let detection_inputs = instances
+        .iter()
+        .map(|instance| {
+            (
+                instance.id.clone(),
+                instance.driver,
+                instance.binary_path.clone(),
+                instance.kiro_crew_path.clone(),
+                instance.kiro_cli_path.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let last_detection_inputs = cx.use_ref(
+        None::<
+            Vec<(
+                String,
+                ProviderKind,
+                Option<PathBuf>,
+                Option<PathBuf>,
+                Option<PathBuf>,
+            )>,
+        >,
+    );
+    let status_instances = instances.clone();
+    let status_current = install_statuses.clone();
     cx.use_effect(
-        (
-            codex_path.clone(),
-            claude_path.clone(),
-            cursor_path.clone(),
-            antigravity_path.clone(),
-            grok_path.clone(),
-            kiro_path.clone(),
-            kiro_crew_path.clone(),
-            kiro_cli_path.clone(),
-            provider_status_revision,
-            nav_mode,
-        ),
+        (detection_inputs.clone(), provider_status_revision, nav_mode),
         move || {
             let generation = PROVIDER_STATUS_GEN.fetch_add(1, Ordering::Relaxed) + 1;
-            // Only a folder edit resets rows to "Checking…". A credential
+            // Only a path edit resets rows to "Checking…". A credential
             // change re-detects quietly so saved keys do not flash the page.
-            let paths = [
-                status_codex_path.clone(),
-                status_claude_path.clone(),
-                status_cursor_path.clone(),
-                status_antigravity_path.clone(),
-                status_grok_path.clone(),
-                status_kiro_path.clone(),
-                status_kiro_crew_path.clone(),
-                status_kiro_cli_path.clone(),
-            ];
-            let paths_changed = last_status_paths.get_cloned().as_ref() != Some(&paths);
-            last_status_paths.set(Some(paths));
-            if paths_changed {
-                set_codex_install_status.call(ProviderInstallStatus::checking());
-                set_claude_install_status.call(ProviderInstallStatus::checking());
-                set_cursor_install_status.call(ProviderInstallStatus::checking_app());
-                set_opencode_zen_install_status.call(ProviderInstallStatus::checking_app());
-                set_opencode_go_install_status.call(ProviderInstallStatus::checking_app());
-                set_openrouter_install_status.call(ProviderInstallStatus::checking_app());
-                set_antigravity_install_status.call(ProviderInstallStatus::checking());
-                set_grok_install_status.call(ProviderInstallStatus::checking_cli());
-                set_kiro_install_status.call(ProviderInstallStatus::checking_kiro());
+            let previous = last_detection_inputs.get_cloned();
+            last_detection_inputs.set(Some(detection_inputs.clone()));
+            let mut seeded = status_current.clone();
+            seeded.retain(|id, _| detection_inputs.iter().any(|input| &input.0 == id));
+            for input in &detection_inputs {
+                let unchanged = previous
+                    .as_ref()
+                    .is_some_and(|previous| previous.contains(input));
+                if !unchanged || !seeded.contains_key(&input.0) {
+                    seeded.insert(
+                        input.0.clone(),
+                        ProviderInstallStatus::checking_for(input.1),
+                    );
+                }
             }
-            let codex_status = set_codex_install_status.clone();
-            let claude_status = set_claude_install_status.clone();
-            let cursor_status = set_cursor_install_status.clone();
-            let opencode_zen_status = set_opencode_zen_install_status.clone();
-            let opencode_go_status = set_opencode_go_install_status.clone();
-            let openrouter_status = set_openrouter_install_status.clone();
-            let antigravity_status = set_antigravity_install_status.clone();
-            let grok_status = set_grok_install_status.clone();
-            let kiro_status = set_kiro_install_status.clone();
+            if seeded != status_current {
+                set_install_statuses.call(seeded);
+            }
+            let setter = set_install_statuses.clone();
+            let instances = status_instances.clone();
             thread::spawn(move || {
                 thread::sleep(Duration::from_millis(250));
                 if PROVIDER_STATUS_GEN.load(Ordering::Relaxed) != generation {
                     return;
                 }
-                let codex = provider_install_status(ProviderKind::Codex, &status_codex_path);
-                let claude = provider_install_status(ProviderKind::Claude, &status_claude_path);
-                let cursor = provider_install_status(ProviderKind::Cursor, &status_cursor_path);
-                let opencode_zen = provider_install_status(ProviderKind::OpenCodeZen, "");
-                let opencode_go = provider_install_status(ProviderKind::OpenCodeGo, "");
-                let openrouter = provider_install_status(ProviderKind::OpenRouter, "");
-                let antigravity =
-                    provider_install_status(ProviderKind::Antigravity, &status_antigravity_path);
-                let grok = provider_install_status(ProviderKind::Grok, &status_grok_path);
-                let kiro = providers::provider_install_status_kiro(
-                    &status_kiro_path,
-                    &status_kiro_crew_path,
-                    &status_kiro_cli_path,
-                );
+                let statuses = instances
+                    .iter()
+                    .map(|instance| (instance.id.clone(), instance_install_status(instance)))
+                    .collect::<HashMap<_, _>>();
                 if PROVIDER_STATUS_GEN.load(Ordering::Relaxed) == generation {
-                    codex_status.call(codex);
-                    claude_status.call(claude);
-                    cursor_status.call(cursor);
-                    opencode_zen_status.call(opencode_zen);
-                    opencode_go_status.call(opencode_go);
-                    openrouter_status.call(openrouter);
-                    antigravity_status.call(antigravity);
-                    grok_status.call(grok);
-                    kiro_status.call(kiro);
+                    setter.call(statuses);
                 }
             });
         },
@@ -565,66 +476,47 @@ pub fn render(
     };
     let nav_selected_tag = match nav_mode {
         SettingsNavMode::Root => root_selected.tag().to_string(),
-        SettingsNavMode::Providers => selected_provider.id().to_string(),
+        SettingsNavMode::Providers => match selected_page {
+            RenderedPage::Provider(provider) => provider.id().to_string(),
+            _ => String::new(),
+        },
     };
     let mut nav_menu_items: Vec<NavViewItem> = match nav_mode {
         SettingsNavMode::Root => root_nav_items(nav_icon_color, use_colored_sidebar_icons).into(),
-        SettingsNavMode::Providers => providers_nav_items(
-            &popup_order,
-            nav_icon_color,
-            color_scheme,
-            |provider| match provider {
-                ProviderKind::Codex => codex_enabled,
-                ProviderKind::Claude => claude_enabled,
-                ProviderKind::Cursor => cursor_enabled,
-                ProviderKind::OpenCodeZen => opencode_zen_enabled,
-                ProviderKind::OpenCodeGo => opencode_go_enabled,
-                ProviderKind::OpenRouter => openrouter_enabled,
-                ProviderKind::Antigravity => antigravity_enabled,
-                ProviderKind::Grok => grok_enabled,
-                ProviderKind::Kiro => kiro_enabled,
-            },
-            |provider| {
-                provider_readiness(match provider {
-                    ProviderKind::Codex => &codex_install_status,
-                    ProviderKind::Claude => &claude_install_status,
-                    ProviderKind::Cursor => &cursor_install_status,
-                    ProviderKind::OpenCodeZen => &opencode_zen_install_status,
-                    ProviderKind::OpenCodeGo => &opencode_go_install_status,
-                    ProviderKind::OpenRouter => &openrouter_install_status,
-                    ProviderKind::Antigravity => &antigravity_install_status,
-                    ProviderKind::Grok => &grok_install_status,
-                    ProviderKind::Kiro => &kiro_install_status,
-                })
-            },
-            openrouter_accounts.len(),
-        ),
+        SettingsNavMode::Providers => {
+            providers_nav_items(&instances, nav_icon_color, color_scheme, |provider| {
+                install_statuses
+                    .get(provider.id())
+                    .map_or(providers::ProviderReadiness::Checking, provider_readiness)
+            })
+        }
     };
     // Keep the callback identity stable so clock/status rerenders do not clear
     // NavigationView.MenuItems in the middle of a native drag.
     let provider_reorder_callback = cx
         .use_ref({
             let tx = settings_tx.clone();
-            let setter = set_popup_order.clone();
+            let setter = set_instances.clone();
             Callback::new(move |(from, to): (String, String)| {
-                let (Some(from), Some(to)) =
-                    (ProviderKind::from_id(&from), ProviderKind::from_id(&to))
-                else {
-                    return;
-                };
                 let setter = setter.clone();
                 persist_update(tx.clone(), |settings| {
-                    let enabled = settings.providers.is_enabled(from);
-                    if settings.providers.is_enabled(to) != enabled {
+                    let (Some(from), Some(to)) = (
+                        settings.resolve_provider(&from),
+                        settings.resolve_provider(&to),
+                    ) else {
+                        return;
+                    };
+                    let enabled = settings.is_enabled(from);
+                    if settings.is_enabled(to) != enabled {
                         return;
                     }
                     let group: Vec<_> = settings
-                        .provider_order()
+                        .provider_ids()
                         .into_iter()
-                        .filter(|provider| settings.providers.is_enabled(*provider) == enabled)
+                        .filter(|provider| settings.is_enabled(*provider) == enabled)
                         .collect();
                     if settings.reorder_providers(from, to, &group) {
-                        setter.call(settings.popup_order.clone());
+                        setter.call(settings.instances.clone());
                     }
                 });
             })
@@ -632,7 +524,7 @@ pub fn render(
         .get_cloned();
     if nav_mode == SettingsNavMode::Providers {
         for item in &mut nav_menu_items {
-            let Some(provider) = item.tag.as_deref().and_then(ProviderKind::from_id) else {
+            let Some(tag) = item.tag.clone() else {
                 continue;
             };
             let scope = if item.dimmed {
@@ -641,7 +533,7 @@ pub fn render(
                 "settings-enabled-providers"
             };
             item.reorder = Some(ReorderItem::new(
-                provider.id(),
+                tag,
                 scope,
                 crate::theme::animations_enabled(),
                 provider_reorder_callback.clone(),
@@ -674,8 +566,8 @@ pub fn render(
             let set_nav_mode = set_nav_mode.clone();
             let set_return_root_tab = set_return_root_tab.clone();
             let set_root_selected = set_root_selected.clone();
-            let set_selected_provider = set_selected_provider.clone();
-            let popup_order = popup_order.clone();
+            let set_selected_page = set_selected_page.clone();
+            let instances = instances.clone();
             move |tag: String| {
                 if theme_navigation_guard.get_cloned() {
                     return;
@@ -683,18 +575,7 @@ pub fn render(
                 match nav_mode {
                     SettingsNavMode::Root => {
                         if tag == "providers" {
-                            let first =
-                                first_provider_in_order(&popup_order, |provider| match provider {
-                                    ProviderKind::Codex => codex_enabled,
-                                    ProviderKind::Claude => claude_enabled,
-                                    ProviderKind::Cursor => cursor_enabled,
-                                    ProviderKind::OpenCodeZen => opencode_zen_enabled,
-                                    ProviderKind::OpenCodeGo => opencode_go_enabled,
-                                    ProviderKind::OpenRouter => openrouter_enabled,
-                                    ProviderKind::Antigravity => antigravity_enabled,
-                                    ProviderKind::Grok => grok_enabled,
-                                    ProviderKind::Kiro => kiro_enabled,
-                                });
+                            let first = first_provider_page(&instances);
                             let restore = if root_selected != Tab::Providers {
                                 root_selected
                             } else {
@@ -702,11 +583,11 @@ pub fn render(
                             };
                             set_return_root_tab.call(restore);
                             set_nav_mode.call(SettingsNavMode::Providers);
-                            set_selected_provider.call(first);
+                            set_selected_page.call(first);
                             fade_to_rendered_page(
                                 set_page_visible.clone(),
                                 set_rendered_page.clone(),
-                                RenderedPage::Provider(first),
+                                first,
                             );
                             return;
                         }
@@ -721,15 +602,20 @@ pub fn render(
                         }
                     }
                     SettingsNavMode::Providers => {
-                        if let Some(provider) = ProviderKind::from_id(&tag)
-                            && provider != selected_provider
+                        if let Some(provider) = instances
+                            .iter()
+                            .find(|instance| instance.id == tag)
+                            .map(ProviderInstance::provider_id)
                         {
-                            set_selected_provider.call(provider);
-                            fade_to_rendered_page(
-                                set_page_visible.clone(),
-                                set_rendered_page.clone(),
-                                RenderedPage::Provider(provider),
-                            );
+                            let page = RenderedPage::Provider(provider);
+                            if page != selected_page {
+                                set_selected_page.call(page);
+                                fade_to_rendered_page(
+                                    set_page_visible.clone(),
+                                    set_rendered_page.clone(),
+                                    page,
+                                );
+                            }
                         }
                     }
                 }
@@ -773,26 +659,25 @@ pub fn render(
             // remains visible when the built-in pane toggle is hidden.
             .pane_title("Providers")
             .pane_footer(
-                border(missing_provider_nav_card())
-                    .padding(Thickness {
-                        left: 12.0,
-                        top: 0.0,
-                        right: 12.0,
-                        bottom: 2.0,
-                    })
-                    .background(Color::transparent()),
+                border(missing_provider_nav_card({
+                    let set_dialog = set_provider_dialog.clone();
+                    move || set_dialog.call(Some(ProviderDialog::add_instance()))
+                }))
+                .padding(Thickness {
+                    left: 12.0,
+                    top: 0.0,
+                    right: 12.0,
+                    bottom: 2.0,
+                })
+                .background(Color::transparent()),
             ),
     };
 
     let (use_colored_provider_icons, set_use_colored_provider_icons) =
         cx.use_state(settings.use_colored_provider_icons);
-    let (show_accounts_as_tabs, set_show_accounts_as_tabs) =
-        cx.use_state(settings.show_accounts_as_tabs);
     let (replace_chatgpt_logo_with_codex, set_replace_chatgpt_logo_with_codex) =
         cx.use_state(settings.replace_chatgpt_logo_with_codex);
     let (start_at_login, set_start_at_login) = cx.use_state(settings.start_at_login);
-    let (automatic_activation, set_automatic_activation) =
-        cx.use_state(settings.automatic_activation);
     let (scheduled_activations, set_scheduled_activations) =
         cx.use_state(settings.scheduled_activations.clone());
     let (auto_activation_pauses, set_auto_activation_pauses) =
@@ -802,8 +687,6 @@ pub fn render(
     let (expanded_auto_activation_pause, set_expanded_auto_activation_pause) =
         cx.use_state(None::<String>);
     let (usage_stats_enabled, set_usage_stats_enabled) = cx.use_state(settings.usage_stats_enabled);
-    let (usage_stats_excluded_providers, set_usage_stats_excluded_providers) =
-        cx.use_state(settings.usage_stats_excluded_providers.clone());
     let (limit_refresh_interval, set_limit_refresh_interval) =
         cx.use_state(settings.limit_refresh_interval);
     let (usage_refresh_interval, set_usage_refresh_interval) =
@@ -870,38 +753,14 @@ pub fn render(
             popup_corner_radius: set_popup_corner_radius.clone(),
             popup_background_material: set_popup_background_material.clone(),
             time_format: set_time_format.clone(),
-            codex_enabled: set_codex_enabled.clone(),
-            claude_enabled: set_claude_enabled.clone(),
-            cursor_enabled: set_cursor_enabled.clone(),
-            opencode_zen_enabled: set_opencode_zen_enabled.clone(),
-            opencode_go_enabled: set_opencode_go_enabled.clone(),
-            openrouter_enabled: set_openrouter_enabled.clone(),
-            antigravity_enabled: set_antigravity_enabled.clone(),
-            grok_enabled: set_grok_enabled.clone(),
-            kiro_enabled: set_kiro_enabled.clone(),
-            openrouter_accounts: set_openrouter_accounts.clone(),
-            codex_profiles: set_codex_profiles.clone(),
-            claude_profiles: set_claude_profiles.clone(),
-            codex_home_excluded_profiles: set_codex_home_excluded_profiles.clone(),
-            claude_home_excluded_profiles: set_claude_home_excluded_profiles.clone(),
-            codex_path: set_codex_path.clone(),
-            claude_path: set_claude_path.clone(),
-            cursor_path: set_cursor_path.clone(),
-            antigravity_path: set_antigravity_path.clone(),
-            grok_path: set_grok_path.clone(),
-            kiro_path: set_kiro_path.clone(),
-            kiro_crew_path: set_kiro_crew_path.clone(),
-            kiro_cli_path: set_kiro_cli_path.clone(),
-            popup_order: set_popup_order.clone(),
+            instances: set_instances.clone(),
+            popup_tab_mode: set_popup_tab_mode.clone(),
             use_colored_provider_icons: set_use_colored_provider_icons.clone(),
-            show_accounts_as_tabs: set_show_accounts_as_tabs.clone(),
             use_colored_sidebar_icons: set_use_colored_sidebar_icons.clone(),
             replace_chatgpt_logo_with_codex: set_replace_chatgpt_logo_with_codex.clone(),
-            automatic_activation: set_automatic_activation.clone(),
             scheduled_activations: set_scheduled_activations.clone(),
             auto_activation_pauses: set_auto_activation_pauses.clone(),
             usage_stats_enabled: set_usage_stats_enabled.clone(),
-            usage_stats_excluded_providers: set_usage_stats_excluded_providers.clone(),
             limit_refresh_interval: set_limit_refresh_interval.clone(),
             usage_refresh_interval: set_usage_refresh_interval.clone(),
             reset_announcement_refresh_interval: set_reset_announcement_refresh_interval.clone(),
@@ -931,7 +790,6 @@ pub fn render(
         });
     });
 
-    tray::sync_account_choices(&codex_profiles, &claude_profiles);
     let page_context = SettingsPageContext {
         theme,
         accent_color,
@@ -940,53 +798,21 @@ pub fn render(
         popup_corner_radius,
         popup_background_material,
         time_format,
-        codex_enabled,
-        claude_enabled,
-        cursor_enabled,
-        opencode_zen_enabled,
-        opencode_go_enabled,
-        openrouter_enabled,
-        antigravity_enabled,
-        grok_enabled,
-        kiro_enabled,
-        codex_path: &codex_path,
-        claude_path: &claude_path,
-        cursor_path: &cursor_path,
-        antigravity_path: &antigravity_path,
-        grok_path: &grok_path,
-        kiro_path: &kiro_path,
-        kiro_crew_path: &kiro_crew_path,
-        kiro_cli_path: &kiro_cli_path,
-        codex_install_status: &codex_install_status,
-        claude_install_status: &claude_install_status,
-        cursor_install_status: &cursor_install_status,
-        opencode_zen_install_status: &opencode_zen_install_status,
-        opencode_go_install_status: &opencode_go_install_status,
-        openrouter_install_status: &openrouter_install_status,
-        antigravity_install_status: &antigravity_install_status,
-        grok_install_status: &grok_install_status,
-        kiro_install_status: &kiro_install_status,
-        openrouter_accounts: &openrouter_accounts,
-        codex_profiles: &codex_profiles,
-        claude_profiles: &claude_profiles,
-        codex_home_excluded_profiles: &codex_home_excluded_profiles,
-        claude_home_excluded_profiles: &claude_home_excluded_profiles,
+        instances: &instances,
+        install_statuses: &install_statuses,
+        popup_tab_mode,
         openrouter_snapshot: &openrouter_snapshot,
         expanded_provider_cards: &expanded_provider_cards,
         provider_notice: &provider_notice,
         color_scheme,
-        popup_order: &popup_order,
         use_colored_provider_icons,
-        show_accounts_as_tabs,
         use_colored_sidebar_icons,
         replace_chatgpt_logo_with_codex,
-        automatic_activation,
         scheduled_activations: &scheduled_activations,
         auto_activation_pauses: &auto_activation_pauses,
         expanded_scheduled_activation: &expanded_scheduled_activation,
         expanded_auto_activation_pause: &expanded_auto_activation_pause,
         usage_stats_enabled,
-        usage_stats_excluded_providers: &usage_stats_excluded_providers,
         limit_refresh_interval,
         usage_refresh_interval,
         reset_announcement_refresh_interval,
@@ -1025,7 +851,6 @@ pub fn render(
         update_phase: &update_phase,
         log_content: &log_content,
         streamdeck_install_phase: &streamdeck_install_phase,
-        set_codex_enabled: set_codex_enabled.clone(),
         set_theme: set_theme.clone(),
         set_accent_color: set_accent_color.clone(),
         set_animations_enabled: set_animations_enabled.clone(),
@@ -1033,42 +858,19 @@ pub fn render(
         set_popup_corner_radius: set_popup_corner_radius.clone(),
         set_popup_background_material: set_popup_background_material.clone(),
         set_time_format: set_time_format.clone(),
-        set_claude_enabled: set_claude_enabled.clone(),
-        set_cursor_enabled: set_cursor_enabled.clone(),
-        set_opencode_zen_enabled: set_opencode_zen_enabled.clone(),
-        set_opencode_go_enabled: set_opencode_go_enabled.clone(),
-        set_openrouter_enabled: set_openrouter_enabled.clone(),
-        set_antigravity_enabled: set_antigravity_enabled.clone(),
-        set_grok_enabled: set_grok_enabled.clone(),
-        set_kiro_enabled: set_kiro_enabled.clone(),
-        set_openrouter_accounts: set_openrouter_accounts.clone(),
-        set_codex_profiles: set_codex_profiles.clone(),
-        set_claude_profiles: set_claude_profiles.clone(),
-        set_codex_home_excluded_profiles: set_codex_home_excluded_profiles.clone(),
-        set_claude_home_excluded_profiles: set_claude_home_excluded_profiles.clone(),
+        set_instances: set_instances.clone(),
+        set_popup_tab_mode: set_popup_tab_mode.clone(),
         set_expanded_provider_cards: set_expanded_provider_cards.clone(),
         set_provider_dialog: set_provider_dialog.clone(),
         set_provider_notice: set_provider_notice.clone(),
-        set_codex_path: set_codex_path.clone(),
-        set_claude_path: set_claude_path.clone(),
-        set_cursor_path: set_cursor_path.clone(),
-        set_antigravity_path: set_antigravity_path.clone(),
-        set_grok_path: set_grok_path.clone(),
-        set_kiro_path: set_kiro_path.clone(),
-        set_kiro_crew_path: set_kiro_crew_path.clone(),
-        set_kiro_cli_path: set_kiro_cli_path.clone(),
-        set_popup_order: set_popup_order.clone(),
         set_use_colored_provider_icons: set_use_colored_provider_icons.clone(),
-        set_show_accounts_as_tabs: set_show_accounts_as_tabs.clone(),
         set_use_colored_sidebar_icons: set_use_colored_sidebar_icons.clone(),
         set_replace_chatgpt_logo_with_codex: set_replace_chatgpt_logo_with_codex.clone(),
-        set_automatic_activation: set_automatic_activation.clone(),
         set_scheduled_activations: set_scheduled_activations.clone(),
         set_auto_activation_pauses: set_auto_activation_pauses.clone(),
         set_expanded_scheduled_activation: set_expanded_scheduled_activation.clone(),
         set_expanded_auto_activation_pause: set_expanded_auto_activation_pause.clone(),
         set_usage_stats_enabled: set_usage_stats_enabled.clone(),
-        set_usage_stats_excluded_providers: set_usage_stats_excluded_providers.clone(),
         set_limit_refresh_interval: set_limit_refresh_interval.clone(),
         set_usage_refresh_interval: set_usage_refresh_interval.clone(),
         set_reset_announcement_refresh_interval: set_reset_announcement_refresh_interval.clone(),
@@ -1079,7 +881,6 @@ pub fn render(
         set_compact_usage_cards: set_compact_usage_cards.clone(),
         set_popup_two_columns: set_popup_two_columns.clone(),
         set_popup_visibility: set_popup_visibility.clone(),
-        set_discovered_popup_bricks: set_discovered_popup_bricks.clone(),
         set_show_total_spend_on_all_tab: set_show_total_spend_on_all_tab.clone(),
         set_total_spend_presentation: set_total_spend_presentation.clone(),
         set_show_account_name: set_show_account_name.clone(),
@@ -1116,7 +917,10 @@ pub fn render(
     };
     let settings_page_body = match rendered_page {
         RenderedPage::Root(tab) => render_page(tab, &page_context),
-        RenderedPage::Provider(provider) => provider_page_content(provider, &page_context),
+        RenderedPage::Provider(provider) if page_context.instance(provider).is_some() => {
+            provider_page_content(provider, &page_context)
+        }
+        RenderedPage::Provider(_) | RenderedPage::NoProviders => no_providers_page(&page_context),
     };
 
     // Padding lives on tab content (inside the scroller), not on this pane, so
@@ -1236,22 +1040,7 @@ pub fn render(
         .columns([GridLength::Star(1.0)])
         .background(Color::transparent());
 
-    let tray_providers: Vec<ProviderKind> = popup_order
-        .iter()
-        .filter_map(|widget| widget.as_provider())
-        .collect();
-    let tray_enabled_providers = enabled_providers(
-        &tray_providers,
-        codex_enabled,
-        claude_enabled,
-        cursor_enabled,
-        opencode_zen_enabled,
-        opencode_go_enabled,
-        openrouter_enabled,
-        antigravity_enabled,
-        grok_enabled,
-        kiro_enabled,
-    );
+    let tray_enabled_providers = enabled_providers(&instances);
     let window_body: Element = if let Some(editing) = editing_tray_indicator.as_ref() {
         let overlay = tray_indicator_edit_overlay(
             &tray_widgets,
@@ -1292,7 +1081,7 @@ pub fn render(
         .map(|dialog| {
             provider_dialog_overlay(
                 dialog,
-                &openrouter_accounts,
+                &instances,
                 ProviderDialogActions {
                     set_dialog: set_provider_dialog.clone(),
                     expanded_cards: expanded_provider_cards.clone(),
@@ -1301,6 +1090,20 @@ pub fn render(
                     status_revision: provider_status_revision,
                     set_status_revision: set_provider_status_revision.clone(),
                     settings_tx: settings_tx.clone(),
+                    select_provider: Some({
+                        let set_selected_page = set_selected_page.clone();
+                        let set_page_visible = set_page_visible.clone();
+                        let set_rendered_page = set_rendered_page.clone();
+                        Arc::new(move |provider: ProviderId| {
+                            let page = RenderedPage::Provider(provider);
+                            set_selected_page.call(page);
+                            fade_to_rendered_page(
+                                set_page_visible.clone(),
+                                set_rendered_page.clone(),
+                                page,
+                            );
+                        })
+                    }),
                 },
             )
         });

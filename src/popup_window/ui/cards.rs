@@ -91,6 +91,11 @@ impl PopupRoot {
                 row.px(px(4.0)).mt(px(8.0)).into_any_element()
             }
             Card::ForcedResets(resets) => self.render_forced_resets(resets, cx),
+            Card::CloudCredits {
+                key,
+                window: limit,
+                credits,
+            } => self.render_cloud_credits(key, limit, *credits, style),
             Card::BankedResets {
                 limits,
                 expansion_key,
@@ -140,20 +145,27 @@ impl PopupRoot {
             .items_center()
             .gap(px(4.0))
             .min_w_0();
-        if matches!(surface, PopupSurface::HomeTab) {
+        let driver = heading.provider.kind();
+        if matches!(surface, PopupSurface::HomeTab) || heading.show_icon {
             title = title.child(
-                icon(
-                    crate::provider_registry::icon(heading.provider),
+                components::provider_mark(
+                    crate::provider_registry::icon(driver),
                     16.0,
-                    palette.provider_icon(heading.provider, self.ui.use_colored_provider_icons),
+                    palette.provider_icon(driver, self.ui.use_colored_provider_icons),
+                    heading.provider.badge().as_ref(),
+                    &palette,
                 )
-                .mr(px(4.0)),
+                .mr(px(if heading.provider.badge().is_some() {
+                    10.0
+                } else {
+                    4.0
+                })),
             );
         }
-        title = title.child(components::body_strong(
+        title = title.child(nowrap(components::body_strong(
             heading.provider.display_name(),
             palette.text_secondary,
-        ));
+        )));
         if let Some(plan) = heading.plan.as_ref() {
             title = title.child(nowrap(components::body(
                 plan.clone(),
@@ -162,25 +174,17 @@ impl PopupRoot {
         }
         if let Some(error) = heading.error.as_ref() {
             let provider = heading.provider;
-            let id = fx::key((
-                "heading-error",
-                provider.id(),
-                heading.profile_id.as_deref(),
-                heading.first,
-            ));
+            let id = fx::key(("heading-error", provider.id(), heading.first));
             title = title.child(
                 div()
                     .id(eid(format!(
                         "heading-error-{}-{}",
-                        crate::widget_data::account_source_id(
-                            provider,
-                            heading.profile_id.as_deref()
-                        ),
+                        provider.id(),
                         heading.first
                     )))
                     .on_hover(self.hover_listener(id, Some(error.clone().into()), cx))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.navigate(PopupView::from_provider(provider), cx);
+                        this.select_view(PopupView::from_provider(provider), cx);
                     }))
                     .child(components::error_badge(16.0, &palette)),
             );
@@ -196,13 +200,8 @@ impl PopupRoot {
             ));
         }
         if heading.drag_handle {
-            trailing = trailing.child(self.widget_drag_handle(
-                HomeWidgetId::new(
-                    PopupWidgetKind::from_provider(heading.provider),
-                    heading.profile_id.as_deref(),
-                ),
-                cx,
-            ));
+            trailing = trailing
+                .child(self.widget_drag_handle(HomeWidgetId::provider(heading.provider), cx));
         }
         components::split_row(title, trailing)
             .px(px(4.0))
@@ -330,6 +329,90 @@ impl PopupRoot {
             ))
             .child(footer)
             .into_any_element()
+    }
+
+    fn render_cloud_credits(
+        &mut self,
+        key: &str,
+        limit: &LimitWindow,
+        credits: Option<&crate::limits::CloudSessionCredits>,
+        style: CardStyle,
+    ) -> AnyElement {
+        let palette = self.palette.clone();
+        let (label, progress, available) = cloud_session_credits_presentation(
+            limit,
+            credits,
+            style.show_used_percentage,
+            Utc::now(),
+        );
+        let progress = self.fx.value(
+            fx::key(("limit-progress", key)),
+            progress as f32,
+            fx::NORMAL,
+        );
+        // Name/balance left, expiry date/countdown right, like two-line quota cards.
+        let mut metadata = div().flex().flex_col().items_end();
+        if let Some(expires) = limit.resets_at {
+            let local = expires.with_timezone(&Local);
+            metadata = metadata.child(card_metadata(
+                format!(
+                    "{}, {}",
+                    local.format("%b %-d"),
+                    TimeFormat::current().format_hm(local)
+                ),
+                &palette,
+            ));
+            if available {
+                metadata = metadata.child(status_row(
+                    "Expires in",
+                    format_reset_in(Some(expires)),
+                    &palette,
+                ));
+            }
+        }
+        let content = components::split_row(
+            div()
+                .flex()
+                .flex_col()
+                .min_w_0()
+                .child(nowrap(caption(
+                    "CLOUD SESSION CREDITS",
+                    palette.text_secondary,
+                )))
+                .child(nowrap(components::body_strong(label, palette.accent))),
+            metadata,
+        );
+
+        if style.compact {
+            let mut element = card(&palette).relative().overflow_hidden();
+            if available {
+                for layer in
+                    components::compact_progress_layers(progress, None, 0, palette.accent, &palette)
+                {
+                    element = element.child(layer);
+                }
+            }
+            return element
+                .child(div().relative().p(px(12.0)).child(content))
+                .into_any_element();
+        }
+        let mut element = card(&palette)
+            .overflow_hidden()
+            .p(px(12.0))
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .child(content);
+        if available {
+            element = element.child(components::progress_track(
+                progress,
+                None,
+                0,
+                palette.accent,
+                &palette,
+            ));
+        }
+        element.into_any_element()
     }
 
     #[allow(clippy::too_many_arguments)]

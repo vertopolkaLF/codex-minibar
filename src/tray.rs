@@ -8,11 +8,11 @@ use fontdue::{
 };
 
 use crate::{
+    instances::ProviderId,
     limits::{LimitWindow, ProviderLimits, RateLimits},
     provider_registry,
     settings::{
-        LimitValue, ProviderKind, TimeFormat, TrayColorMode, TrayPresentation, TrayWidget,
-        TrayWidgetKind,
+        LimitValue, TimeFormat, TrayColorMode, TrayPresentation, TrayWidget, TrayWidgetKind,
     },
 };
 
@@ -75,11 +75,9 @@ fn widget_tooltip(widget: &TrayWidget, limits: &ProviderLimits) -> String {
         let Some(provider) = indicator.provider() else {
             continue;
         };
-        let provider_limits = limits.get(provider);
-        let Some(metric) = crate::widget_data::resolve_account_metric(
+        let Some(metric) = crate::widget_data::resolve_metric(
             provider,
-            provider_limits,
-            indicator.profile_id.as_deref(),
+            limits.get(provider),
             &indicator.metric_id,
         ) else {
             continue;
@@ -88,23 +86,15 @@ fn widget_tooltip(widget: &TrayWidget, limits: &ProviderLimits) -> String {
             .map(|value| format!("{value}%"))
             .unwrap_or_else(|| "?".into());
         let item = format!("{} {value}", metric.label);
-        let source_id =
-            crate::widget_data::account_source_id(provider, indicator.profile_id.as_deref());
-        let profile = provider_limits
-            .account_profiles(provider)
-            .iter()
-            .find(|p| p.id == indicator.profile_id.as_deref().unwrap_or("default"));
-        let title = match profile {
-            Some(profile) => format!("{} ? {}", provider.display_name(), profile.name),
-            None => provider.display_name().to_owned(),
-        };
+        let source_id = provider.id();
+        let title = provider.qualified_name();
         if let Some((_, _, items)) = rows
             .iter_mut()
             .find(|(row_source, _, _)| *row_source == source_id)
         {
             items.push(item);
         } else {
-            rows.push((source_id, title, vec![item]));
+            rows.push((source_id.to_owned(), title, vec![item]));
         }
     }
     if rows.is_empty() {
@@ -257,7 +247,7 @@ struct ResolvedIndicator {
 
 fn indicator_color(
     indicator: &crate::settings::TrayIndicator,
-    provider: ProviderKind,
+    provider: ProviderId,
     remaining: Option<u8>,
     accent: [u8; 3],
 ) -> [u8; 3] {
@@ -274,7 +264,7 @@ fn indicator_color(
             indicator.fixed_color.blue,
         ],
         TrayColorMode::Provider => {
-            let (red, green, blue) = provider_registry::descriptor(provider).brand_rgb;
+            let (red, green, blue) = provider_registry::descriptor(provider.kind()).brand_rgb;
             [red, green, blue]
         }
         TrayColorMode::Accent => accent,
@@ -293,10 +283,9 @@ fn resolve_indicators(
         .take(3)
         .filter_map(|indicator| {
             let provider = indicator.provider()?;
-            let metric = crate::widget_data::resolve_account_metric(
+            let metric = crate::widget_data::resolve_metric(
                 provider,
                 limits.get(provider),
-                indicator.profile_id.as_deref(),
                 &indicator.metric_id,
             );
             let window = metric.map(|metric| metric.window).unwrap_or_default();
@@ -850,27 +839,21 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
+    use crate::settings::ProviderKind;
 
     #[test]
-    fn tray_accounts_resolve_independently_and_missing_accounts_keep_their_slot() {
+    fn tray_instances_resolve_independently_and_missing_instances_keep_their_slot() {
+        use crate::instances::ProviderId;
+        let primary = ProviderId::primary(ProviderKind::Claude);
+        let work = ProviderId::new(ProviderKind::Claude, "claude-tray-work");
         let mut limits = ProviderLimits::default();
-        let profile = |id: &str, used| {
-            let mut snapshot = RateLimits::default();
-            snapshot.primary.used_percent = Some(used);
-            crate::limits::AccountProfileSnapshot {
-                id: id.into(),
-                name: "Same name".into(),
-                limits: snapshot,
-                error: None,
-            }
-        };
-        limits.get_mut(ProviderKind::Claude).claude_profiles =
-            vec![profile("work", 80), profile("default", 7)];
-        let mut widget = TrayWidget::custom_for_provider(ProviderKind::Claude);
-        let default = crate::settings::TrayIndicator::new(ProviderKind::Claude, "claude.session");
-        let mut work = default.clone();
-        work.profile_id = Some("work".into());
-        widget.indicators = vec![default, work];
+        limits.get_mut(primary).primary.used_percent = Some(7);
+        limits.get_mut(work).primary.used_percent = Some(80);
+        let mut widget = TrayWidget::custom_for_provider(primary);
+        let default = crate::settings::TrayIndicator::new(primary, "claude.session");
+        let mut second = default.clone();
+        second.provider_id = work.id().into();
+        widget.indicators = vec![default, second];
         let resolved = resolve_indicators(&widget, &limits, [0, 120, 212]);
         assert_eq!(resolved[0].displayed_percent, Some(93));
         assert_eq!(resolved[1].displayed_percent, Some(20));
@@ -882,10 +865,10 @@ mod tests {
         let decoded: crate::settings::Settings =
             toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
         assert_eq!(
-            decoded.tray_widgets[0].indicators[1].profile_id.as_deref(),
-            Some("work")
+            decoded.tray_widgets[0].indicators[1].provider_id,
+            "claude-tray-work"
         );
-        widget.indicators[0].profile_id = Some("removed".into());
+        widget.indicators[0].provider_id = "claude-removed".into();
         let missing = resolve_indicators(&widget, &limits, [0, 120, 212]);
         assert_eq!(missing.len(), 2);
         assert_eq!(missing[0].displayed_percent, None);
@@ -910,12 +893,14 @@ mod tests {
     }
 
     fn provider_limits() -> ProviderLimits {
-        ProviderLimits::from_entries([(ProviderKind::Codex, limits())])
+        ProviderLimits::from_entries([(ProviderKind::Codex.into(), limits())])
     }
 
     #[test]
     fn renders_rgba_icon_with_visible_pixels() {
-        let mut widget = TrayWidget::custom_for_provider(ProviderKind::Codex);
+        let mut widget = TrayWidget::custom_for_provider(crate::instances::ProviderId::from(
+            ProviderKind::Codex,
+        ));
         widget.presentation = TrayPresentation::Number;
         let pixels = render_widget(&widget, &provider_limits());
         assert_eq!(pixels.len(), ICON_SIZE * ICON_SIZE * 4);
@@ -983,9 +968,11 @@ mod tests {
             ..RateLimits::default()
         };
         assert_eq!(limits.effective_primary().remaining_percent(), Some(60));
-        let mut widget = TrayWidget::custom_for_provider(ProviderKind::Codex);
+        let mut widget = TrayWidget::custom_for_provider(crate::instances::ProviderId::from(
+            ProviderKind::Codex,
+        ));
         widget.presentation = TrayPresentation::Number;
-        let limits = ProviderLimits::from_entries([(ProviderKind::Codex, limits)]);
+        let limits = ProviderLimits::from_entries([(ProviderKind::Codex.into(), limits)]);
         let pixels = render_widget(&widget, &limits);
         assert_eq!(pixels.len(), ICON_SIZE * ICON_SIZE * 4);
         assert!(pixels.chunks_exact(4).any(|pixel| pixel[3] != 0));
@@ -1008,7 +995,9 @@ mod tests {
 
     #[test]
     fn uses_app_icon_until_rate_limit_data_arrives() {
-        let mut widget = TrayWidget::custom_for_provider(ProviderKind::Codex);
+        let mut widget = TrayWidget::custom_for_provider(crate::instances::ProviderId::from(
+            ProviderKind::Codex,
+        ));
         widget.presentation = TrayPresentation::Number;
         let pixels = render_widget(&widget, &ProviderLimits::default());
         assert_eq!(pixels.len(), ICON_SIZE * ICON_SIZE * 4);
@@ -1020,7 +1009,7 @@ mod tests {
     fn renders_three_indicators_with_independent_status_colors() {
         let limits = ProviderLimits::from_entries([
             (
-                ProviderKind::Codex,
+                ProviderKind::Codex.into(),
                 RateLimits {
                     primary: LimitWindow {
                         used_percent: Some(38),
@@ -1030,7 +1019,7 @@ mod tests {
                 },
             ),
             (
-                ProviderKind::Claude,
+                ProviderKind::Claude.into(),
                 RateLimits {
                     primary: LimitWindow {
                         used_percent: Some(55),
@@ -1040,7 +1029,7 @@ mod tests {
                 },
             ),
             (
-                ProviderKind::Cursor,
+                ProviderKind::Cursor.into(),
                 RateLimits {
                     secondary: LimitWindow {
                         used_percent: Some(88),
@@ -1050,11 +1039,22 @@ mod tests {
                 },
             ),
         ]);
-        let mut widget = TrayWidget::custom_for_provider(ProviderKind::Codex);
+        let mut widget = TrayWidget::custom_for_provider(crate::instances::ProviderId::from(
+            ProviderKind::Codex,
+        ));
         widget.indicators = vec![
-            crate::settings::TrayIndicator::new(ProviderKind::Codex, "codex.session"),
-            crate::settings::TrayIndicator::new(ProviderKind::Claude, "claude.session"),
-            crate::settings::TrayIndicator::new(ProviderKind::Cursor, "cursor.auto"),
+            crate::settings::TrayIndicator::new(
+                crate::instances::ProviderId::from(ProviderKind::Codex),
+                "codex.session",
+            ),
+            crate::settings::TrayIndicator::new(
+                crate::instances::ProviderId::from(ProviderKind::Claude),
+                "claude.session",
+            ),
+            crate::settings::TrayIndicator::new(
+                crate::instances::ProviderId::from(ProviderKind::Cursor),
+                "cursor.auto",
+            ),
         ];
         widget.presentation = TrayPresentation::StackedBars;
 

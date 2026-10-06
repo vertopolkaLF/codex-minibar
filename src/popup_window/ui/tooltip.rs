@@ -44,7 +44,7 @@ pub(super) enum ActivityTip {
 pub(super) struct ChartTip {
     pub(super) title: String,
     /// `(icon, label, amount, icon color)` for each visible provider.
-    pub(super) rows: Vec<(&'static str, &'static str, String, Hsla)>,
+    pub(super) rows: Vec<(&'static str, String, String, Hsla)>,
     pub(super) total: String,
 }
 

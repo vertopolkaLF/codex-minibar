@@ -1,23 +1,12 @@
-use super::persistence::{persist_bool, persist_update};
+use super::persistence::persist_update;
 use super::*;
 
 pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Element>) {
-    let codex_enabled = ctx.codex_enabled;
-    let claude_enabled = ctx.claude_enabled;
-    let cursor_enabled = ctx.cursor_enabled;
-    let opencode_zen_enabled = ctx.opencode_zen_enabled;
-    let opencode_go_enabled = ctx.opencode_go_enabled;
-    let openrouter_enabled = ctx.openrouter_enabled;
-    let antigravity_enabled = ctx.antigravity_enabled;
-    let grok_enabled = ctx.grok_enabled;
-    let kiro_enabled = ctx.kiro_enabled;
-    let automatic_activation = ctx.automatic_activation;
     let scheduled_activations = ctx.scheduled_activations;
     let auto_activation_pauses = ctx.auto_activation_pauses;
     let expanded_scheduled_activation = ctx.expanded_scheduled_activation;
     let expanded_auto_activation_pause = ctx.expanded_auto_activation_pause;
     let time_format = ctx.time_format;
-    let set_automatic_activation = ctx.set_automatic_activation.clone();
     let set_scheduled_activations = ctx.set_scheduled_activations.clone();
     let set_auto_activation_pauses = ctx.set_auto_activation_pauses.clone();
     let set_expanded_scheduled_activation = ctx.set_expanded_scheduled_activation.clone();
@@ -25,38 +14,43 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let hovered_card_id = ctx.hovered_card_id;
     let set_hovered_card_id = ctx.set_hovered_card_id.clone();
     let settings_tx = ctx.settings_tx.clone();
-    let apply_automatic_activation = settings_tx.clone();
-    let provider_enabled = [
-        codex_enabled,
-        claude_enabled,
-        cursor_enabled,
-        opencode_zen_enabled,
-        opencode_go_enabled,
-        openrouter_enabled,
-        antigravity_enabled,
-        grok_enabled,
-        kiro_enabled,
+    let instances = ctx.instances;
+    let default_provider = activation_providers(instances).into_iter().next();
+    let mut rows = vec![
+        text_block("Start 5-hour sessions automatically")
+            .font_size(14.0)
+            .semibold()
+            .with_key("activation-automatic-heading")
+            .into(),
+        text_block("Starts a new session as soon as a window is available, instead of waiting for your first request. Each account uses its own login.")
+            .font_size(12.0)
+            .foreground(ThemeRef::SecondaryText)
+            .wrap()
+            .with_key("activation-automatic-caption")
+            .into(),
     ];
-    let default_provider = activation_providers(&provider_enabled).into_iter().next();
-    let mut rows = vec![settings_toggle_card_with_description(
-                "Start 5-hour sessions automatically",
-                Some("Starts a new Codex or Claude session as soon as a window is available, instead of waiting for your first request."),
-                automatic_activation,
-                move |value| {
-                    persist_bool(
-                        set_automatic_activation.clone(),
-                        apply_automatic_activation.clone(),
-                        value,
-                        |settings, value| {
-                            settings.automatic_activation = value;
-                        },
-                    );
-                },
-                "activation-automatic",
-                hovered_card_id,
-                set_hovered_card_id.clone(),
-            )
-            .with_key("activation-automatic")];
+    let candidates = instances
+        .iter()
+        .filter(|instance| {
+            crate::provider_registry::descriptor(instance.driver).supports_activation
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        rows.push(
+            text_block("Add Codex or Claude in Providers first.")
+                .font_size(12.0)
+                .foreground(ThemeRef::SecondaryText)
+                .wrap()
+                .with_key("activation-automatic-empty")
+                .into(),
+        );
+    }
+    for instance in candidates {
+        rows.push(
+            automatic_activation_row(instance, settings_tx.clone())
+                .with_key(format!("activation-automatic-{}", instance.id)),
+        );
+    }
 
     let existing_pauses = auto_activation_pauses.to_vec();
     let pause_setter = set_auto_activation_pauses.clone();
@@ -81,7 +75,7 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     ));
     rows.extend(auto_activation_pause_cards(
         auto_activation_pauses,
-        &provider_enabled,
+        instances,
         time_format,
         expanded_auto_activation_pause,
         set_expanded_auto_activation_pause.clone(),
@@ -114,7 +108,7 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     ));
     rows.extend(scheduled_activation_cards(
         scheduled_activations,
-        &provider_enabled,
+        instances,
         time_format,
         expanded_scheduled_activation,
         set_expanded_scheduled_activation,
@@ -315,30 +309,96 @@ fn activation_section_header(
     .into()
 }
 
-fn activation_providers(provider_enabled: &[bool; 9]) -> Vec<ProviderKind> {
-    ProviderKind::ALL
-        .into_iter()
-        .enumerate()
-        .filter(|(index, provider)| {
-            provider_enabled[*index]
-                && crate::provider_registry::descriptor(*provider).supports_activation
+/// The per-instance "start automatically" switch. Instances that cannot
+/// start sessions (manual credentials) keep the switch, disabled, with why.
+fn automatic_activation_row(instance: &ProviderInstance, settings_tx: Sender<Settings>) -> Element {
+    use crate::instances::{Capabilities, Capability};
+    let provider = instance.provider_id();
+    let reason = Capabilities::reason(instance, Capability::AutoActivation);
+    let mut text: Vec<Element> = vec![
+        text_block(provider_label(instance))
+            .font_size(14.0)
+            .wrap()
+            .into(),
+    ];
+    if !instance.enabled {
+        text.push(
+            text_block("Off in Providers")
+                .font_size(12.0)
+                .foreground(ThemeRef::SecondaryText)
+                .into(),
+        );
+    }
+    if let Some(reason) = reason {
+        text.push(
+            text_block(reason)
+                .font_size(12.0)
+                .foreground(ThemeRef::SystemCaution)
+                .wrap()
+                .into(),
+        );
+    }
+    border(
+        grid((
+            vstack(text)
+                .spacing(2.0)
+                .vertical_alignment(VerticalAlignment::Center)
+                .grid_column(0),
+            ToggleSwitch::new(instance.auto_activation && reason.is_none())
+                .on_content("")
+                .off_content("")
+                .enabled(reason.is_none())
+                .on_toggled(move |value: bool| {
+                    persist_update(settings_tx.clone(), move |settings| {
+                        if let Some(instance) = settings.instance_mut(provider) {
+                            instance.auto_activation = value;
+                        }
+                    });
+                })
+                .min_width(0.0)
+                .width(50.0)
+                .vertical_alignment(VerticalAlignment::Center)
+                .grid_column(1),
+        ))
+        .columns([GridLength::Star(1.0), GridLength::Auto])
+        .column_spacing(16.0),
+    )
+    .padding(settings_card_padding())
+    .background(ThemeRef::CardBackground)
+    .corner_radius(8.0)
+    .border_thickness(Thickness::uniform(1.0))
+    .border_brush(ThemeRef::CardStroke)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
+    .into()
+}
+
+/// `Claude · Work` while a driver has several instances.
+fn provider_label(instance: &ProviderInstance) -> String {
+    instance.provider_id().qualified_name()
+}
+
+/// Enabled instances that can start sessions with their own login.
+fn activation_providers(instances: &[ProviderInstance]) -> Vec<ProviderId> {
+    instances
+        .iter()
+        .filter(|instance| {
+            instance.enabled && crate::instances::Capabilities::of(instance).auto_activation
         })
-        .map(|(_, provider)| provider)
+        .map(ProviderInstance::provider_id)
         .collect()
 }
 
 fn activation_provider_choices(
-    provider_enabled: &[bool; 9],
-    current: Option<ProviderKind>,
-) -> Vec<ProviderKind> {
-    ProviderKind::ALL
-        .into_iter()
-        .enumerate()
-        .filter(|(index, provider)| {
-            crate::provider_registry::descriptor(*provider).supports_activation
-                && (provider_enabled[*index] || current == Some(*provider))
+    instances: &[ProviderInstance],
+    current: Option<ProviderId>,
+) -> Vec<ProviderId> {
+    instances
+        .iter()
+        .filter(|instance| {
+            crate::instances::Capabilities::of(instance).auto_activation
+                && (instance.enabled || current == Some(instance.provider_id()))
         })
-        .map(|(_, provider)| provider)
+        .map(ProviderInstance::provider_id)
         .collect()
 }
 
@@ -380,12 +440,12 @@ fn activation_time_label(time_format: TimeFormat, minutes: u16) -> String {
     }
 }
 
-fn activation_rule_header(provider: Option<ProviderKind>, summary: String) -> Element {
+fn activation_rule_header(provider: Option<ProviderId>, summary: String) -> Element {
     vstack((
         text_block(
             provider
-                .map(ProviderKind::display_name)
-                .unwrap_or("Unknown provider"),
+                .map(ProviderId::qualified_name)
+                .unwrap_or_else(|| "Unknown provider".into()),
         )
         .font_size(14.0),
         text_block(summary)
@@ -468,7 +528,7 @@ fn set_activation_weekday(weekdays: &mut Vec<u8>, day: u8, checked: bool) -> boo
 
 fn scheduled_activation_cards(
     schedules: &[ScheduledActivation],
-    provider_enabled: &[bool; 9],
+    instances: &[ProviderInstance],
     time_format: TimeFormat,
     expanded_schedule: &Option<String>,
     set_expanded_schedule: SetState<Option<String>>,
@@ -479,8 +539,8 @@ fn scheduled_activation_cards(
 ) -> Vec<Element> {
     if schedules.is_empty() {
         return vec![
-            text_block(if activation_providers(provider_enabled).is_empty() {
-                "Turn on Codex or Claude in Providers first."
+            text_block(if activation_providers(instances).is_empty() {
+                "Turn on Codex or Claude in Providers first, with a config folder login."
             } else {
                 "No scheduled activations."
             })
@@ -494,10 +554,10 @@ fn scheduled_activation_cards(
     let mut rows = Vec::with_capacity(schedules.len());
     for schedule in schedules {
         let schedule_id = schedule.id.clone();
-        let choices = activation_provider_choices(provider_enabled, schedule.provider());
+        let choices = activation_provider_choices(instances, schedule.provider());
         let provider_labels = choices
             .iter()
-            .map(|provider| provider.display_name().to_string())
+            .map(|provider| provider.qualified_name())
             .collect::<Vec<_>>();
         let selected_provider = schedule
             .provider()
@@ -523,11 +583,13 @@ fn scheduled_activation_cards(
         let mut fields = Vec::<Element>::new();
         if choices.is_empty() {
             fields.push(
-                text_block("Turn on Codex or Claude in Providers first.")
-                    .font_size(12.0)
-                    .foreground(ThemeRef::SecondaryText)
-                    .wrap()
-                    .into(),
+                text_block(
+                    "Turn on Codex or Claude in Providers first, with a config folder login.",
+                )
+                .font_size(12.0)
+                .foreground(ThemeRef::SecondaryText)
+                .wrap()
+                .into(),
             );
         } else if choices.len() > 1 || schedule.provider().is_none() {
             let schedules_for_provider = schedules.to_vec();
@@ -656,7 +718,7 @@ fn scheduled_activation_cards(
 
 fn auto_activation_pause_cards(
     pauses: &[AutoActivationPause],
-    provider_enabled: &[bool; 9],
+    instances: &[ProviderInstance],
     time_format: TimeFormat,
     expanded_pause: &Option<String>,
     set_expanded_pause: SetState<Option<String>>,
@@ -667,8 +729,8 @@ fn auto_activation_pause_cards(
 ) -> Vec<Element> {
     if pauses.is_empty() {
         return vec![
-            text_block(if activation_providers(provider_enabled).is_empty() {
-                "Turn on Codex or Claude in Providers first."
+            text_block(if activation_providers(instances).is_empty() {
+                "Turn on Codex or Claude in Providers first, with a config folder login."
             } else {
                 "No quiet periods."
             })
@@ -682,10 +744,10 @@ fn auto_activation_pause_cards(
     let mut rows = Vec::with_capacity(pauses.len());
     for pause in pauses {
         let pause_id = pause.id.clone();
-        let choices = activation_provider_choices(provider_enabled, pause.provider());
+        let choices = activation_provider_choices(instances, pause.provider());
         let provider_labels = choices
             .iter()
-            .map(|provider| provider.display_name().to_string())
+            .map(|provider| provider.qualified_name())
             .collect::<Vec<_>>();
         let selected_provider = pause
             .provider()
@@ -711,11 +773,13 @@ fn auto_activation_pause_cards(
         let mut fields = Vec::<Element>::new();
         if choices.is_empty() {
             fields.push(
-                text_block("Turn on Codex or Claude in Providers first.")
-                    .font_size(12.0)
-                    .foreground(ThemeRef::SecondaryText)
-                    .wrap()
-                    .into(),
+                text_block(
+                    "Turn on Codex or Claude in Providers first, with a config folder login.",
+                )
+                .font_size(12.0)
+                .foreground(ThemeRef::SecondaryText)
+                .wrap()
+                .into(),
             );
         } else if choices.len() > 1 || pause.provider().is_none() {
             let pauses_for_provider = pauses.to_vec();

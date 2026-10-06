@@ -11,12 +11,13 @@ use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, TimeZone
 use serde::Deserialize;
 
 use crate::{
+    instances::{ProviderId, ProviderInstance},
     limits::{
         LimitWindow, OpenRouterAccountSnapshot, OpenRouterApiKeySnapshot, RateLimits,
         SpendingSummary,
     },
     secrets,
-    settings::{OpenRouterAccount, Settings},
+    settings::OpenRouterAccount,
     usage::UsageStatistics,
     worker::{Activator, LimitProvider, UsageProvider},
 };
@@ -34,6 +35,7 @@ pub(crate) mod analytics;
 
 pub struct OpenRouterClient {
     cancelled: Arc<AtomicBool>,
+    provider: ProviderId,
     credentials_revision: u64,
     agent: ureq::Agent,
     accounts: Vec<AccountCredentials>,
@@ -66,13 +68,16 @@ struct CachedOpenRouterKey {
 }
 
 impl OpenRouterClient {
-    pub fn new(settings: &Settings) -> Result<Self> {
+    /// One instance is one OpenRouter account with its own keys.
+    pub fn new(instance: &ProviderInstance) -> Result<Self> {
+        let provider = instance.provider_id();
         Ok(Self {
             cancelled: Arc::new(AtomicBool::new(false)),
-            credentials_revision: settings.openrouter_credentials_revision,
+            provider,
+            credentials_revision: instance.credentials_revision,
             agent: ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build(),
-            accounts: load_credentials(settings)?,
-            key_cache: load_key_cache_from_store(),
+            accounts: load_credentials(instance)?,
+            key_cache: load_key_cache_from_store(provider),
         })
     }
 }
@@ -490,33 +495,22 @@ pub fn save_api_key(value: Option<&str>) -> Result<()> {
     save_account_api_key(LEGACY_ACCOUNT_ID, LEGACY_API_KEY_ID, value)
 }
 
-pub fn accounts_for_settings(settings: &Settings) -> Vec<OpenRouterAccount> {
-    let mut accounts = settings.openrouter_accounts.clone();
-    if key_is_configured()
-        && !accounts
-            .iter()
-            .any(|account| account.id == LEGACY_ACCOUNT_ID)
-    {
-        accounts.insert(0, OpenRouterAccount::legacy());
-    }
-    accounts
+pub fn accounts_for_instance(instance: &ProviderInstance) -> Vec<OpenRouterAccount> {
+    instance.openrouter.clone().into_iter().collect()
 }
 
 /// Overlay locally chosen account and key names onto a live quota snapshot.
 /// A rename is a settings-only change and must not wait for the next worker
 /// poll or an app restart.
-pub fn apply_account_names(limits: &mut RateLimits, settings: &Settings) -> bool {
-    let names: HashMap<&str, &str> = settings
-        .openrouter_accounts
+pub fn apply_account_names(limits: &mut RateLimits, instance: &ProviderInstance) -> bool {
+    let configured_accounts = instance.openrouter.as_slice();
+    let names: HashMap<&str, &str> = configured_accounts
         .iter()
         .map(|account| (account.id.as_str(), account.name.as_str()))
         .collect();
     let mut changed = false;
     for account in &mut limits.openrouter_accounts {
-        let configured = settings
-            .openrouter_accounts
-            .iter()
-            .find(|a| a.id == account.id);
+        let configured = configured_accounts.iter().find(|a| a.id == account.id);
         for key in &mut account.api_keys {
             let local_name = configured
                 .and_then(|a| a.api_key_names.get(&key.id))
@@ -861,8 +855,8 @@ struct CreditsData {
     total_usage: f64,
 }
 
-fn load_credentials(settings: &Settings) -> Result<Vec<AccountCredentials>> {
-    accounts_for_settings(settings)
+fn load_credentials(instance: &ProviderInstance) -> Result<Vec<AccountCredentials>> {
+    accounts_for_instance(instance)
         .into_iter()
         .map(|account| {
             let mut api_keys = Vec::new();
@@ -1048,10 +1042,8 @@ fn parse_credits_response(raw: &str) -> Result<AccountCredits> {
     })
 }
 
-fn load_key_cache_from_store() -> HashMap<String, CachedOpenRouterKey> {
-    let Ok(Some(previous)) = crate::store::with_store(|store| {
-        store.load_limits(crate::settings::ProviderKind::OpenRouter)
-    }) else {
+fn load_key_cache_from_store(provider: ProviderId) -> HashMap<String, CachedOpenRouterKey> {
+    let Ok(Some(previous)) = crate::store::with_store(|store| store.load_limits(provider)) else {
         return HashMap::new();
     };
     let mut cache = HashMap::new();
@@ -1319,6 +1311,7 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
+    use crate::settings::ProviderKind;
 
     #[test]
     fn secret_hint_errors_are_retried_and_never_cached_as_missing() {
@@ -1705,15 +1698,13 @@ mod tests {
 
     #[test]
     fn applies_renamed_account_names_onto_a_live_snapshot() {
-        let settings = Settings {
-            openrouter_accounts: vec![OpenRouterAccount {
-                id: "acc".into(),
-                name: "TESTdfwfwer".into(),
-                api_key_ids: vec!["key".into()],
-                api_key_names: Default::default(),
-            }],
-            ..Default::default()
-        };
+        let mut settings = ProviderInstance::primary(ProviderKind::OpenRouter);
+        settings.openrouter = Some(OpenRouterAccount {
+            id: "acc".into(),
+            name: "TESTdfwfwer".into(),
+            api_key_ids: vec!["key".into()],
+            api_key_names: Default::default(),
+        });
         let mut limits = RateLimits::default();
         limits.openrouter_accounts.push(OpenRouterAccountSnapshot {
             id: "acc".into(),
@@ -1764,10 +1755,8 @@ mod tests {
         account
             .api_key_names
             .insert(key_id.clone(), "Local name".into());
-        let mut settings = Settings {
-            openrouter_accounts: vec![account.clone()],
-            ..Default::default()
-        };
+        let mut settings = ProviderInstance::primary(ProviderKind::OpenRouter);
+        settings.openrouter = Some(account.clone());
         let mut limits = RateLimits::default();
         limits.openrouter_accounts.push(OpenRouterAccountSnapshot {
             id: account.id.clone(),
@@ -1787,7 +1776,7 @@ mod tests {
         // Adding/replacing a management key restarts the worker at a new
         // credential revision. Its directory can now return a different name,
         // but the saved user override must still win on the fresh snapshot.
-        settings.openrouter_credentials_revision += 1;
+        settings.credentials_revision += 1;
         limits.openrouter_accounts[0].api_keys[0] = OpenRouterApiKeySnapshot {
             id: key_id.clone(),
             label: Some("Name from management directory".into()),
@@ -1800,14 +1789,14 @@ mod tests {
             Some("Local name")
         );
         assert_eq!(
-            settings.openrouter_accounts[0].api_key_names[&key_id],
+            settings.openrouter.as_ref().unwrap().api_key_names[&key_id],
             "Local name"
         );
 
         // Fresh worker snapshots contain only remote metadata.
         limits.openrouter_accounts[0].api_keys[0].local_name = None;
         assert!(apply_account_names(&mut limits, &settings));
-        settings.openrouter_accounts[0].api_key_names.clear();
+        settings.openrouter.as_mut().unwrap().api_key_names.clear();
         assert!(apply_account_names(&mut limits, &settings));
         let key = &limits.openrouter_accounts[0].api_keys[0];
         assert!(key.local_name.is_none());
@@ -1817,13 +1806,16 @@ mod tests {
             serde_json::from_str(r#"{"id":"old","name":"Personal","api_key_ids":["key"]}"#)
                 .unwrap();
         assert!(old.api_key_names.is_empty());
-        settings.openrouter_accounts[0]
+        settings
+            .openrouter
+            .as_mut()
+            .unwrap()
             .api_key_names
             .insert(key_id.clone(), "Saved name".into());
         let saved = toml::to_string(&settings).unwrap();
-        let restored: Settings = toml::from_str(&saved).unwrap();
+        let restored: ProviderInstance = toml::from_str(&saved).unwrap();
         assert_eq!(
-            restored.openrouter_accounts[0].api_key_names[&key_id],
+            restored.openrouter.as_ref().unwrap().api_key_names[&key_id],
             "Saved name"
         );
     }

@@ -35,7 +35,7 @@ const CHART_PAD_BOTTOM: f32 = 3.0;
 
 pub(super) struct UsageChartData {
     series: Arc<Vec<DailySeriesPoint>>,
-    providers: Arc<Vec<ProviderKind>>,
+    providers: Arc<Vec<ProviderId>>,
     max_value: u64,
 }
 
@@ -366,7 +366,7 @@ impl PopupRoot {
         if metric == OverviewMetric::Cost {
             meta = meta.child(caption("API estimate", palette.text_tertiary));
         }
-        let mut entries: Vec<(ProviderKind, u64)> = snapshot
+        let mut entries: Vec<(ProviderId, u64)> = snapshot
             .providers
             .iter()
             .map(|entry| {
@@ -610,7 +610,7 @@ impl PopupRoot {
     fn chart_tip(
         &self,
         point: &DailySeriesPoint,
-        providers: &[ProviderKind],
+        providers: &[ProviderId],
         hourly: bool,
     ) -> ChartTip {
         let metric = self.overview_metric;
@@ -642,10 +642,10 @@ impl PopupRoot {
                 continue;
             }
             rows.push((
-                crate::provider_registry::icon(*provider),
-                crate::provider_registry::descriptor(*provider).display_name,
+                crate::provider_registry::icon(provider.kind()),
+                provider.qualified_name(),
                 amount,
-                self.palette.provider_icon(*provider, true),
+                self.palette.provider_icon(provider.kind(), true),
             ));
         }
         let total = match metric {
@@ -724,7 +724,7 @@ fn provider_tile(
     palette: &Palette,
     colored: bool,
 ) -> gpui::Div {
-    let descriptor = crate::provider_registry::descriptor(entry.provider);
+    let descriptor = crate::provider_registry::descriptor(entry.provider.kind());
     let value = match metric {
         OverviewMetric::Cost => format_usage_cost(&entry.usage),
         OverviewMetric::Tokens => format_token_count(entry.usage.total_tokens()),
@@ -754,10 +754,12 @@ fn provider_tile(
                 .flex_row()
                 .items_center()
                 .gap(px(8.0))
-                .child(components::icon(
-                    crate::provider_registry::icon(entry.provider),
+                .child(components::provider_mark(
+                    crate::provider_registry::icon(entry.provider.kind()),
                     16.0,
-                    palette.provider_icon(entry.provider, colored),
+                    palette.provider_icon(entry.provider.kind(), colored),
+                    entry.provider.badge().as_ref(),
+                    &palette,
                 ))
                 .child(nowrap(components::body_strong(
                     descriptor.display_name,
@@ -860,10 +862,12 @@ fn model_breakdown_table(rows: &[BreakdownRow], palette: &Palette, colored: bool
             .gap(px(4.0))
             .min_w_0();
         if let Some(provider) = row.provider {
-            title = title.child(components::icon(
-                crate::provider_registry::icon(provider),
+            title = title.child(components::provider_mark(
+                crate::provider_registry::icon(provider.kind()),
                 14.0,
-                palette.provider_icon(provider, colored),
+                palette.provider_icon(provider.kind(), colored),
+                provider.badge().as_ref(),
+                &palette,
             ));
         }
         title = title.child(
@@ -907,7 +911,7 @@ fn day_breakdown_table(
     palette: &Palette,
     colored: bool,
 ) -> gpui::Div {
-    let providers: Vec<ProviderKind> = snapshot
+    let providers: Vec<ProviderId> = snapshot
         .providers
         .iter()
         .map(|entry| entry.provider)
@@ -931,10 +935,12 @@ fn day_breakdown_table(
     for provider in &providers {
         header = header.child(cell(
             provider_col,
-            components::icon(
-                crate::provider_registry::icon(*provider),
+            components::provider_mark(
+                crate::provider_registry::icon(provider.kind()),
                 14.0,
-                palette.provider_icon(*provider, colored),
+                palette.provider_icon(provider.kind(), colored),
+                provider.badge().as_ref(),
+                &palette,
             ),
         ));
     }
@@ -1079,7 +1085,7 @@ fn monotone_path(builder: &mut PathBuilder, xs: &[f32], ys: &[f32], ox: f32, oy:
 fn paint_area_chart(
     bounds: Bounds<Pixels>,
     series: &[DailySeriesPoint],
-    lines: &[(ProviderKind, Hsla)],
+    lines: &[(ProviderId, Hsla)],
     max_value: f32,
     grid: Hsla,
     baseline_color: Hsla,
@@ -1315,13 +1321,13 @@ mod tests {
             start_date: date - Duration::days(2),
             end_date: date,
             providers: vec![ProviderOverview {
-                provider: ProviderKind::Codex,
+                provider: crate::instances::ProviderId::from(ProviderKind::Codex),
                 ..Default::default()
             }],
             daily_series: vec![DailySeriesPoint {
                 at: start_of_local_day(date),
                 date,
-                by_provider: BTreeMap::from([(ProviderKind::Codex, 100)]),
+                by_provider: BTreeMap::from([(ProviderKind::Codex.into(), 100)]),
                 total: 100,
             }],
             ..Default::default()
@@ -1341,7 +1347,7 @@ mod tests {
         let mut updated = (*snapshot).clone();
         updated.daily_series[0]
             .by_provider
-            .insert(ProviderKind::Codex, 200);
+            .insert(crate::instances::ProviderId::from(ProviderKind::Codex), 200);
         let updated = Arc::new(updated);
         assert!(!cache.matches(&updated, OverviewMetric::Cost));
         let next = UsageChartCache::new(updated, OverviewMetric::Cost);
