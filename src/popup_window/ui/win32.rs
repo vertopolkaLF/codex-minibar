@@ -283,14 +283,12 @@ pub(crate) fn set_region(hwnd: HWND, rect: Option<Rect>, radius_px: i32) {
     unsafe {
         let region = match rect.filter(|rect| rect.width() > 0 && rect.height() > 0) {
             None => CreateRectRgn(0, 0, 0, 0),
-            Some(rect) if radius_px <= 0 => {
-                CreateRectRgn(
-                    rect.left - AA_PADDING_PX,
-                    rect.top - AA_PADDING_PX,
-                    rect.right + AA_PADDING_PX,
-                    rect.bottom + AA_PADDING_PX,
-                )
-            }
+            Some(rect) if radius_px <= 0 => CreateRectRgn(
+                rect.left - AA_PADDING_PX,
+                rect.top - AA_PADDING_PX,
+                rect.right + AA_PADDING_PX,
+                rect.bottom + AA_PADDING_PX,
+            ),
             Some(rect) => {
                 // Grow radius with bounds to keep the corner centers fixed.
                 let arc = radius_px.saturating_add(AA_PADDING_PX).saturating_mul(2);
