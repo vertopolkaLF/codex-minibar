@@ -62,3 +62,13 @@ too_many_arguments = "allow"
 lto = "thin"
 strip = true
 panic = "abort"
+
+# GPUI rebuilds and lays out the popup during animation. Keep application
+# code debuggable while optimizing the renderer and its hot dependencies
+# for the normal `cargo run` / `cargo watch -x run` development workflow.
+[profile.dev.package]
+gpui = { opt-level = 3 }
+taffy = { opt-level = 3 }
+resvg = { opt-level = 3 }
+rustybuzz = { opt-level = 3 }
+ttf-parser = { opt-level = 3 }

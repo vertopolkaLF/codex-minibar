@@ -54,6 +54,7 @@ impl PopupRoot {
             .flex_row()
             .h(px(SEGMENT_HEIGHT))
             .rounded(px(8.0))
+            .overflow_hidden()
             .bg(palette.control_fill)
             .flex_none();
         track = if stretch {
@@ -93,7 +94,6 @@ impl PopupRoot {
             let mut cell = div()
                 .id(eid(format!("segment-{key}-{index}")))
                 .relative()
-                .flex_1()
                 .h_full()
                 .flex()
                 .items_center()
@@ -104,9 +104,14 @@ impl PopupRoot {
                     on_select(this, index, cx);
                     cx.notify();
                 }));
-            if !stretch {
-                cell = cell.flex_none().w(px(fixed_width));
-            }
+            // flex_none() leaves flex_basis unchanged in GPUI. Applying
+            // flex_1() first would retain a zero basis and collapse fixed
+            // cells to their padding while the thumb keeps its full width.
+            cell = if stretch {
+                cell.flex_1().min_w_0()
+            } else {
+                cell.flex_none().w(px(fixed_width))
+            };
             if hover > 0.001 {
                 cell = cell.child(
                     div()

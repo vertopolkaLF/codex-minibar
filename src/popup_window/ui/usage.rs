@@ -51,7 +51,7 @@ impl PopupRoot {
             "overview|{}|{:?}|{}|{}|{:?}|{:?}",
             self.ui.usage_revision,
             enabled,
-            crate::store::codex_accounts::current_id(),
+            crate::store::codex_accounts::cached_current_id(),
             crate::usage::truncate_local_hour(Local::now()),
             metric,
             range
@@ -81,7 +81,11 @@ impl PopupRoot {
                 .gap(px(8.0))
                 .child(self.usage_title(None, recalculating))
                 .child(caption(
-                    "Enable a provider in Settings and include it in Usage Stats to see local API usage.",
+                    if recalculating {
+                        "Loading usage…"
+                    } else {
+                        "Enable a provider in Settings and include it in Usage Stats to see local API usage."
+                    },
                     palette.text_tertiary,
                 ))
                 .into_any_element();

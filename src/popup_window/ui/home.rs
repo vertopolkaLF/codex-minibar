@@ -469,7 +469,7 @@ impl PopupRoot {
             "spend|{}|{:?}|{}|{}|{}",
             self.ui.usage_revision,
             enabled,
-            crate::store::codex_accounts::current_id(),
+            crate::store::codex_accounts::cached_current_id(),
             crate::usage::truncate_local_hour(Local::now()),
             period.key()
         );
@@ -541,9 +541,25 @@ impl PopupRoot {
             .mt(px(if is_first { 0.0 } else { HEADING_TOP }))
             .mb(px(2.0));
 
-        let content = match self.ui.total_spend_presentation {
-            TotalSpendPresentation::Donut => self.spend_donut_content(&entries, total),
-            TotalSpendPresentation::ProgressBar => self.spend_hero_content(&entries, total),
+        let initial_loading = self
+            .snapshots
+            .get(&SnapshotSlot::Spend)
+            .is_some_and(|cache| cache.key.is_none() && cache.pending.is_some());
+        let content = if initial_loading {
+            // Pending data is not a zero-dollar result. Keep aggregation off
+            // the UI thread without flashing a false total during opening.
+            div()
+                .h(px(112.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(caption("Loading usage…", palette.text_tertiary))
+                .into_any_element()
+        } else {
+            match self.ui.total_spend_presentation {
+                TotalSpendPresentation::Donut => self.spend_donut_content(&entries, total),
+                TotalSpendPresentation::ProgressBar => self.spend_hero_content(&entries, total),
+            }
         };
         let card_id = fx::key("usage-stats-card");
         let card_hover = self.fx.toggle(

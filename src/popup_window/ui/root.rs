@@ -802,14 +802,8 @@ impl PopupRoot {
         if cache.key.as_deref() == Some(key.as_str()) {
             return Arc::clone(&cache.value);
         }
-        if cache.key.is_none() && cache.pending.is_none() {
-            // First use: compute synchronously so the page never flashes an
-            // empty state while the popup slides in.
-            let limits = (*self.limits).clone();
-            cache.value = Arc::new(query(&limits, &enabled));
-            cache.key = Some(key);
-            return Arc::clone(&cache.value);
-        }
+        // First load also belongs on the background executor: aggregating
+        // local usage can read the database and must not stall the open slide.
         if cache.pending.as_deref() != Some(key.as_str()) {
             cache.pending = Some(key.clone());
             let limits = (*self.limits).clone();
