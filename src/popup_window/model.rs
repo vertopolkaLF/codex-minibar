@@ -38,13 +38,13 @@ fn card_key(provider: ProviderId, metric: &str) -> String {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct HeadingCard<'a> {
+pub(crate) struct HeadingCard {
     pub(crate) provider: ProviderId,
     pub(crate) first: bool,
     /// Draws the driver icon (with the instance badge) before the name.
     pub(crate) show_icon: bool,
     pub(crate) plan: Option<String>,
-    pub(crate) account_name: Option<&'a str>,
+    pub(crate) account_name: Option<String>,
     pub(crate) balance_microusd: Option<u64>,
     pub(crate) error: Option<String>,
     pub(crate) drag_handle: bool,
@@ -52,7 +52,7 @@ pub(crate) struct HeadingCard<'a> {
 
 #[derive(Clone, Debug)]
 pub(crate) enum Card<'a> {
-    Heading(HeadingCard<'a>),
+    Heading(HeadingCard),
     Limit {
         key: String,
         title: String,
@@ -160,7 +160,11 @@ pub(crate) fn provider_cards<'a>(
             })
             .flatten(),
         account_name: (options.show_account_name && !single_openrouter_account)
-            .then_some(limits.account_name.as_deref())
+            .then(|| {
+                Some(provider.display_name())
+                    .filter(|name| name != kind.display_name())
+                    .or_else(|| limits.account_name.clone())
+            })
             .flatten(),
         balance_microusd: single_openrouter_account
             .then(|| limits.openrouter_accounts[0].balance_microusd)

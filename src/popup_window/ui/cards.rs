@@ -134,7 +134,7 @@ impl PopupRoot {
 
     fn render_heading(
         &mut self,
-        heading: &HeadingCard<'_>,
+        heading: &HeadingCard,
         surface: PopupSurface,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -163,7 +163,7 @@ impl PopupRoot {
             );
         }
         title = title.child(nowrap(components::body_strong(
-            heading.provider.display_name(),
+            driver.display_name(),
             palette.text_secondary,
         )));
         if let Some(plan) = heading.plan.as_ref() {
@@ -190,8 +190,8 @@ impl PopupRoot {
             );
         }
         let mut trailing = div().flex().flex_row().items_center().gap(px(4.0));
-        if let Some(name) = heading.account_name {
-            trailing = trailing.child(card_metadata(name.to_owned(), &palette));
+        if let Some(name) = heading.account_name.clone() {
+            trailing = trailing.child(card_metadata(name, &palette));
         }
         if let Some(balance) = heading.balance_microusd {
             trailing = trailing.child(components::body_strong(
