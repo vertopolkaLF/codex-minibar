@@ -142,10 +142,9 @@ fn run(
         .with_assets(assets::PopupAssets)
         .run(move |cx| {
             let font_family = pick_font_family(cx);
-            let initial = size(
-                px(crate::popup::POPUP_WIDE_WIDTH as f32),
-                px(crate::popup::POPUP_WIDTH as f32),
-            );
+            // The tray starts hidden. Do not allocate large swap-chain/MSAA
+            // surfaces before the user has even opened the popup.
+            let initial = size(px(1.0), px(1.0));
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds {
                     origin: point(px(0.0), px(0.0)),
@@ -188,6 +187,7 @@ fn run(
                         let _ = window.update(cx, |root, _, _| {
                             root.host.hwnd = Some(hwnd);
                         });
+                        win32::park_hidden(hwnd);
                     }
                 }
                 while let Some(command) = commands.next().await {

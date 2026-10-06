@@ -9,7 +9,7 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, AvailableSpace, Bounds, Context, Div, ElementId, FontWeight,
+    AnyElement, App, AvailableSpace, Bounds, Context, Div, ElementId, Entity, FontWeight,
     InteractiveElement, IntoElement, ParentElement, Pixels, Point, Render, ScrollWheelEvent,
     SharedString, StatefulInteractiveElement, Styled, Subscription, Task, WeakEntity, Window,
     canvas, div, point, px,
@@ -180,6 +180,8 @@ pub(crate) struct PopupRoot {
     pub(super) open_reset_card: Option<String>,
     pub(super) tab_scroll: f32,
     pub(super) snapshots: HashMap<SnapshotSlot, SnapshotCache>,
+    pub(super) usage_chart_cache: Option<super::usage::UsageChartCache>,
+    pub(super) usage_plot: Option<Entity<super::usage::UsagePlot>>,
     pub(super) charts: HashMap<String, super::activity::ChartState>,
     pub(super) tip: Option<TipRequest>,
     pub(super) pages: HashMap<PopupView, PageMetrics>,
@@ -265,6 +267,8 @@ impl PopupRoot {
             open_reset_card: None,
             tab_scroll: 0.0,
             snapshots: HashMap::new(),
+            usage_chart_cache: None,
+            usage_plot: None,
             charts: HashMap::new(),
             tip: None,
             pages: HashMap::new(),
@@ -500,14 +504,33 @@ impl PopupRoot {
         self.tip = None;
         self.widget_drag = None;
         self.tab_drag = None;
+        // Keep only interaction choices and tiny page measurements while
+        // hidden. Drop derived usage/model data and cancel outstanding loads.
+        self.snapshots = HashMap::new();
+        self.usage_chart_cache = None;
+        self.usage_plot = None;
+        for chart in self.charts.values_mut() {
+            chart.release_data();
+        }
+        self.fx = Fx::default();
+        self.chart_hover = None;
+        self.usage_spinner_started = None;
         crate::popup::set_lifecycle(false, false);
         crate::popup::publish_surface_bounds(0, 0, 0, 0);
         #[cfg(windows)]
         if let Some(hwnd) = self.host.hwnd {
             // ShowWindow re-enters GPUI; run it after this frame.
-            cx.spawn(async move |_, _| {
-                super::win32::set_region(hwnd, None, 0);
-                super::win32::hide(hwnd);
+            cx.spawn(async move |this, cx| {
+                // A tray click may reopen between the last closing frame
+                // and this task. Never park an already-reopened popup.
+                let hidden = this
+                    .update(cx, |root, _| !root.host.visible())
+                    .unwrap_or(false);
+                if hidden {
+                    super::win32::set_region(hwnd, None, 0);
+                    super::win32::hide(hwnd);
+                    super::win32::park_hidden(hwnd);
+                }
             })
             .detach();
         }
@@ -518,6 +541,18 @@ impl PopupRoot {
 
     pub(super) fn two_columns(&self) -> bool {
         self.ui.popup_two_columns && self.host.wide_available()
+    }
+
+    /// GPUI's view cache keys include bounds/mask/text, but not inherited
+    /// opacity. Repaint during page/profile/drag fades; cache stable frames.
+    pub(super) fn cache_graph_paint(&self) -> bool {
+        self.pager.outgoing.is_none()
+            && self.profile_fade_started.is_none()
+            && self.widget_drag.is_none()
+            && PopupWidgetKind::ALL.iter().all(|widget| {
+                self.fx
+                    .is_at_target(fx::key(("widget-dim", widget.id())), 0.0)
+            })
     }
 
     pub(super) fn page_width(&self, view: PopupView) -> f32 {
@@ -934,6 +969,9 @@ fn initial_ui_state(state: &AppState) -> UiState {
 
 impl Render for PopupRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.host.visible() {
+            return div().id("popup-root").size_full();
+        }
         let now = Instant::now();
         self.fx.begin_frame(super::animations_enabled(&self.ui));
         if !cx.has_active_drag() {
@@ -991,6 +1029,11 @@ impl Render for PopupRoot {
         }
 
         let (capsule_w, capsule_h, offset) = self.step_motion(now, cx);
+        // Closing can finish inside step_motion. Submit an empty last frame,
+        // so GPUI also drops scene listeners holding chart/snapshot Arcs.
+        if !self.host.visible() {
+            return div().id("popup-root").size_full();
+        }
         let viewport = window.viewport_size();
         let viewport_w = f32::from(viewport.width);
         let viewport_h = f32::from(viewport.height);

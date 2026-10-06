@@ -202,6 +202,12 @@ impl Fx {
     pub(crate) fn is_animating(&self) -> bool {
         self.animating
     }
+
+    pub(crate) fn is_at_target(&self, id: u64, target: f32) -> bool {
+        self.tweens
+            .get(&id)
+            .is_none_or(|tween| (tween.value(self.now()) - target).abs() < 0.001)
+    }
 }
 
 /// A critically damped spring that keeps its velocity when retargeted, so a

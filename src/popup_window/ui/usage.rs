@@ -4,9 +4,9 @@ use std::{cell::Cell, collections::BTreeMap, f32::consts::PI, rc::Rc, sync::Arc,
 
 use chrono::{DateTime, Duration, Local, NaiveDate};
 use gpui::{
-    AnyElement, Bounds, Context, FontWeight, Hsla, InteractiveElement, IntoElement, MouseMoveEvent,
-    ParentElement, PathBuilder, Pixels, SharedString, StatefulInteractiveElement, Styled, Window,
-    canvas, div, point, px, relative,
+    AnyElement, AnyView, AppContext, Bounds, Context, FontWeight, Hsla, InteractiveElement,
+    IntoElement, MouseMoveEvent, ParentElement, PathBuilder, Pixels, Render, SharedString,
+    StatefulInteractiveElement, Styled, Window, canvas, div, point, px, relative,
 };
 
 use super::{
@@ -32,6 +32,92 @@ const CHART_Y_GAP: f32 = 6.0;
 const CHART_PAD_X: f32 = 4.0;
 const CHART_PAD_TOP: f32 = 6.0;
 const CHART_PAD_BOTTOM: f32 = 3.0;
+
+pub(super) struct UsageChartData {
+    series: Arc<Vec<DailySeriesPoint>>,
+    providers: Arc<Vec<ProviderKind>>,
+    max_value: u64,
+}
+
+pub(super) struct UsageChartCache {
+    source: Arc<OverviewSnapshot>,
+    metric: OverviewMetric,
+    data: Arc<UsageChartData>,
+}
+
+impl UsageChartCache {
+    fn new(source: Arc<OverviewSnapshot>, metric: OverviewMetric) -> Self {
+        let series = if source.hourly {
+            source.daily_series.clone()
+        } else {
+            fill_daily_series(&source.daily_series, source.start_date, source.end_date)
+        };
+        let providers: Vec<_> = source
+            .providers
+            .iter()
+            .map(|entry| entry.provider)
+            .collect();
+        let raw_max = series
+            .iter()
+            .flat_map(|point| {
+                providers
+                    .iter()
+                    .filter_map(|provider| point.by_provider.get(provider).copied())
+            })
+            .max()
+            .unwrap_or(0);
+        Self {
+            source,
+            metric,
+            data: Arc::new(UsageChartData {
+                series: Arc::new(series),
+                providers: Arc::new(providers),
+                max_value: chart_scale_max(raw_max),
+            }),
+        }
+    }
+
+    fn matches(&self, source: &Arc<OverviewSnapshot>, metric: OverviewMetric) -> bool {
+        Arc::ptr_eq(&self.source, source) && self.metric == metric
+    }
+}
+
+/// A separate cached GPUI view: root hover/tooltip/footer updates must not
+/// rebuild or tessellate the unchanged area chart.
+pub(super) struct UsagePlot {
+    data: Arc<UsageChartData>,
+    scale: f32,
+    palette: Palette,
+}
+
+impl Render for UsagePlot {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let data = Arc::clone(&self.data);
+        let scale = self.scale;
+        let palette = self.palette.clone();
+        let lines: Vec<_> = data
+            .providers
+            .iter()
+            .map(|provider| (*provider, palette.series_color(*provider)))
+            .collect();
+        canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                paint_area_chart(
+                    bounds,
+                    &data.series,
+                    &lines,
+                    scale.max(1.0),
+                    palette.chart_grid,
+                    palette.accent,
+                    None,
+                    window,
+                );
+            },
+        )
+        .size_full()
+    }
+}
 
 fn usage_card(palette: &Palette) -> gpui::Div {
     card(palette).p(px(12.0)).flex().flex_col()
@@ -91,18 +177,17 @@ impl PopupRoot {
                 .into_any_element();
         }
         let range_label = range_label(&snapshot);
-        let filled = if snapshot.hourly {
-            snapshot.daily_series.clone()
-        } else {
-            fill_daily_series(
-                &snapshot.daily_series,
-                snapshot.start_date,
-                snapshot.end_date,
-            )
-        };
+        if self
+            .usage_chart_cache
+            .as_ref()
+            .is_none_or(|cache| !cache.matches(&snapshot, metric))
+        {
+            self.usage_chart_cache = Some(UsageChartCache::new(Arc::clone(&snapshot), metric));
+        }
+        let chart_data = Arc::clone(&self.usage_chart_cache.as_ref().unwrap().data);
         let header = self.usage_header(&range_label, recalculating, window, cx);
         let hero = self.usage_hero(&snapshot);
-        let chart = self.usage_chart_card(&snapshot, Arc::new(filled), cx);
+        let chart = self.usage_chart_card(&snapshot, chart_data, cx);
         let totals = usage_totals_card(&snapshot.totals, &palette);
         let breakdown = self.usage_breakdown_card(&snapshot, window, cx);
         let two_columns = self.two_columns();
@@ -328,11 +413,12 @@ impl PopupRoot {
     fn usage_chart_card(
         &mut self,
         snapshot: &OverviewSnapshot,
-        series: Arc<Vec<DailySeriesPoint>>,
+        data: Arc<UsageChartData>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = self.palette.clone();
         let metric = self.overview_metric;
+        let series = Arc::clone(&data.series);
         let hourly = snapshot.hourly;
         let title = match (hourly, metric) {
             (true, OverviewMetric::Cost) => "Hourly cost",
@@ -355,55 +441,64 @@ impl PopupRoot {
                 )
                 .into_any_element();
         }
-        let providers: Vec<ProviderKind> = snapshot
-            .providers
-            .iter()
-            .map(|entry| entry.provider)
-            .collect();
-        let raw_max = series
-            .iter()
-            .flat_map(|point| {
-                providers
-                    .iter()
-                    .filter_map(|p| point.by_provider.get(p).copied())
-            })
-            .max()
-            .unwrap_or(0);
-        let max_value = chart_scale_max(raw_max);
+        let providers = Arc::clone(&data.providers);
+        let max_value = data.max_value;
         // Values glide between ranges/metrics instead of snapping.
         let scale = self
             .fx
             .value(fx::key("usage-chart-scale"), max_value as f32, fx::NORMAL);
         let count = series.len();
         let hover = self.chart_hover.filter(|index| *index < count);
-        let lines = providers
-            .iter()
-            .map(|provider| (*provider, palette.series_color(*provider)))
-            .collect::<Vec<_>>();
         let plot_bounds: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
         let plot_bounds_paint = Rc::clone(&plot_bounds);
-        let paint_series = Arc::clone(&series);
-        let grid_color = palette.chart_grid;
-        let baseline_color = palette.accent;
         let rule_color = palette.text_primary;
-        let plot = canvas(
+        if let Some(plot) = self.usage_plot.as_ref() {
+            plot.update(cx, |plot, cx| {
+                if !Arc::ptr_eq(&plot.data, &data)
+                    || plot.scale != scale
+                    || plot.palette.dark != palette.dark
+                    || plot.palette.accent != palette.accent
+                {
+                    plot.data = Arc::clone(&data);
+                    plot.scale = scale;
+                    plot.palette = palette.clone();
+                    cx.notify();
+                }
+            });
+        } else {
+            self.usage_plot = Some(cx.new(|_| UsagePlot {
+                data: Arc::clone(&data),
+                scale,
+                palette: palette.clone(),
+            }));
+        }
+        let mut plot_style = div().size_full();
+        let plot = AnyView::from(self.usage_plot.as_ref().unwrap().clone());
+        let plot = if self.cache_graph_paint() {
+            plot.cached(plot_style.style().clone())
+        } else {
+            plot
+        };
+        // Hover is a tiny independent overlay, not part of the cached plot.
+        let overlay = canvas(
             move |bounds, _, _| {
                 plot_bounds_paint.set(Some(bounds));
             },
             move |bounds, _, window, _| {
-                paint_area_chart(
-                    bounds,
-                    &paint_series,
-                    &lines,
-                    scale.max(1.0),
-                    grid_color,
-                    baseline_color,
-                    hover.map(|index| (index, rule_color)),
-                    window,
-                );
+                if let Some(index) = hover {
+                    let x = chart_x_at(index, count, f32::from(bounds.size.width));
+                    window.paint_quad(gpui::fill(
+                        Bounds::new(
+                            bounds.origin + point(px(x - 0.5), px(0.0)),
+                            gpui::size(px(1.0), bounds.size.height),
+                        ),
+                        rule_color,
+                    ));
+                }
             },
         )
-        .size_full();
+        .absolute()
+        .inset_0();
         let hover_series = Arc::clone(&series);
         let tip_providers = providers.clone();
         let hit_bounds = Rc::clone(&plot_bounds);
@@ -414,6 +509,7 @@ impl PopupRoot {
             .flex_1()
             .h(px(CHART_PLOT_HEIGHT))
             .child(plot)
+            .child(overlay)
             .on_mouse_move(
                 cx.listener(move |this, event: &MouseMoveEvent, window, cx| {
                     let Some(bounds) = hit_bounds.get() else {
@@ -1212,6 +1308,68 @@ fn format_spend_tenths_value(tenths: u64, microusd: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn chart_snapshot() -> Arc<OverviewSnapshot> {
+        let date = NaiveDate::from_ymd_opt(2026, 10, 6).unwrap();
+        Arc::new(OverviewSnapshot {
+            start_date: date - Duration::days(2),
+            end_date: date,
+            providers: vec![ProviderOverview {
+                provider: ProviderKind::Codex,
+                ..Default::default()
+            }],
+            daily_series: vec![DailySeriesPoint {
+                at: start_of_local_day(date),
+                date,
+                by_provider: BTreeMap::from([(ProviderKind::Codex, 100)]),
+                total: 100,
+            }],
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn chart_cache_reuses_data_until_snapshot_or_metric_changes() {
+        let snapshot = chart_snapshot();
+        let cache = UsageChartCache::new(Arc::clone(&snapshot), OverviewMetric::Cost);
+        let prepared = Arc::clone(&cache.data);
+        for _ in 0..120 {
+            assert!(cache.matches(&snapshot, OverviewMetric::Cost));
+            assert!(Arc::ptr_eq(&cache.data, &prepared));
+        }
+        assert!(!cache.matches(&snapshot, OverviewMetric::Tokens));
+        let mut updated = (*snapshot).clone();
+        updated.daily_series[0]
+            .by_provider
+            .insert(ProviderKind::Codex, 200);
+        let updated = Arc::new(updated);
+        assert!(!cache.matches(&updated, OverviewMetric::Cost));
+        let next = UsageChartCache::new(updated, OverviewMetric::Cost);
+        assert!(next.data.max_value > cache.data.max_value);
+    }
+
+    #[test]
+    fn chart_cache_fills_missing_days_once_and_does_not_cycle_ownership() {
+        let snapshot = chart_snapshot();
+        let cache = UsageChartCache::new(Arc::clone(&snapshot), OverviewMetric::Cost);
+        assert_eq!(cache.data.series.len(), 3);
+        assert_eq!(cache.data.series[0].total, 0);
+        assert_eq!(cache.data.series[2].total, 100);
+        let data = Arc::downgrade(&cache.data);
+        let source = Arc::downgrade(&snapshot);
+        drop(cache);
+        drop(snapshot);
+        assert!(data.upgrade().is_none());
+        assert!(source.upgrade().is_none());
+    }
+
+    #[test]
+    fn hourly_chart_cache_preserves_hours_instead_of_filling_calendar_days() {
+        let mut snapshot = (*chart_snapshot()).clone();
+        snapshot.hourly = true;
+        let cache = UsageChartCache::new(Arc::new(snapshot), OverviewMetric::Tokens);
+        assert_eq!(cache.data.series.len(), 1);
+    }
 
     #[test]
     fn hover_index_lands_on_painted_vertices() {

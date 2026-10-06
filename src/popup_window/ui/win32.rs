@@ -245,6 +245,22 @@ pub(crate) fn hide(hwnd: HWND) {
     }
 }
 
+/// Release the full-size swap-chain and path/MSAA surfaces while hidden.
+/// Show restores host_rect before the first visible frame. Resize outside
+/// any GPUI borrow: WM_SIZE synchronously enters its renderer.
+pub(crate) fn park_hidden(hwnd: HWND) {
+    let origin = window_rect(hwnd);
+    place_keep_order(
+        hwnd,
+        Rect {
+            left: origin.left,
+            top: origin.top,
+            right: origin.left + 1,
+            bottom: origin.top + 1,
+        },
+    );
+}
+
 /// A tray click authorizes foreground activation for this process.
 pub(crate) fn activate(hwnd: HWND) {
     unsafe {

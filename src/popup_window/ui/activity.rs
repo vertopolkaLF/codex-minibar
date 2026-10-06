@@ -1,11 +1,15 @@
 //! Per-provider usage activity card: metrics, daily stacked bars, legend.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 
 use chrono::NaiveDate;
 use gpui::{
-    AnyElement, ClickEvent, Context, Hsla, InteractiveElement, IntoElement, ParentElement,
-    ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Task, Window, div, px,
+    AnyElement, AnyView, AppContext, ClickEvent, Context, Entity, Hsla, InteractiveElement,
+    IntoElement, ParentElement, Render, ScrollWheelEvent, SharedString, StatefulInteractiveElement,
+    Styled, Task, Window, div, px,
 };
 
 use super::{
@@ -16,7 +20,7 @@ use super::{
     tooltip::{ActivityTip, TipContent},
 };
 use crate::popup_window::*;
-use crate::usage::{TokenUsage, UsageStatistics};
+use crate::usage::{DailyTokenUsage, TokenUsage, UsageStatistics};
 
 const HEIGHT: f32 = 56.0;
 const MAX_BARS: usize = 60;
@@ -391,6 +395,48 @@ pub(crate) struct ChartState {
     model_key: Option<String>,
     models: Option<ModelLoad>,
     _task: Option<Task<()>>,
+    buckets: Option<BucketCache>,
+    bars: HashMap<NaiveDate, Entity<ActivityBarView>>,
+}
+
+#[derive(Clone, PartialEq)]
+struct ActivityBarStyle {
+    width: f32,
+    height: f32,
+    dim: f32,
+    background: Option<Hsla>,
+    segments: Vec<(Hsla, f32)>,
+}
+
+struct ActivityBarView {
+    style: ActivityBarStyle,
+}
+
+impl Render for ActivityBarView {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let mut bar = div()
+            .w(px(self.style.width))
+            .h(px(self.style.height))
+            .rounded(px(1.5))
+            .overflow_hidden()
+            .flex()
+            .flex_col()
+            .opacity(1.0 - 0.25 * self.style.dim);
+        if let Some(background) = self.style.background {
+            bar = bar.bg(background);
+        }
+        for (color, weight) in &self.style.segments {
+            bar = bar.child(grow(div().w_full().bg(*color), *weight));
+        }
+        bar
+    }
+}
+
+struct BucketCache {
+    history_days: u16,
+    daily: Vec<DailyTokenUsage>,
+    today: NaiveDate,
+    data: Arc<Vec<Bucket>>,
 }
 
 impl ChartState {
@@ -406,7 +452,34 @@ impl ChartState {
             model_key: None,
             models: None,
             _task: None,
+            buckets: None,
+            bars: HashMap::new(),
         }
+    }
+
+    fn buckets(&mut self, statistics: &UsageStatistics, today: NaiveDate) -> Arc<Vec<Bucket>> {
+        if self.buckets.as_ref().is_none_or(|cache| {
+            cache.today != today
+                || cache.history_days != statistics.history_days
+                || cache.daily != statistics.daily
+        }) {
+            self.buckets = Some(BucketCache {
+                history_days: statistics.history_days,
+                daily: statistics.daily.clone(),
+                today,
+                data: Arc::new(buckets(statistics, today)),
+            });
+        }
+        Arc::clone(&self.buckets.as_ref().unwrap().data)
+    }
+
+    pub(super) fn release_data(&mut self) {
+        self._task = None;
+        self.models = None;
+        self.model_key = None;
+        self.buckets = None;
+        self.bars = HashMap::new();
+        self.hovered = None;
     }
 }
 
@@ -509,10 +582,16 @@ impl PopupRoot {
             statistics.account_id.as_deref().unwrap_or("all")
         );
         let today = Local::now().date_naive();
-        let data = buckets(statistics, today);
-        self.charts
+        let data = self
+            .charts
             .entry(chart.clone())
-            .or_insert_with(|| ChartState::new(cost_based));
+            .or_insert_with(|| ChartState::new(cost_based))
+            .buckets(statistics, today);
+        self.charts
+            .get_mut(&chart)
+            .unwrap()
+            .bars
+            .retain(|date, _| data.iter().any(|bucket| bucket.first == *date));
         let by_model = self.charts[&chart].by_model;
         if by_model {
             self.ensure_models(&chart, provider, statistics, today, &data, cx);
@@ -570,7 +649,8 @@ impl PopupRoot {
                     cx.notify();
                 }
             }));
-        for bucket in &data {
+        let cache_paint = self.cache_graph_paint();
+        for bucket in data.iter() {
             let value = value_of(bucket);
             let date = bucket.first;
             let target = if maximum == 0 {
@@ -588,21 +668,22 @@ impl PopupRoot {
                 hovered.is_some_and(|h| h != date),
                 fx::FAST,
             );
-            let mut bar = div()
-                .w(px(bar_width))
-                .h(px(height))
-                .rounded(px(1.5))
-                .overflow_hidden()
-                .flex()
-                .flex_col();
+            let mut bar_style = ActivityBarStyle {
+                width: bar_width,
+                height,
+                dim,
+                background: None,
+                segments: Vec::new(),
+            };
             if by_model && value > 0 {
                 if let Some(models) = models.as_ref() {
                     for (color, weight) in models.segments(date, cost_mode, palette.dark) {
-                        bar = bar.child(grow(div().w_full().bg(color), weight));
+                        bar_style.segments.push((color, weight));
                     }
                 }
             } else if cost_mode || value == 0 {
-                bar = bar.bg(palette.accent.opacity(if value == 0 { 0.2 } else { 1.0 }));
+                bar_style.background =
+                    Some(palette.accent.opacity(if value == 0 { 0.2 } else { 1.0 }));
             } else {
                 for series in [Series::Output, Series::Cache, Series::Input] {
                     let share = if selection.selected(series) {
@@ -615,9 +696,34 @@ impl PopupRoot {
                         share,
                         fx::FAST,
                     );
-                    bar = bar.child(grow(div().w_full().bg(series.color(&palette)), share));
+                    bar_style.segments.push((series.color(&palette), share));
                 }
             }
+            let existing = self.charts[&chart].bars.get(&date).cloned();
+            let bar = if let Some(bar) = existing {
+                bar.update(cx, |bar, cx| {
+                    if bar.style != bar_style {
+                        bar.style = bar_style.clone();
+                        cx.notify();
+                    }
+                });
+                bar
+            } else {
+                let bar = cx.new(|_| ActivityBarView { style: bar_style });
+                self.charts
+                    .get_mut(&chart)
+                    .unwrap()
+                    .bars
+                    .insert(date, bar.clone());
+                bar
+            };
+            let mut cached_style = div().w(px(bar_width)).h(px(height));
+            let bar = AnyView::from(bar);
+            let bar = if cache_paint {
+                bar.cached(cached_style.style().clone())
+            } else {
+                bar
+            };
             let chart_for_hover = chart.clone();
             let chart_for_wheel = chart.clone();
             let bucket_for_tip = bucket.clone();
@@ -631,7 +737,6 @@ impl PopupRoot {
                 .flex()
                 .items_end()
                 .justify_center()
-                .opacity(1.0 - 0.25 * dim)
                 .child(bar)
                 .on_hover(cx.listener(move |this, hovered: &bool, window, cx| {
                     let Some(state) = this.charts.get_mut(&chart_for_hover) else {
@@ -1089,4 +1194,61 @@ fn usage_card_metrics(
         value(&statistics.history),
         palette,
     ))
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    #[test]
+    fn buckets_refresh_for_new_data_period_and_calendar_day() {
+        let today = NaiveDate::from_ymd_opt(2026, 10, 6).unwrap();
+        let mut statistics = UsageStatistics {
+            history_days: 7,
+            daily: vec![DailyTokenUsage {
+                date: today,
+                usage: TokenUsage {
+                    input_tokens: 10,
+                    requests: 1,
+                    ..Default::default()
+                },
+            }],
+            ..Default::default()
+        };
+        let mut state = ChartState::new(false);
+        let first = state.buckets(&statistics, today);
+        assert!(Arc::ptr_eq(&first, &state.buckets(&statistics, today)));
+        statistics.daily[0].usage.input_tokens = 20;
+        let changed = state.buckets(&statistics, today);
+        assert!(!Arc::ptr_eq(&first, &changed));
+        assert_eq!(changed.last().unwrap().usage.input_tokens, 20);
+        statistics.history_days = 30;
+        let wider = state.buckets(&statistics, today);
+        assert_eq!(wider.len(), 30);
+        assert!(!Arc::ptr_eq(&wider, &changed));
+        assert!(!Arc::ptr_eq(
+            &wider,
+            &state.buckets(&statistics, today + chrono::Duration::days(1))
+        ));
+    }
+
+    #[test]
+    fn hiding_releases_model_and_bucket_data_but_preserves_chart_choices() {
+        let today = NaiveDate::from_ymd_opt(2026, 10, 6).unwrap();
+        let mut state = ChartState::new(true);
+        state.by_model = true;
+        state.model_page = 2;
+        let bucket_data = Arc::downgrade(&state.buckets(&UsageStatistics::default(), today));
+        let models = Arc::new(ModelData::default());
+        let model_data = Arc::downgrade(&models);
+        state.models = Some(ModelLoad::Ready(models));
+        state.model_key = Some("loaded".into());
+        state.release_data();
+        assert!(bucket_data.upgrade().is_none());
+        assert!(model_data.upgrade().is_none());
+        assert!(state.model_key.is_none());
+        assert!(state.by_model);
+        assert!(state.requested.cost);
+        assert_eq!(state.model_page, 2);
+    }
 }

@@ -11,6 +11,8 @@
 //! that capsule on every animation frame. Opening, closing, height and width
 //! motion therefore never move or resize the HWND (and never reallocate the
 //! swap chain); they only change what GPUI paints and what the region exposes.
+//! After hiding, the host parks at 1x1 pixels to release its large DirectX
+//! surfaces. Its full monitor geometry is restored before the next show.
 
 use std::{
     sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU8, Ordering},
