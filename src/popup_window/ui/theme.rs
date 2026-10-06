@@ -65,6 +65,11 @@ impl Palette {
     /// Luminosity controls backdrop brightness independently of tint opacity,
     /// so a lighter tint can preserve wallpaper hue without washing out on white.
     pub(crate) fn capsule_background(&self, frosted: bool) -> Hsla {
+        if self.material == PopupBackgroundMaterial::Mica {
+            // The experimental native controller crashed the GPUI dispatcher.
+            // Keep startup and live material switching safe with a solid fallback.
+            return self.solid_background;
+        }
         let opacity = if frosted && self.material == PopupBackgroundMaterial::Acrylic {
             if self.dark { 0.35 } else { 0.25 }
         } else if self.dark {

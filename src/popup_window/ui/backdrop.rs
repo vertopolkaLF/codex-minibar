@@ -143,6 +143,8 @@ impl Backdrop {
             self.failed = true;
             eprintln!("could not change capsule backdrop luminosity: {error}");
         }
+        // Native MicaController failed fast on this GPUI dispatcher. Keep the
+        // mode on a solid theme fallback until a compatible native target exists.
         self.enabled = material == PopupBackgroundMaterial::Acrylic;
         self.apply_opacity();
     }
@@ -211,7 +213,8 @@ impl Backdrop {
 }
 
 fn luminosity_color(dark: bool) -> Color {
-    let level = if dark { 48 } else { 245 };
+    // Match the dark theme's #202020 base while retaining backdrop chroma.
+    let level = if dark { 32 } else { 245 };
     Color {
         A: 255,
         R: level,
