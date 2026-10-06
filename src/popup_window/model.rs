@@ -163,9 +163,12 @@ pub(crate) fn provider_cards<'a>(
     };
     let mut cards = vec![Card::Heading(heading)];
     let visible = |brick: &str| {
-        options
-            .popup_visibility
-            .is_visible(brick, options.surface, options.show_provider_tabs)
+        options.popup_visibility.is_visible_for_instance(
+            provider.id(),
+            brick,
+            options.surface,
+            options.show_provider_tabs,
+        )
     };
 
     if kind == ProviderKind::OpenRouter {
@@ -618,7 +621,9 @@ pub(crate) fn home_widget_provider(ui: &UiState, widget: &HomeWidgetId) -> Optio
         .find(|instance| instance.id == widget.id())?;
     (instance.enabled
         && instance.show_on_home
-        && ui.popup_visibility.driver_visible_on_home(instance.driver))
+        && ui
+            .popup_visibility
+            .instance_visible_on_home(&instance.id, instance.driver))
     .then(|| instance.provider_id())
 }
 

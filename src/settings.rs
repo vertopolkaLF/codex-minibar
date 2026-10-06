@@ -1040,7 +1040,12 @@ impl PopupSurfaceVisibility {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PopupVisibility {
+    /// Driver-wide defaults, keyed by brick id. An instance without its own
+    /// entry for a brick inherits it from here.
     pub bricks: BTreeMap<String, PopupSurfaceVisibility>,
+    /// Per-instance choices, keyed by instance id and then brick id.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub instances: BTreeMap<String, BTreeMap<String, PopupSurfaceVisibility>>,
 }
 
 impl PopupVisibility {
@@ -1061,7 +1066,10 @@ impl PopupVisibility {
                 bricks.insert(brick_id.clone(), Self::default_brick_visibility(&brick_id));
             }
         }
-        Self { bricks }
+        Self {
+            bricks,
+            instances: BTreeMap::new(),
+        }
     }
 
     pub fn visibility_for(&self, brick_id: &str) -> PopupSurfaceVisibility {
@@ -1071,13 +1079,66 @@ impl PopupVisibility {
             .unwrap_or_else(|| Self::default_brick_visibility(brick_id))
     }
 
+    /// Visibility of a brick for one instance, falling back to the driver default.
+    pub fn instance_visibility_for(
+        &self,
+        instance_id: &str,
+        brick_id: &str,
+    ) -> PopupSurfaceVisibility {
+        self.instances
+            .get(instance_id)
+            .and_then(|bricks| bricks.get(brick_id))
+            .copied()
+            .unwrap_or_else(|| self.visibility_for(brick_id))
+    }
+
+    pub fn set_instance_brick(
+        &mut self,
+        instance_id: impl Into<String>,
+        brick_id: impl Into<String>,
+        all_tab: bool,
+        provider_tab: bool,
+    ) {
+        self.instances
+            .entry(instance_id.into())
+            .or_default()
+            .insert(
+                brick_id.into(),
+                PopupSurfaceVisibility {
+                    all_tab,
+                    provider_tab,
+                },
+            );
+    }
+
     pub fn is_visible(
         &self,
         brick_id: &str,
         surface: PopupSurface,
         show_provider_tabs: bool,
     ) -> bool {
-        let visibility = self.visibility_for(brick_id);
+        Self::surface_visible(self.visibility_for(brick_id), surface, show_provider_tabs)
+    }
+
+    pub fn is_visible_for_instance(
+        &self,
+        instance_id: &str,
+        brick_id: &str,
+        surface: PopupSurface,
+        show_provider_tabs: bool,
+    ) -> bool {
+        Self::surface_visible(
+            self.instance_visibility_for(instance_id, brick_id),
+            surface,
+            show_provider_tabs,
+        )
+    }
+
+    fn surface_visible(
+        visibility: PopupSurfaceVisibility,
+        surface: PopupSurface,
+        show_provider_tabs: bool,
+    ) -> bool {
         if show_provider_tabs {
             match surface {
                 PopupSurface::HomeTab => visibility.all_tab,
@@ -1112,6 +1173,23 @@ impl PopupVisibility {
             .iter()
             .chain(self.bricks.keys().filter(|id| id.starts_with(&prefix)))
             .any(|brick_id| self.visibility_for(brick_id).all_tab)
+    }
+
+    /// Whether any of an instance's cards is shown on Home at all.
+    pub fn instance_visible_on_home(&self, instance_id: &str, provider: ProviderKind) -> bool {
+        let prefix = format!("{}.", crate::provider_registry::descriptor(provider).id);
+        crate::provider_registry::catalog_brick_ids(provider)
+            .iter()
+            .chain(self.bricks.keys().filter(|id| id.starts_with(&prefix)))
+            .any(|brick_id| self.instance_visibility_for(instance_id, brick_id).all_tab)
+    }
+
+    /// Drops the choices of instances that no longer exist.
+    pub fn retain_instances(&mut self, instance_ids: &[&str]) -> bool {
+        let before = self.instances.len();
+        self.instances
+            .retain(|id, bricks| instance_ids.contains(&id.as_str()) && !bricks.is_empty());
+        self.instances.len() != before
     }
 
     pub fn set_brick(&mut self, brick_id: impl Into<String>, all_tab: bool, provider_tab: bool) {
@@ -1941,7 +2019,9 @@ impl Settings {
     }
 
     pub fn normalize_popup_visibility(&mut self) -> bool {
-        self.popup_visibility.normalize()
+        let ids: Vec<&str> = self.instances.iter().map(|i| i.id.as_str()).collect();
+        let retained = self.popup_visibility.retain_instances(&ids);
+        self.popup_visibility.normalize() | retained
     }
 
     /// Every configured instance, enabled or not, in display order.
@@ -2099,6 +2179,7 @@ impl Settings {
         let removed = self.instances.remove(index);
         let id = removed.id.as_str();
         self.popup_home_order.retain(|widget| widget.id() != id);
+        self.popup_visibility.instances.remove(id);
         if let Some(right) = &mut self.popup_home_right_column {
             right.retain(|widget| widget.id() != id);
         }
@@ -3447,6 +3528,29 @@ show_usage_stats = false
         assert!(!visibility.driver_visible_on_home(ProviderKind::Codex));
         assert!(visibility.is_visible("codex.session", PopupSurface::ProviderTab, true));
         assert!(visibility.driver_visible_on_home(ProviderKind::Claude));
+    }
+
+    #[test]
+    fn popup_cards_are_chosen_per_instance() {
+        let mut visibility = PopupVisibility::build_defaults();
+        visibility.set_instance_brick("claude", "claude.session", false, true);
+        assert!(!visibility.is_visible_for_instance(
+            "claude",
+            "claude.session",
+            PopupSurface::HomeTab,
+            true
+        ));
+        // A sibling instance keeps the driver default.
+        assert!(visibility.is_visible_for_instance(
+            "claude-work",
+            "claude.session",
+            PopupSurface::HomeTab,
+            true
+        ));
+        assert!(visibility.is_visible("claude.session", PopupSurface::HomeTab, true));
+
+        assert!(visibility.retain_instances(&["claude-work"]));
+        assert!(visibility.instances.is_empty());
     }
 
     #[test]

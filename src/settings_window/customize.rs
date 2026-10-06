@@ -6,17 +6,18 @@ fn persist_popup_brick(
     current: &PopupVisibility,
     set_popup_visibility: SetState<PopupVisibility>,
     settings_tx: Sender<Settings>,
+    instance_id: String,
     brick_id: String,
     all_tab: bool,
     provider_tab: bool,
 ) {
     let mut next = current.clone();
-    next.set_brick(brick_id.clone(), all_tab, provider_tab);
+    next.set_instance_brick(instance_id.clone(), brick_id.clone(), all_tab, provider_tab);
     set_popup_visibility.call(next);
     persist_update(settings_tx, move |settings| {
         settings
             .popup_visibility
-            .set_brick(brick_id, all_tab, provider_tab);
+            .set_instance_brick(instance_id, brick_id, all_tab, provider_tab);
     });
 }
 
@@ -298,7 +299,7 @@ pub(super) fn provider_settings_cards(
     for brick_id in crate::provider_registry::settings_brick_ids(provider, &extra_ids) {
         let snapshot_all = popup_visibility.clone();
         let snapshot_tab = popup_visibility.clone();
-        let visibility = snapshot_all.visibility_for(&brick_id);
+        let visibility = snapshot_all.instance_visibility_for(instance_id.id(), &brick_id);
         let label = crate::provider_registry::settings_brick_label(
             provider,
             &brick_id,
@@ -316,51 +317,44 @@ pub(super) fn provider_settings_cards(
             visibility.provider_tab,
             section_all,
             move |all_tab| {
-                let provider_tab = snapshot_all.visibility_for(&brick_id_for_all).provider_tab;
+                let provider_tab = snapshot_all
+                    .instance_visibility_for(instance_id.id(), &brick_id_for_all)
+                    .provider_tab;
                 persist_popup_brick(
                     &snapshot_all,
                     set_visibility_all.clone(),
                     settings_tx_all.clone(),
+                    instance_id.id().to_owned(),
                     brick_id_for_all.clone(),
                     all_tab,
                     provider_tab,
                 );
             },
             move |provider_tab| {
-                let all_tab = snapshot_tab.visibility_for(&brick_id_for_tab).all_tab;
+                let all_tab = snapshot_tab
+                    .instance_visibility_for(instance_id.id(), &brick_id_for_tab)
+                    .all_tab;
                 persist_popup_brick(
                     &snapshot_tab,
                     set_visibility_tab.clone(),
                     settings_tx_tab.clone(),
+                    instance_id.id().to_owned(),
                     brick_id_for_tab.clone(),
                     all_tab,
                     provider_tab,
                 );
             },
-            &format!("{}-{}", provider.id(), brick_id),
+            &format!("{}-{}", instance_id.id(), brick_id),
         ));
     }
 
     let section_tx = settings_tx.clone();
-    let shared = ctx
-        .instances
-        .iter()
-        .filter(|other| other.driver == provider)
-        .count()
-        > 1;
     let expanded = ctx.collapsed_popup_provider.as_deref() != Some(instance_id.id());
     let set_collapsed = ctx.set_collapsed_popup_provider.clone();
     let body_height = Some(settings_brick_body_height(brick_rows.len()));
     vec![
         settings_checkbox_expander(
-            if shared {
-                format!(
-                    "Popup cards (shared by every {} instance)",
-                    provider.display_name()
-                )
-            } else {
-                "Popup cards".to_owned()
-            },
+            "Popup cards".to_owned(),
             section_all,
             move |show_on_all: bool| {
                 persist_update(section_tx.clone(), move |settings| {
