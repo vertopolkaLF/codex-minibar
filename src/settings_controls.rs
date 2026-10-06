@@ -928,8 +928,9 @@ fn nav_footer_link(label: &'static str, url: &'static str) -> Element {
 }
 
 /// Compact providers-pane banner: send people to GitHub when a provider is missing.
-pub(crate) fn missing_provider_nav_card() -> Element {
-    border(
+/// Providers pane footer: the "Add provider" action above the request card.
+pub(crate) fn missing_provider_nav_card(on_add: impl Fn() + 'static) -> Element {
+    let request = border(
         vstack((
             text_block("Missing a provider?")
                 .font_size(13.0)
@@ -962,7 +963,19 @@ pub(crate) fn missing_provider_nav_card() -> Element {
     .border_thickness(Thickness::uniform(1.0))
     .border_brush(ThemeRef::CardStroke)
     .horizontal_alignment(HorizontalAlignment::Stretch)
-    .with_key("missing-provider-banner")
+    .with_key("missing-provider-banner");
+    vstack(vec![
+        Button::new("Add provider")
+            .icon(Symbol::Add)
+            .accent()
+            .on_click(on_add)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .with_key("add-provider-button")
+            .into(),
+        request.into(),
+    ])
+    .spacing(8.0)
+    .horizontal_alignment(HorizontalAlignment::Stretch)
     .into()
 }
 

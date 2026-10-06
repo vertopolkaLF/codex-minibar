@@ -20,23 +20,6 @@ fn persist_popup_brick(
     });
 }
 
-fn persist_popup_provider_all(
-    current: &PopupVisibility,
-    set_popup_visibility: SetState<PopupVisibility>,
-    settings_tx: Sender<Settings>,
-    provider: ProviderKind,
-    show_on_all: bool,
-) {
-    let mut next = current.clone();
-    next.set_provider_all_tab(provider, show_on_all);
-    set_popup_visibility.call(next);
-    persist_update(settings_tx, move |settings| {
-        settings
-            .popup_visibility
-            .set_provider_all_tab(provider, show_on_all);
-    });
-}
-
 pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Element>) {
     let use_colored_provider_icons = ctx.use_colored_provider_icons;
     let show_used_percentage = ctx.show_used_percentage;
@@ -74,18 +57,24 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
             "customize-two-columns", hovered_card_id, set_hovered_card_id.clone(),
         ).with_key("customize-two-columns"),
         settings_section_heading("Tabs").with_key("customize-tabs-heading"),
-        settings_toggle_card_with_description(
-            "Show accounts as separate tabs",
-            Some("Give each enabled Codex or Claude account its own icon with a numbered badge. Replaces the profile switcher."),
-            ctx.show_accounts_as_tabs,
-            {
-                let set_value = ctx.set_show_accounts_as_tabs.clone();
-                let settings_tx = settings_tx.clone();
-                move |value| persist_bool(set_value.clone(), settings_tx.clone(), value,
-                    |settings, value| settings.show_accounts_as_tabs = value)
-            },
-            "customize-account-tabs", hovered_card_id, set_hovered_card_id.clone(),
-        ).with_key("customize-account-tabs"),
+        settings_control_card(
+            "Several accounts of one provider",
+            Some("Separate tabs gives every instance its own tab. Grouped shows one tab per provider, with an account switcher or every account stacked."),
+            ComboBox::new(PopupTabMode::ALL.map(PopupTabMode::label))
+                .selected_index(ctx.popup_tab_mode.index())
+                .on_selection_changed({
+                    let set_value = ctx.set_popup_tab_mode.clone();
+                    let settings_tx = settings_tx.clone();
+                    move |index: i32| {
+                        let mode = PopupTabMode::from_index(index);
+                        set_value.call(mode);
+                        persist_update(settings_tx.clone(), move |settings| {
+                            settings.popup_tab_mode = mode;
+                        });
+                    }
+                }),
+            "customize-tab-mode", hovered_card_id, set_hovered_card_id.clone(),
+        ).with_key("customize-tab-mode"),
         settings_toggle_card(
             "Use monochrome icons",
             !use_colored_provider_icons,
@@ -284,15 +273,20 @@ pub(super) fn home_settings_cards(ctx: &SettingsPageContext<'_>) -> Vec<Element>
     rows
 }
 
+/// Popup card visibility for one instance's page. Card visibility is shared
+/// by every instance of a driver; the section switch is the instance's own
+/// "Show on Home".
 pub(super) fn provider_settings_cards(
-    provider: ProviderKind,
+    instance: &ProviderInstance,
     ctx: &SettingsPageContext<'_>,
 ) -> Vec<Element> {
+    let provider = instance.driver;
+    let instance_id = instance.provider_id();
     let popup_visibility = ctx.popup_visibility;
     let discovered_popup_bricks = ctx.discovered_popup_bricks;
     let set_popup_visibility = ctx.set_popup_visibility.clone();
     let settings_tx = ctx.settings_tx.clone();
-    let section_all = popup_visibility.provider_shown_on_all(provider);
+    let section_all = instance.show_on_home;
     let mut brick_rows = vec![settings_brick_table_header(provider.id())];
 
     let extra_ids = popup_visibility
@@ -347,39 +341,45 @@ pub(super) fn provider_settings_cards(
         ));
     }
 
-    let section_snapshot = popup_visibility.clone();
-    let set_section = set_popup_visibility.clone();
     let section_tx = settings_tx.clone();
-    let expanded = ctx.collapsed_popup_provider.as_deref() != Some(provider.id());
+    let shared = ctx
+        .instances
+        .iter()
+        .filter(|other| other.driver == provider)
+        .count()
+        > 1;
+    let expanded = ctx.collapsed_popup_provider.as_deref() != Some(instance_id.id());
     let set_collapsed = ctx.set_collapsed_popup_provider.clone();
     let body_height = Some(settings_brick_body_height(brick_rows.len()));
     vec![
         settings_checkbox_expander(
-            "Popup cards",
+            if shared {
+                format!("Popup cards (shared by every {} instance)", provider.display_name())
+            } else {
+                "Popup cards".to_owned()
+            },
             section_all,
-            move |show_on_all| {
-                persist_popup_provider_all(
-                    &section_snapshot,
-                    set_section.clone(),
-                    section_tx.clone(),
-                    provider,
-                    show_on_all,
-                )
+            move |show_on_all: bool| {
+                persist_update(section_tx.clone(), move |settings| {
+                    if let Some(instance) = settings.instance_mut(instance_id) {
+                        instance.show_on_home = show_on_all;
+                    }
+                });
             },
             expanded,
             move |expanded| {
                 set_collapsed.call(if expanded {
                     None
                 } else {
-                    Some(provider.id().to_string())
+                    Some(instance_id.id().to_string())
                 })
             },
             body_height,
-            format!("popup-provider-{}", provider.id()),
+            format!("popup-provider-{}", instance_id.id()),
             ctx.hovered_card_id,
             ctx.set_hovered_card_id.clone(),
             vstack(brick_rows).spacing(0.0),
         )
-        .with_key(format!("popup-provider-{}", provider.id())),
+        .with_key(format!("popup-provider-{}", instance_id.id())),
     ]
 }

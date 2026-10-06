@@ -39,6 +39,12 @@ impl std::fmt::Display for ProviderId {
     }
 }
 
+impl Default for ProviderId {
+    fn default() -> Self {
+        Self::primary(ProviderKind::default())
+    }
+}
+
 impl From<ProviderKind> for ProviderId {
     fn from(kind: ProviderKind) -> Self {
         Self::primary(kind)
@@ -141,6 +147,32 @@ struct InstanceLabel {
 static LABELS: LazyLock<RwLock<HashMap<&'static str, InstanceLabel>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
+/// Every configured instance in display order with its enabled flag.
+static ORDER: LazyLock<RwLock<Vec<(ProviderId, bool)>>> =
+    LazyLock::new(|| RwLock::new(Vec::new()));
+
+/// Configured instances in display order, as last published. Lets surfaces
+/// without a settings copy (Stream Deck bridge) enumerate instances.
+pub fn published_providers() -> Vec<ProviderId> {
+    ORDER
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .map(|(provider, _)| *provider)
+        .collect()
+}
+
+/// Enabled instances in display order, as last published.
+pub fn published_enabled_providers() -> Vec<ProviderId> {
+    ORDER
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .filter(|(_, enabled)| *enabled)
+        .map(|(provider, _)| *provider)
+        .collect()
+}
+
 fn labels() -> std::sync::RwLockReadGuard<'static, HashMap<&'static str, InstanceLabel>> {
     LABELS.read().unwrap_or_else(|error| error.into_inner())
 }
@@ -169,6 +201,10 @@ pub fn publish(instances: &[ProviderInstance]) {
         })
         .collect();
     *LABELS.write().unwrap_or_else(|error| error.into_inner()) = next;
+    *ORDER.write().unwrap_or_else(|error| error.into_inner()) = instances
+        .iter()
+        .map(|instance| (instance.provider_id(), instance.enabled))
+        .collect();
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]

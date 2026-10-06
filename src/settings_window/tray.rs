@@ -23,46 +23,36 @@ struct TrayPreviewCacheEntry {
 }
 
 thread_local! {
-    static TRAY_ACCOUNT_CHOICES: RefCell<HashMap<ProviderKind, Vec<crate::settings::AccountProfile>>> = RefCell::new(HashMap::new());
     static TRAY_PREVIEW_MOUNTS: RefCell<HashMap<String, windows_core::IInspectable>> =
         RefCell::new(HashMap::new());
     static TRAY_PREVIEW_CACHE: RefCell<HashMap<String, TrayPreviewCacheEntry>> =
         RefCell::new(HashMap::new());
 }
 
-pub(super) fn sync_account_choices(
-    codex: &[crate::settings::CodexProfile],
-    claude: &[crate::settings::ClaudeProfile],
-) {
-    TRAY_ACCOUNT_CHOICES.with(|choices| {
-        let mut choices = choices.borrow_mut();
-        choices.insert(
-            ProviderKind::Codex,
-            crate::codex::profiles_with_default(codex),
-        );
-        choices.insert(
-            ProviderKind::Claude,
-            crate::claude::profiles_with_default(claude),
-        );
-    });
+/// Instances an indicator can read, in display order: every configured
+/// instance with tray metrics, so a disabled one stays selectable for an
+/// existing indicator.
+fn tray_provider_options() -> Vec<ProviderId> {
+    crate::instances::published_providers()
+        .into_iter()
+        .filter(|provider| {
+            !crate::provider_registry::descriptor(provider.kind())
+                .default_tray_metrics
+                .is_empty()
+        })
+        .collect()
 }
 
-fn account_choices(provider: ProviderKind) -> Vec<crate::settings::AccountProfile> {
-    TRAY_ACCOUNT_CHOICES
-        .with(|choices| choices.borrow().get(&provider).cloned().unwrap_or_default())
+fn tray_provider_label(provider: ProviderId) -> String {
+    let enabled = crate::instances::published_enabled_providers().contains(&provider);
+    if enabled {
+        provider.qualified_name()
+    } else {
+        format!("{} (off)", provider.qualified_name())
+    }
 }
 
 pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Element>) {
-    let popup_order = ctx.popup_order;
-    let codex_enabled = ctx.codex_enabled;
-    let claude_enabled = ctx.claude_enabled;
-    let cursor_enabled = ctx.cursor_enabled;
-    let opencode_zen_enabled = ctx.opencode_zen_enabled;
-    let opencode_go_enabled = ctx.opencode_go_enabled;
-    let openrouter_enabled = ctx.openrouter_enabled;
-    let antigravity_enabled = ctx.antigravity_enabled;
-    let grok_enabled = ctx.grok_enabled;
-    let kiro_enabled = ctx.kiro_enabled;
     let tray_widgets = ctx.tray_widgets;
     let expanded_tray_widget = ctx.expanded_tray_widget;
     let editing_tray_indicator = ctx.editing_tray_indicator;
@@ -75,22 +65,7 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let hovered_card_id = ctx.hovered_card_id;
     let set_hovered_card_id = ctx.set_hovered_card_id.clone();
     let settings_tx = ctx.settings_tx.clone();
-    let providers: Vec<ProviderKind> = popup_order
-        .iter()
-        .filter_map(|widget| widget.as_provider())
-        .collect();
-    let enabled_providers = enabled_providers(
-        &providers,
-        codex_enabled,
-        claude_enabled,
-        cursor_enabled,
-        opencode_zen_enabled,
-        opencode_go_enabled,
-        openrouter_enabled,
-        antigravity_enabled,
-        grok_enabled,
-        kiro_enabled,
-    );
+    let enabled_providers = enabled_providers(ctx.instances);
     (
         "Tray",
         tray_settings_cards(
@@ -126,7 +101,7 @@ fn tray_indicator_summary(indicator: &TrayIndicator) -> String {
         return format!("Unsupported {}", indicator.provider_id);
     };
     let metric = crate::provider_registry::settings_brick_label(
-        provider,
+        provider.kind(),
         &indicator.metric_id,
         &cached_discovered_popup_bricks(),
     );
@@ -134,103 +109,11 @@ fn tray_indicator_summary(indicator: &TrayIndicator) -> String {
         LimitValue::Used => "Used",
         LimitValue::Remaining => "Remaining",
     };
-    let account = indicator.profile_id.as_deref().map(|id| {
-        let profiles = account_choices(provider);
-        profiles
-            .iter()
-            .find(|p| p.id == id)
-            .map(|p| p.name.clone())
-            .unwrap_or_else(|| id.to_owned())
-    });
-    let provider_label = account.map_or_else(
-        || provider.display_name().to_owned(),
-        |name| format!("{} · {name}", provider.display_name()),
-    );
+    let provider_label = provider.qualified_name();
     format!(
         "{} · {metric} · {value} · {}",
         provider_label,
         tray_color_mode_label(indicator.color_mode)
-    )
-}
-
-fn tray_account_box(
-    widget_index: usize,
-    indicator_index: usize,
-    widgets: &[TrayWidget],
-    enabled_providers: &[ProviderKind],
-    set_widgets: SetState<Vec<TrayWidget>>,
-    settings_tx: Sender<Settings>,
-) -> Option<Element> {
-    let indicator = widgets.get(widget_index)?.indicators.get(indicator_index)?;
-    let provider = indicator.provider()?;
-    if !matches!(provider, ProviderKind::Claude | ProviderKind::Codex) {
-        return None;
-    }
-    let profiles = account_choices(provider);
-    let mut choices = profiles
-        .iter()
-        .filter(|p| p.enabled || p.id == "default")
-        .map(|p| {
-            (
-                p.id.clone(),
-                if p.enabled {
-                    p.name.clone()
-                } else {
-                    format!("{} (disabled)", p.name)
-                },
-            )
-        })
-        .collect::<Vec<_>>();
-    let wanted = indicator.profile_id.as_deref().unwrap_or("default");
-    let index = choices
-        .iter()
-        .position(|(id, _)| id == wanted)
-        .unwrap_or_else(|| {
-            choices.push((wanted.to_owned(), format!("Unavailable ({wanted})")));
-            choices.len() - 1
-        });
-    let labels = choices
-        .iter()
-        .map(|(id, name)| {
-            if choices.iter().filter(|(_, other)| other == name).count() > 1 {
-                format!(
-                    "{name} ? {}",
-                    id.chars()
-                        .rev()
-                        .take(8)
-                        .collect::<Vec<_>>()
-                        .into_iter()
-                        .rev()
-                        .collect::<String>()
-                )
-            } else {
-                name.clone()
-            }
-        })
-        .collect::<Vec<_>>();
-    let widgets = widgets.to_vec();
-    let providers = enabled_providers.to_vec();
-    Some(
-        ComboBox::new(labels)
-            .header("Account")
-            .selected_index(index as i32)
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .with_key(format!(
-                "tray-account-{}-{indicator_index}-{}",
-                widgets[widget_index].id, indicator.provider_id
-            ))
-            .on_selection_changed(move |choice| {
-                let Some((id, _)) = usize::try_from(choice)
-                    .ok()
-                    .and_then(|index| choices.get(index))
-                else {
-                    return;
-                };
-                let mut next = widgets.clone();
-                next[widget_index].indicators[indicator_index].profile_id = Some(id.clone());
-                persist_tray_widgets(set_widgets.clone(), settings_tx.clone(), next, &providers);
-            })
-            .into(),
     )
 }
 
@@ -250,15 +133,16 @@ fn tray_widget_summary(widget: &TrayWidget) -> String {
     }
 }
 
-fn tray_preview_limits() -> &'static crate::limits::ProviderLimits {
-    static LIMITS: std::sync::OnceLock<crate::limits::ProviderLimits> = std::sync::OnceLock::new();
-    LIMITS.get_or_init(|| {
+/// Sample quotas for previews, one per configured instance so indicators of
+/// every instance render.
+fn tray_preview_limits() -> crate::limits::ProviderLimits {
+    let samples = {
         let window = |used_percent| crate::limits::LimitWindow {
             used_percent: Some(used_percent),
             resets_at: None,
             duration_minutes: Some(300),
         };
-        crate::limits::ProviderLimits::from_entries([
+        [
             (
                 ProviderKind::Codex,
                 crate::limits::RateLimits {
@@ -294,8 +178,19 @@ fn tray_preview_limits() -> &'static crate::limits::ProviderLimits {
                     ..Default::default()
                 },
             ),
-        ])
-    })
+                ]
+    };
+    crate::limits::ProviderLimits::from_entries(
+        crate::instances::published_providers()
+            .into_iter()
+            .chain(samples.iter().map(|(kind, _)| ProviderId::primary(*kind)))
+            .filter_map(|provider| {
+                samples
+                    .iter()
+                    .find(|(kind, _)| *kind == provider.kind())
+                    .map(|(_, limits)| (provider, limits.clone()))
+            }),
+    )
 }
 
 fn tray_widget_preview(widget: &TrayWidget) -> Element {
@@ -320,7 +215,7 @@ fn tray_widget_preview(widget: &TrayWidget) -> Element {
 
         let pixels = Arc::new(crate::tray::render_widget_with_accent(
             widget,
-            tray_preview_limits(),
+            &tray_preview_limits(),
             accent,
         ));
         cache.insert(
@@ -481,7 +376,7 @@ fn clear_indicator_edit_modal(
 
 fn tray_settings_cards(
     widgets: &[TrayWidget],
-    enabled_providers: &[ProviderKind],
+    enabled_providers: &[ProviderId],
     expanded_widget: &Option<String>,
     editing_indicator: &Option<(String, usize)>,
     removed_widget: &Option<(usize, TrayWidget)>,
@@ -710,8 +605,8 @@ fn tray_settings_cards(
                                 let provider = providers_for_empty
                                     .first()
                                     .copied()
-                                    .unwrap_or(ProviderKind::Codex);
-                                let descriptor = crate::provider_registry::descriptor(provider);
+                                    .unwrap_or_default();
+                                let descriptor = crate::provider_registry::descriptor(provider.kind());
                                 let metric = descriptor
                                     .default_tray_metrics
                                     .first()
@@ -775,12 +670,12 @@ fn tray_settings_cards(
                     .last()
                     .and_then(TrayIndicator::provider)
                     .or_else(|| enabled_providers.first().copied())
-                    .unwrap_or(ProviderKind::Codex);
+                    .unwrap_or_default();
                 widget_actions.push(
                     Button::new("Add indicator")
                         .on_click(move || {
                             let descriptor =
-                                crate::provider_registry::descriptor(fallback_provider);
+                                crate::provider_registry::descriptor(fallback_provider.kind());
                             let metric = descriptor
                                 .default_tray_metrics
                                 .first()
@@ -879,7 +774,7 @@ fn tray_settings_cards(
     let first_enabled = enabled_providers
         .first()
         .copied()
-        .unwrap_or(ProviderKind::Codex);
+        .unwrap_or_default();
     let mut add_actions = Vec::<Element>::new();
     let widgets_for_custom = widgets.to_vec();
     let custom_setter = set_widgets.clone();
@@ -936,7 +831,7 @@ fn tray_time_parameter_fields(
     widget_index: usize,
     widget: &TrayWidget,
     widgets: &[TrayWidget],
-    enabled_providers: &[ProviderKind],
+    enabled_providers: &[ProviderId],
     set_widgets: SetState<Vec<TrayWidget>>,
     settings_tx: Sender<Settings>,
 ) -> Element {
@@ -944,8 +839,8 @@ fn tray_time_parameter_fields(
         let provider = enabled_providers
             .first()
             .copied()
-            .unwrap_or(ProviderKind::Codex);
-        let descriptor = crate::provider_registry::descriptor(provider);
+            .unwrap_or_default();
+        let descriptor = crate::provider_registry::descriptor(provider.kind());
         let metric = descriptor
             .default_tray_metrics
             .first()
@@ -955,28 +850,21 @@ fn tray_time_parameter_fields(
     });
     let indicator_index = 0usize;
 
-    let provider_options: Vec<_> = crate::provider_registry::PROVIDERS
-        .iter()
-        .filter(|provider| !provider.default_tray_metrics.is_empty())
-        .collect();
+    let provider_options = tray_provider_options();
     let known_provider = indicator.provider();
     let mut provider_labels = provider_options
         .iter()
-        .map(|provider| provider.display_name.to_owned())
+        .map(|provider| tray_provider_label(*provider))
         .collect::<Vec<_>>();
     let provider_index = known_provider
-        .and_then(|provider| {
-            provider_options
-                .iter()
-                .position(|descriptor| descriptor.kind == provider)
-        })
+        .and_then(|provider| provider_options.iter().position(|option| *option == provider))
         .unwrap_or_else(|| {
             provider_labels.push(format!("Unsupported ({})", indicator.provider_id));
             provider_labels.len() - 1
         }) as i32;
-    let metric_provider = known_provider.unwrap_or(ProviderKind::Codex);
+    let metric_provider = known_provider.unwrap_or_default();
     let metrics = crate::provider_registry::tray_metric_options(
-        metric_provider,
+        metric_provider.kind(),
         &cached_discovered_popup_bricks(),
     );
     let mut metric_labels = metrics
@@ -1000,18 +888,17 @@ fn tray_time_parameter_fields(
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .selected_index(provider_index)
         .on_selection_changed(move |choice: i32| {
-            let Some(descriptor) = crate::provider_registry::PROVIDERS.get(choice.max(0) as usize)
-            else {
+            let Some(provider) = provider_options.get(choice.max(0) as usize).copied() else {
                 return;
             };
+            let descriptor = crate::provider_registry::descriptor(provider.kind());
             let mut next = widgets_for_provider.clone();
             if next[widget_index].indicators.is_empty() {
                 next[widget_index]
                     .indicators
-                    .push(TrayIndicator::new(descriptor.kind, "unknown"));
+                    .push(TrayIndicator::new(provider, "unknown"));
             }
-            next[widget_index].indicators[indicator_index].provider_id = descriptor.id.into();
-            next[widget_index].indicators[indicator_index].profile_id = None;
+            next[widget_index].indicators[indicator_index].provider_id = provider.id().into();
             next[widget_index].indicators[indicator_index].metric_id = descriptor
                 .default_tray_metrics
                 .first()
@@ -1082,17 +969,6 @@ fn tray_time_parameter_fields(
         });
 
     let mut fields = Vec::<Element>::new();
-    if let Some(account) = tray_account_box(
-        widget_index,
-        indicator_index,
-        widgets,
-        enabled_providers,
-        set_widgets.clone(),
-        settings_tx.clone(),
-    ) {
-        fields.push(account);
-    }
-
     fields.push(
         grid((
             provider_box.grid_column(0).grid_row(0),
@@ -1157,7 +1033,7 @@ fn tray_indicator_summary_card(
     indicator: &TrayIndicator,
     widget: &TrayWidget,
     widgets: &[TrayWidget],
-    enabled_providers: &[ProviderKind],
+    enabled_providers: &[ProviderId],
     set_widgets: SetState<Vec<TrayWidget>>,
     set_editing_indicator: AsyncSetState<Option<(String, usize)>>,
     set_indicator_modal_visible: AsyncSetState<bool>,
@@ -1311,7 +1187,7 @@ fn tray_indicator_summary_card(
 
 pub(super) fn tray_indicator_edit_overlay(
     widgets: &[TrayWidget],
-    enabled_providers: &[ProviderKind],
+    enabled_providers: &[ProviderId],
     editing: &(String, usize),
     visible: bool,
     set_widgets: SetState<Vec<TrayWidget>>,
@@ -1429,34 +1305,27 @@ fn tray_indicator_edit_form(
     indicator: &TrayIndicator,
     widget: &TrayWidget,
     widgets: &[TrayWidget],
-    enabled_providers: &[ProviderKind],
+    enabled_providers: &[ProviderId],
     set_widgets: SetState<Vec<TrayWidget>>,
     set_editing_indicator: AsyncSetState<Option<(String, usize)>>,
     set_indicator_modal_visible: AsyncSetState<bool>,
     settings_tx: Sender<Settings>,
 ) -> Element {
-    let provider_options: Vec<_> = crate::provider_registry::PROVIDERS
-        .iter()
-        .filter(|provider| !provider.default_tray_metrics.is_empty())
-        .collect();
+    let provider_options = tray_provider_options();
     let known_provider = indicator.provider();
     let mut provider_labels = provider_options
         .iter()
-        .map(|provider| provider.display_name.to_owned())
+        .map(|provider| tray_provider_label(*provider))
         .collect::<Vec<_>>();
     let provider_index = known_provider
-        .and_then(|provider| {
-            provider_options
-                .iter()
-                .position(|descriptor| descriptor.kind == provider)
-        })
+        .and_then(|provider| provider_options.iter().position(|option| *option == provider))
         .unwrap_or_else(|| {
             provider_labels.push(format!("Unsupported ({})", indicator.provider_id));
             provider_labels.len() - 1
         }) as i32;
-    let metric_provider = known_provider.unwrap_or(ProviderKind::Codex);
+    let metric_provider = known_provider.unwrap_or_default();
     let metrics = crate::provider_registry::tray_metric_options(
-        metric_provider,
+        metric_provider.kind(),
         &cached_discovered_popup_bricks(),
     );
     let mut metric_labels = metrics
@@ -1507,17 +1376,6 @@ fn tray_indicator_edit_form(
             .into(),
     );
 
-    if let Some(account) = tray_account_box(
-        widget_index,
-        indicator_index,
-        widgets,
-        enabled_providers,
-        set_widgets.clone(),
-        settings_tx.clone(),
-    ) {
-        fields.push(account);
-    }
-
     let widgets_for_provider = widgets.to_vec();
     let provider_setter = set_widgets.clone();
     let provider_tx = settings_tx.clone();
@@ -1527,13 +1385,12 @@ fn tray_indicator_edit_form(
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .selected_index(provider_index)
         .on_selection_changed(move |choice: i32| {
-            let Some(descriptor) = crate::provider_registry::PROVIDERS.get(choice.max(0) as usize)
-            else {
+            let Some(provider) = provider_options.get(choice.max(0) as usize).copied() else {
                 return;
             };
+            let descriptor = crate::provider_registry::descriptor(provider.kind());
             let mut next = widgets_for_provider.clone();
-            next[widget_index].indicators[indicator_index].provider_id = descriptor.id.into();
-            next[widget_index].indicators[indicator_index].profile_id = None;
+            next[widget_index].indicators[indicator_index].provider_id = provider.id().into();
             next[widget_index].indicators[indicator_index].metric_id = descriptor
                 .default_tray_metrics
                 .first()
@@ -1688,7 +1545,7 @@ fn persist_tray_widgets(
     setter: SetState<Vec<TrayWidget>>,
     settings_tx: Sender<Settings>,
     widgets: Vec<TrayWidget>,
-    _enabled_providers: &[ProviderKind],
+    _enabled_providers: &[ProviderId],
 ) {
     let mut widgets = widgets;
     for widget in &mut widgets {

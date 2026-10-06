@@ -140,20 +140,23 @@ impl PopupRoot {
             .items_center()
             .gap(px(4.0))
             .min_w_0();
-        if matches!(surface, PopupSurface::HomeTab) {
+        let driver = heading.provider.kind();
+        if matches!(surface, PopupSurface::HomeTab) || heading.show_icon {
             title = title.child(
-                icon(
-                    crate::provider_registry::icon(heading.provider),
+                components::provider_mark(
+                    crate::provider_registry::icon(driver),
                     16.0,
-                    palette.provider_icon(heading.provider, self.ui.use_colored_provider_icons),
+                    palette.provider_icon(driver, self.ui.use_colored_provider_icons),
+                    heading.provider.badge().as_ref(),
+                    &palette,
                 )
-                .mr(px(4.0)),
+                .mr(px(if heading.provider.badge().is_some() { 10.0 } else { 4.0 })),
             );
         }
-        title = title.child(components::body_strong(
+        title = title.child(nowrap(components::body_strong(
             heading.provider.display_name(),
             palette.text_secondary,
-        ));
+        )));
         if let Some(plan) = heading.plan.as_ref() {
             title = title.child(nowrap(components::body(
                 plan.clone(),
@@ -162,25 +165,17 @@ impl PopupRoot {
         }
         if let Some(error) = heading.error.as_ref() {
             let provider = heading.provider;
-            let id = fx::key((
-                "heading-error",
-                provider.id(),
-                heading.profile_id.as_deref(),
-                heading.first,
-            ));
+            let id = fx::key(("heading-error", provider.id(), heading.first));
             title = title.child(
                 div()
                     .id(eid(format!(
                         "heading-error-{}-{}",
-                        crate::widget_data::account_source_id(
-                            provider,
-                            heading.profile_id.as_deref()
-                        ),
+                        provider.id(),
                         heading.first
                     )))
                     .on_hover(self.hover_listener(id, Some(error.clone().into()), cx))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.navigate(PopupView::from_provider(provider), cx);
+                        this.select_view(PopupView::from_provider(provider), cx);
                     }))
                     .child(components::error_badge(16.0, &palette)),
             );
@@ -196,13 +191,9 @@ impl PopupRoot {
             ));
         }
         if heading.drag_handle {
-            trailing = trailing.child(self.widget_drag_handle(
-                HomeWidgetId::new(
-                    PopupWidgetKind::from_provider(heading.provider),
-                    heading.profile_id.as_deref(),
-                ),
-                cx,
-            ));
+            trailing = trailing.child(
+                self.widget_drag_handle(HomeWidgetId::provider(heading.provider), cx),
+            );
         }
         components::split_row(title, trailing)
             .px(px(4.0))

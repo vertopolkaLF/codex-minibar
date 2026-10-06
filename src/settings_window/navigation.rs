@@ -61,7 +61,9 @@ pub(super) enum SettingsNavMode {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum RenderedPage {
     Root(Tab),
-    Provider(ProviderKind),
+    Provider(ProviderId),
+    /// The Providers pane with no instance configured yet.
+    NoProviders,
 }
 
 impl Default for RenderedPage {
@@ -75,6 +77,7 @@ impl RenderedPage {
         match self {
             Self::Root(tab) => format!("settings-scroll-{}", tab.tag()),
             Self::Provider(provider) => format!("settings-scroll-provider-{}", provider.id()),
+            Self::NoProviders => "settings-scroll-no-providers".into(),
         }
     }
 
@@ -82,30 +85,24 @@ impl RenderedPage {
         match self {
             Self::Root(tab) => format!("settings-page-{}", tab.tag()),
             Self::Provider(provider) => format!("settings-page-provider-{}", provider.id()),
+            Self::NoProviders => "settings-page-no-providers".into(),
         }
     }
 }
 
-pub(super) fn provider_order_from_popup(popup_order: &[PopupWidgetKind]) -> Vec<ProviderKind> {
-    popup_order
+/// First enabled instance in the shared order. If none are on, the first
+/// listed instance — same order the Providers pane shows.
+pub(super) fn first_provider_in_order(instances: &[ProviderInstance]) -> Option<ProviderId> {
+    instances
         .iter()
-        .filter_map(|widget| widget.as_provider())
-        .collect()
+        .find(|instance| instance.enabled)
+        .or_else(|| instances.first())
+        .map(ProviderInstance::provider_id)
 }
 
-/// First enabled provider in the shared popup order. If none are on, the first
-/// listed provider — same order the Providers pane shows.
-pub(super) fn first_provider_in_order(
-    popup_order: &[PopupWidgetKind],
-    is_enabled: impl Fn(ProviderKind) -> bool,
-) -> ProviderKind {
-    let order = provider_order_from_popup(popup_order);
-    order
-        .iter()
-        .copied()
-        .find(|provider| is_enabled(*provider))
-        .or_else(|| order.into_iter().next())
-        .unwrap_or(ProviderKind::Codex)
+/// The page shown when entering the Providers pane.
+pub(super) fn first_provider_page(instances: &[ProviderInstance]) -> RenderedPage {
+    first_provider_in_order(instances).map_or(RenderedPage::NoProviders, RenderedPage::Provider)
 }
 
 pub(super) fn fade_to_rendered_page(
@@ -150,62 +147,87 @@ pub(super) fn root_nav_items(nav_icon_color: &str, use_colored: bool) -> [NavVie
     ]
 }
 
-/// Provider pane: enabled providers first, then a divider and the disabled
-/// ones dimmed. Both blocks keep the shared popup order.
+/// Badge plate colors for the native sidebar: the badge color, or a neutral
+/// plate that follows the theme for `Auto`.
+pub(super) fn badge_colors(color: BadgeColor, color_scheme: ColorScheme) -> (String, String) {
+    match color.rgb() {
+        Some((red, green, blue)) => (format!("#{red:02X}{green:02X}{blue:02X}"), "#FFFFFF".into()),
+        None => match color_scheme {
+            ColorScheme::Dark => ("#C8C8C8".into(), "#1C1C1C".into()),
+            ColorScheme::Light => ("#5A5A5A".into(), "#FFFFFF".into()),
+        },
+    }
+}
+
+/// Provider pane: enabled instances first, then a divider and the disabled
+/// ones dimmed. Both blocks keep the shared instance order, so instances of
+/// one driver stay adjacent. Every item is tagged with its instance id.
 pub(super) fn providers_nav_items(
-    popup_order: &[PopupWidgetKind],
+    instances: &[ProviderInstance],
     nav_icon_color: &str,
     color_scheme: ColorScheme,
-    is_enabled: impl Fn(ProviderKind) -> bool,
-    readiness: impl Fn(ProviderKind) -> ProviderReadiness,
-    openrouter_account_count: usize,
+    readiness: impl Fn(ProviderId) -> ProviderReadiness,
 ) -> Vec<NavViewItem> {
     let (ready_color, setup_color) = status_dot_colors(color_scheme);
-    let item = |provider: ProviderKind, enabled: bool| {
-        let descriptor = crate::provider_registry::descriptor(provider);
-        let icon_color = if enabled {
+    let enabled_per_driver = |driver: ProviderKind| {
+        instances
+            .iter()
+            .filter(|instance| instance.enabled && instance.driver == driver)
+            .count()
+    };
+    let item = |instance: &ProviderInstance| {
+        let provider = instance.driver;
+        let icon_color = if instance.enabled {
             crate::icons::provider_brand_hex(provider, color_scheme)
         } else {
             nav_icon_color.to_string()
         };
-        NavViewItem::new(descriptor.display_name)
-            .tag(provider.id())
+        let mut nav = NavViewItem::new(instance.display_name())
+            .tag(instance.id.clone())
             .icon_path(
                 crate::icons::data(crate::provider_registry::icon(provider)),
                 icon_color,
-            )
-    };
-    let order = provider_order_from_popup(popup_order);
-    let mut items = Vec::new();
-    for provider in order
-        .iter()
-        .copied()
-        .filter(|provider| is_enabled(*provider))
-    {
-        let mut nav = item(provider, true);
-        if provider == ProviderKind::OpenRouter && openrouter_account_count > 0 {
-            nav = nav.info_badge(openrouter_account_count as i32);
+            );
+        // Badges tell instances of one driver apart, so they show whenever
+        // the driver has more than one configured instance in the pane.
+        let siblings = instances
+            .iter()
+            .filter(|other| other.driver == provider)
+            .count();
+        if siblings > 1 || enabled_per_driver(provider) > 1 {
+            let badge = instance.badge();
+            let (background, foreground) = badge_colors(badge.color, color_scheme);
+            nav = nav.text_badge(badge.text, background, foreground);
         }
-        nav = match readiness(provider) {
+        nav
+    };
+    let mut items = Vec::new();
+    for instance in instances.iter().filter(|instance| instance.enabled) {
+        let mut nav = item(instance);
+        if instance.driver == ProviderKind::OpenRouter {
+            let keys = instance
+                .openrouter
+                .as_ref()
+                .map_or(0, |account| account.api_key_ids.len());
+            if keys > 0 {
+                nav = nav.info_badge(keys as i32);
+            }
+        }
+        nav = match readiness(instance.provider_id()) {
             ProviderReadiness::Ready => nav.status_dot(ready_color),
             ProviderReadiness::NeedsSetup => nav.status_dot(setup_color),
             ProviderReadiness::Checking => nav,
         };
         items.push(nav);
     }
-    let disabled: Vec<ProviderKind> = order
+    let disabled = instances
         .iter()
-        .copied()
-        .filter(|provider| !is_enabled(*provider))
-        .collect();
+        .filter(|instance| !instance.enabled)
+        .collect::<Vec<_>>();
     if !disabled.is_empty() && !items.is_empty() {
         items.push(NavViewItem::separator());
     }
-    items.extend(
-        disabled
-            .into_iter()
-            .map(|provider| item(provider, false).dimmed(true)),
-    );
+    items.extend(disabled.into_iter().map(|instance| item(instance).dimmed(true)));
     items
 }
 
@@ -216,13 +238,15 @@ pub(super) fn providers_nav_signature(items: &[NavViewItem]) -> String {
         .iter()
         .map(|item| {
             format!(
-                "{}:{}:{}:{:?}:{:?}:{}",
+                "{}:{}:{}:{}:{:?}:{:?}:{:?}:{}",
                 item.tag
                     .as_deref()
                     .unwrap_or(if item.is_separator { "-" } else { "" }),
+                item.content,
                 item.dimmed,
                 item.is_header,
                 item.info_badge,
+                item.text_badge,
                 item.status_dot,
                 item.icon_path
                     .as_ref()
@@ -245,76 +269,81 @@ fn status_dot_colors(color_scheme: ColorScheme) -> (&'static str, &'static str) 
 mod provider_navigation_tests {
     use super::*;
 
+    fn instances(mask: u32, extra_claude: bool) -> Vec<ProviderInstance> {
+        let mut instances = Settings::default().instances;
+        if extra_claude {
+            let mut work = ProviderInstance::new(ProviderKind::Claude, "Work");
+            work.id = "claude-work".into();
+            let index = instances
+                .iter()
+                .position(|instance| instance.driver == ProviderKind::Claude)
+                .unwrap();
+            instances.insert(index + 1, work);
+        }
+        for (index, instance) in instances.iter_mut().enumerate() {
+            instance.enabled = mask & (1 << index) != 0;
+        }
+        instances
+    }
+
     #[test]
-    fn provider_identity_and_order_survive_every_enabled_combination() {
-        let popup_order = Settings::default().popup_order;
-        let order = provider_order_from_popup(&popup_order);
-        assert_eq!(order.len(), crate::provider_registry::PROVIDERS.len());
-        for scheme in [ColorScheme::Light, ColorScheme::Dark] {
-            for mask in 0..(1_u32 << order.len()) {
-                let enabled = |provider| {
-                    let index = order.iter().position(|item| *item == provider).unwrap();
-                    mask & (1 << index) != 0
-                };
-                let items = providers_nav_items(
-                    &popup_order,
-                    "#123456",
-                    scheme,
-                    enabled,
-                    |_| ProviderReadiness::Ready,
-                    2,
-                );
-                let tagged: Vec<_> = items.iter().filter(|item| item.tag.is_some()).collect();
-                let expected: Vec<_> = order
-                    .iter()
-                    .copied()
-                    .filter(|p| enabled(*p))
-                    .chain(order.iter().copied().filter(|p| !enabled(*p)))
-                    .collect();
-                assert_eq!(tagged.len(), order.len());
-                for (item, provider) in tagged.into_iter().zip(expected) {
-                    let descriptor = crate::provider_registry::descriptor(provider);
-                    assert_eq!(item.tag.as_deref(), Some(provider.id()));
-                    assert_eq!(item.content, descriptor.display_name);
+    fn instance_identity_and_order_survive_every_enabled_combination() {
+        for extra_claude in [false, true] {
+            let count = instances(0, extra_claude).len();
+            for scheme in [ColorScheme::Light, ColorScheme::Dark] {
+                for mask in 0..(1_u32 << count) {
+                    let instances = instances(mask, extra_claude);
+                    let items = providers_nav_items(&instances, "#123456", scheme, |_| {
+                        ProviderReadiness::Ready
+                    });
+                    let tagged: Vec<_> = items.iter().filter(|item| item.tag.is_some()).collect();
+                    let expected: Vec<_> = instances
+                        .iter()
+                        .filter(|i| i.enabled)
+                        .chain(instances.iter().filter(|i| !i.enabled))
+                        .collect();
+                    assert_eq!(tagged.len(), expected.len());
+                    for (item, instance) in tagged.into_iter().zip(expected) {
+                        assert_eq!(item.tag.as_deref(), Some(instance.id.as_str()));
+                        assert_eq!(item.content, instance.display_name());
+                        assert_eq!(
+                            item.icon_path.as_ref().unwrap().0,
+                            crate::icons::data(crate::provider_registry::icon(instance.driver))
+                        );
+                        assert_eq!(item.dimmed, !instance.enabled);
+                        assert_eq!(item.status_dot.is_some(), instance.enabled);
+                        assert_eq!(
+                            item.text_badge.is_some(),
+                            extra_claude && instance.driver == ProviderKind::Claude
+                        );
+                    }
+                    let enabled = instances.iter().filter(|i| i.enabled).count();
+                    let mixed = enabled != 0 && enabled != count;
                     assert_eq!(
-                        item.icon_path.as_ref().unwrap().0,
-                        crate::icons::data(crate::provider_registry::icon(provider))
-                    );
-                    let expected_color = if enabled(provider) {
-                        crate::icons::provider_brand_hex(provider, scheme)
-                    } else {
-                        "#123456".into()
-                    };
-                    assert_eq!(item.icon_path.as_ref().unwrap().1, expected_color);
-                    assert_eq!(item.dimmed, !enabled(provider));
-                    assert_eq!(item.status_dot.is_some(), enabled(provider));
-                    assert_eq!(
-                        item.info_badge,
-                        (enabled(provider) && provider == ProviderKind::OpenRouter).then_some(2)
+                        items.iter().filter(|item| item.is_separator).count(),
+                        usize::from(mixed)
                     );
                 }
-                let mixed = mask != 0 && mask != (1 << order.len()) - 1;
-                assert_eq!(
-                    items.iter().filter(|item| item.is_separator).count(),
-                    usize::from(mixed)
-                );
             }
         }
     }
 
     #[test]
     fn first_provider_prefers_enabled_nav_order() {
-        let popup_order = Settings::default().popup_order;
-        let order = provider_order_from_popup(&popup_order);
-        assert_eq!(first_provider_in_order(&popup_order, |_| false), order[0]);
+        let mut instances = Settings::default().instances;
+        for instance in &mut instances {
+            instance.enabled = false;
+        }
         assert_eq!(
-            first_provider_in_order(&popup_order, |provider| provider != order[0]),
-            order[1]
+            first_provider_in_order(&instances),
+            Some(instances[0].provider_id())
         );
-        let last = *order.last().expect("providers");
+        instances[2].enabled = true;
         assert_eq!(
-            first_provider_in_order(&popup_order, |provider| provider == last),
-            last
+            first_provider_in_order(&instances),
+            Some(instances[2].provider_id())
         );
+        assert_eq!(first_provider_in_order(&[]), None);
+        assert!(matches!(first_provider_page(&[]), RenderedPage::NoProviders));
     }
 }

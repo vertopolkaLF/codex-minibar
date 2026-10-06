@@ -18,6 +18,7 @@ use std::{
 use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
 
 use crate::{
+    instances::{ProviderId, ProviderInstance},
     limits::{LimitWindow, ProviderLimits, RateLimits, SpendingSummary, UsageAmount},
     notifications,
     notifications::LimitNotificationTracker,
@@ -28,7 +29,7 @@ use crate::{
     },
     settings::{
         AccentColor, AppTheme, HomeWidgetId, NotificationSettings, PopupBackgroundMaterial,
-        PopupSurface, PopupVisibility, PopupWidgetKind, ProviderKind, Settings, TimeFormat,
+        PopupSurface, PopupTabMode, PopupVisibility, ProviderKind, Settings, TimeFormat,
         TotalSpendPeriod, TotalSpendPresentation, TrayWidget,
     },
     tray::{TrayManager, TrayMenuAction},
@@ -38,7 +39,6 @@ use crate::{
 
 mod actions;
 mod bridge;
-mod chrome;
 mod formatting;
 pub(crate) mod model;
 mod navigation;
@@ -53,7 +53,6 @@ pub(crate) use state::UiState;
 
 pub(crate) use actions::*;
 use bridge::*;
-use chrome::*;
 use formatting::*;
 pub(crate) use navigation::PopupView;
 use navigation::*;
@@ -62,7 +61,7 @@ use state::*;
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum PendingPopupView {
     Home,
-    Provider(ProviderKind),
+    Provider(ProviderId),
 }
 
 static PENDING_POPUP_VIEW: Mutex<Option<PendingPopupView>> = Mutex::new(None);
@@ -112,7 +111,7 @@ pub fn start(state: Arc<AppState>, ui_dispatcher: windows_reactor::UiMarshaller)
 
 /// Requests a provider tab for the next popup show. The request is
 /// intentionally ephemeral, matching clicks from the tray and Stream Deck.
-pub fn request_provider_view(provider: ProviderKind) {
+pub fn request_provider_view(provider: ProviderId) {
     request_view(PendingPopupView::Provider(provider));
 }
 

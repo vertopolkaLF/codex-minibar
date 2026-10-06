@@ -39,36 +39,16 @@ pub(super) fn settings_section_heading(title: impl Into<String>) -> Element {
         .into()
 }
 
-pub(super) fn enabled_providers(
-    order: &[ProviderKind],
-    codex_enabled: bool,
-    claude_enabled: bool,
-    cursor_enabled: bool,
-    opencode_zen_enabled: bool,
-    opencode_go_enabled: bool,
-    openrouter_enabled: bool,
-    antigravity_enabled: bool,
-    grok_enabled: bool,
-    kiro_enabled: bool,
-) -> Vec<ProviderKind> {
-    order
+/// Enabled instances that can feed a tray indicator, in display order.
+pub(super) fn enabled_providers(instances: &[ProviderInstance]) -> Vec<ProviderId> {
+    instances
         .iter()
-        .copied()
-        .filter(|provider| match provider {
-            ProviderKind::Codex => codex_enabled,
-            ProviderKind::Claude => claude_enabled,
-            ProviderKind::Cursor => cursor_enabled,
-            ProviderKind::OpenCodeZen => opencode_zen_enabled,
-            ProviderKind::OpenCodeGo => opencode_go_enabled,
-            ProviderKind::OpenRouter => openrouter_enabled,
-            ProviderKind::Antigravity => antigravity_enabled,
-            ProviderKind::Grok => grok_enabled,
-            ProviderKind::Kiro => kiro_enabled,
-        })
-        .filter(|provider| {
-            !crate::provider_registry::descriptor(*provider)
+        .filter(|instance| instance.enabled)
+        .filter(|instance| {
+            !crate::provider_registry::descriptor(instance.driver)
                 .default_tray_metrics
                 .is_empty()
         })
+        .map(ProviderInstance::provider_id)
         .collect()
 }

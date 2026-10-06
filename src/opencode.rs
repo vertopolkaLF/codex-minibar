@@ -37,13 +37,6 @@ enum Catalog {
 }
 
 impl Catalog {
-    const fn provider(self) -> ProviderKind {
-        match self {
-            Self::Zen => ProviderKind::OpenCodeZen,
-            Self::Go => ProviderKind::OpenCodeGo,
-        }
-    }
-
     const fn provider_id(self) -> &'static str {
         match self {
             Self::Zen => "opencode",

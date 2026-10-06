@@ -344,7 +344,7 @@ fn instances_from_legacy(legacy: &LegacyV38) -> Migrated {
     };
 
     let mut home_order = Vec::<HomeWidgetId>::new();
-    let mut push_unique = |order: &mut Vec<HomeWidgetId>, ids: Vec<HomeWidgetId>| {
+    let push_unique = |order: &mut Vec<HomeWidgetId>, ids: Vec<HomeWidgetId>| {
         for id in ids {
             if !order.contains(&id) {
                 order.push(id);

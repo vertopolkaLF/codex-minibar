@@ -1,7 +1,7 @@
 //! Framework-free popup card plan.
 //!
 //! The GPUI renderer draws exactly what this module decides to show, so the
-//! visibility rules (bricks, surfaces, account profiles, OpenRouter accounts)
+//! visibility rules (bricks, surfaces, instances, OpenRouter accounts)
 //! stay unit-testable without a window.
 
 use super::*;
@@ -23,8 +23,6 @@ pub(crate) struct CardOptions<'a> {
     pub(crate) show_provider_tabs: bool,
     pub(crate) include_usage_stats: bool,
     pub(crate) show_account_name: bool,
-    /// Stable profile identity, shared by Home and the selected provider page.
-    pub(crate) profile_id: Option<&'a str>,
     /// Home widgets carry a reorder handle on their first heading.
     pub(crate) drag_handle: bool,
     /// OpenRouter expired keys expose a remove action.
@@ -33,24 +31,18 @@ pub(crate) struct CardOptions<'a> {
     pub(crate) now: DateTime<Utc>,
 }
 
-impl CardOptions<'_> {
-    fn card_key(&self, provider: ProviderKind, metric: &str) -> String {
-        if matches!(provider, ProviderKind::Claude | ProviderKind::Codex) {
-            format!(
-                "{}:{metric}",
-                crate::widget_data::account_source_id(provider, self.profile_id)
-            )
-        } else {
-            format!("{}-{metric}", provider.id())
-        }
-    }
+/// Instance-scoped card identity, so two instances of one driver never share
+/// animation state.
+fn card_key(provider: ProviderId, metric: &str) -> String {
+    format!("{}:{metric}", provider.id())
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct HeadingCard<'a> {
-    pub(crate) provider: ProviderKind,
-    pub(crate) profile_id: Option<String>,
+    pub(crate) provider: ProviderId,
     pub(crate) first: bool,
+    /// Draws the driver icon (with the instance badge) before the name.
+    pub(crate) show_icon: bool,
     pub(crate) plan: Option<String>,
     pub(crate) account_name: Option<&'a str>,
     pub(crate) balance_microusd: Option<u64>,
@@ -89,7 +81,7 @@ pub(crate) enum Card<'a> {
         expansion_key: String,
     },
     UsageStatistics {
-        provider: ProviderKind,
+        provider: ProviderId,
         statistics: &'a crate::usage::UsageStatistics,
     },
     /// An OpenRouter account with a management key whose analytics have not
@@ -98,7 +90,7 @@ pub(crate) enum Card<'a> {
     Credits {
         value: String,
     },
-    /// Cards that must stay glued together (an account profile or an
+    /// Cards that must stay glued together (an instance section or an
     /// OpenRouter account with its keys).
     Group {
         cards: Vec<Card<'a>>,
@@ -129,66 +121,15 @@ impl Card<'_> {
 }
 
 pub(crate) fn provider_cards<'a>(
-    provider: ProviderKind,
+    provider: ProviderId,
     is_first: bool,
+    show_icon: bool,
     limits: &'a RateLimits,
     forced_resets: &'a [crate::reset_feed::ForcedReset],
     options: &CardOptions<'_>,
 ) -> Vec<Card<'a>> {
-    let profiles = limits.account_profiles(provider);
-    if !profiles.is_empty() {
-        // A profile's own failure marks only that profile; a failure of the
-        // whole provider marks them all.
-        let any_profile_error = profiles.iter().any(|profile| profile.error.is_some());
-        let mut drag_handle = options.drag_handle;
-        let mut cards = profiles
-            .iter()
-            .enumerate()
-            .map(|(index, profile)| {
-                let card_error = options
-                    .provider_error
-                    .filter(|_| profile.error.is_some() || !any_profile_error)
-                    .map(|error| {
-                        cached_profile_error_for_ui(
-                            &profile.limits,
-                            profile.error.as_deref().unwrap_or(error),
-                        )
-                    });
-                let nested = CardOptions {
-                    // Usage statistics come from local logs shared by every
-                    // profile, so they are shown once below the profiles.
-                    include_usage_stats: false,
-                    show_account_name: true,
-                    profile_id: Some(&profile.id),
-                    drag_handle: std::mem::take(&mut drag_handle),
-                    openrouter_actions: false,
-                    provider_error: card_error.as_deref(),
-                    ..*options
-                };
-                let profile_cards = provider_cards(
-                    provider,
-                    is_first && index == 0,
-                    &profile.limits,
-                    forced_resets,
-                    &nested,
-                );
-                Card::Group {
-                    cards: profile_cards,
-                }
-            })
-            .collect::<Vec<_>>();
-        cards.extend(shared_usage_statistics_card(
-            provider,
-            limits,
-            options.include_usage_stats,
-            options.popup_visibility,
-            options.surface,
-            options.show_provider_tabs,
-        ));
-        return cards;
-    }
-
-    let (monthly_label, primary_label, secondary_label) = match provider {
+    let kind = provider.kind();
+    let (monthly_label, primary_label, secondary_label) = match kind {
         ProviderKind::Cursor => ("Cursor Models", "Cursor Models", "Cursor Models"),
         ProviderKind::OpenRouter => ("Spending", "Spending", "Spending"),
         ProviderKind::Antigravity => ("Gemini", "Gemini", "Claude + GPT"),
@@ -197,11 +138,11 @@ pub(crate) fn provider_cards<'a>(
         _ => ("Monthly", "5h Session", "Weekly"),
     };
     let single_openrouter_account =
-        provider == ProviderKind::OpenRouter && limits.openrouter_accounts.len() == 1;
+        kind == ProviderKind::OpenRouter && limits.openrouter_accounts.len() == 1;
     let heading = HeadingCard {
         provider,
-        profile_id: options.profile_id.map(str::to_owned),
         first: is_first,
+        show_icon,
         plan: (!single_openrouter_account)
             .then(|| {
                 limits
@@ -227,9 +168,9 @@ pub(crate) fn provider_cards<'a>(
             .is_visible(brick, options.surface, options.show_provider_tabs)
     };
 
-    if provider == ProviderKind::OpenRouter {
-        let spending_visible = visible(&spending_brick_id(provider));
-        let usage_visible = options.include_usage_stats && visible(&usage_brick_id(provider));
+    if kind == ProviderKind::OpenRouter {
+        let spending_visible = visible(&spending_brick_id(kind));
+        let usage_visible = options.include_usage_stats && visible(&usage_brick_id(kind));
         if spending_visible || usage_visible {
             if !limits.openrouter_accounts.is_empty() {
                 // Each account is its own group so headings and keys can
@@ -270,15 +211,12 @@ pub(crate) fn provider_cards<'a>(
                         });
                     }
                     if usage_visible {
-                        strip.extend(openrouter_account_usage(limits, &account.id));
+                        strip.extend(openrouter_account_usage(provider, limits, &account.id));
                     }
                     cards.push(Card::Group { cards: strip });
                 }
             } else if spending_visible && let Some(spending) = limits.spending.as_ref() {
-                cards.push(spending_card(
-                    format!("{}-spending", provider.id()),
-                    spending,
-                ));
+                cards.push(spending_card(card_key(provider, "spending"), spending));
             }
         }
         return cards;
@@ -288,16 +226,16 @@ pub(crate) fn provider_cards<'a>(
     // from a local session log. Keep its card visible while that export is
     // still empty or delayed, so the feature does not look like it vanished.
     let has_usage_statistics = options.include_usage_stats
-        && visible(&usage_brick_id(provider))
-        && (limits.usage.has_data() || provider == ProviderKind::Cursor);
-    for section in popup_sections(provider, limits, false) {
+        && visible(&usage_brick_id(kind))
+        && (limits.usage.has_data() || kind == ProviderKind::Cursor);
+    for section in popup_sections(kind, limits, false) {
         if !matches!(
             section,
             PopupSection::Monthly | PopupSection::FiveHour | PopupSection::Weekly
         ) {
             continue;
         }
-        if !section_brick_id(provider, section).is_some_and(|brick| visible(&brick)) {
+        if !section_brick_id(kind, section).is_some_and(|brick| visible(&brick)) {
             continue;
         }
         let (title, window, usage_amount, disabled) = match section {
@@ -321,7 +259,7 @@ pub(crate) fn provider_cards<'a>(
             ),
         };
         cards.push(Card::Limit {
-            key: options.card_key(provider, section.key()),
+            key: card_key(provider, section.key()),
             title: title.to_uppercase(),
             window,
             usage_amount,
@@ -331,40 +269,37 @@ pub(crate) fn provider_cards<'a>(
     // Claude can return extra windows such as Fable or Opus. They belong with
     // the ordinary limit cards, before banked resets, statistics, or credits.
     for limit in &limits.additional_limits {
-        if !visible(&additional_limit_brick_id(provider, &limit.id)) {
+        if !visible(&additional_limit_brick_id(kind, &limit.id)) {
             continue;
         }
         cards.push(Card::Limit {
-            key: options.card_key(provider, &format!("additional-{}", limit.id)),
+            key: card_key(provider, &format!("additional-{}", limit.id)),
             title: limit.title.to_uppercase(),
             window: &limit.window,
             usage_amount: None,
             disabled: false,
         });
     }
-    // A Claude profile backed by an Admin API key reports organization spend
-    // instead of subscription windows.
-    if provider == ProviderKind::Claude
+    // A Claude instance backed by an Admin API key reports organization
+    // spend instead of subscription windows.
+    if kind == ProviderKind::Claude
         && let Some(spending) = limits.spending.as_ref()
     {
-        cards.push(spending_card(
-            options.card_key(provider, "spending"),
-            spending,
-        ));
+        cards.push(spending_card(card_key(provider, "spending"), spending));
     }
-    if provider == ProviderKind::Codex {
+    if kind == ProviderKind::Codex {
         let upcoming = upcoming_forced_resets(forced_resets, options.now);
         if !upcoming.is_empty() {
             cards.push(Card::ForcedResets(upcoming));
         }
     }
-    if visible(&resets_brick_id(provider)) && limits.available_reset_count() > 0 {
-        // Use profile identity rather than a mutable, potentially shared name.
+    if visible(&resets_brick_id(kind)) && limits.available_reset_count() > 0 {
+        // Use instance identity rather than a mutable, potentially shared name.
         cards.push(Card::BankedResets {
             limits,
             expansion_key: format!(
                 "{}-{:?}",
-                options.card_key(provider, "banked-resets"),
+                card_key(provider, "banked-resets"),
                 options.surface,
             ),
         });
@@ -375,7 +310,7 @@ pub(crate) fn provider_cards<'a>(
             statistics: &limits.usage,
         });
     }
-    if visible(&credits_brick_id(provider))
+    if visible(&credits_brick_id(kind))
         && let Some(value) = credits_display_value(limits)
     {
         cards.push(Card::Credits { value });
@@ -396,29 +331,15 @@ fn spending_card(key: String, spending: &SpendingSummary) -> Card<'_> {
     }
 }
 
-/// The usage card for a provider whose limit cards come from account profiles.
-pub(crate) fn shared_usage_statistics_card<'a>(
-    provider: ProviderKind,
+fn openrouter_account_usage<'a>(
+    provider: ProviderId,
     limits: &'a RateLimits,
-    include_usage_stats: bool,
-    popup_visibility: &PopupVisibility,
-    surface: PopupSurface,
-    show_provider_tabs: bool,
+    account: &str,
 ) -> Option<Card<'a>> {
-    (include_usage_stats
-        && limits.usage.has_data()
-        && popup_visibility.is_visible(&usage_brick_id(provider), surface, show_provider_tabs))
-    .then_some(Card::UsageStatistics {
-        provider,
-        statistics: &limits.usage,
-    })
-}
-
-fn openrouter_account_usage<'a>(limits: &'a RateLimits, account: &str) -> Option<Card<'a>> {
     let statistics = limits.usage.accounts.get(account);
     if let Some(statistics) = statistics.filter(|s| !s.daily.is_empty()) {
         return Some(Card::UsageStatistics {
-            provider: ProviderKind::OpenRouter,
+            provider,
             statistics,
         });
     }
@@ -439,49 +360,6 @@ pub(crate) fn upcoming_forced_resets(
         .filter(|reset| reset.reset_at > now)
         .take(2)
         .collect()
-}
-
-/// Filter a copy for Home only. The canonical quota snapshots remain intact.
-pub(crate) fn claude_limits_for_home(
-    limits: &RateLimits,
-    saved: &[crate::settings::ClaudeProfile],
-    excluded: &[String],
-) -> Option<RateLimits> {
-    let enabled = claude_account_tabs(saved);
-    let is_visible = |id: &str| {
-        enabled.iter().any(|p| p.id == id) && !excluded.iter().any(|hidden| hidden == id)
-    };
-    if limits.claude_profiles.is_empty() {
-        // Legacy single-Default snapshots, and the placeholder before the
-        // first multi-profile read, describe only the first enabled account.
-        return enabled
-            .first()
-            .filter(|p| is_visible(&p.id))
-            .map(|_| limits.clone());
-    }
-    let mut filtered = limits.clone();
-    filtered.claude_profiles.retain(|p| is_visible(&p.id));
-    (!filtered.claude_profiles.is_empty()).then_some(filtered)
-}
-
-pub(crate) fn codex_limits_for_home(
-    limits: &RateLimits,
-    saved: &[crate::settings::CodexProfile],
-    excluded: &[String],
-) -> Option<RateLimits> {
-    let enabled = codex_account_tabs(saved);
-    let is_visible = |id: &str| {
-        enabled.iter().any(|p| p.id == id) && !excluded.iter().any(|hidden| hidden == id)
-    };
-    if limits.codex_profiles.is_empty() {
-        return enabled
-            .first()
-            .filter(|p| is_visible(&p.id))
-            .map(|_| limits.clone());
-    }
-    let mut filtered = limits.clone();
-    filtered.codex_profiles.retain(|p| is_visible(&p.id));
-    (!filtered.codex_profiles.is_empty()).then_some(filtered)
 }
 
 /// Resolve the label/progress pair while keeping compactness tied to the
@@ -559,9 +437,9 @@ pub(crate) fn interval_tick_count(window: &LimitWindow) -> u32 {
 }
 
 pub(crate) fn latest_sampled_at(limits: &ProviderLimits) -> DateTime<Utc> {
-    crate::provider_registry::PROVIDERS
+    limits
         .iter()
-        .map(|descriptor| limits.get(descriptor.kind).sampled_at)
+        .map(|(_, limits)| limits.sampled_at)
         .max()
         .unwrap_or_default()
 }
@@ -621,132 +499,95 @@ fn pace_label_layout_key(
     }
 }
 
-/// Layout key of the account selected on a Claude/Codex provider tab.
-pub(crate) fn profile_layout_key(
-    provider: ProviderKind,
+/// Structural layout key of one instance's cards. A switcher change whose
+/// key differs fades the page in instead of letting cards jump.
+pub(crate) fn instance_layout_key(
     limits: &RateLimits,
-    selected: Option<&str>,
+    has_error: bool,
     show_used_percentage: bool,
     show_usage_pace: bool,
 ) -> String {
-    let profile = match provider {
-        ProviderKind::Claude => limits.claude_profile(selected),
-        ProviderKind::Codex => limits.codex_profile(selected),
-        _ => None,
-    };
-    let Some(profile) = profile else {
-        return String::new();
-    };
     let mut key = String::new();
-    key.push(if profile.error.is_some() { '!' } else { ';' });
-    push_limits_layout_key(
-        &mut key,
-        &profile.limits,
-        show_used_percentage,
-        show_usage_pace,
-    );
+    key.push(if has_error { '!' } else { ';' });
+    push_limits_layout_key(&mut key, limits, show_used_percentage, show_usage_pace);
     key
 }
 
-/// Auto-distribute only the currently visible blocks until the user first moves one.
-/// Once assigned, hidden providers keep their saved column when they return.
-#[cfg(test)]
-pub(crate) fn home_right_column(ui: &UiState, show_total_spend: bool) -> Vec<PopupWidgetKind> {
-    ui.popup_right_column.clone().unwrap_or_else(|| {
-        visible_popup_widgets(
-            &ui.popup_order,
-            show_total_spend,
-            &ui.popup_visibility,
-            ui.codex_enabled,
-            ui.claude_enabled,
-            ui.cursor_enabled,
-            ui.opencode_zen_enabled,
-            ui.opencode_go_enabled,
-            ui.openrouter_enabled,
-            ui.antigravity_enabled,
-            ui.grok_enabled,
-            ui.kiro_enabled,
-        )
+/// Provider tabs for the current settings.
+pub(crate) fn provider_tabs(ui: &UiState) -> Vec<PopupView> {
+    provider_tab_views(&ui.instances, ui.popup_tab_mode)
+}
+
+/// Provider tabs are shown only when there is more than one to choose from.
+pub(crate) fn show_provider_tabs(ui: &UiState) -> bool {
+    provider_tabs(ui).len() > 1
+}
+
+/// The instance a grouped switcher shows: the persisted choice while it is
+/// still enabled, otherwise the driver's first enabled instance.
+pub(crate) fn selected_group_member(ui: &UiState, driver: ProviderKind) -> Option<ProviderId> {
+    let members = ui.enabled_instances_of(driver);
+    ui.grouped_tab_selection
+        .get(driver.id())
+        .and_then(|id| members.iter().copied().find(|member| member.id() == id))
+        .or_else(|| members.first().copied())
+}
+
+/// The tab that shows `provider`, if any.
+pub(crate) fn tab_for_provider(ui: &UiState, provider: ProviderId) -> Option<PopupView> {
+    let tabs = provider_tabs(ui);
+    if tabs.contains(&PopupView::Provider(provider)) {
+        return Some(PopupView::Provider(provider));
+    }
+    tabs.into_iter().find(|tab| tab.shows(provider))
+}
+
+/// Instances eligible for the combined Usage Stats spend.
+pub(crate) fn spend_providers(ui: &UiState) -> Vec<ProviderId> {
+    ui.enabled_providers()
         .into_iter()
-        .skip(1)
-        .step_by(2)
+        .filter(|provider| {
+            ui.usage_stats_provider_enabled(*provider)
+                && crate::provider_registry::descriptor(provider.kind()).include_in_total_spend
+        })
         .collect()
-    })
 }
 
 pub(crate) fn show_total_spend(ui: &UiState) -> bool {
-    ui.usage_stats_enabled
-        && ui.show_total_spend_on_all_tab
-        && total_spend_provider_count(
-            ui.codex_enabled,
-            ui.claude_enabled,
-            ui.cursor_enabled,
-            ui.opencode_zen_enabled,
-            ui.opencode_go_enabled,
-            ui.openrouter_enabled,
-            &ui.usage_stats_excluded_providers,
-        ) > 1
-}
-
-pub(crate) fn provider_enabled(ui: &UiState, provider: ProviderKind) -> bool {
-    provider_is_enabled(
-        provider,
-        ui.codex_enabled,
-        ui.claude_enabled,
-        ui.cursor_enabled,
-        ui.opencode_zen_enabled,
-        ui.opencode_go_enabled,
-        ui.openrouter_enabled,
-        ui.antigravity_enabled,
-        ui.grok_enabled,
-        ui.kiro_enabled,
-    )
+    ui.usage_stats_enabled && ui.show_total_spend_on_all_tab && spend_providers(ui).len() > 1
 }
 
 pub(crate) fn any_provider_enabled(ui: &UiState) -> bool {
-    ProviderKind::ALL
-        .into_iter()
-        .any(|provider| provider_enabled(ui, provider))
-}
-
-fn home_profiles(ui: &UiState, kind: PopupWidgetKind) -> Vec<crate::settings::AccountProfile> {
-    match kind {
-        PopupWidgetKind::Claude => crate::claude::profiles_with_default(&ui.claude_profiles),
-        PopupWidgetKind::Codex => crate::codex::profiles_with_default(&ui.codex_profiles),
-        _ => Vec::new(),
-    }
+    ui.instances.iter().any(|instance| instance.enabled)
 }
 
 pub(crate) fn home_widget_label(ui: &UiState, widget: &HomeWidgetId) -> String {
-    let Some(provider) = widget.kind.as_provider() else {
+    if widget.is_total_spend() {
         return "Usage Stats".into();
-    };
-    let profiles = home_profiles(ui, widget.kind);
-    match profiles
-        .iter()
-        .find(|p| Some(&p.id) == widget.profile.as_ref())
-    {
-        Some(profile) => format!("{} · {}", provider.display_name(), profile.name),
-        None => provider.display_name().into(),
     }
+    ui.instances
+        .iter()
+        .find(|instance| instance.id == widget.id())
+        .map(|instance| instance.provider_id().qualified_name())
+        .unwrap_or_else(|| widget.id().to_owned())
 }
 
-/// Expand legacy provider slots into persistent account identities, retaining
-/// hidden accounts and inserting new accounts next to their provider's last slot.
+fn widget_driver(ui: &UiState, widget: &HomeWidgetId) -> Option<ProviderKind> {
+    ui.instances
+        .iter()
+        .find(|instance| instance.id == widget.id())
+        .map(|instance| instance.driver)
+}
+
+/// Every Home block in its saved position, including hidden ones so they
+/// keep their slot. New instances join after their driver's last block.
 pub(crate) fn home_widget_order(ui: &UiState) -> Vec<HomeWidgetId> {
-    let mut available = Vec::new();
-    for kind in &ui.popup_order {
-        let profiles = home_profiles(ui, *kind);
-        if profiles.is_empty() {
-            available.push(HomeWidgetId::new(*kind, None));
-        } else {
-            available.extend(
-                profiles
-                    .iter()
-                    .map(|p| HomeWidgetId::new(*kind, Some(&p.id))),
-            );
-        }
-    }
+    let mut available = vec![HomeWidgetId::total_spend()];
+    available.extend(
+        ui.instances
+            .iter()
+            .map(|instance| HomeWidgetId::provider(instance.provider_id())),
+    );
     if ui.popup_home_order.is_empty() {
         return available;
     }
@@ -758,9 +599,10 @@ pub(crate) fn home_widget_order(ui: &UiState) -> Vec<HomeWidgetId> {
     }
     for widget in available {
         if !order.contains(&widget) {
+            let driver = widget_driver(ui, &widget);
             let insert = order
                 .iter()
-                .rposition(|item| item.kind == widget.kind)
+                .rposition(|item| driver.is_some() && widget_driver(ui, item) == driver)
                 .map_or(order.len(), |index| index + 1);
             order.insert(insert, widget);
         }
@@ -768,31 +610,27 @@ pub(crate) fn home_widget_order(ui: &UiState) -> Vec<HomeWidgetId> {
     order
 }
 
+/// The instance behind a Home block, when it is shown on Home.
+pub(crate) fn home_widget_provider(ui: &UiState, widget: &HomeWidgetId) -> Option<ProviderId> {
+    let instance = ui
+        .instances
+        .iter()
+        .find(|instance| instance.id == widget.id())?;
+    (instance.enabled
+        && instance.show_on_home
+        && ui.popup_visibility.driver_visible_on_home(instance.driver))
+    .then(|| instance.provider_id())
+}
+
 pub(crate) fn visible_home_widgets(ui: &UiState, show_spend: bool) -> Vec<HomeWidgetId> {
     home_widget_order(ui)
         .into_iter()
         .filter(|widget| {
-            if widget.kind == PopupWidgetKind::TotalSpend {
-                return show_spend;
+            if widget.is_total_spend() {
+                show_spend
+            } else {
+                home_widget_provider(ui, widget).is_some()
             }
-            let provider = widget.kind.as_provider().expect("provider widget");
-            if !provider_enabled(ui, provider)
-                || !ui.popup_visibility.provider_visible_on_all(provider)
-            {
-                return false;
-            }
-            let Some(id) = &widget.profile else {
-                return true;
-            };
-            let excluded = match provider {
-                ProviderKind::Claude => &ui.claude_home_excluded_profiles,
-                ProviderKind::Codex => &ui.codex_home_excluded_profiles,
-                _ => return false,
-            };
-            home_profiles(ui, widget.kind)
-                .iter()
-                .any(|p| p.id == *id && p.enabled)
-                && !excluded.contains(id)
         })
         .collect()
 }
@@ -800,12 +638,6 @@ pub(crate) fn visible_home_widgets(ui: &UiState, show_spend: bool) -> Vec<HomeWi
 pub(crate) fn home_widget_right_column(ui: &UiState, show_spend: bool) -> Vec<HomeWidgetId> {
     if let Some(right) = &ui.popup_home_right_column {
         return right.clone();
-    }
-    if let Some(legacy) = &ui.popup_right_column {
-        return home_widget_order(ui)
-            .into_iter()
-            .filter(|w| legacy.contains(&w.kind))
-            .collect();
     }
     visible_home_widgets(ui, show_spend)
         .into_iter()

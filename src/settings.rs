@@ -870,6 +870,11 @@ impl ScheduledActivation {
     }
 
     /// Rules bind to one provider instance by id.
+    /// The instance this rule binds to, resolved against published settings.
+    pub fn provider(&self) -> Option<ProviderId> {
+        ProviderId::lookup(&self.provider_id)
+    }
+
     pub fn targets(&self, provider: ProviderId) -> bool {
         self.provider_id == provider.id()
     }
@@ -942,6 +947,11 @@ impl AutoActivationPause {
     }
 
     /// Pauses bind to one provider instance by id.
+    /// The instance this rule binds to, resolved against published settings.
+    pub fn provider(&self) -> Option<ProviderId> {
+        ProviderId::lookup(&self.provider_id)
+    }
+
     pub fn targets(&self, provider: ProviderId) -> bool {
         self.provider_id == provider.id()
     }
@@ -2015,6 +2025,21 @@ impl Settings {
                 || crate::openrouter::has_management_key(instance.openrouter.as_slice()))
     }
 
+    /// Instances whose usage statistics are collected, independent of the
+    /// global Usage switch.
+    pub fn usage_stats_providers(&self) -> Vec<ProviderId> {
+        self.instances
+            .iter()
+            .filter(|instance| {
+                instance.usage_stats
+                    && crate::instances::Capabilities::of(instance).usage_stats
+                    && (instance.driver != ProviderKind::OpenRouter
+                        || crate::openrouter::has_management_key(instance.openrouter.as_slice()))
+            })
+            .map(ProviderInstance::provider_id)
+            .collect()
+    }
+
     /// Enable on the first key, preserve manual opt-out while a key remains,
     /// and disable when the last management key is removed.
     pub(crate) fn sync_openrouter_usage_availability(
@@ -2142,6 +2167,21 @@ impl Settings {
         }
         self.instances.append(&mut remaining);
         true
+    }
+
+    /// Rearranges instances to follow `ids`. Ids that are not configured are
+    /// ignored and instances missing from `ids` keep their relative order at
+    /// the end.
+    pub fn apply_instance_order(&mut self, ids: &[String]) -> bool {
+        let before = self.instances.iter().map(|i| i.id.clone()).collect::<Vec<_>>();
+        let mut remaining = std::mem::take(&mut self.instances);
+        for id in ids {
+            if let Some(index) = remaining.iter().position(|instance| &instance.id == id) {
+                self.instances.push(remaining.remove(index));
+            }
+        }
+        self.instances.append(&mut remaining);
+        before != self.instances.iter().map(|i| i.id.clone()).collect::<Vec<_>>()
     }
 
     /// Moves an instance one slot earlier or later.
@@ -2725,7 +2765,12 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     }
                 }
                 for provider in ProviderKind::ALL {
-                    let id = PopupWidgetKind::from_provider(provider).id();
+                    // Home widget ids of that era.
+                    let id = match provider {
+                        ProviderKind::OpenCodeZen => "open_code_zen",
+                        ProviderKind::OpenCodeGo => "open_code_go",
+                        other => other.id(),
+                    };
                     if !popup_order.iter().any(|value| value.as_str() == Some(id)) {
                         popup_order.push(toml::Value::String(id.into()));
                     }

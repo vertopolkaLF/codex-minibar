@@ -152,15 +152,33 @@ fn load_xaml(xaml: String) -> Result<windows_core::IInspectable> {
 }
 
 fn nav_item_content(item: &NavViewItem) -> Result<bindings::UIElement> {
-    if item.trailing_icon_path.is_none() && item.info_badge.is_none() && item.status_dot.is_none() {
+    if item.trailing_icon_path.is_none()
+        && item.info_badge.is_none()
+        && item.status_dot.is_none()
+        && item.text_badge.is_none()
+    {
         return string_as_textblock(&item.content)?.cast();
     }
     let label = xml_escape_attr(&item.content);
+    let text_badge = item
+        .text_badge
+        .as_ref()
+        .map(|(text, background, foreground)| {
+            let text = xml_escape_attr(text);
+            let background = xml_escape_attr(background);
+            let foreground = xml_escape_attr(foreground);
+            format!(
+                r#"<Border Grid.Column="0" Background="{background}" CornerRadius="4" Padding="4,0,4,1" MinWidth="18" Height="16" VerticalAlignment="Center" Margin="0,0,8,0">
+    <TextBlock Text="{text}" Foreground="{foreground}" FontSize="10" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+  </Border>"#
+            )
+        })
+        .unwrap_or_default();
     let badge = item
         .info_badge
         .map(|value| {
             format!(
-                r#"<InfoBadge Grid.Column="1" Value="{value}" VerticalAlignment="Center" Margin="4,0,0,0"/>"#
+                r#"<InfoBadge Grid.Column="2" Value="{value}" VerticalAlignment="Center" Margin="4,0,0,0"/>"#
             )
         })
         .unwrap_or_default();
@@ -170,7 +188,7 @@ fn nav_item_content(item: &NavViewItem) -> Result<bindings::UIElement> {
         .map(|color| {
             let color = xml_escape_attr(color);
             format!(
-                r#"<Ellipse Grid.Column="2" Width="8" Height="8" Fill="{color}" VerticalAlignment="Center" Margin="8,0,2,0"/>"#
+                r#"<Ellipse Grid.Column="3" Width="8" Height="8" Fill="{color}" VerticalAlignment="Center" Margin="8,0,2,0"/>"#
             )
         })
         .unwrap_or_default();
@@ -184,7 +202,7 @@ fn nav_item_content(item: &NavViewItem) -> Result<bindings::UIElement> {
             let path = xml_escape_attr(path);
             let color = xml_escape_attr(color);
             format!(
-                r#"<Viewbox Grid.Column="3" Width="16" Height="16" VerticalAlignment="Center" Stretch="Uniform" Opacity="0.72" Margin="4,0,0,0">
+                r#"<Viewbox Grid.Column="4" Width="16" Height="16" VerticalAlignment="Center" Stretch="Uniform" Opacity="0.72" Margin="4,0,0,0">
     <Canvas Width="256" Height="256">
       <Path Data="{path}" Fill="{color}"/>
     </Canvas>
@@ -197,12 +215,14 @@ fn nav_item_content(item: &NavViewItem) -> Result<bindings::UIElement> {
     let xaml = format!(
         r#"<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" MinWidth="148" HorizontalAlignment="Stretch">
   <Grid.ColumnDefinitions>
+    <ColumnDefinition Width="Auto"/>
     <ColumnDefinition Width="*"/>
     <ColumnDefinition Width="Auto"/>
     <ColumnDefinition Width="Auto"/>
     <ColumnDefinition Width="Auto"/>
   </Grid.ColumnDefinitions>
-  <TextBlock Text="{label}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+  {text_badge}
+  <TextBlock Grid.Column="1" Text="{label}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
   {badge}
   {dot}
   {trailing}

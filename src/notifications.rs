@@ -3,7 +3,7 @@
 use chrono::{DateTime, Duration, Timelike, Utc};
 
 use crate::limits::RateLimits;
-use crate::settings::{NotificationSettings, ProviderKind};
+use crate::{instances::ProviderId, settings::NotificationSettings};
 
 /// App User Model ID used for Action Center toasts.
 pub const AUMID: &str = "dev.CodexMinibar";
@@ -121,13 +121,13 @@ pub fn show_update_available(version: &str, release_url: &str) {
 }
 
 /// Toast after a provider successfully starts a 5-hour limit.
-pub fn show_activation_succeeded(provider: ProviderKind) {
-    show("5-hour limit started", provider.display_name());
+pub fn show_activation_succeeded(provider: ProviderId) {
+    show("5-hour limit started", &provider.qualified_name());
 }
 
 /// Toast after automatic activation follows a newly reset 5-hour window.
-pub fn show_activation_succeeded_after_reset(provider: ProviderKind) {
-    show("5-hour limit reset and activated", provider.display_name());
+pub fn show_activation_succeeded_after_reset(provider: ProviderId) {
+    show("5-hour limit reset and activated", &provider.qualified_name());
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -164,7 +164,7 @@ impl LimitNotificationTracker {
         &mut self,
         limits: &RateLimits,
         settings: &NotificationSettings,
-        provider: ProviderKind,
+        provider: ProviderId,
     ) -> LimitNotificationResult {
         self.observe_at(limits, settings, provider, Utc::now(), false)
     }
@@ -173,7 +173,7 @@ impl LimitNotificationTracker {
         &mut self,
         limits: &RateLimits,
         settings: &NotificationSettings,
-        provider: ProviderKind,
+        provider: ProviderId,
     ) -> LimitNotificationResult {
         self.observe_at(limits, settings, provider, Utc::now(), true)
     }
@@ -182,7 +182,7 @@ impl LimitNotificationTracker {
         &mut self,
         limits: &RateLimits,
         settings: &NotificationSettings,
-        provider: ProviderKind,
+        provider: ProviderId,
         now: DateTime<Utc>,
         defer_primary_reset: bool,
     ) -> LimitNotificationResult {
@@ -210,7 +210,7 @@ impl LimitNotificationTracker {
         let name = self
             .name
             .clone()
-            .unwrap_or_else(|| provider.display_name().to_owned());
+            .unwrap_or_else(|| provider.qualified_name());
 
         if primary_reset {
             self.startup_low_usage_primary = None;
@@ -592,14 +592,14 @@ mod tests {
         tracker.observe_at(
             &initial,
             &settings,
-            ProviderKind::Codex,
+            ProviderId::primary(crate::settings::ProviderKind::Codex),
             reset - chrono::Duration::hours(5),
             false,
         );
         tracker.observe_at(
             &reset_metadata,
             &settings,
-            ProviderKind::Codex,
+            ProviderId::primary(crate::settings::ProviderKind::Codex),
             reset - chrono::Duration::hours(1),
             false,
         );
@@ -644,14 +644,14 @@ mod tests {
         tracker.observe_at(
             &initial,
             &settings,
-            ProviderKind::Codex,
+            ProviderId::primary(crate::settings::ProviderKind::Codex),
             previous_reset,
             false,
         );
         let result = tracker.observe_at(
             &updated,
             &settings,
-            ProviderKind::Codex,
+            ProviderId::primary(crate::settings::ProviderKind::Codex),
             previous_reset,
             true,
         );
@@ -700,14 +700,14 @@ mod tests {
         tracker.observe_at(
             &initial,
             &settings,
-            ProviderKind::Codex,
+            ProviderId::primary(crate::settings::ProviderKind::Codex),
             previous_reset,
             false,
         );
         let result = tracker.observe_at(
             &updated,
             &settings,
-            ProviderKind::Codex,
+            ProviderId::primary(crate::settings::ProviderKind::Codex),
             previous_reset,
             false,
         );

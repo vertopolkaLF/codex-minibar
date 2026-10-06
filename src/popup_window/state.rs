@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn refresh_all_workers(commands: &[(ProviderKind, Sender<WorkerCommand>)]) -> bool {
+pub(super) fn refresh_all_workers(commands: &[(ProviderId, Sender<WorkerCommand>)]) -> bool {
     let mut requested = false;
     for (_, commands) in commands {
         requested |= commands.send(WorkerCommand::Refresh).is_ok();
@@ -40,17 +40,6 @@ pub(super) fn usage_error_message(statistics: &crate::usage::UsageStatistics) ->
     (!errors.is_empty()).then(|| errors.join("; "))
 }
 
-pub(super) fn cached_profile_error_for_ui(limits: &RateLimits, error: &str) -> String {
-    let message = UiState::error_for_ui(error);
-    if limits.sampled_at.timestamp() <= 0 {
-        return message;
-    }
-    format!(
-        "{message}\nShowing the last successful sample. {}.",
-        format_last_updated(limits.sampled_at, 0)
-    )
-}
-
 /// Shared startup state handed from `main` into the reactor render tree.
 pub struct AppState {
     pub settings: Settings,
@@ -61,7 +50,7 @@ pub struct AppState {
     /// Latest valid public forced-reset announcements. Kept outside UiState so
     /// hidden popups avoid a full native-tree publish on every feed poll.
     pub forced_resets: Mutex<Vec<crate::reset_feed::ForcedReset>>,
-    pub commands: Mutex<HashMap<ProviderKind, Sender<WorkerCommand>>>,
+    pub commands: Mutex<HashMap<ProviderId, Sender<WorkerCommand>>>,
     pub workers: Mutex<crate::provider::ProviderWorkers>,
     pub worker_events_rx: Mutex<Option<Receiver<WorkerEvent>>>,
     pub worker_events_tx: Sender<WorkerEvent>,
@@ -71,7 +60,7 @@ pub struct AppState {
     /// Provider-scoped errors from workers that could not be created at startup.
     /// They remain visible until that provider returns a successful limits
     /// response, just like errors received from a running worker.
-    pub startup_provider_errors: Vec<(ProviderKind, String)>,
+    pub startup_provider_errors: Vec<(ProviderId, String)>,
     /// Last activation attempt loaded from persisted activation state.
     pub last_activation_at: Option<DateTime<Utc>>,
     /// Live settings pushes from the settings window; drained by the tray bridge.
@@ -96,35 +85,23 @@ impl AppState {
     /// snapshot. A rename is a settings-only change and must not wait for the
     /// next worker poll or an app restart.
     pub(super) fn apply_openrouter_account_names(&self, settings: &Settings) -> bool {
-        let mut limits = self.current_limits().get(ProviderKind::OpenRouter).clone();
-        if !crate::openrouter::apply_account_names(&mut limits, settings) {
-            return false;
+        let mut changed = false;
+        for instance in settings
+            .instances
+            .iter()
+            .filter(|instance| instance.driver == ProviderKind::OpenRouter)
+        {
+            let provider = instance.provider_id();
+            let mut limits = self.current_limits().get(provider).clone();
+            if crate::openrouter::apply_account_names(&mut limits, instance) {
+                self.replace_limits(provider, limits);
+                changed = true;
+            }
         }
-        self.replace_limits(ProviderKind::OpenRouter, limits);
-        true
+        changed
     }
 
-    /// Overlay renamed Claude profiles onto the live snapshot, for the same
-    /// reason as the OpenRouter account names above.
-    pub(super) fn apply_claude_profile_names(&self, settings: &Settings) -> bool {
-        let mut limits = self.current_limits().get(ProviderKind::Claude).clone();
-        if !crate::claude::apply_profile_names(&mut limits, settings) {
-            return false;
-        }
-        self.replace_limits(ProviderKind::Claude, limits);
-        true
-    }
-
-    pub(super) fn apply_codex_profile_names(&self, settings: &Settings) -> bool {
-        let mut limits = self.current_limits().get(ProviderKind::Codex).clone();
-        if !crate::codex::apply_profile_names(&mut limits, settings) {
-            return false;
-        }
-        self.replace_limits(ProviderKind::Codex, limits);
-        true
-    }
-
-    pub(super) fn replace_limits(&self, provider: ProviderKind, mut limits: RateLimits) {
+    pub(super) fn replace_limits(&self, provider: ProviderId, mut limits: RateLimits) {
         let persisted = if let Ok(mut current) = self.limits.lock() {
             // Quota polling must not erase the independently refreshed usage
             // history between its ten-minute scans.
@@ -149,7 +126,7 @@ impl AppState {
 
     pub(super) fn replace_usage(
         &self,
-        provider: ProviderKind,
+        provider: ProviderId,
         usage: crate::usage::UsageStatistics,
     ) {
         if let Ok(mut current) = self.limits.lock() {
@@ -159,7 +136,8 @@ impl AppState {
 
     pub(super) fn clear_usage_snapshot(&self) {
         if let Ok(mut limits) = self.limits.lock() {
-            for provider in ProviderKind::ALL {
+            let providers = limits.iter().map(|(provider, _)| provider).collect::<Vec<_>>();
+            for provider in providers {
                 limits.get_mut(provider).usage = crate::usage::UsageStatistics::default();
             }
         }
@@ -169,7 +147,7 @@ impl AppState {
         self.worker_events_rx.lock().ok()?.take()
     }
 
-    pub(super) fn worker_commands(&self) -> Vec<(ProviderKind, Sender<WorkerCommand>)> {
+    pub(super) fn worker_commands(&self) -> Vec<(ProviderId, Sender<WorkerCommand>)> {
         self.commands
             .lock()
             .map(|commands| {
@@ -224,55 +202,51 @@ impl AppState {
         }
     }
 
-    /// Applies provider toggles without disturbing workers that remain enabled.
+    /// Applies instance toggles without disturbing workers that remain
+    /// enabled. Workers of removed or disabled instances stop, and instances
+    /// listed in `restart` get a fresh worker.
     pub(super) fn sync_provider_workers(
         &self,
         settings: &Settings,
-        restart: &[ProviderKind],
-    ) -> Vec<(ProviderKind, String)> {
-        let disabled = crate::provider_registry::PROVIDERS
-            .iter()
-            .map(|descriptor| descriptor.kind)
-            .filter(|provider| !settings.providers.is_enabled(*provider))
-            .collect::<Vec<_>>();
+        restart: &[ProviderId],
+    ) -> Vec<(ProviderId, String)> {
+        let enabled = settings.enabled_providers();
         let stopped = self.workers.lock().map_or_else(
             |_| Vec::new(),
             |mut workers| {
-                disabled
-                    .iter()
-                    .chain(
-                        restart
-                            .iter()
-                            .filter(|provider| settings.providers.is_enabled(**provider)),
-                    )
-                    .filter_map(|provider| workers.remove(provider))
-                    .collect()
+                let remove = workers
+                    .keys()
+                    .copied()
+                    .filter(|provider| !enabled.contains(provider) || restart.contains(provider))
+                    .collect::<Vec<_>>();
+                remove
+                    .into_iter()
+                    .filter_map(|provider| workers.remove(&provider))
+                    .collect::<Vec<_>>()
             },
         );
         for worker in stopped {
             worker.shutdown();
         }
         if let Ok(mut commands) = self.commands.lock() {
-            commands.retain(|provider, _| {
-                settings.providers.is_enabled(*provider) && !restart.contains(provider)
-            });
+            commands.retain(|provider, _| enabled.contains(provider) && !restart.contains(provider));
         }
         if let Ok(mut limits) = self.limits.lock() {
-            for provider in &disabled {
-                *limits.get_mut(*provider) = RateLimits::default();
+            // Disabled instances drop their live sample; removed ones vanish.
+            limits.retain(|provider| settings.instance(provider).is_some());
+            for provider in settings.provider_ids() {
+                if !enabled.contains(&provider) {
+                    *limits.get_mut(provider) = RateLimits::default();
+                }
             }
         }
 
         let mut errors = Vec::new();
-        for provider in crate::provider_registry::PROVIDERS
-            .iter()
-            .map(|descriptor| descriptor.kind)
-        {
-            if !settings.providers.is_enabled(provider)
-                || self
-                    .workers
-                    .lock()
-                    .is_ok_and(|workers| workers.contains_key(&provider))
+        for provider in enabled {
+            if self
+                .workers
+                .lock()
+                .is_ok_and(|workers| workers.contains_key(&provider))
             {
                 continue;
             }
@@ -323,8 +297,8 @@ pub(crate) struct UiState {
     pub(super) popup_background_material: PopupBackgroundMaterial,
     pub(super) time_format: TimeFormat,
     pub(super) last_activation: String,
-    pub(super) provider_errors: HashMap<ProviderKind, String>,
-    pub(super) usage_errors: HashMap<ProviderKind, String>,
+    pub(super) provider_errors: HashMap<ProviderId, String>,
+    pub(super) usage_errors: HashMap<ProviderId, String>,
     pub(super) error: Option<String>,
     /// Changes for every settings transaction so layout-sensitive toggles
     /// force a fresh body measurement and popup resize.
@@ -340,7 +314,7 @@ pub(crate) struct UiState {
     pub(super) forced_resets_revision: u64,
     /// Provider limit/usage requests currently in flight. The refresh icon
     /// stays active until every operation started by the workers has finished.
-    pub(super) active_requests: Vec<(ProviderKind, RequestKind)>,
+    pub(super) active_requests: Vec<(ProviderId, RequestKind)>,
     pub(super) refreshing: bool,
     pub(super) show_used_percentage: bool,
     pub(super) show_usage_values: bool,
@@ -348,45 +322,22 @@ pub(crate) struct UiState {
     pub(super) compact_usage_cards: bool,
     pub(super) popup_visibility: PopupVisibility,
     pub(super) usage_stats_enabled: bool,
-    pub(super) usage_stats_excluded_providers: Vec<String>,
+    /// Instances whose usage statistics are collected and shown.
+    pub(super) usage_stats_providers: Vec<ProviderId>,
     pub(super) show_total_spend_on_all_tab: bool,
     pub(super) total_spend_presentation: TotalSpendPresentation,
     pub(super) total_spend_period: TotalSpendPeriod,
     pub(super) show_account_name: bool,
-    pub(super) codex_enabled: bool,
-    pub(super) claude_enabled: bool,
-    pub(super) cursor_enabled: bool,
-    pub(super) opencode_zen_enabled: bool,
-    pub(super) opencode_go_enabled: bool,
-    pub(super) openrouter_enabled: bool,
-    pub(super) antigravity_enabled: bool,
-    pub(super) grok_enabled: bool,
-    pub(super) kiro_enabled: bool,
-    pub(super) opencode_zen_credentials_revision: u64,
-    pub(super) opencode_go_credentials_revision: u64,
-    pub(super) openrouter_credentials_revision: u64,
-    pub(super) popup_order: Vec<PopupWidgetKind>,
+    /// Every configured instance in display order, enabled or not.
+    pub(super) instances: Vec<ProviderInstance>,
+    pub(super) popup_tab_mode: PopupTabMode,
+    /// Driver id -> instance id selected in a grouped tab's switcher.
+    pub(super) grouped_tab_selection: std::collections::BTreeMap<String, String>,
     pub(super) popup_two_columns: bool,
-    pub(super) popup_right_column: Option<Vec<PopupWidgetKind>>,
     pub(super) popup_home_order: Vec<HomeWidgetId>,
     pub(super) popup_home_right_column: Option<Vec<HomeWidgetId>>,
     pub(super) use_colored_provider_icons: bool,
-    pub(super) show_accounts_as_tabs: bool,
     pub(super) replace_chatgpt_logo_with_codex: bool,
-    pub(super) codex_path: Option<std::path::PathBuf>,
-    pub(super) claude_path: Option<std::path::PathBuf>,
-    pub(super) codex_profiles: Vec<crate::settings::CodexProfile>,
-    pub(super) claude_profiles: Vec<crate::settings::ClaudeProfile>,
-    pub(super) codex_home_excluded_profiles: Vec<String>,
-    pub(super) claude_home_excluded_profiles: Vec<String>,
-    pub(super) codex_credentials_revision: u64,
-    pub(super) claude_credentials_revision: u64,
-    pub(super) cursor_path: Option<std::path::PathBuf>,
-    pub(super) antigravity_path: Option<std::path::PathBuf>,
-    pub(super) grok_path: Option<std::path::PathBuf>,
-    pub(super) kiro_path: Option<std::path::PathBuf>,
-    pub(super) kiro_crew_path: Option<std::path::PathBuf>,
-    pub(super) kiro_cli_path: Option<std::path::PathBuf>,
     pub(super) update_version: Option<String>,
 }
 
@@ -414,45 +365,19 @@ impl Default for UiState {
             compact_usage_cards: false,
             popup_visibility: PopupVisibility::build_defaults(),
             usage_stats_enabled: true,
-            usage_stats_excluded_providers: Vec::new(),
+            usage_stats_providers: Vec::new(),
             show_total_spend_on_all_tab: true,
             total_spend_presentation: TotalSpendPresentation::default(),
             total_spend_period: TotalSpendPeriod::default(),
             show_account_name: false,
-            codex_enabled: true,
-            claude_enabled: false,
-            cursor_enabled: false,
-            opencode_zen_enabled: false,
-            opencode_go_enabled: false,
-            opencode_zen_credentials_revision: 0,
-            opencode_go_credentials_revision: 0,
-            openrouter_enabled: false,
-            antigravity_enabled: false,
-            grok_enabled: false,
-            kiro_enabled: false,
-            openrouter_credentials_revision: 0,
-            popup_order: PopupWidgetKind::default_order(),
+            instances: Settings::default().instances,
+            popup_tab_mode: PopupTabMode::default(),
+            grouped_tab_selection: Default::default(),
             popup_two_columns: false,
-            popup_right_column: None,
             popup_home_order: Vec::new(),
             popup_home_right_column: None,
             use_colored_provider_icons: true,
-            show_accounts_as_tabs: false,
             replace_chatgpt_logo_with_codex: false,
-            codex_path: None,
-            claude_path: None,
-            codex_profiles: Vec::new(),
-            claude_profiles: Vec::new(),
-            codex_home_excluded_profiles: Vec::new(),
-            claude_home_excluded_profiles: Vec::new(),
-            codex_credentials_revision: 0,
-            claude_credentials_revision: 0,
-            cursor_path: None,
-            antigravity_path: None,
-            grok_path: None,
-            kiro_path: None,
-            kiro_crew_path: None,
-            kiro_cli_path: None,
             update_version: None,
         }
     }
@@ -464,21 +389,78 @@ impl UiState {
     /// effective usage eligibility before either path can produce a first frame.
     pub(super) fn popup_layout_from_settings(settings: &Settings) -> Self {
         Self {
-            usage_stats_excluded_providers: settings.effective_usage_stats_excluded_providers(),
-            popup_order: settings.popup_order.clone(),
+            usage_stats_providers: settings.usage_stats_providers(),
+            instances: settings.instances.clone(),
+            popup_tab_mode: settings.popup_tab_mode,
+            grouped_tab_selection: settings.grouped_tab_selection.clone(),
             popup_two_columns: settings.popup_two_columns,
-            show_accounts_as_tabs: settings.show_accounts_as_tabs,
-            codex_profiles: settings.codex_profiles.clone(),
-            claude_profiles: settings.claude_profiles.clone(),
-            codex_home_excluded_profiles: settings.codex_home_excluded_profiles.clone(),
-            claude_home_excluded_profiles: settings.claude_home_excluded_profiles.clone(),
-            codex_credentials_revision: settings.codex_credentials_revision,
-            claude_credentials_revision: settings.claude_credentials_revision,
-            popup_right_column: settings.popup_right_column.clone(),
             popup_home_order: settings.popup_home_order.clone(),
             popup_home_right_column: settings.popup_home_right_column.clone(),
             ..Self::default()
         }
+    }
+
+    /// Copies every settings-owned popup field. Runtime state (errors,
+    /// requests, revisions, update banner) is left untouched.
+    pub(super) fn apply_settings(&mut self, settings: &Settings) {
+        self.theme = settings.theme;
+        self.accent_color = settings.accent_color;
+        self.animations_enabled = settings.animations_enabled;
+        self.popup_background_material = settings.popup_background_material;
+        self.time_format = settings.time_format;
+        self.show_used_percentage = settings.show_used_percentage;
+        self.show_usage_values = settings.show_usage_values;
+        self.show_usage_pace = settings.show_usage_pace;
+        self.compact_usage_cards = settings.compact_usage_cards;
+        self.popup_visibility = settings.popup_visibility.clone();
+        self.usage_stats_enabled = settings.usage_stats_enabled;
+        self.usage_stats_providers = settings.usage_stats_providers();
+        self.show_total_spend_on_all_tab = settings.show_total_spend_on_all_tab;
+        self.total_spend_presentation = settings.total_spend_presentation;
+        self.total_spend_period = settings.total_spend_period;
+        self.show_account_name = settings.show_account_name;
+        self.instances = settings.instances.clone();
+        self.popup_tab_mode = settings.popup_tab_mode;
+        self.grouped_tab_selection = settings.grouped_tab_selection.clone();
+        self.popup_two_columns = settings.popup_two_columns;
+        self.popup_home_order = settings.popup_home_order.clone();
+        self.popup_home_right_column = settings.popup_home_right_column.clone();
+        self.use_colored_provider_icons = settings.use_colored_provider_icons;
+        self.replace_chatgpt_logo_with_codex = settings.replace_chatgpt_logo_with_codex;
+    }
+
+    pub(super) fn instance(&self, provider: ProviderId) -> Option<&ProviderInstance> {
+        self.instances
+            .iter()
+            .find(|instance| instance.id == provider.id())
+    }
+
+    /// Enabled instances in display order.
+    pub(super) fn enabled_providers(&self) -> Vec<ProviderId> {
+        self.instances
+            .iter()
+            .filter(|instance| instance.enabled)
+            .map(ProviderInstance::provider_id)
+            .collect()
+    }
+
+    pub(super) fn provider_enabled(&self, provider: ProviderId) -> bool {
+        self.instance(provider).is_some_and(|instance| instance.enabled)
+    }
+
+    /// Enabled instances of one driver, in display order.
+    pub(super) fn enabled_instances_of(&self, driver: ProviderKind) -> Vec<ProviderId> {
+        self.instances
+            .iter()
+            .filter(|instance| instance.enabled && instance.driver == driver)
+            .map(ProviderInstance::provider_id)
+            .collect()
+    }
+
+    /// Credential revision of the running worker's instance.
+    pub(super) fn credentials_revision(&self, provider: ProviderId) -> u64 {
+        self.instance(provider)
+            .map_or(0, |instance| instance.credentials_revision)
     }
 
     /// Turn transport/status chains into short product-facing messages. The
@@ -600,7 +582,7 @@ impl UiState {
     /// Retain the latest provider error until that provider produces a
     /// successful limits response. A changing message updates the detail while
     /// keeping the red marker continuously visible.
-    pub(super) fn set_provider_error(&mut self, provider: ProviderKind, error: impl Into<String>) {
+    pub(super) fn set_provider_error(&mut self, provider: ProviderId, error: impl Into<String>) {
         let raw_error = error.into();
         let display_error = Self::error_for_ui(&raw_error);
         if self.provider_errors.get(&provider) != Some(&display_error) {
@@ -612,7 +594,7 @@ impl UiState {
         self.provider_errors.insert(provider, display_error);
     }
 
-    pub(super) fn clear_provider_error(&mut self, provider: ProviderKind) {
+    pub(super) fn clear_provider_error(&mut self, provider: ProviderId) {
         self.provider_errors.remove(&provider);
     }
 
@@ -620,7 +602,7 @@ impl UiState {
     /// usage/analytics refresh. Both are provider failures in the popup UI,
     /// but they have independent lifetimes so a healthy quota poll cannot
     /// hide a still-failing analytics request.
-    pub(super) fn provider_error(&self, provider: ProviderKind) -> Option<&str> {
+    pub(super) fn provider_error(&self, provider: ProviderId) -> Option<&str> {
         if let Some(error) = self.provider_errors.get(&provider) {
             Some(error.as_str())
         } else {
@@ -628,11 +610,11 @@ impl UiState {
         }
     }
 
-    pub(super) fn has_provider_error(&self, provider: ProviderKind) -> bool {
+    pub(super) fn has_provider_error(&self, provider: ProviderId) -> bool {
         self.provider_errors.contains_key(&provider) || self.usage_errors.contains_key(&provider)
     }
 
-    pub(super) fn set_usage_error(&mut self, provider: ProviderKind, error: impl Into<String>) {
+    pub(super) fn set_usage_error(&mut self, provider: ProviderId, error: impl Into<String>) {
         let raw_error = error.into();
         let display_error = Self::error_for_ui(&raw_error);
         if self.usage_errors.get(&provider) != Some(&display_error) {
@@ -644,23 +626,20 @@ impl UiState {
         self.usage_errors.insert(provider, display_error);
     }
 
-    pub(super) fn clear_usage_error(&mut self, provider: ProviderKind) {
+    pub(super) fn clear_usage_error(&mut self, provider: ProviderId) {
         self.usage_errors.remove(&provider);
     }
 
-    pub(super) fn usage_stats_provider_enabled(&self, provider: ProviderKind) -> bool {
-        !self
-            .usage_stats_excluded_providers
-            .iter()
-            .any(|id| id == provider.id())
+    pub(super) fn usage_stats_provider_enabled(&self, provider: ProviderId) -> bool {
+        self.usage_stats_providers.contains(&provider)
     }
 
-    pub(super) fn request_started(&mut self, provider: ProviderKind, kind: RequestKind) {
+    pub(super) fn request_started(&mut self, provider: ProviderId, kind: RequestKind) {
         self.active_requests.push((provider, kind));
         self.refreshing = true;
     }
 
-    pub(super) fn request_finished(&mut self, provider: ProviderKind, kind: RequestKind) {
+    pub(super) fn request_finished(&mut self, provider: ProviderId, kind: RequestKind) {
         if let Some(index) = self
             .active_requests
             .iter()
@@ -671,7 +650,7 @@ impl UiState {
         self.refreshing = !self.active_requests.is_empty();
     }
 
-    pub(super) fn clear_provider_requests(&mut self, provider: ProviderKind) {
+    pub(super) fn clear_provider_requests(&mut self, provider: ProviderId) {
         self.active_requests
             .retain(|(active_provider, _)| *active_provider != provider);
         self.refreshing = !self.active_requests.is_empty();

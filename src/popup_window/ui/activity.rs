@@ -487,7 +487,7 @@ impl PopupRoot {
     fn ensure_models(
         &mut self,
         chart: &str,
-        provider: ProviderKind,
+        provider: ProviderId,
         statistics: &UsageStatistics,
         today: NaiveDate,
         bounds: &[Bucket],
@@ -521,19 +521,19 @@ impl PopupRoot {
                 .background_executor()
                 .spawn(async move {
                     crate::store::with_store(|store| {
-                        if provider == ProviderKind::Codex
+                        if provider == ProviderId::primary(ProviderKind::Codex)
                             && let Some(account) = account.as_deref()
                         {
                             store.account_daily_for(account, first, today)
-                        } else if provider == ProviderKind::OpenRouter
+                        } else if provider.kind() == ProviderKind::OpenRouter
                             && let Some(account) = account.as_deref()
                         {
-                            store.load_openrouter_account_models(account, first, today)
+                            store.load_openrouter_account_models(provider, account, first, today)
                         } else {
                             store.load_model_daily(provider, first, today)
                         }
                     })
-                    .map(|rows| Arc::new(group_models(rows, &query_bounds, provider)))
+                    .map(|rows| Arc::new(group_models(rows, &query_bounds, provider.kind())))
                     .map_err(|error| format!("Could not load model data: {error:#}"))
                 })
                 .await;
@@ -553,13 +553,13 @@ impl PopupRoot {
 
     pub(super) fn render_activity_card(
         &mut self,
-        provider: ProviderKind,
+        provider: ProviderId,
         statistics: &UsageStatistics,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = self.palette.clone();
-        if provider == ProviderKind::Cursor && !statistics.has_data() {
+        if provider.kind() == ProviderKind::Cursor && !statistics.has_data() {
             return card(&palette)
                 .p(px(12.0))
                 .flex()
@@ -575,7 +575,7 @@ impl PopupRoot {
                 ))
                 .into_any_element();
         }
-        let cost_based = is_cost_provider(provider);
+        let cost_based = is_cost_provider(provider.kind());
         let chart = format!(
             "{}-{}",
             provider.id(),
@@ -1033,7 +1033,7 @@ impl PopupRoot {
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .child(usage_card_metrics(provider, statistics, &palette))
+            .child(usage_card_metrics(provider.kind(), statistics, &palette))
             .child(
                 div()
                     .flex()

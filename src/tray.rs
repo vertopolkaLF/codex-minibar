@@ -12,7 +12,7 @@ use crate::{
     limits::{LimitWindow, ProviderLimits, RateLimits},
     provider_registry,
     settings::{
-        LimitValue, ProviderKind, TimeFormat, TrayColorMode, TrayPresentation, TrayWidget,
+        LimitValue, TimeFormat, TrayColorMode, TrayPresentation, TrayWidget,
         TrayWidgetKind,
     },
 };

@@ -3,7 +3,7 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, AppContext, ClickEvent, Context, DragMoveEvent, FontWeight, Hsla,
+    AnyElement, AppContext, ClickEvent, Context, DragMoveEvent, Hsla,
     InteractiveElement, IntoElement, ParentElement, Render, ScrollWheelEvent, SharedString,
     StatefulInteractiveElement, Styled, Transformation, Window, div, px, radians,
 };
@@ -19,8 +19,9 @@ use crate::popup_window::{model, *};
 /// Payload carried while a provider tab is dragged to a new position.
 #[derive(Clone)]
 pub(super) struct TabDrag {
-    provider: ProviderKind,
+    view: PopupView,
     icon: &'static str,
+    badge: Option<crate::instances::Badge>,
     color: Hsla,
     palette: Palette,
     size: f32,
@@ -39,17 +40,24 @@ impl Render for TabDrag {
             .flex()
             .items_center()
             .justify_center()
-            .child(icon(self.icon, self.glyph, self.color))
+            .child(components::provider_mark(
+                self.icon,
+                self.glyph,
+                self.color,
+                self.badge.as_ref(),
+                &self.palette,
+            ))
     }
 }
 
 struct TabSpec {
     id: String,
     icon: &'static str,
-    provider: Option<ProviderKind>,
+    /// Driver whose brand tints the icon; `None` for Home and Usage.
+    driver: Option<ProviderKind>,
+    badge: Option<crate::instances::Badge>,
     tip: String,
     view: PopupView,
-    account: Option<(usize, String)>,
     has_error: bool,
     selected: bool,
 }
@@ -57,15 +65,14 @@ struct TabSpec {
 impl PopupRoot {
     fn tab_specs(&self) -> Vec<TabSpec> {
         let ui = Rc::clone(&self.ui);
-        let limits = Rc::clone(&self.limits);
         let current = self.pager.current;
         let mut tabs = vec![TabSpec {
             id: "home".into(),
             icon: "fluent-home",
-            provider: None,
+            driver: None,
+            badge: None,
             tip: "Home".into(),
             view: PopupView::Home,
-            account: None,
             has_error: false,
             selected: current == PopupView::Home,
         }];
@@ -73,10 +80,10 @@ impl PopupRoot {
             tabs.push(TabSpec {
                 id: "usage".into(),
                 icon: "fluent-chart",
-                provider: None,
+                driver: None,
+                badge: None,
                 tip: "Usage".into(),
                 view: PopupView::Usage,
-                account: None,
                 has_error: false,
                 selected: current == PopupView::Usage,
             });
@@ -84,63 +91,35 @@ impl PopupRoot {
         if !self.show_provider_tabs() {
             return tabs;
         }
-        let claude_tabs = self.claude_tabs();
-        let codex_tabs = self.codex_tabs();
-        let selected_claude =
-            selected_claude_account_tab(&claude_tabs, self.claude_profile.as_deref())
-                .map(str::to_owned);
-        let selected_codex = selected_codex_account_tab(&codex_tabs, self.codex_profile.as_deref())
-            .map(str::to_owned);
-        for provider in self.enabled_provider_order() {
-            let icon_name = crate::provider_registry::icon(provider);
-            let view = PopupView::from_provider(provider);
-            let accounts: Vec<(String, String)> = match provider {
-                ProviderKind::Claude => claude_tabs
-                    .iter()
-                    .map(|profile| (profile.id.clone(), profile.name.clone()))
-                    .collect(),
-                ProviderKind::Codex => codex_tabs
-                    .iter()
-                    .map(|profile| (profile.id.clone(), profile.name.clone()))
-                    .collect(),
-                _ => Vec::new(),
-            };
-            if accounts.is_empty() {
-                tabs.push(TabSpec {
-                    id: provider.id().into(),
-                    icon: icon_name,
-                    provider: Some(provider),
-                    tip: provider.display_name().into(),
+        // Every tab id carries its instance (or driver) identity, so a slot
+        // can never keep another provider's icon, badge or label.
+        for view in model::provider_tabs(&ui) {
+            let spec = match view {
+                PopupView::Provider(provider) => TabSpec {
+                    id: format!("instance-{}", provider.id()),
+                    icon: crate::provider_registry::icon(provider.kind()),
+                    driver: Some(provider.kind()),
+                    badge: provider.badge(),
+                    tip: provider.qualified_name(),
                     view,
-                    account: None,
                     has_error: ui.has_provider_error(provider),
                     selected: current == view,
-                });
-                continue;
-            }
-            let selected_account = if provider == ProviderKind::Claude {
-                selected_claude.as_deref()
-            } else {
-                selected_codex.as_deref()
-            };
-            let snapshot = limits.get(provider);
-            for (index, (id, name)) in accounts.into_iter().enumerate() {
-                let has_error = ui.has_provider_error(provider)
-                    || snapshot
-                        .account_profiles(provider)
-                        .iter()
-                        .any(|profile| profile.id == id && profile.error.is_some());
-                tabs.push(TabSpec {
-                    id: format!("{}-account-{id}", provider.id()),
-                    icon: icon_name,
-                    provider: Some(provider),
-                    tip: format!("{} · {name}", provider.display_name()),
+                },
+                PopupView::Group(driver) => TabSpec {
+                    id: format!("group-{}", driver.id()),
+                    icon: crate::provider_registry::icon(driver),
+                    driver: Some(driver),
+                    badge: None,
+                    tip: driver.display_name().into(),
                     view,
-                    selected: current == view && selected_account == Some(id.as_str()),
-                    account: Some((index + 1, id)),
-                    has_error,
-                });
-            }
+                    has_error: tab_members(&ui.instances, view)
+                        .into_iter()
+                        .any(|member| ui.has_provider_error(member)),
+                    selected: current == view,
+                },
+                PopupView::Home | PopupView::Usage => continue,
+            };
+            tabs.push(spec);
         }
         tabs
     }
@@ -199,7 +178,7 @@ impl PopupRoot {
                     .bg(palette.accent),
             );
         }
-        let reorderable: Vec<ProviderKind> = self.enabled_provider_order();
+        let reorderable: Vec<PopupView> = model::provider_tabs(&self.ui);
         for (index, tab) in tabs.into_iter().enumerate() {
             let element = self.render_tab(tab, index, step, button, size, &reorderable, window, cx);
             strip = strip.child(element);
@@ -280,7 +259,7 @@ impl PopupRoot {
         step: f32,
         button: f32,
         size: crate::settings::BottomBarSize,
-        reorderable: &[ProviderKind],
+        reorderable: &[PopupView],
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -298,19 +277,17 @@ impl PopupRoot {
             fx::NORMAL,
         );
         let colored = self.ui.use_colored_provider_icons;
-        let idle = palette.tab_icon(tab.provider, colored);
-        let icon_color = if colored && tab.provider.is_some() {
+        let idle = palette.tab_icon(tab.driver, colored);
+        let icon_color = if colored && tab.driver.is_some() {
             idle
         } else {
             idle.mix(palette.chrome_icon_hover, hover)
         };
-        let dragging_this = self.tab_drag.is_some() && self.tab_drag == tab.provider;
+        let dragging_this = self.tab_drag == Some(tab.view);
         let drop_target =
-            self.tab_drag.is_some() && self.tab_drop == tab.provider && !dragging_this;
+            self.tab_drag.is_some() && self.tab_drop == Some(tab.view) && !dragging_this;
 
         let view = tab.view;
-        let account = tab.account.clone();
-        let provider = tab.provider;
         let mut element = div()
             .id(eid(format!("tab-{}", tab.id)))
             .absolute()
@@ -324,13 +301,6 @@ impl PopupRoot {
             .opacity(if dragging_this { 0.45 } else { 1.0 })
             .on_hover(self.hover_listener(hover_id, Some(tab.tip.clone().into()), cx))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                if let Some((_, id)) = account.clone() {
-                    match provider {
-                        Some(ProviderKind::Codex) => this.codex_profile = Some(id),
-                        Some(ProviderKind::Claude) => this.claude_profile = Some(id),
-                        _ => {}
-                    }
-                }
                 this.navigate(view, cx);
             }));
         if let Some(layer) = components::hover_layer(&palette, hover, 4.0) {
@@ -346,30 +316,13 @@ impl PopupRoot {
                     .border_color(palette.accent),
             );
         }
-        element = element.child(icon(tab.icon, glyph, icon_color));
-        if let Some((number, _)) = tab.account.as_ref() {
-            element = element.child(
-                div()
-                    .absolute()
-                    .right(px(1.0))
-                    .bottom(px(4.0))
-                    .size(px(14.0))
-                    .rounded(px(7.0))
-                    .bg(palette.accent)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        components::text(
-                            SharedString::from(number.to_string()),
-                            if *number < 10 { 9.0 } else { 8.0 },
-                            10.0,
-                            palette.text_on_accent,
-                        )
-                        .font_weight(FontWeight::SEMIBOLD),
-                    ),
-            );
-        }
+        element = element.child(components::provider_mark(
+            tab.icon,
+            glyph,
+            icon_color,
+            tab.badge.as_ref(),
+            &palette,
+        ));
         if tab.has_error {
             element = element.child(
                 div()
@@ -379,13 +332,12 @@ impl PopupRoot {
                     .child(components::error_badge(13.0, &palette)),
             );
         }
-        if let Some(provider) = tab
-            .provider
-            .filter(|provider| reorderable.contains(provider))
-        {
+        if reorderable.contains(&tab.view) {
+            let target = tab.view;
             let drag = TabDrag {
-                provider,
+                view: target,
                 icon: tab.icon,
+                badge: tab.badge.clone(),
                 color: icon_color,
                 palette: palette.clone(),
                 size: button,
@@ -394,9 +346,9 @@ impl PopupRoot {
             let root = cx.entity();
             element = element
                 .on_drag(drag, move |drag, _, _, cx| {
-                    let provider = drag.provider;
+                    let dragged = drag.view;
                     root.update(cx, |root, cx| {
-                        root.tab_drag = Some(provider);
+                        root.tab_drag = Some(dragged);
                         root.tip = None;
                         cx.notify();
                     });
@@ -405,48 +357,43 @@ impl PopupRoot {
                 .on_drag_move(
                     cx.listener(move |this, event: &DragMoveEvent<TabDrag>, _, cx| {
                         if event.bounds.contains(&event.event.position)
-                            && this.tab_drop != Some(provider)
+                            && this.tab_drop != Some(target)
                         {
-                            this.tab_drop = Some(provider);
+                            this.tab_drop = Some(target);
                             cx.notify();
                         }
                     }),
                 )
                 .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
-                    this.reorder_provider_tab(drag.provider, provider, cx);
+                    this.reorder_provider_tab(drag.view, target, cx);
                 }));
         }
         let _ = view_key;
         element.into_any_element()
     }
 
-    fn reorder_provider_tab(
-        &mut self,
-        from: ProviderKind,
-        to: ProviderKind,
-        cx: &mut Context<Self>,
-    ) {
+    fn reorder_provider_tab(&mut self, from: PopupView, to: PopupView, cx: &mut Context<Self>) {
         self.tab_drag = None;
         self.tab_drop = None;
-        if from == to {
+        let tabs = model::provider_tabs(&self.ui);
+        let Some(order) = reordered_instance_ids(&self.ui.instances, &tabs, from, to) else {
             cx.notify();
             return;
-        }
-        let visible = self.enabled_provider_order();
-        let mut scratch = Settings {
-            popup_order: self.ui.popup_order.clone(),
-            ..Settings::default()
         };
-        if !scratch.reorder_providers(from, to, &visible) {
-            cx.notify();
-            return;
-        }
-        let order = scratch.popup_order;
+        let local_order = order.clone();
         self.persist(
             cx,
-            |ui| ui.popup_order = order,
+            move |ui| {
+                let mut remaining = std::mem::take(&mut ui.instances);
+                for id in &local_order {
+                    if let Some(index) = remaining.iter().position(|instance| &instance.id == id) {
+                        ui.instances.push(remaining.remove(index));
+                    }
+                }
+                ui.instances.append(&mut remaining);
+            },
             move |settings| {
-                settings.reorder_providers(from, to, &visible);
+                settings.apply_instance_order(&order);
             },
         );
     }

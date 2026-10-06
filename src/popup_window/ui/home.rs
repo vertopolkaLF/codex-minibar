@@ -110,94 +110,35 @@ impl PopupRoot {
                 0
             };
             let is_first = placed[column] == 0;
-            let section = if widget.kind == PopupWidgetKind::TotalSpend {
+            let section = if widget.is_total_spend() {
                 Some(self.render_total_spend(is_first, can_reorder, window, cx))
             } else {
-                let provider = widget.kind.as_provider().expect("provider widget");
-                let snapshot = limits.get(provider);
-                let home_limits = match provider {
-                    ProviderKind::Claude => claude_limits_for_home(
-                        snapshot,
-                        &ui.claude_profiles,
-                        &ui.claude_home_excluded_profiles,
-                    ),
-                    ProviderKind::Codex => codex_limits_for_home(
-                        snapshot,
-                        &ui.codex_profiles,
-                        &ui.codex_home_excluded_profiles,
-                    ),
-                    _ => Some(snapshot.clone()),
-                };
-                home_limits.and_then(|home_limits| {
-                    let profiles = home_limits.account_profiles(provider);
-                    let selected = widget
-                        .profile
-                        .as_deref()
-                        .and_then(|id| profiles.iter().find(|p| p.id == id));
-                    // Before the first account poll, the legacy snapshot belongs
-                    // only to the first enabled account, never to every new account.
-                    if widget.profile.is_some() && selected.is_none() {
-                        let first = match provider {
-                            ProviderKind::Claude => claude_account_tabs(&ui.claude_profiles),
-                            ProviderKind::Codex => codex_account_tabs(&ui.codex_profiles),
-                            _ => Vec::new(),
-                        };
-                        if !profiles.is_empty()
-                            || first.first().map(|p| p.id.as_str()) != widget.profile.as_deref()
-                        {
-                            return None;
-                        }
-                    }
-                    let provider_error = selected.and_then(|p| p.error.as_deref()).or_else(|| {
-                        (!profiles.iter().any(|p| p.error.is_some()))
-                            .then(|| ui.provider_error(provider))
-                            .flatten()
-                    });
+                model::home_widget_provider(&ui, &widget).map(|provider| {
                     let options = CardOptions {
                         popup_visibility: &ui.popup_visibility,
                         surface: PopupSurface::HomeTab,
                         show_provider_tabs: show_tabs,
-                        include_usage_stats: widget.profile.is_none()
-                            && ui.usage_stats_provider_enabled(provider),
-                        show_account_name: widget.profile.is_some() || ui.show_account_name,
-                        profile_id: widget.profile.as_deref(),
+                        include_usage_stats: ui.usage_stats_provider_enabled(provider),
+                        show_account_name: ui.show_account_name,
                         drag_handle: can_reorder,
-                        openrouter_actions: provider == ProviderKind::OpenRouter,
-                        provider_error,
+                        openrouter_actions: provider.kind() == ProviderKind::OpenRouter,
+                        provider_error: ui.provider_error(provider),
                         now: Utc::now(),
                     };
-                    let account_limits = selected.map_or(&home_limits, |p| &p.limits);
-                    let mut cards = provider_cards(
+                    let cards = provider_cards(
                         provider,
                         is_first,
-                        account_limits,
+                        true,
+                        limits.get(provider),
                         &forced_resets,
                         &options,
                     );
-                    // Local transcript statistics are shared across accounts;
-                    // keep one copy with the first account in the source snapshot.
-                    if widget.profile.is_some()
-                        && (profiles.is_empty()
-                            || selected.map(|p| p.id.as_str())
-                                == profiles.first().map(|p| p.id.as_str()))
-                    {
-                        cards.extend(shared_usage_statistics_card(
-                            provider,
-                            &home_limits,
-                            ui.usage_stats_provider_enabled(provider),
-                            &ui.popup_visibility,
-                            PopupSurface::HomeTab,
-                            show_tabs,
-                        ));
-                    }
-                    Some(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(SECTION_GAP))
-                            .children(self.render_cards(&cards, PopupSurface::HomeTab, window, cx))
-                            .into_any_element(),
-                    )
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(SECTION_GAP))
+                        .children(self.render_cards(&cards, PopupSurface::HomeTab, window, cx))
+                        .into_any_element()
                 })
             };
             let Some(section) = section else {
@@ -575,7 +516,7 @@ impl PopupRoot {
             .child(selector);
         if can_reorder {
             trailing = trailing.child(
-                self.widget_drag_handle(HomeWidgetId::new(PopupWidgetKind::TotalSpend, None), cx),
+                self.widget_drag_handle(HomeWidgetId::total_spend(), cx),
             );
         }
         let heading = components::split_row(title, trailing)
@@ -629,7 +570,7 @@ impl PopupRoot {
             .into_any_element()
     }
 
-    fn spend_hero_content(&self, entries: &[(ProviderKind, u64)], total: u64) -> AnyElement {
+    fn spend_hero_content(&self, entries: &[(ProviderId, u64)], total: u64) -> AnyElement {
         let palette = &self.palette;
         let colored = self.ui.use_colored_provider_icons;
         let mut tiles = div().grid().grid_cols(3).gap_x(px(8.0)).gap_y(px(16.0));
@@ -646,13 +587,15 @@ impl PopupRoot {
                             .flex_row()
                             .items_center()
                             .gap(px(8.0))
-                            .child(components::icon(
-                                crate::provider_registry::icon(*provider),
+                            .child(components::provider_mark(
+                                crate::provider_registry::icon(provider.kind()),
                                 16.0,
-                                palette.provider_icon(*provider, colored),
+                                palette.provider_icon(provider.kind(), colored),
+                                provider.badge().as_ref(),
+                                &palette,
                             ))
                             .child(nowrap(components::body_strong(
-                                provider.display_name(),
+                                provider.qualified_name(),
                                 palette.text_primary,
                             ))),
                     )
@@ -686,7 +629,7 @@ impl PopupRoot {
             .into_any_element()
     }
 
-    fn spend_donut_content(&self, entries: &[(ProviderKind, u64)], total: u64) -> AnyElement {
+    fn spend_donut_content(&self, entries: &[(ProviderId, u64)], total: u64) -> AnyElement {
         let palette = self.palette.clone();
         let colored = self.ui.use_colored_provider_icons;
         let mut legend = div().flex().flex_col().gap(px(12.0)).flex_1().min_w_0();
@@ -697,17 +640,19 @@ impl PopupRoot {
                     .flex_row()
                     .items_center()
                     .gap(px(8.0))
-                    .child(components::icon(
-                        crate::provider_registry::icon(*provider),
+                    .child(components::provider_mark(
+                        crate::provider_registry::icon(provider.kind()),
                         16.0,
-                        palette.provider_icon(*provider, colored),
+                        palette.provider_icon(provider.kind(), colored),
+                        provider.badge().as_ref(),
+                        &palette,
                     ))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .child(nowrap(components::body_strong(
-                                provider.display_name(),
+                                provider.qualified_name(),
                                 palette.text_primary,
                             ))),
                     )
@@ -777,8 +722,8 @@ fn old_is_first(widgets: &HashMap<HomeWidgetId, Bounds<Pixels>>, bounds: Bounds<
 
 /// Rounded segments sized by weight, separated by 4 DIP gaps.
 pub(super) fn share_bar(
-    entries: &[(ProviderKind, u64)],
-    color: impl Fn(ProviderKind) -> Hsla,
+    entries: &[(ProviderId, u64)],
+    color: impl Fn(ProviderId) -> Hsla,
 ) -> gpui::Div {
     let total: u64 = entries
         .iter()
@@ -814,9 +759,9 @@ impl FlexGrowWeight for gpui::Div {
 /// Angular spans of the spend donut, in degrees from 12 o'clock clockwise.
 /// `None` marks the neutral ring drawn when there is no spend at all.
 pub(crate) fn donut_segments(
-    entries: &[(ProviderKind, u64)],
+    entries: &[(ProviderId, u64)],
     total: u64,
-) -> Vec<(Option<ProviderKind>, f32, f32)> {
+) -> Vec<(Option<ProviderId>, f32, f32)> {
     const GAP_DEGREES: f32 = 2.0;
     if total == 0 {
         return vec![(None, -90.0, 270.0)];

@@ -6,27 +6,12 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     let start_at_login = ctx.start_at_login;
     let limit_refresh_interval = ctx.limit_refresh_interval;
     let usage_stats_enabled = ctx.usage_stats_enabled;
-    let usage_stats_excluded_providers = ctx.usage_stats_excluded_providers;
-    let available_usage_providers = crate::provider_registry::PROVIDERS
-        .iter()
-        .filter(|descriptor| match descriptor.kind {
-            ProviderKind::Codex => ctx.codex_enabled,
-            ProviderKind::Claude => ctx.claude_enabled,
-            ProviderKind::Cursor => ctx.cursor_enabled,
-            ProviderKind::OpenCodeZen => ctx.opencode_zen_enabled,
-            ProviderKind::OpenCodeGo => ctx.opencode_go_enabled,
-            ProviderKind::OpenRouter => ctx.openrouter_enabled,
-            ProviderKind::Antigravity | ProviderKind::Grok | ProviderKind::Kiro => false,
-        })
-        .map(|descriptor| descriptor.kind)
-        .collect::<Vec<_>>();
     let usage_refresh_interval = ctx.usage_refresh_interval;
     let forced_reset_feed_enabled = ctx.forced_reset_feed_enabled;
     let forced_reset_notifications = ctx.forced_reset_notifications;
     let reset_announcement_refresh_interval = ctx.reset_announcement_refresh_interval;
     let set_start_at_login = ctx.set_start_at_login.clone();
     let set_usage_stats_enabled = ctx.set_usage_stats_enabled.clone();
-    let set_usage_stats_excluded_providers = ctx.set_usage_stats_excluded_providers.clone();
     let set_limit_refresh_interval = ctx.set_limit_refresh_interval.clone();
     let set_usage_refresh_interval = ctx.set_usage_refresh_interval.clone();
     let set_forced_reset_feed_enabled = ctx.set_forced_reset_feed_enabled.clone();
@@ -107,11 +92,9 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
             )
             .with_key("general-usage-stats-enabled"),
             usage_stats_provider_selection_card(
-                &available_usage_providers,
-                usage_stats_excluded_providers,
+                ctx.instances,
                 usage_stats_enabled,
-                crate::openrouter::has_management_key(ctx.openrouter_accounts),
-                set_usage_stats_excluded_providers,
+                ctx.set_instances.clone(),
                 settings_tx.clone(),
             )
             .with_key("general-usage-stats-providers"),
@@ -213,40 +196,56 @@ pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Elemen
     )
 }
 
+/// Per-instance Usage Stats switches for enabled instances whose driver has
+/// local history. Unavailable instances stay listed, disabled, with why.
 fn usage_stats_provider_selection_card(
-    available_providers: &[ProviderKind],
-    excluded_providers: &[String],
+    instances: &[ProviderInstance],
     usage_stats_enabled: bool,
-    openrouter_usage_available: bool,
-    set_excluded_providers: SetState<Vec<String>>,
+    set_instances: SetState<Vec<ProviderInstance>>,
     settings_tx: Sender<Settings>,
 ) -> Element {
     const PROVIDER_COLUMNS: usize = 3;
+    let available_providers = instances
+        .iter()
+        .filter(|instance| {
+            instance.enabled && crate::provider_registry::supports_usage_stats(instance.driver)
+        })
+        .collect::<Vec<_>>();
     let mut provider_checks = Vec::with_capacity(available_providers.len());
-    for (index, provider) in available_providers.iter().copied().enumerate() {
+    for (index, instance) in available_providers.iter().enumerate() {
         let row = (index / PROVIDER_COLUMNS) as i32;
         let column = (index % PROVIDER_COLUMNS) as i32;
-        let descriptor = crate::provider_registry::descriptor(provider);
-        let available = provider != ProviderKind::OpenRouter || openrouter_usage_available;
-        let checked = available && !excluded_providers.iter().any(|id| id == provider.id());
-        let current = excluded_providers.to_vec();
-        let set_excluded_providers = set_excluded_providers.clone();
+        let provider = instance.provider_id();
+        let reason = crate::instances::Capabilities::reason(
+            instance,
+            crate::instances::Capability::UsageStats,
+        )
+        .or_else(|| {
+            (instance.driver == ProviderKind::OpenRouter
+                && !crate::openrouter::has_management_key(instance.openrouter.as_slice()))
+            .then_some("Add a management key")
+        });
+        let available = reason.is_none();
+        let checked = available && instance.usage_stats;
+        let current = instances.to_vec();
+        let set_instances = set_instances.clone();
         let settings_tx = settings_tx.clone();
         let checkbox: Element = settings_labeled_checkbox(
             checked,
-            descriptor.display_name,
+            provider.qualified_name(),
             usage_stats_enabled && available,
             move |checked| {
                 if !available {
                     return;
                 }
                 let mut optimistic = current.clone();
-                if checked {
-                    optimistic.retain(|id| id != provider.id());
-                } else if !optimistic.iter().any(|id| id == provider.id()) {
-                    optimistic.push(provider.id().into());
+                if let Some(instance) = optimistic
+                    .iter_mut()
+                    .find(|instance| instance.id == provider.id())
+                {
+                    instance.usage_stats = checked;
                 }
-                set_excluded_providers.call(optimistic);
+                set_instances.call(optimistic);
                 persist_update(settings_tx.clone(), move |settings| {
                     settings.set_usage_stats_provider_enabled(provider, checked);
                 });
@@ -256,11 +255,11 @@ fn usage_stats_provider_selection_card(
         // Keep the tooltip host enabled and hit-testable even though the
         // checkbox itself is disabled. Disabled WinUI controls do not receive
         // the ordinary tooltip pointer events.
-        let checkbox = if !available {
+        let checkbox = if let Some(reason) = reason {
             border(checkbox)
                 .background(Color::transparent())
                 .horizontal_alignment(HorizontalAlignment::Left)
-                .tooltip("Add a management key")
+                .tooltip(reason)
                 .into()
         } else {
             checkbox
