@@ -253,6 +253,50 @@ pub(crate) fn badge_plate(k: &Kit, badge: &crate::instances::Badge) -> AnyElemen
         .into_any_element()
 }
 
+/// A driver glyph with the instance badge on its lower-right corner, sized
+/// like the popup's provider marks.
+pub(crate) fn provider_mark(
+    k: &Kit,
+    glyph: &str,
+    size: f32,
+    color: Hsla,
+    badge: Option<&crate::instances::Badge>,
+) -> AnyElement {
+    let mark = div()
+        .relative()
+        .flex_none()
+        .size(px(size))
+        .child(icon(glyph, size, color));
+    let Some(badge) = badge else {
+        return mark.into_any_element();
+    };
+    let (bg, fg) = k.theme.badge(badge.color);
+    let height = (size * 0.62).clamp(9.0, 14.0);
+    mark.child(
+        div()
+            .absolute()
+            .right(px(-height * 0.45))
+            .bottom(px(-height * 0.3))
+            .flex()
+            .items_center()
+            .justify_center()
+            .h(px(height))
+            .min_w(px(height))
+            .px(px((height * 0.22).max(2.0)))
+            .rounded(px(height * 0.3))
+            .border_1()
+            .border_color(k.theme.window_bg)
+            .bg(bg)
+            .text_color(fg)
+            .text_size(px((height * 0.68).max(7.0)))
+            .line_height(px(height))
+            .font_weight(FontWeight::BOLD)
+            .whitespace_nowrap()
+            .child(badge.text.clone()),
+    )
+    .into_any_element()
+}
+
 pub(crate) fn divider(k: &Kit) -> AnyElement {
     div()
         .h(px(1.0))

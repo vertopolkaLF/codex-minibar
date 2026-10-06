@@ -748,34 +748,38 @@ impl SettingsWindow {
             _ => None,
         };
         let theme = k.theme.clone();
-        let ordered: Vec<&ProviderInstance> =
-            enabled.iter().chain(disabled.iter()).copied().collect();
         let selected_index = selected.and_then(|provider| {
-            ordered
+            enabled
                 .iter()
                 .position(|instance| instance.id == provider.id())
         });
-        // The pill tracks items; the divider between groups adds an offset.
-        let divider_after = (!enabled.is_empty() && !disabled.is_empty()).then_some(enabled.len());
         let mut list = div().relative().flex().flex_col().gap(px(NAV_ITEM_GAP));
-        for (index, instance) in ordered.iter().enumerate() {
-            if divider_after == Some(index) {
-                list = list.child(
-                    div()
-                        .h(px(NAV_ITEM_HEIGHT))
-                        .flex()
-                        .items_center()
-                        .px(px(14.0))
-                        .child(kit::text("Off", 12.0, theme.text_tertiary)),
-                );
-            }
+        for instance in &enabled {
             list = list.child(self.provider_nav_item(k, instance, &instances, selected, cx));
         }
-        let pill_index = selected_index.map(|index| match divider_after {
-            Some(after) if index >= after => index + 1,
-            _ => index,
-        });
-        list = list.children(Self::nav_indicator(k, "providers", pill_index));
+        list = list.children(Self::nav_indicator(k, "providers", selected_index));
+        let list = div()
+            .flex()
+            .flex_col()
+            .child(list)
+            .when(!disabled.is_empty(), |el| {
+                let tiles = disabled
+                    .iter()
+                    .map(|instance| self.provider_nav_tile(k, instance, &instances, selected, cx))
+                    .collect::<Vec<_>>();
+                el.when(!enabled.is_empty(), |el| {
+                    el.child(div().h(px(1.0)).mx(px(14.0)).my(px(10.0)).bg(theme.divider))
+                })
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap(px(4.0))
+                        .px(px(6.0))
+                        .pb(px(8.0))
+                        .children(tiles),
+                )
+            });
 
         let back = Self::h(cx, |this, (), _, cx| this.leave_providers(cx));
         let back_enabled = self.provider_dialog.is_none();
@@ -814,45 +818,7 @@ impl SettingsWindow {
                     .on_click(add)
                     .render(k),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(4.0))
-                    .p(px(12.0))
-                    .rounded(px(kit::CARD_RADIUS))
-                    .border_1()
-                    .border_color(theme.card_stroke)
-                    .bg(theme.card)
-                    .child(
-                        div()
-                            .text_size(px(13.0))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Missing a provider?"),
-                    )
-                    .child(kit::caption(k, "Request support or send a pull request."))
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(4.0))
-                            .child(
-                                Button::new("missing-issue", "Issue")
-                                    .link()
-                                    .on_click(kit::handler(|(), _, _| {
-                                        open_url(crate::updater::PROVIDER_REQUEST_ISSUE_URL)
-                                    }))
-                                    .render(k),
-                            )
-                            .child(
-                                Button::new("missing-pr", "Pull request")
-                                    .link()
-                                    .on_click(kit::handler(|(), _, _| {
-                                        open_url(crate::updater::CONTRIBUTING_URL)
-                                    }))
-                                    .render(k),
-                            ),
-                    ),
-            );
+            .child(Self::missing_provider_card(k));
         div()
             .flex()
             .flex_col()
@@ -871,6 +837,104 @@ impl SettingsWindow {
             .into_any_element()
     }
 
+    /// Sidebar footer card pointing at the two ways to get a provider added.
+    fn missing_provider_card(k: &Kit) -> AnyElement {
+        let theme = &k.theme;
+        let action =
+            |id: &'static str, glyph: &'static str, label: &'static str, url: &'static str| {
+                let hover = theme.subtle_hover;
+                let pressed = theme.subtle_pressed;
+                div()
+                    .id(id)
+                    .flex()
+                    .items_center()
+                    .gap(px(10.0))
+                    .h(px(32.0))
+                    .px(px(8.0))
+                    .rounded(px(5.0))
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(hover))
+                    .active(move |style| style.bg(pressed))
+                    .on_click(move |_, _, _| open_url(url))
+                    .child(kit::icon(glyph, 16.0, theme.accent_text))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(kit::text(label, 13.0, theme.text)),
+                    )
+                    .child(kit::icon("arrow-square-out", 12.0, theme.text_tertiary))
+            };
+        div()
+            .flex()
+            .flex_col()
+            .rounded(px(kit::CARD_RADIUS))
+            .border_1()
+            .border_color(theme.card_stroke)
+            .bg(theme.card)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.0))
+                    .p(px(12.0))
+                    .child(
+                        div()
+                            .size(px(34.0))
+                            .flex_none()
+                            .rounded(px(8.0))
+                            .bg(theme.accent_soft)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(kit::icon("puzzle-piece-fill", 16.0, theme.accent_text)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(1.0))
+                            .child(
+                                div()
+                                    .text_size(px(13.0))
+                                    .line_height(px(17.0))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("Missing a provider?"),
+                            )
+                            .child(
+                                kit::text(
+                                    "Ask for it or build it yourself.",
+                                    12.0,
+                                    theme.text_secondary,
+                                )
+                                .line_height(px(16.0)),
+                            ),
+                    ),
+            )
+            .child(div().h(px(1.0)).mx(px(12.0)).bg(theme.divider))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .p(px(4.0))
+                    .child(action(
+                        "missing-issue",
+                        "chat-centered-text-fill",
+                        "Request a provider",
+                        crate::updater::PROVIDER_REQUEST_ISSUE_URL,
+                    ))
+                    .child(action(
+                        "missing-pr",
+                        "git-pull-request-fill",
+                        "Contribute one",
+                        crate::updater::CONTRIBUTING_URL,
+                    )),
+            )
+            .into_any_element()
+    }
+
     fn provider_nav_item(
         &self,
         k: &Kit,
@@ -886,10 +950,8 @@ impl SettingsWindow {
         } else {
             theme.glyph()
         };
+        let badge = shows_badge(instance, instances).then(|| instance.badge());
         let mut trailing = Vec::new();
-        if shows_badge(instance, instances) {
-            trailing.push(kit::badge_plate(k, &instance.badge()));
-        }
         if instance.enabled {
             if instance.driver == ProviderKind::OpenRouter {
                 let keys = instance
@@ -921,7 +983,13 @@ impl SettingsWindow {
         let item = self.nav_item(
             k,
             format!("nav-provider-{}", instance.id).into(),
-            icon(crate::provider_registry::icon(instance.driver), 16.0, color).into_any_element(),
+            kit::provider_mark(
+                k,
+                crate::provider_registry::icon(instance.driver),
+                16.0,
+                color,
+                badge.as_ref(),
+            ),
             instance.display_name().into(),
             selected == Some(provider),
             !instance.enabled,
@@ -944,6 +1012,73 @@ impl SettingsWindow {
                     style.bg(drop_color)
                 } else {
                     style
+                }
+            })
+            .on_drop(cx.listener(move |this, dragged: &DraggedProvider, _, cx| {
+                this.reorder_provider(&dragged.id, &target_id, cx);
+            }))
+            .into_any_element()
+    }
+
+    /// An icon-only tile for a provider that is turned off.
+    fn provider_nav_tile(
+        &self,
+        k: &Kit,
+        instance: &ProviderInstance,
+        instances: &[ProviderInstance],
+        selected: Option<ProviderId>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = &k.theme;
+        let provider = instance.provider_id();
+        let is_selected = selected == Some(provider);
+        let hover = theme.subtle_hover;
+        let color = if is_selected {
+            theme.brand(instance.driver)
+        } else {
+            theme.glyph()
+        };
+        let badge = shows_badge(instance, instances).then(|| instance.badge());
+        let tile = div()
+            .id(eid(format!("nav-provider-{}", instance.id)))
+            .relative()
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(40.0))
+            .rounded(px(6.0))
+            .border_1()
+            .border_color(if is_selected {
+                theme.accent
+            } else {
+                gpui::transparent_black()
+            })
+            .cursor_pointer()
+            .when(is_selected, |el| el.bg(theme.accent_soft))
+            .when(!is_selected, |el| el.hover(move |style| style.bg(hover)))
+            .on_click(cx.listener(move |this, _, _, cx| this.select_provider(provider, cx)))
+            .child(kit::provider_mark(
+                k,
+                crate::provider_registry::icon(instance.driver),
+                18.0,
+                color,
+                badge.as_ref(),
+            ));
+        let tile = kit::with_tooltip(k, tile, instance.display_name());
+        let dragged = DraggedProvider {
+            id: instance.id.clone(),
+            enabled: false,
+            label: instance.display_name().into(),
+            theme: theme.clone(),
+        };
+        let target_id = instance.id.clone();
+        let drop_color = theme.accent_soft;
+        tile.on_drag(dragged, |dragged, _, _, cx| cx.new(|_| dragged.clone()))
+            .drag_over::<DraggedProvider>(move |style, dragged, _, _| {
+                if dragged.enabled {
+                    style
+                } else {
+                    style.bg(drop_color)
                 }
             })
             .on_drop(cx.listener(move |this, dragged: &DraggedProvider, _, cx| {

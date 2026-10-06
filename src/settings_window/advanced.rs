@@ -196,14 +196,14 @@ impl SettingsWindow {
                 ),
             ],
             vec![
+                Button::new("reset-cancel", "Cancel")
+                    .full_width()
+                    .on_click(cancel.clone())
+                    .render(k),
                 Button::new("reset-confirm", "Reset")
                     .accent()
                     .full_width()
                     .on_click(reset)
-                    .render(k),
-                Button::new("reset-cancel", "Cancel")
-                    .full_width()
-                    .on_click(cancel.clone())
                     .render(k),
             ],
             Some(cancel),

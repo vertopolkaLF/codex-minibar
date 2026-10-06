@@ -63,15 +63,15 @@ impl SettingsWindow {
                 ),
             ],
             vec![
+                Button::new("troubleshoot-cancel", "Cancel")
+                    .full_width()
+                    .on_click(dismiss.clone())
+                    .render(k),
                 Button::new("troubleshoot-run", "Open terminal")
                     .accent()
                     .full_width()
                     .disabled(selected.is_none())
                     .on_click(run)
-                    .render(k),
-                Button::new("troubleshoot-cancel", "Cancel")
-                    .full_width()
-                    .on_click(dismiss.clone())
                     .render(k),
             ],
             Some(dismiss),

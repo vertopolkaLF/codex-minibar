@@ -5,8 +5,10 @@
 //! the dialog shows "Checking…" until they finish, then closes with a toast
 //! or returns with the error.
 
+use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, Context, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
+    AnyElement, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, SharedString,
+    StatefulInteractiveElement, Styled, Window, div, px, relative,
 };
 
 use super::super::kit::{self, Button, Kit};
@@ -66,9 +68,28 @@ pub(crate) enum ProviderDialogKind {
     },
 }
 
+/// The steps of the "Add provider" dialog.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AddStep {
+    Provider,
+    Details,
+}
+
+impl AddStep {
+    const ALL: [Self; 2] = [Self::Provider, Self::Details];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Provider => "Provider",
+            Self::Details => "Details",
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct ProviderDialog {
     kind: ProviderDialogKind,
+    add_step: AddStep,
     initial_name: String,
     driver: Option<ProviderKind>,
     badge_color: BadgeColor,
@@ -87,6 +108,7 @@ impl ProviderDialog {
     pub(crate) fn with_name(kind: ProviderDialogKind, name: String) -> Self {
         Self {
             kind,
+            add_step: AddStep::Provider,
             initial_name: name,
             driver: None,
             badge_color: BadgeColor::default(),
@@ -127,6 +149,151 @@ fn link(k: &Kit, id: &'static str, label: &'static str, url: &'static str) -> An
                 .render(k),
         )
         .into_any_element()
+}
+
+/// Numbered step strip; finished steps show a check and can be revisited.
+fn add_stepper(k: &Kit, current: AddStep, on_select: kit::Handler<AddStep>) -> AnyElement {
+    let theme = &k.theme;
+    let current_index = AddStep::ALL
+        .iter()
+        .position(|step| *step == current)
+        .unwrap_or(0);
+    let steps = AddStep::ALL.iter().enumerate().map(|(index, step)| {
+        let step = *step;
+        let active = index == current_index;
+        let done = index < current_index;
+        let marker = div()
+            .size(px(22.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .text_size(px(12.0))
+            .font_weight(FontWeight::SEMIBOLD)
+            .map(|el| {
+                if active || done {
+                    el.bg(theme.accent).text_color(theme.on_accent)
+                } else {
+                    el.border_1()
+                        .border_color(theme.control_stroke)
+                        .text_color(theme.text_secondary)
+                }
+            })
+            .map(|el| {
+                if done {
+                    el.child(kit::icon("check-bold", 12.0, theme.on_accent))
+                } else {
+                    el.child((index + 1).to_string())
+                }
+            });
+        let hover = theme.subtle_hover;
+        let on_select = on_select.clone();
+        div()
+            .id(kit::eid(format!("dlg-step-{index}")))
+            .flex_1()
+            .flex()
+            .items_center()
+            .gap(px(10.0))
+            .h(px(40.0))
+            .px(px(12.0))
+            .rounded(px(6.0))
+            .border_1()
+            .map(|el| {
+                if active {
+                    el.bg(theme.card).border_color(theme.card_stroke)
+                } else {
+                    el.border_color(gpui::transparent_black())
+                }
+            })
+            .when(done, |el| {
+                el.cursor_pointer()
+                    .hover(move |style| style.bg(hover))
+                    .on_click(move |_, window, cx| on_select(step, window, cx))
+            })
+            .child(marker)
+            .child(kit::text(
+                step.label(),
+                14.0,
+                if active || done {
+                    theme.text
+                } else {
+                    theme.text_secondary
+                },
+            ))
+            .into_any_element()
+    });
+    div()
+        .flex()
+        .gap(px(4.0))
+        .p(px(4.0))
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(theme.card_stroke)
+        .bg(theme.subtle_hover)
+        .children(steps)
+        .into_any_element()
+}
+
+/// One selectable provider card in the "Add provider" grid.
+fn driver_card(
+    k: &Kit,
+    driver: ProviderKind,
+    selected: bool,
+    blocked: Option<&str>,
+    on_click: Option<kit::Handler<bool>>,
+) -> AnyElement {
+    let theme = &k.theme;
+    let hover = theme.card_hover;
+    let card = div()
+        .id(kit::eid(format!("dlg-driver-{}", driver.display_name())))
+        .flex()
+        .items_center()
+        .gap(px(12.0))
+        .h(px(52.0))
+        .px(px(14.0))
+        .rounded(px(8.0))
+        .border_1()
+        .map(|el| {
+            if selected {
+                el.border_color(theme.accent).bg(theme.accent_soft)
+            } else {
+                el.border_color(theme.card_stroke).bg(theme.card)
+            }
+        })
+        .when(blocked.is_some(), |el| el.opacity(0.5))
+        .child(kit::icon(
+            crate::provider_registry::icon(driver),
+            20.0,
+            theme.brand(driver),
+        ))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(px(14.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.text)
+                .child(driver.display_name()),
+        )
+        .when(selected, |el| {
+            el.child(kit::icon("check-circle-fill", 20.0, theme.accent_text))
+        })
+        .when(blocked.is_some(), |el| el.child(kit::chip(k, "Added")));
+    // The handler receives `true` on a double click, which also advances.
+    let card = match on_click {
+        Some(on_click) if blocked.is_none() => card
+            .cursor_pointer()
+            .when(!selected, |el| el.hover(move |style| style.bg(hover)))
+            .on_click(move |event, window, cx| on_click(event.click_count() > 1, window, cx)),
+        _ => card,
+    };
+    let card = match blocked {
+        Some(reason) => kit::with_tooltip(k, card, reason.to_owned()),
+        None => card,
+    };
+    card.into_any_element()
 }
 
 fn claude_instructions(k: &Kit, method: ProfileCredentialMethod) -> Vec<AnyElement> {
@@ -282,92 +449,132 @@ impl SettingsWindow {
         let mut wide = false;
         let (title, primary) = match &dialog.kind {
             ProviderDialogKind::AddInstance => {
-                let choices = add_instance_choices(&instances);
-                let labels = choices
-                    .iter()
-                    .map(|(driver, blocked)| {
-                        SharedString::from(match blocked {
-                            Some(_) => format!("{} (already added)", driver.display_name()),
-                            None => driver.display_name().to_owned(),
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                let selected = dialog
-                    .driver
-                    .and_then(|driver| choices.iter().position(|(choice, _)| *choice == driver));
-                fields.push(kit::field(
-                    k,
-                    "Provider",
-                    kit::dropdown_with_placeholder(
-                        k,
-                        "dlg-driver",
-                        labels,
-                        selected,
-                        dialog.checking,
-                        0.0,
-                        Some("Choose a provider".into()),
-                        Self::h(cx, move |this, index: usize, _, cx| {
-                            if let (Some(dialog), Some((driver, _))) =
-                                (this.provider_dialog.as_mut(), choices.get(index))
-                            {
-                                dialog.driver = Some(*driver);
-                                dialog.error = None;
-                            }
-                            cx.notify();
-                        }),
-                    ),
-                ));
-                let placeholder = dialog
-                    .driver
-                    .map_or("e.g. Work", |driver| driver.display_name());
-                fields.push(self.dialog_input(
-                    k,
-                    FIELD_NAME,
-                    "Name",
-                    placeholder,
-                    &dialog.initial_name,
-                    false,
-                    Some("Shown on its tab, Home card, tray and notifications."),
-                    window,
-                    cx,
-                ));
-                first_input = Some(FIELD_NAME);
-                let badge =
-                    self.dialog_input(k, FIELD_BADGE, "Badge", "Auto", "", false, None, window, cx);
-                let color = kit::field(
-                    k,
-                    "Badge color",
-                    kit::dropdown(
-                        k,
-                        "dlg-badge-color",
-                        BadgeColor::ALL
-                            .iter()
-                            .map(|color| SharedString::from(color.label()))
-                            .collect(),
-                        usize::try_from(dialog.badge_color.index()).ok(),
-                        dialog.checking,
-                        0.0,
-                        Self::h(cx, |this, index: usize, _, cx| {
-                            if let Some(dialog) = this.provider_dialog.as_mut() {
-                                dialog.badge_color = BadgeColor::from_index(index as i32);
-                            }
-                            cx.notify();
-                        }),
-                    ),
-                );
-                fields.push(
-                    div()
-                        .flex()
-                        .gap(px(12.0))
-                        .child(div().flex_1().child(badge))
-                        .child(color)
-                        .into_any_element(),
-                );
+                wide = true;
                 fields.push(kit::caption(
                     k,
-                    "Up to three letters; empty uses the name's initials. Badges show while a provider has more than one instance turned on.",
+                    "Track another account or a provider Minibar has not shown yet.",
                 ));
-                ("Add provider".to_owned(), "Add")
+                let step = dialog.add_step;
+                fields.push(add_stepper(
+                    k,
+                    step,
+                    Self::h(cx, |this, step: AddStep, _, cx| this.set_add_step(step, cx)),
+                ));
+                let content = match step {
+                    AddStep::Provider => {
+                        let cards = add_instance_choices(&instances)
+                            .into_iter()
+                            .map(|(driver, blocked)| {
+                                let on_click = (!dialog.checking).then(|| {
+                                    Self::h(cx, move |this, advance: bool, _, cx| {
+                                        if let Some(dialog) = this.provider_dialog.as_mut() {
+                                            dialog.driver = Some(driver);
+                                            dialog.error = None;
+                                        }
+                                        if advance {
+                                            this.set_add_step(AddStep::Details, cx);
+                                        }
+                                        cx.notify();
+                                    })
+                                });
+                                div().w(relative(0.5)).p(px(4.0)).child(driver_card(
+                                    k,
+                                    driver,
+                                    dialog.driver == Some(driver),
+                                    blocked.as_deref(),
+                                    on_click,
+                                ))
+                            })
+                            .collect::<Vec<_>>();
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .mx(px(-4.0))
+                            .children(cards)
+                            .into_any_element()
+                    }
+                    AddStep::Details => {
+                        let placeholder = dialog
+                            .driver
+                            .map_or("e.g. Work", |driver| driver.display_name());
+                        let name = self.dialog_input(
+                            k,
+                            FIELD_NAME,
+                            "Name",
+                            placeholder,
+                            &dialog.initial_name,
+                            false,
+                            Some("Shown on its tab, Home card, tray and notifications."),
+                            window,
+                            cx,
+                        );
+                        first_input = Some(FIELD_NAME);
+                        let badge = self.dialog_input(
+                            k,
+                            FIELD_BADGE,
+                            "Badge",
+                            "Auto",
+                            "",
+                            false,
+                            None,
+                            window,
+                            cx,
+                        );
+                        let color = kit::field(
+                            k,
+                            "Badge color",
+                            kit::dropdown(
+                                k,
+                                "dlg-badge-color",
+                                BadgeColor::ALL
+                                    .iter()
+                                    .map(|color| SharedString::from(color.label()))
+                                    .collect(),
+                                usize::try_from(dialog.badge_color.index()).ok(),
+                                dialog.checking,
+                                0.0,
+                                Self::h(cx, |this, index: usize, _, cx| {
+                                    if let Some(dialog) = this.provider_dialog.as_mut() {
+                                        dialog.badge_color = BadgeColor::from_index(index as i32);
+                                    }
+                                    cx.notify();
+                                }),
+                            ),
+                        );
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(14.0))
+                            .children(dialog.driver.map(|driver| {
+                                driver_card(k, driver, true, None, None)
+                            }))
+                            .child(name)
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap(px(12.0))
+                                    .child(div().flex_1().child(badge))
+                                    .child(color),
+                            )
+                            .child(kit::caption(
+                                k,
+                                "Up to three letters; empty uses the name's initials. Badges show while a provider has more than one instance turned on.",
+                            ))
+                            .into_any_element()
+                    }
+                };
+                let key = match step {
+                    AddStep::Provider => "provider",
+                    AddStep::Details => "details",
+                };
+                fields.push(kit::appear(k, format!("dlg-add-{key}"), content));
+                (
+                    "Add provider".to_owned(),
+                    match step {
+                        AddStep::Provider => "Next",
+                        AddStep::Details => "Add",
+                    },
+                )
             }
             ProviderDialogKind::DeleteInstance { provider } => {
                 let name = instance_name(provider);
@@ -645,9 +852,11 @@ impl SettingsWindow {
         } else {
             primary
         };
+        let picking =
+            dialog.kind == ProviderDialogKind::AddInstance && dialog.add_step == AddStep::Provider;
         let mut primary_button = Button::new("dlg-primary", primary_label)
             .full_width()
-            .disabled(dialog.checking)
+            .disabled(dialog.checking || (picking && dialog.driver.is_none()))
             .on_click(Self::h(cx, |this, (), window, cx| {
                 this.submit_provider_dialog(window, cx)
             }));
@@ -657,11 +866,17 @@ impl SettingsWindow {
             primary_button.accent()
         };
         let login_pending = dialog.checking && dialog.is_sign_in();
-        let cancel = Button::new("dlg-cancel", "Cancel")
+        let detailing =
+            dialog.kind == ProviderDialogKind::AddInstance && dialog.add_step == AddStep::Details;
+        let cancel = Button::new("dlg-cancel", if detailing { "Back" } else { "Cancel" })
             .full_width()
             .disabled(dialog.checking && !login_pending)
-            .on_click(Self::h(cx, |this, (), _, cx| {
-                this.dismiss_provider_dialog(cx)
+            .on_click(Self::h(cx, move |this, (), _, cx| {
+                if detailing {
+                    this.set_add_step(AddStep::Provider, cx);
+                } else {
+                    this.dismiss_provider_dialog(cx);
+                }
             }));
         let dismiss = (!dialog.checking)
             .then(|| Self::h(cx, |this, (), _, cx| this.dismiss_provider_dialog(cx)));
@@ -670,9 +885,25 @@ impl SettingsWindow {
             "provider",
             if wide { 560.0 } else { DIALOG_WIDTH },
             body,
-            vec![primary_button.render(k), cancel.render(k)],
+            vec![cancel.render(k), primary_button.render(k)],
             dismiss,
         ))
+    }
+
+    fn set_add_step(&mut self, step: AddStep, cx: &mut Context<Self>) {
+        let Some(dialog) = self.provider_dialog.as_mut() else {
+            return;
+        };
+        if dialog.checking || (step == AddStep::Details && dialog.driver.is_none()) {
+            return;
+        }
+        if dialog.add_step != step {
+            dialog.add_step = step;
+            dialog.error = None;
+            // Focus the name field again when the details step mounts.
+            dialog.focused = false;
+        }
+        cx.notify();
     }
 
     fn fail_dialog(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
@@ -749,6 +980,9 @@ impl SettingsWindow {
                 let Some(driver) = dialog.driver else {
                     return self.fail_dialog("Choose a provider.", cx);
                 };
+                if dialog.add_step == AddStep::Provider {
+                    return self.set_add_step(AddStep::Details, cx);
+                }
                 if let Some((_, Some(reason))) = add_instance_choices(&instances)
                     .into_iter()
                     .find(|(choice, _)| *choice == driver)

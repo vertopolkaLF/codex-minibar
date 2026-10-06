@@ -185,7 +185,7 @@ impl SettingsWindow {
     }
 
     /// Popup card visibility for one instance's page. Card visibility is
-    /// per instance; the header switch is the instance's own "Show on Home".
+    /// per instance; the Home column follows the General "Show on Home".
     pub(super) fn popup_cards_section(
         &mut self,
         instance: &ProviderInstance,
@@ -294,23 +294,14 @@ impl SettingsWindow {
             this.set_expanded(collapse_id.clone(), !open);
             cx.notify();
         });
-        let switch = kit::toggle(
+        let header = Row::new(card_id.clone(), "Popup cards").description(
             k,
-            format!("{card_id}-home"),
-            show_on_home,
-            false,
-            Self::h(cx, move |this, value: bool, _, cx| {
-                this.edit_instance(cx, instance_id, move |instance| {
-                    instance.show_on_home = value
-                })
-            }),
+            if show_on_home {
+                "Choose which cards this account shows on Home and on its own tab."
+            } else {
+                "Choose which cards this account shows on its own tab. Turn on Show on Home to pick Home cards."
+            },
         );
-        let header = Row::new(card_id.clone(), "Popup cards")
-            .description(
-                k,
-                "Choose which cards this account shows on Home and on its own tab.",
-            )
-            .trailing(switch);
         let table = table.into_any_element();
         kit::expander(k, card_id, header, expanded, on_toggle, move |_| table)
     }

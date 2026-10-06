@@ -257,16 +257,14 @@ impl SettingsWindow {
                 cx,
             )
         });
-        let mut title = div().flex().items_center().gap(px(10.0));
-        if super::super::nav::shows_badge(instance, &self.settings.instances) {
-            title = title.child(kit::badge_plate(k, &instance.badge()));
-        }
-        title = title.child(
-            div()
-                .text_size(px(26.0))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(instance.display_name()),
-        );
+        // The badge sits on the glyph's lower-right corner, as in the popup.
+        let badge = super::super::nav::shows_badge(instance, &self.settings.instances)
+            .then(|| instance.badge());
+        let title = div()
+            .text_size(px(26.0))
+            .line_height(px(30.0))
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(instance.display_name());
         div()
             .flex()
             .items_center()
@@ -283,17 +281,19 @@ impl SettingsWindow {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(kit::icon(
+                    .child(kit::provider_mark(
+                        k,
                         crate::provider_registry::icon(instance.driver),
                         28.0,
                         color,
+                        badge.as_ref(),
                     )),
             )
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(2.0))
+                    .justify_center()
                     .flex_1()
                     .min_w_0()
                     .child(title)

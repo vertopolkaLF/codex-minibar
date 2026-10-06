@@ -78,6 +78,9 @@ fn source(name: &str) -> Option<&'static str> {
         "flag-fill" => include_str!("../../../assets/icons/ph-flag-fill.svg"),
         "folder-fill" => include_str!("../../../assets/icons/ph-folder-fill.svg"),
         "folder-open-fill" => include_str!("../../../assets/icons/ph-folder-open-fill.svg"),
+        "git-pull-request-fill" => {
+            include_str!("../../../assets/icons/ph-git-pull-request-fill.svg")
+        }
         "github-logo-fill" => include_str!("../../../assets/icons/ph-github-logo-fill.svg"),
         "house-fill" => include_str!("../../../assets/icons/ph-house-fill.svg"),
         "info-fill" => include_str!("../../../assets/icons/ph-info-fill.svg"),
@@ -88,6 +91,7 @@ fn source(name: &str) -> Option<&'static str> {
         "plugs-connected-fill" => include_str!("../../../assets/icons/ph-plugs-connected-fill.svg"),
         "plus-bold" => include_str!("../../../assets/icons/ph-plus-bold.svg"),
         "plus-fill" => include_str!("../../../assets/icons/ph-plus-fill.svg"),
+        "puzzle-piece-fill" => include_str!("../../../assets/icons/ph-puzzle-piece-fill.svg"),
         "scroll-fill" => include_str!("../../../assets/icons/ph-scroll-fill.svg"),
         "sign-in-bold" => include_str!("../../../assets/icons/ph-sign-in-bold.svg"),
         "sparkle-fill" => include_str!("../../../assets/icons/ph-sparkle-fill.svg"),
