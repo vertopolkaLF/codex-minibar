@@ -62,6 +62,19 @@ pub(crate) struct Palette {
 }
 
 impl Palette {
+    /// Luminosity controls backdrop brightness independently of tint opacity,
+    /// so a lighter tint can preserve wallpaper hue without washing out on white.
+    pub(crate) fn capsule_background(&self, frosted: bool) -> Hsla {
+        let opacity = if frosted && self.material == PopupBackgroundMaterial::Acrylic {
+            if self.dark { 0.35 } else { 0.25 }
+        } else if self.dark {
+            0.94
+        } else {
+            0.96
+        };
+        self.solid_background.opacity(opacity)
+    }
+
     pub(crate) fn new(
         dark: bool,
         accent: crate::theme::AccentRamp,

@@ -62,6 +62,8 @@ pub(super) enum Phase {
 pub(super) struct Host {
     #[cfg(windows)]
     pub(super) hwnd: Option<windows_sys::Win32::Foundation::HWND>,
+    #[cfg(windows)]
+    backdrop: Option<super::backdrop::Backdrop>,
     pub(super) monitor: Option<super::Monitor>,
     pub(super) phase: Phase,
     pub(super) height: Spring,
@@ -76,6 +78,8 @@ impl Host {
         Self {
             #[cfg(windows)]
             hwnd: None,
+            #[cfg(windows)]
+            backdrop: None,
             monitor: None,
             phase: Phase::Hidden,
             height: Spring::at(f64::from(INITIAL_HEIGHT)),
@@ -318,6 +322,12 @@ impl PopupRoot {
             || self.palette.material != material
             || self.palette.accent != theme::rgb8(self.accent.fill(dark))
         {
+            #[cfg(windows)]
+            if (self.palette.material != material || self.palette.dark != dark)
+                && let Some(backdrop) = &mut self.host.backdrop
+            {
+                backdrop.set_appearance(material, dark);
+            }
             self.palette = Palette::new(dark, self.accent, material, self.font_family.clone());
         }
     }
@@ -391,6 +401,21 @@ impl PopupRoot {
     }
 
     // ----- lifecycle --------------------------------------------------------
+
+    #[cfg(windows)]
+    pub(crate) fn attach_native_host(&mut self, hwnd: windows_sys::Win32::Foundation::HWND) {
+        self.host.hwnd = Some(hwnd);
+        self.host.backdrop =
+            match super::backdrop::Backdrop::new(hwnd, self.palette.material, self.palette.dark) {
+                Ok(backdrop) => Some(backdrop),
+                Err(error) => {
+                    // Keep plain transparency if this system cannot host a clipped
+                    // backdrop. Never fall back to blur across the whole HWND.
+                    eprintln!("could not create capsule backdrop: {error:#}");
+                    None
+                }
+            };
+    }
 
     /// Prepares geometry for a show; the caller performs the native show
     /// outside of this update so GPUI can paint the first frame.
@@ -496,6 +521,10 @@ impl PopupRoot {
 
     fn finish_hide(&mut self, cx: &mut Context<Self>) {
         self.host.phase = Phase::Hidden;
+        #[cfg(windows)]
+        if let Some(backdrop) = &mut self.host.backdrop {
+            backdrop.hide();
+        }
         self.host.offset = 0.0;
         self.hover.clear();
         self.tip = None;
@@ -667,6 +696,15 @@ impl PopupRoot {
                 return;
             }
             let scale = window.scale_factor();
+            if let Some(backdrop) = &mut self.host.backdrop {
+                backdrop.update(
+                    x * scale,
+                    y * scale,
+                    width * scale,
+                    height * scale,
+                    crate::popup::corner_radius_dip() as f32 * scale,
+                );
+            }
             let viewport = window.viewport_size();
             let window_w = (f32::from(viewport.width) * scale).round() as i32;
             let window_h = (f32::from(viewport.height) * scale).round() as i32;
@@ -1148,6 +1186,14 @@ impl Render for PopupRoot {
             );
         }
 
+        #[cfg(windows)]
+        let frosted = self
+            .host
+            .backdrop
+            .as_ref()
+            .is_some_and(|backdrop| backdrop.available());
+        #[cfg(not(windows))]
+        let frosted = false;
         let mut capsule = div()
             .id("popup-capsule")
             .absolute()
@@ -1170,14 +1216,14 @@ impl Render for PopupRoot {
                     cx.notify();
                 }
             }))
-            // Paint the entire capsule opaquely; the technical host stays
-            // transparent outside it without any native blur/backdrop.
+            // A rounded composition visual below GPUI supplies blur only
+            // inside the capsule. This tint leaves that backdrop visible.
             .child(
                 div()
                     .absolute()
                     .inset_0()
                     .rounded(px(radius))
-                    .bg(palette.solid_background),
+                    .bg(palette.capsule_background(frosted)),
             )
             .child(shell)
             // A hairline keeps the capsule edge crisp against any wallpaper.

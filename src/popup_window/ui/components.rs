@@ -210,18 +210,28 @@ pub(crate) fn compact_progress_layers(
     let value = value.clamp(0.0, 100.0);
     let mut layers = Vec::with_capacity(3);
     if value > 0.0 {
-        let mut segment = div()
-            .absolute()
-            .left_0()
-            .top_0()
-            .bottom_0()
-            .w(relative(value / 100.0))
-            .bg(fill.opacity(0.2));
-        segment = if value >= 99.9 {
-            segment.rounded(px(CARD_RADIUS - 1.0))
-        } else {
-            segment.rounded_l(px(CARD_RADIUS - 1.0))
-        };
+        // Overflow masks are rectangular in GPUI. Paint the full card's
+        // rounded contour through a percentage mask so even a narrow fill
+        // follows the card corners instead of shrinking its own radius.
+        let segment = gpui::canvas(
+            |_, _, _| (),
+            move |bounds, _, window, _| {
+                let mut filled_bounds = bounds;
+                filled_bounds.size.width *= value / 100.0;
+                window.with_content_mask(
+                    Some(gpui::ContentMask {
+                        bounds: filled_bounds,
+                    }),
+                    |window| {
+                        let mut quad = gpui::fill(bounds, fill.opacity(0.2));
+                        quad.corner_radii = gpui::Corners::all(px(CARD_RADIUS - 1.0));
+                        window.paint_quad(quad);
+                    },
+                );
+            },
+        )
+        .absolute()
+        .inset_0();
         layers.push(segment.into_any_element());
     }
     if let Some(ticks) = interval_ticks(ticks, palette, true) {

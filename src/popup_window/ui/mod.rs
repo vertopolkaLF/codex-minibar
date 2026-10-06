@@ -14,6 +14,10 @@ mod fx;
 mod home;
 #[cfg(test)]
 pub(crate) use home::donut_segments;
+#[cfg(windows)]
+mod backdrop;
+#[cfg(windows)]
+mod blur_effect;
 mod root;
 mod theme;
 mod tooltip;
@@ -156,7 +160,8 @@ fn run(
                 is_resizable: false,
                 is_minimizable: false,
                 display_id: None,
-                // Keep the host transparent outside the opaque GPUI capsule.
+                // Never enable HWND-wide Acrylic: it ignores the capsule's
+                // region. A separate clipped composition visual supplies blur.
                 window_background: WindowBackgroundAppearance::Transparent,
                 app_id: None,
                 window_min_size: None,
@@ -183,7 +188,7 @@ fn run(
                     if let Some(hwnd) = hwnd {
                         win32::configure(hwnd);
                         let _ = window.update(cx, |root, _, _| {
-                            root.host.hwnd = Some(hwnd);
+                            root.attach_native_host(hwnd);
                         });
                         win32::park_hidden(hwnd);
                     }

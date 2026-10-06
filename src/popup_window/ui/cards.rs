@@ -282,11 +282,13 @@ impl PopupRoot {
         }
         if exhausted {
             return card(&palette)
+                .overflow_hidden()
                 .p(px(12.0))
                 .child(one_row(self))
                 .into_any_element();
         }
         card(&palette)
+            .overflow_hidden()
             .p(px(12.0))
             .flex()
             .flex_col()
