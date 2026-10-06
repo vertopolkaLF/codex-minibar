@@ -10,7 +10,11 @@ use chrono::{DateTime, Local, Timelike};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 38;
+pub const SETTINGS_VERSION: u32 = 39;
+
+mod migration;
+
+pub use crate::instances::{BadgeColor, InstanceSource, ProviderId, ProviderInstance};
 
 /// 255 until `TimeFormat::apply` runs so first paint can still follow Windows.
 static TIME_FORMAT: AtomicU8 = AtomicU8::new(u8::MAX);
@@ -632,46 +636,43 @@ pub enum ProviderKind {
     Kiro,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-#[derive(Default)]
-pub struct ProviderSettings {
-    /// Enabled providers in the user's preferred popup/tab order.
-    pub enabled: Vec<String>,
+/// How provider instances map onto popup tabs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PopupTabMode {
+    /// One tab per instance.
+    #[default]
+    Separate,
+    /// One tab per driver with an account switcher.
+    GroupedSwitcher,
+    /// One tab per driver with every account stacked.
+    GroupedStacked,
 }
 
-impl ProviderSettings {
-    pub fn is_enabled(&self, provider: ProviderKind) -> bool {
-        self.enabled.iter().any(|id| id == provider.id())
-    }
+impl PopupTabMode {
+    pub const ALL: [Self; 3] = [Self::Separate, Self::GroupedSwitcher, Self::GroupedStacked];
 
-    pub fn set_enabled(&mut self, provider: ProviderKind, enabled: bool) {
-        if enabled {
-            if !self.is_enabled(provider) {
-                self.enabled.push(provider.id().into());
-            }
-        } else {
-            self.enabled.retain(|id| id != provider.id());
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Separate => "Separate tabs",
+            Self::GroupedSwitcher => "Grouped, switcher",
+            Self::GroupedStacked => "Grouped, all accounts",
         }
     }
 
-    /// Returns the provider only when there is exactly one usable choice.
-    pub fn single_enabled_provider(&self) -> Option<ProviderKind> {
-        if self.enabled.len() == 1 {
-            self.enabled
-                .first()
-                .and_then(|id| ProviderKind::from_id(id))
-        } else {
-            None
-        }
+    pub const fn is_grouped(self) -> bool {
+        !matches!(self, Self::Separate)
     }
 
-    pub fn from_enabled(enabled: impl IntoIterator<Item = ProviderKind>) -> Self {
-        let mut settings = Self::default();
-        for provider in enabled {
-            settings.set_enabled(provider, true);
-        }
-        settings
+    pub fn index(self) -> i32 {
+        Self::ALL.iter().position(|mode| *mode == self).unwrap_or(0) as i32
+    }
+
+    pub fn from_index(index: i32) -> Self {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| Self::ALL.get(index).copied())
+            .unwrap_or_default()
     }
 }
 
@@ -701,6 +702,14 @@ impl OpenRouterAccount {
             name: name.into(),
             api_key_ids: vec![new_id("openrouter-api")],
             api_key_names: Default::default(),
+        }
+    }
+
+    /// An account whose secrets are named after a provider instance.
+    pub fn with_id(id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            ..Self::new(name)
         }
     }
 
@@ -745,35 +754,6 @@ impl OpenRouterAccount {
         });
         changed |= before != self.api_key_names;
         changed
-    }
-}
-
-/// A provider account tracked by Minibar. The built-in `default` profile follows
-/// this PC's login; other profiles use sessions in the protected secret store.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AccountProfile {
-    pub id: String,
-    pub name: String,
-    #[serde(default = "default_show_usage_values")]
-    pub enabled: bool,
-}
-
-pub type ClaudeProfile = AccountProfile;
-pub type CodexProfile = AccountProfile;
-
-impl AccountProfile {
-    pub const DEFAULT_ID: &'static str = "default";
-
-    pub fn new(name: impl Into<String>) -> Self {
-        Self {
-            id: new_id("account-profile"),
-            name: name.into(),
-            enabled: true,
-        }
-    }
-
-    pub fn is_default(&self) -> bool {
-        self.id == Self::DEFAULT_ID
     }
 }
 
@@ -882,15 +862,16 @@ impl Default for ScheduledActivation {
 }
 
 impl ScheduledActivation {
-    pub fn new(provider: ProviderKind) -> Self {
+    pub fn new(provider: ProviderId) -> Self {
         Self {
             provider_id: provider.id().into(),
             ..Self::default()
         }
     }
 
-    pub fn provider(&self) -> Option<ProviderKind> {
-        ProviderKind::from_id(&self.provider_id)
+    /// Rules bind to one provider instance by id.
+    pub fn targets(&self, provider: ProviderId) -> bool {
+        self.provider_id == provider.id()
     }
 
     pub fn occurs_on(&self, weekday: u8) -> bool {
@@ -953,15 +934,16 @@ impl Default for AutoActivationPause {
 }
 
 impl AutoActivationPause {
-    pub fn new(provider: ProviderKind) -> Self {
+    pub fn new(provider: ProviderId) -> Self {
         Self {
             provider_id: provider.id().into(),
             ..Self::default()
         }
     }
 
-    pub fn provider(&self) -> Option<ProviderKind> {
-        ProviderKind::from_id(&self.provider_id)
+    /// Pauses bind to one provider instance by id.
+    pub fn targets(&self, provider: ProviderId) -> bool {
+        self.provider_id == provider.id()
     }
 
     pub fn occurs_on(&self, weekday: u8) -> bool {
@@ -1049,9 +1031,6 @@ impl PopupSurfaceVisibility {
 #[serde(default)]
 pub struct PopupVisibility {
     pub bricks: BTreeMap<String, PopupSurfaceVisibility>,
-    /// Provider id → show that provider's block on the Home tab.
-    /// Missing keys default to true so older settings keep current cards.
-    pub provider_all_tab: BTreeMap<String, bool>,
 }
 
 impl PopupVisibility {
@@ -1072,22 +1051,7 @@ impl PopupVisibility {
                 bricks.insert(brick_id.clone(), Self::default_brick_visibility(&brick_id));
             }
         }
-        Self {
-            bricks,
-            provider_all_tab: BTreeMap::new(),
-        }
-    }
-
-    pub fn provider_shown_on_all(&self, provider: ProviderKind) -> bool {
-        self.provider_all_tab
-            .get(provider.id())
-            .copied()
-            .unwrap_or(true)
-    }
-
-    pub fn set_provider_all_tab(&mut self, provider: ProviderKind, show_on_all: bool) {
-        self.provider_all_tab
-            .insert(provider.id().to_string(), show_on_all);
+        Self { bricks }
     }
 
     pub fn visibility_for(&self, brick_id: &str) -> PopupSurfaceVisibility {
@@ -1104,24 +1068,23 @@ impl PopupVisibility {
         show_provider_tabs: bool,
     ) -> bool {
         let visibility = self.visibility_for(brick_id);
-        let section_all = crate::provider_registry::provider_for_brick_id(brick_id)
-            .map(|provider| self.provider_shown_on_all(provider))
-            .unwrap_or(true);
         if show_provider_tabs {
             match surface {
-                PopupSurface::HomeTab => section_all && visibility.all_tab,
+                PopupSurface::HomeTab => visibility.all_tab,
                 PopupSurface::ProviderTab => visibility.provider_tab,
             }
         } else {
-            section_all && (visibility.all_tab || visibility.provider_tab)
+            visibility.all_tab || visibility.provider_tab
         }
     }
 
     pub fn absorb_discovered_bricks(&mut self, limits: &crate::limits::ProviderLimits) -> bool {
         let mut changed = false;
         for (provider, snapshot) in limits.iter() {
-            for (brick_id, _) in
-                crate::provider_registry::discovered_additional_brick_labels(provider, snapshot)
+            for (brick_id, _) in crate::provider_registry::discovered_additional_brick_labels(
+                provider.kind(),
+                snapshot,
+            )
             {
                 if self.bricks.contains_key(&brick_id) {
                     continue;
@@ -1133,10 +1096,8 @@ impl PopupVisibility {
         changed
     }
 
-    pub fn provider_visible_on_all(&self, provider: ProviderKind) -> bool {
-        if !self.provider_shown_on_all(provider) {
-            return false;
-        }
+    /// Whether any of a driver's cards is shown on Home at all.
+    pub fn driver_visible_on_home(&self, provider: ProviderKind) -> bool {
         let prefix = format!("{}.", crate::provider_registry::descriptor(provider).id);
         crate::provider_registry::catalog_brick_ids(provider)
             .iter()
@@ -1188,20 +1149,6 @@ impl PopupVisibility {
             self.bricks.remove(&id);
             changed = true;
         }
-        let known_providers: std::collections::HashSet<&str> = ProviderKind::ALL
-            .iter()
-            .map(|provider| provider.id())
-            .collect();
-        let stale_providers: Vec<String> = self
-            .provider_all_tab
-            .keys()
-            .filter(|id| !known_providers.contains(id.as_str()))
-            .cloned()
-            .collect();
-        for id in stale_providers {
-            self.provider_all_tab.remove(&id);
-            changed = true;
-        }
         changed
     }
 }
@@ -1212,107 +1159,28 @@ pub enum PopupSurface {
     ProviderTab,
 }
 
-/// Ordered slots on the popup Home tab, including Usage Stats.
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PopupWidgetKind {
-    TotalSpend,
-    Codex,
-    Claude,
-    Cursor,
-    OpenCodeZen,
-    OpenCodeGo,
-    #[serde(rename = "openrouter")]
-    OpenRouter,
-    Antigravity,
-    Grok,
-    Kiro,
-}
-
-/// A separately reorderable Home block. Profile IDs survive display-name changes.
-#[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HomeWidgetId {
-    pub kind: PopupWidgetKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub profile: Option<String>,
-}
+/// A separately reorderable Home block: Usage Stats or one provider instance.
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct HomeWidgetId(pub String);
 
 impl HomeWidgetId {
-    pub fn new(kind: PopupWidgetKind, profile: Option<&str>) -> Self {
-        Self {
-            kind,
-            profile: profile.map(str::to_owned),
-        }
+    pub const TOTAL_SPEND: &'static str = "total_spend";
+
+    pub fn total_spend() -> Self {
+        Self(Self::TOTAL_SPEND.into())
     }
 
-    pub fn id(&self) -> String {
-        match &self.profile {
-            Some(profile) => format!("{}:profile:{}:{profile}", self.kind.id(), profile.len()),
-            None => self.kind.id().into(),
-        }
-    }
-}
-
-impl PopupWidgetKind {
-    pub const ALL: [Self; 10] = [
-        Self::TotalSpend,
-        Self::Codex,
-        Self::Claude,
-        Self::Cursor,
-        Self::OpenCodeZen,
-        Self::OpenCodeGo,
-        Self::OpenRouter,
-        Self::Antigravity,
-        Self::Grok,
-        Self::Kiro,
-    ];
-
-    pub fn default_order() -> Vec<Self> {
-        Self::ALL.to_vec()
+    pub fn provider(provider: ProviderId) -> Self {
+        Self(provider.id().into())
     }
 
-    pub const fn id(self) -> &'static str {
-        match self {
-            Self::TotalSpend => "total_spend",
-            Self::Codex => "codex",
-            Self::Claude => "claude",
-            Self::Cursor => "cursor",
-            Self::OpenCodeZen => "open_code_zen",
-            Self::OpenCodeGo => "open_code_go",
-            Self::OpenRouter => "openrouter",
-            Self::Antigravity => "antigravity",
-            Self::Grok => "grok",
-            Self::Kiro => "kiro",
-        }
+    pub fn is_total_spend(&self) -> bool {
+        self.0 == Self::TOTAL_SPEND
     }
 
-    pub const fn as_provider(self) -> Option<ProviderKind> {
-        match self {
-            Self::TotalSpend => None,
-            Self::Codex => Some(ProviderKind::Codex),
-            Self::Claude => Some(ProviderKind::Claude),
-            Self::Cursor => Some(ProviderKind::Cursor),
-            Self::OpenCodeZen => Some(ProviderKind::OpenCodeZen),
-            Self::OpenCodeGo => Some(ProviderKind::OpenCodeGo),
-            Self::OpenRouter => Some(ProviderKind::OpenRouter),
-            Self::Antigravity => Some(ProviderKind::Antigravity),
-            Self::Grok => Some(ProviderKind::Grok),
-            Self::Kiro => Some(ProviderKind::Kiro),
-        }
-    }
-
-    pub const fn from_provider(provider: ProviderKind) -> Self {
-        match provider {
-            ProviderKind::Codex => Self::Codex,
-            ProviderKind::Claude => Self::Claude,
-            ProviderKind::Cursor => Self::Cursor,
-            ProviderKind::OpenCodeZen => Self::OpenCodeZen,
-            ProviderKind::OpenCodeGo => Self::OpenCodeGo,
-            ProviderKind::OpenRouter => Self::OpenRouter,
-            ProviderKind::Antigravity => Self::Antigravity,
-            ProviderKind::Grok => Self::Grok,
-            ProviderKind::Kiro => Self::Kiro,
-        }
+    pub fn id(&self) -> &str {
+        &self.0
     }
 }
 
@@ -1465,12 +1333,10 @@ impl Default for TrayFixedColor {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrayIndicator {
+    /// Provider instance id.
     #[serde(rename = "provider")]
     pub provider_id: String,
     pub metric_id: String,
-    /// None selects the built-in Default, never a positional account fallback.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub profile_id: Option<String>,
     #[serde(default)]
     pub limit_value: LimitValue,
     #[serde(default)]
@@ -1480,19 +1346,20 @@ pub struct TrayIndicator {
 }
 
 impl TrayIndicator {
-    pub fn new(provider: ProviderKind, metric_id: impl Into<String>) -> Self {
+    pub fn new(provider: ProviderId, metric_id: impl Into<String>) -> Self {
         Self {
             provider_id: provider.id().into(),
             metric_id: metric_id.into(),
-            profile_id: None,
             limit_value: LimitValue::Remaining,
             color_mode: TrayColorMode::Status,
             fixed_color: TrayFixedColor::default(),
         }
     }
 
-    pub fn provider(&self) -> Option<ProviderKind> {
-        ProviderKind::from_id(&self.provider_id)
+    /// The instance this indicator reads, resolved against the published
+    /// settings.
+    pub fn provider(&self) -> Option<ProviderId> {
+        ProviderId::lookup(&self.provider_id)
     }
 }
 
@@ -1527,11 +1394,11 @@ fn default_tray_presentation() -> TrayPresentation {
 
 impl TrayWidget {
     pub fn default_user_widget() -> Self {
-        Self::for_provider(ProviderKind::Codex)
+        Self::for_provider(ProviderId::primary(ProviderKind::Codex))
     }
 
-    pub fn for_provider(provider: ProviderKind) -> Self {
-        let descriptor = crate::provider_registry::descriptor(provider);
+    pub fn for_provider(provider: ProviderId) -> Self {
+        let descriptor = crate::provider_registry::descriptor(provider.kind());
         if descriptor.default_tray_metrics.is_empty() {
             return Self::app_icon();
         }
@@ -1548,8 +1415,8 @@ impl TrayWidget {
         }
     }
 
-    pub fn custom_for_provider(provider: ProviderKind) -> Self {
-        let descriptor = crate::provider_registry::descriptor(provider);
+    pub fn custom_for_provider(provider: ProviderId) -> Self {
+        let descriptor = crate::provider_registry::descriptor(provider.kind());
         if descriptor.default_tray_metrics.is_empty() {
             return Self::app_icon();
         }
@@ -1586,12 +1453,12 @@ impl TrayWidget {
         self.kind == TrayWidgetKind::AppIcon
     }
 
-    pub fn is_visible_for(&self, providers: &ProviderSettings) -> bool {
+    pub fn is_visible_for(&self, instances: &[ProviderInstance]) -> bool {
         self.is_app_icon()
             || self.indicators.iter().any(|indicator| {
-                indicator
-                    .provider()
-                    .is_some_and(|provider| providers.is_enabled(provider))
+                instances
+                    .iter()
+                    .any(|instance| instance.enabled && instance.id == indicator.provider_id)
             })
     }
 
@@ -1688,40 +1555,34 @@ pub struct Settings {
     pub popup_background_material: PopupBackgroundMaterial,
     /// 12-hour or 24-hour clocks. Missing values follow the Windows locale.
     pub time_format: TimeFormat,
-    pub providers: ProviderSettings,
-    /// Display order for Home-tab widgets (Usage Stats + providers) and footer tabs.
-    pub popup_order: Vec<PopupWidgetKind>,
+    /// Provider instances in the user's order for the Settings sidebar and
+    /// popup tabs. Each one is an independent provider.
+    pub instances: Vec<ProviderInstance>,
+    /// Separate tabs per instance, or one tab per driver.
+    pub popup_tab_mode: PopupTabMode,
+    /// Driver id -> instance id selected in a grouped tab's switcher.
+    pub grouped_tab_selection: BTreeMap<String, String>,
     /// Wider Home and Usage pages; individual provider pages stay compact.
     pub popup_two_columns: bool,
-    /// Home widgets assigned to the right column, independent of visibility.
-    /// None balances visible widgets automatically until the first user move.
-    pub popup_right_column: Option<Vec<PopupWidgetKind>>,
-    /// Independent Home positions; empty inherits the existing provider order.
+    /// Independent Home positions; missing entries follow instance order.
     pub popup_home_order: Vec<HomeWidgetId>,
-    /// None inherits provider column assignments or automatically balances accounts.
+    /// Home widgets in the right column. None balances visible widgets
+    /// automatically until the first user move.
     pub popup_home_right_column: Option<Vec<HomeWidgetId>>,
     /// Brand-colored provider glyphs in the popup. Settings expose the inverse
     /// as "Use monochrome icons".
     pub use_colored_provider_icons: bool,
-    #[serde(default)]
-    pub show_accounts_as_tabs: bool,
     /// Fluent Color glyphs in the Settings sidebar. When false, monochrome
     /// Phosphor paths follow the resolved theme foreground instead. Settings
     /// expose the inverse as "Use monochrome icons".
     pub use_colored_sidebar_icons: bool,
     pub replace_chatgpt_logo_with_codex: bool,
-    pub automatic_activation: bool,
-    /// Weekly activations, each bound to exactly one provider.
+    /// Weekly activations, each bound to exactly one provider instance.
     pub scheduled_activations: Vec<ScheduledActivation>,
     /// Weekly local-time periods that suppress automatic activation per provider.
     pub auto_activation_pauses: Vec<AutoActivationPause>,
     /// Enables the Usage tab, Usage Stats home card, and background usage collection.
     pub usage_stats_enabled: bool,
-    /// Providers excluded from the Usage tab, Usage Stats home card, and
-    /// background usage collection. Missing provider ids remain enabled so
-    /// newly added providers opt in by default.
-    #[serde(default)]
-    pub usage_stats_excluded_providers: Vec<String>,
     pub limit_refresh_interval: LimitRefreshInterval,
     pub usage_refresh_interval: UsageRefreshInterval,
     pub reset_announcement_refresh_interval: ResetAnnouncementRefreshInterval,
@@ -1742,78 +1603,6 @@ pub struct Settings {
     /// Last selected Usage Stats time range on the Home tab.
     pub total_spend_period: TotalSpendPeriod,
     pub show_account_name: bool,
-    /// Optional explicit Codex CLI launcher. When unset, discovery continues
-    /// to search PATH, the desktop app, and the normal install locations.
-    pub codex_path: Option<PathBuf>,
-    /// Optional explicit Claude Code CLI launcher. When unset, discovery
-    /// continues to search PATH and the Claude desktop app.
-    pub claude_path: Option<PathBuf>,
-    /// Optional explicit Cursor desktop-app launcher. When unset, discovery
-    /// continues to inspect the normal installation and profile locations.
-    pub cursor_path: Option<PathBuf>,
-    /// Optional explicit agy CLI folder. When unset, discovery continues to
-    /// search PATH and the normal Antigravity install locations.
-    pub antigravity_path: Option<PathBuf>,
-    /// Optional explicit Grok CLI folder. When unset, discovery continues to
-    /// search PATH and the normal Grok home locations.
-    pub grok_path: Option<PathBuf>,
-    /// Optional explicit Kiro IDE folder or executable. When unset, discovery
-    /// searches the standard per-user and system install locations.
-    #[serde(default)]
-    pub kiro_path: Option<PathBuf>,
-    /// Optional explicit Kiro Crew desktop-app folder or executable. When
-    /// unset, discovery checks per-user, all-users, and registered installs.
-    #[serde(default)]
-    pub kiro_crew_path: Option<PathBuf>,
-    /// Optional explicit Kiro CLI folder or executable. When unset, discovery
-    /// searches its standard install locations and PATH.
-    #[serde(default)]
-    pub kiro_cli_path: Option<PathBuf>,
-    /// Non-secret revisions used to make manual OpenCode key changes refresh
-    /// already-running workers immediately. The key material lives in the
-    /// protected secrets store, never in this file.
-    #[serde(default)]
-    pub opencode_zen_credentials_revision: u64,
-    #[serde(default)]
-    pub opencode_go_credentials_revision: u64,
-    /// Non-secret revision used to refresh an already-running OpenRouter
-    /// worker after its protected account credentials change.
-    #[serde(default)]
-    pub openrouter_credentials_revision: u64,
-    /// OpenRouter account metadata and API-key identities. Key material is
-    /// stored separately in protected Windows user storage.
-    #[serde(default)]
-    pub openrouter_accounts: Vec<OpenRouterAccount>,
-    /// Codex profiles the user changed or added. The default profile is
-    /// implied until it is saved here; see `codex::profiles_for_settings`.
-    #[serde(default)]
-    pub codex_profiles: Vec<CodexProfile>,
-    /// Home visibility is independent of polling and provider-tab visibility.
-    #[serde(default)]
-    pub codex_home_excluded_profiles: Vec<String>,
-    /// Reject queued results and refresh the running Codex reader after a
-    /// profile's protected credential or enabled account set changes.
-    #[serde(default)]
-    pub codex_credentials_revision: u64,
-    /// Per-profile credential identity changes. Token refreshes do not advance
-    /// these; replacing a saved login invalidates only that profile's sample.
-    #[serde(default)]
-    pub codex_profile_credential_revisions: BTreeMap<String, u64>,
-    /// Claude profiles the user changed or added. The default profile is
-    /// implied until it is saved here; see `claude::profiles_for_settings`.
-    #[serde(default)]
-    pub claude_profiles: Vec<ClaudeProfile>,
-    /// Home visibility is independent of polling and provider-tab visibility.
-    #[serde(default)]
-    pub claude_home_excluded_profiles: Vec<String>,
-    /// Reject queued results and refresh the running Claude reader after a
-    /// profile's protected credential or enabled account set changes.
-    #[serde(default)]
-    pub claude_credentials_revision: u64,
-    /// Per-profile credential identity changes. Token refreshes do not advance
-    /// these; replacing a saved login invalidates only that profile's sample.
-    #[serde(default)]
-    pub claude_profile_credential_revisions: BTreeMap<String, u64>,
     pub tray_widgets: Vec<TrayWidget>,
     pub notifications: NotificationSettings,
     pub history_retention_days: u16,
@@ -1836,21 +1625,21 @@ impl Default for Settings {
             popup_corner_radius: PopupCornerRadius::default(),
             popup_background_material: PopupBackgroundMaterial::default(),
             time_format: TimeFormat::from_windows(),
-            providers: ProviderSettings::default(),
-            popup_order: PopupWidgetKind::default_order(),
+            instances: ProviderKind::ALL
+                .into_iter()
+                .map(ProviderInstance::primary)
+                .collect(),
+            popup_tab_mode: PopupTabMode::default(),
+            grouped_tab_selection: BTreeMap::new(),
             popup_two_columns: false,
-            popup_right_column: None,
             popup_home_order: Vec::new(),
             popup_home_right_column: None,
             use_colored_provider_icons: true,
-            show_accounts_as_tabs: false,
             use_colored_sidebar_icons: true,
             replace_chatgpt_logo_with_codex: false,
-            automatic_activation: false,
             scheduled_activations: Vec::new(),
             auto_activation_pauses: Vec::new(),
             usage_stats_enabled: true,
-            usage_stats_excluded_providers: Vec::new(),
             limit_refresh_interval: LimitRefreshInterval::default(),
             usage_refresh_interval: UsageRefreshInterval::default(),
             reset_announcement_refresh_interval: ResetAnnouncementRefreshInterval::default(),
@@ -1864,26 +1653,6 @@ impl Default for Settings {
             total_spend_presentation: TotalSpendPresentation::default(),
             total_spend_period: TotalSpendPeriod::default(),
             show_account_name: false,
-            codex_path: None,
-            claude_path: None,
-            cursor_path: None,
-            antigravity_path: None,
-            grok_path: None,
-            kiro_path: None,
-            kiro_crew_path: None,
-            kiro_cli_path: None,
-            opencode_zen_credentials_revision: 0,
-            opencode_go_credentials_revision: 0,
-            openrouter_credentials_revision: 0,
-            openrouter_accounts: Vec::new(),
-            codex_profiles: Vec::new(),
-            codex_home_excluded_profiles: Vec::new(),
-            codex_credentials_revision: 0,
-            codex_profile_credential_revisions: BTreeMap::new(),
-            claude_profiles: Vec::new(),
-            claude_home_excluded_profiles: Vec::new(),
-            claude_credentials_revision: 0,
-            claude_profile_credential_revisions: BTreeMap::new(),
             // An empty list intentionally means "show the ordinary app icon".
             tray_widgets: Vec::new(),
             notifications: NotificationSettings::default(),
@@ -1909,6 +1678,12 @@ impl Settings {
         let raw = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
         // A settings file must never prevent the application from starting.
         // Prefer repairing or dropping broken sections over refusing to boot.
+        let original_version = raw_version(&raw);
+        if original_version < migration::INSTANCES_VERSION {
+            // Instances rewrite provider settings wholesale and older builds
+            // cannot read the result. Keep the original next to it.
+            let _ = backup_before_migration(path, original_version);
+        }
         let (mut settings, dirty) = match Self::decode_raw(&raw) {
             Ok((settings, dirty)) => (settings, dirty),
             Err(error) => {
@@ -1927,14 +1702,15 @@ impl Settings {
                 return Ok(settings);
             }
         };
+        let moved_credentials = original_version < migration::INSTANCES_VERSION
+            && migration::finish_instance_migration(&mut settings);
         let repaired = settings.repair_inplace();
         let tray_widgets_normalized = settings.normalize_tray_widgets();
-        let popup_order_normalized = settings.normalize_popup_order();
         let popup_visibility_normalized = settings.normalize_popup_visibility();
         if dirty
+            || moved_credentials
             || repaired
             || tray_widgets_normalized
-            || popup_order_normalized
             || popup_visibility_normalized
         {
             settings.save(path)?;
@@ -2013,11 +1789,9 @@ impl Settings {
             "notifications".into(),
             toml::Value::Table(toml::map::Map::new()),
         );
-        root.insert(
-            "providers".into(),
-            toml::Value::Table(toml::map::Map::new()),
-        );
-        root.insert("popup_order".into(), toml::Value::Array(Vec::new()));
+        root.remove("instances");
+        root.remove("popup_home_order");
+        root.remove("popup_home_right_column");
         root.insert(
             "version".into(),
             toml::Value::Integer(i64::from(SETTINGS_VERSION)),
@@ -2065,29 +1839,7 @@ impl Settings {
                 changed = true;
             }
         }
-        let mut account_ids = std::collections::HashSet::new();
-        for account in &mut self.openrouter_accounts {
-            changed |= account.normalize();
-            if !account_ids.insert(account.id.clone()) {
-                account.id = new_id("openrouter-account");
-                account_ids.insert(account.id.clone());
-                changed = true;
-            }
-        }
-        // A profile's id names its saved credential, so a duplicate is dropped
-        // rather than given a new id.
-        let mut profile_ids = std::collections::HashSet::new();
-        let profile_count = self.claude_profiles.len();
-        self.claude_profiles.retain(|profile| {
-            !profile.id.trim().is_empty() && profile_ids.insert(profile.id.clone())
-        });
-        changed |= self.claude_profiles.len() != profile_count;
-        let mut profile_ids = std::collections::HashSet::new();
-        let profile_count = self.codex_profiles.len();
-        self.codex_profiles.retain(|profile| {
-            !profile.id.trim().is_empty() && profile_ids.insert(profile.id.clone())
-        });
-        changed |= self.codex_profiles.len() != profile_count;
+        changed |= self.normalize_instances();
         if self.version < SETTINGS_VERSION {
             self.version = SETTINGS_VERSION;
             changed = true;
@@ -2140,75 +1892,145 @@ impl Settings {
         Ok(())
     }
 
-    /// Ensures `popup_order` lists every known Home-tab widget exactly once.
-    pub fn normalize_popup_order(&mut self) -> bool {
-        let mut next = Vec::with_capacity(PopupWidgetKind::ALL.len());
-        for widget in &self.popup_order {
-            if PopupWidgetKind::ALL.contains(widget) && !next.contains(widget) {
-                next.push(*widget);
+    /// Keeps instance ids unique and every instance internally consistent,
+    /// and drops references to instances that no longer exist.
+    pub fn normalize_instances(&mut self) -> bool {
+        let mut changed = false;
+        let mut ids = std::collections::HashSet::new();
+        for instance in &mut self.instances {
+            changed |= instance.normalize();
+            if !ids.insert(instance.id.clone()) {
+                // A duplicated id would merge two providers' data.
+                instance.id.clear();
+                instance.normalize();
+                ids.insert(instance.id.clone());
+                changed = true;
             }
         }
-        for widget in PopupWidgetKind::ALL {
-            if !next.contains(&widget) {
-                next.push(widget);
-            }
+        let known = |instances: &[ProviderInstance], widget: &HomeWidgetId| {
+            widget.is_total_spend() || instances.iter().any(|i| i.id == widget.id())
+        };
+        let mut seen = std::collections::HashSet::new();
+        let order_len = self.popup_home_order.len();
+        let instances = &self.instances;
+        self.popup_home_order
+            .retain(|widget| known(instances, widget) && seen.insert(widget.clone()));
+        changed |= self.popup_home_order.len() != order_len;
+        if let Some(right) = &mut self.popup_home_right_column {
+            let len = right.len();
+            right.retain(|widget| known(instances, widget));
+            changed |= right.len() != len;
         }
-        if next == self.popup_order {
-            return false;
-        }
-        self.popup_order = next;
-        true
+        let selections = self.grouped_tab_selection.len();
+        self.grouped_tab_selection.retain(|driver, id| {
+            instances
+                .iter()
+                .any(|instance| instance.id == *id && instance.driver.id() == driver)
+        });
+        changed |= self.grouped_tab_selection.len() != selections;
+        changed
     }
 
     pub fn normalize_popup_visibility(&mut self) -> bool {
         self.popup_visibility.normalize()
     }
 
-    pub fn usage_stats_provider_enabled(&self, provider: ProviderKind) -> bool {
-        !self
-            .usage_stats_excluded_providers
+    /// Every configured instance, enabled or not, in display order.
+    pub fn provider_ids(&self) -> Vec<ProviderId> {
+        self.instances
             .iter()
-            .any(|id| id == provider.id())
+            .map(ProviderInstance::provider_id)
+            .collect()
     }
 
-    pub(crate) fn usage_stats_collection_enabled(&self, provider: ProviderKind) -> bool {
-        self.usage_stats_enabled
-            && self.usage_stats_provider_enabled(provider)
-            && (provider != ProviderKind::OpenRouter
-                || crate::openrouter::has_management_key(&self.openrouter_accounts))
+    /// Enabled instances in the user's preferred display order.
+    pub fn enabled_providers(&self) -> Vec<ProviderId> {
+        self.instances
+            .iter()
+            .filter(|instance| instance.enabled)
+            .map(ProviderInstance::provider_id)
+            .collect()
     }
 
-    pub(crate) fn effective_usage_stats_excluded_providers(&self) -> Vec<String> {
-        let mut excluded = self.usage_stats_excluded_providers.clone();
-        if !crate::openrouter::has_management_key(&self.openrouter_accounts)
-            && !excluded
-                .iter()
-                .any(|id| id == ProviderKind::OpenRouter.id())
-        {
-            excluded.push(ProviderKind::OpenRouter.id().into());
+    pub fn instance(&self, provider: ProviderId) -> Option<&ProviderInstance> {
+        self.instance_by_id(provider.id())
+    }
+
+    pub fn instance_mut(&mut self, provider: ProviderId) -> Option<&mut ProviderInstance> {
+        self.instances
+            .iter_mut()
+            .find(|instance| instance.id == provider.id())
+    }
+
+    pub fn instance_by_id(&self, id: &str) -> Option<&ProviderInstance> {
+        self.instances.iter().find(|instance| instance.id == id)
+    }
+
+    /// Resolves a persisted instance id (tray, Stream Deck, schedules).
+    pub fn resolve_provider(&self, id: &str) -> Option<ProviderId> {
+        self.instance_by_id(id).map(ProviderInstance::provider_id)
+    }
+
+    pub fn is_enabled(&self, provider: ProviderId) -> bool {
+        self.instance(provider)
+            .is_some_and(|instance| instance.enabled)
+    }
+
+    /// Enabled instances of one driver, in display order.
+    pub fn enabled_instances_of(&self, driver: ProviderKind) -> Vec<ProviderId> {
+        self.instances
+            .iter()
+            .filter(|instance| instance.enabled && instance.driver == driver)
+            .map(ProviderInstance::provider_id)
+            .collect()
+    }
+
+    /// The single enabled instance, when there is exactly one usable choice.
+    pub fn single_enabled_provider(&self) -> Option<ProviderId> {
+        match self.enabled_providers().as_slice() {
+            [provider] => Some(*provider),
+            _ => None,
         }
-        excluded
+    }
+
+    pub fn set_enabled(&mut self, provider: ProviderId, enabled: bool) {
+        if let Some(instance) = self.instance_mut(provider) {
+            instance.enabled = enabled;
+        }
+    }
+
+    pub fn usage_stats_provider_enabled(&self, provider: ProviderId) -> bool {
+        self.instance(provider)
+            .is_some_and(|instance| instance.usage_stats)
+    }
+
+    pub(crate) fn usage_stats_collection_enabled(&self, provider: ProviderId) -> bool {
+        let Some(instance) = self.instance(provider) else {
+            return false;
+        };
+        self.usage_stats_enabled
+            && instance.usage_stats
+            && crate::instances::Capabilities::of(instance).usage_stats
+            && (provider.kind() != ProviderKind::OpenRouter
+                || crate::openrouter::has_management_key(instance.openrouter.as_slice()))
     }
 
     /// Enable on the first key, preserve manual opt-out while a key remains,
     /// and disable when the last management key is removed.
-    pub(crate) fn sync_openrouter_usage_availability(&mut self, before: bool, after: bool) {
+    pub(crate) fn sync_openrouter_usage_availability(
+        &mut self,
+        provider: ProviderId,
+        before: bool,
+        after: bool,
+    ) {
         if !after || !before {
-            self.set_usage_stats_provider_enabled(ProviderKind::OpenRouter, after);
+            self.set_usage_stats_provider_enabled(provider, after);
         }
     }
 
-    pub fn set_usage_stats_provider_enabled(&mut self, provider: ProviderKind, enabled: bool) {
-        if enabled {
-            self.usage_stats_excluded_providers
-                .retain(|id| id != provider.id());
-        } else if !self
-            .usage_stats_excluded_providers
-            .iter()
-            .any(|id| id == provider.id())
-        {
-            self.usage_stats_excluded_providers
-                .push(provider.id().into());
+    pub fn set_usage_stats_provider_enabled(&mut self, provider: ProviderId, enabled: bool) {
+        if let Some(instance) = self.instance_mut(provider) {
+            instance.usage_stats = enabled;
         }
     }
 
@@ -2219,106 +2041,69 @@ impl Settings {
         self.popup_visibility.absorb_discovered_bricks(limits)
     }
 
-    /// Provider subsequence of [`Self::popup_order`].
-    pub fn provider_order(&self) -> Vec<ProviderKind> {
-        self.popup_order
-            .iter()
-            .filter_map(|widget| widget.as_provider())
-            .collect()
-    }
-
-    /// Enabled providers in the user's preferred display order.
-    pub fn ordered_enabled_providers(&self) -> Vec<ProviderKind> {
-        self.provider_order()
-            .into_iter()
-            .filter(|provider| self.providers.is_enabled(*provider))
-            .collect()
-    }
-
-    /// Visible Home-tab widgets for the current enable flags.
-    pub fn ordered_visible_popup_widgets(&self, show_total_spend: bool) -> Vec<PopupWidgetKind> {
-        self.popup_order
-            .iter()
-            .copied()
-            .filter(|widget| match widget {
-                PopupWidgetKind::TotalSpend => show_total_spend,
-                other => other
-                    .as_provider()
-                    .is_some_and(|provider| self.providers.is_enabled(provider)),
-            })
-            .collect()
-    }
-
-    /// Assigns a Home block without touching its global order or hidden slots.
-    pub fn assign_popup_widget_column(&mut self, widget: PopupWidgetKind, column: usize) -> bool {
-        if column > 1 {
-            return false;
-        }
-        let right = column == 1;
-        let right_column = self.popup_right_column.get_or_insert_with(Vec::new);
-        if right_column.contains(&widget) == right {
-            return false;
-        }
-        right_column.retain(|item| *item != widget);
-        if right {
-            right_column.push(widget);
-        }
-        true
-    }
-
-    /// Moves a visible Home-tab widget onto another visible widget's slot.
-    pub fn move_popup_widget(
-        &mut self,
-        active: PopupWidgetKind,
-        target: PopupWidgetKind,
-        show_total_spend: bool,
-    ) -> bool {
-        self.normalize_popup_order();
-        if active == target {
-            return false;
-        }
-        let before_visible = self.ordered_visible_popup_widgets(show_total_spend);
-        let Some(from) = before_visible.iter().position(|item| *item == active) else {
-            return false;
-        };
-        let Some(to) = before_visible.iter().position(|item| *item == target) else {
-            return false;
-        };
-        let mut after_visible = before_visible.clone();
-        let item = after_visible.remove(from);
-        after_visible.insert(to, item);
-        if after_visible == before_visible {
-            return false;
-        }
-
-        let visible_set: std::collections::HashSet<_> = before_visible.iter().copied().collect();
-        let mut sequence = after_visible.into_iter();
-        let mut rebuilt = Vec::with_capacity(self.popup_order.len());
-        for widget in &self.popup_order {
-            if visible_set.contains(widget) {
-                if let Some(next) = sequence.next() {
-                    rebuilt.push(next);
-                }
-            } else {
-                rebuilt.push(*widget);
+    /// A new instance of `driver`. It takes the driver's legacy id while that
+    /// is free, so a re-added provider finds its previous history again.
+    pub fn new_instance(&self, driver: ProviderKind, name: impl Into<String>) -> ProviderInstance {
+        let mut instance = ProviderInstance::new(driver, name);
+        if self.instance_by_id(driver.id()).is_none() {
+            instance.id = driver.id().into();
+            if let Some(account) = &mut instance.openrouter {
+                *account = OpenRouterAccount::legacy();
             }
         }
-        rebuilt.extend(sequence);
-        self.popup_order = rebuilt;
-        true
+        instance
     }
 
-    /// Reorder only the supplied provider slots, preserving hidden providers and
-    /// non-provider widgets. Used by both the sidebar and popup tab strip.
+    /// Adds an instance after the last instance of the same driver.
+    pub fn add_instance(&mut self, instance: ProviderInstance) -> ProviderId {
+        let provider = instance.provider_id();
+        let index = self
+            .instances
+            .iter()
+            .rposition(|existing| existing.driver == instance.driver)
+            .map_or(self.instances.len(), |index| index + 1);
+        self.instances.insert(index, instance);
+        provider
+    }
+
+    /// Removes an instance and every reference to it.
+    pub fn remove_instance(&mut self, provider: ProviderId) -> Option<ProviderInstance> {
+        let index = self
+            .instances
+            .iter()
+            .position(|instance| instance.id == provider.id())?;
+        let removed = self.instances.remove(index);
+        let id = removed.id.as_str();
+        self.popup_home_order.retain(|widget| widget.id() != id);
+        if let Some(right) = &mut self.popup_home_right_column {
+            right.retain(|widget| widget.id() != id);
+        }
+        self.grouped_tab_selection
+            .retain(|_, selected| selected != id);
+        self.scheduled_activations
+            .retain(|rule| rule.provider_id != id);
+        self.auto_activation_pauses
+            .retain(|pause| pause.provider_id != id);
+        for widget in &mut self.tray_widgets {
+            widget
+                .indicators
+                .retain(|indicator| indicator.provider_id != id);
+        }
+        self.tray_widgets
+            .retain(|widget| widget.is_app_icon() || !widget.indicators.is_empty());
+        Some(removed)
+    }
+
+    /// Reorder only the supplied instances, preserving the others' slots.
+    /// Used by both the sidebar and popup tab strip.
     pub fn reorder_providers(
         &mut self,
-        active: ProviderKind,
-        target: ProviderKind,
-        visible: &[ProviderKind],
+        active: ProviderId,
+        target: ProviderId,
+        visible: &[ProviderId],
     ) -> bool {
-        self.normalize_popup_order();
         let before: Vec<_> = self
-            .provider_order()
+            .provider_ids()
             .into_iter()
             .filter(|provider| visible.contains(provider))
             .collect();
@@ -2335,27 +2120,42 @@ impl Settings {
         let provider = after.remove(from);
         after.insert(to, provider);
         let mut reordered = after.into_iter();
-        for widget in &mut self.popup_order {
-            if widget
-                .as_provider()
-                .is_some_and(|provider| before.contains(&provider))
+        let order = self
+            .provider_ids()
+            .into_iter()
+            .map(|provider| {
+                if before.contains(&provider) {
+                    reordered.next().expect("reordered slot")
+                } else {
+                    provider
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut remaining = std::mem::take(&mut self.instances);
+        for provider in order {
+            if let Some(index) = remaining
+                .iter()
+                .position(|instance| instance.id == provider.id())
             {
-                *widget = PopupWidgetKind::from_provider(reordered.next().expect("provider slot"));
+                self.instances.push(remaining.remove(index));
             }
         }
+        self.instances.append(&mut remaining);
         true
     }
 
-    /// Moves any provider earlier or later among provider slots in `popup_order`.
-    pub fn move_provider(&mut self, provider: ProviderKind, earlier: bool) -> bool {
-        self.normalize_popup_order();
-        let providers = self.provider_order();
-        let Some(index) = providers.iter().position(|item| *item == provider) else {
+    /// Moves an instance one slot earlier or later.
+    pub fn move_provider(&mut self, provider: ProviderId, earlier: bool) -> bool {
+        let Some(index) = self
+            .instances
+            .iter()
+            .position(|instance| instance.id == provider.id())
+        else {
             return false;
         };
         let swap_index = if earlier {
             index.checked_sub(1)
-        } else if index + 1 < providers.len() {
+        } else if index + 1 < self.instances.len() {
             Some(index + 1)
         } else {
             None
@@ -2363,15 +2163,7 @@ impl Settings {
         let Some(swap_index) = swap_index else {
             return false;
         };
-        let left = PopupWidgetKind::from_provider(providers[index]);
-        let right = PopupWidgetKind::from_provider(providers[swap_index]);
-        let Some(left_pos) = self.popup_order.iter().position(|item| *item == left) else {
-            return false;
-        };
-        let Some(right_pos) = self.popup_order.iter().position(|item| *item == right) else {
-            return false;
-        };
-        self.popup_order.swap(left_pos, right_pos);
+        self.instances.swap(index, swap_index);
         true
     }
 
@@ -2400,6 +2192,7 @@ impl Settings {
             self.popup_background_material,
         );
         crate::provider_registry::apply_logo_settings(self.replace_chatgpt_logo_with_codex);
+        crate::instances::publish(&self.instances);
         self.time_format.apply();
         apply_startup_registration(self.start_at_login)
     }
@@ -2529,6 +2322,27 @@ fn apply_startup_registration(enabled: bool) -> Result<()> {
 
 #[cfg(not(windows))]
 fn apply_startup_registration(_enabled: bool) -> Result<()> {
+    Ok(())
+}
+
+/// The `version` a raw settings file claims, or 0 when it has none.
+fn raw_version(raw: &str) -> u32 {
+    toml::from_str::<toml::Value>(raw)
+        .ok()
+        .and_then(|document| document.get("version")?.as_integer())
+        .and_then(|version| u32::try_from(version).ok())
+        .unwrap_or(0)
+}
+
+/// Keeps a copy of settings written by an older version before a migration
+/// that those versions cannot read back.
+fn backup_before_migration(path: &Path, version: u32) -> Result<()> {
+    let backup = path.with_extension(format!("toml.bak-v{version}"));
+    if backup.exists() {
+        return Ok(());
+    }
+    fs::copy(path, &backup)
+        .with_context(|| format!("back up settings to {}", backup.display()))?;
     Ok(())
 }
 
@@ -3213,6 +3027,10 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     .context("settings root must be a TOML table")?
                     .insert("version".into(), toml::Value::Integer(38));
                 version = 38;
+            }
+            38 => {
+                migration::migrate_to_instances(document)?;
+                version = migration::INSTANCES_VERSION;
             }
             // Unknown future/gap versions: stamp current and keep decoding with
             // serde defaults rather than refusing to start.

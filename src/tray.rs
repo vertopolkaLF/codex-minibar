@@ -8,6 +8,7 @@ use fontdue::{
 };
 
 use crate::{
+    instances::ProviderId,
     limits::{LimitWindow, ProviderLimits, RateLimits},
     provider_registry,
     settings::{
@@ -75,36 +76,24 @@ fn widget_tooltip(widget: &TrayWidget, limits: &ProviderLimits) -> String {
         let Some(provider) = indicator.provider() else {
             continue;
         };
-        let provider_limits = limits.get(provider);
-        let Some(metric) = crate::widget_data::resolve_account_metric(
-            provider,
-            provider_limits,
-            indicator.profile_id.as_deref(),
-            &indicator.metric_id,
-        ) else {
+        let Some(metric) =
+            crate::widget_data::resolve_metric(provider, limits.get(provider), &indicator.metric_id)
+        else {
             continue;
         };
         let value = percent(&metric.window, indicator.limit_value)
             .map(|value| format!("{value}%"))
             .unwrap_or_else(|| "?".into());
         let item = format!("{} {value}", metric.label);
-        let source_id =
-            crate::widget_data::account_source_id(provider, indicator.profile_id.as_deref());
-        let profile = provider_limits
-            .account_profiles(provider)
-            .iter()
-            .find(|p| p.id == indicator.profile_id.as_deref().unwrap_or("default"));
-        let title = match profile {
-            Some(profile) => format!("{} ? {}", provider.display_name(), profile.name),
-            None => provider.display_name().to_owned(),
-        };
+        let source_id = provider.id();
+        let title = provider.qualified_name();
         if let Some((_, _, items)) = rows
             .iter_mut()
             .find(|(row_source, _, _)| *row_source == source_id)
         {
             items.push(item);
         } else {
-            rows.push((source_id, title, vec![item]));
+            rows.push((source_id.to_owned(), title, vec![item]));
         }
     }
     if rows.is_empty() {
@@ -257,7 +246,7 @@ struct ResolvedIndicator {
 
 fn indicator_color(
     indicator: &crate::settings::TrayIndicator,
-    provider: ProviderKind,
+    provider: ProviderId,
     remaining: Option<u8>,
     accent: [u8; 3],
 ) -> [u8; 3] {
@@ -274,7 +263,7 @@ fn indicator_color(
             indicator.fixed_color.blue,
         ],
         TrayColorMode::Provider => {
-            let (red, green, blue) = provider_registry::descriptor(provider).brand_rgb;
+            let (red, green, blue) = provider_registry::descriptor(provider.kind()).brand_rgb;
             [red, green, blue]
         }
         TrayColorMode::Accent => accent,
@@ -293,10 +282,9 @@ fn resolve_indicators(
         .take(3)
         .filter_map(|indicator| {
             let provider = indicator.provider()?;
-            let metric = crate::widget_data::resolve_account_metric(
+            let metric = crate::widget_data::resolve_metric(
                 provider,
                 limits.get(provider),
-                indicator.profile_id.as_deref(),
                 &indicator.metric_id,
             );
             let window = metric.map(|metric| metric.window).unwrap_or_default();

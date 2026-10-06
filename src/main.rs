@@ -47,21 +47,17 @@ fn run() -> Result<()> {
         reset_feed::cache_path(&path),
         worker_events_tx.clone(),
     );
-    let mut hydrated_limits = store::shared()
+    let hydrated_limits = store::shared()
         .and_then(|shared| {
             shared
                 .lock()
                 .map_err(|_| anyhow!("provider store lock poisoned"))?
-                .hydrate_provider_limits(settings.history_retention_days)
+                .hydrate_provider_limits(&settings.provider_ids(), settings.history_retention_days)
         })
         .unwrap_or_else(|error| {
             eprintln!("failed to hydrate provider store: {error:#}");
             Default::default()
         });
-    let codex = codex_minibar::settings::ProviderKind::Codex;
-    let retained =
-        codex_minibar::codex::prepare_startup_limits(hydrated_limits.get(codex), &settings);
-    *hydrated_limits.get_mut(codex) = retained;
     let (workers, startup_provider_errors) = start_enabled_workers_with_limits(
         &settings,
         activation_path.clone(),
