@@ -10,6 +10,7 @@ fn main() {
     invalidate_stale_was_extract();
 
     windows_reactor_setup::as_self_contained();
+    embed_common_controls_manifest();
 
     #[cfg(windows)]
     {
@@ -18,6 +19,25 @@ fn main() {
         resource
             .compile()
             .expect("compile Windows application icon");
+    }
+}
+
+/// Merge Common Controls v6 into the manifest windows-reactor embeds.
+fn embed_common_controls_manifest() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/common-controls.manifest");
+    println!("cargo:rerun-if-changed={}", manifest.display());
+    let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    let target_abi = std::env::var("CARGO_CFG_TARGET_ABI").unwrap_or_default();
+    match (target_env.as_str(), target_abi.as_str()) {
+        ("msvc", _) => println!(
+            "cargo:rustc-link-arg-bins=/MANIFESTINPUT:{}",
+            manifest.display()
+        ),
+        ("gnu", "llvm") => println!(
+            "cargo:rustc-link-arg-bins=-Wl,/MANIFESTINPUT:{}",
+            manifest.display()
+        ),
+        _ => {}
     }
 }
 

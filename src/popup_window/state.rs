@@ -8,23 +8,16 @@ pub(super) fn refresh_all_workers(commands: &[(ProviderKind, Sender<WorkerComman
     requested
 }
 
-/// Hidden tray popups must not rebuild their WinUI tree on every provider poll.
-/// Remounting unmanaged SwapChainPanel/XAML children steadily grows the
-/// compositor working set (observed multi-GB after long idle runs).
-pub(super) fn popup_ui_should_publish() -> bool {
-    popup::is_visible() || crate::settings_window::is_open()
+/// Publish view state to the GPUI popup. Hidden popups only store it; the
+/// renderer repaints when it is shown, so background polls stay cheap.
+pub(super) fn publish_popup_ui(ui: &UiState) {
+    super::publish_ui(ui);
 }
 
-pub(super) fn publish_popup_ui(set_ui: &AsyncSetState<UiState>, ui: &UiState) {
-    if popup_ui_should_publish() {
-        set_ui.call(ui.clone());
-    }
-}
-
-/// Push the latest view state before a show so the first frame is current even
-/// after a stretch of suppressed background polls.
-pub(super) fn flush_popup_ui(set_ui: &AsyncSetState<UiState>, ui: &UiState) {
-    set_ui.call(ui.clone());
+/// Same as [`publish_popup_ui`]; kept separate to mark paths that must reach
+/// the renderer before the next show.
+pub(super) fn flush_popup_ui(ui: &UiState) {
+    super::publish_ui(ui);
 }
 
 /// Flatten provider usage errors, including per-account errors exposed by
@@ -323,7 +316,7 @@ impl AppState {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct UiState {
+pub(crate) struct UiState {
     pub(super) theme: AppTheme,
     pub(super) accent_color: AccentColor,
     pub(super) animations_enabled: bool,

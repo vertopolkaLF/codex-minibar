@@ -92,8 +92,7 @@ pub(super) fn update_version_from_phase(phase: &UpdatePhase) -> Option<String> {
 
 pub(super) fn start_background_bridge(
     state: Arc<AppState>,
-    set_ui: AsyncSetState<UiState>,
-    ui_dispatcher: UiMarshaller,
+    ui_dispatcher: windows_reactor::UiMarshaller,
 ) {
     // Use the already hydrated persistent snapshot while the first network
     // refresh is in flight. Opening Settings never starts another poll.
@@ -222,19 +221,14 @@ pub(super) fn start_background_bridge(
             update_available_from_phase(&update_phase),
         ) {
             ui.set_popup_error(error.to_string());
-            flush_popup_ui(&set_ui, &ui);
+            flush_popup_ui(&ui);
         }
 
-        // Keep trying until the WinUI window exists, then park it as a popup.
-        for _ in 0..50 {
-            if popup::ensure_configured().is_some() {
-                break;
-            }
-            thread::sleep(Duration::from_millis(50));
-        }
+        // First frame: the renderer seeds itself from settings, then takes
+        // this complete snapshot (errors, activation text, update state).
+        publish_popup_ui(&ui);
 
         let apply_settings = |ui: &mut UiState,
-                              set_ui: &AsyncSetState<UiState>,
                               notification_settings: &mut NotificationSettings,
                               widgets: &mut Vec<TrayWidget>,
                               tray: &mut TrayManager,
@@ -329,6 +323,11 @@ pub(super) fn start_background_bridge(
                 ui.observe_limits_update();
             } else if state.apply_codex_profile_names(&settings) {
                 ui.observe_limits_update();
+            }
+            if ui.theme != settings.theme || ui.accent_color != settings.accent_color {
+                // Settings windows keep using WinUI's theme resources.
+                let (theme, accent) = (settings.theme, settings.accent_color);
+                ui_dispatcher.dispatch(move || crate::theme::apply_appearance(theme, accent));
             }
             ui.theme = settings.theme;
             ui.accent_color = settings.accent_color;
@@ -429,7 +428,7 @@ pub(super) fn start_background_bridge(
             // Presentation settings must visibly apply before any background
             // work. In particular, changing provider icons must never wait on
             // a worker lock, network request, or provider lifecycle change.
-            flush_popup_ui(set_ui, ui);
+            flush_popup_ui(ui);
             if providers_changed || !restart.is_empty() {
                 let provider_errors = state.sync_provider_workers(&settings, &restart);
                 for (provider, error) in provider_errors {
@@ -506,11 +505,10 @@ pub(super) fn start_background_bridge(
                 }
             }
             *live_settings = settings;
-            flush_popup_ui(set_ui, ui);
+            flush_popup_ui(ui);
         };
 
         let drain_settings = |ui: &mut UiState,
-                              set_ui: &AsyncSetState<UiState>,
                               notification_settings: &mut NotificationSettings,
                               widgets: &mut Vec<TrayWidget>,
                               tray: &mut TrayManager,
@@ -529,7 +527,6 @@ pub(super) fn start_background_bridge(
                 *notify_on_update = settings.notifications.update_available;
                 apply_settings(
                     ui,
-                    set_ui,
                     notification_settings,
                     widgets,
                     tray,
@@ -547,7 +544,6 @@ pub(super) fn start_background_bridge(
 
         let drain_usage_actions =
             |ui: &mut UiState,
-             set_ui: &AsyncSetState<UiState>,
              generation: &mut u64,
              pending: &mut Option<(u64, Vec<ProviderKind>)>| {
                 let Some(actions) = usage_actions_rx.as_ref() else {
@@ -573,14 +569,14 @@ pub(super) fn start_background_bridge(
                         .collect::<Vec<_>>();
                     state.clear_usage_snapshot();
                     ui.observe_usage_update();
-                    publish_popup_ui(set_ui, ui);
+                    publish_popup_ui(ui);
 
                     if targets.is_empty() {
                         if let Err(error) =
                             crate::store::with_store(|store| store.clear_usage_data())
                         {
                             ui.set_popup_error(format!("Could not clear usage data: {error:#}"));
-                            publish_popup_ui(set_ui, ui);
+                            publish_popup_ui(ui);
                         }
                     } else {
                         *pending = Some((clear_generation, targets));
@@ -589,7 +585,6 @@ pub(super) fn start_background_bridge(
             };
 
         let drain_updates = |ui: &mut UiState,
-                             set_ui: &AsyncSetState<UiState>,
                              tray: &mut TrayManager,
                              update_phase: &mut UpdatePhase,
                              widgets: &mut Vec<TrayWidget>| {
@@ -606,7 +601,7 @@ pub(super) fn start_background_bridge(
             ) {
                 ui.set_popup_error(error.to_string());
             }
-            publish_popup_ui(set_ui, ui);
+            publish_popup_ui(ui);
         };
 
         let drain_toast_update = || {
@@ -627,51 +622,42 @@ pub(super) fn start_background_bridge(
                         }
                     }
                     crate::streamdeck::Command::OpenPopup { provider } => {
-                        let ui_dispatcher = ui_dispatcher.clone();
-                        ui_dispatcher.dispatch(move || {
-                            if popup::is_visible() {
-                                // Match tray-click toggle: a second press dismisses
-                                // the flyout. Keep it when Settings is using it as
-                                // a live preview.
-                                if !crate::settings_window::is_open() {
-                                    popup::hide();
-                                }
-                                return;
+                        if popup::is_visible() && !popup::is_closing() {
+                            // Match tray-click toggle: a second press dismisses
+                            // the flyout. Keep it when Settings is using it as
+                            // a live preview.
+                            if !crate::settings_window::is_open() {
+                                popup::hide();
                             }
-                            match provider {
-                                Some(provider) => {
-                                    crate::popup_window::request_provider_view(provider)
-                                }
-                                None => crate::popup_window::request_home_view(),
-                            }
-                            if popup::prepare_show_on_ui_thread() {
-                                popup::show_on_primary();
-                            }
-                        });
+                            continue;
+                        }
+                        match provider {
+                            Some(provider) => crate::popup_window::request_provider_view(provider),
+                            None => crate::popup_window::request_home_view(),
+                        }
+                        popup::show_on_primary();
                     }
                 }
             }
         };
 
         let Some(events) = events else {
-            publish_popup_ui(&set_ui, &ui);
+            publish_popup_ui(&ui);
             loop {
                 popup::pump_messages();
                 drain_toast_update();
                 drain_streamdeck();
                 drain_usage_actions(
                     &mut ui,
-                    &set_ui,
                     &mut usage_clear_generation,
                     &mut pending_usage_clear,
                 );
                 if let Err(error) = tray.refresh_system_theme(&widgets, &state.current_limits()) {
                     ui.set_popup_error(error.to_string());
-                    publish_popup_ui(&set_ui, &ui);
+                    publish_popup_ui(&ui);
                 }
                 drain_settings(
                     &mut ui,
-                    &set_ui,
                     &mut notification_settings,
                     &mut widgets,
                     &mut tray,
@@ -680,15 +666,8 @@ pub(super) fn start_background_bridge(
                     &mut forced_reset_notified_ids,
                     &mut live_settings,
                 );
-                drain_updates(&mut ui, &set_ui, &mut tray, &mut update_phase, &mut widgets);
-                if pump_tray_and_dismiss(
-                    &tray,
-                    &ui_dispatcher,
-                    &settings_tx,
-                    &state,
-                    &mut ui,
-                    &set_ui,
-                ) {
+                drain_updates(&mut ui, &mut tray, &mut update_phase, &mut widgets);
+                if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings_tx, &state, &mut ui) {
                     drop(tray);
                     state.shutdown_worker();
                     std::process::exit(0);
@@ -703,17 +682,15 @@ pub(super) fn start_background_bridge(
             drain_streamdeck();
             drain_usage_actions(
                 &mut ui,
-                &set_ui,
                 &mut usage_clear_generation,
                 &mut pending_usage_clear,
             );
             if let Err(error) = tray.refresh_system_theme(&widgets, &state.current_limits()) {
                 ui.set_popup_error(error.to_string());
-                publish_popup_ui(&set_ui, &ui);
+                publish_popup_ui(&ui);
             }
             drain_settings(
                 &mut ui,
-                &set_ui,
                 &mut notification_settings,
                 &mut widgets,
                 &mut tray,
@@ -722,15 +699,8 @@ pub(super) fn start_background_bridge(
                 &mut forced_reset_notified_ids,
                 &mut live_settings,
             );
-            drain_updates(&mut ui, &set_ui, &mut tray, &mut update_phase, &mut widgets);
-            if pump_tray_and_dismiss(
-                &tray,
-                &ui_dispatcher,
-                &settings_tx,
-                &state,
-                &mut ui,
-                &set_ui,
-            ) {
+            drain_updates(&mut ui, &mut tray, &mut update_phase, &mut widgets);
+            if pump_tray_and_dismiss(&tray, &ui_dispatcher, &settings_tx, &state, &mut ui) {
                 drop(tray);
                 state.shutdown_worker();
                 std::process::exit(0);
@@ -750,7 +720,7 @@ pub(super) fn start_background_bridge(
                         &notification_settings,
                         &state,
                     );
-                    publish_popup_ui(&set_ui, &ui);
+                    publish_popup_ui(&ui);
                 }
                 Ok(WorkerEvent::ForcedResetsRefreshFailed(error)) => {
                     crate::logger::info(format!("Codex reset feed refresh failed: {error}"));
@@ -760,14 +730,14 @@ pub(super) fn start_background_bridge(
                         continue;
                     }
                     ui.request_started(provider, kind);
-                    publish_popup_ui(&set_ui, &ui);
+                    publish_popup_ui(&ui);
                 }
                 Ok(WorkerEvent::ProviderRequestFinished(provider, worker_revision, kind)) => {
                     if !provider_worker_event_is_current(&ui, provider, worker_revision) {
                         continue;
                     }
                     ui.request_finished(provider, kind);
-                    publish_popup_ui(&set_ui, &ui);
+                    publish_popup_ui(&ui);
                 }
                 Ok(WorkerEvent::ProviderLimitsUpdated(provider, worker_revision, limits)) => {
                     if !provider_worker_event_is_current(&ui, provider, worker_revision) {
@@ -903,7 +873,7 @@ pub(super) fn start_background_bridge(
                             format_last_activation(limits.get(provider), fallback_attempt);
                     }
                     ui.observe_limits_update();
-                    publish_popup_ui(&set_ui, &ui);
+                    publish_popup_ui(&ui);
                 }
                 Ok(WorkerEvent::ProviderUsageUpdated(provider, worker_revision, usage)) => {
                     if !provider_worker_event_is_current(&ui, provider, worker_revision) {
@@ -946,7 +916,7 @@ pub(super) fn start_background_bridge(
                         ui.clear_usage_error(provider);
                     }
                     ui.observe_usage_update();
-                    publish_popup_ui(&set_ui, &ui);
+                    publish_popup_ui(&ui);
                 }
                 Ok(WorkerEvent::ProviderUsageLoadedFromCache(provider, worker_revision, usage)) => {
                     if !provider_worker_event_is_current(&ui, provider, worker_revision) {
@@ -974,7 +944,7 @@ pub(super) fn start_background_bridge(
                     // Cached account.error values are historical diagnostics,
                     // not proof that the provider is failing now.
                     ui.observe_usage_update();
-                    publish_popup_ui(&set_ui, &ui);
+                    publish_popup_ui(&ui);
                 }
                 Ok(WorkerEvent::ProviderUsageRefreshFailed(provider, worker_revision, error)) => {
                     if !provider_worker_event_is_current(&ui, provider, worker_revision)
@@ -991,7 +961,7 @@ pub(super) fn start_background_bridge(
                     // source separate so a successful quota poll does not
                     // clear an active analytics error.
                     ui.set_usage_error(provider, error);
-                    publish_popup_ui(&set_ui, &ui);
+                    publish_popup_ui(&ui);
                 }
                 Ok(WorkerEvent::ProviderUsageDataCleared(provider, generation)) => {
                     let completed = pending_usage_clear.as_mut().is_some_and(
@@ -1037,7 +1007,7 @@ pub(super) fn start_background_bridge(
                     } else if notification_settings.activation_success {
                         notifications::show_activation_succeeded(provider);
                     }
-                    publish_popup_ui(&set_ui, &ui);
+                    publish_popup_ui(&ui);
                 }
                 Ok(WorkerEvent::ProviderActivationFailed(provider, worker_revision, error)) => {
                     if !provider_worker_event_is_current(&ui, provider, worker_revision) {
@@ -1053,7 +1023,7 @@ pub(super) fn start_background_bridge(
                         provider.display_name(),
                         format_activation_at(Utc::now())
                     );
-                    publish_popup_ui(&set_ui, &ui);
+                    publish_popup_ui(&ui);
                 }
                 Ok(WorkerEvent::ProviderPollFailed(provider, worker_revision, error)) => {
                     if !provider_worker_event_is_current(&ui, provider, worker_revision) {
@@ -1064,7 +1034,7 @@ pub(super) fn start_background_bridge(
                         provider.display_name()
                     ));
                     ui.set_provider_error(provider, error);
-                    publish_popup_ui(&set_ui, &ui);
+                    publish_popup_ui(&ui);
                 }
                 // All live provider workers are forwarded as scoped events.
                 Ok(
@@ -1091,11 +1061,10 @@ pub(super) fn start_background_bridge(
 #[cfg(windows)]
 pub(super) fn pump_tray_and_dismiss(
     tray: &TrayManager,
-    ui_dispatcher: &UiMarshaller,
+    ui_dispatcher: &windows_reactor::UiMarshaller,
     settings_tx: &Sender<Settings>,
     state: &AppState,
     ui: &mut UiState,
-    set_ui: &AsyncSetState<UiState>,
 ) -> bool {
     use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
 
@@ -1109,38 +1078,20 @@ pub(super) fn pump_tray_and_dismiss(
         } = event
             && tray.contains(&id)
         {
-            let x = position.x as i32;
-            let y = position.y as i32;
             if popup::is_visible() {
                 // While Settings is open the popup is a live preview, not a
                 // transient tray flyout. Keep it available until Settings closes.
+                // A click while it is already closing (the press dismissed it)
+                // must not reopen it.
                 if !crate::settings_window::is_open() {
-                    ui_dispatcher.dispatch(popup::hide);
+                    popup::hide();
                 }
             } else {
-                // Activation and motion publication both belong to WinUI's
-                // thread. Publishing the animation from this tray worker used
-                // to strand the HWND just beyond the monitor edge forever.
-                // Flush suppressed background UiState so the first frame sees
+                // Flush suppressed background state so the first frame sees
                 // the latest limits/error/activation text.
-                flush_popup_ui(set_ui, ui);
-                let (ready_tx, ready_rx) = std::sync::mpsc::channel();
-                ui_dispatcher.dispatch(move || {
-                    let ready = popup::prepare_show_on_ui_thread();
-                    if ready {
-                        popup::show_near(x, y);
-                    }
-                    let _ = ready_tx.send(ready);
-                });
-                match ready_rx.recv_timeout(std::time::Duration::from_millis(500)) {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        eprintln!("popup host was unavailable during synchronous reactivation");
-                    }
-                    Err(error) => eprintln!("popup reactivation timed out: {error}"),
-                }
+                flush_popup_ui(ui);
+                popup::show_near(position.x as i32, position.y as i32);
             }
-            ui_dispatcher.dispatch(popup::hide_from_switchers);
         }
     }
 
@@ -1156,14 +1107,13 @@ pub(super) fn pump_tray_and_dismiss(
                 let settings_tx = settings_tx.clone();
                 let usage_actions_tx = state.usage_actions_tx.clone();
                 let updates = Arc::clone(&state.updates);
-                flush_popup_ui(set_ui, ui);
+                flush_popup_ui(ui);
+                // Opening Settings from the tray menu provides the same
+                // always-visible live preview as opening it from the footer.
+                if !popup::is_visible() || popup::is_closing() {
+                    popup::show_near_cursor();
+                }
                 ui_dispatcher.dispatch(move || {
-                    // Opening Settings from the tray menu should provide the
-                    // same always-visible live preview as opening it from the
-                    // popup footer.
-                    if !popup::is_visible() && popup::prepare_show_on_ui_thread() {
-                        popup::show_near_cursor();
-                    }
                     if let Err(error) =
                         crate::settings_window::open(settings_tx, usage_actions_tx, updates)
                     {
@@ -1175,16 +1125,6 @@ pub(super) fn pump_tray_and_dismiss(
         }
     }
 
-    // HWND geometry belongs to the WinUI thread. Coalesce the 60 Hz tray pump
-    // into at most one pending UI task so a busy dispatcher cannot accumulate
-    // an unbounded tail of stale SetWindowPos calls.
-    if popup::is_visible() && !KEEP_ON_MONITOR_QUEUED.swap(true, Ordering::SeqCst) {
-        ui_dispatcher.dispatch(|| {
-            popup::keep_on_monitor();
-            KEEP_ON_MONITOR_QUEUED.store(false, Ordering::SeqCst);
-        });
-    }
-
     // Settings are a live editor for this surface. Treat the separate settings
     // window as part of the popup interaction so navigating or toggling a
     // setting cannot dismiss the preview beneath it.
@@ -1192,7 +1132,7 @@ pub(super) fn pump_tray_and_dismiss(
         && !popup::is_closing()
         && (popup::clicked_outside() || popup::escape_pressed())
     {
-        ui_dispatcher.dispatch(popup::hide);
+        popup::hide();
     }
     false
 }
@@ -1200,11 +1140,10 @@ pub(super) fn pump_tray_and_dismiss(
 #[cfg(not(windows))]
 pub(super) fn pump_tray_and_dismiss(
     _tray: &TrayManager,
-    _ui_dispatcher: &UiMarshaller,
+    _ui_dispatcher: &windows_reactor::UiMarshaller,
     _settings_tx: &Sender<Settings>,
     _state: &AppState,
     _ui: &mut UiState,
-    _set_ui: &AsyncSetState<UiState>,
 ) -> bool {
     false
 }

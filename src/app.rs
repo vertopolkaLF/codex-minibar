@@ -1,3 +1,3 @@
-//! Compatibility façade for the popup WinUI host.
+//! Compatibility façade for the popup state.
 
-pub use crate::popup_window::{AppState, app};
+pub use crate::popup_window::AppState;

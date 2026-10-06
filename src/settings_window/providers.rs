@@ -2985,7 +2985,7 @@ fn claude_credential_tabs(
     .map(|(label, method)| {
         let current = dialog.clone();
         let set_dialog = set_dialog.clone();
-        crate::popup_usage::segmented_tab(label, dialog.claude_method == method, move || {
+        crate::settings_controls::segmented_tab(label, dialog.claude_method == method, move || {
             if !current.checking && method != current.claude_method {
                 let mut next = current.clone();
                 next.claude_method = method;
@@ -2995,7 +2995,7 @@ fn claude_credential_tabs(
         })
     })
     .collect();
-    crate::popup_usage::segmented_control("claude-credential-methods", tabs, true)
+    crate::settings_controls::segmented_control("claude-credential-methods", tabs, true)
 }
 
 fn claude_credential_fields(

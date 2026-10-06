@@ -27,7 +27,7 @@
 
 ## Overview
 
-Codex Minibar reads quota data from locally authenticated provider sessions and keeps subscription limits and reset times visible in the notification area. It is a native WinUI 3 application written in Rust.
+Codex Minibar reads quota data from locally authenticated provider sessions and keeps subscription limits and reset times visible in the notification area. It is a native Windows application written in Rust: a GPUI tray popup and WinUI 3 settings.
 
 > Codex Minibar is an independent project. It is not affiliated with, endorsed by, or sponsored by OpenAI.
 
@@ -197,8 +197,10 @@ This produces architecture-specific portable ZIP files and NSIS installers under
 
 ## Development
 
-The UI uses [windows-reactor](https://github.com/microsoft/windows-rs/pull/4479) with WinUI 3;
-the Windows App SDK 2.4.0 runtime is bundled through `windows-reactor-setup` self-contained deployment.
+The tray popup is rendered with [GPUI](https://gpui.rs) on its own thread, with an opaque
+theme-aware background. The Settings windows use [windows-reactor](https://github.com/microsoft/windows-rs/pull/4479)
+with WinUI 3; the Windows App SDK 2.4.0 runtime is bundled through `windows-reactor-setup`
+self-contained deployment.
 CI checks formatting, lints, and tests on Windows.
 
 ### Stream Deck companion

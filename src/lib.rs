@@ -15,7 +15,6 @@ pub mod notifications;
 pub mod opencode;
 pub mod openrouter;
 pub mod popup;
-pub mod popup_usage;
 pub mod popup_window;
 pub mod pricing;
 pub mod provider;

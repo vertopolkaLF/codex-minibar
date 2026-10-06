@@ -35,6 +35,9 @@ zip = "2"
 windows-collections = { git = "https://github.com/microsoft/windows-rs", rev = "07f344c019b8fdae4d398d4c2591596044cb416a", features = ["std"] }
 windows-core = { git = "https://github.com/microsoft/windows-rs", rev = "07f344c019b8fdae4d398d4c2591596044cb416a" }
 windows-reactor = { path = ".vendor" }
+gpui = { version = "0.2.2", default-features = false }
+futures = "0.3"
+raw-window-handle = "0.6"
 
 [target.'cfg(windows)'.dependencies]
 tray-icon = { version = "0.24", default-features = false }
