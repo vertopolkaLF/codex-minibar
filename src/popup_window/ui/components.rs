@@ -178,9 +178,83 @@ pub(crate) fn split_row(leading: impl IntoElement, trailing: impl IntoElement) -
         .flex_row()
         .items_center()
         .w_full()
-        .gap(px(8.0))
+        .gap(px(SPLIT_GAP))
         .child(div().flex_1().min_w_0().child(leading))
         .child(div().flex_none().child(trailing))
+}
+
+/// Gap between the two groups of a [`split_row`].
+pub(crate) const SPLIT_GAP: f32 = 8.0;
+
+/// Leading and trailing groups share one row when both fit; otherwise the
+/// trailing group moves under the leading one, right-aligned, so translated
+/// copy is never clipped.
+pub(crate) fn adaptive_split(
+    fits: bool,
+    leading: impl IntoElement,
+    trailing: impl IntoElement,
+) -> Div {
+    if fits {
+        split_row(leading, trailing)
+    } else {
+        div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .gap(px(4.0))
+            .child(leading)
+            .child(div().flex().flex_row().justify_end().child(trailing))
+    }
+}
+
+/// Single-line text while it fits; wrapping text once it needs its own row.
+pub(crate) fn fit_text(fits: bool, element: Div) -> Div {
+    if fits { nowrap(element) } else { element }
+}
+
+/// Measures popup copy with the active font so cards can pick a layout
+/// before painting instead of clipping long translations.
+pub(crate) struct TextMetrics<'a> {
+    text_system: &'a gpui::WindowTextSystem,
+    family: SharedString,
+}
+
+impl<'a> TextMetrics<'a> {
+    pub(crate) fn new(window: &'a gpui::Window, family: SharedString) -> Self {
+        Self {
+            text_system: window.text_system(),
+            family,
+        }
+    }
+
+    fn measure(&self, value: &str, size: f32, weight: FontWeight) -> f32 {
+        measure_text(self.text_system, self.family.clone(), size, weight, value)
+    }
+
+    /// [`caption`] and [`card_metadata`].
+    pub(crate) fn caption(&self, value: &str) -> f32 {
+        self.measure(value, 12.0, FontWeight::NORMAL)
+    }
+
+    /// [`body`].
+    pub(crate) fn body(&self, value: &str) -> f32 {
+        self.measure(value, 14.0, FontWeight::NORMAL)
+    }
+
+    /// [`body_strong`].
+    pub(crate) fn strong(&self, value: &str) -> f32 {
+        self.measure(value, 14.0, FontWeight::SEMIBOLD)
+    }
+
+    /// [`status_row`].
+    pub(crate) fn status_row(&self, label: &str, value: &str) -> f32 {
+        self.body(label) + STATUS_GAP + self.body(value)
+    }
+
+    /// Two groups separated by [`SPLIT_GAP`].
+    pub(crate) fn fits_split(available: f32, leading: f32, trailing: f32) -> bool {
+        leading + SPLIT_GAP + trailing <= available
+    }
 }
 
 pub(crate) fn card_metadata(value: impl Into<SharedString>, palette: &Palette) -> Div {
@@ -188,6 +262,8 @@ pub(crate) fn card_metadata(value: impl Into<SharedString>, palette: &Palette) -
 }
 
 /// "Resets in 4h 13m" — tertiary label, primary value.
+const STATUS_GAP: f32 = 6.0;
+
 pub(crate) fn status_row(
     label: impl Into<SharedString>,
     value: impl Into<SharedString>,
@@ -197,7 +273,7 @@ pub(crate) fn status_row(
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(6.0))
+        .gap(px(STATUS_GAP))
         .whitespace_nowrap()
         .child(body(label, palette.text_tertiary))
         .child(body(value, palette.text_primary))

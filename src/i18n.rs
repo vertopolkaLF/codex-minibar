@@ -77,12 +77,49 @@ fn system_language_is_russian() -> bool {
     }
 }
 
+/// Layout QA only: `CODEX_MINIBAR_PSEUDO_LOCALE=1` accents English copy and
+/// makes it ~40% longer, like long translations such as Portuguese or German.
+const PSEUDO_LOCALE_ENV: &str = "CODEX_MINIBAR_PSEUDO_LOCALE";
+
+/// Transforms literal Fluent text only; placeables such as numbers stay intact.
+fn pseudo_localize(text: &str) -> std::borrow::Cow<'_, str> {
+    let letters = text.chars().filter(|c| c.is_alphabetic()).count();
+    if letters == 0 {
+        return text.into();
+    }
+    let mut result: String = text
+        .chars()
+        .map(|c| match c {
+            'a' => 'á',
+            'e' => 'é',
+            'i' => 'í',
+            'o' => 'ó',
+            'u' => 'ú',
+            'c' => 'ç',
+            'n' => 'ñ',
+            'A' => 'Á',
+            'E' => 'É',
+            'O' => 'Ó',
+            'U' => 'Ú',
+            other => other,
+        })
+        .collect();
+    // Pad inside the trailing whitespace so spacing around placeables stays.
+    let trimmed = result.trim_end().len();
+    let padding = "ẋ".repeat(letters.div_ceil(5) * 2);
+    result.insert_str(trimmed, &padding);
+    result.into()
+}
+
 fn bundle(language: &str, source: &str) -> FluentBundle<FluentResource> {
     let resource =
         FluentResource::try_new(source.to_owned()).expect("valid embedded Fluent catalog");
     let mut bundle = FluentBundle::new(vec![language.parse().expect("supported locale")]);
     // Desktop labels do not need bidi isolation around numeric substitutions.
     bundle.set_use_isolating(false);
+    if language == "en" && std::env::var_os(PSEUDO_LOCALE_ENV).is_some_and(|value| value == "1") {
+        bundle.set_transform(Some(pseudo_localize));
+    }
     bundle
         .add_resource(resource)
         .expect("unique Fluent message IDs");
@@ -280,6 +317,21 @@ mod tests {
             }
         }
         messages
+    }
+
+    #[test]
+    fn pseudo_locale_lengthens_text_and_keeps_placeable_spacing() {
+        assert_eq!(pseudo_localize("Resets in "), "Réséts íñẋẋẋẋ ");
+        assert_eq!(pseudo_localize(" / "), " / ");
+        let mut bundle = bundle("en", "msg = Expires in { $time }");
+        bundle.set_transform(Some(pseudo_localize));
+        let message = bundle.get_message("msg").unwrap();
+        let mut args = FluentArgs::new();
+        args.set("time", "6 d 23 h");
+        let mut errors = Vec::new();
+        let value = bundle.format_pattern(message.value().unwrap(), Some(&args), &mut errors);
+        assert!(errors.is_empty());
+        assert_eq!(value, "Éxpírés íñẋẋẋẋ 6 d 23 h");
     }
 
     #[test]

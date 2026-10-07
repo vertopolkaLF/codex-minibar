@@ -31,10 +31,31 @@ and cached Usage/Home snapshots follow the current language. A setting change
 does not require reopening a window or restarting the application.
 
 Segmented controls measure each label with the active GPUI font and size; fixed
-segments and the animated selection thumb follow each label's width. Compact
-quota and spending cards keep their background fill when the complete name
-cannot fit alongside the current values; the name then takes its own row and
-the values move below it.
+segments and the animated selection thumb follow each label's width.
+
+Popup cards never clip translated copy. Each card measures its text with
+`components::TextMetrics` and the active font, then picks a layout:
+
+- `components::adaptive_split` keeps leading and trailing groups on one row
+  when both fit; otherwise the trailing group moves below, right-aligned.
+- `components::fit_text` keeps a label on one line when it fits and lets it
+  wrap once it has its own row.
+- Compact quota, spending and cloud credit cards keep their background fill in
+  the stacked layout. Spending cards stack the reset and expiry countdowns when
+  they do not fit on one row. Banked and Tibo reset rows stack their dates and
+  countdowns the same way.
+
+New card rows must follow the same pattern: measure both groups and use
+`adaptive_split` instead of a bare `split_row` around translated text.
+
+### Pseudo-locale for layout QA
+
+Start the app with `CODEX_MINIBAR_PSEUDO_LOCALE=1` and select English. English
+copy becomes accented and about 40% longer (`Resets in` → `Réséts íñẋẋẋẋ`),
+which approximates long translations such as Portuguese or German. Numbers,
+names and other Fluent parameters stay unchanged. Check every popup surface
+in one- and two-column layouts. It is a development aid only, not a language
+option.
 
 ## Translate or add a message
 
