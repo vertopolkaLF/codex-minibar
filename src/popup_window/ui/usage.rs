@@ -242,9 +242,13 @@ impl PopupRoot {
             .relative()
             .flex()
             .flex_row()
+            .flex_wrap()
             .items_center()
-            .gap(px(8.0))
-            .h(px(24.0))
+            .w_full()
+            .min_w_0()
+            .gap_x(px(8.0))
+            .gap_y(px(2.0))
+            .min_h(px(24.0))
             .pl(px(24.0 * shift));
         if shift > 0.001 {
             let started = *self.usage_spinner_started.get_or_insert_with(Instant::now);
@@ -268,15 +272,16 @@ impl PopupRoot {
         } else {
             self.usage_spinner_started = None;
         }
-        title = title.child(components::body_strong(
-            crate::i18n::tr("usage-0bb186"),
-            palette.text_primary,
-        ));
+        title = title.child(
+            components::body_strong(crate::i18n::tr("usage-0bb186"), palette.text_primary)
+                .flex_none(),
+        );
         if let Some(label) = range_label {
-            title = title.child(nowrap(components::body(
-                label.to_owned(),
-                palette.text_tertiary,
-            )));
+            title = title.child(
+                nowrap(components::body(label.to_owned(), palette.text_tertiary))
+                    .flex_none()
+                    .max_w(relative(1.0)),
+            );
         }
         title
     }
@@ -342,15 +347,12 @@ impl PopupRoot {
                 div()
                     .flex()
                     .flex_row()
-                    .flex_wrap()
                     .items_start()
                     .gap_x(px(8.0))
-                    .gap_y(px(8.0))
                     .child(
                         div()
-                            .flex_none()
+                            .flex_1()
                             .min_w_0()
-                            .max_w(relative(1.0))
                             .child(self.usage_title(Some(range_label), recalculating)),
                     )
                     .child(div().flex_none().ml_auto().child(metric_control)),
