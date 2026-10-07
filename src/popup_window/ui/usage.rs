@@ -292,8 +292,8 @@ impl PopupRoot {
         let metric_control = self.segmented_control(
             fx::key("usage-metric"),
             vec![
-                crate::i18n::tr(crate::i18n::tr("cost-885dc4")).into(),
-                crate::i18n::tr(crate::i18n::tr("tokens-339143")).into(),
+                crate::i18n::tr("cost").into(),
+                crate::i18n::tr("tokens").into(),
             ],
             usize::from(metric == OverviewMetric::Tokens),
             false,
@@ -342,15 +342,18 @@ impl PopupRoot {
                 div()
                     .flex()
                     .flex_row()
+                    .flex_wrap()
                     .items_start()
-                    .gap(px(8.0))
+                    .gap_x(px(8.0))
+                    .gap_y(px(8.0))
                     .child(
                         div()
-                            .flex_1()
+                            .flex_none()
                             .min_w_0()
+                            .max_w(relative(1.0))
                             .child(self.usage_title(Some(range_label), recalculating)),
                     )
-                    .child(metric_control),
+                    .child(div().flex_none().ml_auto().child(metric_control)),
             )
             .child(range_control)
             .into_any_element()
@@ -435,8 +438,8 @@ impl PopupRoot {
         let title = match (hourly, metric) {
             (true, OverviewMetric::Cost) => crate::i18n::tr("hourly-cost"),
             (true, OverviewMetric::Tokens) => crate::i18n::tr("hourly-processed-tokens"),
-            (false, OverviewMetric::Cost) => crate::i18n::tr(crate::i18n::tr("cost-885dc4")),
-            (false, OverviewMetric::Tokens) => crate::i18n::tr(crate::i18n::tr("tokens-339143")),
+            (false, OverviewMetric::Cost) => crate::i18n::tr("cost"),
+            (false, OverviewMetric::Tokens) => crate::i18n::tr("tokens"),
         };
         let card = usage_card(&palette)
             .gap(px(6.0))
@@ -901,10 +904,7 @@ fn model_breakdown_table(rows: &[BreakdownRow], palette: &Palette, colored: bool
         )
         .child(cell(
             56.0,
-            caption(
-                crate::i18n::tr(crate::i18n::tr("cost-885dc4")),
-                palette.text_tertiary,
-            ),
+            caption(crate::i18n::tr("cost"), palette.text_tertiary),
         ))
         .child(cell(
             44.0,
@@ -912,10 +912,7 @@ fn model_breakdown_table(rows: &[BreakdownRow], palette: &Palette, colored: bool
         ))
         .child(cell(
             56.0,
-            caption(
-                crate::i18n::tr(crate::i18n::tr("tokens-339143")),
-                palette.text_tertiary,
-            ),
+            caption(crate::i18n::tr("tokens"), palette.text_tertiary),
         ));
     let mut list = div().flex().flex_col().gap(px(6.0));
     for row in rows {
@@ -1016,8 +1013,8 @@ fn day_breakdown_table(
         56.0,
         caption(
             match metric {
-                OverviewMetric::Cost => crate::i18n::tr(crate::i18n::tr("cost-885dc4")),
-                OverviewMetric::Tokens => crate::i18n::tr(crate::i18n::tr("tokens-339143")),
+                OverviewMetric::Cost => crate::i18n::tr("cost"),
+                OverviewMetric::Tokens => crate::i18n::tr("tokens"),
             },
             palette.text_tertiary,
         ),

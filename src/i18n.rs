@@ -402,6 +402,14 @@ mod tests {
         }
     }
     #[test]
+    fn metric_labels_keep_standalone_and_sentence_forms_separate() {
+        assert_eq!(tr_in(Language::Russian, "cost"), "Стоимость");
+        assert_eq!(tr_in(Language::Russian, "tokens"), "Токены");
+        assert_eq!(tr_in(Language::Russian, "cost-885dc4"), "стоимости");
+        assert_eq!(tr_in(Language::Russian, "tokens-339143"), "токенов");
+    }
+
+    #[test]
     fn missing_empty_or_invalid_russian_message_falls_back_to_english() {
         let catalogs = Catalogs {
             en: bundle(

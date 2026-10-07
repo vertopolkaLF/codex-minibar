@@ -526,10 +526,21 @@ impl PopupRoot {
         if can_reorder {
             trailing = trailing.child(self.widget_drag_handle(HomeWidgetId::total_spend(), cx));
         }
-        let heading = components::split_row(title, trailing)
+        // Keep both groups at their natural widths. Longer translations move
+        // the period selector onto a new line instead of painting over it.
+        let heading = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .w_full()
+            .gap_x(px(8.0))
+            .gap_y(px(4.0))
             .px(px(4.0))
             .mt(px(if is_first { 0.0 } else { HEADING_TOP }))
-            .mb(px(2.0));
+            .mb(px(2.0))
+            .child(title.flex_none().max_w(gpui::relative(1.0)))
+            .child(trailing.flex_none().ml_auto());
 
         let initial_loading = self
             .snapshots
