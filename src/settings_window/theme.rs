@@ -53,6 +53,7 @@ pub(crate) struct Theme {
     pub(crate) accent_soft: Hsla,
     pub(crate) divider: Hsla,
     pub(crate) popover: Hsla,
+    pub(crate) dialog: Hsla,
     pub(crate) scrim: Hsla,
     pub(crate) success: Hsla,
     pub(crate) success_bg: Hsla,
@@ -207,6 +208,13 @@ impl Theme {
             divider: ink(dark, if dark { 0x10 } else { 0x0D }),
             popover: if dark {
                 rgb8((0x2A, 0x2A, 0x2D))
+            } else {
+                rgb8((0xFC, 0xFC, 0xFD))
+            },
+            // Modal cards sit one step above the window, darker than menus
+            // so the scrim-dimmed page and the card don't wash out together.
+            dialog: if dark {
+                rgb8((0x20, 0x20, 0x23))
             } else {
                 rgb8((0xFC, 0xFC, 0xFD))
             },

@@ -1902,7 +1902,7 @@ pub(crate) fn dialog(
         .w(px(width))
         .max_h(relative(0.92))
         .rounded(px(14.0))
-        .bg(theme.popover)
+        .bg(theme.dialog)
         .shadow(float_shadow(theme, 24.0))
         .overflow_hidden()
         .on_click(|_, _, cx| cx.stop_propagation())
@@ -1924,6 +1924,10 @@ pub(crate) fn dialog(
                 .gap(px(8.0))
                 .p(px(24.0))
                 .flex_none()
+                // GPUI clips children to a rectangle, not the card's radius:
+                // round the tinted footer itself so it can't paint past the
+                // card's bottom corners.
+                .rounded_b(px(14.0))
                 .bg(theme.subtle_hover)
                 .border_t_1()
                 .border_color(theme.divider)
