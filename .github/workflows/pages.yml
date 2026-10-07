@@ -1,10 +1,10 @@
-name: Deploy website to GitHub Pages
+name: Deploy GitHub Pages redirect
 
 on:
   push:
     branches: [main]
     paths:
-      - "site/**"
+      - ".github/pages-redirect.html"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -26,11 +26,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-      - name: Assemble static site
+      # The website now lives at https://vertopolkalf.ru/codex-minibar/ (lf-website repo).
+      # Pages only serves a redirect there; 404.html catches old deep links.
+      - name: Assemble redirect
         run: |
-          mkdir -p _site/assets
-          cp site/index.html site/styles.css site/script.js site/demo.css site/demo.js _site/
-          cp -a site/assets/. _site/assets/
+          mkdir -p _site
+          cp .github/pages-redirect.html _site/index.html
+          cp .github/pages-redirect.html _site/404.html
           touch _site/.nojekyll
       - name: Configure Pages
         uses: actions/configure-pages@v6
