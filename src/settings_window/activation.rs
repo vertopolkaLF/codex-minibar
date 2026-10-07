@@ -451,7 +451,7 @@ impl SettingsWindow {
         let pause = list == RuleList::Pause;
         let mut time_row = div().flex().gap(px(16.0)).flex_wrap();
         if pause {
-            time_row = time_row.items_end();
+            time_row = time_row.items_center();
         }
         let mut pickers = Vec::new();
         for (slot, (label, minutes)) in rule.times.iter().enumerate() {
@@ -465,25 +465,34 @@ impl SettingsWindow {
                     changed
                 })
             });
-            time_row = time_row.child(kit::field(
+            let picker = kit::time_picker(
                 k,
-                *label,
-                kit::time_picker(
-                    k,
-                    format!("{}-{}-time-{slot}", list.prefix(), rule.id),
-                    *minutes,
-                    time_format,
-                    on_change,
-                ),
-            ));
+                format!("{}-{}-time-{slot}", list.prefix(), rule.id),
+                *minutes,
+                time_format,
+                on_change,
+            );
+            pickers.push(if pause {
+                // Inline label so the pickers share the checkbox's line.
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(kit::text(*label, 13.0, k.theme.text_secondary))
+                    .child(picker)
+                    .into_any_element()
+            } else {
+                kit::field(k, *label, picker)
+            });
         }
-        let time_row = time_row.into_any_element();
-        if list == RuleList::Pause {
+        if pause {
             // A whole-day pause is 00:00–23:59 inclusive; the checkbox makes
             // that explicit instead of relying on picking the last minute.
+            // The pickers share its row and fade out in place, so toggling
+            // never shifts the layout.
             let all_day = is_all_day(&rule.times);
             let rule_id = rule.id.clone();
-            fields = fields.child(kit::checkbox(
+            let checkbox = kit::checkbox(
                 k,
                 format!("{}-{}-all-day", list.prefix(), rule.id),
                 all_day,
@@ -501,13 +510,32 @@ impl SettingsWindow {
                         changed
                     })
                 }),
-            ));
+            );
+            time_row = time_row.child(
+                div()
+                    .flex_none()
+                    .h(px(kit::CONTROL_HEIGHT))
+                    .flex()
+                    .items_center()
+                    .child(checkbox),
+            );
             let key = crate::popup_window::ui::fx::key(("pause-times", rule.id.as_str()));
-            if let Some(times) = kit::collapsible(k, key, !all_day, move |_| time_row) {
-                fields = fields.child(times);
+            let shown =
+                k.fx.toggle(key, !all_day, crate::popup_window::ui::fx::NORMAL);
+            for picker in pickers {
+                let mut slot = div().flex_none().child(picker);
+                if shown < 0.999 {
+                    slot = slot.opacity(shown);
+                    if shown <= 0.001 {
+                        slot = slot.invisible();
+                    }
+                }
+                time_row = time_row.child(slot);
             }
         } else {
-            fields = fields.child(time_row);
+            for picker in pickers {
+                time_row = time_row.child(div().flex_none().child(picker));
+            }
         }
 
         let mut days = div().flex().gap(px(6.0));
@@ -556,7 +584,13 @@ impl SettingsWindow {
                 .child(*label),
             );
         }
-        fields = fields.child(kit::field(k, "Days", days.into_any_element()));
+        let days = kit::field(k, "Days", days.into_any_element());
+        if pause {
+            fields = fields.child(time_row).child(days);
+        } else {
+            // A schedule has a single time, so it shares a row with the days.
+            fields = fields.child(time_row.child(div().flex_none().child(days)));
+        }
 
         fields.into_any_element()
     }

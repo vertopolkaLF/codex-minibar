@@ -62,6 +62,11 @@ pub(crate) struct Kit {
     /// Bounds of the cards being painted, innermost last, so rows can round
     /// their hover fill to the card's corners.
     cards: Rc<RefCell<Vec<Bounds<Pixels>>>>,
+    /// The page's scroll container, so opening expanders can scroll
+    /// themselves into view.
+    pub(crate) page_scroll: Option<gpui::ScrollHandle>,
+    /// Expanders the user just opened that still have to be revealed.
+    reveals: Rc<RefCell<HashSet<SharedString>>>,
 }
 
 impl Kit {
@@ -868,6 +873,8 @@ pub(crate) fn expander(
     let chevron = icon("caret-down-bold", 12.0, k.theme.text_secondary)
         .with_transformation(Transformation::rotate(radians(std::f32::consts::PI * turn)));
     let toggle = Rc::clone(&on_toggle);
+    let reveals = Rc::clone(&k.reveals);
+    let reveal_id = id.clone();
     let header = header
         .trailing(
             div()
@@ -878,8 +885,28 @@ pub(crate) fn expander(
                 .child(chevron)
                 .into_any_element(),
         )
-        .on_click(handler(move |(), window, cx| toggle(!expanded, window, cx)))
+        .on_click(handler(move |(), window, cx| {
+            let mut reveals = reveals.borrow_mut();
+            if expanded {
+                reveals.remove(&reveal_id);
+            } else {
+                reveals.insert(reveal_id.clone());
+            }
+            drop(reveals);
+            toggle(!expanded, window, cx)
+        }))
         .render(k);
+    // Follow the opening body with the page scroll so the whole card ends up
+    // in view; tracked until the expand animation settles.
+    let reveal = match &k.page_scroll {
+        Some(scroll) if expanded && k.reveals.borrow().contains(&id) => {
+            if turn >= 0.999 {
+                k.reveals.borrow_mut().remove(&id);
+            }
+            Some(reveal_into_view(scroll.clone()))
+        }
+        _ => None,
+    };
     let theme_divider = k.theme.divider;
     let body = collapsible(k, key, expanded, move |k| {
         div()
@@ -901,7 +928,40 @@ pub(crate) fn expander(
             )
             .into_any_element()
     });
-    card_surface(k, std::iter::once(header).chain(body)).into_any_element()
+    let card = card_surface(k, std::iter::once(header).chain(body));
+    match reveal {
+        Some(reveal) => div()
+            .relative()
+            .child(card)
+            .child(reveal)
+            .into_any_element(),
+        None => card.into_any_element(),
+    }
+}
+
+/// Invisible overlay that scrolls `scroll` the least amount needed to show
+/// the element it covers, without pushing that element's top out of view.
+fn reveal_into_view(scroll: gpui::ScrollHandle) -> AnyElement {
+    const MARGIN: f32 = 16.0;
+    canvas(
+        move |bounds, window, _| {
+            let viewport = scroll.bounds();
+            let below = bounds.bottom() + px(MARGIN) - viewport.bottom();
+            let room_above = bounds.top() - px(MARGIN) - viewport.top();
+            let shift = below.min(room_above);
+            if shift > px(0.5) {
+                let offset = scroll.offset();
+                scroll.set_offset(point(offset.x, offset.y - shift));
+                window.refresh();
+            }
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+    .into_any_element()
 }
 
 // ---------------------------------------------------------------------------
@@ -2470,9 +2530,17 @@ pub(crate) fn time_picker(
             )
         });
         if !entry.1 {
-            // Bring each column's value near the top on open.
-            for (handle, (_, selected, _)) in entry.0.iter().zip(&columns) {
-                handle.scroll_to_top_of_item(selected.saturating_sub(2));
+            // Center each column's value on open. Rows have a fixed pitch, so
+            // the offset is computed directly: `scroll_to_top_of_item` uses
+            // last frame's bounds, which are stale while the flyout animates.
+            let pitch = PICKER_ITEM + 2.0;
+            let viewport = PICKER_ROWS * pitch;
+            for (handle, (labels, selected, _)) in entry.0.iter().zip(&columns) {
+                let content = labels.len() as f32 * pitch - 2.0;
+                let max = (content - viewport).max(0.0);
+                let top =
+                    (*selected as f32 * pitch - (viewport - PICKER_ITEM) / 2.0).clamp(0.0, max);
+                handle.set_offset(gpui::point(px(0.0), px(-top)));
             }
             entry.1 = true;
         }
