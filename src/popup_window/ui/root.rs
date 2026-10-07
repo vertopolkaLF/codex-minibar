@@ -43,6 +43,21 @@ pub(super) const PROFILE_STRIP_HEIGHT: f32 = 46.0;
 const CHROME_INSET: f32 = 1.0;
 const PAGE_PADDING: f32 = 16.0;
 const PAGE_SPACING: f32 = 6.0;
+
+/// One account bar's text and its animated, measured height.
+#[derive(Default)]
+pub(crate) struct AccountBar {
+    spec: Option<AccountBarSpec>,
+    height: Rc<Cell<f32>>,
+}
+
+#[derive(Clone)]
+struct AccountBarSpec {
+    title: String,
+    message: String,
+    severity: Severity,
+    action: bool,
+}
 /// Smooth wheel scrolling: one notch glides over this duration.
 const SCROLL_GLIDE: Duration = Duration::from_millis(140);
 
@@ -1564,14 +1579,79 @@ impl PopupRoot {
     /// The bar for one account: its error, or a warning that its login is
     /// about to end. Login problems carry a button that signs the account in
     /// again into its own folder. `every_error` also shows other errors.
+    ///
+    /// Bars grow in and collapse out at their measured height; a cleared bar
+    /// keeps its last text while it collapses. Returns how shown it is.
     fn account_bar(
         &mut self,
+        view: PopupView,
         provider: ProviderId,
         every_error: bool,
         cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let ui = Rc::clone(&self.ui);
+    ) -> Option<(AnyElement, f32)> {
+        let current = self.account_bar_spec(provider, every_error);
+        // Track every account every frame, so a bar that appears later
+        // animates in instead of starting fully shown.
+        let shown = self.fx.toggle(
+            fx::key(("account-bar", view_key(view), provider.id())),
+            current.is_some(),
+            fx::NORMAL,
+        );
+        let key = (view, provider);
+        let bar = match current {
+            Some(spec) => {
+                let bar = self.account_bars.entry(key).or_default();
+                bar.spec = Some(spec);
+                bar
+            }
+            None if shown > 0.001 => self.account_bars.get_mut(&key)?,
+            None => {
+                self.account_bars.remove(&key);
+                return None;
+            }
+        };
+        let spec = bar.spec.clone()?;
+        let measured = Rc::clone(&bar.height);
         let palette = self.palette.clone();
+        let action = spec.action.then(|| self.sign_in_button(provider, cx));
+        let content = components::info_bar_with_action(
+            spec.title,
+            spec.message,
+            spec.severity,
+            &palette,
+            action,
+        );
+        let height = measured.get();
+        let probe = canvas(
+            move |bounds, window, _| {
+                let natural = f32::from(bounds.size.height);
+                if measured.get() != natural {
+                    measured.set(natural);
+                    window.request_animation_frame();
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
+        let mut element = div().overflow_hidden().opacity(shown).child(
+            div()
+                .relative()
+                .flex_shrink_0()
+                .child(content)
+                .child(probe),
+        );
+        if shown < 1.0 {
+            element = element.h(px(height * shown));
+        }
+        Some((element.into_any_element(), shown))
+    }
+
+    /// What the account's bar should say now, if anything.
+    fn account_bar_spec(&self, provider: ProviderId, every_error: bool) -> Option<AccountBarSpec> {
+        let ui = &self.ui;
         let error = ui.provider_error(provider);
         let notice = ui.instance(provider).and_then(|instance| {
             model::login_notice(instance, error, self.limits.get(provider), Utc::now())
@@ -1594,11 +1674,12 @@ impl PopupRoot {
             }
             _ => return None,
         };
-        let action = notice.map(|_| self.sign_in_button(provider, cx));
-        Some(
-            components::info_bar_with_action(title, message, severity, &palette, action)
-                .into_any_element(),
-        )
+        Some(AccountBarSpec {
+            title,
+            message,
+            severity,
+            action: notice.is_some(),
+        })
     }
 
     fn sign_in_button(&mut self, provider: ProviderId, cx: &mut Context<Self>) -> AnyElement {
