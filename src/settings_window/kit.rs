@@ -793,14 +793,19 @@ impl Row {
                 .on_click(move |_, window, cx| on_click((), window, cx))
                 .child(row_hover_fill(k, t));
         }
-        row = row.children(self.icon).child(text_col).child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(10.0))
-                .flex_none()
-                .children(self.trailing),
-        );
+        row = row.children(self.icon).child(text_col);
+        // An empty trailing slot would still claim a row gap and inset
+        // full-width details (e.g. folder pickers) from the right edge.
+        if !self.trailing.is_empty() {
+            row = row.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.0))
+                    .flex_none()
+                    .children(self.trailing),
+            );
+        }
         row.into_any_element()
     }
 }
