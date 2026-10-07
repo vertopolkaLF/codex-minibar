@@ -40,9 +40,9 @@ impl SettingsWindow {
 
         let theme_cards = div().flex().gap(px(12.0)).w_full().children(
             [
-                (AppTheme::Auto, "Windows"),
-                (AppTheme::Light, "Light"),
-                (AppTheme::Dark, "Dark"),
+                (AppTheme::Auto, crate::i18n::tr("windows")),
+                (AppTheme::Light, crate::i18n::tr("light")),
+                (AppTheme::Dark, crate::i18n::tr("dark")),
             ]
             .into_iter()
             .map(|(value, label)| self.theme_card(k, value, label, value == theme, cx)),
@@ -50,20 +50,23 @@ impl SettingsWindow {
         let colors = self.accent_swatches(k, accent, cx);
         let look = kit::card_of(k, |k| {
             vec![
-                Row::new("appearance-theme", "Color theme")
-                    .description(k, "Applies to Settings, the popup and its tray menu.")
+                Row::new("appearance-theme", crate::i18n::tr("color-theme"))
+                    .description(
+                        k,
+                        crate::i18n::tr("applies-to-settings-the-popup-and-its-tray-menu"),
+                    )
                     .detail(div().pt(px(12.0)).child(theme_cards).into_any_element())
                     .render(k),
-                Row::new("appearance-accent", "Accent color")
-                    .description(k, "Windows follows your system accent.")
+                Row::new("appearance-accent", crate::i18n::tr("accent-color"))
+                    .description(k, crate::i18n::tr("windows-follows-your-system-accent"))
                     .detail(div().pt(px(12.0)).child(colors).into_any_element())
                     .render(k),
-                Row::new("appearance-icon-style", "Icons style")
-                    .description(k, "Glyph style in the Settings sidebar.")
+                Row::new("appearance-icon-style", crate::i18n::tr("icons-style"))
+                    .description(k, crate::i18n::tr("glyph-style-in-the-settings-sidebar"))
                     .trailing(kit::segmented(
                         k,
                         "appearance-icon-style",
-                        &["Colored", "Monochrome"],
+                        &[crate::i18n::tr("colored"), crate::i18n::tr("monochrome")],
                         if colored_sidebar { 0 } else { 1 },
                         false,
                         Self::h(cx, |this, index: usize, _, cx| {
@@ -73,11 +76,14 @@ impl SettingsWindow {
                         }),
                     ))
                     .render(k),
-                Row::new("appearance-time", "Time format")
+                Row::new("appearance-time", crate::i18n::tr("time-format"))
                     .trailing(kit::segmented(
                         k,
                         "appearance-time-format",
-                        &["12-hour", "24-hour"],
+                        &[
+                            crate::i18n::tr("msg-12-hour"),
+                            crate::i18n::tr("msg-24-hour"),
+                        ],
                         time_format.index().max(0) as usize,
                         false,
                         Self::h(cx, |this, index: usize, _, cx| {
@@ -93,11 +99,15 @@ impl SettingsWindow {
         let radius_value = radius.dip();
         let popup = kit::card_of(k, |k| {
             vec![
-                Row::new("appearance-material", "Popup background")
+                Row::new("appearance-material", crate::i18n::tr("popup-background"))
                     .trailing(kit::segmented(
                         k,
                         "appearance-material",
-                        &["Acrylic", "Mica", "Solid"],
+                        &[
+                            crate::i18n::tr("acrylic"),
+                            crate::i18n::tr("mica"),
+                            crate::i18n::tr("solid"),
+                        ],
                         material.index().max(0) as usize,
                         false,
                         Self::h(cx, |this, index: usize, _, cx| {
@@ -108,11 +118,11 @@ impl SettingsWindow {
                         }),
                     ))
                     .render(k),
-                Row::new("appearance-bar", "Bottom bar size")
+                Row::new("appearance-bar", crate::i18n::tr("bottom-bar-size"))
                     .trailing(kit::segmented(
                         k,
                         "appearance-bar",
-                        &["Comfortable", "Compact"],
+                        &[crate::i18n::tr("comfortable"), crate::i18n::tr("compact")],
                         bar.index().max(0) as usize,
                         false,
                         Self::h(cx, |this, index: usize, _, cx| {
@@ -121,7 +131,7 @@ impl SettingsWindow {
                         }),
                     ))
                     .render(k),
-                Row::new("appearance-radius", "Popup corner radius")
+                Row::new("appearance-radius", crate::i18n::tr("popup-corner-radius"))
                     .trailing(kit::slider(
                         k,
                         "appearance-radius",
@@ -156,10 +166,12 @@ impl SettingsWindow {
             vec![kit::toggle_row(
                 k,
                 "appearance-animations",
-                "Animation effects",
+                crate::i18n::tr("animation-effects"),
                 Some(
-                    "Glide transitions in the popup and Settings. Windows' own animation setting is also respected."
-                        .into(),
+                    crate::i18n::tr(
+                        "glide-transitions-in-the-popup-and-settings-windows-own-animation",
+                    )
+                    .into(),
                 ),
                 animations,
                 Self::h(cx, |this, value: bool, _, cx| {
@@ -171,9 +183,9 @@ impl SettingsWindow {
 
         vec![
             look,
-            kit::section_heading(k, "Popup"),
+            kit::section_heading(k, crate::i18n::tr("popup")),
             popup,
-            kit::section_heading(k, "Motion"),
+            kit::section_heading(k, crate::i18n::tr("motion")),
             motion,
         ]
     }
@@ -282,16 +294,25 @@ impl SettingsWindow {
         current: AccentColor,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        const LABELS: [&str; 8] = [
-            "Windows", "Blue", "Purple", "Pink", "Red", "Orange", "Green", "Teal",
-        ];
+        fn labels() -> [&'static str; 8] {
+            [
+                crate::i18n::tr("windows"),
+                crate::i18n::tr("blue"),
+                crate::i18n::tr("purple"),
+                crate::i18n::tr("pink"),
+                crate::i18n::tr("red"),
+                crate::i18n::tr("orange"),
+                crate::i18n::tr("green"),
+                crate::i18n::tr("teal"),
+            ]
+        }
         let (dark, on_accent) = (k.theme.dark, k.theme.on_accent);
         let fill = |accent| rgb8(crate::theme::accent_ramp(accent).fill(dark));
         kit::ColorSwatches {
             id: "accent".into(),
             presets: ACCENTS
                 .into_iter()
-                .zip(LABELS)
+                .zip(labels())
                 .map(|(accent, label)| kit::Swatch {
                     label: label.into(),
                     fill: fill(accent),

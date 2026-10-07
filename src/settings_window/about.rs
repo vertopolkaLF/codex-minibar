@@ -11,13 +11,15 @@ use crate::updater::{ISSUES_URL, RELEASES_URL, REPO_URL, UpdatePhase, current_ve
 
 fn update_status_label(phase: &UpdatePhase) -> String {
     match phase {
-        UpdatePhase::Idle => "Check GitHub for a new version".into(),
-        UpdatePhase::Checking => "Checking for updates…".into(),
-        UpdatePhase::UpToDate => "You're up to date".into(),
-        UpdatePhase::Available(update) => format!("Update {} available", update.version),
-        UpdatePhase::Applying => "Installing update…".into(),
+        UpdatePhase::Idle => crate::i18n::tr("check-github-for-a-new-version").into(),
+        UpdatePhase::Checking => crate::i18n::tr("checking-for-updates").into(),
+        UpdatePhase::UpToDate => crate::i18n::tr("you-re-up-to-date").into(),
+        UpdatePhase::Available(update) => {
+            crate::i18n::format("update-available", &[("v0", update.version.to_string())])
+        }
+        UpdatePhase::Applying => crate::i18n::tr("installing-update").into(),
         // Never surface raw transport errors (e.g. "GET https://...").
-        UpdatePhase::Failed(_) => "Couldn't check for updates".into(),
+        UpdatePhase::Failed(_) => crate::i18n::tr("couldn-t-check-for-updates").into(),
     }
 }
 
@@ -51,7 +53,10 @@ impl SettingsWindow {
                     .line_height(px(16.0))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.accent_text)
-                    .child(format!("Version {}", current_version())),
+                    .child(crate::i18n::format(
+                        "version",
+                        &[("v0", current_version().to_string())],
+                    )),
             )
             .child(
                 div()
@@ -59,7 +64,7 @@ impl SettingsWindow {
                     .text_size(px(14.0))
                     .line_height(px(20.0))
                     .text_color(theme.text_secondary)
-                    .child("Usage limits in the Windows tray."),
+                    .child(crate::i18n::tr("usage-limits-in-the-windows-tray")),
             )
             .into_any_element();
 
@@ -85,9 +90,9 @@ impl SettingsWindow {
         if matches!(phase, UpdatePhase::Available(_)) {
             update_rows.push(
                 status
-                    .description(k, "A new release is ready to install.")
+                    .description(k, crate::i18n::tr("a-new-release-is-ready-to-install"))
                     .trailing(
-                        Button::new("about-whats-new", "What's new")
+                        Button::new("about-whats-new", crate::i18n::tr("what-s-new"))
                             .on_click(kit::handler(|(), _, _| {
                                 if let Err(error) = crate::updater::open_release_notes() {
                                     eprintln!("failed to open release notes: {error:#}");
@@ -96,7 +101,7 @@ impl SettingsWindow {
                             .render(k),
                     )
                     .trailing(
-                        Button::new("about-update", "Update")
+                        Button::new("about-update", crate::i18n::tr("update"))
                             .accent()
                             .on_click(kit::handler(|(), _, _| install_update()))
                             .render(k),
@@ -108,7 +113,7 @@ impl SettingsWindow {
             update_rows.push(
                 status
                     .trailing(
-                        Button::new("about-check", "Check for updates")
+                        Button::new("about-check", crate::i18n::tr("check-for-updates"))
                             .accent()
                             .disabled(busy)
                             .on_click(Self::h(cx, |this, (), _, _| {
@@ -125,7 +130,7 @@ impl SettingsWindow {
         update_rows.push(kit::toggle_row(
             k,
             "about-check-startup",
-            "Check for updates on startup",
+            crate::i18n::tr("check-for-updates-on-startup"),
             None,
             check_for_updates,
             Self::h(cx, |this, value: bool, _, cx| {
@@ -135,7 +140,7 @@ impl SettingsWindow {
         update_rows.push(kit::toggle_row(
             k,
             "about-notify",
-            "Notify when a new version is found",
+            crate::i18n::tr("notify-when-a-new-version-is-found"),
             None,
             notify,
             Self::h(cx, |this, value: bool, _, cx| {
@@ -201,28 +206,28 @@ impl SettingsWindow {
             .mx(px(-6.0))
             .child(tile(
                 "about-github",
-                "GitHub",
-                "Source code",
+                crate::i18n::tr("github"),
+                crate::i18n::tr("source-code"),
                 "github-logo-fill",
                 REPO_URL,
             ))
             .child(tile(
                 "about-releases",
-                "Releases",
-                "See what's new",
+                crate::i18n::tr("releases"),
+                crate::i18n::tr("see-what-s-new"),
                 "download-simple-fill",
                 RELEASES_URL,
             ))
             .child(tile(
                 "about-issues",
-                "Report an issue",
-                "Found a bug?",
+                crate::i18n::tr("report-an-issue"),
+                crate::i18n::tr("found-a-bug"),
                 "flag-fill",
                 ISSUES_URL,
             ))
             .child(tile(
                 "about-author",
-                "Author",
+                crate::i18n::tr("author"),
                 "@vertopolkaLF",
                 "at-fill",
                 "https://github.com/vertopolkaLF",
@@ -231,9 +236,9 @@ impl SettingsWindow {
 
         vec![
             hero,
-            kit::section_heading(k, "Updates"),
+            kit::section_heading(k, crate::i18n::tr("updates")),
             updates,
-            kit::section_heading(k, "Resources"),
+            kit::section_heading(k, crate::i18n::tr("resources")),
             resources,
         ]
     }

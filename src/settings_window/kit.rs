@@ -1317,7 +1317,11 @@ pub(crate) fn toggle_row_with(
     let id: SharedString = id.into();
     let disabled = disabled_reason.is_some();
     let state_label = text(
-        if on && !disabled { "On" } else { "Off" },
+        if on && !disabled {
+            crate::i18n::tr("on")
+        } else {
+            crate::i18n::tr("off")
+        },
         13.0,
         k.theme.text_secondary,
     )
@@ -1759,7 +1763,7 @@ pub(crate) fn more_menu(
     let toggle_id = id.clone();
     let open = k.menus.is_open(&id);
     let button = Button::icon_only(format!("more-{id}"), "dots-three-bold")
-        .tooltip("More options")
+        .tooltip(crate::i18n::tr("more-options"))
         .on_click(handler(move |(), window, _| {
             menus.toggle(toggle_id.clone(), window)
         }))
@@ -3039,7 +3043,7 @@ impl ColorSwatches {
                     theme.text_secondary,
                 )),
             });
-        let trigger = with_tooltip(k, trigger, "Custom color").into_any_element();
+        let trigger = with_tooltip(k, trigger, crate::i18n::tr("custom-color")).into_any_element();
 
         let content = k.menus.is_open(&menu).then(|| {
             let base = self.picker_rgb;

@@ -43,10 +43,10 @@ impl SettingsWindow {
                 k,
                 cx,
                 "customize-two-columns",
-                "Use two columns",
-                Some(
-                    "Widen Home and Usage. Drag Home blocks between columns; provider tabs stay compact.",
-                ),
+                crate::i18n::tr("use-two-columns"),
+                Some(crate::i18n::tr(
+                    "widen-home-and-usage-drag-home-blocks-between-columns-provider-ta",
+                )),
                 |s| s.popup_two_columns,
                 |s, v| s.popup_two_columns = v,
             )]
@@ -57,10 +57,10 @@ impl SettingsWindow {
                 kit::dropdown_row(
                     k,
                     "customize-tab-mode",
-                    "Several accounts of one provider",
-                    Some(
-                        "Separate tabs gives every instance its own tab. Grouped shows one tab per provider, with an account switcher or every account stacked.",
-                    ),
+                    crate::i18n::tr("several-accounts-of-one-provider"),
+                    Some(crate::i18n::tr(
+                        "separate-tabs-gives-every-instance-its-own-tab-grouped-shows-one",
+                    )),
                     PopupTabMode::ALL
                         .iter()
                         .map(|mode| SharedString::from(mode.label()))
@@ -77,8 +77,10 @@ impl SettingsWindow {
                     k,
                     cx,
                     "customize-mono-icons",
-                    "Use monochrome icons",
-                    Some("Draw provider marks in the popup without brand colors."),
+                    crate::i18n::tr("use-monochrome-icons"),
+                    Some(crate::i18n::tr(
+                        "draw-provider-marks-in-the-popup-without-brand-colors",
+                    )),
                     |s| !s.use_colored_provider_icons,
                     |s, v| s.use_colored_provider_icons = !v,
                 ),
@@ -91,7 +93,7 @@ impl SettingsWindow {
                     k,
                     cx,
                     "customize-show-used",
-                    "Show used instead of remaining",
+                    crate::i18n::tr("show-used-instead-of-remaining"),
                     None,
                     |s| s.show_used_percentage,
                     |s, v| s.show_used_percentage = v,
@@ -101,10 +103,10 @@ impl SettingsWindow {
                     k,
                     cx,
                     "customize-usage-values",
-                    "Show usage in values (when possible)",
-                    Some(
-                        "Adds exact used/limit amounts next to percentages when a provider reports them.",
-                    ),
+                    crate::i18n::tr("show-usage-in-values-when-possible"),
+                    Some(crate::i18n::tr(
+                        "adds-exact-used-limit-amounts-next-to-percentages-when-a-provider",
+                    )),
                     |s| s.show_usage_values,
                     |s, v| s.show_usage_values = v,
                 ),
@@ -113,8 +115,10 @@ impl SettingsWindow {
                     k,
                     cx,
                     "customize-usage-pace",
-                    "Show usage pace",
-                    Some("Marks whether you're burning quota faster or slower than an even pace."),
+                    crate::i18n::tr("show-usage-pace"),
+                    Some(crate::i18n::tr(
+                        "marks-whether-you-re-burning-quota-faster-or-slower-than-an-even",
+                    )),
                     |s| s.show_usage_pace,
                     |s, v| s.show_usage_pace = v,
                 ),
@@ -123,8 +127,10 @@ impl SettingsWindow {
                     k,
                     cx,
                     "customize-legacy-cards",
-                    "Use legacy usage cards",
-                    Some("Show the older layout with a header, a thin bar and a footer."),
+                    crate::i18n::tr("use-legacy-usage-cards"),
+                    Some(crate::i18n::tr(
+                        "show-the-older-layout-with-a-header-a-thin-bar-and-a-footer",
+                    )),
                     |s| !s.compact_usage_cards,
                     |s, v| s.compact_usage_cards = !v,
                 ),
@@ -133,7 +139,7 @@ impl SettingsWindow {
                     k,
                     cx,
                     "customize-account-name",
-                    "Show account name",
+                    crate::i18n::tr("show-account-name"),
                     None,
                     |s| s.show_account_name,
                     |s, v| s.show_account_name = v,
@@ -148,16 +154,16 @@ impl SettingsWindow {
                     k,
                     cx,
                     "customize-spend-home",
-                    "Show on Home tab",
+                    crate::i18n::tr("show-on-home-tab"),
                     None,
                     |s| s.show_total_spend_on_all_tab,
                     |s, v| s.show_total_spend_on_all_tab = v,
                 ),
-                Row::new("customize-spend-layout", "Layout")
+                Row::new("customize-spend-layout", crate::i18n::tr("layout"))
                     .trailing(kit::segmented(
                         k,
                         "customize-spend-layout",
-                        &["Donut", "Cards"],
+                        &[crate::i18n::tr("donut"), crate::i18n::tr("cards")],
                         presentation.index().max(0) as usize,
                         !self.settings.show_total_spend_on_all_tab,
                         Self::h(cx, |this, index: usize, _, cx| {
@@ -171,13 +177,13 @@ impl SettingsWindow {
             ]
         });
         vec![
-            kit::section_heading(k, "Layout"),
+            kit::section_heading(k, crate::i18n::tr("layout")),
             layout,
-            kit::section_heading(k, "Tabs"),
+            kit::section_heading(k, crate::i18n::tr("tabs")),
             tabs,
-            kit::section_heading(k, "Cards"),
+            kit::section_heading(k, crate::i18n::tr("cards")),
             cards,
-            kit::section_heading(k, "Usage Widget"),
+            kit::section_heading(k, crate::i18n::tr("usage-widget")),
             widget,
         ]
     }
@@ -222,10 +228,10 @@ impl SettingsWindow {
                         .text_size(px(12.0))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_secondary)
-                        .child("Card"),
+                        .child(crate::i18n::tr("card")),
                 )
-                .child(header_cell("Home"))
-                .child(header_cell("Tab")),
+                .child(header_cell(crate::i18n::tr("home")))
+                .child(header_cell(crate::i18n::tr("tab"))),
         );
         for brick_id in crate::provider_registry::settings_brick_ids(provider, &extra_ids) {
             let current = visibility.instance_visibility_for(instance_id.id(), &brick_id);
@@ -292,12 +298,12 @@ impl SettingsWindow {
             this.set_expanded(collapse_id.clone(), !open);
             cx.notify();
         });
-        let header = Row::new(card_id.clone(), "Popup cards").description(
+        let header = Row::new(card_id.clone(), crate::i18n::tr("popup-cards")).description(
             k,
             if show_on_home {
-                "Choose which cards this account shows on Home and on its own tab."
+                crate::i18n::tr("choose-which-cards-this-account-shows-on-home-and-on-its-own-tab")
             } else {
-                "Choose which cards this account shows on its own tab. Turn on Show on Home to pick Home cards."
+                crate::i18n::tr("choose-which-cards-this-account-shows-on-its-own-tab-turn-on-show")
             },
         );
         let table = table.into_any_element();

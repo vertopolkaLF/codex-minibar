@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Weekday};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone};
 
 use crate::{
     instances::ProviderId,
@@ -41,12 +41,12 @@ impl OverviewRange {
         }
     }
 
-    pub const fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Self::Past24h => "Past 24h",
-            Self::SevenDays => "7 days",
-            Self::ThirtyDays => "30 days",
-            Self::NinetyDays => "90 days",
+            Self::Past24h => crate::i18n::tr("past-24h"),
+            Self::SevenDays => crate::i18n::tr("msg-7-days"),
+            Self::ThirtyDays => crate::i18n::tr("msg-30-days"),
+            Self::NinetyDays => crate::i18n::tr("msg-90-days"),
         }
     }
 }
@@ -470,7 +470,7 @@ fn assemble_overview_snapshot(
                     OverviewMetric::Tokens => tokens,
                 };
                 BreakdownRow {
-                    label: date.format("%b %-d").to_string(),
+                    label: crate::i18n::month_day(*date),
                     weekday: Some(weekday_short(*date).to_owned()),
                     provider: None,
                     cost_microusd: cost,
@@ -565,15 +565,7 @@ fn assemble_overview_snapshot(
 }
 
 fn weekday_short(date: NaiveDate) -> &'static str {
-    match date.weekday() {
-        Weekday::Mon => "Mon",
-        Weekday::Tue => "Tue",
-        Weekday::Wed => "Wed",
-        Weekday::Thu => "Thu",
-        Weekday::Fri => "Fri",
-        Weekday::Sat => "Sat",
-        Weekday::Sun => "Sun",
-    }
+    crate::i18n::weekday(date.weekday())
 }
 
 pub fn format_hour_label(at: DateTime<Local>) -> String {

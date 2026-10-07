@@ -16,13 +16,30 @@ fn forced_reset_info_body(reset: &crate::reset_feed::ForcedReset) -> String {
     let local = reset.reset_at.with_timezone(&Local);
     let when = format!(
         "{}, {}",
-        local.format("%b %-d"),
+        crate::i18n::month_day(local),
         TimeFormat::current().format_hm(local)
     );
     let countdown = format_reset_in(Some(reset.reset_at));
     reset.label.as_deref().map_or_else(
-        || format!("A possible Codex reset is scheduled for {when} (in {countdown})"),
-        |label| format!("{label}: possible reset on {when} (in {countdown})"),
+        || {
+            crate::i18n::format(
+                "a-possible-codex-reset-is-scheduled-for-when-in-countdown",
+                &[
+                    ("when", when.to_string()),
+                    ("countdown", countdown.to_string()),
+                ],
+            )
+        },
+        |label| {
+            crate::i18n::format(
+                "label-possible-reset-on-when-in-countdown",
+                &[
+                    ("label", label.to_string()),
+                    ("when", when.to_string()),
+                    ("countdown", countdown.to_string()),
+                ],
+            )
+        },
     )
 }
 
@@ -41,7 +58,10 @@ fn notify_new_forced_reset_info(
     let now = Utc::now();
     for reset in resets.iter().filter(|reset| reset.reset_at > now) {
         if notified_ids.insert(reset.id.clone()) {
-            notifications::show("New Codex reset info", &forced_reset_info_body(reset));
+            notifications::show(
+                crate::i18n::tr("new-codex-reset-info"),
+                &forced_reset_info_body(reset),
+            );
             state.mark_forced_reset_info_notified(reset.id.clone());
         }
     }
@@ -70,10 +90,21 @@ fn warn_login_expiry(provider: ProviderId, limits: &RateLimits) {
     warned.push((provider, expires_at));
     let local = expires_at.with_timezone(&chrono::Local);
     crate::notifications::show(
-        &format!("{} login expires soon", provider.qualified_name()),
-        &format!(
-            "It stops renewing on {}. Open Minibar and choose Sign in again.",
-            local.format("%b %-d, %H:%M")
+        &crate::i18n::format(
+            "login-expires-soon",
+            &[("v0", provider.qualified_name().to_string())],
+        ),
+        &crate::i18n::format(
+            "it-stops-renewing-on-open-minibar-and-choose-sign-in-again",
+            &[(
+                "v0",
+                (format!(
+                    "{}, {}",
+                    crate::i18n::month_day(local),
+                    TimeFormat::current().format_hm(local)
+                ))
+                .to_string(),
+            )],
         ),
     );
 }
@@ -194,6 +225,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                               tray: &mut TrayManager,
                               settings: Settings,
                               live_settings: &mut Settings| {
+            settings.language.apply();
             crate::settings_window::sync_open_window(settings.clone());
             let phase = updates.snapshot();
             ui.settings_revision = ui.settings_revision.wrapping_add(1);
@@ -364,7 +396,10 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                         if let Err(error) =
                             crate::store::with_store(|store| store.clear_usage_data())
                         {
-                            ui.set_popup_error(format!("Could not clear usage data: {error:#}"));
+                            ui.set_popup_error(crate::i18n::format(
+                                "could-not-clear-usage-data-error",
+                                &[("error", format!("{:#}", error))],
+                            ));
                             publish_popup_ui(ui);
                         }
                     } else {
@@ -398,7 +433,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                 && let Err(error) = crate::updater::apply_pending_update()
             {
                 eprintln!("failed to apply update from toast: {error:#}");
-                notifications::show("Update failed", &format!("{error:#}"));
+                notifications::show(crate::i18n::tr("update-failed"), &format!("{error:#}"));
             }
         };
 
@@ -700,10 +735,12 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                         "{} activation succeeded",
                         provider.display_name()
                     ));
-                    ui.last_activation = format!(
-                        "{} succeeded at {}",
-                        provider.qualified_name(),
-                        format_activation_at(Utc::now())
+                    ui.last_activation = crate::i18n::format(
+                        "succeeded-at",
+                        &[
+                            ("v0", provider.qualified_name().to_string()),
+                            ("v1", (format_activation_at(Utc::now())).to_string()),
+                        ],
                     );
                     let combine_activation_notification =
                         crate::provider::automatic_activation(provider, &live_settings)
@@ -725,10 +762,13 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                         "{} activation failed: {error}",
                         provider.display_name()
                     ));
-                    ui.last_activation = format!(
-                        "{} failed at {}: {error}",
-                        provider.qualified_name(),
-                        format_activation_at(Utc::now())
+                    ui.last_activation = crate::i18n::format(
+                        "failed-at-error",
+                        &[
+                            ("v0", provider.qualified_name().to_string()),
+                            ("v1", (format_activation_at(Utc::now())).to_string()),
+                            ("error", error.to_string()),
+                        ],
                     );
                     publish_popup_ui(&ui);
                 }
@@ -806,7 +846,7 @@ pub(super) fn pump_tray_and_dismiss(
             TrayMenuAction::Update => {
                 if let Err(error) = crate::updater::apply_pending_update() {
                     eprintln!("failed to apply update: {error:#}");
-                    notifications::show("Update failed", &format!("{error:#}"));
+                    notifications::show(crate::i18n::tr("update-failed"), &format!("{error:#}"));
                 }
             }
             TrayMenuAction::Settings => {

@@ -104,9 +104,12 @@ impl PopupRoot {
                 provider,
                 statistics,
             } => self.render_activity_card(*provider, statistics, window, cx),
-            Card::UsageLoading => caption("Loading usage statistics…", self.palette.text_tertiary)
-                .mx(px(4.0))
-                .into_any_element(),
+            Card::UsageLoading => caption(
+                crate::i18n::tr("loading-usage-statistics"),
+                self.palette.text_tertiary,
+            )
+            .mx(px(4.0))
+            .into_any_element(),
             Card::Credits { value } => {
                 let palette = &self.palette;
                 card(palette)
@@ -117,8 +120,14 @@ impl PopupRoot {
                             .flex()
                             .flex_col()
                             .gap(px(2.0))
-                            .child(components::body("CREDITS", palette.text_tertiary))
-                            .child(caption("Available balance", palette.text_tertiary)),
+                            .child(components::body(
+                                crate::i18n::tr("credits-338f52"),
+                                palette.text_tertiary,
+                            ))
+                            .child(caption(
+                                crate::i18n::tr("available-balance"),
+                                palette.text_tertiary,
+                            )),
                         components::body_strong(value.clone(), palette.accent),
                     ))
                     .into_any_element()
@@ -182,7 +191,11 @@ impl PopupRoot {
                         provider.id(),
                         heading.first
                     )))
-                    .on_hover(self.hover_listener(id, Some(error.clone().into()), cx))
+                    .on_hover(self.hover_listener(
+                        id,
+                        Some(crate::i18n::localize_error(error).into()),
+                        cx,
+                    ))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.select_view(PopupView::from_provider(provider), cx);
                     }))
@@ -212,8 +225,12 @@ impl PopupRoot {
 
     fn reset_status(&self, limit: &LimitWindow) -> Div {
         match limit.resets_at {
-            Some(at) => status_row("Resets in", format_reset_in(Some(at)), &self.palette),
-            None => card_metadata("Session not started", &self.palette),
+            Some(at) => status_row(
+                crate::i18n::tr("resets-in"),
+                format_reset_in(Some(at)),
+                &self.palette,
+            ),
+            None => card_metadata(crate::i18n::tr("session-not-started"), &self.palette),
         }
     }
 
@@ -357,14 +374,14 @@ impl PopupRoot {
             metadata = metadata.child(card_metadata(
                 format!(
                     "{}, {}",
-                    local.format("%b %-d"),
+                    crate::i18n::month_day(local),
                     TimeFormat::current().format_hm(local)
                 ),
                 &palette,
             ));
             if available {
                 metadata = metadata.child(status_row(
-                    "Expires in",
+                    crate::i18n::tr("expires-in"),
                     format_reset_in(Some(expires)),
                     &palette,
                 ));
@@ -376,7 +393,7 @@ impl PopupRoot {
                 .flex_col()
                 .min_w_0()
                 .child(nowrap(caption(
-                    "CLOUD SESSION CREDITS",
+                    crate::i18n::tr("cloud-session-credits"),
                     palette.text_secondary,
                 )))
                 .child(nowrap(components::body_strong(label, palette.accent))),
@@ -464,7 +481,10 @@ impl PopupRoot {
                     .flex_row()
                     .gap(px(6.0))
                     .whitespace_nowrap()
-                    .child(components::body("Usage:", palette.text_tertiary))
+                    .child(components::body(
+                        crate::i18n::tr("usage"),
+                        palette.text_tertiary,
+                    ))
                     .child(components::body_strong(amount, palette.accent)),
             );
             let expires_soon = expires_at.filter(|at| *at > Utc::now());
@@ -473,7 +493,7 @@ impl PopupRoot {
                 let mut meta = div().flex().flex_row().items_center().gap(px(6.0));
                 if let Some(reset) = spending.resets_at {
                     meta = meta.child(status_row(
-                        "Resets in",
+                        crate::i18n::tr("resets-in"),
                         format_reset_in(Some(reset)),
                         &palette,
                     ));
@@ -483,7 +503,7 @@ impl PopupRoot {
                         meta = meta.child(card_metadata("•", &palette));
                     }
                     meta = meta.child(status_row(
-                        "Expires in",
+                        crate::i18n::tr("expires-in"),
                         format_reset_in(Some(expires)),
                         &palette,
                     ));
@@ -581,7 +601,7 @@ impl PopupRoot {
             .items_center()
             .justify_center()
             .rounded(px(4.0))
-            .on_hover(self.hover_listener(hover_id, Some("Remove key".into()), cx))
+            .on_hover(self.hover_listener(hover_id, Some(crate::i18n::tr("remove-key").into()), cx))
             .on_click(move |_: &ClickEvent, _, _| {
                 let account_id = account_id.clone();
                 let key_id = key_id.clone();
@@ -610,26 +630,27 @@ impl PopupRoot {
     ) -> AnyElement {
         let palette = self.palette.clone();
         let count = limits.available_reset_count();
-        let count_label = if count == 1 {
-            "1 Banked Reset".to_owned()
-        } else {
-            format!("{count} Banked Resets")
-        };
+        let count_label =
+            crate::i18n::format("count-banked-resets", &[("count", count.to_string())]);
         let format_date = |at: DateTime<Utc>| {
             let local = at.with_timezone(&Local);
             format!(
                 "{}, {}",
-                local.format("%b %-d"),
+                crate::i18n::month_day(local),
                 TimeFormat::current().format_hm(local)
             )
         };
         let expiration = limits.next_reset_credit_expiration();
         let expiration_date = expiration
             .map(format_date)
-            .unwrap_or_else(|| "Available to use".into());
+            .unwrap_or_else(|| crate::i18n::tr("available-to-use").into());
         let expiration_status = match expiration {
-            Some(at) => status_row("Expires in", format_reset_in(Some(at)), &palette),
-            None => card_metadata("No expiration date", &palette),
+            Some(at) => status_row(
+                crate::i18n::tr("expires-in"),
+                format_reset_in(Some(at)),
+                &palette,
+            ),
+            None => card_metadata(crate::i18n::tr("no-expiration-date"), &palette),
         };
         let available = limits
             .reset_credits
@@ -728,13 +749,19 @@ impl PopupRoot {
                     .as_deref()
                     .filter(|title| !title.trim().is_empty())
                     .map(str::to_owned)
-                    .unwrap_or_else(|| format!("Banked Reset {}", index + 1));
+                    .unwrap_or_else(|| {
+                        crate::i18n::format("banked-reset", &[("v0", (index + 1).to_string())])
+                    });
                 let date = credit
                     .expires_at
-                    .map_or_else(|| "No expiration date".into(), format_date);
+                    .map_or_else(|| crate::i18n::tr("no-expiration-date").into(), format_date);
                 let status = match credit.expires_at {
-                    Some(at) => status_row("Expires in", format_reset_in(Some(at)), &palette),
-                    None => card_metadata("Available to use", &palette),
+                    Some(at) => status_row(
+                        crate::i18n::tr("expires-in"),
+                        format_reset_in(Some(at)),
+                        &palette,
+                    ),
+                    None => card_metadata(crate::i18n::tr("available-to-use"), &palette),
                 };
                 rows = rows.child(components::split_row(
                     nowrap(components::body(name, palette.text_secondary)),
@@ -776,20 +803,20 @@ impl PopupRoot {
             let local = reset.reset_at.with_timezone(&Local);
             let date = format!(
                 "{}, {}",
-                local.format("%b %-d"),
+                crate::i18n::month_day(local),
                 TimeFormat::current().format_hm(local)
             );
             let label = reset
                 .label
                 .as_deref()
                 .filter(|label| !label.trim().is_empty())
-                .unwrap_or("Codex limits")
+                .unwrap_or(crate::i18n::tr("codex-limits"))
                 .to_owned();
             let row_id = fx::key(("forced-reset-row", reset.id.as_str()));
             let tip: SharedString = if reset.source_url.is_some() {
-                "Open announcement source".into()
+                crate::i18n::tr("open-announcement-source").into()
             } else {
-                "Source not provided".into()
+                crate::i18n::tr("source-not-provided").into()
             };
             let source = reset.source_url.clone();
             rows = rows.child(
@@ -810,7 +837,10 @@ impl PopupRoot {
                             .flex()
                             .flex_col()
                             .gap(px(1.0))
-                            .child(caption("Tibo Reset™", palette.text_secondary))
+                            .child(caption(
+                                crate::i18n::tr("tibo-reset"),
+                                palette.text_secondary,
+                            ))
                             .child(components::body_strong(label, palette.accent)),
                         div()
                             .flex()
@@ -819,7 +849,7 @@ impl PopupRoot {
                             .gap(px(1.0))
                             .child(card_metadata(date, &palette))
                             .child(status_row(
-                                "Resets in",
+                                crate::i18n::tr("resets-in"),
                                 format_reset_in(Some(reset.reset_at)),
                                 &palette,
                             )),

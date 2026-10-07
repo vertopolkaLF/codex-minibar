@@ -349,7 +349,7 @@ impl Default for UiState {
             animations_enabled: true,
             popup_background_material: PopupBackgroundMaterial::Mica,
             time_format: TimeFormat::from_windows(),
-            last_activation: "Never".into(),
+            last_activation: crate::i18n::tr("never").into(),
             provider_errors: HashMap::new(),
             usage_errors: HashMap::new(),
             error: None,
@@ -499,16 +499,24 @@ impl UiState {
             || lower.contains("name resolution")
             || lower.contains("os error 11001");
         if timeout {
-            add("The request timed out. Try refreshing again.");
+            add(crate::i18n::english(
+                "the-request-timed-out-try-refreshing-again",
+            ));
         }
         if certificate {
-            add("The secure connection could not be verified. See Log for details.");
+            add(crate::i18n::english(
+                "the-secure-connection-could-not-be-verified-see-log-for-details",
+            ));
         }
         if closed && !timeout {
-            add("The provider closed the connection. Try refreshing again.");
+            add(crate::i18n::english(
+                "the-provider-closed-the-connection-try-refreshing-again",
+            ));
         }
         if dns {
-            add("The provider's address could not be resolved. Check your connection.");
+            add(crate::i18n::english(
+                "the-provider-s-address-could-not-be-resolved-check-your-connectio",
+            ));
         }
         if !timeout
             && !certificate
@@ -520,37 +528,55 @@ impl UiState {
                 || lower.contains("connection refused")
                 || lower.contains("tls connection init failed"))
         {
-            add("Could not connect to the provider. Check your connection and try again.");
+            add(crate::i18n::english(
+                "could-not-connect-to-the-provider-check-your-connection-and-try-a",
+            ));
         }
         if lower.contains("save a valid management key") {
-            add("The management key was rejected. Update it in Settings.");
+            add(crate::i18n::english(
+                "the-management-key-was-rejected-update-it-in-settings",
+            ));
         } else if has_status("401") {
-            add("Authentication failed. Sign in again or update the provider key.");
+            add(crate::i18n::english(
+                "authentication-failed-sign-in-again-or-update-the-provider-key",
+            ));
         }
         if has_status("403") {
-            add("Access denied by the provider (HTTP 403).");
+            add(crate::i18n::english(
+                "access-denied-by-the-provider-http-403",
+            ));
         }
         if has_status("429")
             || lower.contains("rate limited")
             || lower.contains("too many requests")
         {
-            add("Too many requests. Wait a few minutes before refreshing again.");
+            add(crate::i18n::english(
+                "too-many-requests-wait-a-few-minutes-before-refreshing-again",
+            ));
         }
         if ["500", "502", "503"].iter().any(|code| has_status(code)) {
-            add("The provider is temporarily unavailable. Try again later.");
+            add(crate::i18n::english(
+                "the-provider-is-temporarily-unavailable-try-again-later",
+            ));
         }
         if has_status("400") {
-            add("The provider rejected the request. See Log for details.");
+            add(crate::i18n::english(
+                "the-provider-rejected-the-request-see-log-for-details",
+            ));
         }
         if has_status("404") {
-            add("The requested resource was not found. See Log for details.");
+            add(crate::i18n::english(
+                "the-requested-resource-was-not-found-see-log-for-details",
+            ));
         }
         if lower.contains("parse ")
             || lower.contains("invalid json")
             || lower.contains("missing rows")
             || lower.contains("incomplete results")
         {
-            add("The provider returned an unexpected response. Try refreshing again.");
+            add(crate::i18n::english(
+                "the-provider-returned-an-unexpected-response-try-refreshing-again",
+            ));
         }
         if !messages.is_empty() {
             return messages.join("\n");
@@ -563,7 +589,7 @@ impl UiState {
             || lower.contains("os error")
             || lower.contains("<html")
         {
-            return "The request failed. See Log for details.".into();
+            return crate::i18n::english("the-request-failed-see-log-for-details").into();
         }
         error.trim().into()
     }

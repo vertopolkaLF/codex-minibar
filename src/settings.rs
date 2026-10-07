@@ -671,11 +671,11 @@ pub enum PopupTabMode {
 impl PopupTabMode {
     pub const ALL: [Self; 3] = [Self::Separate, Self::GroupedSwitcher, Self::GroupedStacked];
 
-    pub const fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Self::Separate => "Separate tabs",
-            Self::GroupedSwitcher => "Grouped, switcher",
-            Self::GroupedStacked => "Grouped, all accounts",
+            Self::Separate => crate::i18n::tr("separate-tabs"),
+            Self::GroupedSwitcher => crate::i18n::tr("grouped-switcher"),
+            Self::GroupedStacked => crate::i18n::tr("grouped-all-accounts"),
         }
     }
 
@@ -1376,11 +1376,11 @@ pub enum TotalSpendPeriod {
 }
 
 impl TotalSpendPeriod {
-    pub const fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Self::Today => "Today",
-            Self::Yesterday => "Yesterday",
-            Self::ThirtyDays => "30 days",
+            Self::Today => crate::i18n::tr("today"),
+            Self::Yesterday => crate::i18n::tr("yesterday"),
+            Self::ThirtyDays => crate::i18n::tr("msg-30-days"),
         }
     }
 
@@ -1649,6 +1649,7 @@ pub struct Settings {
     /// reboot between its two pages.
     pub onboarding_completed: bool,
     pub theme: AppTheme,
+    pub language: crate::i18n::Language,
     pub accent_color: AccentColor,
     /// App-level accessibility override. The Windows animation preference is
     /// still honored when this remains enabled.
@@ -1725,6 +1726,7 @@ impl Default for Settings {
             version: SETTINGS_VERSION,
             onboarding_completed: false,
             theme: AppTheme::Auto,
+            language: crate::i18n::Language::Auto,
             accent_color: AccentColor::Windows,
             animations_enabled: true,
             bottom_bar_size: BottomBarSize::default(),
@@ -1985,15 +1987,15 @@ impl Settings {
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(
             (1..=365).contains(&self.history_retention_days),
-            "history retention must be between 1 and 365 days"
+            crate::i18n::tr("history-retention-must-be-between-1-and-365-days")
         );
         anyhow::ensure!(
             (1..=99).contains(&self.notifications.low_usage_threshold_percent),
-            "session low usage threshold must be between 1 and 99 percent"
+            crate::i18n::tr("session-low-usage-threshold-must-be-between-1-and-99-percent")
         );
         anyhow::ensure!(
             (1..=99).contains(&self.notifications.weekly_low_usage_threshold_percent),
-            "weekly low usage threshold must be between 1 and 99 percent"
+            crate::i18n::tr("weekly-low-usage-threshold-must-be-between-1-and-99-percent")
         );
         Ok(())
     }
@@ -2342,6 +2344,7 @@ impl Settings {
 
     /// Applies settings whose effect lives outside the render tree.
     pub fn apply_runtime_effects(&self) -> Result<()> {
+        self.language.apply();
         crate::theme::set_animations_enabled(self.animations_enabled);
         crate::popup::apply_popup_appearance(
             self.bottom_bar_size,

@@ -212,6 +212,7 @@ pub(crate) struct PopupRoot {
     pub(super) usage_plot: Option<Entity<super::usage::UsagePlot>>,
     pub(super) charts: HashMap<String, super::activity::ChartState>,
     pub(super) tip: Option<TipRequest>,
+    language_is_russian: bool,
     pub(super) pages: HashMap<PopupView, PageMetrics>,
     pub(super) widget_bounds: Rc<RefCell<WidgetLayout>>,
     pub(super) usage_spinner_started: Option<Instant>,
@@ -299,6 +300,7 @@ impl PopupRoot {
             usage_plot: None,
             charts: HashMap::new(),
             tip: None,
+            language_is_russian: crate::i18n::is_russian(),
             pages: HashMap::new(),
             widget_bounds: Rc::new(RefCell::new(WidgetLayout::default())),
             usage_spinner_started: None,
@@ -977,7 +979,7 @@ impl PopupRoot {
         std::thread::spawn(|| {
             if let Err(error) = crate::updater::apply_pending_update() {
                 eprintln!("failed to apply update: {error:#}");
-                crate::notifications::show("Update failed", &format!("{error:#}"));
+                crate::notifications::show(crate::i18n::tr("update-failed"), &format!("{error:#}"));
             }
         });
     }
@@ -1105,6 +1107,13 @@ fn initial_ui_state(state: &AppState) -> UiState {
 
 impl Render for PopupRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let language_is_russian = crate::i18n::is_russian();
+        if self.language_is_russian != language_is_russian {
+            self.language_is_russian = language_is_russian;
+            // Tooltips retain formatted chart text while hovered. Rebuild on
+            // the next pointer event rather than retaining the old language.
+            self.tip = None;
+        }
         if !self.host.visible() {
             return div().id("popup-root").size_full();
         }
@@ -1509,8 +1518,8 @@ impl PopupRoot {
         if let Some(error) = ui.error.as_deref() {
             body.push(
                 components::info_bar(
-                    "Something went wrong",
-                    error.to_owned(),
+                    crate::i18n::tr("something-went-wrong"),
+                    crate::i18n::localize_error(error),
                     Severity::Error,
                     &palette,
                 )
@@ -1545,8 +1554,8 @@ impl PopupRoot {
         if !model::any_provider_enabled(&ui) {
             body.push(
                 components::info_bar(
-                    "No providers enabled",
-                    "Turn one on in Settings > Providers.",
+                    crate::i18n::tr("no-providers-enabled"),
+                    crate::i18n::tr("turn-one-on-in-settings-providers"),
                     Severity::Informational,
                     &palette,
                 )
@@ -1656,19 +1665,30 @@ impl PopupRoot {
         let name = provider.qualified_name();
         let (title, message, severity) = match (notice, error) {
             (Some(LoginNotice::Expiring { days_left }), _) => (
-                format!(
-                    "{name} login expires in {days_left} {}",
-                    if days_left == 1 { "day" } else { "days" }
+                crate::i18n::format(
+                    "name-login-expires-in-days-left",
+                    &[
+                        ("name", name.to_string()),
+                        ("days_left", days_left.to_string()),
+                        (
+                            "v0",
+                            (if days_left == 1 { "day" } else { "days" }).to_string(),
+                        ),
+                    ],
                 ),
-                "Sign in again to keep limits updating.".to_owned(),
+                crate::i18n::tr("sign-in-again-to-keep-limits-updating").to_owned(),
                 Severity::Caution,
             ),
-            (Some(LoginNotice::SignInNeeded), Some(error)) => {
-                (format!("{name} error"), error.to_owned(), Severity::Error)
-            }
-            (None, Some(error)) if every_error => {
-                (format!("{name} error"), error.to_owned(), Severity::Error)
-            }
+            (Some(LoginNotice::SignInNeeded), Some(error)) => (
+                crate::i18n::format("name-error", &[("name", name.to_string())]),
+                crate::i18n::localize_error(error),
+                Severity::Error,
+            ),
+            (None, Some(error)) if every_error => (
+                crate::i18n::format("name-error", &[("name", name.to_string())]),
+                crate::i18n::localize_error(error),
+                Severity::Error,
+            ),
             _ => return None,
         };
         Some(AccountBarSpec {
@@ -1700,7 +1720,7 @@ impl PopupRoot {
                 crate::settings_window::open_sign_in(provider);
             })
             .child(components::body_strong(
-                "Sign in again",
+                crate::i18n::tr("sign-in-again"),
                 palette.text_on_accent,
             ))
             .into_any_element()

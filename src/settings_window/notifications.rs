@@ -19,7 +19,7 @@ impl SettingsWindow {
                 kit::toggle_row(
                     k,
                     "notif-activation-success",
-                    "Successful activations",
+                    crate::i18n::tr("successful-activations"),
                     None,
                     n.activation_success,
                     Self::h(cx, |this, value: bool, _, cx| {
@@ -29,7 +29,7 @@ impl SettingsWindow {
                 kit::toggle_row(
                     k,
                     "notif-activation-failure",
-                    "Failed activations",
+                    crate::i18n::tr("failed-activations"),
                     None,
                     n.activation_failure,
                     Self::h(cx, |this, value: bool, _, cx| {
@@ -39,7 +39,7 @@ impl SettingsWindow {
                 kit::toggle_row(
                     k,
                     "notif-limits-reset",
-                    "When limits reset",
+                    crate::i18n::tr("when-limits-reset"),
                     None,
                     n.limits_changed,
                     Self::h(cx, |this, value: bool, _, cx| {
@@ -52,9 +52,9 @@ impl SettingsWindow {
             k,
             cx,
             "notif-low-usage",
-            format!(
-                "When 5-hour remaining hits {}%",
-                n.low_usage_threshold_percent
+            crate::i18n::format(
+                "when-5-hour-remaining-hits",
+                &[("v0", n.low_usage_threshold_percent.to_string())],
             ),
             n.low_usage_enabled,
             n.low_usage_threshold_percent,
@@ -65,16 +65,21 @@ impl SettingsWindow {
             k,
             cx,
             "notif-weekly-low-usage",
-            format!(
-                "When weekly remaining hits {}%",
-                n.weekly_low_usage_threshold_percent
+            crate::i18n::format(
+                "when-weekly-remaining-hits",
+                &[("v0", n.weekly_low_usage_threshold_percent.to_string())],
             ),
             n.weekly_low_usage_enabled,
             n.weekly_low_usage_threshold_percent,
             |s, v| s.notifications.weekly_low_usage_enabled = v,
             |s, v| s.notifications.weekly_low_usage_threshold_percent = v,
         );
-        vec![activity, kit::section_heading(k, "Low usage"), low, weekly]
+        vec![
+            activity,
+            kit::section_heading(k, crate::i18n::tr("low-usage")),
+            low,
+            weekly,
+        ]
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -93,7 +98,12 @@ impl SettingsWindow {
             k,
             id,
             title,
-            Some("Shows a notification once per window when the remaining share drops to the threshold.".into()),
+            Some(
+                crate::i18n::tr(
+                    "shows-a-notification-once-per-window-when-the-remaining-share-dro",
+                )
+                .into(),
+            ),
             enabled,
             Self::h(cx, move |this, value: bool, _, cx| {
                 this.edit(cx, move |s| write_enabled(s, value))
@@ -121,7 +131,7 @@ impl SettingsWindow {
             .w(px(40.0))
             .text_right()
             .into_any_element();
-        let threshold_row = Row::new(format!("{id}-threshold-row"), "Threshold")
+        let threshold_row = Row::new(format!("{id}-threshold-row"), crate::i18n::tr("threshold"))
             .trailing(slider)
             .trailing(value_label)
             .render(k);

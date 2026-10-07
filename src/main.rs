@@ -22,13 +22,14 @@ use codex_minibar::{
 fn run() -> Result<()> {
     notifications::initialize();
     sync_installed_display_version();
-    show_post_update_success_if_needed();
     let path = Settings::default_path()?;
     codex_minibar::logger::initialize(&path)?;
     if let Err(error) = codex_minibar::pricing::initialize() {
         eprintln!("failed to hydrate pricing catalog: {error:#}");
     }
     let mut settings = Settings::load_or_create(&path)?;
+    settings.language.apply();
+    show_post_update_success_if_needed();
     if let Err(error) = settings.reconcile_startup_from_registry(&path) {
         eprintln!("failed to reconcile startup setting: {error:#}");
     }

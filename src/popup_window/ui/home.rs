@@ -73,7 +73,11 @@ impl PopupRoot {
         let root = cx.entity();
         div()
             .id(eid(format!("drag-handle-{}", widget.id())))
-            .on_hover(self.hover_listener(hover_id, Some("Drag to reorder".into()), cx))
+            .on_hover(self.hover_listener(
+                hover_id,
+                Some(crate::i18n::tr("drag-to-reorder").into()),
+                cx,
+            ))
             .on_drag(drag, move |drag, _, _, cx| {
                 let widget = drag.widget.clone();
                 root.update(cx, |root, cx| {
@@ -230,7 +234,11 @@ impl PopupRoot {
                     .items_center()
                     .justify_center()
                     .child(caption(
-                        if dragging { "Drop here" } else { "" },
+                        if dragging {
+                            crate::i18n::tr("drop-here")
+                        } else {
+                            ""
+                        },
                         palette.text_tertiary.alpha(reveal),
                     ))
                     .on_drag_move(cx.listener(
@@ -438,12 +446,13 @@ impl PopupRoot {
         let period = self.ui.total_spend_period;
         let enabled = self.enabled_spend();
         let key = format!(
-            "spend|{}|{:?}|{}|{}|{}",
+            "spend|{}|{:?}|{}|{}|{}|{}",
             self.ui.usage_revision,
             enabled,
             crate::store::codex_accounts::cached_current_id(),
             crate::usage::truncate_local_hour(Local::now()),
-            period.key()
+            period.key(),
+            crate::i18n::is_russian()
         );
         let snapshot = self.snapshot(
             SnapshotSlot::Spend,
@@ -481,7 +490,7 @@ impl PopupRoot {
                 palette.text_secondary.mix(palette.accent, title_hover),
             ))
             .child(components::body_strong(
-                "Usage Stats",
+                crate::i18n::tr("usage-stats"),
                 palette.text_secondary.mix(palette.accent, title_hover),
             ));
         let periods = [
@@ -534,7 +543,10 @@ impl PopupRoot {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(caption("Loading usage…", palette.text_tertiary))
+                .child(caption(
+                    crate::i18n::tr("loading-usage"),
+                    palette.text_tertiary,
+                ))
                 .into_any_element()
         } else {
             match self.ui.total_spend_presentation {

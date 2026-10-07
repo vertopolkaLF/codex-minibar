@@ -20,7 +20,7 @@ const ICON_SIZE: usize = 32;
 
 pub fn tooltip(limits: &RateLimits) -> String {
     let five_hour = if limits.five_hour_disabled() {
-        "Disabled".to_string()
+        crate::i18n::tr("disabled").to_string()
     } else {
         format_remaining(&limits.primary)
     };
@@ -29,12 +29,14 @@ pub fn tooltip(limits: &RateLimits) -> String {
     } else {
         format_reset(limits.primary.resets_at)
     };
-    let mut rows = vec![format!(
-        "5h  |  {}  |  {}\n7d  |  {}  |  {}",
-        five_hour,
-        five_hour_reset,
-        format_remaining(&limits.secondary),
-        format_reset(limits.secondary.resets_at),
+    let mut rows = vec![crate::i18n::format(
+        "msg-5h-7d",
+        &[
+            ("v0", five_hour.to_string()),
+            ("v1", five_hour_reset.to_string()),
+            ("v2", (format_remaining(&limits.secondary)).to_string()),
+            ("v3", (format_reset(limits.secondary.resets_at)).to_string()),
+        ],
     )];
     rows.extend(limits.additional_limits.iter().map(|limit| {
         format!(
@@ -611,6 +613,7 @@ mod platform {
         last_pixels: Vec<Vec<u8>>,
         last_tooltips: Vec<String>,
         update_available: bool,
+        language_is_russian: bool,
         uses_light_theme: bool,
         next_theme_check: Instant,
     }
@@ -629,6 +632,7 @@ mod platform {
                 last_pixels: Vec::new(),
                 last_tooltips: Vec::new(),
                 update_available: false,
+                language_is_russian: crate::i18n::is_russian(),
                 uses_light_theme: system_uses_light_theme(),
                 next_theme_check: Instant::now(),
             }
@@ -642,7 +646,10 @@ mod platform {
         ) -> Result<()> {
             self.uses_light_theme = system_uses_light_theme();
             self.next_theme_check = Instant::now() + Duration::from_millis(250);
-            let menu_changed = self.update_available != update_available;
+            let language_is_russian = crate::i18n::is_russian();
+            let menu_changed = self.update_available != update_available
+                || self.language_is_russian != language_is_russian;
+            self.language_is_russian = language_is_russian;
             self.update_available = update_available;
             // No configured widgets is a deliberate state: retain one ordinary app icon.
             let icon_count = widgets.len().max(1);
@@ -787,10 +794,15 @@ mod platform {
             None,
             None,
         );
-        let settings = MenuItem::with_id("settings", "Settings", true, None);
-        let exit = MenuItem::with_id("exit", "Exit", true, None);
+        let settings = MenuItem::with_id("settings", crate::i18n::tr("settings"), true, None);
+        let exit = MenuItem::with_id("exit", crate::i18n::tr("exit"), true, None);
         if update_available {
-            let update = MenuItem::with_id("update", "Update Available", true, None);
+            let update = MenuItem::with_id(
+                "update",
+                crate::i18n::tr("update-available-67fd3a"),
+                true,
+                None,
+            );
             return Menu::with_items(&[
                 &header,
                 &PredefinedMenuItem::separator(),

@@ -55,8 +55,12 @@ const WINDOW_WIDTH: f32 = 1000.0;
 const WINDOW_HEIGHT: f32 = 740.0;
 const ONBOARDING_WIDTH: f32 = 780.0;
 const ONBOARDING_HEIGHT: f32 = 560.0;
-pub(crate) const SETTINGS_WINDOW_TITLE: &str = "Codex Minibar Settings";
-pub(crate) const ONBOARDING_WINDOW_TITLE: &str = "Welcome to Codex Minibar";
+pub(crate) fn settings_window_title() -> &'static str {
+    crate::i18n::tr("codex-minibar-settings")
+}
+pub(crate) fn onboarding_window_title() -> &'static str {
+    crate::i18n::tr("welcome-to-codex-minibar")
+}
 
 static SETTINGS_OPEN: AtomicBool = AtomicBool::new(false);
 static ONBOARDING_OPEN: AtomicBool = AtomicBool::new(false);
@@ -300,7 +304,7 @@ fn window_options(
 fn open_settings_window(state: Arc<AppState>, cx: &mut AsyncApp) {
     let result = cx.update(|cx| {
         let options = window_options(
-            SETTINGS_WINDOW_TITLE,
+            settings_window_title(),
             WINDOW_WIDTH,
             WINDOW_HEIGHT,
             (640.0, 460.0),
@@ -324,7 +328,7 @@ fn open_settings_window(state: Arc<AppState>, cx: &mut AsyncApp) {
 fn open_onboarding_window(state: Arc<AppState>, cx: &mut AsyncApp) {
     let result = cx.update(|cx| {
         let options = window_options(
-            ONBOARDING_WINDOW_TITLE,
+            onboarding_window_title(),
             ONBOARDING_WIDTH,
             ONBOARDING_HEIGHT,
             (560.0, 420.0),
