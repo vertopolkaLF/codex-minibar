@@ -19,11 +19,6 @@
   <label for="provider">Provider</label>
   <select id="provider"></select>
 
-  <div id="accountField" hidden>
-    <label for="account">Account</label>
-    <select id="account"></select>
-  </div>
-
   <label for="widget">Widget</label>
   <select id="widget">
     <option value="single_limit">Single limit</option>
@@ -101,7 +96,9 @@
   <p class="hint">Tap runs the selected action. Hold for 0.7 seconds to ask the running Minibar app to refresh provider data without opening the popup. Tapping can start Minibar if it is closed.</p>
 
   <script>
-    const providers = {
+    // Built-in drivers, used by kind for metric fallbacks and as the provider
+    // list while Minibar is not running. The live catalog lists instances.
+    const fallbackProviders = {
       codex: { name: "Codex", metrics: [["codex.session", "5h session"], ["codex.weekly", "Weekly"], ["codex.lunaReserve", "Luna Reserve"]] },
       claude: { name: "Claude", metrics: [["claude.session", "5h session"], ["claude.weekly", "Weekly"]] },
       cursor: { name: "Cursor", metrics: [["cursor.auto", "Cursor Models"], ["cursor.api", "Other Models"], ["cursor.allModels", "All Models"], ["cursor.grokBot", "Grok Bot"]] },
@@ -109,15 +106,13 @@
       "opencode-go": { name: "OpenCode Go", metrics: [["opencode-go.session", "5h session"], ["opencode-go.weekly", "Weekly"], ["opencode-go.monthly", "Monthly"]] },
       openrouter: { name: "OpenRouter", metrics: [["openrouter.limit", "Spending limit"]] }
     };
-    const defaultSettings = { provider: "codex", profileIds: {}, widget: "single_limit", singleMetricId: "codex.session", metricIds: ["codex.session"], presentation: "rings", resetDisplay: "countdown", valueMode: "remaining", showPercentSymbol: true, showPace: true, font: "inter", providerMark: "hidden", coloredProviderMark: false, showCountdown: true, clickAction: "open_popup", cycleProviders: ["codex", "claude", "cursor"], cycleIndex: 0 };
+    const defaultSettings = { provider: "codex", widget: "single_limit", singleMetricId: "codex.session", metricIds: ["codex.session"], presentation: "rings", resetDisplay: "countdown", valueMode: "remaining", showPercentSymbol: true, showPace: true, font: "inter", providerMark: "hidden", coloredProviderMark: false, showCountdown: true, clickAction: "open_popup", cycleProviders: ["codex", "claude", "cursor"], cycleIndex: 0 };
     let settings = { ...defaultSettings };
-    let catalogProviders = {};
+    let catalog = null;
     let websocket;
     let context;
     let settingsPending = false;
     const providerSelect = document.querySelector("#provider");
-    const accountSelect = document.querySelector("#account");
-    const accountField = document.querySelector("#accountField");
     const widget = document.querySelector("#widget");
     const singleMetric = document.querySelector("#singleMetric");
     const dualHint = document.querySelector("#dualHint");
@@ -132,13 +127,6 @@
     const clickAction = document.querySelector("#clickAction");
     const cycleOptions = document.querySelector("#cycleOptions");
     const cycleProviders = document.querySelector("#cycleProviders");
-
-    for (const [id, provider] of Object.entries(providers)) {
-      const option = document.createElement("option");
-      option.value = id;
-      option.textContent = provider.name;
-      providerSelect.append(option);
-    }
 
     function sendSettings() {
       if (!websocket || !context || websocket.readyState !== WebSocket.OPEN) {
@@ -156,40 +144,82 @@
       if (!websocket || !context || websocket.readyState !== WebSocket.OPEN) return;
       websocket.send(JSON.stringify({ event: "sendToPlugin", action: "com.vertopolkalf.codex-minibar.quota-indicator", context, payload: { op: "catalog" } }));
     }
-    function providerMetrics(provider = providers[providerSelect.value] ?? providers.codex, profileId = settings.profileIds?.[providerSelect.value] ?? "default") {
-      const providerId = Object.keys(providers).find(id => providers[id] === provider);
-      const live = catalogProviders[providerId];
-      const account = live?.accounts?.find(account => account.id === profileId);
-      const metrics = account?.metrics ?? live?.metrics;
-      return metrics?.map(metric => [metric.id, metric.label]) ?? provider?.metrics ?? [];
+    function catalogEntry(id) {
+      return catalog?.find(provider => provider.id === id);
     }
-    function renderAccounts() {
-      const providerId = settings.provider;
-      accountField.hidden = providerId !== "claude" && providerId !== "codex";
-      if (accountField.hidden) return;
-      const live = catalogProviders[providerId];
-      const choices = live?.accounts?.length ? [...live.accounts] : [{ id: "default", name: "Default" }];
-      const selected = settings.profileIds?.[providerId] ?? "default";
-      if (!choices.some(account => account.id === selected)) choices.push({ id: selected, name: `Unavailable (${selected})` });
-      accountSelect.replaceChildren();
-      for (const account of choices) {
-        const option = document.createElement("option");
-        option.value = account.id;
-        const duplicate = choices.filter(other => other.name === account.name).length > 1;
-        option.textContent = duplicate ? `${account.name} ? ${account.id.slice(-8)}` : account.name;
-        accountSelect.append(option);
+    // Instance ids are the driver id (primary) or `<driver>-…` (added later).
+    function kindOf(id) {
+      const live = catalogEntry(id);
+      if (live) return live.kind;
+      if (fallbackProviders[id]) return id;
+      return Object.keys(fallbackProviders)
+        .filter(kind => id.startsWith(`${kind}-`))
+        .sort((a, b) => b.length - a.length)[0];
+    }
+    function providerMetrics(id = settings.provider) {
+      const live = catalogEntry(id);
+      if (live) return live.metrics.map(metric => [metric.id, metric.label]);
+      return fallbackProviders[kindOf(id)]?.metrics ?? [];
+    }
+    function unavailableLabel(id) {
+      const kindName = fallbackProviders[kindOf(id)]?.name;
+      if (!catalog && fallbackProviders[id]) return fallbackProviders[id].name;
+      if (!catalog) return kindName ? `${kindName} (${id})` : id;
+      return `Unavailable (${kindName ?? id})`;
+    }
+    /** Enabled instances plus any ids this key already references. */
+    function providerChoices(referenced) {
+      const choices = catalog
+        ? catalog
+            .filter(provider => provider.enabled || referenced.includes(provider.id))
+            .map(provider => ({ id: provider.id, label: provider.enabled ? provider.name : `${provider.name} (disabled)` }))
+        : Object.entries(fallbackProviders).map(([id, provider]) => ({ id, label: provider.name }));
+      for (const id of referenced) {
+        if (!choices.some(choice => choice.id === id)) choices.push({ id, label: unavailableLabel(id) });
       }
-      accountSelect.value = selected;
+      for (const choice of choices) {
+        if (choices.filter(other => other.label === choice.label).length > 1) {
+          const badge = catalogEntry(choice.id)?.badge;
+          choice.label = `${choice.label} (${badge ?? choice.id.slice(-6)})`;
+        }
+      }
+      return choices;
+    }
+    // Rebuilding only on change keeps an open dropdown usable while the
+    // catalog refreshes every two seconds.
+    function fillOptions(select, choices) {
+      const signature = JSON.stringify(choices);
+      if (select.dataset.signature === signature) return;
+      select.dataset.signature = signature;
+      select.replaceChildren(...choices.map(choice => {
+        const option = document.createElement("option");
+        option.value = choice.id;
+        option.textContent = choice.label;
+        return option;
+      }));
+    }
+    // Former Claude/Codex accounts became instances: Default is the primary
+    // instance and any other account kept its profile id as the instance id.
+    function migrateProviderId(id, profileIds) {
+      if (id !== "claude" && id !== "codex") return id;
+      const profile = profileIds?.[id];
+      return typeof profile === "string" && profile && profile !== "default" ? profile : id;
     }
     function normalizeProviderMark(value, widgetKind) {
       if (value === "logo") return "logo";
       if (value === "text") return widgetKind === "dual_limit" ? "logo" : "text";
       return "hidden";
     }
-    function normalizeSettings(input) {
-      const incomingMetrics = Array.isArray(input?.metricIds) ? input.metricIds.filter(Boolean) : [];
-      const provider = providers[input?.provider] ? input.provider : defaultSettings.provider;
-      const metrics = providerMetrics(providers[provider], input?.profileIds?.[provider] ?? "default");
+    function normalizeSettings(stored) {
+      const { profileIds, ...input } = stored ?? {};
+      const incomingMetrics = Array.isArray(input.metricIds) ? input.metricIds.filter(Boolean) : [];
+      const provider = typeof input.provider === "string" && input.provider
+        ? migrateProviderId(input.provider, profileIds)
+        : defaultSettings.provider;
+      const cycle = Array.isArray(input.cycleProviders) && input.cycleProviders.length
+        ? [...new Set(input.cycleProviders.filter(Boolean).map(id => migrateProviderId(id, profileIds)))]
+        : defaultSettings.cycleProviders;
+      const metrics = providerMetrics(provider);
       const widgetKind = input?.widget ?? (incomingMetrics.length > 1 ? "dual_limit" : defaultSettings.widget);
       const singleMetricId = input?.singleMetricId ?? incomingMetrics[0] ?? metrics[0]?.[0] ?? defaultSettings.singleMetricId;
       const reset = input?.resetDisplay
@@ -201,7 +231,7 @@
         ...defaultSettings,
         ...(input ?? {}),
         provider,
-        profileIds: Object.fromEntries(Object.entries(input?.profileIds ?? {}).filter(([, id]) => typeof id === "string")),
+        cycleProviders: cycle,
         widget: widgetKind === "dual_limit" ? "dual_limit" : "single_limit",
         singleMetricId,
         metricIds: incomingMetrics.length ? incomingMetrics : [singleMetricId],
@@ -215,8 +245,7 @@
       };
     }
     function renderMetrics() {
-      const provider = providers[providerSelect.value] ?? providers.codex;
-      const metrics = providerMetrics(provider);
+      const metrics = providerMetrics();
       singleMetric.replaceChildren();
       for (const [id, label] of metrics) {
         const option = document.createElement("option");
@@ -236,24 +265,29 @@
         : "";
     }
     function renderCycleProviders() {
+      const choices = providerChoices(settings.cycleProviders);
+      const signature = JSON.stringify([choices, settings.cycleProviders]);
+      if (cycleProviders.dataset.signature === signature) return;
+      cycleProviders.dataset.signature = signature;
       cycleProviders.replaceChildren();
-      for (const [id, provider] of Object.entries(providers)) {
+      for (const choice of choices) {
         const wrapper = document.createElement("label");
         wrapper.className = "check";
         const checkbox = document.createElement("input");
         checkbox.type = "checkbox";
-        checkbox.checked = settings.cycleProviders.includes(id);
+        checkbox.checked = settings.cycleProviders.includes(choice.id);
         checkbox.addEventListener("change", () => {
           settings.cycleProviders = [...cycleProviders.querySelectorAll("input:checked")].map(input => input.dataset.provider);
           settings.cycleIndex = 0;
           sendSettings();
         });
-        checkbox.dataset.provider = id;
-        wrapper.append(checkbox, document.createTextNode(provider.name));
+        checkbox.dataset.provider = choice.id;
+        wrapper.append(checkbox, document.createTextNode(choice.label));
         cycleProviders.append(wrapper);
       }
     }
     function render() {
+      fillOptions(providerSelect, providerChoices([settings.provider]));
       providerSelect.value = settings.provider;
       widget.value = settings.widget;
       singleMetric.value = settings.singleMetricId;
@@ -270,21 +304,12 @@
       coloredProviderMark.disabled = (settings.providerMark ?? "hidden") === "hidden";
       clickAction.value = settings.clickAction;
       cycleOptions.hidden = settings.clickAction !== "cycle_provider";
-      renderAccounts();
       renderMetrics();
       renderCycleProviders();
     }
-    accountSelect.addEventListener("change", () => {
-      settings.profileIds = { ...settings.profileIds, [settings.provider]: accountSelect.value };
-      const metrics = providerMetrics();
-      if (!metrics.some(metric => metric[0] === settings.singleMetricId)) settings.singleMetricId = metrics[0]?.[0] ?? "";
-      settings.metricIds = metrics.slice(0, settings.widget === "dual_limit" ? 2 : 1).map(metric => metric[0]);
-      render();
-      sendSettings();
-    });
     providerSelect.addEventListener("change", () => {
       settings.provider = providerSelect.value;
-      const metrics = providerMetrics(providers[settings.provider]);
+      const metrics = providerMetrics();
       settings.singleMetricId = metrics[0]?.[0] ?? "";
       settings.metricIds = metrics.slice(0, 2).map(metric => metric[0]);
       if (metrics.length < 2 && settings.widget === "dual_limit") settings.widget = "single_limit";
@@ -293,7 +318,7 @@
     });
     widget.addEventListener("change", () => {
       settings.widget = widget.value;
-      const metrics = providerMetrics(providers[settings.provider]);
+      const metrics = providerMetrics();
       settings.metricIds = metrics.slice(0, settings.widget === "dual_limit" ? 2 : 1).map(metric => metric[0]);
       if (settings.widget === "single_limit" && !metrics.some(metric => metric[0] === settings.singleMetricId)) {
         settings.singleMetricId = metrics[0]?.[0] ?? "";
@@ -341,7 +366,7 @@
         const message = JSON.parse(event.data);
         if (message.event === "sendToPropertyInspector" && message.payload?.type === "catalog") {
           if (message.payload.ok) {
-            catalogProviders = Object.fromEntries(message.payload.providers.map(provider => [provider.id, provider]));
+            catalog = message.payload.providers;
             render();
           }
           return;

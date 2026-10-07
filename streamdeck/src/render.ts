@@ -22,8 +22,8 @@ export type KeyFont = "inter" | "segoe" | "arial" | "consolas";
 export type ProviderMark = "hidden" | "text" | "logo";
 
 export interface ActionSettings extends JsonObject {
+  /** Provider instance id; the primary instance keeps the driver id. */
   provider: string;
-  profileIds: Record<string, string>;
   widget: WidgetKind;
   singleMetricId: string;
   metricIds: string[];
@@ -43,7 +43,6 @@ export interface ActionSettings extends JsonObject {
 
 export const DEFAULT_SETTINGS: ActionSettings = {
   provider: "codex",
-  profileIds: {},
   widget: "single_limit",
   singleMetricId: "codex.session",
   metricIds: ["codex.session"],
@@ -161,19 +160,31 @@ function resolvedProviderMark(settings: ActionSettings): ProviderMark {
 }
 
 function brandHex(provider: ProviderSnapshot): string {
-  const rgb = provider.brand_rgb;
-  if (!Array.isArray(rgb) || rgb.length < 3) return "#809fff";
+  return rgbHex(provider.brand_rgb) ?? "#809fff";
+}
+
+function rgbHex(rgb: unknown): string | null {
+  if (!Array.isArray(rgb) || rgb.length < 3) return null;
   return `#${rgb.slice(0, 3).map(channel => Math.max(0, Math.min(255, Number(channel) || 0)).toString(16).padStart(2, "0")).join("")}`;
 }
 
 function providerLogo(provider: ProviderSnapshot, size: number, settings: ActionSettings): string {
-  const glyph = PROVIDER_LOGOS[provider.icon] ?? PROVIDER_LOGOS[provider.id] ?? PROVIDER_LOGOS.codex;
+  const glyph = PROVIDER_LOGOS[provider.icon] ?? PROVIDER_LOGOS[provider.kind] ?? PROVIDER_LOGOS.codex;
   const scale = size / glyph.view;
   const origin = (144 - size) / 2;
   const rule = glyph.evenodd ? ` fill-rule="evenodd" clip-rule="evenodd"` : "";
   const fill = settings.coloredProviderMark ? brandHex(provider) : "#ffffff";
   const opacity = settings.coloredProviderMark ? "0.4" : "0.2";
-  return `<g transform="translate(${origin} ${origin}) scale(${scale})"><path d="${glyph.d}" fill="${fill}" fill-opacity="${opacity}"${rule}/></g>`;
+  const logo = `<g transform="translate(${origin} ${origin}) scale(${scale})"><path d="${glyph.d}" fill="${fill}" fill-opacity="${opacity}"${rule}/></g>`;
+  return logo + providerBadge(provider, settings);
+}
+
+/** Instance badge in the key's top corner, clear of rings and reset text, so same-driver keys stay distinguishable. */
+function providerBadge(provider: ProviderSnapshot, settings: ActionSettings): string {
+  if (!provider.badge) return "";
+  const fill = settings.coloredProviderMark ? (rgbHex(provider.badge_rgb) ?? brandHex(provider)) : "#ffffff";
+  const opacity = settings.coloredProviderMark ? "0.6" : "0.35";
+  return `<text x="138" y="22" text-anchor="end" font-family="${fontFamily(settings)}" font-size="20" font-weight="800" fill="${fill}" fill-opacity="${opacity}">${escapeXml(provider.badge)}</text>`;
 }
 
 function providerNameMarkup(provider: ProviderSnapshot, settings: ActionSettings, y: number, fillOverride?: string): string {
@@ -183,7 +194,32 @@ function providerNameMarkup(provider: ProviderSnapshot, settings: ActionSettings
   return `<text x="72" y="${y}" text-anchor="middle" font-family="${fontFamily(settings)}" font-size="${size}" font-weight="700" fill="${fill}">${escapeXml(label)}</text>`;
 }
 
-export function normalizeSettings(settings: Partial<ActionSettings> | undefined): ActionSettings {
+/** Keys saved before provider instances named a Claude/Codex account here. */
+type StoredSettings = Partial<ActionSettings> & { profileIds?: Record<string, unknown> };
+
+/**
+ * Former accounts became provider instances: Default is the primary instance
+ * (the driver id) and any other account kept its profile id as instance id.
+ */
+function migrateProviderId(provider: string, profileIds: StoredSettings["profileIds"]): string {
+  if (provider !== "claude" && provider !== "codex") return provider;
+  const profile = profileIds?.[provider];
+  return typeof profile === "string" && profile && profile !== "default" ? profile : provider;
+}
+
+/** True when stored settings still use the pre-instance account scheme. */
+export function needsMigration(settings: StoredSettings | undefined): boolean {
+  return settings !== undefined && "profileIds" in settings;
+}
+
+export function normalizeSettings(input: StoredSettings | undefined): ActionSettings {
+  const { profileIds, ...settings } = input ?? {};
+  const provider = typeof settings.provider === "string" && settings.provider
+    ? migrateProviderId(settings.provider, profileIds)
+    : DEFAULT_SETTINGS.provider;
+  const cycleProviders = settings.cycleProviders?.length
+    ? [...new Set(settings.cycleProviders.filter(Boolean).map(id => migrateProviderId(id, profileIds)))]
+    : DEFAULT_SETTINGS.cycleProviders;
   const legacyMetricIds = settings?.metricIds?.filter(Boolean) ?? [];
   const widget = normalizeWidget(
     settings?.widget ?? (legacyMetricIds.length > 1 ? "dual_limit" : DEFAULT_SETTINGS.widget),
@@ -197,8 +233,8 @@ export function normalizeSettings(settings: Partial<ActionSettings> | undefined)
   return {
     ...DEFAULT_SETTINGS,
     ...settings,
+    provider,
     widget,
-    profileIds: Object.fromEntries(Object.entries(settings?.profileIds ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string")),
     singleMetricId: settings?.singleMetricId ?? legacyMetricIds[0] ?? DEFAULT_SETTINGS.singleMetricId,
     presentation: normalizePresentation(settings?.presentation),
     resetDisplay,
@@ -208,7 +244,7 @@ export function normalizeSettings(settings: Partial<ActionSettings> | undefined)
     providerMark: normalizeProviderMark(settings?.providerMark, widget),
     coloredProviderMark: settings?.coloredProviderMark === true,
     metricIds: legacyMetricIds.length ? legacyMetricIds : DEFAULT_SETTINGS.metricIds,
-    cycleProviders: settings?.cycleProviders?.length ? settings.cycleProviders : DEFAULT_SETTINGS.cycleProviders,
+    cycleProviders,
     cycleIndex: Math.max(0, settings?.cycleIndex ?? 0),
   };
 }
@@ -220,15 +256,10 @@ export function activeProvider(settings: ActionSettings): string {
   return settings.cycleProviders[settings.cycleIndex % settings.cycleProviders.length] ?? settings.provider;
 }
 
-/** Select by persistent account identity; never borrow another account's quota. */
+/** Select by instance identity; a removed instance never borrows another's quota. */
 export function selectedProvider(snapshot: SnapshotResponse | null, settings: ActionSettings): ProviderSnapshot | null {
   const providerId = activeProvider(settings);
-  const provider = snapshot?.providers.find(item => item.id === providerId) ?? null;
-  if (!provider) return null;
-  const profileId = settings.profileIds[providerId] ?? "default";
-  if (providerId !== "claude" && providerId !== "codex") return provider;
-  if (!provider.accounts?.length) return profileId === "default" ? provider : null;
-  return provider.accounts.find(account => account.profile_id === profileId) ?? null;
+  return snapshot?.providers.find(item => item.id === providerId) ?? null;
 }
 
 interface MetricRow {

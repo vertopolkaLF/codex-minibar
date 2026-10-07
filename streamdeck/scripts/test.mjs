@@ -16,7 +16,7 @@ try {
   const output = path.join(directory, "render.mjs");
   await bundle.write({ file: output, format: "es" });
   await bundle.close();
-  const result = spawnSync(process.execPath, ["--test", "tests/accounts.test.mjs"], {
+  const result = spawnSync(process.execPath, ["--test", "tests/instances.test.mjs"], {
     stdio: "inherit",
     env: { ...process.env, MINIBAR_RENDER_TEST_MODULE: pathToFileURL(output).href },
   });

@@ -4,15 +4,20 @@ This is a thin Stream Deck plugin. It stores each key's configuration in the
 Stream Deck Property Inspector and reads sanitized quota snapshots from the
 running Codex Minibar process over loopback.
 
-Claude and Codex keys can select an individual account. Account selections use
-persistent profile IDs and remain independent for each provider when cycling.
-The Property Inspector refreshes the available accounts from Minibar; a removed
-or disabled account stays unavailable instead of showing another account's quota.
-Older keys continue to select the built-in Default account.
+Each key selects one provider instance. The Property Inspector lists the
+enabled instances reported by Minibar (plus any instance a key already
+references, marked disabled or unavailable); while Minibar is not running it
+falls back to the built-in providers. A removed or disabled instance stays
+unavailable instead of showing another instance's quota. When a driver has
+several enabled instances, logo watermarks carry the instance badge.
 
-The bridge keeps legacy provider and metric IDs and adds `profile_id`, globally
-unique `source_id` values, and independent `accounts` snapshots. These snapshots
-contain quota data and display names, never authentication credentials.
+Keys saved before provider instances migrate automatically: a Claude/Codex
+key on the Default account selects the primary instance (the driver id) and
+any other account selects the instance that kept its profile id.
+
+The bridge reports instance ids in `id`, the driver in `kind`, and the
+instance `badge`. Snapshots contain quota data and display names, never
+authentication credentials.
 
 ## Development
 

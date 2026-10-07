@@ -15,6 +15,7 @@ import { BridgeUnavailableError, MinibarBridge, type SnapshotResponse } from "./
 import {
   activeProvider,
   DEFAULT_SETTINGS,
+  needsMigration,
   normalizeSettings,
   renderIndicator,
   selectedProvider,
@@ -195,6 +196,9 @@ export class QuotaIndicator extends SingletonAction<ActionSettings> {
     streamDeck.logger.info(`Quota Indicator appeared: ${ev.action.id}`);
     const settings = startSettings(ev.payload.settings);
     bindings.set(ev.action.id, { action: ev.action, settings });
+    // Persist the account → instance migration so the inspector and later
+    // sessions read the instance id directly.
+    if (needsMigration(ev.payload.settings)) void ev.action.setSettings(settings);
     ensureRefreshLoop();
     void paint({ action: ev.action, settings }, latestSnapshot !== null);
     void refresh();
