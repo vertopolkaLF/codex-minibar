@@ -281,6 +281,32 @@ impl SettingsWindow {
         cx.notify();
     }
 
+    /// Shows the account's page and starts its sign-in, the same dialog its
+    /// "Sign in again" button opens. A sign-in already running is kept.
+    pub(crate) fn begin_sign_in(
+        &mut self,
+        provider: ProviderId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.instance(provider).is_none() {
+            return;
+        }
+        self.select_provider(provider, cx);
+        if self
+            .provider_dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.checking)
+        {
+            return;
+        }
+        self.open_provider_dialog(
+            ProviderDialog::new(ProviderDialogKind::SignIn { provider }),
+            window,
+            cx,
+        );
+    }
+
     pub(in super::super) fn dismiss_provider_dialog(&mut self, cx: &mut Context<Self>) {
         let Some(dialog) = &self.provider_dialog else {
             return;

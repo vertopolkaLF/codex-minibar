@@ -1298,3 +1298,46 @@ fn cloud_credit_balances_use_dollars_and_expired_or_locked_credits_have_no_progr
         ("Expired".into(), 0.0, false)
     );
 }
+
+#[test]
+fn login_notices_offer_sign_in_only_where_minibar_can_sign_in() {
+    let now = Utc::now();
+    let claude = ProviderInstance::new(ProviderKind::Claude, "Work");
+    let openrouter = ProviderInstance::new(ProviderKind::OpenRouter, "Keys");
+    let fine = RateLimits::default();
+    let expiring = RateLimits {
+        login_expires_at: Some(now + chrono::Duration::hours(30)),
+        ..RateLimits::default()
+    };
+    let later = RateLimits {
+        login_expires_at: Some(now + chrono::Duration::days(10)),
+        ..RateLimits::default()
+    };
+    let lost = "Claude no longer accepts this login. Use Sign in for this instance in Settings > Providers.";
+
+    assert_eq!(
+        model::login_notice(&claude, Some(lost), &fine, now),
+        Some(model::LoginNotice::SignInNeeded)
+    );
+    assert_eq!(
+        model::login_notice(&claude, Some("The request timed out. Try refreshing again."), &expiring, now),
+        None
+    );
+    assert_eq!(
+        model::login_notice(&claude, None, &expiring, now),
+        Some(model::LoginNotice::Expiring { days_left: 2 })
+    );
+    assert_eq!(model::login_notice(&claude, None, &later, now), None);
+    let app = ProviderInstance::primary(ProviderKind::Claude);
+    assert_eq!(model::login_notice(&app, Some(lost), &expiring, now), None);
+    assert_eq!(model::login_notice(&claude, None, &fine, now), None);
+    assert_eq!(
+        model::login_notice(
+            &openrouter,
+            Some("Authentication failed. Sign in again or update the provider key."),
+            &fine,
+            now
+        ),
+        None
+    );
+}

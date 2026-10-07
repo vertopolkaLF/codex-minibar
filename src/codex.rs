@@ -475,6 +475,7 @@ pub fn parse_wham_usage(response: &Value, sampled_at: DateTime<Utc>) -> Result<R
         sampled_at,
         primary_window_is_unactivated,
         account_name,
+        login_expires_at: None,
         plan_type: response
             .get("plan_type")
             .and_then(Value::as_str)
@@ -725,6 +726,7 @@ pub fn parse_rate_limits(
         sampled_at,
         primary_window_is_unactivated,
         account_name: None,
+        login_expires_at: None,
         plan_type: limits
             .get("planType")
             .and_then(Value::as_str)

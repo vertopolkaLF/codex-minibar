@@ -4,6 +4,10 @@
 //! second, non-topmost target on the same HWND, which hosts only our rounded
 //! SpriteVisual. Unlike ACCENT_ENABLE_ACRYLICBLURBEHIND, the host backdrop
 //! brush samples desktop content only where this clipped visual is painted.
+//!
+//! Mica swaps the visual's brush for the compositor's blurred-wallpaper brush
+//! (the same source DWM's Mica uses), so it tints from the desktop wallpaper
+//! rather than the windows behind the popup.
 
 use anyhow::{Context, Result};
 use windows::{
@@ -11,7 +15,7 @@ use windows::{
     UI::{
         Color,
         Composition::{
-            CompositionColorBrush, CompositionEffectSourceParameter,
+            CompositionBrush, CompositionColorBrush, CompositionEffectSourceParameter,
             CompositionRoundedRectangleGeometry, Compositor, Desktop::DesktopWindowTarget,
             SpriteVisual,
         },
@@ -65,6 +69,10 @@ pub(super) struct Backdrop {
     visual: SpriteVisual,
     geometry: CompositionRoundedRectangleGeometry,
     luminosity: CompositionColorBrush,
+    acrylic: CompositionBrush,
+    /// None where the system has no blurred-wallpaper brush (pre-Win11).
+    mica: Option<CompositionBrush>,
+    material: PopupBackgroundMaterial,
     _queue: QueueOwner,
     enabled: bool,
     visible: bool,
@@ -115,10 +123,22 @@ impl Backdrop {
         brush.SetSourceParameter(&source_name, &desktop)?;
         let luminosity = compositor.CreateColorBrushWithColor(luminosity_color(dark))?;
         brush.SetSourceParameter(&luminosity_name, &luminosity)?;
+        let acrylic: CompositionBrush = brush.cast()?;
+        let mica = match mica_brush(&compositor, &luminosity) {
+            Ok(mica) => Some(mica),
+            Err(error) => {
+                eprintln!("Mica wallpaper brush unavailable; using a solid popup: {error:#}");
+                None
+            }
+        };
         let geometry = compositor.CreateRoundedRectangleGeometry()?;
         let clip = compositor.CreateGeometricClipWithGeometry(&geometry)?;
         let visual = compositor.CreateSpriteVisual()?;
-        visual.SetBrush(&brush)?;
+        let initial = match (material, &mica) {
+            (PopupBackgroundMaterial::Mica, Some(mica)) => mica,
+            _ => &acrylic,
+        };
+        visual.SetBrush(initial)?;
         visual.SetClip(&clip)?;
         visual.SetOpacity(0.0)?;
         target.SetRoot(&visual)?;
@@ -130,12 +150,31 @@ impl Backdrop {
             visual,
             geometry,
             luminosity,
+            acrylic,
+            mica,
+            material,
             _queue: queue,
-            enabled: material == PopupBackgroundMaterial::Acrylic,
+            enabled: false,
             visible: false,
             failed: false,
             last_geometry: None,
-        })
+        }
+        .with_enabled())
+    }
+
+    fn with_enabled(mut self) -> Self {
+        self.enabled = self.supports(self.material);
+        self
+    }
+
+    /// Whether this backdrop can paint `material` (Solid never paints).
+    pub(super) fn supports(&self, material: PopupBackgroundMaterial) -> bool {
+        !self.failed
+            && match material {
+                PopupBackgroundMaterial::Acrylic => true,
+                PopupBackgroundMaterial::Mica => self.mica.is_some(),
+                PopupBackgroundMaterial::Solid => false,
+            }
     }
 
     pub(super) fn set_appearance(&mut self, material: PopupBackgroundMaterial, dark: bool) {
@@ -143,14 +182,22 @@ impl Backdrop {
             self.failed = true;
             eprintln!("could not change capsule backdrop luminosity: {error}");
         }
-        // Native MicaController failed fast on this GPUI dispatcher. Keep the
-        // mode on a solid theme fallback until a compatible native target exists.
-        self.enabled = material == PopupBackgroundMaterial::Acrylic;
+        if material != self.material {
+            let brush = match (material, &self.mica) {
+                (PopupBackgroundMaterial::Mica, Some(mica)) => Some(mica),
+                (PopupBackgroundMaterial::Acrylic, _) => Some(&self.acrylic),
+                _ => None,
+            };
+            if let Some(brush) = brush
+                && let Err(error) = self.visual.SetBrush(brush)
+            {
+                self.failed = true;
+                eprintln!("could not switch popup backdrop material: {error}");
+            }
+            self.material = material;
+        }
+        self.enabled = self.supports(material);
         self.apply_opacity();
-    }
-
-    pub(super) fn available(&self) -> bool {
-        !self.failed
     }
 
     pub(super) fn hide(&mut self) {
@@ -210,6 +257,29 @@ impl Backdrop {
             eprintln!("could not change capsule backdrop visibility: {error}");
         }
     }
+}
+
+/// Mica: the system's blurred wallpaper, recolored to the theme's lightness.
+/// The GPUI capsule tint supplies Mica's tint opacity on top.
+fn mica_brush(
+    compositor: &Compositor,
+    luminosity: &CompositionColorBrush,
+) -> Result<CompositionBrush> {
+    let wallpaper = compositor
+        .TryCreateBlurredWallpaperBackdropBrush()
+        .context("creating blurred wallpaper brush")?;
+    let source_name = windows_core::HSTRING::from("wallpaper");
+    let source = CompositionEffectSourceParameter::Create(&source_name)?;
+    let luminosity_name = windows_core::HSTRING::from("luminosity");
+    let luminosity_source = CompositionEffectSourceParameter::Create(&luminosity_name)?;
+    let effect = super::blur_effect::luminosity_blend(source.cast()?, luminosity_source.cast()?);
+    let factory = compositor
+        .CreateEffectFactory(&effect)
+        .context("creating Mica luminosity effect")?;
+    let brush = factory.CreateBrush()?;
+    brush.SetSourceParameter(&source_name, &wallpaper)?;
+    brush.SetSourceParameter(&luminosity_name, luminosity)?;
+    Ok(brush.cast()?)
 }
 
 fn luminosity_color(dark: bool) -> Color {

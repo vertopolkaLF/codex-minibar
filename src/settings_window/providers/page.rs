@@ -557,6 +557,8 @@ impl SettingsWindow {
                 );
             } else {
                 let (app_label, crew_label, cli_label) = source_labels(driver);
+                let other_claude_account =
+                    driver == ProviderKind::Claude && instance.config_folder().is_some();
                 if status.app_applicable {
                     cards.push(self.source_row(
                         k,
@@ -567,6 +569,7 @@ impl SettingsWindow {
                         status.app.as_deref(),
                         status.used == Some(ProviderInstallSource::App),
                         driver == ProviderKind::Cursor,
+                        other_claude_account.then_some(crate::claude::OTHER_ACCOUNT_NEEDS_CLI),
                     ));
                 }
                 if status.crew_applicable {
@@ -579,6 +582,7 @@ impl SettingsWindow {
                         status.crew.as_deref(),
                         status.used == Some(ProviderInstallSource::Crew),
                         false,
+                        None,
                     ));
                 }
                 if status.cli_applicable {
@@ -591,6 +595,7 @@ impl SettingsWindow {
                         status.cli.as_deref(),
                         status.used == Some(ProviderInstallSource::Cli),
                         driver != ProviderKind::Kiro,
+                        None,
                     ));
                 }
             }
@@ -619,10 +624,12 @@ impl SettingsWindow {
         path: Option<&str>,
         in_use: bool,
         can_choose_folder: bool,
+        note: Option<&'static str>,
     ) -> AnyElement {
         let theme = &k.theme;
         let id = format!("source-{}-{label}", provider.id());
         let mut row = Row::new(id.clone(), label.to_owned()).icon(kit::row_icon(k, icon));
+        let note = note.map(|note| kit::text(note, 12.0, theme.caution).into_any_element());
         match path {
             Some(path) => {
                 let menu_path = path.to_owned();
@@ -633,7 +640,11 @@ impl SettingsWindow {
                             .text_color(theme.text_secondary)
                             .child(path.to_owned())
                             .into_any_element(),
-                    )
+                    );
+                if let Some(note) = note {
+                    row = row.detail(note);
+                }
+                row = row
                     .trailing(kit::status_dot(theme.success))
                     .trailing(
                         kit::text(

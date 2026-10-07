@@ -94,7 +94,7 @@ impl SettingsWindow {
                     .trailing(kit::segmented(
                         k,
                         "appearance-material",
-                        &["Acrylic", "Mica"],
+                        &["Acrylic", "Mica", "Solid"],
                         material.index().max(0) as usize,
                         false,
                         Self::h(cx, |this, index: usize, _, cx| {

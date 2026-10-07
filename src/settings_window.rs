@@ -74,6 +74,7 @@ thread_local! {
 pub(crate) enum Command {
     Open,
     OpenOnboarding,
+    SignIn(crate::instances::ProviderId),
     Sync(Box<Settings>),
     DiscoveredBricks(BTreeMap<String, String>),
     OpenRouter(OpenRouterSettingsSnapshot),
@@ -86,6 +87,11 @@ fn post(command: Command) {
 /// Open (or focus) the Settings window.
 pub fn open() {
     post(Command::Open);
+}
+
+/// Open Settings on one account's page with its sign-in already started.
+pub fn open_sign_in(provider: crate::instances::ProviderId) {
+    post(Command::SignIn(provider));
 }
 
 /// Open the two-step first-launch flow. Choices stay local until Done so a
@@ -187,6 +193,18 @@ pub(crate) fn handle(command: Command, state: &Arc<AppState>, cx: &mut AsyncApp)
                 return;
             }
             open_settings_window(Arc::clone(state), cx);
+        }
+        Command::SignIn(provider) => {
+            if focus_existing(&ONBOARDING_WINDOW, cx) {
+                return;
+            }
+            if !focus_existing(&SETTINGS_WINDOW, cx) {
+                open_settings_window(Arc::clone(state), cx);
+            }
+            let Some(handle) = SETTINGS_WINDOW.with(|slot| *slot.borrow()) else {
+                return;
+            };
+            let _ = handle.update(cx, |root, window, cx| root.begin_sign_in(provider, window, cx));
         }
         Command::OpenOnboarding => {
             if focus_existing(&ONBOARDING_WINDOW, cx) {

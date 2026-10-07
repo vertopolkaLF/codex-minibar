@@ -149,6 +149,14 @@ pub(crate) fn instance_install_status(instance: &ProviderInstance) -> ProviderIn
                 ..provider_install_status(ProviderKind::Claude, "")
             }
         }
+        ProviderKind::Claude if instance.config_folder().is_some() => {
+            // Another account's folder never runs the app's bundled copy.
+            let status = provider_install_status(ProviderKind::Claude, &path(&instance.binary_path));
+            ProviderInstallStatus {
+                used: status.cli.as_ref().map(|_| ProviderInstallSource::Cli),
+                ..status
+            }
+        }
         driver => provider_install_status(driver, &path(&instance.binary_path)),
     }
 }

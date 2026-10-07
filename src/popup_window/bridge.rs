@@ -49,6 +49,35 @@ fn notify_new_forced_reset_info(
 
 /// The notification tracker of one instance, named so its toasts say which
 /// instance they are about when a driver has several.
+/// Notifies once per login when it enters Claude Code's three-day warning
+/// before it stops renewing. A new sign-in moves the deadline and re-arms it.
+fn warn_login_expiry(provider: ProviderId, limits: &RateLimits) {
+    static WARNED: Mutex<Vec<(ProviderId, DateTime<Utc>)>> = Mutex::new(Vec::new());
+    let Some(expires_at) = limits.login_expires_at else {
+        return;
+    };
+    let left = expires_at - Utc::now();
+    if left <= chrono::Duration::zero() || left > chrono::Duration::days(3) {
+        return;
+    }
+    let Ok(mut warned) = WARNED.lock() else {
+        return;
+    };
+    if warned.contains(&(provider, expires_at)) {
+        return;
+    }
+    warned.retain(|(warned, _)| *warned != provider);
+    warned.push((provider, expires_at));
+    let local = expires_at.with_timezone(&chrono::Local);
+    crate::notifications::show(
+        &format!("{} login expires soon", provider.qualified_name()),
+        &format!(
+            "It stops renewing on {}. Open Minibar and choose Sign in again.",
+            local.format("%b %-d, %H:%M")
+        ),
+    );
+}
+
 fn instance_tracker(
     trackers: &mut HashMap<String, LimitNotificationTracker>,
     provider: ProviderId,
@@ -520,6 +549,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                     }
                     // Publish once, then let both native tray and GPUI render
                     // from that exact snapshot.
+                    warn_login_expiry(provider, &limits);
                     state.replace_limits(provider, limits);
                     ui.clear_provider_error(provider);
                     let limits = state.current_limits();

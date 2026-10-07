@@ -269,13 +269,14 @@ impl PopupCornerRadius {
 ///
 /// Acrylic remains the default to preserve the existing popup appearance for
 /// upgraded installations; Mica is available for a less aggressively blurred
-/// desktop surface.
+/// desktop surface, and Solid drops the backdrop for an opaque theme base.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PopupBackgroundMaterial {
     #[default]
     Acrylic,
     Mica,
+    Solid,
 }
 
 impl PopupBackgroundMaterial {
@@ -283,12 +284,14 @@ impl PopupBackgroundMaterial {
         match self {
             Self::Acrylic => 0,
             Self::Mica => 1,
+            Self::Solid => 2,
         }
     }
 
     pub const fn from_index(index: i32) -> Self {
         match index {
             1 => Self::Mica,
+            2 => Self::Solid,
             _ => Self::Acrylic,
         }
     }

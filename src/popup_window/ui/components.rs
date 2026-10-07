@@ -318,6 +318,7 @@ pub(crate) fn compact_progress_layers(
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Severity {
     Error,
+    Caution,
     Informational,
 }
 
@@ -328,9 +329,30 @@ pub(crate) fn info_bar(
     severity: Severity,
     palette: &Palette,
 ) -> Div {
-    let (background, glyph_color) = match severity {
-        Severity::Error => (palette.critical_background, palette.critical),
-        Severity::Informational => (palette.attention_background, palette.accent),
+    info_bar_with_action(title, message, severity, palette, None)
+}
+
+/// [`info_bar`] with an action button under the message, as WinUI places it
+/// when the text wraps.
+pub(crate) fn info_bar_with_action(
+    title: impl Into<SharedString>,
+    message: impl Into<SharedString>,
+    severity: Severity,
+    palette: &Palette,
+    action: Option<AnyElement>,
+) -> Div {
+    let (background, glyph_color, glyph) = match severity {
+        Severity::Error => (
+            palette.critical_background,
+            palette.critical,
+            "fluent-error-circle",
+        ),
+        Severity::Caution => (palette.caution_background, palette.caution, "fluent-warning"),
+        Severity::Informational => (
+            palette.attention_background,
+            palette.accent,
+            "fluent-error-circle",
+        ),
     };
     let message: SharedString = message.into();
     div()
@@ -347,7 +369,7 @@ pub(crate) fn info_bar(
         .child(
             div()
                 .pt(px(2.0))
-                .child(icon("fluent-error-circle", 16.0, glyph_color)),
+                .child(icon(glyph, 16.0, glyph_color)),
         )
         .child(
             div()
@@ -362,7 +384,8 @@ pub(crate) fn info_bar(
                         .lines()
                         .map(|line| body(SharedString::from(line.to_owned()), palette.text_primary))
                         .collect::<Vec<_>>(),
-                ),
+                )
+                .children(action.map(|action| div().pt(px(8.0)).flex().child(action))),
         )
 }
 

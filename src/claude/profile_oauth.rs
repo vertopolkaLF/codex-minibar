@@ -1,6 +1,6 @@
 //! Signs a Claude instance in by running Claude Code's own login inside the
 //! instance's config folder. Claude Code keeps and refreshes the login there;
-//! Minibar only reads it.
+//! Minibar reads it and renews it only while it has expired.
 use std::{
     path::Path,
     process::{Command, Stdio},
@@ -156,9 +156,9 @@ fn cleanup_root(root: &Path) -> Result<()> {
 /// login lands in the folder, where Claude Code keeps refreshing it.
 pub(crate) fn login(explicit: Option<&Path>, folder: &Path, control: &LoginControl) -> Result<()> {
     ensure!(!control.cancelled(), "Claude sign-in cancelled.");
-    let executable = super::cli_available(explicit)
-        .or_else(super::claude_desktop::bundled_cli)
-        .context("Install native Windows Claude Code to sign in from Minibar.")?;
+    // Never the desktop app's bundled copy: it serves only the app's account.
+    let executable =
+        super::cli_available(explicit).context(super::OTHER_ACCOUNT_NEEDS_CLI)?;
     ensure!(
         executable
             .extension()

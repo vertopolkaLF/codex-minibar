@@ -245,6 +245,9 @@ pub struct RateLimits {
     pub primary_window_is_unactivated: bool,
     /// Human-readable account identity supplied by the provider, when available.
     pub account_name: Option<String>,
+    /// When the login itself stops renewing and needs a new sign-in.
+    #[serde(default)]
+    pub login_expires_at: Option<DateTime<Utc>>,
     pub plan_type: Option<String>,
     pub limit_name: Option<String>,
     /// Provider-defined name for the secondary quota when it is not a

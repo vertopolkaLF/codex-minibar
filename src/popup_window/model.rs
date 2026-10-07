@@ -566,6 +566,11 @@ pub(crate) fn instance_layout_key(
 ) -> String {
     let mut key = String::new();
     key.push(if has_error { '!' } else { ';' });
+    // An expiring login adds a warning bar above the cards.
+    let expiring = limits
+        .login_expires_at
+        .is_some_and(|at| at - Utc::now() <= chrono::Duration::days(3));
+    key.push(if expiring { '~' } else { '.' });
     push_limits_layout_key(&mut key, limits, show_used_percentage, show_usage_pace);
     key
 }
@@ -743,4 +748,52 @@ pub(crate) fn home_widget_drop_layout(
         }
     }
     (order != home_widget_order(ui) || right != old_right).then_some((order, right))
+}
+
+/// What an account's bar says about its login.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LoginNotice {
+    /// The login is gone; only a new sign-in brings the account back.
+    SignInNeeded,
+    /// The login stops renewing within Claude Code's three-day warning.
+    Expiring { days_left: i64 },
+}
+
+/// The login notice for one account, if any. `error` is the account's
+/// current popup error; only accounts Minibar can sign in get a notice.
+pub(crate) fn login_notice(
+    instance: &ProviderInstance,
+    error: Option<&str>,
+    limits: &RateLimits,
+    now: DateTime<Utc>,
+) -> Option<LoginNotice> {
+    let can_sign_in = crate::instances::Capabilities::reason(
+        instance,
+        crate::instances::Capability::SignIn,
+    )
+    .is_none();
+    // The default Claude account can read the desktop app's own session,
+    // which the app keeps signed in; no sign-in is offered for it for now.
+    let app_account = instance.driver == ProviderKind::Claude && instance.config_folder().is_none();
+    if !can_sign_in || app_account {
+        return None;
+    }
+    if let Some(error) = error {
+        return error_needs_sign_in(error).then_some(LoginNotice::SignInNeeded);
+    }
+    let left = limits.login_expires_at? - now;
+    let window = chrono::Duration::days(3);
+    if left <= chrono::Duration::zero() || left > window {
+        return None;
+    }
+    let day = chrono::Duration::days(1).num_milliseconds();
+    let days_left = (left.num_milliseconds() + day - 1) / day;
+    Some(LoginNotice::Expiring { days_left })
+}
+
+/// Login failures all end by asking for a new sign-in; every other error
+/// (network, rate limits, server faults) does not.
+pub(crate) fn error_needs_sign_in(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    error.contains("sign in") || error.contains("sign-in")
 }

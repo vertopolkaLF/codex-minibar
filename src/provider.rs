@@ -221,17 +221,22 @@ fn start_driver_worker(
             )
         }
         ProviderKind::Claude => {
-            let executable = crate::claude::first_available(instance.binary_path.as_deref())
-                .unwrap_or_else(|| PathBuf::from("claude"));
+            let folder = instance.config_folder();
+            let executable = crate::claude::executable_for(
+                instance.binary_path.as_deref(),
+                folder.as_deref(),
+            );
             crate::logger::info(format!(
                 "{} executable: {}",
                 provider.display_name(),
-                executable.display()
+                executable
+                    .as_deref()
+                    .map_or("none".into(), |path| path.display().to_string())
             ));
             start_worker!(
                 ClaudeClient::for_instance(instance),
                 ClaudeClient::for_instance(instance),
-                ClaudeActivator::new(Some(executable)).with_config_folder(instance.config_folder()),
+                ClaudeActivator::new(executable).with_config_folder(folder),
                 true
             )
         }

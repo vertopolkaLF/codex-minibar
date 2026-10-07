@@ -207,6 +207,10 @@ pub(crate) struct PopupRoot {
     pub(super) refresh_started: Option<Instant>,
     pub(super) profile_layout: String,
     pub(super) profile_fade_started: Option<Instant>,
+    /// Account bars per page, kept while they collapse after clearing.
+    pub(super) account_bars: HashMap<(PopupView, ProviderId), AccountBar>,
+    /// Body items that grow in and out, with how present each one is.
+    pub(super) body_presence: Vec<(usize, f32)>,
     pub(super) capsule_origin: Point<Pixels>,
     pub(super) capsule_size: (f32, f32),
     pub(super) _subscriptions: Vec<Subscription>,
@@ -290,6 +294,8 @@ impl PopupRoot {
             refresh_started: None,
             profile_layout: String::new(),
             profile_fade_started: None,
+            account_bars: HashMap::new(),
+            body_presence: Vec::new(),
             capsule_origin: Point::default(),
             capsule_size: (0.0, 0.0),
             _subscriptions: vec![appearance],
@@ -1269,7 +1275,7 @@ impl Render for PopupRoot {
             .host
             .backdrop
             .as_ref()
-            .is_some_and(|backdrop| backdrop.available());
+            .is_some_and(|backdrop| backdrop.supports(palette.material));
         #[cfg(not(windows))]
         let frosted = false;
         let capsule = div()
@@ -1364,6 +1370,7 @@ impl PopupRoot {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let body = self.build_body(view, window, cx);
+        let presence = std::mem::take(&mut self.body_presence);
         let metrics = self.page_metrics(view);
         let max_scroll = (metrics.content_height.get() - viewport_height).max(0.0);
         let target = metrics.scroll_target.min(max_scroll);
@@ -1382,7 +1389,15 @@ impl PopupRoot {
             .flex_col()
             .gap(px(PAGE_SPACING))
             .p(px(PAGE_PADDING))
-            .children(body.into_iter().map(|body| div().flex_none().child(body)))
+            .children(body.into_iter().enumerate().map(|(index, body)| {
+                let item = div().flex_none().child(body);
+                // A growing item also grows its gap: the negative margin
+                // cancels the gap while the item is still collapsed.
+                match presence.iter().find(|(at, _)| *at == index) {
+                    Some((_, shown)) => item.mb(px(-PAGE_SPACING * (1.0 - shown))),
+                    None => item,
+                }
+            }))
             .into_any_element();
         // Like GPUI's list elements, lay out the subtree as an independent
         // root. The animated viewport supplies ONLY its width, never height.
@@ -1487,37 +1502,29 @@ impl PopupRoot {
                 .into_any_element(),
             );
         }
-        if let Some(provider) = self.page_provider(view)
-            && let Some(error) = ui.provider_error(provider)
-        {
-            body.push(
-                components::info_bar(
-                    format!("{} error", provider.qualified_name()),
-                    error.to_owned(),
-                    Severity::Error,
-                    &palette,
-                )
-                .into_any_element(),
-            );
+        // One account's page shows its error; pages with several accounts
+        // show only bars that need a new sign-in, since their headings
+        // already mark other errors.
+        let (accounts, every_error) = match view {
+            PopupView::Usage => (self.enabled_spend(), true),
+            PopupView::Home => (ui.enabled_providers(), false),
+            other => match self.page_provider(other) {
+                Some(provider) => (vec![provider], true),
+                None => (tab_members(&ui.instances, other), false),
+            },
+        };
+        self.body_presence.clear();
+        for provider in accounts {
+            if let Some((bar, shown)) = self.account_bar(view, provider, every_error, cx) {
+                if shown < 1.0 {
+                    self.body_presence.push((body.len(), shown));
+                }
+                body.push(bar);
+            }
         }
         match view {
             PopupView::Home => body.extend(self.render_home(window, cx)),
-            PopupView::Usage => {
-                for provider in self.enabled_spend() {
-                    if let Some(error) = ui.provider_error(provider) {
-                        body.push(
-                            components::info_bar(
-                                format!("{} error", provider.qualified_name()),
-                                error.to_owned(),
-                                Severity::Error,
-                                &palette,
-                            )
-                            .into_any_element(),
-                        );
-                    }
-                }
-                body.push(self.render_usage_page(window, cx));
-            }
+            PopupView::Usage => body.push(self.render_usage_page(window, cx)),
             other => body.extend(self.render_provider_page(other, window, cx)),
         }
         if !model::any_provider_enabled(&ui) {
@@ -1552,6 +1559,68 @@ impl PopupRoot {
             }
             _ => None,
         }
+    }
+
+    /// The bar for one account: its error, or a warning that its login is
+    /// about to end. Login problems carry a button that signs the account in
+    /// again into its own folder. `every_error` also shows other errors.
+    fn account_bar(
+        &mut self,
+        provider: ProviderId,
+        every_error: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let ui = Rc::clone(&self.ui);
+        let palette = self.palette.clone();
+        let error = ui.provider_error(provider);
+        let notice = ui.instance(provider).and_then(|instance| {
+            model::login_notice(instance, error, self.limits.get(provider), Utc::now())
+        });
+        let name = provider.qualified_name();
+        let (title, message, severity) = match (notice, error) {
+            (Some(LoginNotice::Expiring { days_left }), _) => (
+                format!(
+                    "{name} login expires in {days_left} {}",
+                    if days_left == 1 { "day" } else { "days" }
+                ),
+                "Sign in again to keep limits updating.".to_owned(),
+                Severity::Caution,
+            ),
+            (Some(LoginNotice::SignInNeeded), Some(error)) => {
+                (format!("{name} error"), error.to_owned(), Severity::Error)
+            }
+            (None, Some(error)) if every_error => {
+                (format!("{name} error"), error.to_owned(), Severity::Error)
+            }
+            _ => return None,
+        };
+        let action = notice.map(|_| self.sign_in_button(provider, cx));
+        Some(
+            components::info_bar_with_action(title, message, severity, &palette, action)
+                .into_any_element(),
+        )
+    }
+
+    fn sign_in_button(&mut self, provider: ProviderId, cx: &mut Context<Self>) -> AnyElement {
+        let palette = self.palette.clone();
+        let hover_id = fx::key(("sign-in-again", provider.id()));
+        let hovered = self.hovered(hover_id);
+        let hover = self.fx.toggle(fx::key(("sign-in-again-fx", hover_id)), hovered, fx::FASTER);
+        div()
+            .id(eid(format!("sign-in-again-{}", provider.id())))
+            .h(px(28.0))
+            .px(px(12.0))
+            .flex()
+            .items_center()
+            .rounded(px(4.0))
+            // WinUI accent buttons fade to 90% on hover.
+            .bg(palette.accent.opacity(1.0 - 0.1 * hover))
+            .on_hover(self.hover_listener(hover_id, None, cx))
+            .on_click(move |_: &gpui::ClickEvent, _, _| {
+                crate::settings_window::open_sign_in(provider);
+            })
+            .child(components::body_strong("Sign in again", palette.text_on_accent))
+            .into_any_element()
     }
 
     /// Provider tab content: one instance, or every instance of a stacked

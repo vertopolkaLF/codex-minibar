@@ -46,8 +46,13 @@ const ADMIN_API_VERSION: &str = "2023-06-01";
 const MANUAL_SECRET_PREFIX: &str = "claude-profile-";
 const MANUAL_CREDENTIAL_HINT: &str = "Update this instance's credential in Settings > Providers.";
 const FOLDER_SIGN_IN_HINT: &str = "Use Sign in for this instance in Settings > Providers.";
-/// How long an expired login waits before Claude Code is asked again.
-const REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(10 * 60);
+/// Shown wherever an extra account would otherwise fall back to the app's CLI.
+pub const OTHER_ACCOUNT_NEEDS_CLI: &str = "Extra Claude accounts need the Claude Code CLI. The Claude app's built-in copy only serves the app's own account.";
+/// How long a login whose renewal failed transiently waits before retrying.
+const REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(5 * 60);
+/// Claude Code's own OAuth client and token endpoint.
+const OAUTH_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
+const OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const FALLBACK_CLAUDE_CODE_VERSION: &str = "2.1.280";
 const PROFILE_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 60);
 pub const ACTIVATION_MODEL: &str = "haiku";
@@ -66,6 +71,17 @@ pub fn is_installed(explicit: Option<&Path>) -> bool {
 /// searched first; legacy explicit file paths remain supported for upgrades.
 pub fn first_available(explicit: Option<&Path>) -> Option<PathBuf> {
     claude_desktop::bundled_cli().or_else(|| cli_available(explicit))
+}
+
+/// The Claude Code allowed to run for an account. Another account's folder
+/// only ever gets the standalone CLI: the desktop app's bundled copy is a
+/// different version that belongs to the app's own login.
+pub fn executable_for(explicit: Option<&Path>, folder: Option<&Path>) -> Option<PathBuf> {
+    if folder.is_some() {
+        cli_available(explicit)
+    } else {
+        first_available(explicit)
+    }
 }
 
 /// Finds only a standalone Claude Code CLI, excluding the launcher bundled by
@@ -157,8 +173,16 @@ impl ClaudeActivator {
     }
 
     pub fn activate_minimal(&self) -> Result<()> {
-        let mut command = activation_command(self.executable.as_deref());
-        scope_command(&mut command, self.config_folder.as_deref());
+        let folder = self.config_folder.as_deref();
+        let program = match self.executable.clone() {
+            Some(executable) => executable,
+            None if folder.is_some() => bail!("{OTHER_ACCOUNT_NEEDS_CLI}"),
+            // The bare name keeps the error about a missing CLI rather than
+            // a missing desktop install.
+            None => PathBuf::from("claude"),
+        };
+        let mut command = activation_command_for(program);
+        scope_command(&mut command, folder);
         let mut child = command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -190,17 +214,6 @@ impl Activator for ClaudeActivator {
     fn activate(&mut self) -> Result<()> {
         self.activate_minimal()
     }
-}
-
-fn activation_command(explicit: Option<&Path>) -> Command {
-    activation_command_for(activation_program(explicit))
-}
-
-/// Prefer the launcher on PATH, then the `claude.exe` the desktop app unpacks
-/// for its embedded Claude Code. Falling back to the bare name keeps the error
-/// message about a missing CLI rather than a missing desktop install.
-fn activation_program(explicit: Option<&Path>) -> PathBuf {
-    first_available(explicit).unwrap_or_else(|| PathBuf::from("claude"))
 }
 
 fn activation_command_for(program: PathBuf) -> Command {
@@ -355,16 +368,22 @@ impl ClaudeLogin {
 
 /// Reads one Claude instance's usage from Claude's OAuth usage endpoint, the
 /// same one CodexBar queries. Folder logins stay in Claude's own
-/// `.credentials.json`; Minibar only ever reads them.
+/// `.credentials.json`; Minibar only writes back a login it renewed itself.
 pub struct ClaudeClient {
     timeout: Duration,
     provider: ProviderId,
     login: ClaudeLogin,
-    executable: Option<PathBuf>,
     account_cache: ClaudeAccountCache,
-    /// Expired logins are handed to `claude auth status` at most this often.
-    last_refresh_attempt: Option<Instant>,
+    last_refresh: Option<RefreshAttempt>,
     rate_limited: bool,
+}
+
+/// The last renewal tried for one refresh token. A new token (another
+/// renewal or a fresh sign-in) is always tried right away.
+struct RefreshAttempt {
+    refresh_token: String,
+    at: Instant,
+    rejected: bool,
 }
 
 #[derive(Default)]
@@ -401,9 +420,8 @@ impl ClaudeClient {
             timeout: Duration::from_secs(15),
             provider: ProviderId::primary(crate::settings::ProviderKind::Claude),
             login: ClaudeLogin::Ambient,
-            executable: None,
             account_cache: ClaudeAccountCache::default(),
-            last_refresh_attempt: None,
+            last_refresh: None,
             rate_limited: false,
         }
     }
@@ -412,7 +430,6 @@ impl ClaudeClient {
         Self {
             provider: instance.provider_id(),
             login: ClaudeLogin::for_instance(instance),
-            executable: first_available(instance.binary_path.as_deref()),
             ..Self::new()
         }
     }
@@ -426,7 +443,7 @@ impl ClaudeClient {
         let agent = self.agent()?;
         match self.login.clone() {
             ClaudeLogin::Ambient => {
-                let credentials = self.with_refresh(None, load_credentials)?;
+                let credentials = self.with_refresh(&agent, None, load_credentials)?;
                 let hint = credentials.source.sign_in_hint();
                 // Both credential files record the plan next to the token, so
                 // the common case needs no request at all to label it.
@@ -434,17 +451,22 @@ impl ClaudeClient {
                     credentials.subscription_type,
                     credentials.rate_limit_tier,
                 );
+                // This account may be the desktop app's, which keeps itself
+                // signed in, so it gets no expiry warning for now.
                 self.read_oauth(&agent, &credentials.access_token, hint, plan)
             }
             ClaudeLogin::Folder(folder) => {
                 let file = folder.join(".credentials.json");
                 let credentials =
-                    self.with_refresh(Some(&folder), || load_cli_credentials_at(&file))?;
+                    self.with_refresh(&agent, Some(&folder), || load_cli_credentials_at(&file))?;
                 let plan = plan_type_from_account_fields(
                     credentials.subscription_type,
                     credentials.rate_limit_tier,
                 );
-                self.read_oauth(&agent, &credentials.access_token, FOLDER_SIGN_IN_HINT, plan)
+                let mut limits =
+                    self.read_oauth(&agent, &credentials.access_token, FOLDER_SIGN_IN_HINT, plan)?;
+                limits.login_expires_at = credentials.login_expires_at;
+                Ok(limits)
             }
             ClaudeLogin::Manual(instance_id) => {
                 let credential = load_manual_credential(&instance_id)?.with_context(|| {
@@ -457,11 +479,12 @@ impl ClaudeClient {
         }
     }
 
-    /// Reads a login; when it has expired, lets Claude Code refresh it once
-    /// through `claude auth status`, which never contacts a model and so can
-    /// never start a session window, then reads it again.
+    /// Reads a login; when it has expired, renews it with its refresh token
+    /// the way Claude Code does, then reads it again. Renewing never contacts
+    /// a model, so it can never start a session window.
     fn with_refresh(
         &mut self,
+        agent: &ureq::Agent,
         folder: Option<&Path>,
         load: impl Fn() -> Result<Credentials>,
     ) -> Result<Credentials> {
@@ -469,26 +492,43 @@ impl ClaudeClient {
         if !credentials.is_expired() {
             return Ok(credentials);
         }
-        let refreshable = credentials.source == CredentialSource::Cli
-            && self
-                .last_refresh_attempt
-                .is_none_or(|at| at.elapsed() >= REFRESH_RETRY_INTERVAL);
-        if refreshable && let Some(executable) = self.executable.clone() {
-            self.last_refresh_attempt = Some(Instant::now());
-            if let Err(error) = refresh_login(&executable, folder) {
-                crate::logger::info(format!("Claude login refresh failed: {error:#}"));
-            }
-            let refreshed = load()?;
-            if !refreshed.is_expired() {
-                return Ok(refreshed);
-            }
-        }
         let hint = if folder.is_some() {
             FOLDER_SIGN_IN_HINT
         } else {
             credentials.source.sign_in_hint()
         };
-        bail!("Claude login has expired. {hint}")
+        let Some(refresh) = credentials.refresh else {
+            bail!("Claude login has expired. {hint}")
+        };
+        if let Some(last) = self
+            .last_refresh
+            .as_ref()
+            .filter(|last| last.refresh_token == refresh.refresh_token)
+        {
+            if last.rejected {
+                bail!("Claude no longer accepts this login. {hint}")
+            }
+            if last.at.elapsed() < REFRESH_RETRY_INTERVAL {
+                bail!("Claude login has expired and could not be renewed yet. {hint}")
+            }
+        }
+        let outcome = refresh_cli_login(agent, &refresh);
+        self.last_refresh = Some(RefreshAttempt {
+            refresh_token: refresh.refresh_token,
+            at: Instant::now(),
+            rejected: matches!(outcome, Ok(Renewal::Rejected)),
+        });
+        match outcome {
+            Ok(Renewal::Renewed) => {
+                let refreshed = load()?;
+                if !refreshed.is_expired() {
+                    return Ok(refreshed);
+                }
+                bail!("Claude login has expired. {hint}")
+            }
+            Ok(Renewal::Rejected) => bail!("Claude no longer accepts this login. {hint}"),
+            Err(error) => Err(error.context(format!("Claude login has expired. {hint}"))),
+        }
     }
 
     fn read_credential(&mut self, agent: &ureq::Agent, credential: &str) -> Result<RateLimits> {
@@ -606,42 +646,169 @@ pub(crate) fn scope_command(command: &mut Command, folder: Option<&Path>) {
     }
 }
 
-fn refresh_command(executable: &Path, folder: Option<&Path>) -> Command {
-    let mut command = Command::new(executable);
-    command
-        .args(["auth", "status"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    if let Some(folder) = folder {
-        command.current_dir(folder);
-    }
-    scope_command(&mut command, folder);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
-    }
-    command
+enum Renewal {
+    /// The file now holds a live login, renewed here or by someone else.
+    Renewed,
+    /// Claude refused the refresh token; only a new sign-in helps.
+    Rejected,
 }
 
-/// `claude auth status` refreshes an expired OAuth login under Claude Code's
-/// own lock and writes it back, without sending any model request.
-fn refresh_login(executable: &Path, folder: Option<&Path>) -> Result<()> {
-    let mut child = refresh_command(executable, folder)
-        .spawn()
-        .context("start `claude auth status`")?;
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        if child.try_wait()?.is_some() {
-            return Ok(());
+/// Every reader renews under this lock, so two instances sharing a file
+/// never spend the same single-use refresh token twice.
+static RENEWAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn oauth_refresh_token(file: &Value) -> Option<&str> {
+    file["claudeAiOauth"]["refreshToken"]
+        .as_str()
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+}
+
+fn read_credential_file(path: &Path) -> Result<Value> {
+    let contents = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    serde_json::from_slice(&contents).with_context(|| format!("parse {}", path.display()))
+}
+
+/// Renews a CLI login with its refresh token, exactly as Claude Code does,
+/// and writes the new tokens back into the same file. Only an expired login
+/// is renewed, and a running Claude Code renews ahead of expiry, so this
+/// covers the gaps when Claude Code is not running.
+///
+/// Refresh tokens are single-use. The file is re-read before the request and
+/// again before the write, so a renewal that Claude Code finished meanwhile
+/// is kept rather than overwritten. Nothing is written on failure.
+fn refresh_cli_login(agent: &ureq::Agent, refresh: &FileRefresh) -> Result<Renewal> {
+    let _guard = RENEWAL_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let file = read_credential_file(&refresh.path)?;
+    if oauth_refresh_token(&file) != Some(refresh.refresh_token.as_str()) {
+        return Ok(Renewal::Renewed);
+    }
+    let scopes = file["claudeAiOauth"]["scopes"]
+        .as_array()
+        .map(|scopes| {
+            scopes
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default();
+    let mut body = serde_json::json!({
+        "grant_type": "refresh_token",
+        "refresh_token": refresh.refresh_token,
+        "client_id": OAUTH_CLIENT_ID,
+    });
+    if !scopes.is_empty() {
+        body["scope"] = Value::String(scopes);
+    }
+    let response = match agent
+        .post(OAUTH_TOKEN_URL)
+        .set("Content-Type", "application/json")
+        .set("Accept", "application/json")
+        .send_string(&body.to_string())
+    {
+        Ok(response) => response
+            .into_string()
+            .context("read Claude login renewal response")?,
+        Err(ureq::Error::Status(status @ (400 | 401), response)) => {
+            let body = response.into_string().unwrap_or_default();
+            if oauth_error_code(&body).as_deref() == Some("invalid_grant") {
+                crate::logger::info("Claude rejected a login renewal (invalid_grant)");
+                return Ok(Renewal::Rejected);
+            }
+            bail!("Claude login renewal failed with HTTP {status}")
         }
-        if Instant::now() >= deadline {
-            terminate(&mut child);
-            bail!("`claude auth status` timed out");
+        Err(ureq::Error::Status(429, _)) => {
+            bail!("Claude login renewal is rate limited; it will be retried")
+        }
+        Err(ureq::Error::Status(status, _)) => {
+            bail!("Claude login renewal failed with HTTP {status}")
+        }
+        Err(error) => return Err(error).context("renew Claude login"),
+    };
+    let renewed: TokenResponse =
+        serde_json::from_str(&response).context("parse Claude login renewal response")?;
+    anyhow::ensure!(
+        !renewed.access_token.trim().is_empty(),
+        "Claude login renewal returned no access token"
+    );
+    let now = Utc::now().timestamp_millis();
+    let mut file = read_credential_file(&refresh.path)?;
+    if oauth_refresh_token(&file) != Some(refresh.refresh_token.as_str()) {
+        crate::logger::info("Claude Code renewed the login first; keeping its tokens");
+        return Ok(Renewal::Renewed);
+    }
+    let oauth = file["claudeAiOauth"]
+        .as_object_mut()
+        .context("Claude credentials lost their OAuth session")?;
+    oauth.insert("accessToken".into(), renewed.access_token.into());
+    if let Some(token) = renewed.refresh_token.filter(|token| !token.trim().is_empty()) {
+        oauth.insert("refreshToken".into(), token.into());
+    }
+    oauth.insert(
+        "expiresAt".into(),
+        (now + renewed.expires_in.saturating_mul(1000)).into(),
+    );
+    if let Some(seconds) = renewed.refresh_token_expires_in {
+        oauth.insert(
+            "refreshTokenExpiresAt".into(),
+            (now + seconds.saturating_mul(1000)).into(),
+        );
+    }
+    if let Some(scope) = renewed.scope.filter(|scope| !scope.trim().is_empty()) {
+        oauth.insert(
+            "scopes".into(),
+            scope.split_whitespace().map(Value::from).collect(),
+        );
+    }
+    write_credential_file(&refresh.path, &file)?;
+    crate::logger::info("Claude login renewed");
+    Ok(Renewal::Renewed)
+}
+
+#[derive(Deserialize)]
+struct TokenResponse {
+    access_token: String,
+    refresh_token: Option<String>,
+    expires_in: i64,
+    refresh_token_expires_in: Option<i64>,
+    scope: Option<String>,
+}
+
+/// OAuth errors are `{"error":"invalid_grant"}`; Anthropic's own errors nest
+/// a `type` instead.
+fn oauth_error_code(body: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(body).ok()?;
+    let error = &value["error"];
+    error
+        .as_str()
+        .or_else(|| error["type"].as_str())
+        .map(str::to_ascii_lowercase)
+}
+
+/// Replaces the file in one step, so Claude Code never reads half a login.
+/// A reader holding the file open can briefly block the swap on Windows.
+fn write_credential_file(path: &Path, file: &Value) -> Result<()> {
+    use std::io::Write;
+    let directory = path
+        .parent()
+        .context("Claude credentials have no parent folder")?;
+    let mut last_error = None;
+    for _ in 0..5 {
+        let mut temp = tempfile::NamedTempFile::new_in(directory)
+            .context("create temporary Claude credentials")?;
+        temp.write_all(&serde_json::to_vec(file)?)?;
+        temp.as_file().sync_all()?;
+        match temp.persist(path) {
+            Ok(_) => return Ok(()),
+            Err(error) => last_error = Some(error.error),
         }
         thread::sleep(Duration::from_millis(100));
     }
+    Err(last_error.expect("at least one attempt"))
+        .with_context(|| format!("write {}", path.display()))
 }
 
 /// Sends a Claude request and maps the failures every endpoint shares.
@@ -861,10 +1028,14 @@ struct CredentialFile {
 
 #[derive(Deserialize)]
 struct OAuthCredentials {
-    #[serde(rename = "accessToken")]
+    #[serde(rename = "accessToken", default)]
     access_token: String,
+    #[serde(rename = "refreshToken", default)]
+    refresh_token: String,
     #[serde(rename = "expiresAt")]
     expires_at_millis: Option<i64>,
+    #[serde(rename = "refreshTokenExpiresAt")]
+    refresh_expires_at_millis: Option<i64>,
     #[serde(rename = "subscriptionType")]
     subscription_type: Option<String>,
     #[serde(rename = "rateLimitTier")]
@@ -879,6 +1050,15 @@ struct Credentials {
     subscription_type: Option<String>,
     rate_limit_tier: Option<String>,
     source: CredentialSource,
+    /// The CLI file and refresh token that can renew this login directly.
+    refresh: Option<FileRefresh>,
+    /// When renewing stops working and a new sign-in is needed.
+    login_expires_at: Option<DateTime<Utc>>,
+}
+
+struct FileRefresh {
+    path: PathBuf,
+    refresh_token: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -898,9 +1078,13 @@ impl CredentialSource {
 }
 
 impl Credentials {
+    /// Claude Code can leave an empty access token next to a live refresh
+    /// token; that login needs a refresh just like an expired one.
     fn is_expired(&self) -> bool {
-        self.expires_at
-            .is_some_and(|expires_at| expires_at <= Utc::now())
+        self.access_token.is_empty()
+            || self
+                .expires_at
+                .is_some_and(|expires_at| expires_at <= Utc::now())
     }
 }
 
@@ -961,19 +1145,34 @@ fn load_cli_credentials_at(path: &Path) -> Result<Credentials> {
         "Claude credentials do not contain a Claude OAuth session; run `claude` to sign in",
     )?;
     let access_token = oauth.access_token.trim().to_owned();
+    let refresh_token = oauth.refresh_token.trim().to_owned();
+    // An empty access token next to a refresh token is renewable.
     anyhow::ensure!(
-        !access_token.is_empty(),
+        !access_token.is_empty() || !refresh_token.is_empty(),
         "Claude OAuth access token is empty"
     );
     let expires_at = oauth
         .expires_at_millis
         .and_then(DateTime::from_timestamp_millis);
+    // Claude Code's own rule: an access token that outlives the refresh
+    // token by more than three days means the deadline does not apply.
+    let login_expires_at = oauth
+        .refresh_expires_at_millis
+        .and_then(DateTime::from_timestamp_millis)
+        .filter(|login| {
+            expires_at.is_none_or(|access| access <= *login + chrono::Duration::days(3))
+        });
     Ok(Credentials {
         access_token,
         expires_at,
         subscription_type: oauth.subscription_type,
         rate_limit_tier: oauth.rate_limit_tier,
         source: CredentialSource::Cli,
+        refresh: (!refresh_token.is_empty()).then_some(FileRefresh {
+            path,
+            refresh_token,
+        }),
+        login_expires_at,
     })
 }
 
@@ -985,6 +1184,8 @@ fn load_desktop_credentials() -> Result<Credentials> {
         subscription_type: session.subscription_type,
         rate_limit_tier: session.rate_limit_tier,
         source: CredentialSource::Desktop,
+        refresh: None,
+        login_expires_at: None,
     })
 }
 
@@ -1581,6 +1782,85 @@ mod tests {
         let oauth = file.oauth.unwrap();
         assert_eq!(oauth.subscription_type.as_deref(), Some("team"));
         assert_eq!(oauth.rate_limit_tier.as_deref(), Some("default_raven"));
+    }
+
+    #[test]
+    fn empty_access_token_with_a_refresh_token_is_renewable() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join(".credentials.json");
+        fs::write(
+            &path,
+            r#"{"claudeAiOauth":{"accessToken":"","refreshToken":"r","expiresAt":4102444800000}}"#,
+        )
+        .unwrap();
+        let credentials = load_cli_credentials_at(&path).unwrap();
+        assert!(credentials.is_expired());
+        assert_eq!(credentials.refresh.unwrap().refresh_token, "r");
+
+        fs::write(&path, r#"{"claudeAiOauth":{"accessToken":"","refreshToken":""}}"#).unwrap();
+        assert!(load_cli_credentials_at(&path).is_err());
+    }
+
+    #[test]
+    fn login_deadline_follows_claude_codes_rule() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join(".credentials.json");
+        let day = 86_400_000_i64;
+        let write = |access: i64, refresh: i64| {
+            fs::write(
+                &path,
+                format!(
+                    r#"{{"claudeAiOauth":{{"accessToken":"a","refreshToken":"r","expiresAt":{access},"refreshTokenExpiresAt":{refresh}}}}}"#
+                ),
+            )
+            .unwrap();
+        };
+        let now = Utc::now().timestamp_millis();
+        write(now + day / 3, now + 2 * day);
+        assert_eq!(
+            load_cli_credentials_at(&path).unwrap().login_expires_at,
+            DateTime::from_timestamp_millis(now + 2 * day)
+        );
+        // An access token outliving the refresh token by over three days
+        // means the deadline does not apply.
+        write(now + 10 * day, now + 2 * day);
+        assert_eq!(load_cli_credentials_at(&path).unwrap().login_expires_at, None);
+    }
+
+    #[test]
+    fn renewal_errors_are_read_from_both_error_shapes() {
+        assert_eq!(
+            oauth_error_code(r#"{"error":"invalid_grant","error_description":"x"}"#).as_deref(),
+            Some("invalid_grant")
+        );
+        assert_eq!(
+            oauth_error_code(r#"{"error":{"type":"rate_limit_error"}}"#).as_deref(),
+            Some("rate_limit_error")
+        );
+        assert_eq!(oauth_error_code("not json"), None);
+    }
+
+    #[test]
+    fn credential_write_replaces_the_file_and_keeps_other_fields() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join(".credentials.json");
+        fs::write(&path, r#"{"other":1,"claudeAiOauth":{"accessToken":"old"}}"#).unwrap();
+        let mut file = read_credential_file(&path).unwrap();
+        file["claudeAiOauth"]["accessToken"] = "new".into();
+        write_credential_file(&path, &file).unwrap();
+        let written = read_credential_file(&path).unwrap();
+        assert_eq!(written["claudeAiOauth"]["accessToken"], "new");
+        assert_eq!(written["other"], 1);
+        assert_eq!(fs::read_dir(folder.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn other_accounts_never_resolve_the_desktop_bundled_cli() {
+        let folder = tempfile::tempdir().unwrap();
+        assert_eq!(
+            executable_for(None, Some(folder.path())),
+            cli_available(None)
+        );
     }
 
     #[test]

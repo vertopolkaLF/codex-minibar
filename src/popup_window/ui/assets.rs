@@ -36,6 +36,7 @@ fn source(name: &str) -> Option<&'static str> {
         "fluent-error-circle" => {
             include_str!("../../../assets/icons/fluent-error-circle-16-filled.svg")
         }
+        "fluent-warning" => include_str!("../../../assets/icons/fluent-warning-16-filled.svg"),
         "codex" => include_str!("../../../assets/icons/openai-iconify.svg"),
         "claude" => include_str!("../../../assets/icons/claude-iconify.svg"),
         "cursor" => include_str!("../../../assets/icons/cursor-iconify.svg"),
@@ -240,6 +241,7 @@ mod tests {
             "fluent-chart",
             "fluent-home",
             "fluent-error-circle",
+            "fluent-warning",
         ] {
             assert!(source(name).is_some(), "{name}");
         }

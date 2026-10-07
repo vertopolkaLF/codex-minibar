@@ -52,6 +52,8 @@ pub(crate) struct Palette {
     pub(crate) critical: Hsla,
     pub(crate) critical_background: Hsla,
     pub(crate) attention_background: Hsla,
+    pub(crate) caution: Hsla,
+    pub(crate) caution_background: Hsla,
     pub(crate) chrome_icon: Hsla,
     pub(crate) chrome_icon_hover: Hsla,
     pub(crate) pace_marker: Hsla,
@@ -65,12 +67,22 @@ impl Palette {
     /// Luminosity controls backdrop brightness independently of tint opacity,
     /// so a lighter tint can preserve wallpaper hue without washing out on white.
     pub(crate) fn capsule_background(&self, frosted: bool) -> Hsla {
-        if self.material == PopupBackgroundMaterial::Mica {
-            // The experimental native controller crashed the GPUI dispatcher.
-            // Keep startup and live material switching safe with a solid fallback.
-            return self.solid_background;
+        match self.material {
+            // Opaque #202020 / #F3F3F3 with no backdrop blur behind it.
+            PopupBackgroundMaterial::Solid => return self.solid_background,
+            // WinUI Mica tint opacity (0.8 dark / 0.5 light) over the
+            // luminosity-matched wallpaper; solid where Mica is unsupported.
+            PopupBackgroundMaterial::Mica => {
+                if !frosted {
+                    return self.solid_background;
+                }
+                return self
+                    .solid_background
+                    .opacity(if self.dark { 0.8 } else { 0.5 });
+            }
+            PopupBackgroundMaterial::Acrylic => {}
         }
-        let opacity = if frosted && self.material == PopupBackgroundMaterial::Acrylic {
+        let opacity = if frosted {
             if self.dark { 0.35 } else { 0.25 }
         } else if self.dark {
             0.94
@@ -162,6 +174,17 @@ impl Palette {
                 rgba8(255, 255, 255, 0x08)
             } else {
                 rgba8(0xF6, 0xF6, 0xF6, 0x80)
+            },
+            // SystemFillColorCaution / CautionBackground.
+            caution: if dark {
+                rgba8(0xFC, 0xE1, 0x00, 0xFF)
+            } else {
+                rgba8(0x9D, 0x5D, 0x00, 0xFF)
+            },
+            caution_background: if dark {
+                rgba8(0x43, 0x35, 0x19, 0xFF)
+            } else {
+                rgba8(0xFF, 0xF4, 0xCE, 0xFF)
             },
             chrome_icon: if dark {
                 rgb8((190, 190, 190))
