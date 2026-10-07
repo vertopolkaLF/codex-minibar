@@ -7,7 +7,7 @@ use gpui::{
 
 use super::kit::{self, Kit, Row, SliderRange, eid};
 use super::window::SettingsWindow;
-use crate::popup_window::ui::theme::{HslaExt, rgb8};
+use crate::popup_window::ui::theme::rgb8;
 use crate::settings::{
     AccentColor, AppTheme, BottomBarSize, PopupBackgroundMaterial, PopupCornerRadius, TimeFormat,
 };
@@ -58,18 +58,21 @@ impl SettingsWindow {
                     .description(k, "Windows follows your system accent.")
                     .detail(div().pt(px(12.0)).child(colors).into_any_element())
                     .render(k),
-                kit::toggle_row(
-                    k,
-                    "appearance-mono-sidebar",
-                    "Use monochrome icons",
-                    Some("Show single-color glyphs in the Settings sidebar.".into()),
-                    !colored_sidebar,
-                    Self::h(cx, |this, mono: bool, _, cx| {
-                        this.edit(cx, move |settings| {
-                            settings.use_colored_sidebar_icons = !mono
-                        })
-                    }),
-                ),
+                Row::new("appearance-icon-style", "Icons style")
+                    .description(k, "Glyph style in the Settings sidebar.")
+                    .trailing(kit::segmented(
+                        k,
+                        "appearance-icon-style",
+                        &["Colored", "Monochrome"],
+                        if colored_sidebar { 0 } else { 1 },
+                        false,
+                        Self::h(cx, |this, index: usize, _, cx| {
+                            this.edit(cx, move |settings| {
+                                settings.use_colored_sidebar_icons = index == 0
+                            })
+                        }),
+                    ))
+                    .render(k),
                 Row::new("appearance-time", "Time format")
                     .trailing(kit::segmented(
                         k,
@@ -273,193 +276,45 @@ impl SettingsWindow {
         .into_any_element()
     }
 
-    fn accent_swatches(&self, k: &mut Kit, current: AccentColor, cx: &mut Context<Self>) -> AnyElement {
-        let theme = &k.theme;
-        let mut row = div().flex().flex_wrap().gap(px(10.0));
-        for (index, accent) in ACCENTS.into_iter().enumerate() {
-            let ramp = crate::theme::accent_ramp(accent);
-            let fill = rgb8(ramp.fill(theme.dark));
-            let selected = accent == current;
-            let label = [
-                "Windows", "Blue", "Purple", "Pink", "Red", "Orange", "Green", "Teal",
-            ][index];
-            let swatch_id = format!("accent-{label}");
-            // Selection is a tinted halo, not an outline.
-            let rest = if selected {
-                fill.alpha(0.35)
-            } else {
-                gpui::transparent_black()
-            };
-            let swatch = kit::hover_bg(
-                k,
-                div().id(eid(swatch_id.clone())),
-                kit::hover_key(&swatch_id),
-                rest,
-                if selected { rest } else { theme.subtle_hover },
-            )
-            .size(px(34.0))
-            .rounded_full()
-            .p(px(4.0))
-            .cursor_pointer()
-            .on_click(cx.listener(move |this, _, _, cx| {
-                if this.settings.accent_color != accent {
-                    this.edit(cx, move |settings| settings.accent_color = accent);
-                }
-            }))
-            .child(
-                div()
-                    .size_full()
-                    .rounded_full()
-                    .bg(fill)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .when(accent == AccentColor::Windows, |el| {
-                        el.child(kit::icon("desktop-fill", 12.0, theme.on_accent))
-                    })
-                    .when(selected && accent != AccentColor::Windows, |el| {
-                        el.child(kit::icon("check-bold", 12.0, theme.on_accent))
-                    }),
-            );
-            row = row.child(kit::with_tooltip(k, swatch, label));
-        }
-        row.child(self.custom_accent_swatch(k, current, cx))
-            .into_any_element()
-    }
-
-    /// Swatch that opens a flyout with red/green/blue sliders for any color.
-    fn custom_accent_swatch(
+    fn accent_swatches(
         &self,
         k: &mut Kit,
         current: AccentColor,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        const MENU: &str = "accent-custom";
-        let custom = matches!(current, AccentColor::Custom(_));
-        let open = k.menus.is_open(MENU);
-        let base = crate::theme::accent_ramp(current).base;
-        let (dark, on_accent, subtle_hover, control, text_secondary) = {
-            let theme = &k.theme;
-            (
-                theme.dark,
-                theme.on_accent,
-                theme.subtle_hover,
-                theme.control,
-                theme.text_secondary,
-            )
-        };
-        let fill = rgb8(crate::theme::accent_ramp(current).fill(dark));
-        let rest = if custom {
-            fill.alpha(0.35)
-        } else {
-            gpui::transparent_black()
-        };
-        let menus = k.menus.clone();
-        let trigger = kit::hover_bg(
-            k,
-            div().id(eid("accent-custom")),
-            kit::hover_key("accent-custom"),
-            rest,
-            if custom { rest } else { subtle_hover },
-        )
-        .size(px(34.0))
-        .rounded_full()
-        .p(px(4.0))
-        .cursor_pointer()
-        .on_click(move |_, window, _| menus.toggle(MENU.into(), window))
-        .child(
-            div()
-                .size_full()
-                .rounded_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .map(|el| {
-                    if custom {
-                        el.bg(fill).child(kit::icon("check-bold", 12.0, on_accent))
-                    } else {
-                        el.bg(control)
-                            .child(kit::icon("plus-bold", 12.0, text_secondary))
-                    }
-                }),
-        );
-        let trigger = kit::with_tooltip(k, trigger, "Custom color").into_any_element();
-
-        let content = open.then(|| {
-            // Keep the picked hue/saturation while the color is grey or black,
-            // where RGB alone cannot tell them.
-            let hsv = resolve_hsv(base);
-            let pick = |this: &mut SettingsWindow, hsv: [f32; 3], cx: &mut Context<SettingsWindow>| {
-                let rgb = kit::hsv_to_rgb(hsv[0], hsv[1], hsv[2]);
+        const LABELS: [&str; 8] = [
+            "Windows", "Blue", "Purple", "Pink", "Red", "Orange", "Green", "Teal",
+        ];
+        let (dark, on_accent) = (k.theme.dark, k.theme.on_accent);
+        let fill = |accent| rgb8(crate::theme::accent_ramp(accent).fill(dark));
+        kit::ColorSwatches {
+            id: "accent".into(),
+            presets: ACCENTS
+                .into_iter()
+                .zip(LABELS)
+                .map(|(accent, label)| kit::Swatch {
+                    label: label.into(),
+                    fill: fill(accent),
+                    ink: on_accent,
+                    icon: (accent == AccentColor::Windows).then_some("desktop-fill"),
+                })
+                .collect(),
+            selected: ACCENTS.iter().position(|accent| *accent == current),
+            custom: matches!(current, AccentColor::Custom(_)).then(|| (fill(current), on_accent)),
+            picker_rgb: crate::theme::accent_ramp(current).base,
+            on_select: Self::h(cx, |this, index: usize, _, cx| {
+                let accent = ACCENTS[index];
+                if this.settings.accent_color != accent {
+                    this.edit(cx, move |settings| settings.accent_color = accent);
+                }
+            }),
+            on_custom: Self::h(cx, |this, rgb: (u8, u8, u8), _, cx| {
                 let next = AccentColor::custom(rgb);
-                remember_hsv(rgb, hsv);
                 if this.settings.accent_color != next {
                     this.edit(cx, move |settings| settings.accent_color = next);
                 }
-            };
-            let area = kit::color_area(
-                k,
-                "accent-custom-area",
-                (240.0, 160.0),
-                hsv,
-                Self::h(cx, move |this, (x, y): (f32, f32), _, cx| {
-                    let current = resolve_hsv(crate::theme::accent_ramp(this.settings.accent_color).base);
-                    pick(this, [current[0], x, 1.0 - y], cx)
-                }),
-            );
-            let strip = kit::hue_strip(
-                k,
-                "accent-custom-hue",
-                240.0,
-                hsv[0],
-                Self::h(cx, move |this, hue: f32, _, cx| {
-                    let current = resolve_hsv(crate::theme::accent_ramp(this.settings.accent_color).base);
-                    pick(this, [hue, current[1], current[2]], cx)
-                }),
-            );
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(14.0))
-                .child(area)
-                .child(strip)
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(10.0))
-                        .child(div().size(px(24.0)).rounded_full().bg(rgb8(base)))
-                        .child(kit::text(
-                            format!("#{:02X}{:02X}{:02X}", base.0, base.1, base.2),
-                            13.0,
-                            text_secondary,
-                        )),
-                )
-                .into_any_element()
-        });
-        kit::flyout(k, MENU.into(), trigger, content)
-    }
-}
-
-thread_local! {
-    /// The last picked color with its exact HSV, so dragging through grey or
-    /// black does not lose hue and round-trip rounding does not jitter.
-    static LAST_HSV: std::cell::Cell<(u32, [f32; 3])> = const { std::cell::Cell::new((u32::MAX, [0.0; 3])) };
-}
-
-fn pack(rgb: (u8, u8, u8)) -> u32 {
-    (u32::from(rgb.0) << 16) | (u32::from(rgb.1) << 8) | u32::from(rgb.2)
-}
-
-fn remember_hsv(rgb: (u8, u8, u8), hsv: [f32; 3]) {
-    LAST_HSV.with(|last| last.set((pack(rgb), hsv)));
-}
-
-fn resolve_hsv(rgb: (u8, u8, u8)) -> [f32; 3] {
-    let (packed, hsv) = LAST_HSV.with(|last| last.get());
-    if packed == pack(rgb) {
-        hsv
-    } else {
-        kit::rgb_to_hsv(rgb)
+            }),
+        }
+        .render(k)
     }
 }

@@ -69,6 +69,7 @@ fn source(name: &str) -> Option<&'static str> {
         }
         "check-bold" => include_str!("../../../assets/icons/ph-check-bold.svg"),
         "check-circle-fill" => include_str!("../../../assets/icons/ph-check-circle-fill.svg"),
+        "circle-half-fill" => include_str!("../../../assets/icons/ph-circle-half-fill.svg"),
         "clock-fill" => include_str!("../../../assets/icons/ph-clock-fill.svg"),
         "copy" => include_str!("../../../assets/icons/ph-copy.svg"),
         "desktop-fill" => include_str!("../../../assets/icons/ph-desktop-fill.svg"),

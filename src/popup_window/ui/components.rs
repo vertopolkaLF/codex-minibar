@@ -60,8 +60,8 @@ pub(crate) fn icon(name: &str, size: f32, color: Hsla) -> gpui::Svg {
 /// Instance badge plate: up to three letters on the badge color, or on a
 /// neutral plate that follows the theme for `Auto`.
 pub(crate) fn badge_plate(badge: &crate::instances::Badge, height: f32, palette: &Palette) -> Div {
-    let (background, foreground) = match badge.color.rgb() {
-        Some(rgb) => (super::theme::rgb8(rgb), gpui::white()),
+    let (background, foreground) = match badge.color.rgb().zip(badge.color.text_rgb()) {
+        Some((rgb, text)) => (super::theme::rgb8(rgb), super::theme::rgb8(text)),
         None => (
             palette.text_secondary,
             palette.solid_background.opacity(1.0),

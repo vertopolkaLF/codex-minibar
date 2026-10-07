@@ -6,7 +6,8 @@ use std::{path::PathBuf, sync::mpsc::Sender};
 use super::persistence::try_persist_update_fallible;
 use crate::limits::{OpenRouterAccountSnapshot, OpenRouterApiKeySnapshot, SpendingSummary};
 use crate::settings::{
-    InstanceSource, OpenRouterAccount, ProviderId, ProviderInstance, ProviderKind, Settings,
+    BadgeColor, InstanceSource, OpenRouterAccount, ProviderId, ProviderInstance, ProviderKind,
+    Settings,
 };
 
 mod dialog;
@@ -749,6 +750,46 @@ fn provider_label(instance: &ProviderInstance, instances: &[ProviderInstance]) -
 
 fn looks_like_openrouter_key(value: &str) -> bool {
     value.starts_with("sk-or-")
+}
+
+/// Badge color presets plus a custom color, in the accent picker's style.
+fn badge_color_swatches(
+    k: &super::kit::Kit,
+    id: impl Into<gpui::SharedString>,
+    current: BadgeColor,
+    on_pick: super::kit::Handler<BadgeColor>,
+) -> gpui::AnyElement {
+    let theme = &k.theme;
+    let plate = |color: BadgeColor| theme.badge(color);
+    let on_select = on_pick.clone();
+    super::kit::ColorSwatches {
+        id: id.into(),
+        presets: BadgeColor::PRESETS
+            .into_iter()
+            .map(|color| {
+                let (fill, ink) = plate(color);
+                super::kit::Swatch {
+                    label: color.label().into(),
+                    fill,
+                    ink,
+                    icon: (color == BadgeColor::Auto).then_some("circle-half-fill"),
+                }
+            })
+            .collect(),
+        selected: BadgeColor::PRESETS
+            .iter()
+            .position(|color| *color == current),
+        custom: matches!(current, BadgeColor::Custom(_)).then(|| plate(current)),
+        // Auto opens the picker on a neutral grey rather than the theme plate.
+        picker_rgb: current.rgb().unwrap_or((0x80, 0x80, 0x80)),
+        on_select: std::rc::Rc::new(move |index, window, cx| {
+            on_select(BadgeColor::PRESETS[index], window, cx)
+        }),
+        on_custom: std::rc::Rc::new(move |rgb, window, cx| {
+            on_pick(BadgeColor::custom(rgb), window, cx)
+        }),
+    }
+    .render(k)
 }
 
 #[cfg(test)]

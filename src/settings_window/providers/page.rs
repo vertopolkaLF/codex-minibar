@@ -366,19 +366,17 @@ impl SettingsWindow {
         );
         let name_field = kit::text_field(k, &name, Some(240.0), window, cx);
         let badge_field = kit::text_field(k, &badge, Some(88.0), window, cx);
-        let badge_color = kit::dropdown(
+        let badge_color = badge_color_swatches(
             k,
             format!("provider-{}-badge-color", provider.id()),
-            BadgeColor::ALL
-                .iter()
-                .map(|color| SharedString::from(color.label()))
-                .collect(),
-            usize::try_from(instance.badge_color.index()).ok(),
-            false,
-            160.0,
-            Self::h(cx, move |this, index: usize, _, cx| {
-                let color = BadgeColor::from_index(index as i32);
-                this.edit_instance(cx, provider, move |instance| instance.badge_color = color)
+            instance.badge_color,
+            Self::h(cx, move |this, color: BadgeColor, _, cx| {
+                if this
+                    .instance(provider)
+                    .is_some_and(|instance| instance.badge_color != color)
+                {
+                    this.edit_instance(cx, provider, move |instance| instance.badge_color = color)
+                }
             }),
         );
         let rows = vec![
@@ -396,7 +394,7 @@ impl SettingsWindow {
                 .render(k),
             Row::new("provider-badge-color", "Badge color")
                 .description(k, "Auto uses a neutral plate that follows the theme.")
-                .trailing(badge_color)
+                .detail(div().pt(px(12.0)).child(badge_color).into_any_element())
                 .render(k),
             kit::toggle_row(
                 k,

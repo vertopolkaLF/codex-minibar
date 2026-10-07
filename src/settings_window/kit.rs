@@ -2893,3 +2893,165 @@ pub(crate) fn hue_strip(
         Rc::new(move |(x, _), window, cx| on_change(x * 360.0, window, cx)),
     )
 }
+
+/// One preset in a [`ColorSwatches`] row.
+pub(crate) struct Swatch {
+    pub label: SharedString,
+    pub fill: Hsla,
+    /// Glyph painted on the fill.
+    pub ink: Hsla,
+    /// Glyph shown whether or not the swatch is chosen ("follow system").
+    pub icon: Option<&'static str>,
+}
+
+/// A row of round color presets followed by a "+" swatch that opens a
+/// saturation/value area and hue strip for any color.
+pub(crate) struct ColorSwatches {
+    pub id: SharedString,
+    pub presets: Vec<Swatch>,
+    /// The chosen preset; `None` while a custom color is chosen.
+    pub selected: Option<usize>,
+    /// Fill and glyph color of the chosen custom color.
+    pub custom: Option<(Hsla, Hsla)>,
+    /// Color the picker opens on and edits.
+    pub picker_rgb: (u8, u8, u8),
+    pub on_select: Handler<usize>,
+    pub on_custom: Handler<(u8, u8, u8)>,
+}
+
+impl ColorSwatches {
+    pub(crate) fn render(self, k: &Kit) -> AnyElement {
+        let theme = &k.theme;
+        let mut row = div().flex().flex_wrap().gap(px(10.0));
+        for (index, swatch) in self.presets.into_iter().enumerate() {
+            let selected = self.selected == Some(index);
+            let swatch_id = format!("{}-{}", self.id, swatch.label);
+            let on_select = self.on_select.clone();
+            let glyph = swatch
+                .icon
+                .or(selected.then_some("check-bold"))
+                .map(|name| icon(name, 12.0, swatch.ink));
+            let el = swatch_shell(k, &swatch_id, selected.then_some(swatch.fill))
+                .on_click(move |_, window, cx| on_select(index, window, cx))
+                .child(swatch_dot().bg(swatch.fill).children(glyph));
+            row = row.child(with_tooltip(k, el, swatch.label));
+        }
+
+        let menu: SharedString = format!("{}-custom", self.id).into();
+        let menus = k.menus.clone();
+        let toggle_menu = menu.clone();
+        let trigger = swatch_shell(k, &menu, self.custom.map(|(fill, _)| fill))
+            .on_click(move |_, window, _| menus.toggle(toggle_menu.clone(), window))
+            .child(match self.custom {
+                Some((fill, ink)) => swatch_dot().bg(fill).child(icon("check-bold", 12.0, ink)),
+                None => swatch_dot().bg(theme.control).child(icon(
+                    "plus-bold",
+                    12.0,
+                    theme.text_secondary,
+                )),
+            });
+        let trigger = with_tooltip(k, trigger, "Custom color").into_any_element();
+
+        let content = k.menus.is_open(&menu).then(|| {
+            let base = self.picker_rgb;
+            // Keep the picked hue/saturation while the color is grey or black,
+            // where RGB alone cannot tell them.
+            let hsv = resolve_hsv(base);
+            let pick = move |next: [f32; 3],
+                             on_custom: &Handler<(u8, u8, u8)>,
+                             window: &mut Window,
+                             cx: &mut App| {
+                let rgb = hsv_to_rgb(next[0], next[1], next[2]);
+                remember_hsv(rgb, next);
+                on_custom(rgb, window, cx);
+            };
+            let on_custom = self.on_custom.clone();
+            let area = color_area(
+                k,
+                format!("{}-area", self.id),
+                (240.0, 160.0),
+                hsv,
+                Rc::new(move |(x, y), window, cx| {
+                    pick([hsv[0], x, 1.0 - y], &on_custom, window, cx)
+                }),
+            );
+            let on_custom = self.on_custom.clone();
+            let strip = hue_strip(
+                k,
+                format!("{}-hue", self.id),
+                240.0,
+                hsv[0],
+                Rc::new(move |hue, window, cx| pick([hue, hsv[1], hsv[2]], &on_custom, window, cx)),
+            );
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(14.0))
+                .child(area)
+                .child(strip)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.0))
+                        .child(div().size(px(24.0)).rounded_full().bg(rgb8(base)))
+                        .child(text(
+                            format!("#{:02X}{:02X}{:02X}", base.0, base.1, base.2),
+                            13.0,
+                            theme.text_secondary,
+                        )),
+                )
+                .into_any_element()
+        });
+        row.child(flyout(k, menu, trigger, content))
+            .into_any_element()
+    }
+}
+
+/// Hover/selection halo around a swatch. Selection is a tinted halo, not an
+/// outline.
+fn swatch_shell(k: &Kit, id: &str, selected: Option<Hsla>) -> gpui::Stateful<gpui::Div> {
+    let rest = selected.map_or(gpui::transparent_black(), |fill| fill.alpha(0.35));
+    let hover = if selected.is_some() {
+        rest
+    } else {
+        k.theme.subtle_hover
+    };
+    hover_bg(k, div().id(eid(id.to_owned())), hover_key(id), rest, hover)
+        .size(px(34.0))
+        .rounded_full()
+        .p(px(4.0))
+        .cursor_pointer()
+}
+
+fn swatch_dot() -> gpui::Div {
+    div()
+        .size_full()
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+}
+
+thread_local! {
+    /// The last picked color with its exact HSV, so dragging through grey or
+    /// black does not lose hue and round-trip rounding does not jitter.
+    static LAST_HSV: Cell<(u32, [f32; 3])> = const { Cell::new((u32::MAX, [0.0; 3])) };
+}
+
+fn pack(rgb: (u8, u8, u8)) -> u32 {
+    (u32::from(rgb.0) << 16) | (u32::from(rgb.1) << 8) | u32::from(rgb.2)
+}
+
+fn remember_hsv(rgb: (u8, u8, u8), hsv: [f32; 3]) {
+    LAST_HSV.with(|last| last.set((pack(rgb), hsv)));
+}
+
+fn resolve_hsv(rgb: (u8, u8, u8)) -> [f32; 3] {
+    let (packed, hsv) = LAST_HSV.with(|last| last.get());
+    if packed == pack(rgb) {
+        hsv
+    } else {
+        rgb_to_hsv(rgb)
+    }
+}

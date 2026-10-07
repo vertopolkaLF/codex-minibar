@@ -232,10 +232,13 @@ pub enum BadgeColor {
     Blue,
     Purple,
     Pink,
+    /// User-picked color, packed as `0xRRGGBB`.
+    Custom(u32),
 }
 
 impl BadgeColor {
-    pub const ALL: [Self; 9] = [
+    /// The presets offered next to the custom color.
+    pub const PRESETS: [Self; 9] = [
         Self::Auto,
         Self::Red,
         Self::Orange,
@@ -246,6 +249,10 @@ impl BadgeColor {
         Self::Purple,
         Self::Pink,
     ];
+
+    pub const fn custom(rgb: (u8, u8, u8)) -> Self {
+        Self::Custom(((rgb.0 as u32) << 16) | ((rgb.1 as u32) << 8) | rgb.2 as u32)
+    }
 
     pub const fn label(self) -> &'static str {
         match self {
@@ -258,6 +265,7 @@ impl BadgeColor {
             Self::Blue => "Blue",
             Self::Purple => "Purple",
             Self::Pink => "Pink",
+            Self::Custom(_) => "Custom",
         }
     }
 
@@ -273,21 +281,21 @@ impl BadgeColor {
             Self::Blue => Some((0x00, 0x78, 0xD4)),
             Self::Purple => Some((0x8E, 0x4E, 0xC6)),
             Self::Pink => Some((0xD6, 0x40, 0x9F)),
+            Self::Custom(packed) => Some(((packed >> 16) as u8, (packed >> 8) as u8, packed as u8)),
         }
     }
 
-    pub fn index(self) -> i32 {
-        Self::ALL
-            .iter()
-            .position(|color| *color == self)
-            .unwrap_or_default() as i32
-    }
-
-    pub fn from_index(index: i32) -> Self {
-        usize::try_from(index)
-            .ok()
-            .and_then(|index| Self::ALL.get(index).copied())
-            .unwrap_or_default()
+    /// Letter color on the plate: white on presets; black on light custom
+    /// colors so they stay readable.
+    pub fn text_rgb(self) -> Option<(u8, u8, u8)> {
+        let (r, g, b) = self.rgb()?;
+        let light = matches!(self, Self::Custom(_))
+            && 0.299 * f32::from(r) + 0.587 * f32::from(g) + 0.114 * f32::from(b) > 170.0;
+        Some(if light {
+            (0x1C, 0x1C, 0x1C)
+        } else {
+            (0xFF, 0xFF, 0xFF)
+        })
     }
 }
 

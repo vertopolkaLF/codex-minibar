@@ -297,8 +297,8 @@ impl Theme {
 
     /// Badge plate colors: the badge color, or a neutral plate for `Auto`.
     pub(crate) fn badge(&self, color: crate::settings::BadgeColor) -> (Hsla, Hsla) {
-        match color.rgb() {
-            Some(rgb) => (rgb8(rgb), rgb8((255, 255, 255))),
+        match color.rgb().zip(color.text_rgb()) {
+            Some((rgb, text)) => (rgb8(rgb), rgb8(text)),
             None if self.dark => (rgb8((200, 200, 200)), rgb8((28, 28, 28))),
             None => (rgb8((90, 90, 90)), rgb8((255, 255, 255))),
         }

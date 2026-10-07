@@ -6,10 +6,7 @@
 //! or returns with the error.
 
 use gpui::prelude::FluentBuilder;
-use gpui::{
-    AnyElement, Context, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
-    relative,
-};
+use gpui::{AnyElement, Context, IntoElement, ParentElement, Styled, Window, div, px, relative};
 
 use super::super::kit::{self, Button, Kit};
 use super::super::window::{SettingsWindow, open_url};
@@ -460,19 +457,17 @@ impl SettingsWindow {
                         let color = kit::field(
                             k,
                             "Badge color",
-                            kit::dropdown(
+                            badge_color_swatches(
                                 k,
                                 "dlg-badge-color",
-                                BadgeColor::ALL
-                                    .iter()
-                                    .map(|color| SharedString::from(color.label()))
-                                    .collect(),
-                                usize::try_from(dialog.badge_color.index()).ok(),
-                                dialog.checking,
-                                0.0,
-                                Self::h(cx, |this, index: usize, _, cx| {
-                                    if let Some(dialog) = this.provider_dialog.as_mut() {
-                                        dialog.badge_color = BadgeColor::from_index(index as i32);
+                                dialog.badge_color,
+                                Self::h(cx, |this, color: BadgeColor, _, cx| {
+                                    if let Some(dialog) = this
+                                        .provider_dialog
+                                        .as_mut()
+                                        .filter(|dialog| !dialog.checking)
+                                    {
+                                        dialog.badge_color = color;
                                     }
                                     cx.notify();
                                 }),
@@ -486,13 +481,8 @@ impl SettingsWindow {
                                 driver_card(k, driver, true, None, None)
                             }))
                             .child(name)
-                            .child(
-                                div()
-                                    .flex()
-                                    .gap(px(12.0))
-                                    .child(div().flex_1().child(badge))
-                                    .child(color),
-                            )
+                            .child(badge)
+                            .child(color)
                             .child(kit::caption(
                                 k,
                                 "Up to three letters; empty uses the name's initials. Badges show while a provider has more than one instance turned on.",
