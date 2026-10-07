@@ -154,13 +154,11 @@ impl SettingsWindow {
     }
 
     pub(super) fn reset_confirm_overlay(
-        &self,
-        k: &Kit,
+        &mut self,
+        k: &mut Kit,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if !self.confirm_reset {
-            return None;
-        }
+        let ((), phase) = self.overlays.reset.track(k, self.confirm_reset.then_some(()))?;
         let cancel = Self::h(cx, |this, (), _, cx| {
             this.confirm_reset = false;
             cx.notify();
@@ -187,6 +185,7 @@ impl SettingsWindow {
         Some(kit::dialog(
             k,
             "reset",
+            phase,
             420.0,
             vec![
                 kit::dialog_title(k, "Reset all settings?"),

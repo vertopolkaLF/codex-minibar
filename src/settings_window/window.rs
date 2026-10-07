@@ -93,6 +93,8 @@ pub(crate) struct SettingsWindow {
     pub(super) tray_dialog: Option<super::tray::TrayDialog>,
     pub(super) removed_widget: Option<(usize, TrayWidget)>,
     pub(super) confirm_reset: bool,
+    /// Dialogs that are open or still playing their exit transition.
+    pub(super) overlays: Overlays,
     pub(super) tray_previews: super::tray::PreviewCache,
     _poll: Task<()>,
     _subscriptions: Vec<Subscription>,
@@ -187,6 +189,7 @@ impl SettingsWindow {
             tray_dialog: None,
             removed_widget: None,
             confirm_reset: false,
+            overlays: Overlays::default(),
             tray_previews: Default::default(),
             _poll: poll,
             _subscriptions: subscriptions,
@@ -1256,13 +1259,13 @@ impl Render for SettingsWindow {
         if let Some(overlay) = self.provider_dialog_overlay(&mut k, window, cx) {
             overlays.push(overlay);
         }
-        if let Some(overlay) = self.troubleshoot_overlay(&k, cx) {
+        if let Some(overlay) = self.troubleshoot_overlay(&mut k, cx) {
             overlays.push(overlay);
         }
         if let Some(overlay) = self.tray_dialog_overlay(&mut k, window, cx) {
             overlays.push(overlay);
         }
-        if let Some(overlay) = self.reset_confirm_overlay(&k, cx) {
+        if let Some(overlay) = self.reset_confirm_overlay(&mut k, cx) {
             overlays.push(overlay);
         }
         k.end_frame(window);
@@ -1303,6 +1306,15 @@ impl Render for SettingsWindow {
             )
             .children(overlays)
     }
+}
+
+/// Last shown state of each dialog, kept while it fades out.
+#[derive(Default)]
+pub(super) struct Overlays {
+    pub(super) provider: kit::Presence<ProviderDialog>,
+    pub(super) troubleshoot: kit::Presence<crate::troubleshoot::ToolPickerState>,
+    pub(super) tray: kit::Presence<(super::tray::TrayDialog, usize, TrayWidget)>,
+    pub(super) reset: kit::Presence<()>,
 }
 
 /// Drag payload for reordering providers in the sidebar.

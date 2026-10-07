@@ -67,6 +67,8 @@ pub(crate) struct Kit {
     pub(crate) page_scroll: Option<gpui::ScrollHandle>,
     /// Expanders the user just opened that still have to be revealed.
     reveals: Rc<RefCell<HashSet<SharedString>>>,
+    /// A dismissed overlay is still fading out this frame.
+    exiting: Cell<bool>,
 }
 
 impl Kit {
@@ -76,6 +78,7 @@ impl Kit {
         self.fx.begin_frame(enabled);
         self.hovers.begin_frame(enabled);
         self.cards.borrow_mut().clear();
+        self.exiting.set(false);
     }
 
     pub(crate) fn animate(&self) -> bool {
@@ -85,7 +88,7 @@ impl Kit {
     /// Request another frame while any tween is still in flight.
     pub(crate) fn end_frame(&self, window: &mut Window) {
         let hovering = self.hovers.end_frame();
-        if self.fx.is_animating() || hovering {
+        if self.fx.is_animating() || hovering || self.exiting.get() {
             window.request_animation_frame();
         }
     }
@@ -1967,16 +1970,87 @@ pub(crate) fn text_field(
 // Overlays
 // ---------------------------------------------------------------------------
 
+const DIALOG_EXIT: Duration = Duration::from_millis(167);
+
+/// Where an overlay is in its lifetime: which opening it belongs to, and how
+/// far its exit has played once dismissed.
+#[derive(Clone, Copy)]
+pub(crate) struct OverlayPhase {
+    generation: u64,
+    exit: Option<f32>,
+}
+
+impl OverlayPhase {
+    pub(crate) fn closing(&self) -> bool {
+        self.exit.is_some()
+    }
+}
+
+/// Keeps a dismissed overlay's last state for the length of its exit
+/// transition, so it fades out instead of vanishing.
+pub(crate) struct Presence<T> {
+    shown: Option<T>,
+    generation: u64,
+    closed_at: Option<Instant>,
+}
+
+impl<T> Default for Presence<T> {
+    fn default() -> Self {
+        Self {
+            shown: None,
+            generation: 0,
+            closed_at: None,
+        }
+    }
+}
+
+impl<T: Clone> Presence<T> {
+    /// The state to render this frame: the live one while open, otherwise
+    /// the last one until its exit finishes.
+    pub(crate) fn track(&mut self, k: &Kit, current: Option<T>) -> Option<(T, OverlayPhase)> {
+        if let Some(current) = current {
+            if self.shown.is_none() || self.closed_at.is_some() {
+                self.generation = self.generation.wrapping_add(1);
+            }
+            self.shown = Some(current.clone());
+            self.closed_at = None;
+            let phase = OverlayPhase {
+                generation: self.generation,
+                exit: None,
+            };
+            return Some((current, phase));
+        }
+        let shown = self.shown.as_ref()?;
+        let closed_at = *self.closed_at.get_or_insert_with(Instant::now);
+        let t = closed_at.elapsed().as_secs_f32() / DIALOG_EXIT.as_secs_f32();
+        if !k.animate() || t >= 1.0 {
+            self.shown = None;
+            self.closed_at = None;
+            return None;
+        }
+        k.exiting.set(true);
+        let phase = OverlayPhase {
+            generation: self.generation,
+            exit: Some(t),
+        };
+        Some((shown.clone(), phase))
+    }
+}
+
 /// Modal dialog: scrim, centered card, body and a button footer.
 pub(crate) fn dialog(
     k: &Kit,
     id: impl Into<SharedString>,
+    phase: OverlayPhase,
     width: f32,
     body: Vec<AnyElement>,
     buttons: Vec<AnyElement>,
     on_dismiss: Option<Handler<()>>,
 ) -> AnyElement {
     let id: SharedString = id.into();
+    let generation = phase.generation;
+    let exit = phase.exit.map(fx::ease_out_cubic);
+    let on_dismiss = on_dismiss.filter(|_| exit.is_none());
     let theme = &k.theme;
     let card = div()
         .id(eid(format!("dialog-card-{id}")))
@@ -2018,11 +2092,13 @@ pub(crate) fn dialog(
                 .border_color(theme.divider)
                 .children(buttons),
         );
+    let drop = exit.unwrap_or(0.0) * 8.0;
+    let fade = 1.0 - exit.unwrap_or(0.0);
     let card: AnyElement = if k.animate() {
         card.with_animation(
-            eid(format!("dialog-anim-{id}")),
+            eid(format!("dialog-anim-{id}-{generation}")),
             Animation::new(Duration::from_millis(220)).with_easing(fx::ease_out_cubic),
-            |el, delta| el.opacity(delta).top(px((1.0 - delta) * 16.0)),
+            move |el, delta| el.opacity(delta).top(px((1.0 - delta) * 16.0 + drop)),
         )
         .into_any_element()
     } else {
@@ -2041,16 +2117,20 @@ pub(crate) fn dialog(
         .justify_center()
         .p(px(16.0))
         .bg(scrim)
-        .child(card);
+        .child(card)
+        .when(exit.is_some(), |el| {
+            // Fading out: nothing inside reacts to the pointer any more.
+            el.child(div().absolute().top_0().left_0().size_full().occlude())
+        });
     if let Some(on_dismiss) = on_dismiss {
         overlay = overlay.on_click(move |_, window, cx| on_dismiss((), window, cx));
     }
     let overlay: AnyElement = if k.animate() {
         overlay
             .with_animation(
-                eid(format!("dialog-scrim-{id}")),
+                eid(format!("dialog-scrim-{id}-{generation}")),
                 Animation::new(Duration::from_millis(167)),
-                |el, delta| el.opacity(delta),
+                move |el, delta| el.opacity(delta * fade),
             )
             .into_any_element()
     } else {

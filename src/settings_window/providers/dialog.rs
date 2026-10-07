@@ -364,7 +364,7 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let dialog = self.provider_dialog.clone()?;
+        let (dialog, phase) = self.overlays.provider.track(k, self.provider_dialog.clone())?;
         let instances = self.settings.instances.clone();
         let instance_name = |provider: &ProviderId| {
             instances
@@ -752,7 +752,7 @@ impl SettingsWindow {
         {
             fields.push(kit::info_bar(k, kit::Severity::Critical, error.clone()));
         }
-        if !dialog.focused {
+        if !dialog.focused && !phase.closing() {
             if let Some(id) = first_input {
                 self.focus_input(id, window, cx);
             }
@@ -810,6 +810,7 @@ impl SettingsWindow {
         Some(kit::dialog(
             k,
             "provider",
+            phase,
             if wide { 560.0 } else { DIALOG_WIDTH },
             body,
             vec![cancel.render(k), primary_button.render(k)],

@@ -564,18 +564,20 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let dialog = self.tray_dialog.clone()?;
-        let Some((index, widget)) = self
-            .settings
-            .tray_widgets
-            .iter()
-            .cloned()
-            .enumerate()
-            .find(|(_, widget)| widget.id == dialog.widget_id)
-        else {
+        let current = self.tray_dialog.clone().and_then(|dialog| {
+            self.settings
+                .tray_widgets
+                .iter()
+                .cloned()
+                .enumerate()
+                .find(|(_, widget)| widget.id == dialog.widget_id)
+                .map(|(index, widget)| (dialog, index, widget))
+        });
+        if current.is_none() {
+            // The widget is gone; its editor closes with it.
             self.tray_dialog = None;
-            return None;
-        };
+        }
+        let ((dialog, index, widget), phase) = self.overlays.tray.track(k, current)?;
         let close = Self::h(cx, |this, (), _, cx| {
             this.tray_dialog = None;
             cx.notify();
@@ -637,6 +639,7 @@ impl SettingsWindow {
         Some(kit::dialog(
             k,
             format!("tray-dialog-{}", widget.id),
+            phase,
             600.0,
             body,
             vec![remove.render(k), done.render(k)],

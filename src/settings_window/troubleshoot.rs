@@ -7,11 +7,11 @@ use super::window::SettingsWindow;
 
 impl SettingsWindow {
     pub(super) fn troubleshoot_overlay(
-        &self,
-        k: &Kit,
+        &mut self,
+        k: &mut Kit,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let picker = self.troubleshoot.as_ref()?;
+        let (picker, phase) = self.overlays.troubleshoot.track(k, self.troubleshoot.clone())?;
         let labels = picker
             .tools
             .iter()
@@ -36,6 +36,7 @@ impl SettingsWindow {
         Some(kit::dialog(
             k,
             "troubleshoot",
+            phase,
             440.0,
             vec![
                 kit::dialog_title(k, "Run Troubleshoot with AI"),
