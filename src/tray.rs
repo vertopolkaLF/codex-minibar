@@ -4,7 +4,7 @@ use std::{fs, path::PathBuf, sync::OnceLock};
 use font8x8::{BASIC_FONTS, UnicodeFonts};
 use fontdue::{
     Font, FontSettings,
-    layout::{CoordinateSystem, HorizontalAlign, Layout, LayoutSettings, TextStyle, VerticalAlign},
+    layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle, VerticalAlign},
 };
 
 use crate::{
@@ -331,7 +331,7 @@ pub fn render_widget_with_accent(
                     .lines()
                     .map(|line| (line.to_owned(), indicator.color))
                     .collect::<Vec<_>>();
-                render_text_lines(&lines)
+                render_text_lines(&lines, false)
             } else {
                 render_text_lines(
                     &indicators
@@ -343,6 +343,7 @@ pub fn render_widget_with_accent(
                             )
                         })
                         .collect::<Vec<_>>(),
+                    false,
                 )
             }
         }
@@ -358,13 +359,17 @@ pub fn render_widget_with_accent(
                     )
                 })
                 .collect::<Vec<_>>(),
+            true,
         ),
     }
 }
 
-fn render_text_lines(lines: &[(String, [u8; 3])]) -> Vec<u8> {
+/// Draws one line per indicator. Lines share one column centered in the icon,
+/// on whole pixels, so stacked values line up; `right_align` aligns them by
+/// their last digit like a table, otherwise each line centers in the column.
+fn render_text_lines(lines: &[(String, [u8; 3])], right_align: bool) -> Vec<u8> {
     let Some(font) = system_font() else {
-        return render_fallback_lines(lines);
+        return render_fallback_lines(lines, right_align);
     };
     let line_refs = lines
         .iter()
@@ -374,13 +379,26 @@ fn render_text_lines(lines: &[(String, [u8; 3])]) -> Vec<u8> {
     let fonts = [font.clone()];
     let mut pixels = vec![0; ICON_SIZE * ICON_SIZE * 4];
     let line_height = ICON_SIZE as f32 / lines.len().max(1) as f32;
-    for (line_index, (line, rgb)) in lines.iter().enumerate() {
+    // Advance widths, not ink bounds: those differ per glyph ("3" vs "8") and
+    // would shift every line by its own amount.
+    let widths = lines
+        .iter()
+        .map(|(line, _)| {
+            line.chars()
+                .map(|character| font.metrics(character, font_size).advance_width)
+                .sum::<f32>()
+        })
+        .collect::<Vec<_>>();
+    let column = widths.iter().copied().fold(0.0_f32, f32::max);
+    let left = ((ICON_SIZE as f32 - column) / 2.0).round();
+    for (line_index, ((line, rgb), width)) in lines.iter().zip(&widths).enumerate() {
+        let slack = column - width;
+        let x = left + if right_align { slack } else { (slack / 2.0).round() };
         let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
         layout.reset(&LayoutSettings {
+            x,
             y: line_index as f32 * line_height,
-            max_width: Some(ICON_SIZE as f32),
             max_height: Some(line_height),
-            horizontal_align: HorizontalAlign::Center,
             vertical_align: VerticalAlign::Middle,
             ..LayoutSettings::default()
         });
@@ -521,9 +539,14 @@ fn font_candidates() -> Vec<PathBuf> {
     candidates
 }
 
-fn render_fallback_lines(lines: &[(String, [u8; 3])]) -> Vec<u8> {
+fn render_fallback_lines(lines: &[(String, [u8; 3])], right_align: bool) -> Vec<u8> {
     let mut pixels = vec![0; ICON_SIZE * ICON_SIZE * 4];
     let line_height = ICON_SIZE / lines.len().max(1);
+    let column = lines
+        .iter()
+        .map(|(text, _)| text.chars().count())
+        .max()
+        .unwrap_or(0);
     for (line_index, (text, rgb)) in lines.iter().enumerate() {
         let scale = if lines.len() == 1 && text.chars().count() <= 2 {
             3
@@ -531,8 +554,12 @@ fn render_fallback_lines(lines: &[(String, [u8; 3])]) -> Vec<u8> {
             1
         };
         let glyph_width = 8 * scale;
-        let total_width = glyph_width * text.chars().count();
-        let start_x = ICON_SIZE.saturating_sub(total_width) / 2;
+        let count = text.chars().count();
+        let start_x = if right_align && scale == 1 {
+            ICON_SIZE.saturating_sub(glyph_width * column) / 2 + glyph_width * (column - count)
+        } else {
+            ICON_SIZE.saturating_sub(glyph_width * count) / 2
+        };
         let start_y = line_index * line_height + line_height.saturating_sub(8 * scale) / 2;
         for (index, character) in text.chars().enumerate() {
             let Some(glyph) = BASIC_FONTS.get(character) else {

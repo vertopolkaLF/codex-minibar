@@ -2217,7 +2217,6 @@ pub(crate) struct ChoiceCard {
     id: SharedString,
     leading: Option<AnyElement>,
     title: SharedString,
-    subtitle: Option<SharedString>,
     trailing: Vec<AnyElement>,
     selected: bool,
     on_click: Option<Handler<bool>>,
@@ -2229,7 +2228,6 @@ impl ChoiceCard {
             id: id.into(),
             leading: None,
             title: title.into(),
-            subtitle: None,
             trailing: Vec::new(),
             selected: false,
             on_click: None,
@@ -2238,11 +2236,6 @@ impl ChoiceCard {
 
     pub(crate) fn leading(mut self, element: AnyElement) -> Self {
         self.leading = Some(element);
-        self
-    }
-
-    pub(crate) fn subtitle(mut self, subtitle: impl Into<SharedString>) -> Self {
-        self.subtitle = Some(subtitle.into());
         self
     }
 
@@ -2269,7 +2262,7 @@ impl ChoiceCard {
             theme.control
         };
         let key = hover_key(&self.id);
-        let mut text_col = div()
+        let text_col = div()
             .flex()
             .flex_col()
             .gap(px(1.0))
@@ -2284,16 +2277,6 @@ impl ChoiceCard {
                     .text_color(theme.text)
                     .child(self.title),
             );
-        if let Some(subtitle) = self.subtitle {
-            text_col = text_col.child(
-                div()
-                    .truncate()
-                    .text_size(px(12.0))
-                    .line_height(px(16.0))
-                    .text_color(theme.text_secondary)
-                    .child(subtitle),
-            );
-        }
         let mut card = div()
             .id(eid(self.id))
             .flex()
