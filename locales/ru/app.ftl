@@ -215,13 +215,13 @@ loading-usage-statistics = Загрузка статистики использ�
 available-balance = Доступный баланс
 
 # src/popup_window/ui/cards.rs
-resets-in = Сброс через
+resets-in = До сброса
 
 # src/popup_window/ui/cards.rs
 session-not-started = Сессия не начата
 
 # src/popup_window/ui/cards.rs
-expires-in = Истекает через
+expires-in = До истечения
 
 # src/popup_window/ui/cards.rs
 usage = Расход:

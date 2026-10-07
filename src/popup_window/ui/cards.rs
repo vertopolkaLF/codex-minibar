@@ -112,7 +112,14 @@ impl PopupRoot {
                 key,
                 window: limit,
                 credits,
-            } => self.render_cloud_credits(key, limit, *credits, style),
+            } => self.render_cloud_credits(
+                key,
+                limit,
+                *credits,
+                style,
+                self.card_inner_width(surface),
+                window,
+            ),
             Card::BankedResets {
                 limits,
                 expansion_key,
@@ -436,8 +443,20 @@ impl PopupRoot {
         limit: &LimitWindow,
         credits: Option<&crate::limits::CloudSessionCredits>,
         style: CardStyle,
+        available_width: f32,
+        window: &Window,
     ) -> AnyElement {
         let palette = self.palette.clone();
+        let font_family = self.font_family.clone();
+        let measure = |value: &str, size, weight| {
+            components::measure_text(
+                window.text_system(),
+                font_family.clone(),
+                size,
+                weight,
+                value,
+            )
+        };
         let (label, progress, available) = cloud_session_credits_presentation(
             limit,
             credits,
@@ -451,36 +470,60 @@ impl PopupRoot {
         );
         // Name/balance left, expiry date/countdown right, like two-line quota cards.
         let mut metadata = div().flex().flex_col().items_end();
+        let mut metadata_width: f32 = 0.0;
         if let Some(expires) = limit.resets_at {
             let local = expires.with_timezone(&Local);
-            metadata = metadata.child(card_metadata(
-                format!(
-                    "{}, {}",
-                    crate::i18n::month_day(local),
-                    TimeFormat::current().format_hm(local)
-                ),
-                &palette,
-            ));
+            let date = format!(
+                "{}, {}",
+                crate::i18n::month_day(local),
+                TimeFormat::current().format_hm(local)
+            );
+            metadata_width = measure(&date, 12.0, FontWeight::NORMAL);
+            metadata = metadata.child(card_metadata(date, &palette));
             if available {
+                let countdown = format_reset_in(Some(expires));
+                metadata_width = metadata_width.max(
+                    measure(crate::i18n::tr("expires-in"), 14.0, FontWeight::NORMAL)
+                        + 6.0
+                        + measure(&countdown, 14.0, FontWeight::NORMAL),
+                );
                 metadata = metadata.child(status_row(
                     crate::i18n::tr("expires-in"),
-                    format_reset_in(Some(expires)),
+                    countdown,
                     &palette,
                 ));
             }
         }
-        let content = components::split_row(
-            div()
+        let title = crate::i18n::tr("cloud-session-credits");
+        let title_width = measure(title, 12.0, FontWeight::NORMAL);
+        let label_width = measure(&label, 14.0, FontWeight::SEMIBOLD);
+        let fits = |width: f32| width + 8.0 + metadata_width <= available_width;
+        let label_el = nowrap(components::body_strong(label, palette.accent));
+        // Long translations move to their own rows instead of being clipped.
+        let content = if fits(title_width.max(label_width)) {
+            components::split_row(
+                div()
+                    .flex()
+                    .flex_col()
+                    .min_w_0()
+                    .child(nowrap(caption(title, palette.text_secondary)))
+                    .child(label_el),
+                metadata,
+            )
+        } else {
+            let mut column = div()
                 .flex()
                 .flex_col()
-                .min_w_0()
-                .child(nowrap(caption(
-                    crate::i18n::tr("cloud-session-credits"),
-                    palette.text_secondary,
-                )))
-                .child(nowrap(components::body_strong(label, palette.accent))),
-            metadata,
-        );
+                .w_full()
+                .gap(px(2.0))
+                .child(caption(title, palette.text_secondary));
+            column = if fits(label_width) {
+                column.child(components::split_row(label_el, metadata))
+            } else {
+                column.child(label_el).child(metadata)
+            };
+            column
+        };
 
         if style.compact {
             let mut element = card(&palette).relative().overflow_hidden();
