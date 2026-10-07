@@ -711,6 +711,15 @@ windows-follows-your-system-accent = Windows использует системн
 icons-style = Стиль значков
 
 # src/settings_window/appearance.rs
+font = Шрифт
+
+# src/settings_window/appearance.rs
+any-font-installed-on-this-pc = Любой шрифт, установленный на этом компьютере.
+
+# src/settings_window/appearance.rs
+windows-default = По умолчанию Windows
+
+# src/settings_window/appearance.rs
 glyph-style-in-the-settings-sidebar = Стиль значков в боковой панели настроек.
 
 # src/settings_window/appearance.rs

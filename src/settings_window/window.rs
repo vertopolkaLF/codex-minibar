@@ -55,6 +55,8 @@ pub(crate) struct SettingsWindow {
     pub(super) settings: Settings,
     pub(super) kit: Kit,
     fonts: Fonts,
+    /// Installed families offered by the Appearance font picker.
+    pub(super) font_families: Vec<SharedString>,
     backdrop: super::backdrop::Backdrop,
     focus: FocusHandle,
     // Navigation.
@@ -162,6 +164,7 @@ impl SettingsWindow {
             settings,
             kit: Kit::default(),
             fonts,
+            font_families: crate::popup_window::ui::theme::installed_font_families(cx),
             focus,
             mode: NavMode::Root,
             pending_slide: None,
@@ -1246,7 +1249,7 @@ impl Render for SettingsWindow {
             self.settings.theme,
             self.settings.accent_color,
             window.appearance(),
-            self.fonts.clone(),
+            self.fonts.with_text(self.settings.font_family.as_deref()),
         );
         if self.backdrop.mica() {
             theme = theme.with_mica();

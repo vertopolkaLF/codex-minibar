@@ -545,7 +545,7 @@ impl Render for OnboardingWindow {
             self.settings.theme,
             self.settings.accent_color,
             window.appearance(),
-            self.fonts.clone(),
+            self.fonts.with_text(self.settings.font_family.as_deref()),
         );
         if self.backdrop.mica() {
             theme = theme.with_mica();

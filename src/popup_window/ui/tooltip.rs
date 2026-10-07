@@ -85,7 +85,7 @@ impl PopupRoot {
         let measure = |text: &str, size: f32| -> f32 {
             let run = gpui::TextRun {
                 len: text.len(),
-                font: gpui::font(self.font_family.clone()),
+                font: gpui::font(self.palette.font_family.clone()),
                 color: self.palette.text_primary,
                 background_color: None,
                 underline: None,

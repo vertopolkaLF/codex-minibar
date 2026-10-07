@@ -52,7 +52,7 @@ impl PopupRoot {
             .map(|(label, badge)| Segment {
                 label_width: components::measure_text(
                     window.text_system(),
-                    self.font_family.clone(),
+                    self.palette.font_family.clone(),
                     12.0,
                     FontWeight::SEMIBOLD,
                     &label,

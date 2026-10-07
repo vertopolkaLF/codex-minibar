@@ -593,16 +593,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn thirty_day_total_spend_matches_usage_tab_range() {
+    fn total_spend_periods_match_usage_tab_ranges() {
         let today = Local::now().date_naive();
-        let (start, end) = dates_for_total_spend(TotalSpendPeriod::ThirtyDays);
-        assert_eq!(end, today);
+        let yesterday = today - Duration::days(1);
         assert_eq!(
-            start,
-            today
-                - Duration::days(i64::from(
-                    OverviewRange::ThirtyDays.days().saturating_sub(1)
-                ))
+            dates_for_total_spend(TotalSpendPeriod::Today),
+            (today, today)
+        );
+        assert_eq!(
+            dates_for_total_spend(TotalSpendPeriod::Yesterday),
+            (yesterday, yesterday)
+        );
+        let thirty_days = Duration::days(i64::from(
+            OverviewRange::ThirtyDays.days().saturating_sub(1),
+        ));
+        assert_eq!(
+            dates_for_total_spend(TotalSpendPeriod::ThirtyDays),
+            (today - thirty_days, today)
         );
     }
 

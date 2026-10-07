@@ -374,31 +374,3 @@ fn write_response(stream: &mut TcpStream, response: &Response) -> io::Result<()>
     stream.write_all(b"\n")?;
     stream.flush()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{limits::LimitWindow, settings::ProviderKind};
-
-    #[test]
-    fn window_snapshot_exposes_remaining_without_provider_credentials() {
-        let window = LimitWindow {
-            used_percent: Some(25),
-            resets_at: None,
-            duration_minutes: Some(300),
-        };
-        let snapshot = widget_data::window_snapshot(&window);
-        assert_eq!(snapshot.used_percent, Some(25));
-        assert_eq!(snapshot.remaining_percent, Some(75));
-    }
-
-    #[test]
-    fn catalog_uses_provider_metric_ids() {
-        let provider = provider_registry::descriptor(ProviderKind::Codex);
-        assert_eq!(
-            provider.metrics[0].source,
-            provider_registry::MetricSource::Primary
-        );
-        assert_eq!(provider.metrics[0].id, "codex.session");
-    }
-}

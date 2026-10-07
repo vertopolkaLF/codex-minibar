@@ -23,6 +23,42 @@ pub(crate) fn rgb8((r, g, b): (u8, u8, u8)) -> Hsla {
     rgba8(r, g, b, 255)
 }
 
+/// The default UI family: Segoe UI Variable on Windows 11, Segoe UI on older
+/// systems that do not ship the variable font.
+pub(crate) fn default_font_family(cx: &gpui::App) -> SharedString {
+    let names = cx.text_system().all_font_names();
+    ["Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI"]
+        .into_iter()
+        .find(|candidate| names.iter().any(|name| name == candidate))
+        .unwrap_or("Segoe UI")
+        .into()
+}
+
+/// Font families installed on this PC, without GPUI's internal aliases and
+/// vertical (`@`) variants.
+pub(crate) fn installed_font_families(cx: &gpui::App) -> Vec<SharedString> {
+    let mut names = cx
+        .text_system()
+        .all_font_names()
+        .into_iter()
+        .filter(|name| !name.is_empty() && !name.starts_with(['.', '@']))
+        .collect::<Vec<_>>();
+    names.sort_by_key(|name| name.to_lowercase());
+    names.dedup();
+    names.into_iter().map(SharedString::from).collect()
+}
+
+/// The UI family to render with: the user's pick, or the system default.
+pub(crate) fn ui_font_family(custom: Option<&str>, default: &SharedString) -> SharedString {
+    custom
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map_or_else(
+            || default.clone(),
+            |name| SharedString::from(name.to_owned()),
+        )
+}
+
 /// Black/white with a WinUI-style alpha byte.
 fn ink(dark: bool, alpha: u8) -> Hsla {
     if dark {

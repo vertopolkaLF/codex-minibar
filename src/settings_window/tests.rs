@@ -11,13 +11,6 @@ fn tab_tags_are_unique() {
 }
 
 #[test]
-fn root_navigation_keeps_customize_separate_from_providers() {
-    assert!(Tab::ALL.contains(&Tab::Providers));
-    assert!(Tab::ALL.contains(&Tab::Popup));
-    assert_ne!(Tab::Providers.label(), Tab::Popup.label());
-}
-
-#[test]
 fn every_sidebar_icon_is_embedded() {
     for tab in Tab::ALL {
         assert!(

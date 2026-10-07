@@ -710,6 +710,15 @@ windows-follows-your-system-accent = Windows follows your system accent.
 icons-style = Icons style
 
 # src/settings_window/appearance.rs
+font = Font
+
+# src/settings_window/appearance.rs
+any-font-installed-on-this-pc = Any font installed on this PC.
+
+# src/settings_window/appearance.rs
+windows-default = Windows default
+
+# src/settings_window/appearance.rs
 glyph-style-in-the-settings-sidebar = Glyph style in the Settings sidebar.
 
 # src/settings_window/appearance.rs

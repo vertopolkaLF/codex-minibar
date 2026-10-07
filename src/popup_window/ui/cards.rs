@@ -27,7 +27,7 @@ fn compact_title_fits(available: f32, title: f32, usage: f32, reset: f32) -> boo
 
 impl PopupRoot {
     fn metrics<'a>(&self, window: &'a Window) -> TextMetrics<'a> {
-        TextMetrics::new(window, self.font_family.clone())
+        TextMetrics::new(window, self.palette.font_family.clone())
     }
 
     pub(super) fn render_cards(

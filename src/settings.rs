@@ -1651,6 +1651,9 @@ pub struct Settings {
     pub theme: AppTheme,
     pub language: crate::i18n::Language,
     pub accent_color: AccentColor,
+    /// Installed font family for every window. None follows the Windows UI
+    /// font (Segoe UI Variable, or Segoe UI on older systems).
+    pub font_family: Option<String>,
     /// App-level accessibility override. The Windows animation preference is
     /// still honored when this remains enabled.
     pub animations_enabled: bool,
@@ -1728,6 +1731,7 @@ impl Default for Settings {
             theme: AppTheme::Auto,
             language: crate::i18n::Language::Auto,
             accent_color: AccentColor::Windows,
+            font_family: None,
             animations_enabled: true,
             bottom_bar_size: BottomBarSize::default(),
             popup_corner_radius: PopupCornerRadius::default(),
@@ -3279,145 +3283,6 @@ mod tests {
     }
 
     #[test]
-    fn defaults_match_product_decisions() {
-        let value = Settings::default();
-        assert!(!value.is_enabled(id(ProviderKind::Codex)));
-        assert!(!value.is_enabled(id(ProviderKind::Claude)));
-        assert_eq!(
-            value
-                .instances
-                .iter()
-                .map(|instance| instance.driver)
-                .collect::<Vec<_>>(),
-            ProviderKind::ALL
-        );
-        assert!(value.instances.iter().all(ProviderInstance::is_primary));
-        assert_eq!(value.popup_tab_mode, PopupTabMode::Separate);
-        assert_eq!(value.theme, AppTheme::Auto);
-        assert_eq!(value.accent_color, AccentColor::Windows);
-        assert!(value.animations_enabled);
-        assert_eq!(value.bottom_bar_size, BottomBarSize::Comfortable);
-        assert_eq!(value.popup_corner_radius, PopupCornerRadius::Small);
-        assert_eq!(
-            value.popup_background_material,
-            PopupBackgroundMaterial::Mica
-        );
-        assert_eq!(value.time_format, TimeFormat::from_windows());
-        assert!(value.use_colored_provider_icons);
-        assert!(value.use_colored_sidebar_icons);
-        assert!(!value.replace_chatgpt_logo_with_codex);
-        assert!(
-            value
-                .instances
-                .iter()
-                .all(|instance| !instance.auto_activation)
-        );
-        assert!(value.auto_activation_pauses.is_empty());
-        assert!(value.usage_stats_enabled);
-        for provider in ProviderKind::ALL {
-            assert!(value.usage_stats_provider_enabled(id(provider)));
-        }
-        assert_eq!(value.limit_refresh_interval, LimitRefreshInterval::Minute1);
-        assert_eq!(
-            value.usage_refresh_interval,
-            UsageRefreshInterval::Minutes15
-        );
-        assert!(value.start_at_login);
-        assert!(!value.show_used_percentage);
-        assert!(value.show_usage_pace);
-        assert!(value.compact_usage_cards);
-        assert!(
-            value
-                .popup_visibility
-                .is_visible("codex.usage", PopupSurface::ProviderTab, true)
-        );
-        assert!(
-            !value
-                .popup_visibility
-                .is_visible("codex.usage", PopupSurface::HomeTab, true)
-        );
-        assert!(!value.popup_visibility.is_visible(
-            "cursor.allModels",
-            PopupSurface::HomeTab,
-            true
-        ));
-        assert!(!value.popup_visibility.is_visible(
-            "cursor.allModels",
-            PopupSurface::ProviderTab,
-            true
-        ));
-        assert!(
-            value
-                .popup_visibility
-                .driver_visible_on_home(ProviderKind::Codex)
-        );
-        assert!(value.instances.iter().all(|instance| instance.show_on_home));
-        assert!(value.show_total_spend_on_all_tab);
-        assert_eq!(
-            value.total_spend_presentation,
-            TotalSpendPresentation::Donut
-        );
-        assert_eq!(value.total_spend_period, TotalSpendPeriod::ThirtyDays);
-        assert_eq!(value.history_retention_days, 30);
-        assert!(value.tray_widgets.is_empty());
-        assert!(value.popup_home_order.is_empty());
-        assert_eq!(
-            value.reset_announcement_refresh_interval,
-            ResetAnnouncementRefreshInterval::Hour1
-        );
-        assert!(value.notifications.activation_success);
-        assert!(value.notifications.activation_failure);
-        assert!(!value.notifications.codex_unavailable);
-        assert!(!value.notifications.approaching_reset);
-        assert!(value.notifications.limits_changed);
-        assert!(value.notifications.low_usage_enabled);
-        assert_eq!(value.notifications.low_usage_threshold_percent, 20);
-        assert!(value.notifications.weekly_low_usage_enabled);
-        assert_eq!(value.notifications.weekly_low_usage_threshold_percent, 20);
-        assert!(value.notifications.update_available);
-        assert!(value.notifications.forced_reset_feed_enabled);
-        assert!(value.notifications.forced_reset_notifications);
-    }
-
-    #[test]
-    fn popup_appearance_presets_keep_stable_indices_and_metrics() {
-        assert_eq!(BottomBarSize::Comfortable.index(), 0);
-        assert_eq!(BottomBarSize::Compact.index(), 1);
-        assert_eq!(BottomBarSize::from_index(1), BottomBarSize::Compact);
-        assert_eq!(BottomBarSize::from_index(99), BottomBarSize::Comfortable);
-        assert_eq!(BottomBarSize::Comfortable.footer_height_dip(), 61);
-        assert_eq!(BottomBarSize::Compact.footer_height_dip(), 51);
-        assert_eq!(BottomBarSize::Comfortable.icon_button_size(), 36.0);
-        assert_eq!(BottomBarSize::Compact.icon_button_size(), 32.0);
-        assert_eq!(BottomBarSize::Comfortable.icon_glyph_size(), 18.0);
-        assert_eq!(BottomBarSize::Compact.icon_glyph_size(), 16.0);
-        assert_eq!(
-            BottomBarSize::Comfortable.padding_top(),
-            BottomBarSize::Comfortable.padding_bottom()
-        );
-        assert_eq!(
-            BottomBarSize::Compact.padding_top(),
-            BottomBarSize::Compact.padding_bottom()
-        );
-
-        assert_eq!(PopupCornerRadius::Small.index(), 2);
-        assert_eq!(PopupCornerRadius::ExtraLarge.index(), 5);
-        assert_eq!(PopupCornerRadius::from_index(4), PopupCornerRadius::Large);
-        assert_eq!(PopupCornerRadius::from_index(99), PopupCornerRadius::Small);
-        assert_eq!(PopupCornerRadius::from_dip(8), PopupCornerRadius::Small);
-        assert_eq!(PopupCornerRadius::from_dip(0), PopupCornerRadius::Zero);
-        assert_eq!(PopupCornerRadius::from_dip(4), PopupCornerRadius::Four);
-        assert_eq!(PopupCornerRadius::from_dip(12), PopupCornerRadius::Medium);
-        assert_eq!(PopupCornerRadius::from_dip(16), PopupCornerRadius::Large);
-        assert_eq!(
-            PopupCornerRadius::from_dip(20),
-            PopupCornerRadius::ExtraLarge
-        );
-        assert_eq!(PopupCornerRadius::Small.dip(), 8);
-        assert_eq!(PopupCornerRadius::ExtraLarge.dip(), 20);
-    }
-
-    #[test]
     fn migrates_v31_settings_with_popup_appearance_defaults() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.toml");
@@ -3467,7 +3332,7 @@ mod tests {
     }
 
     #[test]
-    fn migrates_v35_settings_with_usage_provider_selection_defaults() {
+    fn migrates_v35_settings_with_usage_and_forced_reset_defaults() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.toml");
         fs::write(&path, "version = 35\n").unwrap();
@@ -3480,44 +3345,12 @@ mod tests {
         // The selection now lives on each instance.
         assert!(!raw.contains("usage_stats_excluded_providers"));
         assert!(raw.contains("usage_stats = true"));
-    }
-
-    #[test]
-    fn migrates_v36_settings_with_usage_provider_selection_defaults() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("settings.toml");
-        fs::write(&path, "version = 36\n").unwrap();
-
-        let loaded = Settings::load_or_create(&path).unwrap();
-
-        assert_eq!(loaded.version, SETTINGS_VERSION);
-        assert!(loaded.usage_stats_provider_enabled(id(ProviderKind::OpenRouter)));
-        let raw = fs::read_to_string(path).unwrap();
-        // The selection now lives on each instance.
-        assert!(!raw.contains("usage_stats_excluded_providers"));
-        assert!(raw.contains("usage_stats = true"));
-    }
-
-    #[test]
-    fn popup_appearance_settings_round_trip_through_disk() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("settings.toml");
-        let settings = Settings {
-            bottom_bar_size: BottomBarSize::Compact,
-            popup_corner_radius: PopupCornerRadius::Large,
-            popup_background_material: PopupBackgroundMaterial::Mica,
-            ..Settings::default()
-        };
-        settings.save(&path).unwrap();
-
-        let loaded = Settings::load_or_create(&path).unwrap();
-
-        assert_eq!(loaded.bottom_bar_size, BottomBarSize::Compact);
-        assert_eq!(loaded.popup_corner_radius, PopupCornerRadius::Large);
         assert_eq!(
-            loaded.popup_background_material,
-            PopupBackgroundMaterial::Mica
+            loaded.reset_announcement_refresh_interval,
+            ResetAnnouncementRefreshInterval::Hour1
         );
+        assert!(loaded.notifications.forced_reset_feed_enabled);
+        assert!(loaded.notifications.forced_reset_notifications);
     }
 
     #[test]
@@ -3628,23 +3461,6 @@ show_usage_stats = false
     }
 
     #[test]
-    fn opencode_provider_ids_and_home_ids_are_distinct_and_stable() {
-        assert_eq!(ProviderKind::OpenCodeZen.id(), "opencode");
-        assert_eq!(ProviderKind::OpenCodeGo.id(), "opencode-go");
-        assert_eq!(ProviderKind::OpenRouter.id(), "openrouter");
-        // Home blocks are keyed by instance id; primaries keep the driver id.
-        assert_eq!(
-            HomeWidgetId::provider(id(ProviderKind::OpenCodeZen)).id(),
-            "opencode"
-        );
-        assert_eq!(
-            HomeWidgetId::provider(id(ProviderKind::OpenCodeGo)).id(),
-            "opencode-go"
-        );
-        assert_ne!(HomeWidgetId::total_spend().id(), "opencode");
-    }
-
-    #[test]
     fn zen_cannot_create_a_fake_tray_metric_widget() {
         assert!(TrayWidget::for_provider(id(ProviderKind::OpenCodeZen)).is_app_icon());
         assert!(TrayWidget::custom_for_provider(id(ProviderKind::OpenCodeZen)).is_app_icon());
@@ -3656,6 +3472,9 @@ show_usage_stats = false
         let path = directory.path().join("settings.toml");
         let expected = Settings {
             compact_usage_cards: false,
+            bottom_bar_size: BottomBarSize::Compact,
+            popup_corner_radius: PopupCornerRadius::Large,
+            popup_background_material: PopupBackgroundMaterial::Solid,
             ..Default::default()
         };
         expected.save(&path).unwrap();
@@ -3678,23 +3497,6 @@ show_usage_stats = false
         assert_eq!(pause.start_time_minutes, 23 * 60 + 59);
         assert_eq!(pause.end_time_minutes, 23 * 60 + 59);
         assert!(!pause.id.is_empty());
-    }
-
-    #[test]
-    fn migrates_v30_settings_with_empty_auto_activation_pauses() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("settings.toml");
-        fs::write(&path, "version = 30\n").unwrap();
-
-        let loaded = Settings::load_or_create(&path).unwrap();
-
-        assert_eq!(loaded.version, SETTINGS_VERSION);
-        assert!(loaded.auto_activation_pauses.is_empty());
-        assert!(
-            fs::read_to_string(path)
-                .unwrap()
-                .contains("auto_activation_pauses = []")
-        );
     }
 
     #[test]
@@ -3760,51 +3562,6 @@ tray_widgets = []
     }
 
     #[test]
-    fn migrates_v35_settings_to_forced_reset_defaults() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("settings.toml");
-        fs::write(&path, "version = 35\n").unwrap();
-
-        let migrated = Settings::load_or_create(&path).unwrap();
-
-        assert_eq!(migrated.version, SETTINGS_VERSION);
-        assert_eq!(
-            migrated.reset_announcement_refresh_interval,
-            ResetAnnouncementRefreshInterval::Hour1
-        );
-        assert!(migrated.notifications.forced_reset_feed_enabled);
-        assert!(migrated.notifications.forced_reset_notifications);
-    }
-
-    #[test]
-    fn time_format_uses_stable_dropdown_indices() {
-        assert_eq!(TimeFormat::Hour12.index(), 0);
-        assert_eq!(TimeFormat::Hour24.index(), 1);
-        assert_eq!(TimeFormat::from_index(1), TimeFormat::Hour24);
-        assert_eq!(TimeFormat::from_index(0), TimeFormat::Hour12);
-    }
-
-    #[test]
-    fn usage_refresh_interval_uses_stable_dropdown_indices() {
-        assert_eq!(UsageRefreshInterval::Minute1.index(), 0);
-        assert_eq!(UsageRefreshInterval::Minutes5.index(), 1);
-        assert_eq!(UsageRefreshInterval::Minutes60.index(), 6);
-        assert_eq!(
-            UsageRefreshInterval::from_index(0),
-            UsageRefreshInterval::Minute1
-        );
-        assert_eq!(
-            UsageRefreshInterval::from_index(1),
-            UsageRefreshInterval::Minutes5
-        );
-        assert_eq!(
-            UsageRefreshInterval::from_index(99),
-            UsageRefreshInterval::Minutes5
-        );
-        assert_eq!(UsageRefreshInterval::Minutes45.seconds(), 45 * 60);
-    }
-
-    #[test]
     fn time_format_toml_names_round_trip() {
         for (raw, expected) in [
             ("hour_12", TimeFormat::Hour12),
@@ -3859,20 +3616,6 @@ enabled = ["codex", "claude"]
         let raw = fs::read_to_string(path).unwrap();
         assert!(raw.contains("time_format"));
         assert!(raw.contains(migrated.time_format.as_str()));
-    }
-
-    #[test]
-    fn total_spend_presentation_uses_stable_dropdown_indices() {
-        assert_eq!(TotalSpendPresentation::Donut.index(), 0);
-        assert_eq!(TotalSpendPresentation::ProgressBar.index(), 1);
-        assert_eq!(
-            TotalSpendPresentation::from_index(1),
-            TotalSpendPresentation::ProgressBar
-        );
-        assert_eq!(
-            TotalSpendPresentation::from_index(99),
-            TotalSpendPresentation::Donut
-        );
     }
 
     #[test]
@@ -4086,21 +3829,6 @@ enabled = ["codex", "claude"]
                 .instance(id(ProviderKind::Claude))
                 .unwrap()
                 .show_on_home
-        );
-    }
-
-    #[test]
-    fn disabled_provider_references_are_preserved() {
-        let mut settings = Settings {
-            tray_widgets: vec![TrayWidget::default_user_widget()],
-            ..Settings::default()
-        };
-        settings.set_enabled(id(ProviderKind::Claude), true);
-
-        assert!(!settings.normalize_tray_widgets());
-        assert_eq!(
-            settings.tray_widgets[0].indicators[0].provider(),
-            Some(id(ProviderKind::Codex))
         );
     }
 

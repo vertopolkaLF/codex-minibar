@@ -946,6 +946,18 @@ windows-follows-your-system-accent = { "" }
 icons-style = { "" }
 
 # English source:
+# font = Font
+font = { "" }
+
+# English source:
+# any-font-installed-on-this-pc = Any font installed on this PC.
+any-font-installed-on-this-pc = { "" }
+
+# English source:
+# windows-default = Windows default
+windows-default = { "" }
+
+# English source:
 # glyph-style-in-the-settings-sidebar = Glyph style in the Settings sidebar.
 glyph-style-in-the-settings-sidebar = { "" }
 

@@ -293,6 +293,7 @@ impl AppState {
 pub(crate) struct UiState {
     pub(super) theme: AppTheme,
     pub(super) accent_color: AccentColor,
+    pub(super) font_family: Option<String>,
     pub(super) animations_enabled: bool,
     pub(super) popup_background_material: PopupBackgroundMaterial,
     pub(super) time_format: TimeFormat,
@@ -346,6 +347,7 @@ impl Default for UiState {
         Self {
             theme: AppTheme::Auto,
             accent_color: AccentColor::Windows,
+            font_family: None,
             animations_enabled: true,
             popup_background_material: PopupBackgroundMaterial::Mica,
             time_format: TimeFormat::from_windows(),
@@ -405,6 +407,7 @@ impl UiState {
     pub(super) fn apply_settings(&mut self, settings: &Settings) {
         self.theme = settings.theme;
         self.accent_color = settings.accent_color;
+        self.font_family = settings.font_family.clone();
         self.animations_enabled = settings.animations_enabled;
         self.popup_background_material = settings.popup_background_material;
         self.time_format = settings.time_format;

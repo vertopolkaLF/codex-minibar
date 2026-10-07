@@ -195,7 +195,8 @@ pub(crate) struct PopupRoot {
     pub(super) forced_resets: Rc<Vec<ForcedReset>>,
     pub(super) palette: Palette,
     pub(super) accent: crate::theme::AccentRamp,
-    pub(super) font_family: SharedString,
+    /// Windows UI family used when no custom font is selected.
+    pub(super) default_font: SharedString,
     pub(super) fx: Fx,
     pub(super) hover: HashSet<u64>,
     pub(super) host: Host,
@@ -236,7 +237,7 @@ pub(crate) struct PopupRoot {
 impl PopupRoot {
     pub(crate) fn new(
         state: Arc<AppState>,
-        font_family: SharedString,
+        default_font: SharedString,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -247,7 +248,7 @@ impl PopupRoot {
             dark,
             accent,
             crate::popup::background_material(),
-            font_family.clone(),
+            theme::ui_font_family(ui.font_family.as_deref(), &default_font),
         );
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             this.refresh_palette(window);
@@ -283,7 +284,7 @@ impl PopupRoot {
             ui: Rc::new(ui),
             palette,
             accent,
-            font_family,
+            default_font,
             fx: Fx::default(),
             hover: HashSet::new(),
             host: Host::new(),
@@ -349,7 +350,9 @@ impl PopupRoot {
     pub(super) fn refresh_palette(&mut self, window: &Window) {
         let dark = theme::resolve_dark(self.ui.theme, system_dark(window));
         let material = crate::popup::background_material();
+        let font = theme::ui_font_family(self.ui.font_family.as_deref(), &self.default_font);
         if self.palette.dark != dark
+            || self.palette.font_family != font
             || self.palette.material != material
             || self.palette.accent != theme::rgb8(self.accent.fill(dark))
         {
@@ -359,7 +362,7 @@ impl PopupRoot {
             {
                 backdrop.set_appearance(material, dark);
             }
-            self.palette = Palette::new(dark, self.accent, material, self.font_family.clone());
+            self.palette = Palette::new(dark, self.accent, material, font);
         }
     }
 
