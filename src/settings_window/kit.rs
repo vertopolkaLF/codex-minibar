@@ -341,6 +341,8 @@ fn row_hover_fill(k: &Kit, t: f32) -> AnyElement {
 pub(crate) struct Menus {
     open: Rc<RefCell<Option<SharedString>>>,
     closed: Rc<RefCell<Option<(SharedString, Instant)>>>,
+    /// Scroll state of the open menu's list, reset on every opening.
+    list_scroll: Rc<RefCell<Option<(SharedString, gpui::ScrollHandle)>>>,
 }
 
 impl Menus {
@@ -366,7 +368,24 @@ impl Menus {
         } else {
             Some(id)
         };
+        self.list_scroll.borrow_mut().take();
         window.refresh();
+    }
+
+    /// The open menu's list scroll; a fresh opening reveals `selected`.
+    fn list_scroll(&self, id: &SharedString, selected: Option<usize>) -> gpui::ScrollHandle {
+        let mut slot = self.list_scroll.borrow_mut();
+        if let Some((open, handle)) = slot.as_ref()
+            && open == id
+        {
+            return handle.clone();
+        }
+        let handle = gpui::ScrollHandle::new();
+        if let Some(index) = selected {
+            handle.scroll_to_item(index);
+        }
+        *slot = Some((id.clone(), handle.clone()));
+        handle
     }
 
     /// Close without a repaint (the caller is about to notify anyway).
@@ -1520,7 +1539,8 @@ fn menu_panel(
         .p(px(4.0))
         .gap(px(2.0))
         .max_h(px(340.0))
-        .overflow_y_scroll();
+        .overflow_y_scroll()
+        .track_scroll(&menus.list_scroll(id, selected));
     for (index, item) in items.into_iter().enumerate() {
         let on_select = Rc::clone(&on_select);
         let menus = menus.clone();

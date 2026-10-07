@@ -29,8 +29,8 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use gpui::{
-    AppContext, Application, Bounds, SharedString, WindowBackgroundAppearance, WindowBounds,
-    WindowKind, WindowOptions, point, px, size,
+    AppContext, Application, Bounds, WindowBackgroundAppearance, WindowBounds, WindowKind,
+    WindowOptions, point, px, size,
 };
 
 pub(crate) use root::PopupRoot;
@@ -112,18 +112,6 @@ pub(crate) fn host_rect(monitor: Monitor) -> win32::Rect {
     }
 }
 
-/// Resolve a font family once: Segoe UI Variable on Windows 11, Segoe UI on
-/// older systems that do not ship the variable font.
-fn pick_font_family(cx: &mut gpui::App) -> SharedString {
-    let names = cx.text_system().all_font_names();
-    for candidate in ["Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI"] {
-        if names.iter().any(|name| name == candidate) {
-            return SharedString::from(candidate);
-        }
-    }
-    SharedString::from("Segoe UI")
-}
-
 pub(crate) fn start(
     state: Arc<AppState>,
     commands: futures::channel::mpsc::UnboundedReceiver<PopupCommand>,
@@ -144,7 +132,7 @@ fn run(
         .with_assets(assets::PopupAssets)
         .run(move |cx| {
             crate::settings_window::init(cx);
-            let font_family = pick_font_family(cx);
+            let default_font = theme::default_font_family(cx);
             let settings_state = Arc::clone(&state);
             // The tray starts hidden. Do not allocate large swap-chain/MSAA
             // surfaces before the user has even opened the popup.
@@ -171,7 +159,7 @@ fn run(
                 tabbing_identifier: None,
             };
             let window = match cx.open_window(options, |window, cx| {
-                cx.new(|cx| PopupRoot::new(state, font_family, window, cx))
+                cx.new(|cx| PopupRoot::new(state, default_font, window, cx))
             }) {
                 Ok(window) => window,
                 Err(error) => {

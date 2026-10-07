@@ -82,7 +82,7 @@ impl Default for Theme {
     }
 }
 
-/// Font families resolved once per process from the installed fonts.
+/// Font families resolved once per window from the installed fonts.
 #[derive(Clone, Debug)]
 pub(crate) struct Fonts {
     pub(crate) text: SharedString,
@@ -110,15 +110,20 @@ impl Fonts {
                 .map_or_else(|| SharedString::from(fallback), |name| (*name).into())
         };
         Self {
-            text: pick(
-                &["Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI"],
-                "Segoe UI",
-            ),
+            text: crate::popup_window::ui::theme::default_font_family(cx),
             mono: pick(&["Cascadia Mono", "Consolas"], "Consolas"),
             icons: pick(
                 &["Segoe Fluent Icons", "Segoe MDL2 Assets"],
                 "Segoe MDL2 Assets",
             ),
+        }
+    }
+
+    /// Swaps the text family for the user's font; mono and icon fonts stay.
+    pub(crate) fn with_text(&self, custom: Option<&str>) -> Self {
+        Self {
+            text: crate::popup_window::ui::theme::ui_font_family(custom, &self.text),
+            ..self.clone()
         }
     }
 }

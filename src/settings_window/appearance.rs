@@ -1,7 +1,7 @@
-//! Appearance: theme, accent, icons, time format, popup material and motion.
+//! Appearance: theme, accent, font, icons, time format, popup material and motion.
 
 use gpui::{
-    AnyElement, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
+    AnyElement, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, div, prelude::FluentBuilder, px, relative,
 };
 
@@ -48,6 +48,7 @@ impl SettingsWindow {
             .map(|(value, label)| self.theme_card(k, value, label, value == theme, cx)),
         );
         let colors = self.accent_swatches(k, accent, cx);
+        let font = self.font_picker(k, cx);
         let look = kit::card_of(k, |k| {
             vec![
                 Row::new("appearance-theme", "Color theme")
@@ -57,6 +58,10 @@ impl SettingsWindow {
                 Row::new("appearance-accent", "Accent color")
                     .description(k, "Windows follows your system accent.")
                     .detail(div().pt(px(12.0)).child(colors).into_any_element())
+                    .render(k),
+                Row::new("appearance-font", "Font")
+                    .description(k, "Any font installed on this PC.")
+                    .trailing(font)
                     .render(k),
                 Row::new("appearance-icon-style", "Icons style")
                     .description(k, "Glyph style in the Settings sidebar.")
@@ -274,6 +279,46 @@ impl SettingsWindow {
                 .child(label),
         )
         .into_any_element()
+    }
+
+    /// Installed font families, led by the Windows default.
+    fn font_picker(&self, k: &Kit, cx: &mut Context<Self>) -> AnyElement {
+        let current = self.settings.font_family.clone();
+        let mut families = self.font_families.clone();
+        // A font removed since it was chosen stays visible as the selection.
+        if let Some(name) = &current
+            && !families.iter().any(|family| family.as_ref() == name)
+        {
+            families.push(name.clone().into());
+        }
+        let selected = match &current {
+            None => 0,
+            Some(name) => {
+                1 + families
+                    .iter()
+                    .position(|family| family.as_ref() == name)
+                    .unwrap_or_default()
+            }
+        };
+        let mut options = vec![SharedString::from("Windows default")];
+        options.extend(families.iter().cloned());
+        kit::dropdown(
+            k,
+            "appearance-font",
+            options,
+            Some(selected),
+            false,
+            200.0,
+            Self::h(cx, move |this, index: usize, _, cx| {
+                let next = index
+                    .checked_sub(1)
+                    .and_then(|index| families.get(index))
+                    .map(ToString::to_string);
+                if this.settings.font_family != next {
+                    this.edit(cx, move |settings| settings.font_family = next.clone());
+                }
+            }),
+        )
     }
 
     fn accent_swatches(

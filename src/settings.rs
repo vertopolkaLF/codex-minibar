@@ -1650,6 +1650,9 @@ pub struct Settings {
     pub onboarding_completed: bool,
     pub theme: AppTheme,
     pub accent_color: AccentColor,
+    /// Installed font family for every window. None follows the Windows UI
+    /// font (Segoe UI Variable, or Segoe UI on older systems).
+    pub font_family: Option<String>,
     /// App-level accessibility override. The Windows animation preference is
     /// still honored when this remains enabled.
     pub animations_enabled: bool,
@@ -1726,6 +1729,7 @@ impl Default for Settings {
             onboarding_completed: false,
             theme: AppTheme::Auto,
             accent_color: AccentColor::Windows,
+            font_family: None,
             animations_enabled: true,
             bottom_bar_size: BottomBarSize::default(),
             popup_corner_radius: PopupCornerRadius::default(),
