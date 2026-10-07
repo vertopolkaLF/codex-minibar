@@ -26,7 +26,7 @@ use crate::popup_window::ui::{
     assets,
     controls::{Segment, SegmentStyle, segmented_track},
     fx::{self, Fx},
-    theme::HslaExt,
+    theme::{HslaExt, rgb8},
 };
 
 pub(crate) type Handler<T> = Rc<dyn Fn(T, &mut Window, &mut App)>;
@@ -2628,4 +2628,268 @@ pub(crate) fn time_picker(
         deferred(anchored().snap_to_window_with_margin(px(8.0)).child(panel)).with_priority(2),
     ));
     wrapper.into_any_element()
+}
+
+/// Anchors `content` in a floating panel below `trigger` while the menu `id`
+/// is open, using the same chrome and entrance motion as the time picker.
+pub(crate) fn flyout(
+    k: &Kit,
+    id: SharedString,
+    trigger: AnyElement,
+    content: Option<AnyElement>,
+) -> AnyElement {
+    let wrapper = div().relative().flex_none().child(trigger);
+    let Some(content) = content.filter(|_| k.menus.is_open(&id)) else {
+        return wrapper.into_any_element();
+    };
+    let menus = k.menus.clone();
+    let panel = div()
+        .id(eid(format!("flyout-panel-{id}")))
+        .occlude()
+        .mt(px(4.0))
+        .p(px(12.0))
+        .rounded(px(10.0))
+        .bg(k.theme.popover)
+        .shadow(float_shadow(&k.theme, 8.0))
+        .on_mouse_down_out(move |_, window, _| menus.close(window))
+        .child(content);
+    let panel: AnyElement = if k.animate() {
+        panel
+            .with_animation(
+                eid(format!("flyout-anim-{id}")),
+                Animation::new(Duration::from_millis(167)).with_easing(fx::ease_out_cubic),
+                |el, delta| el.opacity(delta).mt(px(4.0 - (1.0 - delta) * 8.0)),
+            )
+            .into_any_element()
+    } else {
+        panel.into_any_element()
+    };
+    wrapper
+        .child(div().absolute().top_full().left_0().child(
+            deferred(anchored().snap_to_window_with_margin(px(8.0)).child(panel)).with_priority(2),
+        ))
+        .into_any_element()
+}
+
+// ---------------------------------------------------------------------------
+// Color picker surfaces
+// ---------------------------------------------------------------------------
+
+/// HSV (hue 0..360, saturation and value 0..1) to 8-bit RGB.
+pub(crate) fn hsv_to_rgb(hue: f32, sat: f32, val: f32) -> (u8, u8, u8) {
+    let h = hue.rem_euclid(360.0) / 60.0;
+    let c = val * sat;
+    let x = c * (1.0 - (h % 2.0 - 1.0).abs());
+    let (r, g, b) = match h as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = val - c;
+    let channel = |value: f32| ((value + m) * 255.0).round().clamp(0.0, 255.0) as u8;
+    (channel(r), channel(g), channel(b))
+}
+
+/// 8-bit RGB to HSV (hue 0..360, saturation and value 0..1).
+pub(crate) fn rgb_to_hsv((r, g, b): (u8, u8, u8)) -> [f32; 3] {
+    let (r, g, b) = (
+        f32::from(r) / 255.0,
+        f32::from(g) / 255.0,
+        f32::from(b) / 255.0,
+    );
+    let max = r.max(g).max(b);
+    let delta = max - r.min(g).min(b);
+    let hue = if delta <= f32::EPSILON {
+        0.0
+    } else if max == r {
+        60.0 * ((g - b) / delta).rem_euclid(6.0)
+    } else if max == g {
+        60.0 * ((b - r) / delta + 2.0)
+    } else {
+        60.0 * ((r - g) / delta + 4.0)
+    };
+    let sat = if max <= f32::EPSILON { 0.0 } else { delta / max };
+    [hue, sat, max]
+}
+
+/// A pointer surface reporting the pressed/dragged position as fractions of
+/// its width and height. `content` is painted underneath the pointer layer.
+fn drag_area(
+    k: &Kit,
+    id: SharedString,
+    width: f32,
+    height: f32,
+    content: Vec<AnyElement>,
+    on_change: Handler<(f32, f32)>,
+) -> AnyElement {
+    let bounds = Rc::new(Cell::new(None::<Bounds<Pixels>>));
+    let dragging = Rc::clone(&k.sliders);
+    let locate = |position: gpui::Point<Pixels>, bounds: Bounds<Pixels>| {
+        let fx = f32::from(position.x - bounds.left()) / f32::from(bounds.size.width).max(1.0);
+        let fy = f32::from(position.y - bounds.top()) / f32::from(bounds.size.height).max(1.0);
+        (fx.clamp(0.0, 1.0), fy.clamp(0.0, 1.0))
+    };
+    let track_bounds = Rc::clone(&bounds);
+    let paint_bounds = Rc::clone(&bounds);
+    let down_id = id.clone();
+    let down_dragging = Rc::clone(&dragging);
+    let down_change = Rc::clone(&on_change);
+    div()
+        .id(eid(format!("drag-area-{id}")))
+        .relative()
+        .w(px(width))
+        .h(px(height))
+        .flex_none()
+        .cursor_pointer()
+        .children(content)
+        .child(
+            canvas(
+                move |b, _, _| track_bounds.set(Some(b)),
+                move |_, _, window, _| {
+                    let Some(_) = paint_bounds.get() else {
+                        return;
+                    };
+                    let move_bounds = Rc::clone(&paint_bounds);
+                    let move_dragging = Rc::clone(&dragging);
+                    let move_change = Rc::clone(&on_change);
+                    let move_id = id.clone();
+                    window.on_mouse_event(move |event: &MouseMoveEvent, _, window, cx| {
+                        if move_dragging.borrow().as_ref() != Some(&move_id) {
+                            return;
+                        }
+                        if event.pressed_button != Some(MouseButton::Left) {
+                            *move_dragging.borrow_mut() = None;
+                            window.refresh();
+                            return;
+                        }
+                        if let Some(bounds) = move_bounds.get() {
+                            move_change(locate(event.position, bounds), window, cx);
+                        }
+                    });
+                    let up_dragging = Rc::clone(&dragging);
+                    window.on_mouse_event(move |_: &MouseUpEvent, _, window, _| {
+                        if up_dragging.borrow_mut().take().is_some() {
+                            window.refresh();
+                        }
+                    });
+                },
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full(),
+        )
+        .on_mouse_down(
+            MouseButton::Left,
+            move |event: &MouseDownEvent, window, cx| {
+                *down_dragging.borrow_mut() = Some(down_id.clone());
+                if let Some(bounds) = bounds.get() {
+                    down_change(locate(event.position, bounds), window, cx);
+                }
+                window.refresh();
+            },
+        )
+        .into_any_element()
+}
+
+fn picker_thumb(size: f32, fill: Hsla) -> gpui::Div {
+    div()
+        .absolute()
+        .size(px(size))
+        .rounded_full()
+        .border_2()
+        .border_color(gpui::white())
+        .bg(fill)
+        .shadow(vec![gpui::BoxShadow {
+            color: gpui::black().alpha(0.45),
+            offset: point(px(0.0), px(1.0)),
+            blur_radius: px(3.0),
+            spread_radius: px(0.0),
+        }])
+}
+
+/// Photoshop-style saturation (x) / brightness (y) square for `hue`.
+pub(crate) fn color_area(
+    k: &Kit,
+    id: impl Into<SharedString>,
+    size: (f32, f32),
+    hsv: [f32; 3],
+    on_change: Handler<(f32, f32)>,
+) -> AnyElement {
+    let [hue, sat, val] = hsv;
+    let hue_color = rgb8(hsv_to_rgb(hue, 1.0, 1.0));
+    let fill = rgb8(hsv_to_rgb(hue, sat, val));
+    let white = |alpha: f32| gpui::hsla(0.0, 0.0, 1.0, alpha);
+    let black = |alpha: f32| gpui::hsla(0.0, 0.0, 0.0, alpha);
+    let layers = vec![
+        div()
+            .absolute()
+            .size_full()
+            .rounded(px(6.0))
+            .overflow_hidden()
+            .bg(hue_color)
+            .child(div().absolute().size_full().bg(gpui::linear_gradient(
+                90.0,
+                gpui::linear_color_stop(white(1.0), 0.0),
+                gpui::linear_color_stop(white(0.0), 1.0),
+            )))
+            .child(div().absolute().size_full().bg(gpui::linear_gradient(
+                180.0,
+                gpui::linear_color_stop(black(0.0), 0.0),
+                gpui::linear_color_stop(black(1.0), 1.0),
+            )))
+            .into_any_element(),
+        picker_thumb(16.0, fill)
+            .left(relative(sat))
+            .top(relative(1.0 - val))
+            .ml(px(-8.0))
+            .mt(px(-8.0))
+            .into_any_element(),
+    ];
+    drag_area(k, id.into(), size.0, size.1, layers, on_change)
+}
+
+/// Rainbow hue strip; reports the hue in degrees.
+pub(crate) fn hue_strip(
+    k: &Kit,
+    id: impl Into<SharedString>,
+    width: f32,
+    hue: f32,
+    on_change: Handler<f32>,
+) -> AnyElement {
+    const HEIGHT: f32 = 16.0;
+    let stop = |degrees: f32| rgb8(hsv_to_rgb(degrees, 1.0, 1.0));
+    let mut strip = div()
+        .absolute()
+        .size_full()
+        .rounded_full()
+        .overflow_hidden()
+        .flex();
+    for index in 0..6 {
+        let from = index as f32 * 60.0;
+        strip = strip.child(div().flex_1().h_full().bg(gpui::linear_gradient(
+            90.0,
+            gpui::linear_color_stop(stop(from), 0.0),
+            gpui::linear_color_stop(stop(from + 60.0), 1.0),
+        )));
+    }
+    let layers = vec![
+        strip.into_any_element(),
+        picker_thumb(HEIGHT + 4.0, stop(hue))
+            .left(relative((hue / 360.0).clamp(0.0, 1.0)))
+            .top(px(-2.0))
+            .ml(px(-(HEIGHT + 4.0) / 2.0))
+            .into_any_element(),
+    ];
+    drag_area(
+        k,
+        id.into(),
+        width,
+        HEIGHT,
+        layers,
+        Rc::new(move |(x, _), window, cx| on_change(x * 360.0, window, cx)),
+    )
 }

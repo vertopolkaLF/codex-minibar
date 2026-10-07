@@ -58,6 +58,8 @@ pub enum AccentColor {
     Orange,
     Green,
     Teal,
+    /// User-picked color, packed as `0xRRGGBB`.
+    Custom(u32),
 }
 
 impl AccentColor {
@@ -71,7 +73,12 @@ impl AccentColor {
             Self::Orange => 5,
             Self::Green => 6,
             Self::Teal => 7,
+            Self::Custom(_) => 8,
         }
+    }
+
+    pub const fn custom(rgb: (u8, u8, u8)) -> Self {
+        Self::Custom(((rgb.0 as u32) << 16) | ((rgb.1 as u32) << 8) | rgb.2 as u32)
     }
 
     pub const fn from_index(index: i32) -> Self {
@@ -90,13 +97,18 @@ impl AccentColor {
     pub const fn rgb(self) -> Option<(u8, u8, u8)> {
         match self {
             Self::Windows => None,
-            Self::Blue => Some((0x00, 0x78, 0xD4)),
-            Self::Purple => Some((0x88, 0x17, 0x98)),
-            Self::Pink => Some((0xE3, 0x00, 0x8C)),
-            Self::Red => Some((0xD1, 0x34, 0x38)),
-            Self::Orange => Some((0xCA, 0x50, 0x10)),
-            Self::Green => Some((0x10, 0x7C, 0x10)),
-            Self::Teal => Some((0x00, 0x83, 0x8C)),
+            Self::Blue => Some((102, 184, 242)),
+            Self::Purple => Some((223, 102, 242)),
+            Self::Pink => Some((242, 102, 181)),
+            Self::Red => Some((242, 102, 116)),
+            Self::Orange => Some((242, 158, 102)),
+            Self::Green => Some((110, 204, 126)),
+            Self::Teal => Some((86, 192, 204)),
+            Self::Custom(packed) => Some((
+                (packed >> 16) as u8,
+                (packed >> 8) as u8,
+                packed as u8,
+            )),
         }
     }
 }

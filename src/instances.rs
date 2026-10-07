@@ -265,8 +265,8 @@ impl BadgeColor {
     pub const fn rgb(self) -> Option<(u8, u8, u8)> {
         match self {
             Self::Auto => None,
-            Self::Red => Some((0xE5, 0x48, 0x4D)),
-            Self::Orange => Some((0xF7, 0x6B, 0x15)),
+            Self::Red => Some((0xF0, 0x2D, 0x35)),
+            Self::Orange => Some((0xFB, 0x9A, 0x44)),
             Self::Yellow => Some((0xE2, 0xA3, 0x00)),
             Self::Green => Some((0x30, 0xA4, 0x6C)),
             Self::Teal => Some((0x12, 0xA5, 0x94)),

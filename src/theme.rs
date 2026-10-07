@@ -77,14 +77,17 @@ fn tone((r, g, b): (u8, u8, u8), amount: f64, lighter: bool) -> (u8, u8, u8) {
 }
 
 impl AccentRamp {
-    /// Windows-style ramp by mixing the accent toward white or black.
+    /// Ramp for an explicitly chosen color. The fill roles (`light2` in dark,
+    /// `dark1` in light) are the chosen color itself, so the swatch, preview
+    /// and every accent-filled control show exactly what was picked; the
+    /// other steps are mixed toward white or black.
     pub fn from_base(base: (u8, u8, u8)) -> Self {
         Self {
             base,
             light1: tone(base, 0.25, true),
-            light2: tone(base, 0.45, true),
+            light2: base,
             light3: tone(base, 0.70, true),
-            dark1: tone(base, 0.25, false),
+            dark1: base,
             dark2: tone(base, 0.45, false),
             dark3: tone(base, 0.70, false),
         }
