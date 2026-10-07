@@ -267,14 +267,14 @@ impl PopupCornerRadius {
 
 /// Material used by the popup's full-window background surface.
 ///
-/// Acrylic remains the default to preserve the existing popup appearance for
-/// upgraded installations; Mica is available for a less aggressively blurred
-/// desktop surface, and Solid drops the backdrop for an opaque theme base.
+/// Mica is the default, a less aggressively blurred desktop surface; Acrylic
+/// keeps the stronger blur (and upgraded installations keep their stored
+/// choice), and Solid drops the backdrop for an opaque theme base.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PopupBackgroundMaterial {
-    #[default]
     Acrylic,
+    #[default]
     Mica,
     Solid,
 }
@@ -1616,14 +1616,14 @@ pub struct NotificationSettings {
 impl Default for NotificationSettings {
     fn default() -> Self {
         Self {
-            activation_success: false,
-            activation_failure: false,
+            activation_success: true,
+            activation_failure: true,
             codex_unavailable: false,
             approaching_reset: false,
-            limits_changed: false,
-            low_usage_enabled: false,
+            limits_changed: true,
+            low_usage_enabled: true,
             low_usage_threshold_percent: 20,
-            weekly_low_usage_enabled: false,
+            weekly_low_usage_enabled: true,
             weekly_low_usage_threshold_percent: 20,
             update_available: true,
             forced_reset_feed_enabled: true,
@@ -1689,8 +1689,8 @@ pub struct Settings {
     #[serde(default = "default_show_usage_values")]
     pub show_usage_values: bool,
     pub show_usage_pace: bool,
-    /// Uses the compact full-card progress layout for popup quota cards.
-    /// False preserves the standard header, bar, and footer layout.
+    /// Uses the compact full-card progress layout for popup quota cards (the
+    /// default). False selects the legacy header, bar, and footer layout.
     pub compact_usage_cards: bool,
     /// Per-card visibility for popup Home and provider tabs.
     pub popup_visibility: PopupVisibility,
@@ -1745,7 +1745,7 @@ impl Default for Settings {
             show_used_percentage: false,
             show_usage_values: true,
             show_usage_pace: true,
-            compact_usage_cards: false,
+            compact_usage_cards: true,
             popup_visibility: PopupVisibility::build_defaults(),
             show_total_spend_on_all_tab: true,
             total_spend_presentation: TotalSpendPresentation::default(),
@@ -3275,7 +3275,7 @@ mod tests {
         assert_eq!(value.popup_corner_radius, PopupCornerRadius::Small);
         assert_eq!(
             value.popup_background_material,
-            PopupBackgroundMaterial::Acrylic
+            PopupBackgroundMaterial::Mica
         );
         assert_eq!(value.time_format, TimeFormat::from_windows());
         assert!(value.use_colored_provider_icons);
@@ -3300,7 +3300,7 @@ mod tests {
         assert!(value.start_at_login);
         assert!(!value.show_used_percentage);
         assert!(value.show_usage_pace);
-        assert!(!value.compact_usage_cards);
+        assert!(value.compact_usage_cards);
         assert!(
             value
                 .popup_visibility
@@ -3340,14 +3340,14 @@ mod tests {
             value.reset_announcement_refresh_interval,
             ResetAnnouncementRefreshInterval::Hour1
         );
-        assert!(!value.notifications.activation_success);
-        assert!(!value.notifications.activation_failure);
+        assert!(value.notifications.activation_success);
+        assert!(value.notifications.activation_failure);
         assert!(!value.notifications.codex_unavailable);
         assert!(!value.notifications.approaching_reset);
-        assert!(!value.notifications.limits_changed);
-        assert!(!value.notifications.low_usage_enabled);
+        assert!(value.notifications.limits_changed);
+        assert!(value.notifications.low_usage_enabled);
         assert_eq!(value.notifications.low_usage_threshold_percent, 20);
-        assert!(!value.notifications.weekly_low_usage_enabled);
+        assert!(value.notifications.weekly_low_usage_enabled);
         assert_eq!(value.notifications.weekly_low_usage_threshold_percent, 20);
         assert!(value.notifications.update_available);
         assert!(value.notifications.forced_reset_feed_enabled);
@@ -3630,7 +3630,7 @@ show_usage_stats = false
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.toml");
         let expected = Settings {
-            compact_usage_cards: true,
+            compact_usage_cards: false,
             ..Default::default()
         };
         expected.save(&path).unwrap();
@@ -3698,7 +3698,7 @@ tray_widgets = []
         );
         assert!(migrated.start_at_login);
         assert!(migrated.show_usage_pace);
-        assert!(!migrated.compact_usage_cards);
+        assert!(migrated.compact_usage_cards);
         assert!(
             migrated
                 .popup_visibility

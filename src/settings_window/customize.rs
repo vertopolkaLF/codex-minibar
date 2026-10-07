@@ -122,13 +122,11 @@ impl SettingsWindow {
                     self,
                     k,
                     cx,
-                    "customize-compact-cards",
-                    "Use compact usage cards",
-                    Some(
-                        "Use the alternative full-card progress layout while keeping the standard element positions.",
-                    ),
-                    |s| s.compact_usage_cards,
-                    |s, v| s.compact_usage_cards = v,
+                    "customize-legacy-cards",
+                    "Use legacy usage cards",
+                    Some("Show the older layout with a header, a thin bar and a footer."),
+                    |s| !s.compact_usage_cards,
+                    |s, v| s.compact_usage_cards = !v,
                 ),
                 bool_row(
                     self,

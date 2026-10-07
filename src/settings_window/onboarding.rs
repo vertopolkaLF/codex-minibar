@@ -1,4 +1,5 @@
-//! First-launch flow: choose providers, then a few general settings.
+//! First-launch flow: choose providers, a few general settings, then
+//! notifications.
 //! Choices stay local until Done, so a dismissed window never
 //! half-configures provider workers.
 
@@ -111,6 +112,17 @@ enum Step {
     #[default]
     Providers,
     General,
+    Notifications,
+}
+
+impl Step {
+    const fn index(self) -> usize {
+        match self {
+            Self::Providers => 0,
+            Self::General => 1,
+            Self::Notifications => 2,
+        }
+    }
 }
 
 pub(crate) struct OnboardingWindow {
@@ -201,7 +213,12 @@ impl OnboardingWindow {
 
     fn providers_step(&mut self, k: &mut Kit, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut rows = Vec::new();
-        for (index, driver) in ProviderKind::ALL.into_iter().enumerate() {
+        // Detected providers first; detection is fixed when the window opens,
+        // so the order never shifts while the user toggles.
+        let mut order: Vec<(usize, ProviderKind)> =
+            ProviderKind::ALL.into_iter().enumerate().collect();
+        order.sort_by_key(|(index, _)| !self.detected[*index]);
+        for (index, driver) in order {
             let theme = &k.theme;
             let on = self.enabled[index];
             let mark = div()
@@ -362,12 +379,102 @@ impl OnboardingWindow {
         ]
     }
 
+    fn notifications_step(&mut self, k: &mut Kit, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let n = &self.settings.notifications;
+        let activity = kit::card_of(k, |k| {
+            vec![
+                kit::toggle_row(
+                    k,
+                    "onboarding-notif-activation-success",
+                    "Successful activations",
+                    None,
+                    n.activation_success,
+                    Self::h(cx, |this, value: bool, _, cx| {
+                        this.settings.notifications.activation_success = value;
+                        cx.notify();
+                    }),
+                ),
+                kit::toggle_row(
+                    k,
+                    "onboarding-notif-activation-failure",
+                    "Failed activations",
+                    None,
+                    n.activation_failure,
+                    Self::h(cx, |this, value: bool, _, cx| {
+                        this.settings.notifications.activation_failure = value;
+                        cx.notify();
+                    }),
+                ),
+                kit::toggle_row(
+                    k,
+                    "onboarding-notif-limits-reset",
+                    "When limits reset",
+                    None,
+                    n.limits_changed,
+                    Self::h(cx, |this, value: bool, _, cx| {
+                        this.settings.notifications.limits_changed = value;
+                        cx.notify();
+                    }),
+                ),
+            ]
+        });
+        let low = kit::card_of(k, |k| {
+            vec![
+                kit::toggle_row(
+                    k,
+                    "onboarding-notif-low-usage",
+                    format!(
+                        "When 5-hour remaining hits {}%",
+                        n.low_usage_threshold_percent
+                    ),
+                    None,
+                    n.low_usage_enabled,
+                    Self::h(cx, |this, value: bool, _, cx| {
+                        this.settings.notifications.low_usage_enabled = value;
+                        cx.notify();
+                    }),
+                ),
+                kit::toggle_row(
+                    k,
+                    "onboarding-notif-weekly-low-usage",
+                    format!(
+                        "When weekly remaining hits {}%",
+                        n.weekly_low_usage_threshold_percent
+                    ),
+                    None,
+                    n.weekly_low_usage_enabled,
+                    Self::h(cx, |this, value: bool, _, cx| {
+                        this.settings.notifications.weekly_low_usage_enabled = value;
+                        cx.notify();
+                    }),
+                ),
+            ]
+        });
+        let updates = kit::card_of(k, |k| {
+            vec![kit::toggle_row(
+                k,
+                "onboarding-notif-update",
+                "When a new version is found",
+                None,
+                n.update_available,
+                Self::h(cx, |this, value: bool, _, cx| {
+                    this.settings.notifications.update_available = value;
+                    cx.notify();
+                }),
+            )]
+        });
+        vec![
+            kit::section_heading(k, "Activity"),
+            activity,
+            kit::section_heading(k, "Low usage"),
+            low,
+            kit::section_heading(k, "Updates"),
+            updates,
+        ]
+    }
+
     fn step_dots(&self, k: &mut Kit) -> AnyElement {
-        let index = if self.step == Step::Providers {
-            0.0
-        } else {
-            1.0
-        };
+        let index = self.step.index() as f32;
         let t = k.fx.value(fx::key("onboarding-step"), index, fx::NORMAL);
         let theme = &k.theme;
         let dot = |active: f32| {
@@ -383,8 +490,7 @@ impl OnboardingWindow {
         div()
             .flex()
             .gap(px(6.0))
-            .child(dot(1.0 - t))
-            .child(dot(t))
+            .children((0..3).map(|i| dot((1.0 - (t - i as f32).abs()).max(0.0))))
             .into_any_element()
     }
 }
@@ -414,6 +520,11 @@ impl Render for OnboardingWindow {
                 "You can change these later in Settings.",
                 self.general_step(&mut k, cx),
             ),
+            Step::Notifications => (
+                "Notifications",
+                "Turn off anything you don't want to hear about. You can change these later in Settings.",
+                self.notifications_step(&mut k, cx),
+            ),
         };
         let theme = k.theme.clone();
         let body = div()
@@ -433,9 +544,12 @@ impl Render for OnboardingWindow {
         let dots = self.step_dots(&mut k);
         let back: AnyElement = match self.step {
             Step::Providers => div().into_any_element(),
-            Step::General => Button::new("onboarding-back", "Back")
+            Step::General | Step::Notifications => Button::new("onboarding-back", "Back")
                 .on_click(Self::h(cx, |this, (), _, cx| {
-                    this.step = Step::Providers;
+                    this.step = match this.step {
+                        Step::Notifications => Step::General,
+                        _ => Step::Providers,
+                    };
                     cx.notify();
                 }))
                 .render(&k),
@@ -447,7 +561,13 @@ impl Render for OnboardingWindow {
                     this.step = Step::General;
                     cx.notify();
                 })),
-            Step::General => Button::new("onboarding-done", "Done")
+            Step::General => Button::new("onboarding-next", "Continue")
+                .accent()
+                .on_click(Self::h(cx, |this, (), _, cx| {
+                    this.step = Step::Notifications;
+                    cx.notify();
+                })),
+            Step::Notifications => Button::new("onboarding-done", "Done")
                 .accent()
                 .on_click(Self::h(cx, |this, (), window, _| this.finish(window))),
         }
