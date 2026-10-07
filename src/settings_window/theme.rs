@@ -1,8 +1,7 @@
 //! Fluent color tokens for the GPUI Settings and onboarding windows.
 //!
-//! Values follow the Windows 11 theme dictionaries (Mica base, layer, card,
-//! control and text fills) so the window sits naturally next to the system
-//! Settings app. Everything resolves from the live theme and accent on every
+//! The layering follows Windows 11 (base, content plane, cards, controls) but
+//! surfaces are separated by fill alone: strokes are reserved for dividers. Everything resolves from the live theme and accent on every
 //! frame; nothing is cached across appearance changes.
 
 use gpui::{Hsla, SharedString, WindowAppearance};
@@ -26,20 +25,22 @@ pub(crate) struct Theme {
     pub(crate) icon_font: SharedString,
     pub(crate) window_bg: Hsla,
     pub(crate) layer: Hsla,
-    pub(crate) layer_stroke: Hsla,
     pub(crate) card: Hsla,
     pub(crate) card_hover: Hsla,
-    pub(crate) card_stroke: Hsla,
     pub(crate) control: Hsla,
     pub(crate) control_hover: Hsla,
     pub(crate) control_pressed: Hsla,
-    pub(crate) control_stroke: Hsla,
     pub(crate) control_strong: Hsla,
     pub(crate) control_disabled: Hsla,
+    /// Unfilled track of toggles and checkboxes.
+    pub(crate) control_track: Hsla,
+    /// Opaque raised fill for slider thumbs; brighter than any card.
+    pub(crate) control_solid: Hsla,
     pub(crate) input_bg: Hsla,
     pub(crate) input_focus_bg: Hsla,
     pub(crate) subtle_hover: Hsla,
     pub(crate) subtle_pressed: Hsla,
+    pub(crate) nav_selected: Hsla,
     pub(crate) text: Hsla,
     pub(crate) text_secondary: Hsla,
     pub(crate) text_tertiary: Hsla,
@@ -52,7 +53,6 @@ pub(crate) struct Theme {
     pub(crate) accent_soft: Hsla,
     pub(crate) divider: Hsla,
     pub(crate) popover: Hsla,
-    pub(crate) popover_stroke: Hsla,
     pub(crate) scrim: Hsla,
     pub(crate) success: Hsla,
     pub(crate) success_bg: Hsla,
@@ -61,6 +61,8 @@ pub(crate) struct Theme {
     pub(crate) critical_bg: Hsla,
     pub(crate) selection: Hsla,
     pub(crate) shadow: Hsla,
+    /// Soft lift under cards; transparent where fills already separate.
+    pub(crate) card_shadow: Hsla,
 }
 
 impl Default for Theme {
@@ -136,9 +138,9 @@ impl Theme {
     pub(crate) fn new(dark: bool, accent: crate::theme::AccentRamp, fonts: Fonts) -> Self {
         let accent_fill = rgb8(accent.fill(dark));
         let window_bg = if dark {
-            rgb8((0x20, 0x20, 0x20))
+            rgb8((0x19, 0x19, 0x1B))
         } else {
-            rgb8((0xF3, 0xF3, 0xF3))
+            rgb8((0xEC, 0xEC, 0xEF))
         };
         Self {
             dark,
@@ -146,64 +148,51 @@ impl Theme {
             mono_font: fonts.mono,
             icon_font: fonts.icons,
             window_bg,
+            // The content plane: one step up from the window, no stroke.
             layer: if dark {
-                rgba8(0x3A, 0x3A, 0x3A, 0x4C)
-            } else {
-                rgba8(255, 255, 255, 0x80)
-            },
-            layer_stroke: ink(dark, if dark { 0x10 } else { 0x0C }),
-            card: if dark {
-                rgba8(255, 255, 255, 0x0D)
-            } else {
-                rgba8(255, 255, 255, 0xB3)
-            },
-            card_hover: if dark {
-                rgba8(255, 255, 255, 0x15)
-            } else {
-                rgba8(0xF6, 0xF6, 0xF6, 0xD0)
-            },
-            card_stroke: if dark {
-                rgba8(0, 0, 0, 0x30)
-            } else {
-                rgba8(0, 0, 0, 0x0F)
-            },
-            control: if dark {
-                rgba8(255, 255, 255, 0x0F)
-            } else {
-                rgba8(255, 255, 255, 0xB3)
-            },
-            control_hover: if dark {
-                rgba8(255, 255, 255, 0x15)
-            } else {
-                rgba8(0xF9, 0xF9, 0xF9, 0x80)
-            },
-            control_pressed: if dark {
                 rgba8(255, 255, 255, 0x08)
             } else {
-                rgba8(0xF9, 0xF9, 0xF9, 0x4D)
+                rgba8(255, 255, 255, 0x8C)
             },
-            control_stroke: ink(dark, if dark { 0x14 } else { 0x16 }),
-            control_strong: ink(dark, if dark { 0x8B } else { 0x72 }),
-            control_disabled: ink(dark, if dark { 0x28 } else { 0x37 }),
-            input_bg: if dark {
+            card: if dark {
                 rgba8(255, 255, 255, 0x0B)
             } else {
-                rgba8(255, 255, 255, 0xB3)
+                rgba8(255, 255, 255, 0xFF)
             },
-            input_focus_bg: if dark {
-                rgb8((0x1E, 0x1E, 0x1E))
+            card_hover: if dark {
+                rgba8(255, 255, 255, 0x12)
+            } else {
+                rgba8(0xF7, 0xF7, 0xF9, 0xFF)
+            },
+            // Controls are filled, never outlined: a tint that reads on both
+            // the plane and a card.
+            control: ink(dark, if dark { 0x12 } else { 0x0A }),
+            control_hover: ink(dark, if dark { 0x1A } else { 0x10 }),
+            control_pressed: ink(dark, if dark { 0x0C } else { 0x07 }),
+            control_strong: ink(dark, if dark { 0x8B } else { 0x72 }),
+            control_disabled: ink(dark, if dark { 0x20 } else { 0x18 }),
+            control_track: rgba8(0, 0, 0, if dark { 0x73 } else { 0x1F }),
+            control_solid: if dark {
+                rgb8((0x4A, 0x4A, 0x4E))
             } else {
                 rgb8((0xFF, 0xFF, 0xFF))
             },
-            subtle_hover: ink(dark, if dark { 0x0F } else { 0x09 }),
-            subtle_pressed: ink(dark, if dark { 0x0A } else { 0x06 }),
+            input_bg: ink(dark, if dark { 0x0E } else { 0x08 }),
+            input_focus_bg: if dark {
+                rgba8(0, 0, 0, 0x40)
+            } else {
+                rgba8(0, 0, 0, 0x04)
+            },
+            subtle_hover: ink(dark, if dark { 0x0E } else { 0x08 }),
+            subtle_pressed: ink(dark, if dark { 0x09 } else { 0x05 }),
+            nav_selected: ink(dark, if dark { 0x13 } else { 0x0B }),
             text: if dark {
-                rgba8(255, 255, 255, 0xFF)
+                rgba8(255, 255, 255, 0xF2)
             } else {
                 rgba8(0, 0, 0, 0xE4)
             },
-            text_secondary: ink(dark, if dark { 0xC5 } else { 0x9E }),
-            text_tertiary: ink(dark, if dark { 0x87 } else { 0x72 }),
+            text_secondary: ink(dark, if dark { 0xB0 } else { 0x99 }),
+            text_tertiary: ink(dark, if dark { 0x80 } else { 0x70 }),
             text_disabled: ink(dark, if dark { 0x5D } else { 0x5C }),
             on_accent: if dark {
                 rgba8(0, 0, 0, 0xFF)
@@ -215,16 +204,11 @@ impl Theme {
             accent_pressed: accent_fill.alpha(0.8),
             accent_text: rgb8(accent.text(dark)),
             accent_soft: accent_fill.alpha(if dark { 0.16 } else { 0.12 }),
-            divider: ink(dark, if dark { 0x15 } else { 0x0F }),
+            divider: ink(dark, if dark { 0x10 } else { 0x0D }),
             popover: if dark {
-                rgb8((0x2C, 0x2C, 0x2C))
+                rgb8((0x2A, 0x2A, 0x2D))
             } else {
-                rgb8((0xF9, 0xF9, 0xF9))
-            },
-            popover_stroke: if dark {
-                rgba8(0, 0, 0, 0x5C)
-            } else {
-                rgba8(0, 0, 0, 0x17)
+                rgb8((0xFC, 0xFC, 0xFD))
             },
             scrim: rgba8(0, 0, 0, if dark { 0x80 } else { 0x4D }),
             success: if dark {
@@ -253,8 +237,22 @@ impl Theme {
                 rgb8((0xFD, 0xE7, 0xE9))
             },
             selection: accent_fill.alpha(0.4),
-            shadow: rgba8(0, 0, 0, if dark { 0x66 } else { 0x26 }),
+            shadow: rgba8(0, 0, 0, if dark { 0x73 } else { 0x29 }),
+            card_shadow: rgba8(0, 0, 0, if dark { 0x00 } else { 0x0A }),
         }
+    }
+
+    /// Let a Mica backdrop show through: the window base becomes transparent
+    /// and the content plane takes the Windows 11 layer fill, which is
+    /// tuned to sit on Mica.
+    pub(crate) fn with_mica(mut self) -> Self {
+        self.window_bg = gpui::transparent_black();
+        self.layer = if self.dark {
+            rgba8(0x3A, 0x3A, 0x3A, 0x4C)
+        } else {
+            rgba8(255, 255, 255, 0x80)
+        };
+        self
     }
 
     /// Brand tint of a provider mark on this theme's surfaces.

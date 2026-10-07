@@ -23,7 +23,7 @@ pub(crate) mod theme;
 mod tooltip;
 mod usage;
 #[cfg(windows)]
-mod win32;
+pub(crate) mod win32;
 
 use std::sync::Arc;
 

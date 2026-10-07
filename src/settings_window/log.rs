@@ -76,8 +76,6 @@ impl SettingsWindow {
             .w_full()
             .overflow_y_scroll()
             .rounded(px(kit::CARD_RADIUS))
-            .border_1()
-            .border_color(theme.card_stroke)
             .bg(theme.card)
             .p(px(14.0))
             .font_family(theme.mono_font.clone())

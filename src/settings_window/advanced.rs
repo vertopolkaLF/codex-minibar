@@ -30,7 +30,7 @@ impl SettingsWindow {
                 action_row(
                     k,
                     "advanced-export",
-                    "export-fill",
+                    "upload-simple-fill",
                     "Export settings",
                     "Save every setting to a .toml file. Saved keys stay in Windows user storage.",
                     Button::new("advanced-export", "Export")
@@ -39,7 +39,7 @@ impl SettingsWindow {
                 action_row(
                     k,
                     "advanced-import",
-                    "upload-simple-fill",
+                    "download-simple-fill",
                     "Import settings",
                     "Replace the current settings with a previously exported file.",
                     Button::new("advanced-import", "Import")

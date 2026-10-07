@@ -55,9 +55,15 @@ pub(crate) struct SettingsWindow {
     pub(super) settings: Settings,
     pub(super) kit: Kit,
     fonts: Fonts,
+    backdrop: super::backdrop::Backdrop,
     focus: FocusHandle,
     // Navigation.
     pub(super) mode: NavMode,
+    /// Direction of the pending sidebar swap (+1 into Providers, -1 back);
+    /// consumed by the next navigation.
+    pending_slide: Option<f32>,
+    /// Direction the current page slid in from; 0 for in-place switches.
+    nav_slide: f32,
     pub(super) root_tab: Tab,
     pub(super) return_tab: Tab,
     pub(super) page: Page,
@@ -84,7 +90,7 @@ pub(crate) struct SettingsWindow {
     pub(super) log: SharedString,
     pub(super) streamdeck_phase: crate::streamdeck::InstallPhase,
     pub(super) troubleshoot: Option<crate::troubleshoot::ToolPickerState>,
-    pub(super) tray_editing: Option<(String, usize)>,
+    pub(super) tray_dialog: Option<super::tray::TrayDialog>,
     pub(super) removed_widget: Option<(usize, TrayWidget)>,
     pub(super) confirm_reset: bool,
     pub(super) tray_previews: super::tray::PreviewCache,
@@ -148,12 +154,15 @@ impl SettingsWindow {
         });
         Self {
             update_phase: state.updates.snapshot(),
+            backdrop: super::backdrop::Backdrop::install(window),
             state,
             settings,
             kit: Kit::default(),
             fonts,
             focus,
             mode: NavMode::Root,
+            pending_slide: None,
+            nav_slide: 0.0,
             root_tab: Tab::General,
             return_tab: Tab::General,
             page,
@@ -175,7 +184,7 @@ impl SettingsWindow {
             log: SharedString::default(),
             streamdeck_phase: crate::streamdeck::InstallPhase::Idle,
             troubleshoot: None,
-            tray_editing: None,
+            tray_dialog: None,
             removed_widget: None,
             confirm_reset: false,
             tray_previews: Default::default(),
@@ -368,6 +377,7 @@ impl SettingsWindow {
             return;
         }
         self.page = page;
+        self.nav_slide = self.pending_slide.take().unwrap_or(0.0);
         self.scroll = ScrollHandle::new();
         self.kit.menus.close_silently();
         cx.notify();
@@ -380,7 +390,7 @@ impl SettingsWindow {
             } else {
                 self.root_tab
             };
-            self.mode = NavMode::Providers;
+            self.set_mode(NavMode::Providers);
             let first = first_provider_page(&self.settings.instances);
             self.navigate(first, cx);
             return;
@@ -393,14 +403,26 @@ impl SettingsWindow {
         if let Some(dialog) = self.provider_dialog.take() {
             dialog.login_control().cancel();
         }
-        self.mode = NavMode::Root;
+        self.set_mode(NavMode::Root);
         self.root_tab = self.return_tab;
         self.navigate(Page::Root(self.return_tab), cx);
     }
 
     pub(super) fn select_provider(&mut self, provider: ProviderId, cx: &mut Context<Self>) {
-        self.mode = NavMode::Providers;
+        self.set_mode(NavMode::Providers);
         self.navigate(Page::Provider(provider), cx);
+    }
+
+    /// Switch the sidebar between the root list and the Providers pane; the
+    /// next navigation slides both panes in from the side being entered.
+    fn set_mode(&mut self, mode: NavMode) {
+        if self.mode != mode {
+            self.mode = mode;
+            self.pending_slide = Some(match mode {
+                NavMode::Providers => 1.0,
+                NavMode::Root => -1.0,
+            });
+        }
     }
 
     // ----- provider detection --------------------------------------------------
@@ -499,8 +521,8 @@ impl SettingsWindow {
             self.dismiss_provider_dialog(cx);
         } else if self.troubleshoot.is_some() {
             self.troubleshoot = None;
-        } else if self.tray_editing.is_some() {
-            self.tray_editing = None;
+        } else if self.tray_dialog.is_some() {
+            self.tray_dialog = None;
         } else if self.confirm_reset {
             self.confirm_reset = false;
         } else if self.mode == NavMode::Providers {
@@ -516,37 +538,7 @@ impl SettingsWindow {
 
     fn titlebar(&self, k: &Kit, window: &Window) -> AnyElement {
         let theme = &k.theme;
-        let caption =
-            |id: &'static str, glyph: &'static str, area: WindowControlArea, close: bool| {
-                let hover = if close {
-                    crate::popup_window::ui::theme::rgb8((0xC4, 0x2B, 0x1C))
-                } else {
-                    theme.subtle_hover
-                };
-                div()
-                    .id(id)
-                    .w(px(46.0))
-                    .h_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(10.0))
-                    .font_family(theme.icon_font.clone())
-                    .text_color(theme.text)
-                    .window_control_area(area)
-                    // Occlude the drag area beneath so the button, not the
-                    // caption, wins the non-client hit test.
-                    .occlude()
-                    .hover(move |style| {
-                        let style = style.bg(hover);
-                        if close {
-                            style.text_color(gpui::white())
-                        } else {
-                            style
-                        }
-                    })
-                    .child(glyph)
-            };
+        let caption = |id, glyph, area, close| kit::caption_button(k, id, glyph, area, close);
         let maximize_glyph = if window.is_maximized() {
             "\u{E923}"
         } else {
@@ -607,17 +599,21 @@ impl SettingsWindow {
     ) -> gpui::Stateful<gpui::Div> {
         let theme = &k.theme;
         let hover = theme.subtle_hover;
-        div()
-            .id(eid(id))
+        let selected_bg = theme.nav_selected;
+        let key = kit::hover_key(&id);
+        let (rest, target) = if selected {
+            (selected_bg, selected_bg)
+        } else {
+            (gpui::transparent_black(), hover)
+        };
+        kit::hover_bg(k, div().id(eid(id)), key, rest, target)
             .flex()
             .items_center()
             .gap(px(12.0))
             .h(px(NAV_ITEM_HEIGHT))
             .px(px(14.0))
-            .rounded(px(5.0))
+            .rounded(px(kit::CONTROL_RADIUS))
             .cursor_pointer()
-            .when(selected, |el| el.bg(hover))
-            .hover(move |style| style.bg(hover))
             .on_click(move |_, window, cx| on_click((), window, cx))
             .child(div().when(dimmed, |el| el.opacity(0.55)).child(leading))
             .child(
@@ -715,8 +711,6 @@ impl SettingsWindow {
             .gap(px(10.0))
             .p(px(14.0))
             .rounded(px(kit::CARD_RADIUS))
-            .border_1()
-            .border_color(theme.card_stroke)
             .bg(theme.accent_soft)
             .child(
                 div()
@@ -791,6 +785,7 @@ impl SettingsWindow {
             .pb(px(8.0))
             .child(
                 Button::icon_only("providers-back", "caret-left")
+                    .ghost()
                     .tooltip("Back")
                     .disabled(!back_enabled)
                     .on_click(back)
@@ -844,34 +839,37 @@ impl SettingsWindow {
             |id: &'static str, glyph: &'static str, label: &'static str, url: &'static str| {
                 let hover = theme.subtle_hover;
                 let pressed = theme.subtle_pressed;
-                div()
-                    .id(id)
-                    .flex()
-                    .items_center()
-                    .gap(px(10.0))
-                    .h(px(32.0))
-                    .px(px(8.0))
-                    .rounded(px(5.0))
-                    .cursor_pointer()
-                    .hover(move |style| style.bg(hover))
-                    .active(move |style| style.bg(pressed))
-                    .on_click(move |_, _, _| open_url(url))
-                    .child(kit::icon(glyph, 16.0, theme.accent_text))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(kit::text(label, 13.0, theme.text)),
-                    )
-                    .child(kit::icon("arrow-square-out", 12.0, theme.text_tertiary))
+                kit::hover_bg(
+                    k,
+                    div().id(id),
+                    kit::hover_key(id),
+                    gpui::transparent_black(),
+                    hover,
+                )
+                .flex()
+                .items_center()
+                .gap(px(10.0))
+                .h(px(32.0))
+                .px(px(8.0))
+                .rounded(px(kit::CONTROL_RADIUS))
+                .cursor_pointer()
+                .active(move |style| style.bg(pressed))
+                .on_click(move |_, _, _| open_url(url))
+                .child(kit::icon(glyph, 16.0, theme.accent_text))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(kit::text(label, 13.0, theme.text)),
+                )
+                .child(kit::icon("arrow-square-out", 12.0, theme.text_tertiary))
             };
         div()
             .flex()
             .flex_col()
             .rounded(px(kit::CARD_RADIUS))
-            .border_1()
-            .border_color(theme.card_stroke)
             .bg(theme.card)
+            .shadow(kit::card_shadow(theme))
             .child(
                 div()
                     .flex()
@@ -1039,31 +1037,34 @@ impl SettingsWindow {
             theme.glyph()
         };
         let badge = shows_badge(instance, instances).then(|| instance.badge());
-        let tile = div()
-            .id(eid(format!("nav-provider-{}", instance.id)))
-            .relative()
-            .flex()
-            .items_center()
-            .justify_center()
-            .size(px(40.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(if is_selected {
-                theme.accent
-            } else {
-                gpui::transparent_black()
-            })
-            .cursor_pointer()
-            .when(is_selected, |el| el.bg(theme.accent_soft))
-            .when(!is_selected, |el| el.hover(move |style| style.bg(hover)))
-            .on_click(cx.listener(move |this, _, _, cx| this.select_provider(provider, cx)))
-            .child(kit::provider_mark(
-                k,
-                crate::provider_registry::icon(instance.driver),
-                18.0,
-                color,
-                badge.as_ref(),
-            ));
+        let tile_id = format!("nav-provider-{}", instance.id);
+        let (rest, target) = if is_selected {
+            (theme.accent_soft, theme.accent_soft)
+        } else {
+            (gpui::transparent_black(), hover)
+        };
+        let tile = kit::hover_bg(
+            k,
+            div().id(eid(tile_id.clone())),
+            kit::hover_key(&tile_id),
+            rest,
+            target,
+        )
+        .relative()
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(px(40.0))
+        .rounded(px(8.0))
+        .cursor_pointer()
+        .on_click(cx.listener(move |this, _, _, cx| this.select_provider(provider, cx)))
+        .child(kit::provider_mark(
+            k,
+            crate::provider_registry::icon(instance.driver),
+            18.0,
+            color,
+            badge.as_ref(),
+        ));
         let tile = kit::with_tooltip(k, tile, instance.display_name());
         let dragged = DraggedProvider {
             id: instance.id.clone(),
@@ -1155,7 +1156,13 @@ impl SettingsWindow {
             .w_full()
             .max_w(px(CONTENT_MAX_WIDTH))
             .children(rows);
-        let body = kit::appear(k, format!("{page_key}-appear"), body.into_any_element());
+        let body = kit::slide_in(
+            k,
+            format!("{page_key}-appear"),
+            body.into_any_element(),
+            self.nav_slide,
+            false,
+        );
         let scroller = div()
             .id(eid(format!("{page_key}-scroll")))
             .size_full()
@@ -1165,9 +1172,9 @@ impl SettingsWindow {
                 div()
                     .flex()
                     .justify_center()
-                    .px(px(36.0))
-                    .pt(px(28.0))
-                    .pb(px(40.0))
+                    .px(px(40.0))
+                    .pt(px(32.0))
+                    .pb(px(48.0))
                     .child(body),
             );
         let notice = self.notice.as_ref().map(|(message, generation)| {
@@ -1186,10 +1193,7 @@ impl SettingsWindow {
             .flex_1()
             .min_w_0()
             .h_full()
-            .rounded_tl(px(10.0))
-            .border_t_1()
-            .border_l_1()
-            .border_color(k.theme.layer_stroke)
+            .rounded_tl(px(12.0))
             .bg(k.theme.layer)
             .overflow_hidden()
             .child(scroller)
@@ -1211,12 +1215,16 @@ impl SettingsWindow {
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut k = std::mem::take(&mut self.kit);
-        let theme = Theme::resolve(
+        let mut theme = Theme::resolve(
             self.settings.theme,
             self.settings.accent_color,
             window.appearance(),
             self.fonts.clone(),
         );
+        if self.backdrop.mica() {
+            theme = theme.with_mica();
+        }
+        self.backdrop.sync(theme.dark, window.appearance());
         k.begin_frame(theme);
         self.refresh_detection(cx);
         // A deleted instance must not stay selected.
@@ -1232,7 +1240,16 @@ impl Render for SettingsWindow {
             NavMode::Root => self.root_sidebar(&mut k, cx),
             NavMode::Providers => self.providers_sidebar(&mut k, cx),
         };
-        let sidebar = kit::appear_fill(&k, format!("sidebar-{sidebar_mode:?}"), sidebar);
+        let sidebar = kit::slide_in(
+            &k,
+            format!("sidebar-{sidebar_mode:?}"),
+            sidebar,
+            match sidebar_mode {
+                NavMode::Providers => 1.0,
+                NavMode::Root => -1.0,
+            },
+            true,
+        );
         let content = self.content(&mut k, window, cx);
         let mut overlays: Vec<AnyElement> = Vec::new();
         if let Some(overlay) = self.provider_dialog_overlay(&mut k, window, cx) {
@@ -1241,7 +1258,7 @@ impl Render for SettingsWindow {
         if let Some(overlay) = self.troubleshoot_overlay(&k, cx) {
             overlays.push(overlay);
         }
-        if let Some(overlay) = self.tray_editor_overlay(&mut k, window, cx) {
+        if let Some(overlay) = self.tray_dialog_overlay(&mut k, window, cx) {
             overlays.push(overlay);
         }
         if let Some(overlay) = self.reset_confirm_overlay(&k, cx) {
@@ -1277,6 +1294,7 @@ impl Render for SettingsWindow {
                             .w(px(SIDEBAR_WIDTH))
                             .flex_none()
                             .h_full()
+                            .overflow_hidden()
                             .pb(px(4.0))
                             .child(sidebar),
                     )
@@ -1301,13 +1319,11 @@ impl Render for DraggedProvider {
             .font_family(self.theme.font.clone())
             .px(px(12.0))
             .py(px(6.0))
-            .rounded(px(5.0))
-            .border_1()
-            .border_color(self.theme.popover_stroke)
+            .rounded(px(kit::CONTROL_RADIUS))
             .bg(self.theme.popover)
             .text_size(px(13.0))
             .text_color(self.theme.text)
-            .shadow_md()
+            .shadow(kit::float_shadow(&self.theme, 6.0))
             .child(self.label.clone())
     }
 }

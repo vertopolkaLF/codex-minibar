@@ -28,30 +28,36 @@ impl SettingsWindow {
             .flex()
             .flex_col()
             .items_center()
-            .gap(px(4.0))
             .pt(px(8.0))
-            .pb(px(20.0))
-            .child(kit::image("color/app-icon.png", 104.0).mb(px(10.0)))
+            .pb(px(24.0))
+            .child(kit::image("color/app-icon.png", 104.0).mb(px(14.0)))
             .child(
                 div()
-                    .text_size(px(26.0))
+                    .text_size(px(28.0))
+                    .line_height(px(34.0))
                     .font_weight(FontWeight::BOLD)
                     .child("Codex Minibar"),
             )
             .child(
                 div()
+                    .mt(px(6.0))
+                    .h(px(22.0))
                     .px(px(10.0))
-                    .py(px(2.0))
+                    .flex()
+                    .items_center()
                     .rounded_full()
                     .bg(theme.accent_soft)
                     .text_size(px(12.0))
+                    .line_height(px(16.0))
+                    .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.accent_text)
                     .child(format!("Version {}", current_version())),
             )
             .child(
                 div()
-                    .pt(px(8.0))
-                    .text_size(px(15.0))
+                    .mt(px(12.0))
+                    .text_size(px(14.0))
+                    .line_height(px(20.0))
                     .text_color(theme.text_secondary)
                     .child("Usage limits in the Windows tray."),
             )
@@ -143,10 +149,8 @@ impl SettingsWindow {
                     detail: &'static str,
                     glyph: &'static str,
                     url: &'static str| {
-            let hover = theme.card_hover;
-            div()
-                .id(eid(id))
-                .w(relative(0.5))
+            let (tile, t) = kit::hoverable(k, div().id(eid(id)), kit::hover_key(id));
+            tile.w(relative(0.5))
                 .p(px(6.0))
                 .child(
                     div()
@@ -155,10 +159,8 @@ impl SettingsWindow {
                         .gap(px(14.0))
                         .p(px(16.0))
                         .rounded(px(kit::CARD_RADIUS))
-                        .border_1()
-                        .border_color(theme.card_stroke)
-                        .bg(theme.card)
-                        .hover(move |style| style.bg(hover))
+                        .bg(kit::blend(theme.card, theme.card_hover, t))
+                        .shadow(kit::card_shadow(&theme))
                         .child(
                             div()
                                 .size(px(36.0))
@@ -174,14 +176,18 @@ impl SettingsWindow {
                                 .flex()
                                 .flex_col()
                                 .flex_1()
-                                .gap(px(2.0))
+                                .gap(px(1.0))
                                 .child(
                                     div()
                                         .text_size(px(14.0))
+                                        .line_height(px(20.0))
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .child(title),
                                 )
-                                .child(kit::text(detail, 12.0, theme.text_secondary)),
+                                .child(
+                                    kit::text(detail, 12.0, theme.text_secondary)
+                                        .line_height(px(16.0)),
+                                ),
                         )
                         .child(kit::icon("arrow-square-out", 14.0, theme.text_tertiary)),
                 )

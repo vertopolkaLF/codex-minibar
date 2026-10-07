@@ -7,8 +7,8 @@
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, px, relative,
+    AnyElement, Context, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
+    relative,
 };
 
 use super::super::kit::{self, Button, Kit};
@@ -153,86 +153,23 @@ fn link(k: &Kit, id: &'static str, label: &'static str, url: &'static str) -> An
 
 /// Numbered step strip; finished steps show a check and can be revisited.
 fn add_stepper(k: &Kit, current: AddStep, on_select: kit::Handler<AddStep>) -> AnyElement {
-    let theme = &k.theme;
-    let current_index = AddStep::ALL
+    let labels = AddStep::ALL.map(AddStep::label);
+    let current = AddStep::ALL
         .iter()
         .position(|step| *step == current)
         .unwrap_or(0);
-    let steps = AddStep::ALL.iter().enumerate().map(|(index, step)| {
-        let step = *step;
-        let active = index == current_index;
-        let done = index < current_index;
-        let marker = div()
-            .size(px(22.0))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded_full()
-            .text_size(px(12.0))
-            .font_weight(FontWeight::SEMIBOLD)
-            .map(|el| {
-                if active || done {
-                    el.bg(theme.accent).text_color(theme.on_accent)
-                } else {
-                    el.border_1()
-                        .border_color(theme.control_stroke)
-                        .text_color(theme.text_secondary)
-                }
-            })
-            .map(|el| {
-                if done {
-                    el.child(kit::icon("check-bold", 12.0, theme.on_accent))
-                } else {
-                    el.child((index + 1).to_string())
-                }
-            });
-        let hover = theme.subtle_hover;
-        let on_select = on_select.clone();
-        div()
-            .id(kit::eid(format!("dlg-step-{index}")))
-            .flex_1()
-            .flex()
-            .items_center()
-            .gap(px(10.0))
-            .h(px(40.0))
-            .px(px(12.0))
-            .rounded(px(6.0))
-            .border_1()
-            .map(|el| {
-                if active {
-                    el.bg(theme.card).border_color(theme.card_stroke)
-                } else {
-                    el.border_color(gpui::transparent_black())
-                }
-            })
-            .when(done, |el| {
-                el.cursor_pointer()
-                    .hover(move |style| style.bg(hover))
-                    .on_click(move |_, window, cx| on_select(step, window, cx))
-            })
-            .child(marker)
-            .child(kit::text(
-                step.label(),
-                14.0,
-                if active || done {
-                    theme.text
-                } else {
-                    theme.text_secondary
-                },
-            ))
-            .into_any_element()
-    });
-    div()
-        .flex()
-        .gap(px(4.0))
-        .p(px(4.0))
-        .rounded(px(8.0))
-        .border_1()
-        .border_color(theme.card_stroke)
-        .bg(theme.subtle_hover)
-        .children(steps)
-        .into_any_element()
+    kit::stepper(
+        k,
+        "dlg",
+        &labels,
+        current,
+        false,
+        kit::handler(move |index: usize, window, cx| {
+            if let Some(step) = AddStep::ALL.get(index) {
+                on_select(*step, window, cx);
+            }
+        }),
+    )
 }
 
 /// One selectable provider card in the "Add provider" grid.
@@ -244,51 +181,25 @@ fn driver_card(
     on_click: Option<kit::Handler<bool>>,
 ) -> AnyElement {
     let theme = &k.theme;
-    let hover = theme.card_hover;
-    let card = div()
-        .id(kit::eid(format!("dlg-driver-{}", driver.display_name())))
-        .flex()
-        .items_center()
-        .gap(px(12.0))
-        .h(px(52.0))
-        .px(px(14.0))
-        .rounded(px(8.0))
-        .border_1()
-        .map(|el| {
-            if selected {
-                el.border_color(theme.accent).bg(theme.accent_soft)
-            } else {
-                el.border_color(theme.card_stroke).bg(theme.card)
-            }
-        })
-        .when(blocked.is_some(), |el| el.opacity(0.5))
-        .child(kit::icon(
+    let mut card = kit::ChoiceCard::new(
+        format!("dlg-driver-{}", driver.display_name()),
+        driver.display_name(),
+    )
+    .leading(
+        kit::icon(
             crate::provider_registry::icon(driver),
             20.0,
             theme.brand(driver),
-        ))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .text_size(px(14.0))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme.text)
-                .child(driver.display_name()),
         )
-        .when(selected, |el| {
-            el.child(kit::icon("check-circle-fill", 20.0, theme.accent_text))
-        })
-        .when(blocked.is_some(), |el| el.child(kit::chip(k, "Added")));
-    // The handler receives `true` on a double click, which also advances.
-    let card = match on_click {
-        Some(on_click) if blocked.is_none() => card
-            .cursor_pointer()
-            .when(!selected, |el| el.hover(move |style| style.bg(hover)))
-            .on_click(move |event, window, cx| on_click(event.click_count() > 1, window, cx)),
-        _ => card,
-    };
+        .into_any_element(),
+    )
+    .selected(selected);
+    if blocked.is_some() {
+        card = card.trailing(kit::chip(k, "Added"));
+    } else if let Some(on_click) = on_click {
+        card = card.on_click(on_click);
+    }
+    let card = card.render(k).when(blocked.is_some(), |el| el.opacity(0.5));
     let card = match blocked {
         Some(reason) => kit::with_tooltip(k, card, reason.to_owned()),
         None => card,

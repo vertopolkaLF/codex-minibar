@@ -129,8 +129,6 @@ impl SettingsWindow {
                 .gap(px(14.0))
                 .py(px(40.0))
                 .rounded(px(kit::CARD_RADIUS))
-                .border_1()
-                .border_color(k.theme.card_stroke)
                 .bg(k.theme.card)
                 .child(kit::icon(
                     "plugs-connected-fill",
@@ -275,8 +273,6 @@ impl SettingsWindow {
                     .size(px(56.0))
                     .flex_none()
                     .rounded(px(12.0))
-                    .border_1()
-                    .border_color(theme.card_stroke)
                     .bg(theme.card)
                     .flex()
                     .items_center()

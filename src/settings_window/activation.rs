@@ -203,7 +203,7 @@ impl SettingsWindow {
             .iter()
             .map(|pause| {
                 let all_day =
-                    pause.start_time_minutes == 0 && pause.end_time_minutes == 23 * 60 + 59;
+                    pause.start_time_minutes == 0 && pause.end_time_minutes == LAST_MINUTE;
                 let times = if all_day {
                     "All day".to_owned()
                 } else {
@@ -321,8 +321,7 @@ impl SettingsWindow {
                     .px(px(16.0))
                     .py(px(18.0))
                     .rounded(px(kit::CARD_RADIUS))
-                    .border_1()
-                    .border_color(k.theme.card_stroke)
+                    .bg(k.theme.subtle_hover)
                     .flex()
                     .justify_center()
                     .child(kit::caption(k, message))
@@ -333,6 +332,22 @@ impl SettingsWindow {
         for rule in rules {
             let card_id = format!("{}-{}", list.prefix(), rule.id);
             let expanded = self.is_expanded(&card_id);
+            let remove = {
+                let rule_id = rule.id.clone();
+                let card_id = card_id.clone();
+                Self::h(cx, move |this, (), _, cx| {
+                    this.set_expanded(card_id.clone(), false);
+                    let id = rule_id.clone();
+                    this.edit(cx, move |settings| match list {
+                        RuleList::Schedule => {
+                            settings.scheduled_activations.retain(|rule| rule.id != id)
+                        }
+                        RuleList::Pause => {
+                            settings.auto_activation_pauses.retain(|rule| rule.id != id)
+                        }
+                    });
+                })
+            };
             let rule_id = rule.id.clone();
             let toggle = kit::toggle(
                 k,
@@ -362,7 +377,19 @@ impl SettingsWindow {
                 },
             ))
             .description(k, rule.summary.clone())
-            .trailing(toggle);
+            .trailing(toggle)
+            .trailing(
+                Button::icon_only(format!("{card_id}-remove"), "trash-fill")
+                    .danger()
+                    .ghost()
+                    .tooltip(if list == RuleList::Pause {
+                        "Remove quiet period"
+                    } else {
+                        "Remove activation"
+                    })
+                    .on_click(remove)
+                    .render(k),
+            );
             let body = self.rule_body(k, cx, list, &rule, instances, time_format);
             let on_toggle = Self::expand_handler(cx, card_id.clone());
             let card = kit::expander(k, card_id.clone(), header, expanded, on_toggle, move |_| {
@@ -433,16 +460,50 @@ impl SettingsWindow {
                     changed
                 })
             });
-            time_row = time_row.child(time_field(
+            time_row = time_row.child(kit::field(
                 k,
-                format!("{}-{}-time-{slot}", list.prefix(), rule.id),
-                label,
-                *minutes,
-                time_format,
-                on_change,
+                *label,
+                kit::time_picker(
+                    k,
+                    format!("{}-{}-time-{slot}", list.prefix(), rule.id),
+                    *minutes,
+                    time_format,
+                    on_change,
+                ),
             ));
         }
-        fields = fields.child(time_row);
+        let time_row = time_row.into_any_element();
+        if list == RuleList::Pause {
+            // A whole-day pause is 00:00–23:59 inclusive; the checkbox makes
+            // that explicit instead of relying on picking the last minute.
+            let all_day = is_all_day(&rule.times);
+            let rule_id = rule.id.clone();
+            fields = fields.child(kit::checkbox(
+                k,
+                format!("{}-{}-all-day", list.prefix(), rule.id),
+                all_day,
+                false,
+                Some("All day".into()),
+                Self::h(cx, move |this, value: bool, _, cx| {
+                    this.edit_rule(cx, list, rule_id.clone(), move |_, _, _, times| {
+                        let next = if value {
+                            [0, LAST_MINUTE]
+                        } else {
+                            [9 * 60, 17 * 60]
+                        };
+                        let changed = times[..] != next[..];
+                        times.copy_from_slice(&next);
+                        changed
+                    })
+                }),
+            ));
+            let key = crate::popup_window::ui::fx::key(("pause-times", rule.id.as_str()));
+            if let Some(times) = kit::collapsible(k, key, !all_day, move |_| time_row) {
+                fields = fields.child(times);
+            }
+        } else {
+            fields = fields.child(time_row);
+        }
 
         let mut days = div().flex().gap(px(6.0));
         for (day, label) in WEEKDAY_LABELS.iter().enumerate() {
@@ -459,66 +520,39 @@ impl SettingsWindow {
                     set_weekday(weekdays, day as u8, !selected)
                 })
             });
+            let day_id = format!("{}-{}-day-{day}", list.prefix(), rule.id);
+            let rest = if selected {
+                theme.accent
+            } else {
+                theme.control
+            };
             days = days.child(
-                div()
-                    .id(eid(format!("{}-{}-day-{day}", list.prefix(), rule.id)))
-                    .w(px(48.0))
-                    .h(px(kit::CONTROL_HEIGHT))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(5.0))
-                    .border_1()
-                    .border_color(if selected {
-                        theme.accent
-                    } else {
-                        theme.control_stroke
-                    })
-                    .bg(if selected {
-                        theme.accent
-                    } else {
-                        theme.control
-                    })
-                    .text_size(px(13.0))
-                    .text_color(if selected {
-                        theme.on_accent
-                    } else {
-                        theme.text
-                    })
-                    .cursor_pointer()
-                    .hover(move |style| style.bg(hover))
-                    .on_click(move |_, window, cx| toggle((), window, cx))
-                    .child(*label),
+                kit::hover_bg(
+                    k,
+                    div().id(eid(day_id.clone())),
+                    kit::hover_key(&day_id),
+                    rest,
+                    hover,
+                )
+                .w(px(48.0))
+                .h(px(kit::CONTROL_HEIGHT))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(kit::CONTROL_RADIUS))
+                .text_size(px(13.0))
+                .text_color(if selected {
+                    theme.on_accent
+                } else {
+                    theme.text
+                })
+                .cursor_pointer()
+                .on_click(move |_, window, cx| toggle((), window, cx))
+                .child(*label),
             );
         }
         fields = fields.child(kit::field(k, "Days", days.into_any_element()));
 
-        let rule_id = rule.id.clone();
-        let card_id = format!("{}-{}", list.prefix(), rule.id);
-        let remove = Self::h(cx, move |this, (), _, cx| {
-            this.set_expanded(card_id.clone(), false);
-            let id = rule_id.clone();
-            this.edit(cx, move |settings| match list {
-                RuleList::Schedule => settings.scheduled_activations.retain(|rule| rule.id != id),
-                RuleList::Pause => settings.auto_activation_pauses.retain(|rule| rule.id != id),
-            });
-        });
-        fields = fields.child(
-            div().flex().child(
-                Button::new(
-                    format!("{}-{}-remove", list.prefix(), rule.id),
-                    if list == RuleList::Pause {
-                        "Remove quiet period"
-                    } else {
-                        "Remove activation"
-                    },
-                )
-                .danger()
-                .with_icon("trash-fill")
-                .on_click(remove)
-                .render(k),
-            ),
-        );
         fields.into_any_element()
     }
 }
@@ -579,96 +613,11 @@ fn apply_rule(
     }
 }
 
-/// Hour / minute (/ AM-PM) picker built from dropdowns.
-fn time_field(
-    k: &Kit,
-    id: String,
-    label: &'static str,
-    minutes: u16,
-    time_format: TimeFormat,
-    on_change: kit::Handler<u16>,
-) -> AnyElement {
-    let minutes = minutes.min(23 * 60 + 59);
-    let hour = minutes / 60;
-    let minute = minutes % 60;
-    let mut parts = div().flex().gap(px(6.0)).items_center();
-    let (hour_labels, hour_index) = match time_format {
-        TimeFormat::Hour24 => (
-            (0..24)
-                .map(|value| format!("{value:02}").into())
-                .collect::<Vec<SharedString>>(),
-            hour as usize,
-        ),
-        TimeFormat::Hour12 => (
-            (1..=12).map(|value| value.to_string().into()).collect(),
-            ((hour + 11) % 12) as usize,
-        ),
-    };
-    let set_hour = {
-        let on_change = on_change.clone();
-        kit::handler(move |index: usize, window, cx| {
-            let index = index as u16;
-            let hour = match time_format {
-                TimeFormat::Hour24 => index.min(23),
-                TimeFormat::Hour12 => {
-                    let hour12 = (index + 1) % 12;
-                    if hour >= 12 { hour12 + 12 } else { hour12 }
-                }
-            };
-            on_change(hour * 60 + minute, window, cx)
-        })
-    };
-    parts = parts.child(kit::dropdown(
-        k,
-        format!("{id}-hour"),
-        hour_labels,
-        Some(hour_index),
-        false,
-        76.0,
-        set_hour,
-    ));
-    parts = parts.child(kit::text(":", 14.0, k.theme.text_secondary));
-    let minute_labels = (0..12)
-        .map(|value| SharedString::from(format!("{:02}", value * 5)))
-        .collect::<Vec<_>>();
-    let set_minute = {
-        let on_change = on_change.clone();
-        kit::handler(move |index: usize, window, cx| {
-            on_change(hour * 60 + (index as u16 * 5).min(59), window, cx)
-        })
-    };
-    parts = parts.child(kit::dropdown(
-        k,
-        format!("{id}-minute"),
-        minute_labels,
-        Some((minute / 5) as usize),
-        false,
-        76.0,
-        set_minute,
-    ));
-    if time_format == TimeFormat::Hour12 {
-        let set_period = kit::handler(move |index: usize, window, cx| {
-            let hour12 = hour % 12;
-            let hour = if index == 1 { hour12 + 12 } else { hour12 };
-            on_change(hour * 60 + minute, window, cx)
-        });
-        parts = parts.child(kit::dropdown(
-            k,
-            format!("{id}-period"),
-            kit::options(&["AM", "PM"]),
-            Some(usize::from(hour >= 12)),
-            false,
-            76.0,
-            set_period,
-        ));
-    }
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(6.0))
-        .child(kit::text(label, 12.0, k.theme.text_secondary))
-        .child(parts)
-        .into_any_element()
+const LAST_MINUTE: u16 = 23 * 60 + 59;
+
+/// Pause bounds that cover every minute of the day.
+fn is_all_day(times: &[(&'static str, u16)]) -> bool {
+    matches!(times, [(_, 0), (_, LAST_MINUTE)])
 }
 
 #[cfg(test)]

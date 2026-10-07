@@ -228,46 +228,49 @@ impl SettingsWindow {
             .flex()
             .rounded(px(6.0))
             .overflow_hidden()
-            .border_1()
-            .border_color(theme.card_stroke)
             .map(|el| match value {
                 AppTheme::Auto => el.child(mock(false)).child(mock(true)),
                 AppTheme::Light => el.child(mock(false)),
                 AppTheme::Dark => el.child(mock(true)),
             });
         let hover = theme.card_hover;
-        div()
-            .id(eid(format!("theme-card-{label}")))
-            .flex_1()
-            .flex()
-            .flex_col()
-            .gap(px(8.0))
-            .p(px(8.0))
-            .rounded(px(kit::CARD_RADIUS))
-            .border_2()
-            .border_color(if selected {
-                theme.accent
-            } else {
-                theme.card_stroke
-            })
-            .cursor_pointer()
-            .hover(move |style| style.bg(hover))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                if this.settings.theme != value {
-                    this.edit(cx, move |settings| settings.theme = value);
-                }
-            }))
-            .child(preview)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .text_size(px(13.0))
-                    .when(selected, |el| el.font_weight(FontWeight::SEMIBOLD))
-                    .child(label),
-            )
-            .into_any_element()
+        let card_id = format!("theme-card-{label}");
+        let rest = if selected {
+            theme.accent_soft
+        } else {
+            theme.card
+        };
+        kit::hover_bg(
+            k,
+            div().id(eid(card_id.clone())),
+            kit::hover_key(&card_id),
+            rest,
+            if selected { rest } else { hover },
+        )
+        .flex_1()
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+        .p(px(8.0))
+        .rounded(px(kit::CARD_RADIUS))
+        .shadow(kit::card_shadow(theme))
+        .cursor_pointer()
+        .on_click(cx.listener(move |this, _, _, cx| {
+            if this.settings.theme != value {
+                this.edit(cx, move |settings| settings.theme = value);
+            }
+        }))
+        .child(preview)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .text_size(px(13.0))
+                .when(selected, |el| el.font_weight(FontWeight::SEMIBOLD))
+                .child(label),
+        )
+        .into_any_element()
     }
 
     fn accent_swatches(&self, k: &Kit, current: AccentColor, cx: &mut Context<Self>) -> AnyElement {
@@ -280,48 +283,44 @@ impl SettingsWindow {
             let label = [
                 "Windows", "Blue", "Purple", "Pink", "Red", "Orange", "Green", "Teal",
             ][index];
-            let swatch = div()
-                .id(eid(format!("accent-{label}")))
-                .size(px(34.0))
-                .rounded_full()
-                .p(px(3.0))
-                .border_2()
-                .border_color(if selected {
-                    theme.text
-                } else {
-                    gpui::transparent_black()
-                })
-                .cursor_pointer()
-                .hover({
-                    let ring = theme.text.alpha(0.4);
-                    move |style| {
-                        if selected {
-                            style
-                        } else {
-                            style.border_color(ring)
-                        }
-                    }
-                })
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if this.settings.accent_color != accent {
-                        this.edit(cx, move |settings| settings.accent_color = accent);
-                    }
-                }))
-                .child(
-                    div()
-                        .size_full()
-                        .rounded_full()
-                        .bg(fill)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .when(accent == AccentColor::Windows, |el| {
-                            el.child(kit::icon("desktop-fill", 12.0, theme.on_accent))
-                        })
-                        .when(selected && accent != AccentColor::Windows, |el| {
-                            el.child(kit::icon("check-bold", 12.0, theme.on_accent))
-                        }),
-                );
+            let swatch_id = format!("accent-{label}");
+            // Selection is a tinted halo, not an outline.
+            let rest = if selected {
+                fill.alpha(0.35)
+            } else {
+                gpui::transparent_black()
+            };
+            let swatch = kit::hover_bg(
+                k,
+                div().id(eid(swatch_id.clone())),
+                kit::hover_key(&swatch_id),
+                rest,
+                if selected { rest } else { theme.subtle_hover },
+            )
+            .size(px(34.0))
+            .rounded_full()
+            .p(px(4.0))
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if this.settings.accent_color != accent {
+                    this.edit(cx, move |settings| settings.accent_color = accent);
+                }
+            }))
+            .child(
+                div()
+                    .size_full()
+                    .rounded_full()
+                    .bg(fill)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(accent == AccentColor::Windows, |el| {
+                        el.child(kit::icon("desktop-fill", 12.0, theme.on_accent))
+                    })
+                    .when(selected && accent != AccentColor::Windows, |el| {
+                        el.child(kit::icon("check-bold", 12.0, theme.on_accent))
+                    }),
+            );
             row = row.child(kit::with_tooltip(k, swatch, label));
         }
         row.into_any_element()

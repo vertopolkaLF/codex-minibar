@@ -115,6 +115,7 @@ enum Step {
 
 pub(crate) struct OnboardingWindow {
     state: Arc<AppState>,
+    backdrop: super::backdrop::Backdrop,
     settings: Settings,
     detected: [bool; DRIVERS],
     enabled: [bool; DRIVERS],
@@ -150,6 +151,7 @@ impl OnboardingWindow {
         window.focus(&focus);
         Self {
             state,
+            backdrop: super::backdrop::Backdrop::install(window),
             settings,
             detected,
             enabled: detected,
@@ -206,8 +208,6 @@ impl OnboardingWindow {
                 .size(px(32.0))
                 .flex_none()
                 .rounded(px(8.0))
-                .border_1()
-                .border_color(theme.card_stroke)
                 .bg(theme.card)
                 .flex()
                 .items_center()
@@ -392,12 +392,17 @@ impl OnboardingWindow {
 impl Render for OnboardingWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut k = std::mem::take(&mut self.kit);
-        k.begin_frame(Theme::resolve(
+        let mut theme = Theme::resolve(
             self.settings.theme,
             self.settings.accent_color,
             window.appearance(),
             self.fonts.clone(),
-        ));
+        );
+        if self.backdrop.mica() {
+            theme = theme.with_mica();
+        }
+        self.backdrop.sync(theme.dark, window.appearance());
+        k.begin_frame(theme);
         let (heading, description, rows) = match self.step {
             Step::Providers => (
                 "Choose providers",
@@ -447,30 +452,23 @@ impl Render for OnboardingWindow {
                 .on_click(Self::h(cx, |this, (), window, _| this.finish(window))),
         }
         .render(&k);
+        let minimize = kit::caption_button(
+            &k,
+            "onboarding-min",
+            "\u{E921}",
+            WindowControlArea::Min,
+            false,
+        );
+        let close = kit::caption_button(
+            &k,
+            "onboarding-close",
+            "\u{E8BB}",
+            WindowControlArea::Close,
+            true,
+        );
         k.end_frame(window);
         self.kit = k;
 
-        let caption =
-            |id: &'static str, glyph: &'static str, area: WindowControlArea, close: bool| {
-                let hover = if close {
-                    crate::popup_window::ui::theme::rgb8((0xC4, 0x2B, 0x1C))
-                } else {
-                    theme.subtle_hover
-                };
-                div()
-                    .id(id)
-                    .w(px(46.0))
-                    .h_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(10.0))
-                    .font_family(theme.icon_font.clone())
-                    .window_control_area(area)
-                    .occlude()
-                    .hover(move |style| style.bg(hover))
-                    .child(glyph)
-            };
         div()
             .id("onboarding-root")
             .size_full()
@@ -501,18 +499,8 @@ impl Render for OnboardingWindow {
                                 theme.text_secondary,
                             )),
                     )
-                    .child(caption(
-                        "onboarding-min",
-                        "\u{E921}",
-                        WindowControlArea::Min,
-                        false,
-                    ))
-                    .child(caption(
-                        "onboarding-close",
-                        "\u{E8BB}",
-                        WindowControlArea::Close,
-                        true,
-                    )),
+                    .child(minimize)
+                    .child(close),
             )
             .child(
                 // Focus is tracked below the title bar so title bar clicks

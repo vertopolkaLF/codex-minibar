@@ -4,7 +4,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use gpui::{
     AnyElement, Context, FontWeight, ImageFormat, InteractiveElement, IntoElement, ParentElement,
-    SharedString, StatefulInteractiveElement, Styled, Window, div, img, px,
+    SharedString, StatefulInteractiveElement, Styled, Window, div, img, prelude::FluentBuilder, px,
+    relative,
 };
 
 use super::kit::{self, Button, Kit, Row, eid};
@@ -23,7 +24,33 @@ const PRESENTATION_LABELS: [&str; 5] = [
     "Countdown",
 ];
 const COLOR_LABELS: [&str; 5] = ["Status", "Fixed", "Provider", "App accent", "Monochrome"];
+const PRESENTATION_HINTS: [&str; 5] = [
+    "Percentages as digits",
+    "One bar per indicator",
+    "Nested rings, one per indicator",
+    "When the limit resets",
+    "Time left until the reset",
+];
+const STEP_LABELS: [&str; 2] = ["Style", "Indicators"];
 const MAX_INDICATORS: usize = 3;
+
+/// The open widget editor: which widget, which step and which indicator.
+#[derive(Clone)]
+pub(crate) struct TrayDialog {
+    widget_id: String,
+    step: usize,
+    indicator: usize,
+}
+
+impl TrayDialog {
+    fn new(widget_id: String) -> Self {
+        Self {
+            widget_id,
+            step: 0,
+            indicator: 0,
+        }
+    }
+}
 
 /// Fixed-color presets offered next to the hex field.
 const SWATCHES: [(u8, u8, u8); 12] = [
@@ -121,39 +148,54 @@ fn presentation_from_index(index: usize) -> TrayPresentation {
     }
 }
 
-fn indicator_summary(indicator: &TrayIndicator) -> String {
-    let Some(provider) = indicator.provider() else {
-        return format!("Unsupported {}", indicator.provider_id);
-    };
-    let metric = crate::provider_registry::settings_brick_label(
-        provider.kind(),
-        &indicator.metric_id,
-        &super::cached_discovered_popup_bricks(),
+/// Metric, value and color of an indicator, under its provider name.
+fn indicator_detail(indicator: &TrayIndicator) -> String {
+    let metric = indicator.provider().map_or_else(
+        || indicator.metric_id.clone(),
+        |provider| {
+            crate::provider_registry::settings_brick_label(
+                provider.kind(),
+                &indicator.metric_id,
+                &super::cached_discovered_popup_bricks(),
+            )
+            .to_string()
+        },
     );
     let value = match indicator.limit_value {
         LimitValue::Used => "Used",
         LimitValue::Remaining => "Remaining",
     };
     format!(
-        "{} · {metric} · {value} · {}",
-        provider.qualified_name(),
+        "{metric} · {value} · {}",
         color_mode_label(indicator.color_mode)
     )
 }
 
-fn widget_summary(widget: &TrayWidget) -> String {
+fn widget_title(index: usize, widget: &TrayWidget) -> String {
     if widget.kind == TrayWidgetKind::AppIcon {
-        return "App icon".into();
-    }
-    let labels = widget
-        .indicators
-        .iter()
-        .map(indicator_summary)
-        .collect::<Vec<_>>();
-    if labels.is_empty() {
-        "Empty widget".into()
+        "App icon".into()
     } else {
-        labels.join("  ·  ")
+        format!("Widget {}", index + 1)
+    }
+}
+
+/// Style and the providers a widget reads, for list rows and the editor.
+fn widget_short_summary(widget: &TrayWidget) -> String {
+    if widget.kind == TrayWidgetKind::AppIcon {
+        return "The Codex Minibar icon".into();
+    }
+    let style = PRESENTATION_LABELS[presentation_index(widget.presentation)];
+    let mut providers: Vec<String> = Vec::new();
+    for provider in widget.indicators.iter().filter_map(TrayIndicator::provider) {
+        let name = provider.qualified_name().to_string();
+        if !providers.contains(&name) {
+            providers.push(name);
+        }
+    }
+    if providers.is_empty() {
+        format!("{style} · No indicators")
+    } else {
+        format!("{style} · {}", providers.join(", "))
     }
 }
 
@@ -242,7 +284,7 @@ fn encode_png(pixels: &[u8]) -> Option<Vec<u8>> {
 
 impl SettingsWindow {
     /// The widget rendered exactly as the tray draws it, with sample quotas.
-    fn tray_preview(&mut self, k: &Kit, widget: &TrayWidget, size: f32) -> AnyElement {
+    fn tray_preview(&mut self, widget: &TrayWidget, size: f32) -> AnyElement {
         let key = PreviewKey {
             widget: widget.clone(),
             accent: crate::theme::current_accent_rgb(),
@@ -276,8 +318,6 @@ impl SettingsWindow {
             .flex_none()
             .rounded(px(6.0))
             .bg(plate)
-            .border_1()
-            .border_color(k.theme.card_stroke)
             .flex()
             .items_center()
             .justify_center()
@@ -315,7 +355,7 @@ impl SettingsWindow {
     pub(super) fn tray_page(
         &mut self,
         k: &mut Kit,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let widgets = self.settings.tray_widgets.clone();
@@ -353,11 +393,17 @@ impl SettingsWindow {
                 k,
                 Row::new("tray-empty", "Tray icon").description(k, "Shows the app icon."),
             ));
-        }
-        let count = widgets.len();
-        for (index, widget) in widgets.iter().enumerate() {
-            let card = self.tray_widget_card(k, index, count, widget, &enabled, window, cx);
-            rows.push(kit::appear(k, format!("tray-widget-{}", widget.id), card));
+        } else {
+            let count = widgets.len();
+            let items = widgets
+                .iter()
+                .enumerate()
+                .map(|(index, widget)| {
+                    let row = self.tray_widget_row(k, index, count, widget, cx);
+                    kit::appear(k, format!("tray-widget-{}", widget.id), row)
+                })
+                .collect();
+            rows.push(kit::card(k, items));
         }
         let first = enabled.first().copied();
         let add_widget = Self::h(cx, move |this, (), _, cx| {
@@ -365,7 +411,7 @@ impl SettingsWindow {
                 return;
             };
             let widget = TrayWidget::custom_for_provider(provider);
-            this.set_expanded(format!("tray-{}", widget.id), true);
+            this.tray_dialog = Some(TrayDialog::new(widget.id.clone()));
             this.update_widgets(cx, |widgets| widgets.push(widget));
         });
         let add_icon = Self::h(cx, |this, (), _, cx| {
@@ -394,206 +440,377 @@ impl SettingsWindow {
         rows
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn tray_widget_card(
+    /// One widget in the page list: live preview, name, a short summary and
+    /// an action menu. Clicking the row opens the widget editor.
+    fn tray_widget_row(
         &mut self,
-        k: &mut Kit,
+        k: &Kit,
         index: usize,
         count: usize,
         widget: &TrayWidget,
-        enabled: &[ProviderId],
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let card_id = format!("tray-{}", widget.id);
-        let expanded = self.is_expanded(&card_id);
-        let move_up = Self::h(cx, move |this, (), _, cx| {
-            this.update_widgets(cx, |widgets| {
-                if index > 0 {
-                    widgets.swap(index, index - 1)
-                }
-            })
+        let id = widget.id.clone();
+        let open_id = id.clone();
+        let open = Self::h(cx, move |this, (), _, cx| {
+            this.tray_dialog = Some(TrayDialog::new(open_id.clone()));
+            cx.notify();
         });
-        let move_down = Self::h(cx, move |this, (), _, cx| {
-            this.update_widgets(cx, |widgets| {
-                if index + 1 < widgets.len() {
-                    widgets.swap(index, index + 1)
+        let menu_id = id.clone();
+        let mut up = kit::MenuItem::new("Move up").icon("arrow-up-bold");
+        up.disabled = index == 0;
+        let mut down = kit::MenuItem::new("Move down").icon("arrow-down-bold");
+        down.disabled = index + 1 >= count;
+        let menu = kit::more_menu(
+            k,
+            format!("tray-{id}-menu"),
+            vec![
+                kit::MenuItem::new("Edit").icon("pencil-simple-fill"),
+                up,
+                down,
+                kit::MenuItem::new("Duplicate").icon("copy"),
+                kit::MenuItem::new("Remove").icon("trash-fill").danger(),
+            ],
+            Self::h(cx, move |this, choice: usize, _, cx| match choice {
+                0 => {
+                    this.tray_dialog = Some(TrayDialog::new(menu_id.clone()));
+                    cx.notify();
                 }
-            })
-        });
-        let reorder = div()
-            .flex()
-            .flex_col()
-            .child(
-                Button::icon_only(format!("{card_id}-up"), "caret-up")
-                    .tooltip("Move widget up")
-                    .disabled(index == 0)
-                    .on_click(move_up)
-                    .render(k),
-            )
-            .child(
-                Button::icon_only(format!("{card_id}-down"), "caret-down-bold")
-                    .tooltip("Move widget down")
-                    .disabled(index + 1 >= count)
-                    .on_click(move_down)
-                    .render(k),
-            )
-            .into_any_element();
-        let preview = self.tray_preview(k, widget, 32.0);
-        let header = Row::new(format!("{card_id}-header"), format!("Widget {}", index + 1))
-            .icon(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.0))
-                    .child(reorder)
-                    .child(preview)
-                    .into_any_element(),
-            )
-            .description(k, widget_summary(widget));
-        let body = self.tray_widget_body(k, index, widget, enabled, window, cx);
-        let on_toggle = Self::expand_handler(cx, card_id.clone());
-        kit::expander(k, card_id, header, expanded, on_toggle, move |_| body)
+                1 => this.move_widget(index, -1, cx),
+                2 => this.move_widget(index, 1, cx),
+                3 => this.duplicate_widget(index, cx),
+                _ => this.remove_widget(index, cx),
+            }),
+        );
+        let preview = self.tray_preview(widget, 24.0);
+        Row::new(format!("tray-row-{id}"), widget_title(index, widget))
+            .icon(preview)
+            .description(k, widget_short_summary(widget))
+            .trailing(menu)
+            .trailing(kit::icon("caret-right", 12.0, k.theme.text_secondary).into_any_element())
+            .on_click(open)
+            .render(k)
     }
 
-    fn tray_widget_body(
+    fn move_widget(&mut self, index: usize, delta: isize, cx: &mut Context<Self>) {
+        self.update_widgets(cx, |widgets| {
+            let target = index as isize + delta;
+            if index < widgets.len() && target >= 0 && (target as usize) < widgets.len() {
+                widgets.swap(index, target as usize);
+            }
+        });
+    }
+
+    fn duplicate_widget(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.update_widgets(cx, |widgets| {
+            if let Some(widget) = widgets.get(index) {
+                let copy = if widget.kind == TrayWidgetKind::AppIcon {
+                    TrayWidget::app_icon()
+                } else {
+                    widget.duplicate_with_new_id()
+                };
+                widgets.insert(index + 1, copy);
+            }
+        });
+    }
+
+    fn remove_widget(&mut self, index: usize, cx: &mut Context<Self>) {
+        let mut next = self.settings.tray_widgets.clone();
+        if index >= next.len() {
+            return;
+        }
+        let removed = next.remove(index);
+        if self
+            .tray_dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.widget_id == removed.id)
+        {
+            self.tray_dialog = None;
+        }
+        self.removed_widget = Some((index, removed));
+        self.set_widgets(next, cx);
+    }
+
+    fn set_tray_dialog(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut TrayDialog)) {
+        if let Some(dialog) = self.tray_dialog.as_mut() {
+            f(dialog);
+        }
+        cx.notify();
+    }
+
+    /// The widget editor, in the style of the "Add provider" dialog: a live
+    /// preview header, a Style / Indicators stepper and card pickers. Every
+    /// choice applies to the tray immediately; "Done" only closes it.
+    pub(super) fn tray_dialog_overlay(
+        &mut self,
+        k: &mut Kit,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let dialog = self.tray_dialog.clone()?;
+        let Some((index, widget)) = self
+            .settings
+            .tray_widgets
+            .iter()
+            .cloned()
+            .enumerate()
+            .find(|(_, widget)| widget.id == dialog.widget_id)
+        else {
+            self.tray_dialog = None;
+            return None;
+        };
+        let close = Self::h(cx, |this, (), _, cx| {
+            this.tray_dialog = None;
+            cx.notify();
+        });
+        let preview = self.tray_preview(&widget, 32.0);
+        let header = div()
+            .flex()
+            .items_center()
+            .gap(px(14.0))
+            .child(preview)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(2.0))
+                    .child(kit::dialog_title(k, widget_title(index, &widget)))
+                    .child(kit::caption(k, widget_short_summary(&widget))),
+            )
+            .into_any_element();
+        let mut body = vec![header];
+        if widget.kind == TrayWidgetKind::AppIcon {
+            body.push(kit::caption(
+                k,
+                "Shows the Codex Minibar icon in the notification area. It has no indicators to set up.",
+            ));
+        } else {
+            body.push(kit::stepper(
+                k,
+                "tray-dlg",
+                &STEP_LABELS,
+                dialog.step,
+                true,
+                Self::h(cx, |this, step: usize, _, cx| {
+                    this.set_tray_dialog(cx, |dialog| dialog.step = step)
+                }),
+            ));
+            let content = if dialog.step == 0 {
+                self.tray_style_step(k, index, &widget, cx)
+            } else {
+                self.tray_indicators_step(k, index, &widget, dialog.indicator, window, cx)
+            };
+            body.push(kit::appear(
+                k,
+                format!("tray-dlg-{}-{}", widget.id, dialog.step),
+                content,
+            ));
+        }
+        let remove = Button::new("tray-dlg-remove", "Remove widget")
+            .danger()
+            .with_icon("trash-fill")
+            .full_width()
+            .on_click(Self::h(cx, move |this, (), _, cx| {
+                this.remove_widget(index, cx)
+            }));
+        let done = Button::new("tray-dlg-done", "Done")
+            .accent()
+            .full_width()
+            .on_click(close.clone());
+        Some(kit::dialog(
+            k,
+            format!("tray-dialog-{}", widget.id),
+            600.0,
+            body,
+            vec![remove.render(k), done.render(k)],
+            Some(close),
+        ))
+    }
+
+    /// Style picker: one card per presentation, each previewing this widget
+    /// drawn that way. A double click picks and moves on to Indicators.
+    fn tray_style_step(
+        &mut self,
+        k: &Kit,
+        index: usize,
+        widget: &TrayWidget,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let first_enabled = self
+            .enabled_tray_providers()
+            .first()
+            .copied()
+            .unwrap_or_default();
+        let current = presentation_index(widget.presentation);
+        let cards = (0..PRESENTATION_LABELS.len())
+            .map(|choice| {
+                let preview = if choice == current {
+                    self.tray_preview(widget, 24.0)
+                } else {
+                    let mut variant = widget.clone();
+                    variant.id = format!("{}::style-{choice}", widget.id);
+                    variant.presentation = presentation_from_index(choice);
+                    if variant.presentation.is_reset_clock() {
+                        variant.indicators.truncate(1);
+                    }
+                    variant.normalize();
+                    self.tray_preview(&variant, 24.0)
+                };
+                let on_click = Self::h(cx, move |this, advance: bool, _, cx| {
+                    this.set_presentation(index, choice, first_enabled, cx);
+                    if advance {
+                        this.set_tray_dialog(cx, |dialog| dialog.step = 1);
+                    }
+                });
+                div()
+                    .w(relative(0.5))
+                    .p(px(4.0))
+                    .child(
+                        kit::ChoiceCard::new(
+                            format!("tray-style-{choice}"),
+                            PRESENTATION_LABELS[choice],
+                        )
+                        .leading(preview)
+                        .subtitle(PRESENTATION_HINTS[choice])
+                        .selected(choice == current)
+                        .on_click(on_click)
+                        .render(k),
+                    )
+                    .into_any_element()
+            })
+            .collect::<Vec<_>>();
+        div()
+            .flex()
+            .flex_wrap()
+            .mx(px(-4.0))
+            .children(cards)
+            .into_any_element()
+    }
+
+    fn set_presentation(
+        &mut self,
+        index: usize,
+        choice: usize,
+        fallback: ProviderId,
+        cx: &mut Context<Self>,
+    ) {
+        self.update_widgets(cx, |widgets| {
+            let Some(widget) = widgets.get_mut(index) else {
+                return;
+            };
+            widget.presentation = presentation_from_index(choice);
+            if widget.presentation.is_reset_clock() {
+                widget.indicators.truncate(1);
+                if widget.indicators.is_empty() {
+                    widget.indicators.push(default_indicator(fallback));
+                }
+            }
+        });
+    }
+
+    /// Indicator cards (pick, reorder, remove, add) above the fields of the
+    /// picked one. Reset clocks follow a single indicator.
+    #[allow(clippy::too_many_arguments)]
+    fn tray_indicators_step(
         &mut self,
         k: &mut Kit,
         index: usize,
         widget: &TrayWidget,
-        enabled: &[ProviderId],
+        selected: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let id = widget.id.clone();
-        let remove = Self::h(cx, move |this, (), _, cx| {
-            let mut next = this.settings.tray_widgets.clone();
-            if index < next.len() {
-                let removed = next.remove(index);
-                this.removed_widget = Some((index, removed));
-                this.tray_editing = None;
-                this.set_widgets(next, cx);
-            }
-        });
-        let duplicate = Self::h(cx, move |this, (), _, cx| {
-            this.update_widgets(cx, |widgets| {
-                if let Some(widget) = widgets.get(index) {
-                    let copy = if widget.kind == TrayWidgetKind::AppIcon {
-                        TrayWidget::app_icon()
-                    } else {
-                        widget.duplicate_with_new_id()
-                    };
-                    widgets.insert(index + 1, copy);
-                }
-            })
-        });
-        let actions = |k: &Kit, extra: Option<AnyElement>| {
-            div()
-                .flex()
-                .gap(px(8.0))
-                .children(extra)
-                .child(
-                    Button::new(format!("tray-{id}-duplicate"), "Duplicate")
-                        .with_icon("copy")
-                        .on_click(duplicate.clone())
-                        .render(k),
-                )
-                .child(
-                    Button::new(format!("tray-{id}-remove"), "Remove")
-                        .danger()
-                        .with_icon("trash-fill")
-                        .on_click(remove.clone())
-                        .render(k),
-                )
-                .into_any_element()
-        };
-        if widget.kind == TrayWidgetKind::AppIcon {
-            return actions(k, None);
-        }
-        let mut body = div().flex().flex_col().gap(px(14.0));
-        let first_enabled = enabled.first().copied().unwrap_or_default();
-        body = body.child(kit::field(
-            k,
-            "Appearance",
-            kit::dropdown(
-                k,
-                format!("tray-{id}-presentation"),
-                kit::options(&PRESENTATION_LABELS),
-                Some(presentation_index(widget.presentation)),
-                false,
-                240.0,
-                Self::h(cx, move |this, choice: usize, _, cx| {
-                    this.update_widgets(cx, |widgets| {
-                        let Some(widget) = widgets.get_mut(index) else {
-                            return;
-                        };
-                        widget.presentation = presentation_from_index(choice);
-                        if widget.presentation.is_reset_clock() {
-                            widget.indicators.truncate(1);
-                            if widget.indicators.is_empty() {
-                                widget.indicators.push(default_indicator(first_enabled));
-                            }
-                        }
-                    })
-                }),
-            ),
-        ));
-        let mut extra = None;
+        let first_enabled = self
+            .enabled_tray_providers()
+            .first()
+            .copied()
+            .unwrap_or_default();
         if widget.presentation.is_reset_clock() {
             let indicator = widget
                 .indicators
                 .first()
                 .cloned()
                 .unwrap_or_else(|| default_indicator(first_enabled));
-            body = body.child(self.indicator_fields(k, index, 0, &indicator, false, window, cx));
-        } else {
-            body = body.child(kit::text("Indicators", 12.0, k.theme.text_secondary));
-            let count = widget.indicators.len();
-            for (slot, indicator) in widget.indicators.iter().enumerate() {
-                body = body
-                    .child(self.indicator_row(k, index, slot, count, &widget.id, indicator, cx));
-            }
-            if count < MAX_INDICATORS {
-                let fallback = widget
-                    .indicators
-                    .last()
-                    .and_then(TrayIndicator::provider)
-                    .unwrap_or(first_enabled);
-                let widget_id = widget.id.clone();
-                extra = Some(
-                    Button::new(format!("tray-{id}-add-indicator"), "Add indicator")
+            return div()
+                .flex()
+                .flex_col()
+                .gap(px(14.0))
+                .child(kit::caption(k, "Reset clocks follow one indicator."))
+                .child(self.indicator_fields(k, index, 0, &indicator, false, window, cx))
+                .into_any_element();
+        }
+        let count = widget.indicators.len();
+        let selected = selected.min(count.saturating_sub(1));
+        let mut list = div().flex().flex_col().gap(px(6.0));
+        for (slot, indicator) in widget.indicators.iter().enumerate() {
+            list = list.child(self.indicator_card(
+                k,
+                index,
+                slot,
+                count,
+                &widget.id,
+                indicator,
+                slot == selected,
+                cx,
+            ));
+        }
+        let mut column = div().flex().flex_col().gap(px(14.0)).child(list);
+        if count < MAX_INDICATORS {
+            let fallback = widget
+                .indicators
+                .last()
+                .and_then(TrayIndicator::provider)
+                .unwrap_or(first_enabled);
+            column = column.child(
+                div().flex().child(
+                    Button::new(format!("tray-{}-add-indicator", widget.id), "Add indicator")
                         .with_icon("plus-bold")
                         .on_click(Self::h(cx, move |this, (), _, cx| {
-                            let slot = this
-                                .settings
-                                .tray_widgets
-                                .get(index)
-                                .map_or(0, |widget| widget.indicators.len());
                             this.update_widgets(cx, |widgets| {
                                 if let Some(widget) = widgets.get_mut(index) {
                                     widget.indicators.push(default_indicator(fallback));
                                 }
                             });
-                            this.tray_editing = Some((widget_id.clone(), slot));
+                            this.set_tray_dialog(cx, |dialog| dialog.indicator = count);
                         }))
                         .render(k),
-                );
-            }
+                ),
+            );
         }
-        body.child(actions(k, extra)).into_any_element()
+        if let Some(indicator) = widget.indicators.get(selected) {
+            column = column
+                .child(kit::divider(k))
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .line_height(px(18.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(k.theme.text_secondary)
+                        .child(format!("Indicator {}", selected + 1)),
+                )
+                .child(self.indicator_fields(k, index, selected, indicator, true, window, cx));
+        }
+        column.into_any_element()
     }
 
+    /// A pickable indicator: provider mark, provider name, metric details and
+    /// reorder/remove controls.
     #[allow(clippy::too_many_arguments)]
-    fn indicator_row(
+    fn indicator_card(
         &mut self,
-        k: &mut Kit,
+        k: &Kit,
         widget_index: usize,
         slot: usize,
         count: usize,
         widget_id: &str,
         indicator: &TrayIndicator,
+        selected: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let theme = &k.theme;
+        let id = format!("tray-{widget_id}-indicator-{slot}");
         let swap = |delta: isize| {
             Self::h(cx, move |this, (), _, cx| {
                 this.update_widgets(cx, |widgets| {
@@ -604,101 +821,97 @@ impl SettingsWindow {
                     if target >= 0 && (target as usize) < widget.indicators.len() {
                         widget.indicators.swap(slot, target as usize);
                     }
-                })
+                });
+                this.set_tray_dialog(cx, |dialog| {
+                    dialog.indicator = (slot as isize + delta).max(0) as usize
+                });
             })
         };
-        let id = format!("tray-{widget_id}-indicator-{slot}");
-        let edit_id = widget_id.to_owned();
-        let edit = Self::h(cx, move |this, (), _, cx| {
-            this.tray_editing = Some((edit_id.clone(), slot));
-            cx.notify();
-        });
         let remove = Self::h(cx, move |this, (), _, cx| {
-            let mut next = this.settings.tray_widgets.clone();
-            let Some(widget) = next.get_mut(widget_index) else {
-                return;
-            };
-            if slot < widget.indicators.len() {
-                widget.indicators.remove(slot);
-            }
-            if widget.indicators.is_empty() {
-                let removed = next.remove(widget_index);
-                this.removed_widget = Some((widget_index, removed));
-            }
-            this.tray_editing = None;
-            this.set_widgets(next, cx);
+            this.update_widgets(cx, |widgets| {
+                if let Some(widget) = widgets.get_mut(widget_index)
+                    && widget.indicators.len() > 1
+                    && slot < widget.indicators.len()
+                {
+                    widget.indicators.remove(slot);
+                }
+            });
+            this.set_tray_dialog(cx, |dialog| {
+                if dialog.indicator >= slot {
+                    dialog.indicator = dialog.indicator.saturating_sub(1);
+                }
+            });
         });
-        let theme = &k.theme;
-        let swatch = (indicator.color_mode == TrayColorMode::Fixed).then(|| {
-            let color = indicator.fixed_color;
-            div()
-                .size(px(10.0))
-                .rounded_full()
-                .bg(rgb8((color.red, color.green, color.blue)))
-                .into_any_element()
+        let pick = Self::h(cx, move |this, _: bool, _, cx| {
+            this.set_tray_dialog(cx, |dialog| dialog.indicator = slot)
         });
-        div()
+        let (glyph, tint, title) = match indicator.provider() {
+            Some(provider) => (
+                crate::provider_registry::icon(provider.kind()),
+                theme.brand(provider.kind()),
+                provider.qualified_name().to_string(),
+            ),
+            None => (
+                "warning-fill",
+                theme.caution,
+                format!("Unsupported {}", indicator.provider_id),
+            ),
+        };
+        let mark = div()
+            .relative()
+            .child(kit::glyph_plate(
+                36.0,
+                theme.subtle_hover,
+                kit::icon(glyph, 18.0, tint).into_any_element(),
+            ))
+            .when(indicator.color_mode == TrayColorMode::Fixed, |el| {
+                let color = indicator.fixed_color;
+                el.child(
+                    div()
+                        .absolute()
+                        .right(px(-2.0))
+                        .bottom(px(-2.0))
+                        .size(px(12.0))
+                        .rounded_full()
+                        .bg(rgb8((color.red, color.green, color.blue))),
+                )
+            })
+            .into_any_element();
+        let controls = div()
             .flex()
-            .items_center()
-            .gap(px(10.0))
-            .p(px(8.0))
-            .pr(px(12.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(theme.card_stroke)
-            .bg(theme.subtle_hover)
+            .gap(px(2.0))
             .child(
-                div()
-                    .flex()
-                    .child(
-                        Button::icon_only(format!("{id}-up"), "arrow-up-bold")
-                            .tooltip("Move indicator up")
-                            .disabled(slot == 0)
-                            .on_click(swap(-1))
-                            .render(k),
-                    )
-                    .child(
-                        Button::icon_only(format!("{id}-down"), "arrow-down-bold")
-                            .tooltip("Move indicator down")
-                            .disabled(slot + 1 >= count)
-                            .on_click(swap(1))
-                            .render(k),
-                    ),
+                Button::icon_only(format!("{id}-up"), "arrow-up-bold")
+                    .ghost()
+                    .tooltip("Move up")
+                    .disabled(slot == 0)
+                    .on_click(swap(-1))
+                    .render(k),
             )
             .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_w_0()
-                    .gap(px(2.0))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.0))
-                            .children(swatch)
-                            .child(
-                                div()
-                                    .text_size(px(13.0))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(indicator_summary(indicator)),
-                            ),
-                    )
-                    .child(kit::caption(k, format!("Indicator {}", slot + 1))),
-            )
-            .child(
-                Button::new(format!("{id}-edit"), "Edit")
-                    .with_icon("pencil-simple-fill")
-                    .on_click(edit)
+                Button::icon_only(format!("{id}-down"), "arrow-down-bold")
+                    .ghost()
+                    .tooltip("Move down")
+                    .disabled(slot + 1 >= count)
+                    .on_click(swap(1))
                     .render(k),
             )
             .child(
                 Button::icon_only(format!("{id}-remove"), "trash-fill")
+                    .ghost()
                     .tooltip("Remove indicator")
+                    .disabled(count <= 1)
                     .on_click(remove)
                     .render(k),
             )
+            .into_any_element();
+        kit::ChoiceCard::new(id, title)
+            .leading(mark)
+            .subtitle(indicator_detail(indicator))
+            .trailing(controls)
+            .selected(selected)
+            .on_click(pick)
+            .render(k)
             .into_any_element()
     }
 
@@ -882,7 +1095,6 @@ impl SettingsWindow {
                 }
             })
         };
-        let theme = &k.theme;
         let mut swatches = div().flex().flex_wrap().gap(px(8.0));
         for (index, (red, green, blue)) in SWATCHES.into_iter().enumerate() {
             let color = TrayFixedColor { red, green, blue };
@@ -893,11 +1105,19 @@ impl SettingsWindow {
                     .size(px(26.0))
                     .rounded(px(6.0))
                     .bg(rgb8((red, green, blue)))
-                    .border_2()
-                    .border_color(if selected {
-                        theme.accent
-                    } else {
-                        theme.card_stroke
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(selected, |el| {
+                        let luma = 0.299 * f32::from(red)
+                            + 0.587 * f32::from(green)
+                            + 0.114 * f32::from(blue);
+                        let mark = if luma > 150.0 {
+                            rgb8((0, 0, 0))
+                        } else {
+                            rgb8((255, 255, 255))
+                        };
+                        el.child(kit::icon("check-bold", 14.0, mark))
                     })
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| set(this, color, cx))),
@@ -924,12 +1144,9 @@ impl SettingsWindow {
             },
         );
         let hex_field = kit::text_field(k, &hex_input, Some(120.0), window, cx);
-        let theme = &k.theme;
         let preview = div()
             .size(px(kit::CONTROL_HEIGHT))
             .rounded(px(6.0))
-            .border_1()
-            .border_color(theme.card_stroke)
             .bg(rgb8((current.red, current.green, current.blue)));
         kit::field(
             k,
@@ -949,67 +1166,6 @@ impl SettingsWindow {
                 )
                 .into_any_element(),
         )
-    }
-
-    /// Modal editor for one indicator.
-    pub(super) fn tray_editor_overlay(
-        &mut self,
-        k: &mut Kit,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let (widget_id, slot) = self.tray_editing.clone()?;
-        let Some((widget_index, widget)) = self
-            .settings
-            .tray_widgets
-            .iter()
-            .cloned()
-            .enumerate()
-            .find(|(_, widget)| widget.id == widget_id)
-        else {
-            self.tray_editing = None;
-            return None;
-        };
-        let Some(indicator) = widget.indicators.get(slot).cloned() else {
-            self.tray_editing = None;
-            return None;
-        };
-        let close = Self::h(cx, |this, (), _, cx| {
-            this.tray_editing = None;
-            cx.notify();
-        });
-        let preview = self.tray_preview(k, &widget, 32.0);
-        let fields = self.indicator_fields(k, widget_index, slot, &indicator, true, window, cx);
-        Some(kit::dialog(
-            k,
-            format!("tray-editor-{widget_id}-{slot}"),
-            540.0,
-            vec![
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(14.0))
-                    .child(preview)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.0))
-                            .child(kit::dialog_title(k, format!("Edit indicator {}", slot + 1)))
-                            .child(kit::caption(k, indicator_summary(&indicator))),
-                    )
-                    .into_any_element(),
-                fields,
-            ],
-            vec![
-                Button::new("tray-editor-done", "Done")
-                    .accent()
-                    .full_width()
-                    .on_click(close.clone())
-                    .render(k),
-            ],
-            Some(close),
-        ))
     }
 }
 

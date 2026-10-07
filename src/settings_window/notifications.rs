@@ -135,18 +135,7 @@ impl SettingsWindow {
         });
         div()
             .pb(px(4.0))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .rounded(px(kit::CARD_RADIUS))
-                    .border_1()
-                    .border_color(k.theme.card_stroke)
-                    .bg(k.theme.card)
-                    .overflow_hidden()
-                    .child(toggle)
-                    .children(reveal),
-            )
+            .child(kit::card_surface(k, std::iter::once(toggle).chain(reveal)))
             .into_any_element()
     }
 }

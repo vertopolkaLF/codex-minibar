@@ -25,6 +25,7 @@ use crate::popup_window::{AppState, PopupCommand};
 use crate::settings::Settings;
 
 mod about;
+mod backdrop;
 mod activation;
 mod advanced;
 mod appearance;
