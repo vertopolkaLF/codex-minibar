@@ -364,7 +364,10 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let (dialog, phase) = self.overlays.provider.track(k, self.provider_dialog.clone())?;
+        let (dialog, phase) = self
+            .overlays
+            .provider
+            .track(k, self.provider_dialog.clone())?;
         let instances = self.settings.instances.clone();
         let instance_name = |provider: &ProviderId| {
             instances

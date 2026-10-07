@@ -104,11 +104,7 @@ impl AccentColor {
             Self::Orange => Some((242, 158, 102)),
             Self::Green => Some((110, 204, 126)),
             Self::Teal => Some((86, 192, 204)),
-            Self::Custom(packed) => Some((
-                (packed >> 16) as u8,
-                (packed >> 8) as u8,
-                packed as u8,
-            )),
+            Self::Custom(packed) => Some(((packed >> 16) as u8, (packed >> 8) as u8, packed as u8)),
         }
     }
 }
@@ -2181,7 +2177,10 @@ impl Settings {
         if self.instance_by_id(driver.id()).is_none() {
             instance.id = driver.id().into();
             if let Some(account) = &mut instance.openrouter {
-                *account = OpenRouterAccount::legacy();
+                *account = OpenRouterAccount {
+                    name: account.name.clone(),
+                    ..OpenRouterAccount::legacy()
+                };
             }
         }
         instance
@@ -3027,6 +3026,15 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     .context("settings root must be a TOML table")?
                     .insert("version".into(), toml::Value::Integer(24));
                 version = 24;
+            }
+            24 | 25 => {
+                // No released build wrote these versions. Step through them
+                // so the instance migration still runs for older files.
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .insert("version".into(), toml::Value::Integer(26));
+                version = 26;
             }
             26 => {
                 // Manual OpenCode keys are stored outside settings. These

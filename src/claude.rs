@@ -744,7 +744,10 @@ fn refresh_cli_login(agent: &ureq::Agent, refresh: &FileRefresh) -> Result<Renew
         .as_object_mut()
         .context("Claude credentials lost their OAuth session")?;
     oauth.insert("accessToken".into(), renewed.access_token.into());
-    if let Some(token) = renewed.refresh_token.filter(|token| !token.trim().is_empty()) {
+    if let Some(token) = renewed
+        .refresh_token
+        .filter(|token| !token.trim().is_empty())
+    {
         oauth.insert("refreshToken".into(), token.into());
     }
     oauth.insert(
@@ -1797,7 +1800,11 @@ mod tests {
         assert!(credentials.is_expired());
         assert_eq!(credentials.refresh.unwrap().refresh_token, "r");
 
-        fs::write(&path, r#"{"claudeAiOauth":{"accessToken":"","refreshToken":""}}"#).unwrap();
+        fs::write(
+            &path,
+            r#"{"claudeAiOauth":{"accessToken":"","refreshToken":""}}"#,
+        )
+        .unwrap();
         assert!(load_cli_credentials_at(&path).is_err());
     }
 
@@ -1824,7 +1831,10 @@ mod tests {
         // An access token outliving the refresh token by over three days
         // means the deadline does not apply.
         write(now + 10 * day, now + 2 * day);
-        assert_eq!(load_cli_credentials_at(&path).unwrap().login_expires_at, None);
+        assert_eq!(
+            load_cli_credentials_at(&path).unwrap().login_expires_at,
+            None
+        );
     }
 
     #[test]
@@ -1844,7 +1854,11 @@ mod tests {
     fn credential_write_replaces_the_file_and_keeps_other_fields() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join(".credentials.json");
-        fs::write(&path, r#"{"other":1,"claudeAiOauth":{"accessToken":"old"}}"#).unwrap();
+        fs::write(
+            &path,
+            r#"{"other":1,"claudeAiOauth":{"accessToken":"old"}}"#,
+        )
+        .unwrap();
         let mut file = read_credential_file(&path).unwrap();
         file["claudeAiOauth"]["accessToken"] = "new".into();
         write_credential_file(&path, &file).unwrap();

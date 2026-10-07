@@ -2796,7 +2796,11 @@ pub(crate) fn rgb_to_hsv((r, g, b): (u8, u8, u8)) -> [f32; 3] {
     } else {
         60.0 * ((r - g) / delta + 4.0)
     };
-    let sat = if max <= f32::EPSILON { 0.0 } else { delta / max };
+    let sat = if max <= f32::EPSILON {
+        0.0
+    } else {
+        delta / max
+    };
     [hue, sat, max]
 }
 

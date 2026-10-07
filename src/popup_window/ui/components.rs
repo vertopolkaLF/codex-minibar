@@ -347,7 +347,11 @@ pub(crate) fn info_bar_with_action(
             palette.critical,
             "fluent-error-circle",
         ),
-        Severity::Caution => (palette.caution_background, palette.caution, "fluent-warning"),
+        Severity::Caution => (
+            palette.caution_background,
+            palette.caution,
+            "fluent-warning",
+        ),
         Severity::Informational => (
             palette.attention_background,
             palette.accent,
@@ -366,11 +370,7 @@ pub(crate) fn info_bar_with_action(
         .bg(background)
         .border_1()
         .border_color(palette.card_stroke)
-        .child(
-            div()
-                .pt(px(2.0))
-                .child(icon(glyph, 16.0, glyph_color)),
-        )
+        .child(div().pt(px(2.0)).child(icon(glyph, 16.0, glyph_color)))
         .child(
             div()
                 .flex()

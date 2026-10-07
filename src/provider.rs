@@ -222,10 +222,8 @@ fn start_driver_worker(
         }
         ProviderKind::Claude => {
             let folder = instance.config_folder();
-            let executable = crate::claude::executable_for(
-                instance.binary_path.as_deref(),
-                folder.as_deref(),
-            );
+            let executable =
+                crate::claude::executable_for(instance.binary_path.as_deref(), folder.as_deref());
             crate::logger::info(format!(
                 "{} executable: {}",
                 provider.display_name(),

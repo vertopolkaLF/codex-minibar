@@ -251,8 +251,8 @@ fn instances_from_legacy(legacy: &LegacyV38) -> Migrated {
                         name,
                         enabled: base.enabled && profile.enabled,
                         show_on_home: base.show_on_home && !excluded.contains(&profile.id),
-                        // Activation only ever ran with the local login.
-                        auto_activation: primary && legacy.automatic_activation,
+                        // Activation only ever ran with the local login of enabled providers.
+                        auto_activation: primary && base.enabled && legacy.automatic_activation,
                         binary_path: binary_path.clone(),
                         // Saved Claude accounts are resolved once the secret
                         // store can say whether they hold a sign-in session.
@@ -723,10 +723,11 @@ profile_id = "acct"
         assert_eq!(session.source, InstanceSource::ConfigFolder { path: None });
         let pasted = settings.instance_by_id(&pasted_id).unwrap();
         assert_eq!(pasted.source, InstanceSource::Manual);
-        assert_eq!(
-            *forgotten.borrow(),
-            [claude_secret(&session_id), codex_secret(&codex_id)]
-        );
+        let mut forgotten = forgotten.take();
+        forgotten.sort();
+        let mut expected = [claude_secret(&session_id), codex_secret(&codex_id)];
+        expected.sort();
+        assert_eq!(forgotten, expected);
         let claude: serde_json::Value = serde_json::from_slice(
             &std::fs::read(root.path().join(&session_id).join(".credentials.json")).unwrap(),
         )

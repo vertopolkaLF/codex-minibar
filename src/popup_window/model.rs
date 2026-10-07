@@ -767,11 +767,9 @@ pub(crate) fn login_notice(
     limits: &RateLimits,
     now: DateTime<Utc>,
 ) -> Option<LoginNotice> {
-    let can_sign_in = crate::instances::Capabilities::reason(
-        instance,
-        crate::instances::Capability::SignIn,
-    )
-    .is_none();
+    let can_sign_in =
+        crate::instances::Capabilities::reason(instance, crate::instances::Capability::SignIn)
+            .is_none();
     // The default Claude account can read the desktop app's own session,
     // which the app keeps signed in; no sign-in is offered for it for now.
     let app_account = instance.driver == ProviderKind::Claude && instance.config_folder().is_none();

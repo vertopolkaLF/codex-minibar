@@ -1636,13 +1636,10 @@ impl PopupRoot {
         .top_0()
         .left_0()
         .size_full();
-        let mut element = div().overflow_hidden().opacity(shown).child(
-            div()
-                .relative()
-                .flex_shrink_0()
-                .child(content)
-                .child(probe),
-        );
+        let mut element = div()
+            .overflow_hidden()
+            .opacity(shown)
+            .child(div().relative().flex_shrink_0().child(content).child(probe));
         if shown < 1.0 {
             element = element.h(px(height * shown));
         }
@@ -1686,7 +1683,9 @@ impl PopupRoot {
         let palette = self.palette.clone();
         let hover_id = fx::key(("sign-in-again", provider.id()));
         let hovered = self.hovered(hover_id);
-        let hover = self.fx.toggle(fx::key(("sign-in-again-fx", hover_id)), hovered, fx::FASTER);
+        let hover = self
+            .fx
+            .toggle(fx::key(("sign-in-again-fx", hover_id)), hovered, fx::FASTER);
         div()
             .id(eid(format!("sign-in-again-{}", provider.id())))
             .h(px(28.0))
@@ -1700,7 +1699,10 @@ impl PopupRoot {
             .on_click(move |_: &gpui::ClickEvent, _, _| {
                 crate::settings_window::open_sign_in(provider);
             })
-            .child(components::body_strong("Sign in again", palette.text_on_accent))
+            .child(components::body_strong(
+                "Sign in again",
+                palette.text_on_accent,
+            ))
             .into_any_element()
     }
 

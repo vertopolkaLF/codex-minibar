@@ -774,8 +774,18 @@ fn refresh_indicator_waits_for_both_limit_and_usage_requests() {
 
 #[test]
 fn pager_queues_only_the_latest_destination() {
+    let state = PagerState {
+        provider_order: [
+            ProviderKind::Codex,
+            ProviderKind::Claude,
+            ProviderKind::Cursor,
+        ]
+        .map(|provider| PopupView::Provider(id(provider)))
+        .to_vec(),
+        ..PagerState::default()
+    };
     let state = reduce_pager(
-        PagerState::default(),
+        state,
         PagerAction::Select(PopupView::Provider(id(ProviderKind::Codex))),
     );
     assert_eq!(state.outgoing, Some(PopupView::Home));
@@ -1320,7 +1330,12 @@ fn login_notices_offer_sign_in_only_where_minibar_can_sign_in() {
         Some(model::LoginNotice::SignInNeeded)
     );
     assert_eq!(
-        model::login_notice(&claude, Some("The request timed out. Try refreshing again."), &expiring, now),
+        model::login_notice(
+            &claude,
+            Some("The request timed out. Try refreshing again."),
+            &expiring,
+            now
+        ),
         None
     );
     assert_eq!(

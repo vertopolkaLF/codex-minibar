@@ -11,7 +11,10 @@ impl SettingsWindow {
         k: &mut Kit,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let (picker, phase) = self.overlays.troubleshoot.track(k, self.troubleshoot.clone())?;
+        let (picker, phase) = self
+            .overlays
+            .troubleshoot
+            .track(k, self.troubleshoot.clone())?;
         let labels = picker
             .tools
             .iter()

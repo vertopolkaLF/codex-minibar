@@ -631,14 +631,13 @@ impl SettingsWindow {
         match path {
             Some(path) => {
                 let menu_path = path.to_owned();
-                row = row
-                    .detail(
-                        div()
-                            .text_size(px(12.0))
-                            .text_color(theme.text_secondary)
-                            .child(path.to_owned())
-                            .into_any_element(),
-                    );
+                row = row.detail(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(theme.text_secondary)
+                        .child(path.to_owned())
+                        .into_any_element(),
+                );
                 if let Some(note) = note {
                     row = row.detail(note);
                 }

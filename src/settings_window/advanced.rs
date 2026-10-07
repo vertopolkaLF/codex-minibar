@@ -158,7 +158,10 @@ impl SettingsWindow {
         k: &mut Kit,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let ((), phase) = self.overlays.reset.track(k, self.confirm_reset.then_some(()))?;
+        let ((), phase) = self
+            .overlays
+            .reset
+            .track(k, self.confirm_reset.then_some(()))?;
         let cancel = Self::h(cx, |this, (), _, cx| {
             this.confirm_reset = false;
             cx.notify();

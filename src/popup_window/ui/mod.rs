@@ -270,7 +270,9 @@ fn handle_command(
             #[cfg(windows)]
             {
                 let hwnd = window
-                    .update(cx, |root, _, _| root.host.hwnd.filter(|_| root.host.visible()))
+                    .update(cx, |root, _, _| {
+                        root.host.hwnd.filter(|_| root.host.visible())
+                    })
                     .ok()
                     .flatten();
                 if let Some(hwnd) = hwnd {

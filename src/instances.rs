@@ -376,7 +376,10 @@ impl ProviderInstance {
             source: InstanceSource::default(),
             kiro_crew_path: None,
             kiro_cli_path: None,
-            openrouter: (driver == ProviderKind::OpenRouter).then(OpenRouterAccount::legacy),
+            openrouter: (driver == ProviderKind::OpenRouter).then(|| OpenRouterAccount {
+                name: driver.display_name().into(),
+                ..OpenRouterAccount::legacy()
+            }),
             credentials_revision: 0,
         }
     }
@@ -384,11 +387,12 @@ impl ProviderInstance {
     /// A new, enabled instance with a fresh id.
     pub fn new(driver: ProviderKind, name: impl Into<String>) -> Self {
         let id = new_instance_id(driver);
+        let name = name.into();
         Self {
             openrouter: (driver == ProviderKind::OpenRouter)
-                .then(|| OpenRouterAccount::with_id(id.clone(), "OpenRouter account")),
+                .then(|| OpenRouterAccount::with_id(id.clone(), name.clone())),
             id,
-            name: name.into(),
+            name,
             enabled: true,
             ..Self::primary(driver)
         }

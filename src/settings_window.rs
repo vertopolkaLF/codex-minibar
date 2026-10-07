@@ -25,10 +25,10 @@ use crate::popup_window::{AppState, PopupCommand};
 use crate::settings::Settings;
 
 mod about;
-mod backdrop;
 mod activation;
 mod advanced;
 mod appearance;
+mod backdrop;
 mod customize;
 mod general;
 mod input;
@@ -204,7 +204,9 @@ pub(crate) fn handle(command: Command, state: &Arc<AppState>, cx: &mut AsyncApp)
             let Some(handle) = SETTINGS_WINDOW.with(|slot| *slot.borrow()) else {
                 return;
             };
-            let _ = handle.update(cx, |root, window, cx| root.begin_sign_in(provider, window, cx));
+            let _ = handle.update(cx, |root, window, cx| {
+                root.begin_sign_in(provider, window, cx)
+            });
         }
         Command::OpenOnboarding => {
             if focus_existing(&ONBOARDING_WINDOW, cx) {

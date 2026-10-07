@@ -393,7 +393,12 @@ fn render_text_lines(lines: &[(String, [u8; 3])], right_align: bool) -> Vec<u8> 
     let left = ((ICON_SIZE as f32 - column) / 2.0).round();
     for (line_index, ((line, rgb), width)) in lines.iter().zip(&widths).enumerate() {
         let slack = column - width;
-        let x = left + if right_align { slack } else { (slack / 2.0).round() };
+        let x = left
+            + if right_align {
+                slack
+            } else {
+                (slack / 2.0).round()
+            };
         let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
         layout.reset(&LayoutSettings {
             x,
