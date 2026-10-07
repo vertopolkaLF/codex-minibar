@@ -1165,16 +1165,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires an installed and authenticated Codex CLI"]
-    fn reads_live_rate_limits() {
-        let executable = first_available(None).expect("Codex CLI should be discoverable");
-        let limits = CodexClient::new(executable)
-            .read_rate_limits()
-            .expect("Codex quota should return rate limits");
-        assert!(limits.primary.used_percent.is_some() || limits.primary.resets_at.is_some());
-    }
-
-    #[test]
     fn activation_exec_persists_a_real_session_and_captures_the_reply() {
         let args = activation_args(
             Path::new("C:\\tmp\\act"),

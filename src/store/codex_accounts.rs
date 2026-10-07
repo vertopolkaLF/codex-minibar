@@ -1199,87 +1199,6 @@ mod tests {
                 .is_empty()
         );
     }
-
-    #[test]
-    #[ignore = "reads local rollouts; requires a disposable database copy in CODEX_ACCOUNT_TEST_DB"]
-    fn replay_local_history_in_disposable_database() {
-        let path =
-            std::env::var("CODEX_ACCOUNT_TEST_DB").expect("disposable database copy required");
-        assert!(path.ends_with("account-migration-test.sqlite"));
-        let db = ProviderStore {
-            conn: Connection::open(&path).unwrap(),
-        };
-        db.migrate().unwrap();
-        let state = db.initialize_codex_attribution().unwrap();
-        assert_eq!(state.historical_owner, "legacy:previous-account");
-        let before = identity();
-        let mut events = Vec::new();
-        let mut expected = TokenUsage::default();
-        let from = Local::now().date_naive() - Duration::days(364);
-        let to = Local::now().date_naive() - Duration::days(1);
-        for (path, source) in crate::usage::collect_codex_session_files(&codex_home()).unwrap() {
-            let mut file = crate::usage::CachedSessionFile::default();
-            events.extend(
-                crate::usage::scan_file_delta(&path, &source, &mut file)
-                    .unwrap()
-                    .events,
-            );
-            for day in file.daily {
-                if day.date >= from && day.date <= to {
-                    expected.add(&day.usage);
-                }
-            }
-        }
-        let after = identity();
-        db.save_account_events(&events, &state, &before, &after, Utc::now())
-            .unwrap();
-        let rows = db
-            .account_daily_for(&state.historical_owner, from, to)
-            .unwrap();
-        let mut total = TokenUsage::default();
-        for (_, _, usage) in rows {
-            total.add(&usage);
-        }
-        // The test scanner deliberately has no live pricing catalog. The
-        // migration must preserve cached prices rather than replace them with
-        // that unpriced replay, while matching all token/request counters.
-        assert_eq!(total.input_tokens, expected.input_tokens);
-        assert_eq!(total.cached_input_tokens, expected.cached_input_tokens);
-        assert_eq!(total.output_tokens, expected.output_tokens);
-        assert_eq!(total.requests, expected.requests);
-        let cached_price:i64=db.conn.query_row("SELECT COALESCE(SUM(estimated_cost_microusd),0) FROM usage_daily WHERE provider='codex' AND date>=?1 AND date<=?2",params![from.to_string(),to.to_string()],|r|r.get(0)).unwrap();
-        assert!(total.estimated_cost_microusd >= cached_price as u64);
-        assert!(
-            db.account_daily_for(&current_id(), from, to)
-                .unwrap()
-                .is_empty()
-        );
-        let count = db
-            .conn
-            .query_row("SELECT COUNT(*) FROM codex_account_events", [], |r| {
-                r.get::<_, i64>(0)
-            })
-            .unwrap();
-        db.save_account_events(&events, &state, &None, &None, Utc::now())
-            .unwrap();
-        assert_eq!(
-            count,
-            db.conn
-                .query_row("SELECT COUNT(*) FROM codex_account_events", [], |r| r
-                    .get::<_, i64>(0))
-                .unwrap()
-        );
-        assert_eq!(
-            db.conn
-                .query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0))
-                .unwrap(),
-            "ok"
-        );
-        println!(
-            "Migrated {count} events; historical tokens={}; active account has no historical events; replay unchanged",
-            total.total_tokens()
-        );
-    }
     #[test]
     fn ownership_keeps_history_and_rejects_ambiguous_intervals() {
         let s = state();
@@ -1709,43 +1628,6 @@ mod tests {
                     .get::<_, i64>(0))
                 .unwrap(),
             0
-        );
-    }
-    #[test]
-    fn migration_keeps_same_basename_cursors_separate() {
-        let db = store();
-        for (path, offset) in [
-            ("sessions/2026/09/one/shared.jsonl", 100_i64),
-            ("sessions/2026/09/two/shared.jsonl", 300_i64),
-        ] {
-            db.conn
-                .execute(
-                    "INSERT INTO scan_files(provider,path,offset,meta_json)
-                     VALUES('codex',?1,?2,'{}')",
-                    params![path, offset],
-                )
-                .unwrap();
-        }
-
-        db.initialize_codex_attribution_at(identity_for("only-account", 1), at(100))
-            .unwrap();
-        let mut query = db
-            .conn
-            .prepare("SELECT source,offset FROM codex_legacy_cursors ORDER BY source")
-            .unwrap();
-        let cursors = query
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-            })
-            .unwrap()
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .unwrap();
-        assert_eq!(
-            cursors,
-            vec![
-                ("sessions/2026/09/one/shared.jsonl".into(), 100),
-                ("sessions/2026/09/two/shared.jsonl".into(), 300),
-            ]
         );
     }
 

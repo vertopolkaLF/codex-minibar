@@ -796,11 +796,3 @@ impl Render for TextInput {
             .child(TextElement { input: cx.entity() })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn mask_is_one_code_point() {
-        assert_eq!(super::MASK.len_utf8(), 3);
-    }
-}

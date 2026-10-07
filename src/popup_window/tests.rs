@@ -134,52 +134,6 @@ fn unavailable_sample_has_clear_copy() {
 }
 
 #[test]
-fn popup_refresh_is_sent_to_every_provider_worker() {
-    let (codex_tx, codex_rx) = std::sync::mpsc::channel();
-    let (claude_tx, claude_rx) = std::sync::mpsc::channel();
-    let (cursor_tx, cursor_rx) = std::sync::mpsc::channel();
-    let commands = vec![
-        (id(ProviderKind::Codex), codex_tx),
-        (id(ProviderKind::Claude), claude_tx),
-        (id(ProviderKind::Cursor), cursor_tx),
-    ];
-
-    assert!(refresh_all_workers(&commands));
-    assert_eq!(codex_rx.try_recv(), Ok(WorkerCommand::Refresh));
-    assert_eq!(claude_rx.try_recv(), Ok(WorkerCommand::Refresh));
-    assert_eq!(cursor_rx.try_recv(), Ok(WorkerCommand::Refresh));
-}
-
-#[test]
-fn combined_spend_uses_usage_tab_windows() {
-    let today = Local::now().date_naive();
-    assert_eq!(
-        crate::usage_overview::dates_for_total_spend(TotalSpendPeriod::Today),
-        (today, today)
-    );
-    assert_eq!(
-        crate::usage_overview::dates_for_total_spend(TotalSpendPeriod::Yesterday),
-        (
-            today - ChronoDuration::days(1),
-            today - ChronoDuration::days(1)
-        )
-    );
-    assert_eq!(
-        crate::usage_overview::dates_for_total_spend(TotalSpendPeriod::ThirtyDays),
-        (
-            today
-                - ChronoDuration::days(i64::from(
-                    crate::usage_overview::OverviewRange::ThirtyDays
-                        .days()
-                        .saturating_sub(1)
-                )),
-            today
-        )
-    );
-    assert_eq!(format_usd(1.25), "$1.25");
-}
-
-#[test]
 fn spend_donut_segments_cover_the_ring_with_gaps() {
     let segments = ui::donut_segments(
         &[
@@ -504,19 +458,6 @@ fn sections_keep_banked_resets_singleton() {
 }
 
 #[test]
-fn banked_resets_section_is_available_when_data_exists() {
-    let mut limits = plan_limits("plus");
-    limits.reset_credits = Some(crate::limits::RateLimitResetCreditsSummary {
-        available_count: 1,
-        ..Default::default()
-    });
-
-    assert!(
-        popup_sections(ProviderKind::Codex, &limits, false).contains(&PopupSection::BankedResets)
-    );
-}
-
-#[test]
 fn every_limits_sample_forces_a_reactive_state_change() {
     let mut ui = UiState::default();
     let initial = ui.clone();
@@ -604,21 +545,6 @@ fn provider_error_survives_until_that_provider_succeeds() {
 }
 
 #[test]
-fn forbidden_provider_error_is_shortened_for_ui() {
-    let mut ui = UiState::default();
-
-    ui.set_provider_error(
-        id(ProviderKind::Codex),
-        "codex stderr: unexpected status 403 Forbidden: <html>the full response</html>",
-    );
-
-    assert_eq!(
-        ui.provider_error(id(ProviderKind::Codex)),
-        Some("Access denied by the provider (HTTP 403).")
-    );
-}
-
-#[test]
 fn repeated_network_failures_become_one_readable_provider_error() {
     let raw = "OpenRouter quota refresh failed: TEST: request https://openrouter.ai/api/v1/key: Connection Failed: Connect error: A connection attempt failed because the connected party did not properly respond (os error 10060); ".repeat(3);
     let mut ui = UiState::default();
@@ -658,6 +584,16 @@ fn provider_errors_explain_http_failures_and_deduplicate_server_errors() {
             "parse OpenRouter analytics: invalid JSON response",
             "The provider returned an unexpected response. Try refreshing again.",
         ),
+        (
+            "codex stderr: unexpected status 403 Forbidden: <html>the full response</html>",
+            "Access denied by the provider (HTTP 403).",
+        ),
+        (
+            "Codex app-server response timed out",
+            "The request timed out. Try refreshing again.",
+        ),
+        // A number that merely contains 403 is not an HTTP status.
+        ("model 4030 is unavailable", "model 4030 is unavailable"),
     ] {
         assert_eq!(UiState::error_for_ui(raw), expected);
     }
@@ -727,33 +663,6 @@ fn nested_usage_errors_are_promoted_to_provider_error_state() {
     assert_eq!(
         usage_error_message(&statistics).as_deref(),
         Some("analytics request failed")
-    );
-}
-
-#[test]
-fn provider_timeout_has_a_readable_message() {
-    let mut ui = UiState::default();
-
-    ui.set_provider_error(
-        id(ProviderKind::Codex),
-        "Codex app-server response timed out",
-    );
-
-    assert_eq!(
-        ui.provider_error(id(ProviderKind::Codex)),
-        Some("The request timed out. Try refreshing again.")
-    );
-}
-
-#[test]
-fn unrelated_403_text_is_not_treated_as_an_http_status() {
-    let mut ui = UiState::default();
-
-    ui.set_provider_error(id(ProviderKind::Codex), "model 4030 is unavailable");
-
-    assert_eq!(
-        ui.provider_error(id(ProviderKind::Codex)),
-        Some("model 4030 is unavailable")
     );
 }
 

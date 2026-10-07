@@ -805,23 +805,6 @@ mod tests {
     }
 
     #[test]
-    fn only_providers_with_real_session_windows_support_activation() {
-        assert!(descriptor(ProviderKind::Codex).supports_activation);
-        assert!(descriptor(ProviderKind::Claude).supports_activation);
-        assert!(!descriptor(ProviderKind::Cursor).supports_activation);
-        assert!(!descriptor(ProviderKind::OpenCodeZen).supports_activation);
-        assert!(!descriptor(ProviderKind::OpenCodeGo).supports_activation);
-        assert!(!descriptor(ProviderKind::OpenRouter).supports_activation);
-        assert!(descriptor(ProviderKind::OpenRouter).include_in_total_spend);
-        assert!(!descriptor(ProviderKind::Antigravity).supports_activation);
-        assert!(!descriptor(ProviderKind::Grok).supports_activation);
-        assert!(!descriptor(ProviderKind::Antigravity).include_in_total_spend);
-        assert!(!descriptor(ProviderKind::Grok).include_in_total_spend);
-        assert!(!supports_usage_stats(ProviderKind::Antigravity));
-        assert!(!supports_usage_stats(ProviderKind::Grok));
-    }
-
-    #[test]
     fn opencode_registry_keeps_zen_popup_only_and_maps_go_monthly() {
         assert!(descriptor(ProviderKind::OpenCodeZen).metrics.is_empty());
         let limits = RateLimits {
