@@ -29,8 +29,15 @@ pub(crate) struct Theme {
     pub(crate) card_hover: Hsla,
     pub(crate) control: Hsla,
     pub(crate) control_hover: Hsla,
-    pub(crate) control_pressed: Hsla,
     pub(crate) control_strong: Hsla,
+    /// Flat push button fill; a solid step brighter than controls.
+    pub(crate) button: Hsla,
+    pub(crate) button_hover: Hsla,
+    pub(crate) button_pressed: Hsla,
+    /// Destructive button: a soft red wash with saturated red text.
+    pub(crate) danger: Hsla,
+    pub(crate) danger_hover: Hsla,
+    pub(crate) danger_text: Hsla,
     pub(crate) control_disabled: Hsla,
     /// Unfilled track of toggles and checkboxes.
     pub(crate) control_track: Hsla,
@@ -48,7 +55,6 @@ pub(crate) struct Theme {
     pub(crate) on_accent: Hsla,
     pub(crate) accent: Hsla,
     pub(crate) accent_hover: Hsla,
-    pub(crate) accent_pressed: Hsla,
     pub(crate) accent_text: Hsla,
     pub(crate) accent_soft: Hsla,
     pub(crate) divider: Hsla,
@@ -169,8 +175,17 @@ impl Theme {
             // the plane and a card.
             control: ink(dark, if dark { 0x12 } else { 0x0A }),
             control_hover: ink(dark, if dark { 0x1A } else { 0x10 }),
-            control_pressed: ink(dark, if dark { 0x0C } else { 0x07 }),
             control_strong: ink(dark, if dark { 0x8B } else { 0x72 }),
+            button: ink(dark, if dark { 0x17 } else { 0x0B }),
+            button_hover: ink(dark, if dark { 0x22 } else { 0x13 }),
+            button_pressed: ink(dark, if dark { 0x12 } else { 0x08 }),
+            danger: rgba8(0xE5, 0x48, 0x4D, if dark { 0x29 } else { 0x1A }),
+            danger_hover: rgba8(0xE5, 0x48, 0x4D, if dark { 0x3D } else { 0x29 }),
+            danger_text: if dark {
+                rgb8((0xFF, 0x6B, 0x6E))
+            } else {
+                rgb8((0xCE, 0x2C, 0x31))
+            },
             control_disabled: ink(dark, if dark { 0x20 } else { 0x18 }),
             control_track: rgba8(0, 0, 0, if dark { 0x73 } else { 0x1F }),
             control_solid: if dark {
@@ -202,7 +217,6 @@ impl Theme {
             },
             accent: accent_fill,
             accent_hover: accent_fill.alpha(0.9),
-            accent_pressed: accent_fill.alpha(0.8),
             accent_text: rgb8(accent.text(dark)),
             accent_soft: accent_fill.alpha(if dark { 0.16 } else { 0.12 }),
             divider: ink(dark, if dark { 0x10 } else { 0x0D }),

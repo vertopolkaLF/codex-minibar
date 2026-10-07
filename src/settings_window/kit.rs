@@ -1004,63 +1004,8 @@ impl Button {
     }
 
     pub(crate) fn render(self, k: &Kit) -> AnyElement {
-        let theme = &k.theme;
-        let (bg, hover, pressed, fg) = match self.kind {
-            ButtonKind::Accent => (
-                theme.accent,
-                theme.accent_hover,
-                theme.accent_pressed,
-                theme.on_accent,
-            ),
-            ButtonKind::Standard => (
-                theme.control,
-                theme.control_hover,
-                theme.control_pressed,
-                theme.text,
-            ),
-            ButtonKind::Danger => (
-                theme.control,
-                theme.critical_bg,
-                theme.critical_bg.alpha(0.7),
-                theme.critical,
-            ),
-            ButtonKind::Link => (
-                gpui::transparent_black(),
-                theme.subtle_hover,
-                theme.subtle_pressed,
-                theme.accent_text,
-            ),
-        };
-        let (bg, hover, pressed, fg) = match (self.ghost, self.kind) {
-            (false, _) | (true, ButtonKind::Link) => (bg, hover, pressed, fg),
-            (true, ButtonKind::Accent) => (
-                gpui::transparent_black(),
-                theme.accent_soft,
-                theme.accent_soft.alpha(0.7),
-                theme.accent_text,
-            ),
-            (true, ButtonKind::Standard) => (
-                gpui::transparent_black(),
-                theme.control_hover,
-                theme.control_pressed,
-                fg,
-            ),
-            (true, ButtonKind::Danger) => (gpui::transparent_black(), hover, pressed, fg),
-        };
-        let fg = if self.disabled {
-            if self.kind == ButtonKind::Accent && !self.ghost {
-                theme.on_accent.alpha(0.7)
-            } else {
-                theme.text_disabled
-            }
-        } else {
-            fg
-        };
-        let bg = if self.disabled && self.kind == ButtonKind::Accent && !self.ghost {
-            theme.control_disabled
-        } else {
-            bg
-        };
+        let skin = ButtonSkin::resolve(&k.theme, self.kind, self.ghost, self.disabled);
+        let fg = skin.fg;
         let icon_only = self.label.is_none();
         let key = hover_key(&self.id);
         let mut button = div()
@@ -1069,30 +1014,29 @@ impl Button {
             .flex_none()
             .items_center()
             .justify_center()
-            .gap(px(8.0))
+            .gap(px(6.0))
             .h(px(CONTROL_HEIGHT))
             .rounded(px(CONTROL_RADIUS))
-            .bg(bg)
             .text_color(fg)
             .text_size(px(13.0))
             .when_some(self.icon, |el, name| el.child(icon(name, 14.0, fg)))
             .when_some(self.label, |el, label| el.child(label));
-        button = if icon_only {
-            button.w(px(CONTROL_HEIGHT))
-        } else {
-            button.px(px(if self.kind == ButtonKind::Link {
-                6.0
-            } else {
-                14.0
-            }))
+        button = match (icon_only, self.kind, self.icon.is_some()) {
+            (true, ..) => button.w(px(CONTROL_HEIGHT)),
+            (false, ButtonKind::Link, _) => button.px(px(6.0)),
+            // Optically balance a leading glyph: its box reads lighter
+            // than text, so the icon side takes less padding.
+            (false, _, true) => button.pl(px(10.0)).pr(px(12.0)),
+            (false, _, false) => button.px(px(12.0)),
         };
         if self.full_width {
             button = button.w_full().flex_1();
         }
         if self.disabled {
-            button = button.cursor(CursorStyle::Arrow);
+            button = button.bg(skin.rest).cursor(CursorStyle::Arrow);
         } else {
-            button = hover_bg(k, button, key, bg, hover)
+            let pressed = skin.pressed;
+            button = hover_bg(k, button, key, skin.rest, skin.hover)
                 .cursor_pointer()
                 .active(move |style| style.bg(pressed));
             if let Some(on_click) = self.on_click {
@@ -1106,6 +1050,87 @@ impl Button {
             button = with_tooltip(k, button, tooltip);
         }
         button.into_any_element()
+    }
+}
+
+/// Resolved fills of one button. Buttons are flat solid fills: no strokes,
+/// gradients or shadows; hover brightens and press settles below rest.
+struct ButtonSkin {
+    rest: Hsla,
+    hover: Hsla,
+    pressed: Hsla,
+    fg: Hsla,
+}
+
+impl ButtonSkin {
+    fn resolve(theme: &Theme, kind: ButtonKind, ghost: bool, disabled: bool) -> Self {
+        let clear = gpui::transparent_black();
+        let skin = |rest, hover, pressed, fg| Self {
+            rest,
+            hover,
+            pressed,
+            fg,
+        };
+        if disabled {
+            let fill = match (kind, ghost) {
+                (ButtonKind::Link, _) | (_, true) => clear,
+                _ => theme.control_disabled.alpha(theme.control_disabled.a * 0.6),
+            };
+            return skin(fill, fill, fill, theme.text_disabled);
+        }
+        // Accent hover lifts toward the text color and press sinks away
+        // from it, so the fill stays opaque instead of turning translucent.
+        let lift = if theme.dark {
+            gpui::white()
+        } else {
+            gpui::black()
+        };
+        let sink = if theme.dark {
+            gpui::black()
+        } else {
+            gpui::white()
+        };
+        match (kind, ghost) {
+            (ButtonKind::Link, _) => skin(
+                clear,
+                theme.subtle_hover,
+                theme.subtle_pressed,
+                theme.accent_text,
+            ),
+            (ButtonKind::Standard, false) => skin(
+                theme.button,
+                theme.button_hover,
+                theme.button_pressed,
+                theme.text,
+            ),
+            (ButtonKind::Standard, true) => {
+                skin(clear, theme.button, theme.button_pressed, theme.text)
+            }
+            (ButtonKind::Accent, false) => skin(
+                theme.accent,
+                blend(theme.accent, lift, 0.10),
+                blend(theme.accent, sink, 0.08),
+                theme.on_accent,
+            ),
+            (ButtonKind::Accent, true) => skin(
+                clear,
+                theme.accent_soft,
+                theme.accent_soft.alpha(theme.accent_soft.a * 0.7),
+                theme.accent_text,
+            ),
+            (ButtonKind::Danger, false) => skin(
+                theme.danger,
+                theme.danger_hover,
+                theme.danger.alpha(theme.danger.a * 0.8),
+                theme.danger_text,
+            ),
+            (ButtonKind::Danger, true) => skin(
+                clear,
+                theme.danger,
+                theme.danger.alpha(theme.danger.a * 0.7),
+                theme.danger_text,
+            ),
+        }
     }
 }
 

@@ -448,7 +448,12 @@ impl SettingsWindow {
                 ),
             ));
         }
+        let pause = list == RuleList::Pause;
         let mut time_row = div().flex().gap(px(16.0)).flex_wrap();
+        if pause {
+            time_row = time_row.items_end();
+        }
+        let mut pickers = Vec::new();
         for (slot, (label, minutes)) in rule.times.iter().enumerate() {
             let rule_id = rule.id.clone();
             let on_change = Self::h(cx, move |this, value: u16, _, cx| {
