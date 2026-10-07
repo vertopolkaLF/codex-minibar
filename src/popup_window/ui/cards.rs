@@ -6,7 +6,9 @@ use gpui::{
 };
 
 use super::{
-    components::{self, CARD_RADIUS, caption, card, card_metadata, icon, nowrap, status_row},
+    components::{
+        self, CARD_RADIUS, TextMetrics, caption, card, card_metadata, icon, nowrap, status_row,
+    },
     fx,
     root::{PopupRoot, eid},
     theme::HslaExt,
@@ -15,8 +17,19 @@ use crate::popup_window::{model::*, *};
 
 /// Old WinUI estimate per expanded banked-reset row; used as the reveal cap.
 const RESET_ROW_HEIGHT: f32 = 58.0;
+/// Name line plus gap added when a row stacks its date under the name.
+const STACKED_ROW_EXTRA: f32 = 24.0;
+
+fn compact_title_fits(available: f32, title: f32, usage: f32, reset: f32) -> bool {
+    // Two 10 DIP gaps between the three groups in the compact row.
+    title + usage + reset + 20.0 <= available
+}
 
 impl PopupRoot {
+    fn metrics<'a>(&self, window: &'a Window) -> TextMetrics<'a> {
+        TextMetrics::new(window, self.palette.font_family.clone())
+    }
+
     pub(super) fn render_cards(
         &mut self,
         cards: &[Card<'_>],
@@ -46,7 +59,16 @@ impl PopupRoot {
                 window: limit,
                 usage_amount,
                 disabled,
-            } => self.render_limit_card(key, title, limit, *usage_amount, *disabled, style),
+            } => self.render_limit_card(
+                key,
+                title,
+                limit,
+                *usage_amount,
+                *disabled,
+                style,
+                self.card_inner_width(surface),
+                window,
+            ),
             Card::Spending {
                 key,
                 title,
@@ -66,6 +88,8 @@ impl PopupRoot {
                 *expires_at,
                 delete.clone(),
                 style,
+                self.card_inner_width(surface),
+                window,
                 cx,
             ),
             Card::AccountHeading {
@@ -90,23 +114,41 @@ impl PopupRoot {
                 };
                 row.px(px(4.0)).mt(px(8.0)).into_any_element()
             }
-            Card::ForcedResets(resets) => self.render_forced_resets(resets, cx),
+            Card::ForcedResets(resets) => {
+                self.render_forced_resets(resets, self.card_inner_width(surface), window, cx)
+            }
             Card::CloudCredits {
                 key,
                 window: limit,
                 credits,
-            } => self.render_cloud_credits(key, limit, *credits, style),
+            } => self.render_cloud_credits(
+                key,
+                limit,
+                *credits,
+                style,
+                self.card_inner_width(surface),
+                window,
+            ),
             Card::BankedResets {
                 limits,
                 expansion_key,
-            } => self.render_banked_resets(limits, expansion_key, cx),
+            } => self.render_banked_resets(
+                limits,
+                expansion_key,
+                self.card_inner_width(surface),
+                window,
+                cx,
+            ),
             Card::UsageStatistics {
                 provider,
                 statistics,
             } => self.render_activity_card(*provider, statistics, window, cx),
-            Card::UsageLoading => caption("Loading usage statistics…", self.palette.text_tertiary)
-                .mx(px(4.0))
-                .into_any_element(),
+            Card::UsageLoading => caption(
+                crate::i18n::tr("loading-usage-statistics"),
+                self.palette.text_tertiary,
+            )
+            .mx(px(4.0))
+            .into_any_element(),
             Card::Credits { value } => {
                 let palette = &self.palette;
                 card(palette)
@@ -117,8 +159,14 @@ impl PopupRoot {
                             .flex()
                             .flex_col()
                             .gap(px(2.0))
-                            .child(components::body("CREDITS", palette.text_tertiary))
-                            .child(caption("Available balance", palette.text_tertiary)),
+                            .child(components::body(
+                                crate::i18n::tr("credits-338f52"),
+                                palette.text_tertiary,
+                            ))
+                            .child(caption(
+                                crate::i18n::tr("available-balance"),
+                                palette.text_tertiary,
+                            )),
                         components::body_strong(value.clone(), palette.accent),
                     ))
                     .into_any_element()
@@ -182,7 +230,11 @@ impl PopupRoot {
                         provider.id(),
                         heading.first
                     )))
-                    .on_hover(self.hover_listener(id, Some(error.clone().into()), cx))
+                    .on_hover(self.hover_listener(
+                        id,
+                        Some(crate::i18n::localize_error(error).into()),
+                        cx,
+                    ))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.select_view(PopupView::from_provider(provider), cx);
                     }))
@@ -212,8 +264,12 @@ impl PopupRoot {
 
     fn reset_status(&self, limit: &LimitWindow) -> Div {
         match limit.resets_at {
-            Some(at) => status_row("Resets in", format_reset_in(Some(at)), &self.palette),
-            None => card_metadata("Session not started", &self.palette),
+            Some(at) => status_row(
+                crate::i18n::tr("resets-in"),
+                format_reset_in(Some(at)),
+                &self.palette,
+            ),
+            None => card_metadata(crate::i18n::tr("session-not-started"), &self.palette),
         }
     }
 
@@ -245,6 +301,8 @@ impl PopupRoot {
         usage_amount: Option<&UsageAmount>,
         disabled: bool,
         style: CardStyle,
+        available_width: f32,
+        window: &Window,
     ) -> AnyElement {
         let palette = self.palette.clone();
         let (label, progress, show_reset, exhausted) =
@@ -259,6 +317,24 @@ impl PopupRoot {
             .then(|| limit.pace_tip(style.show_used_percentage, Utc::now()))
             .flatten();
         let secondary = palette.text_secondary;
+        let metrics = self.metrics(window);
+        let title_width = metrics.caption(title);
+        let mut usage_width = metrics.strong(&label);
+        if let Some(value) = usage_amount_label(usage_amount, style.show_usage_values) {
+            usage_width += 5.0 + metrics.caption(&value);
+        }
+        let reset_width = match limit.resets_at {
+            Some(at) => {
+                metrics.status_row(crate::i18n::tr("resets-in"), &format_reset_in(Some(at)))
+            }
+            None => metrics.caption(crate::i18n::tr("session-not-started")),
+        };
+        let single_line = !title.contains(['\n', '\r']);
+        // Title, usage and reset on one row; pace forces the two-row layout.
+        let one_row_fits = single_line
+            && pace.is_none()
+            && compact_title_fits(available_width, title_width, usage_width, reset_width);
+        let title_alone_fits = single_line && title_width <= available_width;
         let title_el = || nowrap(caption(title.to_owned(), secondary));
         let one_row = |this: &Self| {
             div()
@@ -271,14 +347,24 @@ impl PopupRoot {
                 .child(this.usage_label(label.clone(), usage_amount, style.show_usage_values))
                 .child(this.reset_status(limit))
         };
+        let title_block =
+            components::fit_text(title_alone_fits, caption(title.to_owned(), secondary));
         let header = match pace {
             Some(pace) => {
-                components::split_row(title_el(), card_metadata(pace.summary(), &palette))
+                let summary = pace.summary();
+                let fits = title_alone_fits
+                    && TextMetrics::fits_split(
+                        available_width,
+                        title_width,
+                        metrics.caption(&summary),
+                    );
+                components::adaptive_split(fits, title_block, card_metadata(summary, &palette))
             }
-            None => div().child(title_el()),
+            None => div().child(title_block),
         };
         let footer = if show_reset {
-            components::split_row(
+            components::adaptive_split(
+                TextMetrics::fits_split(available_width, usage_width, reset_width),
                 self.usage_label(label.clone(), usage_amount, style.show_usage_values),
                 self.reset_status(limit),
             )
@@ -297,7 +383,8 @@ impl PopupRoot {
             ) {
                 element = element.child(layer);
             }
-            let content = if pace.is_none() {
+            // Copy that does not fit keeps the compact fill and moves values below the title.
+            let content = if one_row_fits {
                 one_row(self)
             } else {
                 div().flex().flex_col().w_full().child(header).child(footer)
@@ -306,7 +393,7 @@ impl PopupRoot {
                 .child(div().relative().p(px(12.0)).child(content))
                 .into_any_element();
         }
-        if exhausted {
+        if exhausted && one_row_fits {
             return card(&palette)
                 .overflow_hidden()
                 .p(px(12.0))
@@ -337,8 +424,11 @@ impl PopupRoot {
         limit: &LimitWindow,
         credits: Option<&crate::limits::CloudSessionCredits>,
         style: CardStyle,
+        available_width: f32,
+        window: &Window,
     ) -> AnyElement {
         let palette = self.palette.clone();
+        let metrics = self.metrics(window);
         let (label, progress, available) = cloud_session_credits_presentation(
             limit,
             credits,
@@ -352,36 +442,59 @@ impl PopupRoot {
         );
         // Name/balance left, expiry date/countdown right, like two-line quota cards.
         let mut metadata = div().flex().flex_col().items_end();
+        let mut metadata_width: f32 = 0.0;
         if let Some(expires) = limit.resets_at {
             let local = expires.with_timezone(&Local);
-            metadata = metadata.child(card_metadata(
-                format!(
-                    "{}, {}",
-                    local.format("%b %-d"),
-                    TimeFormat::current().format_hm(local)
-                ),
-                &palette,
-            ));
+            let date = format!(
+                "{}, {}",
+                crate::i18n::month_day(local),
+                TimeFormat::current().format_hm(local)
+            );
+            metadata_width = metrics.caption(&date);
+            metadata = metadata.child(card_metadata(date, &palette));
             if available {
+                let countdown = format_reset_in(Some(expires));
+                metadata_width = metadata_width
+                    .max(metrics.status_row(crate::i18n::tr("expires-in"), &countdown));
                 metadata = metadata.child(status_row(
-                    "Expires in",
-                    format_reset_in(Some(expires)),
+                    crate::i18n::tr("expires-in"),
+                    countdown,
                     &palette,
                 ));
             }
         }
-        let content = components::split_row(
+        let title = crate::i18n::tr("cloud-session-credits");
+        let title_width = metrics.caption(title);
+        let label_width = metrics.strong(&label);
+        let fits = |width: f32| TextMetrics::fits_split(available_width, width, metadata_width);
+        let label_el = nowrap(components::body_strong(label, palette.accent));
+        // Long copy moves to its own rows instead of being clipped.
+        let content = if fits(title_width.max(label_width)) {
+            components::split_row(
+                div()
+                    .flex()
+                    .flex_col()
+                    .min_w_0()
+                    .child(nowrap(caption(title, palette.text_secondary)))
+                    .child(label_el),
+                metadata,
+            )
+        } else {
             div()
                 .flex()
                 .flex_col()
-                .min_w_0()
-                .child(nowrap(caption(
-                    "CLOUD SESSION CREDITS",
-                    palette.text_secondary,
-                )))
-                .child(nowrap(components::body_strong(label, palette.accent))),
-            metadata,
-        );
+                .w_full()
+                .gap(px(2.0))
+                .child(components::fit_text(
+                    title_width <= available_width,
+                    caption(title, palette.text_secondary),
+                ))
+                .child(components::adaptive_split(
+                    fits(label_width),
+                    label_el,
+                    metadata,
+                ))
+        };
 
         if style.compact {
             let mut element = card(&palette).relative().overflow_hidden();
@@ -427,13 +540,19 @@ impl PopupRoot {
         expires_at: Option<DateTime<Utc>>,
         delete: Option<(String, String)>,
         style: CardStyle,
+        available_width: f32,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = self.palette.clone();
+        let metrics = self.metrics(window);
+        let mut right_width;
         let mut right = div().flex().flex_col().items_end().gap(px(2.0));
         let mut show_masked_key = true;
         if expired {
-            let label = expires_at.map_or_else(|| "expired".into(), format_expired_at);
+            let label =
+                expires_at.map_or_else(|| crate::i18n::tr("expired").into(), format_expired_at);
+            right_width = metrics.body(&label);
             let mut row = div()
                 .flex()
                 .flex_row()
@@ -441,6 +560,7 @@ impl PopupRoot {
                 .gap(px(8.0))
                 .child(components::body(label, palette.text_tertiary));
             if let Some((account_id, key_id)) = delete {
+                right_width += 40.0;
                 row = row.child(self.render_delete_button(account_id, key_id, cx));
             }
             right = right.child(row);
@@ -458,50 +578,81 @@ impl PopupRoot {
                     |limit| format!("?.?? / {}", format_usd(limit as f64 / 1_000_000.0)),
                 )
             };
+            right_width = metrics.body(crate::i18n::tr("usage")) + 6.0 + metrics.strong(&amount);
             right = right.child(
                 div()
                     .flex()
                     .flex_row()
                     .gap(px(6.0))
                     .whitespace_nowrap()
-                    .child(components::body("Usage:", palette.text_tertiary))
+                    .child(components::body(
+                        crate::i18n::tr("usage"),
+                        palette.text_tertiary,
+                    ))
                     .child(components::body_strong(amount, palette.accent)),
             );
             let expires_soon = expires_at.filter(|at| *at > Utc::now());
             show_masked_key = !(spending.resets_at.is_some() && expires_soon.is_some());
-            if spending.resets_at.is_some() || expires_soon.is_some() {
-                let mut meta = div().flex().flex_row().items_center().gap(px(6.0));
-                if let Some(reset) = spending.resets_at {
-                    meta = meta.child(status_row(
-                        "Resets in",
-                        format_reset_in(Some(reset)),
-                        &palette,
-                    ));
-                }
-                if let Some(expires) = expires_soon {
-                    if spending.resets_at.is_some() {
+            let statuses = [
+                spending.resets_at.map(|at| ("resets-in", at)),
+                expires_soon.map(|at| ("expires-in", at)),
+            ]
+            .into_iter()
+            .flatten()
+            .map(|(label, at)| (crate::i18n::tr(label), format_reset_in(Some(at))))
+            .collect::<Vec<_>>();
+            if !statuses.is_empty() {
+                let widths = statuses
+                    .iter()
+                    .map(|(label, value)| metrics.status_row(label, value))
+                    .collect::<Vec<_>>();
+                let bullet = 12.0 + metrics.caption("•");
+                let inline_width = widths.iter().sum::<f32>() + bullet * (widths.len() - 1) as f32;
+                // Reset and expiry share a row only while it fits the card.
+                let inline = inline_width <= available_width;
+                let mut meta = if inline {
+                    div().flex().flex_row().items_center().gap(px(6.0))
+                } else {
+                    div().flex().flex_col().items_end().gap(px(2.0))
+                };
+                for (index, (label, value)) in statuses.into_iter().enumerate() {
+                    if inline && index > 0 {
                         meta = meta.child(card_metadata("•", &palette));
                     }
-                    meta = meta.child(status_row(
-                        "Expires in",
-                        format_reset_in(Some(expires)),
-                        &palette,
-                    ));
+                    meta = meta.child(status_row(label, value, &palette));
                 }
                 right = right.child(meta);
+                right_width = right_width.max(if inline {
+                    inline_width
+                } else {
+                    widths.iter().copied().fold(0.0, f32::max)
+                });
             }
         }
+        let title_fits = !title.contains(['\n', '\r'])
+            && TextMetrics::fits_split(available_width, metrics.caption(title), right_width);
+        let title_label = caption(title.to_owned(), palette.text_secondary);
         let mut left = div()
             .flex()
             .flex_col()
             .gap(px(2.0))
-            .child(nowrap(caption(title.to_owned(), palette.text_secondary)));
+            .child(components::fit_text(title_fits, title_label));
         if show_masked_key
             && let Some(masked) = masked_key.map(str::trim).filter(|value| !value.is_empty())
         {
             left = left.child(nowrap(caption(masked.to_owned(), palette.text_tertiary)));
         }
-        let header = components::split_row(left, right);
+        let header = if title_fits {
+            components::split_row(left, right)
+        } else {
+            div()
+                .flex()
+                .flex_col()
+                .w_full()
+                .gap(px(6.0))
+                .child(left)
+                .child(right)
+        };
         // Expired keys keep title/mask only — no spend bar that looks "full".
         let progress = (!expired)
             .then(|| {
@@ -581,7 +732,7 @@ impl PopupRoot {
             .items_center()
             .justify_center()
             .rounded(px(4.0))
-            .on_hover(self.hover_listener(hover_id, Some("Remove key".into()), cx))
+            .on_hover(self.hover_listener(hover_id, Some(crate::i18n::tr("remove-key").into()), cx))
             .on_click(move |_: &ClickEvent, _, _| {
                 let account_id = account_id.clone();
                 let key_id = key_id.clone();
@@ -606,30 +757,43 @@ impl PopupRoot {
         &mut self,
         limits: &RateLimits,
         expansion_key: &str,
+        available_width: f32,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = self.palette.clone();
+        let metrics = self.metrics(window);
+        // These rows use 16 DIP side padding instead of the usual 12.
+        let available_width = available_width - 8.0;
+        let date_status_width = |date: &str, status: f32| metrics.caption(date).max(status);
         let count = limits.available_reset_count();
-        let count_label = if count == 1 {
-            "1 Banked Reset".to_owned()
-        } else {
-            format!("{count} Banked Resets")
-        };
+        let count_label =
+            crate::i18n::format("count-banked-resets", &[("count", count.to_string())]);
         let format_date = |at: DateTime<Utc>| {
             let local = at.with_timezone(&Local);
             format!(
                 "{}, {}",
-                local.format("%b %-d"),
+                crate::i18n::month_day(local),
                 TimeFormat::current().format_hm(local)
             )
         };
         let expiration = limits.next_reset_credit_expiration();
         let expiration_date = expiration
             .map(format_date)
-            .unwrap_or_else(|| "Available to use".into());
-        let expiration_status = match expiration {
-            Some(at) => status_row("Expires in", format_reset_in(Some(at)), &palette),
-            None => card_metadata("No expiration date", &palette),
+            .unwrap_or_else(|| crate::i18n::tr("available-to-use").into());
+        let (expiration_status, expiration_status_width) = match expiration {
+            Some(at) => {
+                let value = format_reset_in(Some(at));
+                let width = metrics.status_row(crate::i18n::tr("expires-in"), &value);
+                (
+                    status_row(crate::i18n::tr("expires-in"), value, &palette),
+                    width,
+                )
+            }
+            None => {
+                let label = crate::i18n::tr("no-expiration-date");
+                (card_metadata(label, &palette), metrics.caption(label))
+            }
         };
         let available = limits
             .reset_credits
@@ -648,12 +812,23 @@ impl PopupRoot {
             .fx
             .toggle(fx::key(("reset-reveal", expansion_key)), open, fx::NORMAL);
 
-        let mut title = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(8.0))
-            .child(nowrap(components::body_strong(count_label, palette.accent)));
+        // Count label plus the 8 DIP gap and 16 DIP chevron.
+        let title_width = metrics.strong(&count_label) + if expandable { 24.0 } else { 0.0 };
+        let header_fits = TextMetrics::fits_split(
+            available_width,
+            title_width,
+            date_status_width(&expiration_date, expiration_status_width),
+        );
+        let mut title =
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(8.0))
+                .child(components::fit_text(
+                    title_width <= available_width,
+                    components::body_strong(count_label, palette.accent),
+                ));
         if expandable {
             title = title.child(
                 icon("fluent-chevron-down", 16.0, theme_gray()).with_transformation(
@@ -661,7 +836,8 @@ impl PopupRoot {
                 ),
             );
         }
-        let header_content = components::split_row(
+        let header_content = components::adaptive_split(
+            header_fits,
             title,
             div()
                 .flex()
@@ -719,6 +895,7 @@ impl PopupRoot {
                 .flex_col()
                 .gap(px(9.0))
                 .child(components::rule(&palette));
+            let mut stacked_rows = 0;
             for (index, credit) in available.iter().enumerate() {
                 if index > 0 {
                     rows = rows.child(components::rule(&palette));
@@ -728,16 +905,41 @@ impl PopupRoot {
                     .as_deref()
                     .filter(|title| !title.trim().is_empty())
                     .map(str::to_owned)
-                    .unwrap_or_else(|| format!("Banked Reset {}", index + 1));
+                    .unwrap_or_else(|| {
+                        crate::i18n::format("banked-reset", &[("v0", (index + 1).to_string())])
+                    });
                 let date = credit
                     .expires_at
-                    .map_or_else(|| "No expiration date".into(), format_date);
-                let status = match credit.expires_at {
-                    Some(at) => status_row("Expires in", format_reset_in(Some(at)), &palette),
-                    None => card_metadata("Available to use", &palette),
+                    .map_or_else(|| crate::i18n::tr("no-expiration-date").into(), format_date);
+                let (status, status_width) = match credit.expires_at {
+                    Some(at) => {
+                        let value = format_reset_in(Some(at));
+                        let width = metrics.status_row(crate::i18n::tr("expires-in"), &value);
+                        (
+                            status_row(crate::i18n::tr("expires-in"), value, &palette),
+                            width,
+                        )
+                    }
+                    None => {
+                        let label = crate::i18n::tr("available-to-use");
+                        (card_metadata(label, &palette), metrics.caption(label))
+                    }
                 };
-                rows = rows.child(components::split_row(
-                    nowrap(components::body(name, palette.text_secondary)),
+                let name_width = metrics.body(&name);
+                let fits = TextMetrics::fits_split(
+                    available_width,
+                    name_width,
+                    date_status_width(&date, status_width),
+                );
+                if !fits {
+                    stacked_rows += 1;
+                }
+                rows = rows.child(components::adaptive_split(
+                    fits,
+                    components::fit_text(
+                        name_width <= available_width,
+                        components::body(name, palette.text_secondary),
+                    ),
                     div()
                         .flex()
                         .flex_col()
@@ -747,7 +949,10 @@ impl PopupRoot {
                         .child(status),
                 ));
             }
-            let cap = (available.len() as f32 * RESET_ROW_HEIGHT + 16.0) * reveal;
+            let cap = (available.len() as f32 * RESET_ROW_HEIGHT
+                + stacked_rows as f32 * STACKED_ROW_EXTRA
+                + 16.0)
+                * reveal;
             element = element.child(
                 div()
                     .overflow_hidden()
@@ -762,9 +967,12 @@ impl PopupRoot {
     fn render_forced_resets(
         &mut self,
         resets: &[&crate::reset_feed::ForcedReset],
+        available_width: f32,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = self.palette.clone();
+        let metrics = self.metrics(window);
         let hover_id = fx::key("forced-resets");
         let hover = self.fx.toggle(
             fx::key(("forced-resets-hover", hover_id)),
@@ -776,22 +984,29 @@ impl PopupRoot {
             let local = reset.reset_at.with_timezone(&Local);
             let date = format!(
                 "{}, {}",
-                local.format("%b %-d"),
+                crate::i18n::month_day(local),
                 TimeFormat::current().format_hm(local)
             );
             let label = reset
                 .label
                 .as_deref()
                 .filter(|label| !label.trim().is_empty())
-                .unwrap_or("Codex limits")
+                .unwrap_or(crate::i18n::tr("codex-limits"))
                 .to_owned();
             let row_id = fx::key(("forced-reset-row", reset.id.as_str()));
             let tip: SharedString = if reset.source_url.is_some() {
-                "Open announcement source".into()
+                crate::i18n::tr("open-announcement-source").into()
             } else {
-                "Source not provided".into()
+                crate::i18n::tr("source-not-provided").into()
             };
             let source = reset.source_url.clone();
+            let countdown = format_reset_in(Some(reset.reset_at));
+            let kind = crate::i18n::tr("tibo-reset");
+            let leading_width = metrics.caption(kind).max(metrics.strong(&label));
+            let trailing_width = metrics
+                .caption(&date)
+                .max(metrics.status_row(crate::i18n::tr("resets-in"), &countdown));
+            let fits = TextMetrics::fits_split(available_width, leading_width, trailing_width);
             rows = rows.child(
                 div()
                     .id(eid(format!("forced-reset-{}", reset.id)))
@@ -805,12 +1020,13 @@ impl PopupRoot {
                             ));
                         }
                     })
-                    .child(components::split_row(
+                    .child(components::adaptive_split(
+                        fits,
                         div()
                             .flex()
                             .flex_col()
                             .gap(px(1.0))
-                            .child(caption("Tibo Reset™", palette.text_secondary))
+                            .child(caption(kind, palette.text_secondary))
                             .child(components::body_strong(label, palette.accent)),
                         div()
                             .flex()
@@ -819,8 +1035,8 @@ impl PopupRoot {
                             .gap(px(1.0))
                             .child(card_metadata(date, &palette))
                             .child(status_row(
-                                "Resets in",
-                                format_reset_in(Some(reset.reset_at)),
+                                crate::i18n::tr("resets-in"),
+                                countdown,
                                 &palette,
                             )),
                     )),
@@ -841,4 +1057,16 @@ impl PopupRoot {
 
 fn theme_gray() -> gpui::Hsla {
     super::theme::rgb8((138, 138, 138))
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::compact_title_fits;
+
+    #[test]
+    fn compact_card_requires_room_for_the_entire_name() {
+        assert!(compact_title_fits(320.0, 80.0, 100.0, 120.0));
+        assert!(!compact_title_fits(320.0, 81.0, 100.0, 120.0));
+        assert!(compact_title_fits(340.0, 81.0, 100.0, 120.0));
+    }
 }

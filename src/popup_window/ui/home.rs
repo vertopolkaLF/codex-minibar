@@ -18,7 +18,7 @@ use crate::popup_window::{model::*, *};
 use crate::usage_overview::OverviewSnapshot;
 
 const SECTION_GAP: f32 = 6.0;
-const COLUMN_GAP: f32 = 20.0;
+pub(super) const COLUMN_GAP: f32 = 20.0;
 const HEADING_TOP: f32 = 8.0;
 
 /// Payload carried while a Home widget is dragged.
@@ -73,7 +73,11 @@ impl PopupRoot {
         let root = cx.entity();
         div()
             .id(eid(format!("drag-handle-{}", widget.id())))
-            .on_hover(self.hover_listener(hover_id, Some("Drag to reorder".into()), cx))
+            .on_hover(self.hover_listener(
+                hover_id,
+                Some(crate::i18n::tr("drag-to-reorder").into()),
+                cx,
+            ))
             .on_drag(drag, move |drag, _, _, cx| {
                 let widget = drag.widget.clone();
                 root.update(cx, |root, cx| {
@@ -230,7 +234,11 @@ impl PopupRoot {
                     .items_center()
                     .justify_center()
                     .child(caption(
-                        if dragging { "Drop here" } else { "" },
+                        if dragging {
+                            crate::i18n::tr("drop-here")
+                        } else {
+                            ""
+                        },
                         palette.text_tertiary.alpha(reveal),
                     ))
                     .on_drag_move(cx.listener(
@@ -438,12 +446,13 @@ impl PopupRoot {
         let period = self.ui.total_spend_period;
         let enabled = self.enabled_spend();
         let key = format!(
-            "spend|{}|{:?}|{}|{}|{}",
+            "spend|{}|{:?}|{}|{}|{}|{}",
             self.ui.usage_revision,
             enabled,
             crate::store::codex_accounts::cached_current_id(),
             crate::usage::truncate_local_hour(Local::now()),
-            period.key()
+            period.key(),
+            crate::i18n::is_russian()
         );
         let snapshot = self.snapshot(
             SnapshotSlot::Spend,
@@ -481,7 +490,7 @@ impl PopupRoot {
                 palette.text_secondary.mix(palette.accent, title_hover),
             ))
             .child(components::body_strong(
-                "Usage Stats",
+                crate::i18n::tr("usage-stats"),
                 palette.text_secondary.mix(palette.accent, title_hover),
             ));
         let periods = [
@@ -517,10 +526,21 @@ impl PopupRoot {
         if can_reorder {
             trailing = trailing.child(self.widget_drag_handle(HomeWidgetId::total_spend(), cx));
         }
-        let heading = components::split_row(title, trailing)
+        // Keep both groups at their natural widths. Longer translations move
+        // the period selector onto a new line instead of painting over it.
+        let heading = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .w_full()
+            .gap_x(px(8.0))
+            .gap_y(px(4.0))
             .px(px(4.0))
             .mt(px(if is_first { 0.0 } else { HEADING_TOP }))
-            .mb(px(2.0));
+            .mb(px(2.0))
+            .child(title.flex_none().max_w(gpui::relative(1.0)))
+            .child(trailing.flex_none().ml_auto());
 
         let initial_loading = self
             .snapshots
@@ -534,7 +554,10 @@ impl PopupRoot {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(caption("Loading usage…", palette.text_tertiary))
+                .child(caption(
+                    crate::i18n::tr("loading-usage"),
+                    palette.text_tertiary,
+                ))
                 .into_any_element()
         } else {
             match self.ui.total_spend_presentation {

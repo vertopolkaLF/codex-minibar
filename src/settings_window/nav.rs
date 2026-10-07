@@ -52,17 +52,17 @@ impl Tab {
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::General => "General",
-            Self::Appearance => "Appearance",
-            Self::Providers => "Providers",
-            Self::Popup => "Customize",
-            Self::Schedule => "Limit activation",
-            Self::Tray => "Tray",
-            Self::Notifications => "Notifications",
-            Self::Advanced => "Advanced",
-            Self::Log => "Log",
-            Self::Integrations => "Integrations",
-            Self::About => "About & Updates",
+            Self::General => crate::i18n::tr("general"),
+            Self::Appearance => crate::i18n::tr("appearance"),
+            Self::Providers => crate::i18n::tr("providers"),
+            Self::Popup => crate::i18n::tr("customize"),
+            Self::Schedule => crate::i18n::tr("limit-activation"),
+            Self::Tray => crate::i18n::tr("tray"),
+            Self::Notifications => crate::i18n::tr("notifications"),
+            Self::Advanced => crate::i18n::tr("advanced"),
+            Self::Log => crate::i18n::tr("log"),
+            Self::Integrations => crate::i18n::tr("integrations"),
+            Self::About => crate::i18n::tr("about-updates"),
         }
     }
 

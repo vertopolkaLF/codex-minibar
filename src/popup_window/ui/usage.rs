@@ -134,13 +134,14 @@ impl PopupRoot {
         let range = self.overview_range;
         let enabled = self.enabled_spend();
         let key = format!(
-            "overview|{}|{:?}|{}|{}|{:?}|{:?}",
+            "overview|{}|{:?}|{}|{}|{:?}|{:?}|{}",
             self.ui.usage_revision,
             enabled,
             crate::store::codex_accounts::cached_current_id(),
             crate::usage::truncate_local_hour(Local::now()),
             metric,
-            range
+            range,
+            crate::i18n::is_russian()
         );
         let snapshot = self.snapshot(
             SnapshotSlot::Overview,
@@ -168,9 +169,11 @@ impl PopupRoot {
                 .child(self.usage_title(None, recalculating))
                 .child(caption(
                     if recalculating {
-                        "Loading usage…"
+                        crate::i18n::tr("loading-usage")
                     } else {
-                        "Enable a provider in Settings and include it in Usage Stats to see local API usage."
+                        crate::i18n::tr(
+                            "enable-a-provider-in-settings-and-include-it-in-usage-stats-to-se",
+                        )
                     },
                     palette.text_tertiary,
                 ))
@@ -239,9 +242,13 @@ impl PopupRoot {
             .relative()
             .flex()
             .flex_row()
+            .flex_wrap()
             .items_center()
-            .gap(px(8.0))
-            .h(px(24.0))
+            .w_full()
+            .min_w_0()
+            .gap_x(px(8.0))
+            .gap_y(px(2.0))
+            .min_h(px(24.0))
             .pl(px(24.0 * shift));
         if shift > 0.001 {
             let started = *self.usage_spinner_started.get_or_insert_with(Instant::now);
@@ -265,12 +272,16 @@ impl PopupRoot {
         } else {
             self.usage_spinner_started = None;
         }
-        title = title.child(components::body_strong("Usage", palette.text_primary));
+        title = title.child(
+            components::body_strong(crate::i18n::tr("usage-0bb186"), palette.text_primary)
+                .flex_none(),
+        );
         if let Some(label) = range_label {
-            title = title.child(nowrap(components::body(
-                label.to_owned(),
-                palette.text_tertiary,
-            )));
+            title = title.child(
+                nowrap(components::body(label.to_owned(), palette.text_tertiary))
+                    .flex_none()
+                    .max_w(relative(1.0)),
+            );
         }
         title
     }
@@ -285,7 +296,10 @@ impl PopupRoot {
         let metric = self.overview_metric;
         let metric_control = self.segmented_control(
             fx::key("usage-metric"),
-            vec!["Cost".into(), "Tokens".into()],
+            vec![
+                crate::i18n::tr("cost").into(),
+                crate::i18n::tr("tokens").into(),
+            ],
             usize::from(metric == OverviewMetric::Tokens),
             false,
             |this, index, _| {
@@ -334,14 +348,14 @@ impl PopupRoot {
                     .flex()
                     .flex_row()
                     .items_start()
-                    .gap(px(8.0))
+                    .gap_x(px(8.0))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .child(self.usage_title(Some(range_label), recalculating)),
                     )
-                    .child(metric_control),
+                    .child(div().flex_none().ml_auto().child(metric_control)),
             )
             .child(range_control)
             .into_any_element()
@@ -360,11 +374,14 @@ impl PopupRoot {
             .items_end()
             .gap(px(2.0))
             .child(components::body(
-                format!("{} sessions", snapshot.total_sessions),
+                crate::i18n::format("sessions", &[("v0", snapshot.total_sessions.to_string())]),
                 palette.text_secondary,
             ));
         if metric == OverviewMetric::Cost {
-            meta = meta.child(caption("API estimate", palette.text_tertiary));
+            meta = meta.child(caption(
+                crate::i18n::tr("api-estimate"),
+                palette.text_tertiary,
+            ));
         }
         let mut entries: Vec<(ProviderId, u64)> = snapshot
             .providers
@@ -421,10 +438,10 @@ impl PopupRoot {
         let series = Arc::clone(&data.series);
         let hourly = snapshot.hourly;
         let title = match (hourly, metric) {
-            (true, OverviewMetric::Cost) => "Hourly cost",
-            (true, OverviewMetric::Tokens) => "Hourly processed tokens",
-            (false, OverviewMetric::Cost) => "Cost",
-            (false, OverviewMetric::Tokens) => "Tokens",
+            (true, OverviewMetric::Cost) => crate::i18n::tr("hourly-cost"),
+            (true, OverviewMetric::Tokens) => crate::i18n::tr("hourly-processed-tokens"),
+            (false, OverviewMetric::Cost) => crate::i18n::tr("cost"),
+            (false, OverviewMetric::Tokens) => crate::i18n::tr("tokens"),
         };
         let card = usage_card(&palette)
             .gap(px(6.0))
@@ -437,7 +454,10 @@ impl PopupRoot {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(caption("No activity in this range", palette.text_tertiary)),
+                        .child(caption(
+                            crate::i18n::tr("no-activity-in-this-range"),
+                            palette.text_tertiary,
+                        )),
                 )
                 .into_any_element();
         }
@@ -570,7 +590,7 @@ impl PopupRoot {
             if hourly {
                 crate::usage_overview::format_hour_label(point.at)
             } else {
-                point.date.format("%b %-d").to_string()
+                crate::i18n::month_day(point.date)
             }
         };
         let x_axis = div()
@@ -617,11 +637,11 @@ impl PopupRoot {
         let title = if hourly {
             format!(
                 "{} · {}",
-                point.date.format("%b %-d"),
+                crate::i18n::month_day(point.date),
                 crate::usage_overview::format_hour_label(point.at)
             )
         } else {
-            point.date.format("%b %-d").to_string()
+            crate::i18n::month_day(point.date)
         };
         let mut total_cents = 0_u64;
         let mut total_tokens = 0_u64;
@@ -665,7 +685,10 @@ impl PopupRoot {
         let breakdown = self.overview_breakdown;
         let control = self.segmented_control(
             fx::key("usage-breakdown"),
-            vec!["Model".into(), "Day".into()],
+            vec![
+                crate::i18n::tr("model").into(),
+                crate::i18n::tr("day").into(),
+            ],
             usize::from(breakdown == BreakdownMode::Day),
             false,
             |this, index, _| {
@@ -688,7 +711,7 @@ impl PopupRoot {
         usage_card(&palette)
             .gap(px(14.0))
             .child(components::split_row(
-                components::body_strong("Breakdown", palette.text_primary),
+                components::body_strong(crate::i18n::tr("breakdown"), palette.text_primary),
                 control,
             ))
             .child(table)
@@ -702,18 +725,29 @@ fn range_label(snapshot: &OverviewSnapshot) -> String {
             .daily_series
             .first()
             .map(|point| crate::usage_overview::format_hour_label(point.at))
-            .unwrap_or_else(|| snapshot.start_date.format("%b %-d").to_string());
+            .unwrap_or_else(|| crate::i18n::month_day(snapshot.start_date));
         let end = snapshot
             .daily_series
             .last()
             .map(|point| crate::usage_overview::format_hour_label(point.at))
-            .unwrap_or_else(|| snapshot.end_date.format("%b %-d").to_string());
-        format!("{start} to {end}")
+            .unwrap_or_else(|| crate::i18n::month_day(snapshot.end_date));
+        crate::i18n::format(
+            "start-to-end",
+            &[("start", start.to_string()), ("end", end.to_string())],
+        )
     } else {
-        format!(
-            "{} to {}",
-            snapshot.start_date.format("%b %-d"),
-            snapshot.end_date.format("%b %-d")
+        crate::i18n::format(
+            "to",
+            &[
+                (
+                    "v0",
+                    (crate::i18n::month_day(snapshot.start_date)).to_string(),
+                ),
+                (
+                    "v1",
+                    (crate::i18n::month_day(snapshot.end_date)).to_string(),
+                ),
+            ],
         )
     }
 }
@@ -737,12 +771,20 @@ fn provider_tile(
         OverviewMetric::Cost => format_token_count(entry.usage.total_tokens()),
         OverviewMetric::Tokens => format_usage_cost(&entry.usage),
     };
-    let detail = format!(
-        "{share:.1}% of {} · {other}",
-        match metric {
-            OverviewMetric::Cost => "cost",
-            OverviewMetric::Tokens => "tokens",
-        }
+    let detail = crate::i18n::format(
+        "share-1-of-other",
+        &[
+            ("share", format!("{:.1}", share)),
+            (
+                "v0",
+                (match metric {
+                    OverviewMetric::Cost => crate::i18n::tr("cost-885dc4"),
+                    OverviewMetric::Tokens => crate::i18n::tr("tokens-339143"),
+                })
+                .to_string(),
+            ),
+            ("other", other.to_string()),
+        ],
     );
     div()
         .flex()
@@ -778,7 +820,10 @@ fn provider_tile(
                         .gap(px(4.0))
                         .child(components::caption_strong(value, palette.text_primary))
                         .child(nowrap(caption(
-                            format!("· {} sessions", entry.sessions),
+                            crate::i18n::format(
+                                "sessions-0e5e29",
+                                &[("v0", entry.sessions.to_string())],
+                            ),
                             palette.text_secondary,
                         ))),
                 )
@@ -803,7 +848,10 @@ fn usage_totals_card(totals: &TokenUsage, palette: &Palette) -> AnyElement {
         .saturating_sub(totals.cached_input_tokens);
     usage_card(palette)
         .gap(px(8.0))
-        .child(components::body_strong("Totals", palette.text_primary))
+        .child(components::body_strong(
+            crate::i18n::tr("totals"),
+            palette.text_primary,
+        ))
         .child(
             div()
                 .flex()
@@ -811,20 +859,26 @@ fn usage_totals_card(totals: &TokenUsage, palette: &Palette) -> AnyElement {
                 .gap(px(8.0))
                 .child(pair(
                     metric(
-                        "Processed tokens",
+                        crate::i18n::tr("processed-tokens"),
                         format_token_count(totals.total_tokens()),
                     ),
                     metric(
-                        "Cached input",
+                        crate::i18n::tr("cached-input"),
                         format_token_count(totals.cached_input_tokens),
                     ),
                 ))
                 .child(pair(
-                    metric("Uncached input", format_token_count(uncached)),
-                    metric("Output", format_token_count(totals.output_tokens)),
+                    metric(
+                        crate::i18n::tr("uncached-input"),
+                        format_token_count(uncached),
+                    ),
+                    metric(
+                        crate::i18n::tr("output"),
+                        format_token_count(totals.output_tokens),
+                    ),
                 ))
                 .child(metric(
-                    "Cache savings",
+                    crate::i18n::tr("cache-savings"),
                     format_spend(totals.cache_savings_microusd),
                 )),
         )
@@ -848,11 +902,20 @@ fn model_breakdown_table(rows: &[BreakdownRow], palette: &Palette, colored: bool
         .child(
             div()
                 .flex_1()
-                .child(caption("Model", palette.text_tertiary)),
+                .child(caption(crate::i18n::tr("model"), palette.text_tertiary)),
         )
-        .child(cell(56.0, caption("Cost", palette.text_tertiary)))
-        .child(cell(44.0, caption("Share", palette.text_tertiary)))
-        .child(cell(56.0, caption("Tokens", palette.text_tertiary)));
+        .child(cell(
+            56.0,
+            caption(crate::i18n::tr("cost"), palette.text_tertiary),
+        ))
+        .child(cell(
+            44.0,
+            caption(crate::i18n::tr("share"), palette.text_tertiary),
+        ))
+        .child(cell(
+            56.0,
+            caption(crate::i18n::tr("tokens"), palette.text_tertiary),
+        ));
     let mut list = div().flex().flex_col().gap(px(6.0));
     for row in rows {
         let mut title = div()
@@ -929,7 +992,11 @@ fn day_breakdown_table(
             .items_center()
             .py(px(2.0))
             .child(div().flex_1().child(caption(
-                if snapshot.hourly { "Hour" } else { "Day" },
+                if snapshot.hourly {
+                    crate::i18n::tr("hour")
+                } else {
+                    crate::i18n::tr("day")
+                },
                 palette.text_tertiary,
             )));
     for provider in &providers {
@@ -948,8 +1015,8 @@ fn day_breakdown_table(
         56.0,
         caption(
             match metric {
-                OverviewMetric::Cost => "Cost",
-                OverviewMetric::Tokens => "Tokens",
+                OverviewMetric::Cost => crate::i18n::tr("cost"),
+                OverviewMetric::Tokens => crate::i18n::tr("tokens"),
             },
             palette.text_tertiary,
         ),
@@ -963,7 +1030,7 @@ fn day_breakdown_table(
             .gap(px(4.0))
             .child(caption(row.label.clone(), palette.text_primary));
         if let Some(weekday) = &row.weekday {
-            let weekend = matches!(weekday.as_str(), "Sat" | "Sun");
+            let weekend = weekday == crate::i18n::tr("sat") || weekday == crate::i18n::tr("sun");
             date = date.child(caption(
                 weekday.clone(),
                 if weekend {

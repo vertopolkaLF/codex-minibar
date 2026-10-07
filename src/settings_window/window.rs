@@ -80,6 +80,7 @@ pub(crate) struct SettingsWindow {
     detection_revision: u64,
     detection_task: Option<Task<()>>,
     pub(super) status_revision: u64,
+    language_is_russian: bool,
     pub(super) provider_dialog: Option<ProviderDialog>,
     pub(super) openrouter: OpenRouterSettingsSnapshot,
     pub(super) discovered_bricks: BTreeMap<String, String>,
@@ -180,6 +181,7 @@ impl SettingsWindow {
             detection_revision: 0,
             detection_task: None,
             status_revision: 0,
+            language_is_russian: crate::i18n::is_russian(),
             provider_dialog: None,
             openrouter: super::cached_openrouter_snapshot(),
             discovered_bricks: super::cached_discovered_popup_bricks(),
@@ -207,6 +209,8 @@ impl SettingsWindow {
             return;
         }
         self.settings = settings;
+        self.settings.language.apply();
+        cx.refresh_windows();
         cx.notify();
     }
 
@@ -217,6 +221,8 @@ impl SettingsWindow {
         edit: impl Fn(&mut Settings) + Send + 'static,
     ) {
         edit(&mut self.settings);
+        self.settings.language.apply();
+        cx.refresh_windows();
         self.settings.normalize_tray_widgets();
         self.settings.normalize_popup_visibility();
         persistence::queue(self.state.settings_tx.clone(), move |settings| {
@@ -566,7 +572,7 @@ impl SettingsWindow {
                     .flex_1()
                     .child(kit::image("color/app-icon-32.png", 16.0))
                     .child(kit::text(
-                        super::SETTINGS_WINDOW_TITLE,
+                        super::settings_window_title(),
                         12.0,
                         theme.text_secondary,
                     )),
@@ -725,13 +731,16 @@ impl SettingsWindow {
                     .gap(px(8.0))
                     .child(icon("download-simple-fill", 14.0, theme.accent_text))
                     .child(kit::text(
-                        format!("{version} is available"),
+                        crate::i18n::format(
+                            "version-is-available",
+                            &[("version", version.to_string())],
+                        ),
                         13.0,
                         theme.text,
                     )),
             )
             .child(
-                Button::new("sidebar-update", "Update now")
+                Button::new("sidebar-update", crate::i18n::tr("update-now"))
                     .accent()
                     .full_width()
                     .on_click(kit::handler(|(), _, _| install_update()))
@@ -792,7 +801,7 @@ impl SettingsWindow {
             .child(
                 Button::icon_only("providers-back", "caret-left")
                     .ghost()
-                    .tooltip("Back")
+                    .tooltip(crate::i18n::tr("back"))
                     .disabled(!back_enabled)
                     .on_click(back)
                     .render(k),
@@ -801,7 +810,7 @@ impl SettingsWindow {
                 div()
                     .text_size(px(16.0))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("Providers"),
+                    .child(crate::i18n::tr("providers")),
             );
         let add = Self::h(cx, |this, (), window, cx| {
             this.open_provider_dialog(ProviderDialog::add_instance(), window, cx)
@@ -812,7 +821,7 @@ impl SettingsWindow {
             .gap(px(10.0))
             .p(px(12.0))
             .child(
-                Button::new("providers-add", "Add provider")
+                Button::new("providers-add", crate::i18n::tr("add-provider"))
                     .accent()
                     .with_icon("plus-bold")
                     .full_width()
@@ -905,11 +914,11 @@ impl SettingsWindow {
                                     .text_size(px(13.0))
                                     .line_height(px(17.0))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child("Missing a provider?"),
+                                    .child(crate::i18n::tr("missing-a-provider")),
                             )
                             .child(
                                 kit::text(
-                                    "Ask for it or build it yourself.",
+                                    crate::i18n::tr("ask-for-it-or-build-it-yourself"),
                                     12.0,
                                     theme.text_secondary,
                                 )
@@ -926,13 +935,13 @@ impl SettingsWindow {
                     .child(action(
                         "missing-issue",
                         "chat-centered-text-fill",
-                        "Request a provider",
+                        crate::i18n::tr("request-a-provider"),
                         crate::updater::PROVIDER_REQUEST_ISSUE_URL,
                     ))
                     .child(action(
                         "missing-pr",
                         "git-pull-request-fill",
-                        "Contribute one",
+                        crate::i18n::tr("contribute-one"),
                         crate::updater::CONTRIBUTING_URL,
                     )),
             )
@@ -1128,17 +1137,26 @@ impl SettingsWindow {
         match self.page {
             Page::Root(tab) => {
                 let (title, mut rows) = match tab {
-                    Tab::General => ("General", self.general_page(k, window, cx)),
-                    Tab::Appearance => ("Appearance", self.appearance_page(k, cx)),
-                    Tab::Popup => ("Customize", self.customize_page(k, cx)),
-                    Tab::Schedule => ("Limit activation", self.activation_page(k, cx)),
-                    Tab::Tray => ("Tray", self.tray_page(k, window, cx)),
-                    Tab::Notifications => ("Notifications", self.notifications_page(k, cx)),
-                    Tab::Advanced => ("Advanced", self.advanced_page(k, cx)),
-                    Tab::Log => ("Log", self.log_page(k, cx)),
-                    Tab::Integrations => ("Integrations", self.integrations_page(k, cx)),
+                    Tab::General => (crate::i18n::tr("general"), self.general_page(k, window, cx)),
+                    Tab::Appearance => (crate::i18n::tr("appearance"), self.appearance_page(k, cx)),
+                    Tab::Popup => (crate::i18n::tr("customize"), self.customize_page(k, cx)),
+                    Tab::Schedule => (
+                        crate::i18n::tr("limit-activation"),
+                        self.activation_page(k, cx),
+                    ),
+                    Tab::Tray => (crate::i18n::tr("tray"), self.tray_page(k, window, cx)),
+                    Tab::Notifications => (
+                        crate::i18n::tr("notifications"),
+                        self.notifications_page(k, cx),
+                    ),
+                    Tab::Advanced => (crate::i18n::tr("advanced"), self.advanced_page(k, cx)),
+                    Tab::Log => (crate::i18n::tr("log"), self.log_page(k, cx)),
+                    Tab::Integrations => (
+                        crate::i18n::tr("integrations"),
+                        self.integrations_page(k, cx),
+                    ),
                     Tab::About => ("", self.about_page(k, cx)),
-                    Tab::Providers => ("Providers", Vec::new()),
+                    Tab::Providers => (crate::i18n::tr("providers"), Vec::new()),
                 };
                 if !title.is_empty() {
                     rows.insert(0, kit::page_title(k, title));
@@ -1220,6 +1238,12 @@ impl SettingsWindow {
 
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let language_is_russian = crate::i18n::is_russian();
+        if self.language_is_russian != language_is_russian {
+            self.language_is_russian = language_is_russian;
+            self.status_revision = self.status_revision.wrapping_add(1);
+        }
+        window.set_window_title(super::settings_window_title());
         let mut k = std::mem::take(&mut self.kit);
         let mut theme = Theme::resolve(
             self.settings.theme,
@@ -1231,7 +1255,7 @@ impl Render for SettingsWindow {
             theme = theme.with_mica();
         }
         self.backdrop.sync(theme.dark, window.appearance());
-        k.begin_frame(theme);
+        k.begin_frame(theme, window);
         k.page_scroll = Some(self.scroll.clone());
         self.refresh_detection(cx);
         // A deleted instance must not stay selected.
@@ -1354,7 +1378,7 @@ pub(super) fn install_update() {
     std::thread::spawn(|| {
         if let Err(error) = crate::updater::apply_pending_update() {
             eprintln!("failed to apply update: {error:#}");
-            crate::notifications::show("Update failed", &format!("{error:#}"));
+            crate::notifications::show(crate::i18n::tr("update-failed"), &format!("{error:#}"));
         }
     });
 }

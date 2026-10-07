@@ -254,18 +254,18 @@ impl BadgeColor {
         Self::Custom(((rgb.0 as u32) << 16) | ((rgb.1 as u32) << 8) | rgb.2 as u32)
     }
 
-    pub const fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Self::Auto => "Auto",
-            Self::Red => "Red",
-            Self::Orange => "Orange",
-            Self::Yellow => "Yellow",
-            Self::Green => "Green",
-            Self::Teal => "Teal",
-            Self::Blue => "Blue",
-            Self::Purple => "Purple",
-            Self::Pink => "Pink",
-            Self::Custom(_) => "Custom",
+            Self::Auto => crate::i18n::tr("auto"),
+            Self::Red => crate::i18n::tr("red"),
+            Self::Orange => crate::i18n::tr("orange"),
+            Self::Yellow => crate::i18n::tr("yellow"),
+            Self::Green => crate::i18n::tr("green"),
+            Self::Teal => crate::i18n::tr("teal"),
+            Self::Blue => crate::i18n::tr("blue"),
+            Self::Purple => crate::i18n::tr("purple"),
+            Self::Pink => crate::i18n::tr("pink"),
+            Self::Custom(_) => crate::i18n::tr("custom"),
         }
     }
 
@@ -475,9 +475,9 @@ impl ProviderInstance {
             changed = true;
         }
         if self.driver == ProviderKind::OpenRouter {
-            let account = self
-                .openrouter
-                .get_or_insert_with(|| OpenRouterAccount::with_id(self.id.clone(), "OpenRouter"));
+            let account = self.openrouter.get_or_insert_with(|| {
+                OpenRouterAccount::with_id(self.id.clone(), crate::i18n::tr("openrouter"))
+            });
             changed |= account.normalize();
             if account.name != self.name {
                 account.name = self.name.clone();
@@ -686,7 +686,9 @@ impl Capabilities {
             return None;
         }
         if instance.uses_manual_credential() {
-            return Some("Not available for manual credentials. Switch Source to Config folder.");
+            return Some(crate::i18n::tr(
+                "not-available-for-manual-credentials-switch-source-to-config-fold",
+            ));
         }
         Some(match capability {
             Capability::UsageStats
@@ -695,12 +697,14 @@ impl Capabilities {
                     ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo
                 ) =>
             {
-                "OpenCode's local history is tracked by the first OpenCode instance."
+                crate::i18n::tr("opencode-s-local-history-is-tracked-by-the-first-opencode-instanc")
             }
-            Capability::UsageStats => "This provider has no local usage history.",
-            Capability::AutoActivation => "This provider has no session window to start.",
+            Capability::UsageStats => crate::i18n::tr("this-provider-has-no-local-usage-history"),
+            Capability::AutoActivation => {
+                crate::i18n::tr("this-provider-has-no-session-window-to-start")
+            }
             Capability::SignIn | Capability::ConfigFolder => {
-                "This provider does not use a config folder."
+                crate::i18n::tr("this-provider-does-not-use-a-config-folder")
             }
         })
     }

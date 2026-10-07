@@ -137,12 +137,36 @@ pub(crate) fn provider_cards<'a>(
 ) -> Vec<Card<'a>> {
     let kind = provider.kind();
     let (monthly_label, primary_label, secondary_label) = match kind {
-        ProviderKind::Cursor => ("Cursor Models", "Cursor Models", "Cursor Models"),
-        ProviderKind::OpenRouter => ("Spending", "Spending", "Spending"),
-        ProviderKind::Antigravity => ("Gemini", "Gemini", "Claude + GPT"),
-        ProviderKind::Grok => ("Credits", "Credits", "Credits"),
-        ProviderKind::Kiro => ("Monthly Credits", "Credits", "Credits"),
-        _ => ("Monthly", "5h Session", "Weekly"),
+        ProviderKind::Cursor => (
+            crate::i18n::tr("cursor-models"),
+            crate::i18n::tr("cursor-models"),
+            crate::i18n::tr("cursor-models"),
+        ),
+        ProviderKind::OpenRouter => (
+            crate::i18n::tr("spending"),
+            crate::i18n::tr("spending"),
+            crate::i18n::tr("spending"),
+        ),
+        ProviderKind::Antigravity => (
+            crate::i18n::tr("gemini"),
+            crate::i18n::tr("gemini"),
+            crate::i18n::tr("claude-gpt"),
+        ),
+        ProviderKind::Grok => (
+            crate::i18n::tr("credits"),
+            crate::i18n::tr("credits"),
+            crate::i18n::tr("credits"),
+        ),
+        ProviderKind::Kiro => (
+            crate::i18n::tr("monthly-credits-976559"),
+            crate::i18n::tr("credits"),
+            crate::i18n::tr("credits"),
+        ),
+        _ => (
+            crate::i18n::tr("monthly"),
+            crate::i18n::tr("msg-5h-session-de7ce8"),
+            crate::i18n::tr("weekly"),
+        ),
     };
     let single_openrouter_account =
         kind == ProviderKind::OpenRouter && limits.openrouter_accounts.len() == 1;
@@ -210,7 +234,12 @@ pub(crate) fn provider_cards<'a>(
                             .map(str::trim)
                             .filter(|label| !label.is_empty())
                             .map(str::to_owned)
-                            .unwrap_or_else(|| format!("Key {}", index + 1));
+                            .unwrap_or_else(|| {
+                                crate::i18n::format(
+                                    "key-39df89",
+                                    &[("v0", (index + 1).to_string())],
+                                )
+                            });
                         let expired = api_key.is_expired(options.now);
                         strip.push(Card::Spending {
                             key: format!("{}-api-{}", account.id, api_key.id),
@@ -296,7 +325,7 @@ pub(crate) fn provider_cards<'a>(
         }
         cards.push(Card::Limit {
             key: card_key(provider, &format!("additional-{}", limit.id)),
-            title: limit.title.to_uppercase(),
+            title: crate::provider_registry::additional_label(limit).to_uppercase(),
             window: &limit.window,
             usage_amount: None,
             disabled: false,
@@ -397,10 +426,10 @@ pub(crate) fn cloud_session_credits_presentation(
     now: DateTime<Utc>,
 ) -> (String, f64, bool) {
     if window.resets_at.is_some_and(|at| at <= now) {
-        return ("Expired".into(), 0.0, false);
+        return (crate::i18n::tr("expired").into(), 0.0, false);
     }
     if credits.is_some_and(|credits| credits.locked) {
-        return ("Unavailable".into(), 0.0, false);
+        return (crate::i18n::tr("unavailable").into(), 0.0, false);
     }
     let (percentage, progress, _, _) = limit_card_presentation(window, show_used, false);
     let label = credits.map_or(percentage, |credits| {
@@ -409,11 +438,16 @@ pub(crate) fn cloud_session_credits_presentation(
         } else {
             credits.remaining_dollars
         };
-        format!(
-            "{} of {} {}",
-            format_usd(amount),
-            format_usd(credits.limit_dollars),
-            if show_used { "used" } else { "left" }
+        crate::i18n::format(
+            if show_used {
+                "cloud-amount-used"
+            } else {
+                "cloud-amount-left"
+            },
+            &[
+                ("amount", format_usd(amount)),
+                ("limit", format_usd(credits.limit_dollars)),
+            ],
         )
     });
     (label, progress, true)
@@ -430,7 +464,7 @@ pub(crate) fn limit_card_presentation(
     disabled: bool,
 ) -> (String, f64, bool, bool) {
     if disabled {
-        return ("Disabled".into(), 100.0, false, false);
+        return (crate::i18n::tr("disabled").into(), 100.0, false, false);
     }
     let remaining = window.remaining_percent();
     let percentage = if show_used_percentage {
@@ -438,10 +472,18 @@ pub(crate) fn limit_card_presentation(
     } else {
         remaining
     };
-    let suffix = if show_used_percentage { "used" } else { "left" };
     let label = percentage
-        .map(|value| format!("{value}% {suffix}"))
-        .unwrap_or_else(|| "Unavailable".into());
+        .map(|value| {
+            crate::i18n::format(
+                if show_used_percentage {
+                    "quota-percent-used"
+                } else {
+                    "quota-percent-left"
+                },
+                &[("value", value.to_string())],
+            )
+        })
+        .unwrap_or_else(|| crate::i18n::tr("unavailable").into());
     (
         label,
         f64::from(percentage.unwrap_or(0)),
@@ -625,7 +667,7 @@ pub(crate) fn any_provider_enabled(ui: &UiState) -> bool {
 
 pub(crate) fn home_widget_label(ui: &UiState, widget: &HomeWidgetId) -> String {
     if widget.is_total_spend() {
-        return "Usage Stats".into();
+        return crate::i18n::tr("usage-stats").into();
     }
     ui.instances
         .iter()

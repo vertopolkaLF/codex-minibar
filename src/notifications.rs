@@ -122,13 +122,16 @@ pub fn show_update_available(version: &str, release_url: &str) {
 
 /// Toast after a provider successfully starts a 5-hour limit.
 pub fn show_activation_succeeded(provider: ProviderId) {
-    show("5-hour limit started", &provider.qualified_name());
+    show(
+        crate::i18n::tr("msg-5-hour-limit-started"),
+        &provider.qualified_name(),
+    );
 }
 
 /// Toast after automatic activation follows a newly reset 5-hour window.
 pub fn show_activation_succeeded_after_reset(provider: ProviderId) {
     show(
-        "5-hour limit reset and activated",
+        crate::i18n::tr("msg-5-hour-limit-reset-and-activated"),
         &provider.qualified_name(),
     );
 }
@@ -218,7 +221,7 @@ impl LimitNotificationTracker {
         if primary_reset {
             self.startup_low_usage_primary = None;
             if settings.limits_changed && !defer_primary_reset && notify_five_hour_reset {
-                show("5-hour limit reset", &name);
+                show(crate::i18n::tr("msg-5-hour-limit-reset"), &name);
             }
         }
         // Free plans have no weekly limit. Their single monthly quota may shift
@@ -226,14 +229,14 @@ impl LimitNotificationTracker {
         if secondary_reset && can_notify_weekly(limits) {
             self.startup_low_usage_secondary = None;
             if settings.limits_changed {
-                show("Weekly limit reset", &name);
+                show(crate::i18n::tr("weekly-limit-reset"), &name);
             }
         }
 
         if settings.low_usage_enabled {
             let threshold = settings.low_usage_threshold_percent;
             maybe_notify_low_usage(
-                &format!("{name} 5-hour"),
+                &crate::i18n::format("name-5-hour", &[("name", name.to_string())]),
                 limits.primary.remaining_percent(),
                 limits.primary.resets_at,
                 threshold,
@@ -331,7 +334,7 @@ fn secondary_limit_label(limits: &RateLimits, name: &str) -> String {
     {
         return name.to_owned();
     }
-    format!("{name} weekly")
+    crate::i18n::format("name-weekly", &[("name", name.to_string())])
 }
 
 fn maybe_notify_low_usage(
@@ -351,8 +354,11 @@ fn maybe_notify_low_usage(
     }
     let remaining = remaining.expect("notification requires a remaining percentage");
     show(
-        &format!("{label} limit is low"),
-        &format!("{remaining}% remaining"),
+        &crate::i18n::format("label-limit-is-low", &[("label", label.to_string())]),
+        &crate::i18n::format(
+            "remaining-remaining",
+            &[("remaining", remaining.to_string())],
+        ),
     );
 }
 

@@ -16,11 +16,6 @@ use super::{
 
 const SEGMENT_HEIGHT: f32 = 34.0;
 
-/// Width of a fixed (non-stretched) segment, matching the WinUI control.
-fn segment_width(label: &str) -> f32 {
-    (label.chars().count() as f32 * 8.0 + 22.0).max(48.0)
-}
-
 impl PopupRoot {
     /// Pill segmented control with a sliding accent thumb.
     #[allow(clippy::too_many_arguments)]
@@ -48,13 +43,20 @@ impl PopupRoot {
         selected: usize,
         stretch: bool,
         on_select: impl Fn(&mut Self, usize, &mut Context<Self>) + 'static,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = self.palette.clone();
         let segments = segments
             .into_iter()
             .map(|(label, badge)| Segment {
+                label_width: components::measure_text(
+                    window.text_system(),
+                    self.palette.font_family.clone(),
+                    12.0,
+                    FontWeight::SEMIBOLD,
+                    &label,
+                ),
                 label,
                 badge_width: badge
                     .as_ref()
@@ -186,15 +188,17 @@ pub(crate) struct SegmentStyle {
 
 pub(crate) struct Segment {
     pub(crate) label: SharedString,
+    pub(crate) label_width: f32,
     /// Leading mark (an instance badge), with its width for fixed layouts.
     pub(crate) badge: Option<AnyElement>,
     pub(crate) badge_width: f32,
 }
 
 impl Segment {
-    pub(crate) fn text(label: impl Into<SharedString>) -> Self {
+    pub(crate) fn text(label: impl Into<SharedString>, label_width: f32) -> Self {
         Self {
             label: label.into(),
+            label_width,
             badge: None,
             badge_width: 0.0,
         }
@@ -217,14 +221,23 @@ pub(crate) fn segmented_track(
 ) -> AnyElement {
     let count = segments.len().max(1);
     let selected = selected.min(count - 1);
-    let fixed_width = segments
+    let widths = segments
         .iter()
-        .map(|segment| segment_width(&segment.label) + segment.badge_width)
-        .fold(0.0_f32, f32::max);
-    // The thumb glides between cells as a fraction of the track.
-    let thumb = fx.value(
-        fx::key(("segment-thumb", key)),
-        selected as f32 / count as f32,
+        .enumerate()
+        .map(|(index, segment)| {
+            let width = segment.label_width
+                + 20.0
+                + segment.badge_width
+                + if segment.badge.is_some() { 5.0 } else { 0.0 };
+            fx.value(fx::key(("segment-width", key, index)), width, fx::FAST)
+        })
+        .collect::<Vec<_>>();
+    let (total_width, target_left, target_width) = segment_geometry(&widths, selected, stretch);
+    // Fixed segments have independent text-sized widths; stretch stays equal.
+    let thumb = fx.value(fx::key(("segment-thumb", key)), target_left, fx::FAST);
+    let thumb_width = fx.value(
+        fx::key(("segment-thumb-width", key)),
+        target_width,
         fx::FAST,
     );
     let mut track = div()
@@ -240,7 +253,7 @@ pub(crate) fn segmented_track(
     track = if stretch {
         track.w_full()
     } else {
-        track.w(px(fixed_width * count as f32))
+        track.w(px(total_width))
     };
     track = track.child(
         div()
@@ -248,7 +261,7 @@ pub(crate) fn segmented_track(
             .top_0()
             .bottom_0()
             .left(relative(thumb))
-            .w(relative(1.0 / count as f32))
+            .w(relative(thumb_width))
             .rounded(px(8.0))
             .bg(style.thumb),
     );
@@ -287,7 +300,7 @@ pub(crate) fn segmented_track(
         cell = if stretch {
             cell.flex_1().min_w_0()
         } else {
-            cell.flex_none().w(px(fixed_width))
+            cell.flex_none().w(px(widths[index]))
         };
         if hover > 0.001 {
             cell = cell.child(
@@ -326,4 +339,35 @@ pub(crate) fn segmented_track(
         track = track.child(cell);
     }
     track.into_any_element()
+}
+
+fn segment_geometry(widths: &[f32], selected: usize, stretch: bool) -> (f32, f32, f32) {
+    let total = widths.iter().sum::<f32>();
+    if widths.is_empty() {
+        return (0.0, 0.0, 1.0);
+    }
+    let selected = selected.min(widths.len() - 1);
+    if stretch {
+        let count = widths.len() as f32;
+        (total, selected as f32 / count, 1.0 / count)
+    } else {
+        let denominator = total.max(1.0);
+        (
+            total,
+            widths[..selected].iter().sum::<f32>() / denominator,
+            widths[selected] / denominator,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::segment_geometry;
+
+    #[test]
+    fn thumb_matches_individual_text_sized_segments() {
+        assert_eq!(segment_geometry(&[60.0, 90.0], 0, false), (150.0, 0.0, 0.4));
+        assert_eq!(segment_geometry(&[60.0, 90.0], 1, false), (150.0, 0.4, 0.6));
+        assert_eq!(segment_geometry(&[60.0, 90.0], 1, true), (150.0, 0.5, 0.5));
+    }
 }

@@ -25,7 +25,7 @@ fn status_line(
 ) -> (String, Option<Dot>) {
     let provider = instance.driver;
     if !instance.enabled {
-        return ("Off".into(), None);
+        return (crate::i18n::tr("off").into(), None);
     }
     let readiness = provider_readiness(status);
     let dot = match readiness {
@@ -42,47 +42,54 @@ fn status_line(
             crate::openrouter::has_management_key(std::slice::from_ref(account))
         });
         if keys == 0 && !management {
-            return ("No keys yet".into(), Some(Dot::Caution));
+            return (crate::i18n::tr("no-keys-yet").into(), Some(Dot::Caution));
         }
-        let mut text = plural(keys, "API key");
+        let mut text = crate::i18n::format("api-key-count", &[("v0", keys.to_string())]);
         if management {
-            text.push_str(" · management key");
+            text.push_str(crate::i18n::tr("management-key-5c8cf2"));
         }
         return (text, dot);
     }
     if instance.uses_manual_credential() {
         return match readiness {
-            ProviderReadiness::Ready => ("Using a saved credential".into(), dot),
-            ProviderReadiness::Checking => ("Checking…".into(), dot),
-            ProviderReadiness::NeedsSetup => ("Paste a credential under Account".into(), dot),
+            ProviderReadiness::Ready => (crate::i18n::tr("using-a-saved-credential").into(), dot),
+            ProviderReadiness::Checking => (crate::i18n::tr("checking").into(), dot),
+            ProviderReadiness::NeedsSetup => (
+                crate::i18n::tr("paste-a-credential-under-account").into(),
+                dot,
+            ),
         };
     }
     let text = match readiness {
-        ProviderReadiness::Checking => "Checking…".to_owned(),
+        ProviderReadiness::Checking => crate::i18n::tr("checking").to_owned(),
         ProviderReadiness::NeedsSetup => match provider {
             ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
                 if instance.is_primary() {
-                    "Needs an API key or OpenCode sign-in".to_owned()
+                    crate::i18n::tr("needs-an-api-key-or-opencode-sign-in").to_owned()
                 } else {
-                    "Needs an API key".to_owned()
+                    crate::i18n::tr("needs-an-api-key").to_owned()
                 }
             }
-            _ => "Not found. Set its folder under Runtime.".to_owned(),
+            _ => crate::i18n::tr("not-found-set-its-folder-under-runtime").to_owned(),
         },
         ProviderReadiness::Ready => match provider {
             ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
                 if crate::opencode::key_is_configured(instance.provider_id()) {
-                    "Using a saved API key".to_owned()
+                    crate::i18n::tr("using-a-saved-api-key").to_owned()
                 } else {
-                    "Using OpenCode sign-in or local history".to_owned()
+                    crate::i18n::tr("using-opencode-sign-in-or-local-history").to_owned()
                 }
             }
             _ => {
                 let (app, crew, cli) = source_labels(provider);
                 match status.used {
-                    Some(ProviderInstallSource::Cli) => format!("Reading {cli}"),
-                    Some(ProviderInstallSource::Crew) => format!("Reading {crew}"),
-                    _ => format!("Reading {app}"),
+                    Some(ProviderInstallSource::Cli) => {
+                        crate::i18n::format("reading-cli", &[("cli", cli.to_string())])
+                    }
+                    Some(ProviderInstallSource::Crew) => {
+                        crate::i18n::format("reading-crew", &[("crew", crew.to_string())])
+                    }
+                    _ => crate::i18n::format("reading-app", &[("app", app.to_string())]),
                 }
             }
         },
@@ -92,13 +99,13 @@ fn status_line(
 
 fn checking_message(status: &ProviderInstallStatus) -> &'static str {
     if status.crew_applicable {
-        "Checking Kiro IDE, Kiro Crew, and CLI…"
+        crate::i18n::tr("checking-kiro-ide-kiro-crew-and-cli")
     } else if status.app_applicable && status.cli_applicable {
-        "Checking installed app and CLI…"
+        crate::i18n::tr("checking-installed-app-and-cli")
     } else if status.cli_applicable {
-        "Checking CLI…"
+        crate::i18n::tr("checking-cli")
     } else {
-        "Checking installed app…"
+        crate::i18n::tr("checking-installed-app")
     }
 }
 
@@ -121,7 +128,7 @@ impl SettingsWindow {
             this.open_provider_dialog(ProviderDialog::add_instance(), window, cx)
         });
         vec![
-            kit::page_title(k, "Providers"),
+            kit::page_title(k, crate::i18n::tr("providers")),
             div()
                 .flex()
                 .flex_col()
@@ -137,10 +144,10 @@ impl SettingsWindow {
                 ))
                 .child(kit::caption(
                     k,
-                    "No providers yet. Add one to start reading limits.",
+                    crate::i18n::tr("no-providers-yet-add-one-to-start-reading-limits"),
                 ))
                 .child(
-                    Button::new("no-providers-add", "Add provider")
+                    Button::new("no-providers-add", crate::i18n::tr("add-provider"))
                         .accent()
                         .with_icon("plus-bold")
                         .on_click(add)
@@ -166,9 +173,9 @@ impl SettingsWindow {
             rows.push(kit::info_bar(
                 k,
                 kit::Severity::Info,
-                format!(
-                    "{} is off, so it doesn't appear in the minibar or tray. Turn it on to start reading usage.",
-                    instance.display_name()
+                crate::i18n::format(
+                    "is-off-so-it-doesn-t-appear-in-the-minibar-or-tray-turn-it-on-to",
+                    &[("v0", instance.display_name().to_string())],
                 ),
             ));
         }
@@ -177,13 +184,13 @@ impl SettingsWindow {
         sections.extend(self.account_section(&instance, k, cx));
         sections.extend(self.runtime_section(&instance, &status, k, window, cx));
         sections.extend(self.features_section(&instance, k, cx));
-        sections.push(kit::section_heading(k, "Appearance"));
+        sections.push(kit::section_heading(k, crate::i18n::tr("appearance")));
         if instance.driver == ProviderKind::Codex {
             sections.push(kit::card_of(k, |k| {
                 vec![kit::toggle_row(
                     k,
                     "codex-replace-logo",
-                    "Replace ChatGPT logo with Codex",
+                    crate::i18n::tr("replace-chatgpt-logo-with-codex"),
                     None,
                     self.settings.replace_chatgpt_logo_with_codex,
                     Self::h(cx, |this, value: bool, _, cx| {
@@ -231,7 +238,7 @@ impl SettingsWindow {
         }
         status_row = status_row.child(kit::text(status_text, 13.0, theme.text_secondary));
         if crate::instances::Capabilities::of(instance).limits_only() {
-            status_row = status_row.child(kit::chip(k, "Limits only"));
+            status_row = status_row.child(kit::chip(k, crate::i18n::tr("limits-only")));
         }
         let color = if instance.enabled {
             theme.brand(instance.driver)
@@ -301,7 +308,11 @@ impl SettingsWindow {
                     .items_center()
                     .gap(px(10.0))
                     .child(kit::text(
-                        if enabled { "On" } else { "Off" },
+                        if enabled {
+                            crate::i18n::tr("on")
+                        } else {
+                            crate::i18n::tr("off")
+                        },
                         13.0,
                         theme.text_secondary,
                     ))
@@ -311,7 +322,7 @@ impl SettingsWindow {
                             format!("provider-delete-{}", provider.id()),
                             "trash-fill",
                         )
-                        .tooltip("Delete provider")
+                        .tooltip(crate::i18n::tr("delete-provider"))
                         .on_click(delete)
                         .render(k),
                     ),
@@ -380,34 +391,48 @@ impl SettingsWindow {
             }),
         );
         let rows = vec![
-            Row::new("provider-name", "Display name")
-                .description(k, "Shown on popup tabs, Home cards, the tray and notifications.")
-                .trailing(name_field)
-                .render(k),
-            Row::new("provider-badge", "Badge")
+            Row::new("provider-name", crate::i18n::tr("display-name"))
                 .description(
                     k,
-                    "Up to three letters. Leave empty to use the name's initials. Shown while a provider has more than one instance turned on.",
+                    crate::i18n::tr("shown-on-popup-tabs-home-cards-the-tray-and-notifications"),
+                )
+                .trailing(name_field)
+                .render(k),
+            Row::new("provider-badge", crate::i18n::tr("badge"))
+                .description(
+                    k,
+                    crate::i18n::tr(
+                        "up-to-three-letters-leave-empty-to-use-the-name-s-initials-shown",
+                    ),
                 )
                 .trailing(kit::badge_plate(k, &instance.badge()))
                 .trailing(badge_field)
                 .render(k),
-            Row::new("provider-badge-color", "Badge color")
-                .description(k, "Auto uses a neutral plate that follows the theme.")
+            Row::new("provider-badge-color", crate::i18n::tr("badge-color"))
+                .description(
+                    k,
+                    crate::i18n::tr("auto-uses-a-neutral-plate-that-follows-the-theme"),
+                )
                 .detail(div().pt(px(12.0)).child(badge_color).into_any_element())
                 .render(k),
             kit::toggle_row(
                 k,
                 format!("provider-{}-home", provider.id()),
-                "Show on Home",
-                Some("Its provider tab stays available when hidden from Home.".into()),
+                crate::i18n::tr("show-on-home"),
+                Some(
+                    crate::i18n::tr("its-provider-tab-stays-available-when-hidden-from-home")
+                        .into(),
+                ),
                 instance.show_on_home,
                 Self::h(cx, move |this, value: bool, _, cx| {
                     this.edit_instance(cx, provider, move |instance| instance.show_on_home = value)
                 }),
             ),
         ];
-        vec![kit::section_heading(k, "General"), kit::card(k, rows)]
+        vec![
+            kit::section_heading(k, crate::i18n::tr("general")),
+            kit::card(k, rows),
+        ]
     }
 
     fn account_section(
@@ -436,20 +461,25 @@ impl SettingsWindow {
                 .ok()
                 .flatten()
                 .filter(|value| !value.trim().is_empty());
-            let mut row = Row::new("account-manual", "Credential")
+            let mut row = Row::new("account-manual", crate::i18n::tr("credential"))
                 .icon(kit::row_icon(k, "key-fill"))
                 .description(
                     k,
                     match (&saved, &identity) {
-                        (Some(_), Some(identity)) => format!("Signed in as {identity}"),
-                        (Some(_), None) => "Saved in Windows user storage".into(),
-                        (None, _) => "Paste a sessionKey or an OAuth access token.".into(),
+                        (Some(_), Some(identity)) => crate::i18n::format(
+                            "signed-in-as-identity",
+                            &[("identity", identity.to_string())],
+                        ),
+                        (Some(_), None) => crate::i18n::tr("saved-in-windows-user-storage").into(),
+                        (None, _) => {
+                            crate::i18n::tr("paste-a-sessionkey-or-an-oauth-access-token").into()
+                        }
                     },
                 );
             if saved.is_some() {
                 row = row.description(
                     k,
-                    "Reads limits only. Minibar cannot refresh a pasted credential.",
+                    crate::i18n::tr("reads-limits-only-minibar-cannot-refresh-a-pasted-credential"),
                 );
             }
             if let Some(saved) = &saved {
@@ -459,9 +489,9 @@ impl SettingsWindow {
                 Button::new(
                     "account-manual-button",
                     if saved.is_some() {
-                        "Replace credential"
+                        crate::i18n::tr("replace-credential")
                     } else {
-                        "Add credential"
+                        crate::i18n::tr("add-credential")
                     },
                 )
                 .on_click(open(ProviderDialogKind::ManualCredential { provider }))
@@ -475,13 +505,18 @@ impl SettingsWindow {
                 instance,
                 crate::instances::Capability::SignIn,
             );
-            let mut row = Row::new("account-sign-in", "Signed-in account")
+            let mut row = Row::new("account-sign-in", crate::i18n::tr("signed-in-account"))
                 .icon(kit::row_icon(k, "user-fill"))
                 .description(
                     k,
                     match &identity {
-                        Some(identity) => format!("Signed in as {identity}"),
-                        None => "Not signed in yet, or no limits read so far.".into(),
+                        Some(identity) => crate::i18n::format(
+                            "signed-in-as-identity",
+                            &[("identity", identity.to_string())],
+                        ),
+                        None => {
+                            crate::i18n::tr("not-signed-in-yet-or-no-limits-read-so-far").into()
+                        }
                     },
                 );
             if let Some(folder) = &folder {
@@ -498,9 +533,9 @@ impl SettingsWindow {
                 Button::new(
                     "account-sign-in-button",
                     if identity.is_some() {
-                        "Sign in again"
+                        crate::i18n::tr("sign-in-again")
                     } else {
-                        "Sign in"
+                        crate::i18n::tr("sign-in")
                     },
                 )
                 .with_icon("sign-in-bold")
@@ -509,7 +544,10 @@ impl SettingsWindow {
                 .render(k),
             )
         };
-        vec![kit::section_heading(k, "Account"), kit::row_card(k, row)]
+        vec![
+            kit::section_heading(k, crate::i18n::tr("account")),
+            kit::row_card(k, row),
+        ]
     }
 
     fn runtime_section(
@@ -527,11 +565,11 @@ impl SettingsWindow {
         }
         let mut out = vec![kit::section_header(
             k,
-            "Runtime",
+            crate::i18n::tr("runtime"),
             Some(
-                format!(
-                    "{} Minibar finds these automatically.",
-                    provider_description(driver)
+                crate::i18n::format(
+                    "minibar-finds-these-automatically",
+                    &[("v0", (provider_description(driver)).to_string())],
                 )
                 .into(),
             ),
@@ -645,7 +683,11 @@ impl SettingsWindow {
                     .trailing(kit::status_dot(theme.success))
                     .trailing(
                         kit::text(
-                            if in_use { "In use" } else { "Found" },
+                            if in_use {
+                                crate::i18n::tr("in-use")
+                            } else {
+                                crate::i18n::tr("found")
+                            },
                             12.0,
                             theme.text_secondary,
                         )
@@ -655,8 +697,8 @@ impl SettingsWindow {
                         k,
                         format!("{id}-menu"),
                         vec![
-                            MenuItem::new("Copy path").icon("copy"),
-                            MenuItem::new("Open folder").icon("folder-open-fill"),
+                            MenuItem::new(crate::i18n::tr("copy-path")).icon("copy"),
+                            MenuItem::new(crate::i18n::tr("open-folder")).icon("folder-open-fill"),
                         ],
                         Self::h(cx, move |this, choice: usize, _, cx| {
                             if choice == 1 {
@@ -665,7 +707,7 @@ impl SettingsWindow {
                                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(
                                     menu_path.clone(),
                                 ));
-                                this.show_notice("Path copied.", cx);
+                                this.show_notice(crate::i18n::tr("path-copied"), cx);
                             }
                         }),
                     ));
@@ -674,14 +716,17 @@ impl SettingsWindow {
                 row = row
                     .description(
                         k,
-                        "Not installed, or installed somewhere Minibar doesn't look.",
+                        crate::i18n::tr(
+                            "not-installed-or-installed-somewhere-minibar-doesn-t-look",
+                        ),
                     )
                     .trailing(
-                        kit::text("Not found", 12.0, theme.text_secondary).into_any_element(),
+                        kit::text(crate::i18n::tr("not-found"), 12.0, theme.text_secondary)
+                            .into_any_element(),
                     );
                 if can_choose_folder {
                     row = row.trailing(
-                        Button::new(format!("{id}-choose"), "Choose folder…")
+                        Button::new(format!("{id}-choose"), crate::i18n::tr("choose-folder"))
                             .with_icon("folder-fill")
                             .on_click(Self::h(cx, move |this, (), _, cx| {
                                 this.pick_folder(provider, PathField::Binary, cx)
@@ -700,7 +745,7 @@ impl SettingsWindow {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Select folder".into()),
+            prompt: Some(crate::i18n::tr("select-folder").into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = prompt.await else {
@@ -765,7 +810,7 @@ impl SettingsWindow {
                     "folder-open-fill",
                 )
                 .kind(kit::ButtonKind::Standard)
-                .tooltip("Choose folder")
+                .tooltip(crate::i18n::tr("choose-folder-1838a4"))
                 .on_click(Self::h(cx, move |this, (), _, cx| {
                     this.pick_folder(provider, field, cx)
                 }))
@@ -789,7 +834,10 @@ impl SettingsWindow {
         let description = kit::caption(k, config.description);
         let header = Row::new(format!("{card_id}-header"), config.label)
             .icon(kit::row_icon(k, "folder-fill"))
-            .description(k, "Only needed if automatic detection misses your install.");
+            .description(
+                k,
+                crate::i18n::tr("only-needed-if-automatic-detection-misses-your-install"),
+            );
         let on_toggle = Self::expand_handler(cx, card_id.clone());
         kit::expander(k, card_id, header, expanded, on_toggle, move |_| {
             div()
@@ -815,15 +863,17 @@ impl SettingsWindow {
         let manual = instance.uses_manual_credential();
         if instance.driver == ProviderKind::Claude {
             rows.push(
-                Row::new("instance-source", "Source")
+                Row::new("instance-source", crate::i18n::tr("source"))
                     .description(
                         k,
-                        "Config folder reads the Claude Code login in CLAUDE_CONFIG_DIR. Manual credential reads limits only from a pasted credential.",
+                        crate::i18n::tr(
+                            "config-folder-reads-the-claude-code-login-in-claude-config-dir-ma",
+                        ),
                     )
                     .trailing(kit::segmented(
                         k,
                         format!("provider-{}-source", provider.id()),
-                        &["Config folder", "Manual"],
+                        &[crate::i18n::tr("config-folder"), crate::i18n::tr("manual")],
                         usize::from(manual),
                         false,
                         Self::h(cx, move |this, index: usize, _, cx| {
@@ -865,25 +915,34 @@ impl SettingsWindow {
                 window,
                 cx,
             );
-            let mut row = Row::new("instance-config-folder", "Config folder").description(
-                k,
-                format!(
-                    "Passed to the CLI as {env}. Leave empty to use {}.",
-                    if instance.is_primary() {
-                        "the standard folder"
-                    } else {
-                        "a folder Minibar creates for this instance"
-                    }
-                ),
-            );
+            let mut row = Row::new("instance-config-folder", crate::i18n::tr("config-folder"))
+                .description(
+                    k,
+                    crate::i18n::format(
+                        "passed-to-the-cli-as-env-leave-empty-to-use",
+                        &[
+                            ("env", env.to_string()),
+                            (
+                                "v0",
+                                (if instance.is_primary() {
+                                    crate::i18n::tr("the-standard-folder")
+                                } else {
+                                    crate::i18n::tr("a-folder-minibar-creates-for-this-instance")
+                                })
+                                .to_string(),
+                            ),
+                        ],
+                    ),
+                );
             row = row.detail(div().pt(px(8.0)).child(picker).into_any_element());
             if let Some(other) =
                 crate::instances::folder_conflicts(&self.settings.instances).get(&instance.id)
             {
                 row = row.detail(
                     kit::text(
-                        format!(
-                            "{other} already reads this folder. Two instances must not share a login, or usage is counted twice."
+                        crate::i18n::format(
+                            "other-already-reads-this-folder-two-instances-must-not-share-a-lo",
+                            &[("other", other.to_string())],
                         ),
                         12.0,
                         k.theme.critical,
@@ -910,30 +969,42 @@ impl SettingsWindow {
             rows.push(kit::toggle_row_with(
                 k,
                 format!("provider-{}-auto", provider.id()),
-                "Automatic activation",
+                crate::i18n::tr("automatic-activation"),
                 Some(
-                    "Starts this account's 5-hour window when it resets, using its own login. Schedules and pauses are under Limit activation."
-                        .into(),
+                    crate::i18n::tr(
+                        "starts-this-account-s-5-hour-window-when-it-resets-using-its-own",
+                    )
+                    .into(),
                 ),
                 instance.auto_activation,
                 Capabilities::reason(instance, Capability::AutoActivation).map(SharedString::from),
                 Self::h(cx, move |this, value: bool, _, cx| {
-                    this.edit_instance(cx, provider, move |instance| instance.auto_activation = value)
+                    this.edit_instance(cx, provider, move |instance| {
+                        instance.auto_activation = value
+                    })
                 }),
             ));
         }
         rows.push(kit::toggle_row_with(
             k,
             format!("provider-{}-usage", provider.id()),
-            "Usage statistics",
-            Some("Scans this instance's local history for its usage card. Turn off to stop collecting entirely.".into()),
+            crate::i18n::tr("usage-statistics"),
+            Some(
+                crate::i18n::tr(
+                    "scans-this-instance-s-local-history-for-its-usage-card-turn-off-t",
+                )
+                .into(),
+            ),
             instance.usage_stats,
             Capabilities::reason(instance, Capability::UsageStats).map(SharedString::from),
             Self::h(cx, move |this, value: bool, _, cx| {
                 this.edit_instance(cx, provider, move |instance| instance.usage_stats = value)
             }),
         ));
-        vec![kit::section_heading(k, "Features"), kit::card(k, rows)]
+        vec![
+            kit::section_heading(k, crate::i18n::tr("features")),
+            kit::card(k, rows),
+        ]
     }
 
     fn opencode_source_card(&self, status: &ProviderInstallStatus, k: &Kit) -> AnyElement {
@@ -945,22 +1016,29 @@ impl SettingsWindow {
             );
         }
         let found = status.used.is_some();
-        let mut row = Row::new("source-opencode", "OpenCode sign-in or local history")
-            .icon(kit::row_icon(k, "terminal-window-fill"))
-            .description(
-                k,
-                if found {
-                    "Found in OpenCode auth, environment, a saved key, or local history."
-                } else {
-                    "Nothing found in OpenCode auth, environment, or local history."
-                },
-            );
+        let mut row = Row::new(
+            "source-opencode",
+            crate::i18n::tr("opencode-sign-in-or-local-history"),
+        )
+        .icon(kit::row_icon(k, "terminal-window-fill"))
+        .description(
+            k,
+            if found {
+                crate::i18n::tr("found-in-opencode-auth-environment-a-saved-key-or-local-history")
+            } else {
+                crate::i18n::tr("nothing-found-in-opencode-auth-environment-or-local-history")
+            },
+        );
         if found {
             row = row.trailing(kit::status_dot(k.theme.success));
         }
         row = row.trailing(
             kit::text(
-                if found { "Found" } else { "Not found" },
+                if found {
+                    crate::i18n::tr("found")
+                } else {
+                    crate::i18n::tr("not-found")
+                },
                 12.0,
                 k.theme.text_secondary,
             )
@@ -980,17 +1058,20 @@ impl SettingsWindow {
             .ok()
             .flatten()
             .filter(|value| !value.trim().is_empty());
-        let row = Row::new("opencode-api-key", "API key").icon(kit::row_icon(k, "key-fill"));
+        let row = Row::new("opencode-api-key", crate::i18n::tr("api-key"))
+            .icon(kit::row_icon(k, "key-fill"));
         let row = match saved_key {
             Some(key) => row
-                .description(k, "Saved in Windows user storage")
+                .description(k, crate::i18n::tr("saved-in-windows-user-storage"))
                 .trailing(masked(k, crate::secrets::masked_hint(&key)))
                 .trailing(kit::more_menu(
                     k,
                     format!("opencode-key-{}", provider.id()),
                     vec![
-                        MenuItem::new("Replace key").icon("pencil-simple-fill"),
-                        MenuItem::new("Remove key").icon("trash-fill").danger(),
+                        MenuItem::new(crate::i18n::tr("replace-key")).icon("pencil-simple-fill"),
+                        MenuItem::new(crate::i18n::tr("remove-key"))
+                            .icon("trash-fill")
+                            .danger(),
                     ],
                     Self::h(cx, move |this, choice: usize, window, cx| {
                         let kind = if choice == 1 {
@@ -1008,13 +1089,13 @@ impl SettingsWindow {
                 .description(
                     k,
                     if instance.is_primary() {
-                        "Optional. Only needed without OpenCode sign-in on this PC."
+                        crate::i18n::tr("optional-only-needed-without-opencode-sign-in-on-this-pc")
                     } else {
-                        "Add the key of the account this instance tracks."
+                        crate::i18n::tr("add-the-key-of-the-account-this-instance-tracks")
                     },
                 )
                 .trailing(
-                    Button::new("opencode-add-key", "Add API key")
+                    Button::new("opencode-add-key", crate::i18n::tr("add-api-key"))
                         .with_icon("plus-bold")
                         .on_click(Self::h(cx, move |this, (), window, cx| {
                             this.open_provider_dialog(
@@ -1029,7 +1110,10 @@ impl SettingsWindow {
                         .render(k),
                 ),
         };
-        vec![kit::section_heading(k, "Account"), kit::row_card(k, row)]
+        vec![
+            kit::section_heading(k, crate::i18n::tr("account")),
+            kit::row_card(k, row),
+        ]
     }
 
     // ----- OpenRouter ----------------------------------------------------------
@@ -1045,9 +1129,9 @@ impl SettingsWindow {
         };
         let mut out = vec![kit::section_header(
             k,
-            "Keys",
+            crate::i18n::tr("keys"),
             Some(
-                "A management key shows credit balance and usage history. API keys show spend per key."
+                crate::i18n::tr("a-management-key-shows-credit-balance-and-usage-history-api-keys")
                     .into(),
             ),
             None,
@@ -1067,23 +1151,26 @@ impl SettingsWindow {
         };
 
         let management = match crate::openrouter::management_key_hint(&account.id) {
-            Err(error) => Row::new("management-key", "Management key")
+            Err(error) => Row::new("management-key", crate::i18n::tr("management-key"))
                 .icon(kit::row_icon(k, "key-fill"))
                 .detail(kit::tooltip_host(
                     k,
                     "management-key-error",
                     format!("{error:#}"),
                     kit::text(
-                        "Could not read the saved key. Reopen this page to retry.",
+                        crate::i18n::tr("could-not-read-the-saved-key-reopen-this-page-to-retry"),
                         12.0,
                         theme.caution,
                     )
                     .into_any_element(),
                 )),
             Ok(Some(hint)) => {
-                let mut row = Row::new("management-key", "Management key")
+                let mut row = Row::new("management-key", crate::i18n::tr("management-key"))
                     .icon(kit::row_icon(k, "key-fill"))
-                    .description(k, "Credit balance and account-wide usage history");
+                    .description(
+                        k,
+                        crate::i18n::tr("credit-balance-and-account-wide-usage-history"),
+                    );
                 if let Some(balance) = snapshot
                     .as_ref()
                     .and_then(|snapshot| snapshot.balance_microusd)
@@ -1093,7 +1180,10 @@ impl SettingsWindow {
                             .text_size(px(12.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.accent_text)
-                            .child(format!("{} credit", money(balance)))
+                            .child(crate::i18n::format(
+                                "credit",
+                                &[("v0", (money(balance)).to_string())],
+                            ))
                             .into_any_element(),
                     );
                 }
@@ -1102,8 +1192,10 @@ impl SettingsWindow {
                     k,
                     format!("management-{}", account.id),
                     vec![
-                        MenuItem::new("Replace key").icon("pencil-simple-fill"),
-                        MenuItem::new("Remove key").icon("trash-fill").danger(),
+                        MenuItem::new(crate::i18n::tr("replace-key")).icon("pencil-simple-fill"),
+                        MenuItem::new(crate::i18n::tr("remove-key"))
+                            .icon("trash-fill")
+                            .danger(),
                     ],
                     Self::h(cx, move |this, choice: usize, window, cx| {
                         let kind = if choice == 1 {
@@ -1120,14 +1212,14 @@ impl SettingsWindow {
                     }),
                 ))
             }
-            Ok(None) => Row::new("management-key", "Management key")
+            Ok(None) => Row::new("management-key", crate::i18n::tr("management-key"))
                 .icon(kit::row_icon(k, "key-fill"))
                 .description(
                     k,
-                    "Not added. Add one to see credit balance and usage history.",
+                    crate::i18n::tr("not-added-add-one-to-see-credit-balance-and-usage-history"),
                 )
                 .trailing(
-                    Button::new("management-add", "Add management key")
+                    Button::new("management-add", crate::i18n::tr("add-management-key"))
                         .on_click(open(
                             cx,
                             ProviderDialogKind::OpenRouterManagementKey {
@@ -1150,10 +1242,10 @@ impl SettingsWindow {
                     .text_size(px(12.0))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_secondary)
-                    .child("API keys"),
+                    .child(crate::i18n::tr("api-keys")),
             )
             .child(
-                Button::new("openrouter-add-key", "Add API key")
+                Button::new("openrouter-add-key", crate::i18n::tr("add-api-key"))
                     .link()
                     .with_icon("plus-bold")
                     .on_click(open(
@@ -1184,10 +1276,21 @@ impl SettingsWindow {
                     .pt(px(6.0))
                     .child(kit::caption(
                         k,
-                        format!(
-                            "Last updated {}, {}",
-                            at.with_timezone(&chrono::Local).format("%b %-d"),
-                            TimeFormat::current().format_hm(at.with_timezone(&chrono::Local))
+                        crate::i18n::format(
+                            "last-updated",
+                            &[
+                                (
+                                    "v0",
+                                    (crate::i18n::month_day(at.with_timezone(&chrono::Local)))
+                                        .to_string(),
+                                ),
+                                (
+                                    "v1",
+                                    (TimeFormat::current()
+                                        .format_hm(at.with_timezone(&chrono::Local)))
+                                    .to_string(),
+                                ),
+                            ],
                         ),
                     ))
                     .into_any_element(),
@@ -1211,7 +1314,7 @@ impl SettingsWindow {
                 .pb(px(16.0))
                 .child(kit::caption(
                     k,
-                    "No API keys yet. Add one to track spend per key.",
+                    crate::i18n::tr("no-api-keys-yet-add-one-to-track-spend-per-key"),
                 ))
                 .into_any_element();
         }
@@ -1237,10 +1340,10 @@ impl SettingsWindow {
                     .items_center()
                     .gap(px(10.0))
                     .h(px(30.0))
-                    .child(column("Name", None, false))
-                    .child(column("Key", Some(120.0), false))
-                    .child(column("Spend", Some(140.0), true))
-                    .child(column("Limit", Some(64.0), true))
+                    .child(column(crate::i18n::tr("name"), None, false))
+                    .child(column(crate::i18n::tr("key"), Some(120.0), false))
+                    .child(column(crate::i18n::tr("spend"), Some(140.0), true))
+                    .child(column(crate::i18n::tr("limit"), Some(64.0), true))
                     .child(div().w(px(kit::CONTROL_HEIGHT))),
             );
         let credit_total = account_credit_total(snapshot);
@@ -1255,8 +1358,12 @@ impl SettingsWindow {
                 kit::tooltip_host(
                     k,
                     format!("key-error-{key_id}"),
-                    format!("{error}. Reopen this page to retry."),
-                    kit::text("Could not read key", 13.0, theme.caution).into_any_element(),
+                    crate::i18n::format(
+                        "error-reopen-this-page-to-retry",
+                        &[("error", error.to_string())],
+                    ),
+                    kit::text(crate::i18n::tr("could-not-read-key"), 13.0, theme.caution)
+                        .into_any_element(),
                 )
             } else {
                 match account
@@ -1269,10 +1376,10 @@ impl SettingsWindow {
                     Some(label) => kit::text(label, 13.0, theme.text)
                         .truncate()
                         .into_any_element(),
-                    None if !saved => {
-                        kit::text("Not saved", 13.0, theme.caution).into_any_element()
-                    }
-                    None => kit::text("Unnamed", 13.0, theme.text_tertiary).into_any_element(),
+                    None if !saved => kit::text(crate::i18n::tr("not-saved"), 13.0, theme.caution)
+                        .into_any_element(),
+                    None => kit::text(crate::i18n::tr("unnamed"), 13.0, theme.text_tertiary)
+                        .into_any_element(),
                 }
             };
             // The saved key is authoritative immediately after a replacement;
@@ -1288,19 +1395,27 @@ impl SettingsWindow {
                         if let Some(limit) = spending.limit_microusd.filter(|limit| *limit > 0) {
                             Some((
                                 used as f64 / limit as f64,
-                                format!("{} of the {} limit", money(used), money(limit)),
+                                crate::i18n::format(
+                                    "of-the-limit",
+                                    &[
+                                        ("v0", (money(used)).to_string()),
+                                        ("v1", (money(limit)).to_string()),
+                                    ],
+                                ),
                             ))
                         } else {
                             credit_total.map(|total| {
-                            (
-                                used as f64 / total as f64,
-                                format!(
-                                    "No spend limit. Key spend: {}. Account credits purchased: {}.",
-                                    money(used),
-                                    money(total)
-                                ),
-                            )
-                        })
+                                (
+                                    used as f64 / total as f64,
+                                    crate::i18n::format(
+                                        "no-spend-limit-key-spend-account-credits-purchased",
+                                        &[
+                                            ("v0", (money(used)).to_string()),
+                                            ("v1", (money(total)).to_string()),
+                                        ],
+                                    ),
+                                )
+                            })
                         };
                     let mut cell = div().flex().items_center().justify_end().gap(px(8.0));
                     if let Some((fraction, tooltip)) = bar {
@@ -1338,14 +1453,21 @@ impl SettingsWindow {
                 .map(|key| key.spending.limit_microusd)
             {
                 Some(Some(limit)) => kit::text(money(limit), 13.0, theme.text).into_any_element(),
-                Some(None) => kit::text("None", 13.0, theme.text_tertiary).into_any_element(),
+                Some(None) => {
+                    kit::text(crate::i18n::tr("none"), 13.0, theme.text_tertiary).into_any_element()
+                }
                 None => kit::text("—", 13.0, theme.text_tertiary).into_any_element(),
             };
-            let mut items = vec![MenuItem::new("Rename key").icon("pencil-simple-fill")];
+            let mut items =
+                vec![MenuItem::new(crate::i18n::tr("rename-key")).icon("pencil-simple-fill")];
             if !(saved || read_error.is_some()) {
-                items.push(MenuItem::new("Add key").icon("plus-bold"));
+                items.push(MenuItem::new(crate::i18n::tr("add-key")).icon("plus-bold"));
             }
-            items.push(MenuItem::new("Remove key").icon("trash-fill").danger());
+            items.push(
+                MenuItem::new(crate::i18n::tr("remove-key"))
+                    .icon("trash-fill")
+                    .danger(),
+            );
             let actions: Vec<&'static str> = if saved || read_error.is_some() {
                 vec!["rename", "remove"]
             } else {

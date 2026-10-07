@@ -31,7 +31,10 @@ impl SettingsWindow {
                 && let Err(error) = crate::troubleshoot::launch_selected(tool)
             {
                 eprintln!("failed to start troubleshooting terminal: {error:#}");
-                crate::notifications::show("Troubleshooting could not start", &error.to_string());
+                crate::notifications::show(
+                    crate::i18n::tr("troubleshooting-could-not-start"),
+                    &error.to_string(),
+                );
             }
             this.troubleshoot = None;
             cx.notify();
@@ -42,14 +45,16 @@ impl SettingsWindow {
             phase,
             440.0,
             vec![
-                kit::dialog_title(k, "Run Troubleshoot with AI"),
+                kit::dialog_title(k, crate::i18n::tr("run-troubleshoot-with-ai")),
                 kit::caption(
                     k,
-                    "Choose which installed AI tool should investigate the problem.",
+                    crate::i18n::tr(
+                        "choose-which-installed-ai-tool-should-investigate-the-problem",
+                    ),
                 ),
                 kit::field(
                     k,
-                    "AI tool",
+                    crate::i18n::tr("ai-tool"),
                     kit::dropdown(
                         k,
                         "troubleshoot-tool",
@@ -67,11 +72,11 @@ impl SettingsWindow {
                 ),
             ],
             vec![
-                Button::new("troubleshoot-cancel", "Cancel")
+                Button::new("troubleshoot-cancel", crate::i18n::tr("cancel"))
                     .full_width()
                     .on_click(dismiss.clone())
                     .render(k),
-                Button::new("troubleshoot-run", "Open terminal")
+                Button::new("troubleshoot-run", crate::i18n::tr("open-terminal"))
                     .accent()
                     .full_width()
                     .disabled(selected.is_none())

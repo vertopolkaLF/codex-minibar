@@ -100,7 +100,7 @@ pub fn resolve_metric(
         let mut window = reserve_window.clone();
         window.resets_at = limits.primary.resets_at;
         window.duration_minutes = limits.primary.duration_minutes;
-        (crate::limits::LUNA_RESERVE_TITLE.to_owned(), window)
+        (crate::i18n::tr("luna-reserve").to_owned(), window)
     } else {
         (
             label,

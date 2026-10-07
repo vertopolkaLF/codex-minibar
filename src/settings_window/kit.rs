@@ -9,6 +9,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     rc::Rc,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -49,6 +50,7 @@ pub(crate) const CONTROL_RADIUS: f32 = 6.0;
 #[derive(Default)]
 pub(crate) struct Kit {
     pub(crate) theme: Theme,
+    text_system: Option<Arc<gpui::WindowTextSystem>>,
     pub(crate) fx: Fx,
     heights: HashMap<u64, Rc<Cell<f32>>>,
     pub(crate) menus: Menus,
@@ -72,8 +74,9 @@ pub(crate) struct Kit {
 }
 
 impl Kit {
-    pub(crate) fn begin_frame(&mut self, theme: Theme) {
+    pub(crate) fn begin_frame(&mut self, theme: Theme, window: &Window) {
         self.theme = theme;
+        self.text_system = Some(Arc::clone(window.text_system()));
         let enabled = crate::theme::animations_enabled();
         self.fx.begin_frame(enabled);
         self.hovers.begin_frame(enabled);
@@ -1336,7 +1339,11 @@ pub(crate) fn toggle_row_with(
     let id: SharedString = id.into();
     let disabled = disabled_reason.is_some();
     let state_label = text(
-        if on && !disabled { "On" } else { "Off" },
+        if on && !disabled {
+            crate::i18n::tr("on")
+        } else {
+            crate::i18n::tr("off")
+        },
         13.0,
         k.theme.text_secondary,
     )
@@ -1461,7 +1468,20 @@ pub(crate) fn segmented(
     };
     let segments = labels
         .iter()
-        .map(|label| Segment::text(label.to_string()))
+        .map(|label| {
+            Segment::text(
+                label.to_string(),
+                crate::popup_window::ui::components::measure_text(
+                    k.text_system
+                        .as_ref()
+                        .expect("begin_frame initializes text measurement"),
+                    theme.font.clone(),
+                    12.0,
+                    FontWeight::SEMIBOLD,
+                    label,
+                ),
+            )
+        })
         .collect();
     let hover_set = Rc::clone(&k.hovered);
     let hovered = |index: usize| hover_set.borrow().contains(&fx::key((key, index)));
@@ -1779,7 +1799,7 @@ pub(crate) fn more_menu(
     let toggle_id = id.clone();
     let open = k.menus.is_open(&id);
     let button = Button::icon_only(format!("more-{id}"), "dots-three-bold")
-        .tooltip("More options")
+        .tooltip(crate::i18n::tr("more-options"))
         .on_click(handler(move |(), window, _| {
             menus.toggle(toggle_id.clone(), window)
         }))
@@ -3059,7 +3079,7 @@ impl ColorSwatches {
                     theme.text_secondary,
                 )),
             });
-        let trigger = with_tooltip(k, trigger, "Custom color").into_any_element();
+        let trigger = with_tooltip(k, trigger, crate::i18n::tr("custom-color")).into_any_element();
 
         let content = k.menus.is_open(&menu).then(|| {
             let base = self.picker_rgb;

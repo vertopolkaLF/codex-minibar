@@ -10,20 +10,26 @@ use crate::streamdeck::InstallPhase;
 fn install_description(phase: &InstallPhase) -> &'static str {
     match phase {
         InstallPhase::Idle => {
-            "Download the latest Stream Deck companion from GitHub and open its installer."
+            crate::i18n::tr("download-the-latest-stream-deck-companion-from-github-and-open-it")
         }
-        InstallPhase::Downloading => "Downloading the latest Stream Deck companion from GitHub...",
-        InstallPhase::Launching => "Opening the Stream Deck installer...",
-        InstallPhase::Launched => "The installer is open. Finish the installation in Stream Deck.",
-        InstallPhase::Failed(_) => "The plugin could not be downloaded or opened. Try again.",
+        InstallPhase::Downloading => {
+            crate::i18n::tr("downloading-the-latest-stream-deck-companion-from-github")
+        }
+        InstallPhase::Launching => crate::i18n::tr("opening-the-stream-deck-installer"),
+        InstallPhase::Launched => {
+            crate::i18n::tr("the-installer-is-open-finish-the-installation-in-stream-deck")
+        }
+        InstallPhase::Failed(_) => {
+            crate::i18n::tr("the-plugin-could-not-be-downloaded-or-opened-try-again")
+        }
     }
 }
 
 fn install_button_label(phase: &InstallPhase) -> &'static str {
     match phase {
-        InstallPhase::Downloading => "Downloading...",
-        InstallPhase::Launching => "Opening...",
-        _ => "Install plugin",
+        InstallPhase::Downloading => crate::i18n::tr("downloading"),
+        InstallPhase::Launching => crate::i18n::tr("opening"),
+        _ => crate::i18n::tr("install-plugin"),
     }
 }
 
@@ -55,13 +61,16 @@ impl SettingsWindow {
             })
             .detach();
         });
-        let mut row = Row::new("integrations-streamdeck", "Stream Deck companion")
-            .icon(kit::row_icon(k, "package-fill"))
-            .description(k, install_description(phase));
+        let mut row = Row::new(
+            "integrations-streamdeck",
+            crate::i18n::tr("stream-deck-companion"),
+        )
+        .icon(kit::row_icon(k, "package-fill"))
+        .description(k, install_description(phase));
         if matches!(phase, InstallPhase::Failed(_)) {
             row = row.detail(
                 kit::text(
-                    "Check your connection, then try again.",
+                    crate::i18n::tr("check-your-connection-then-try-again"),
                     12.0,
                     k.theme.caution,
                 )
