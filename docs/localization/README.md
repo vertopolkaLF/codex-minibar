@@ -32,8 +32,9 @@ does not require reopening a window or restarting the application.
 
 Segmented controls measure each label with the active GPUI font and size; fixed
 segments and the animated selection thumb follow each label's width. Compact
-quota and spending cards use the full layout when their complete name cannot
-fit alongside the current values. Names then use a separate full-width row.
+quota and spending cards keep their background fill when the complete name
+cannot fit alongside the current values; the name then takes its own row and
+the values move below it.
 
 ## Translate or add a message
 

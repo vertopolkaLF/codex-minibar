@@ -361,24 +361,30 @@ impl PopupRoot {
                 None => div().child(title_el()),
             }
         };
-        let footer = if show_reset {
+        let footer = if show_reset && usage_width + 8.0 + reset_width <= available_width {
+            components::split_row(
+                self.usage_label(label.clone(), usage_amount, style.show_usage_values),
+                self.reset_status(limit),
+            )
+        } else if show_reset {
             div()
                 .flex()
-                .flex_row()
-                .flex_wrap()
+                .flex_col()
                 .w_full()
-                .gap_x(px(8.0))
-                .gap_y(px(4.0))
+                .gap(px(4.0))
+                .child(self.usage_label(label.clone(), usage_amount, style.show_usage_values))
                 .child(
-                    self.usage_label(label.clone(), usage_amount, style.show_usage_values)
-                        .flex_none(),
+                    div()
+                        .flex()
+                        .flex_row()
+                        .justify_end()
+                        .child(self.reset_status(limit)),
                 )
-                .child(self.reset_status(limit).flex_none().ml_auto())
         } else {
             self.usage_label(label.clone(), usage_amount, style.show_usage_values)
         };
 
-        if style.compact && title_fits {
+        if style.compact {
             let mut element = card(&palette).relative().overflow_hidden();
             for layer in components::compact_progress_layers(
                 progress,
@@ -389,7 +395,8 @@ impl PopupRoot {
             ) {
                 element = element.child(layer);
             }
-            let content = if pace.is_none() {
+            // Names that do not fit keep the compact fill but move values below the title.
+            let content = if pace.is_none() && title_fits {
                 one_row(self)
             } else {
                 div().flex().flex_col().w_full().child(header).child(footer)
@@ -663,7 +670,7 @@ impl PopupRoot {
                 self.fx
                     .value(fx::key(("spend-progress", key)), value as f32, fx::NORMAL)
             });
-        if style.compact && title_fits {
+        if style.compact {
             let mut element = card(&palette).relative().overflow_hidden();
             if let Some(progress) = progress {
                 for layer in
