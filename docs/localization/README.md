@@ -30,6 +30,11 @@ writer and live synchronization. Tray menus/tooltips, provider error summaries,
 and cached Usage/Home snapshots follow the current language. A setting change
 does not require reopening a window or restarting the application.
 
+Segmented controls measure each label with the active GPUI font and size; fixed
+segments and the animated selection thumb follow each label's width. Compact
+quota and spending cards use the full layout when their complete name cannot
+fit alongside the current values. Names then use a separate full-width row.
+
 ## Translate or add a message
 
 Use a stable message ID for application copy. Keep GPUI element IDs, provider IDs,

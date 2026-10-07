@@ -1252,7 +1252,7 @@ impl Render for SettingsWindow {
             theme = theme.with_mica();
         }
         self.backdrop.sync(theme.dark, window.appearance());
-        k.begin_frame(theme);
+        k.begin_frame(theme, window);
         k.page_scroll = Some(self.scroll.clone());
         self.refresh_detection(cx);
         // A deleted instance must not stay selected.

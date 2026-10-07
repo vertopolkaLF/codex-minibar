@@ -551,7 +551,7 @@ impl Render for OnboardingWindow {
             theme = theme.with_mica();
         }
         self.backdrop.sync(theme.dark, window.appearance());
-        k.begin_frame(theme);
+        k.begin_frame(theme, window);
         let (heading, description, rows) = match self.step {
             Step::Providers => (
                 crate::i18n::tr("choose-providers"),

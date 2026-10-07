@@ -167,7 +167,7 @@ no-tokens-in-this-period = В этом периоде нет токенов ка
 loading-model-breakdown = Загрузка разбивки по моделям
 
 # src/popup_window/ui/activity.rs
-group-tokens-or-cost-by-model = Группировать токены или стоимость по моделям
+group-tokens-or-cost-by-model = Группировать токены или расходы по моделям
 
 # src/popup_window/ui/usage.rs
 model = Модель
@@ -176,16 +176,16 @@ model = Модель
 tokens = Токены
 
 # src/popup_window/ui/usage.rs
-cost = Стоимость
+cost = Расход
 
 # src/popup_window/ui/activity.rs
-no-cost-data-for-this-period = Нет данных стоимости за этот период
+no-cost-data-for-this-period = Нет данных расходов за этот период
 
 # src/popup_window/ui/activity.rs
 no-token-data-for-this-period = Нет данных токенов за этот период
 
 # src/popup_window/ui/activity.rs
-daily-cost-in-usd = Стоимость по дням в USD
+daily-cost-in-usd = Расход по дням в USD
 
 # src/popup_window/ui/activity.rs
 daily-token-volume = Объём токенов по дням
@@ -194,7 +194,7 @@ daily-token-volume = Объём токенов по дням
 of-total-models-scroll-for-more = { $v0 }–{ $v1 } из { $total } моделей · Прокрутите, чтобы увидеть остальные
 
 # src/popup_window/ui/activity.rs
-cost-usd-by-model = Стоимость (USD) по моделям
+cost-usd-by-model = Расход (USD) по моделям
 
 # src/popup_window/ui/activity.rs
 tokens-by-model = Токены по моделям
@@ -224,7 +224,7 @@ session-not-started = Сессия не начата
 expires-in = Истекает через
 
 # src/popup_window/ui/cards.rs
-usage = Использование:
+usage = Расход:
 
 # src/settings_window/providers/page.rs
 remove-key = Удалить ключ
@@ -318,7 +318,7 @@ total = Всего
 enable-a-provider-in-settings-and-include-it-in-usage-stats-to-se = Включите провайдера в настройках и добавьте его в статистику использования, чтобы видеть локальное использование API.
 
 # src/popup_window/ui/usage.rs
-hourly-cost = Стоимость по часам
+hourly-cost = Расход по часам
 
 # src/popup_window/ui/usage.rs
 hourly-processed-tokens = Обработанные токены по часам
@@ -2077,7 +2077,7 @@ to = { $v0 } — { $v1 }
 share-1-of-other = { $share }% от { $v0 } · { $other }
 
 # application
-cost-885dc4 = стоимости
+cost-885dc4 = расхода
 
 # application
 tokens-339143 = токенов

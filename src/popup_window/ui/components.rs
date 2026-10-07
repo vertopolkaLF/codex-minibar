@@ -13,6 +13,37 @@ use super::{assets::icon_path, theme::Palette};
 
 pub(crate) const CARD_RADIUS: f32 = crate::popup::CARD_CORNER_RADIUS_DIP as f32;
 pub(crate) const PROGRESS_TRACK_HEIGHT: f32 = 6.0;
+
+/// Measure with the same font, size and weight used to render the label.
+pub(crate) fn measure_text(
+    text_system: &gpui::WindowTextSystem,
+    family: SharedString,
+    size: f32,
+    weight: FontWeight,
+    value: &str,
+) -> f32 {
+    let mut font = gpui::font(family);
+    font.weight = weight;
+    value
+        .lines()
+        .map(|line| {
+            let run = gpui::TextRun {
+                len: line.len(),
+                font: font.clone(),
+                color: gpui::black(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            f32::from(
+                text_system
+                    .shape_line(line.to_owned().into(), px(size), &[run], None)
+                    .width,
+            )
+        })
+        .fold(0.0_f32, f32::max)
+        .ceil()
+}
 const INTERVAL_TICK_WIDTH: f32 = 2.0;
 const INTERVAL_TICK_HEIGHT: f32 = PROGRESS_TRACK_HEIGHT - 2.0;
 const CARD_EDGE_MARKER_HEIGHT: f32 = INTERVAL_TICK_HEIGHT + 2.0;
