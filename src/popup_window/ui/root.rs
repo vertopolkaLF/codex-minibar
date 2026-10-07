@@ -1670,10 +1670,6 @@ impl PopupRoot {
                     &[
                         ("name", name.to_string()),
                         ("days_left", days_left.to_string()),
-                        (
-                            "v0",
-                            (if days_left == 1 { "day" } else { "days" }).to_string(),
-                        ),
                     ],
                 ),
                 crate::i18n::tr("sign-in-again-to-keep-limits-updating").to_owned(),

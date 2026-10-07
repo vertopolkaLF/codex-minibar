@@ -225,7 +225,9 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                               tray: &mut TrayManager,
                               settings: Settings,
                               live_settings: &mut Settings| {
-            settings.language.apply();
+            if !crate::settings_window::has_pending_edits() {
+                settings.language.apply();
+            }
             crate::settings_window::sync_open_window(settings.clone());
             let phase = updates.snapshot();
             ui.settings_revision = ui.settings_revision.wrapping_add(1);

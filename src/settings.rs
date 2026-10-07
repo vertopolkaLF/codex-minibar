@@ -2344,7 +2344,9 @@ impl Settings {
 
     /// Applies settings whose effect lives outside the render tree.
     pub fn apply_runtime_effects(&self) -> Result<()> {
-        self.language.apply();
+        if !crate::settings_window::has_pending_edits() {
+            self.language.apply();
+        }
         crate::theme::set_animations_enabled(self.animations_enabled);
         crate::popup::apply_popup_appearance(
             self.bottom_bar_size,

@@ -93,6 +93,12 @@ pub fn open() {
     post(Command::Open);
 }
 
+/// Optimistic local edits own the displayed settings while the serial writer
+/// commits earlier snapshots. Do not roll the UI language back mid-queue.
+pub(crate) fn has_pending_edits() -> bool {
+    persistence::has_pending()
+}
+
 /// Open Settings on one account's page with its sign-in already started.
 pub fn open_sign_in(provider: crate::instances::ProviderId) {
     post(Command::SignIn(provider));
