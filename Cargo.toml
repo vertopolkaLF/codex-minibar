@@ -80,3 +80,9 @@ taffy = { opt-level = 3 }
 resvg = { opt-level = 3 }
 rustybuzz = { opt-level = 3 }
 ttf-parser = { opt-level = 3 }
+
+# GPUI 0.2.2 with its Windows blend state fixed to composite alpha (see the
+# `codex-minibar patch` note in vendor/gpui's directx_renderer.rs).
+# Translucent windows otherwise draw anti-aliased edges as gray hairlines.
+[patch.crates-io]
+gpui = { path = "vendor/gpui" }
