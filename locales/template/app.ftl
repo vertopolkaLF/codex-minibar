@@ -3275,8 +3275,13 @@ openrouter-keys-expires = { "" }
 
 
 # English source:
-# openrouter-keys-expires-never = Never
-openrouter-keys-expires-never = { "" }
+# openrouter-keys-expires-1-hour = 1 hour
+openrouter-keys-expires-1-hour = { "" }
+
+
+# English source:
+# openrouter-keys-expires-1-day = 1 day
+openrouter-keys-expires-1-day = { "" }
 
 
 # English source:
@@ -3292,6 +3297,21 @@ openrouter-keys-expires-30-days = { "" }
 # English source:
 # openrouter-keys-expires-90-days = 90 days
 openrouter-keys-expires-90-days = { "" }
+
+
+# English source:
+# openrouter-keys-expires-180-days = 180 days
+openrouter-keys-expires-180-days = { "" }
+
+
+# English source:
+# openrouter-keys-expires-1-year = 1 year
+openrouter-keys-expires-1-year = { "" }
+
+
+# English source:
+# openrouter-keys-expires-never = No expiration
+openrouter-keys-expires-never = { "" }
 
 
 # English source:

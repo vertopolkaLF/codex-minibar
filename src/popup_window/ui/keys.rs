@@ -70,32 +70,54 @@ struct Editor {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Expiry {
-    Never,
+    Hour,
+    Day,
     Week,
     Month,
     Quarter,
+    HalfYear,
+    Year,
+    Never,
 }
 
 impl Expiry {
-    const ALL: [Self; 4] = [Self::Never, Self::Week, Self::Month, Self::Quarter];
+    /// Same choices, in the same order, as OpenRouter's own key form.
+    const ALL: [Self; 8] = [
+        Self::Hour,
+        Self::Day,
+        Self::Week,
+        Self::Month,
+        Self::Quarter,
+        Self::HalfYear,
+        Self::Year,
+        Self::Never,
+    ];
 
     fn label(self) -> &'static str {
         match self {
-            Self::Never => crate::i18n::tr("openrouter-keys-expires-never"),
+            Self::Hour => crate::i18n::tr("openrouter-keys-expires-1-hour"),
+            Self::Day => crate::i18n::tr("openrouter-keys-expires-1-day"),
             Self::Week => crate::i18n::tr("openrouter-keys-expires-7-days"),
             Self::Month => crate::i18n::tr("openrouter-keys-expires-30-days"),
             Self::Quarter => crate::i18n::tr("openrouter-keys-expires-90-days"),
+            Self::HalfYear => crate::i18n::tr("openrouter-keys-expires-180-days"),
+            Self::Year => crate::i18n::tr("openrouter-keys-expires-1-year"),
+            Self::Never => crate::i18n::tr("openrouter-keys-expires-never"),
         }
     }
 
     fn at(self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
-        let days = match self {
+        let lifetime = match self {
+            Self::Hour => chrono::Duration::hours(1),
+            Self::Day => chrono::Duration::days(1),
+            Self::Week => chrono::Duration::days(7),
+            Self::Month => chrono::Duration::days(30),
+            Self::Quarter => chrono::Duration::days(90),
+            Self::HalfYear => chrono::Duration::days(180),
+            Self::Year => chrono::Duration::days(365),
             Self::Never => return None,
-            Self::Week => 7,
-            Self::Month => 30,
-            Self::Quarter => 90,
         };
-        Some(now + chrono::Duration::days(days))
+        Some(now + lifetime)
     }
 }
 
@@ -104,6 +126,8 @@ struct CreateForm {
     account: String,
     reset: LimitReset,
     expiry: Expiry,
+    /// The expiry list is unfolded below its field.
+    expiry_open: bool,
     byok: bool,
     track: bool,
     saving: bool,
@@ -684,6 +708,7 @@ impl PopupRoot {
             account,
             reset: LimitReset::Monthly,
             expiry: Expiry::Never,
+            expiry_open: false,
             byok: false,
             track: true,
             saving: false,
@@ -1086,6 +1111,131 @@ impl PopupRoot {
                 el.child(caption(hint, palette.text_tertiary))
             })
             .into_any_element()
+    }
+
+    /// Dropdown for the key's lifetime. The list unfolds inside the form, so
+    /// it never spills past the popup's edge.
+    fn expiry_select(
+        &mut self,
+        expiry: Expiry,
+        open: bool,
+        disabled: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        const OPTION_HEIGHT: f32 = 28.0;
+        const LIST_PADDING: f32 = 4.0;
+        let palette = self.palette.clone();
+        let open = open && !disabled;
+        let reveal = self
+            .fx
+            .toggle(fx::key("or-key-expiry-open"), open, fx::NORMAL);
+        let hover_id = fx::key("or-key-expiry-field");
+        let hover = self.fx.toggle(
+            fx::key(("or-key-expiry-field-fx", hover_id)),
+            self.hovered(hover_id) && !disabled,
+            fx::FASTER,
+        );
+        let mut field = div()
+            .id(eid("or-key-expiry-field"))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(8.0))
+            .h(px(32.0))
+            .px(px(10.0))
+            .rounded(px(4.0))
+            .bg(palette
+                .control_fill
+                .mix(palette.subtle_fill, hover.max(reveal)))
+            .border_1()
+            .border_color(palette.card_stroke)
+            .when(disabled, |el| el.opacity(0.45))
+            .on_hover(self.hover_listener(hover_id, None, cx))
+            .child(div().flex_1().min_w_0().child(nowrap(components::body(
+                expiry.label(),
+                palette.text_primary,
+            ))))
+            .child(
+                icon("fluent-chevron-down", 14.0, palette.text_tertiary).with_transformation(
+                    Transformation::rotate(radians(std::f32::consts::PI * reveal)),
+                ),
+            );
+        if !disabled {
+            field = field.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                if let Some(KeyPage::Create(form)) = this.keys.page.as_mut() {
+                    form.expiry_open = !form.expiry_open;
+                }
+                cx.notify();
+            }));
+        }
+        let mut select = div().flex().flex_col().child(field);
+        if reveal > 0.001 {
+            let mut list = div()
+                .flex()
+                .flex_col()
+                .p(px(LIST_PADDING))
+                .rounded(px(4.0))
+                .bg(palette.control_fill)
+                .border_1()
+                .border_color(palette.card_stroke);
+            for option in Expiry::ALL {
+                let selected = option == expiry;
+                let hover_id = fx::key(("or-key-expiry-option", option.label()));
+                let hover = self.fx.toggle(
+                    fx::key(("or-key-expiry-option-fx", hover_id)),
+                    self.hovered(hover_id),
+                    fx::FASTER,
+                );
+                let fill = if selected { 1.0 } else { hover };
+                list = list.child(
+                    div()
+                        .id(eid(format!("or-key-expiry-{option:?}")))
+                        .relative()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .h(px(OPTION_HEIGHT))
+                        .px(px(10.0))
+                        .rounded(px(4.0))
+                        .when(fill > 0.001, |el| el.bg(palette.subtle_fill.opacity(fill)))
+                        .on_hover(self.hover_listener(hover_id, None, cx))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            if let Some(KeyPage::Create(form)) = this.keys.page.as_mut() {
+                                form.expiry = option;
+                                form.expiry_open = false;
+                            }
+                            cx.notify();
+                        }))
+                        // Fluent's selected-item pill.
+                        .when(selected, |el| {
+                            el.child(
+                                div()
+                                    .absolute()
+                                    .left(px(2.0))
+                                    .top(px(8.0))
+                                    .bottom(px(8.0))
+                                    .w(px(3.0))
+                                    .rounded(px(1.5))
+                                    .bg(palette.accent),
+                            )
+                        })
+                        .child(nowrap(components::body(
+                            option.label(),
+                            palette.text_primary,
+                        ))),
+                );
+            }
+            // Unfolded height: options, list padding and border, and the gap.
+            let full = Expiry::ALL.len() as f32 * OPTION_HEIGHT + LIST_PADDING * 2.0 + 6.0;
+            select = select.child(
+                div()
+                    .overflow_hidden()
+                    .when(reveal < 0.999, |el| el.max_h(px(full * reveal)))
+                    .opacity(reveal)
+                    .child(div().pt(px(4.0)).child(list)),
+            );
+        }
+        select.into_any_element()
     }
 
     fn key_badge(
@@ -1891,9 +2041,10 @@ impl PopupRoot {
         let Some(KeyPage::Create(form)) = self.keys.page.as_ref() else {
             return div().into_any_element();
         };
-        let (reset, expiry, byok, track, saving, error) = (
+        let (reset, expiry, expiry_open, byok, track, saving, error) = (
             form.reset,
             form.expiry,
+            form.expiry_open,
             form.byok,
             form.track,
             form.saving,
@@ -1942,24 +2093,7 @@ impl PopupRoot {
             window,
             cx,
         );
-        let expiry_control = self.segmented_control_quiet(
-            fx::key("or-key-create-expiry"),
-            Expiry::ALL
-                .iter()
-                .map(|expiry| SharedString::from(expiry.label()))
-                .collect(),
-            Expiry::ALL
-                .iter()
-                .position(|item| *item == expiry)
-                .unwrap_or(0),
-            |this, index, _| {
-                if let Some(KeyPage::Create(form)) = this.keys.page.as_mut() {
-                    form.expiry = Expiry::ALL[index];
-                }
-            },
-            window,
-            cx,
-        );
+        let expiry_control = self.expiry_select(expiry, expiry_open, saving, cx);
         let byok_row = self.key_switch_row(
             "create-byok".into(),
             crate::i18n::tr("openrouter-keys-byok"),
@@ -2254,9 +2388,15 @@ mod tests {
     }
 
     #[test]
-    fn expiry_presets_land_whole_days_ahead() {
+    fn expiry_presets_match_openrouter_lifetimes() {
         let now = Utc::now();
         assert_eq!(Expiry::Never.at(now), None);
+        assert_eq!(Expiry::Hour.at(now), Some(now + chrono::Duration::hours(1)));
+        assert_eq!(
+            Expiry::Year.at(now),
+            Some(now + chrono::Duration::days(365))
+        );
+        assert_eq!(Expiry::ALL.last(), Some(&Expiry::Never));
         assert_eq!(Expiry::Week.at(now), Some(now + chrono::Duration::days(7)));
         assert_eq!(
             Expiry::Quarter.at(now),

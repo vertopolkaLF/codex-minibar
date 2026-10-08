@@ -2435,7 +2435,10 @@ openrouter-keys-invalid-amount = Введите сумму в долларах, 
 openrouter-keys-expires = Срок действия
 
 
-openrouter-keys-expires-never = Бессрочно
+openrouter-keys-expires-1-hour = 1 час
+
+
+openrouter-keys-expires-1-day = 1 день
 
 
 openrouter-keys-expires-7-days = 7 дней
@@ -2445,6 +2448,15 @@ openrouter-keys-expires-30-days = 30 дней
 
 
 openrouter-keys-expires-90-days = 90 дней
+
+
+openrouter-keys-expires-180-days = 180 дней
+
+
+openrouter-keys-expires-1-year = 1 год
+
+
+openrouter-keys-expires-never = Бессрочно
 
 
 openrouter-keys-track = Отслеживать ключ в Minibar

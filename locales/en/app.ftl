@@ -2428,7 +2428,10 @@ openrouter-keys-invalid-amount = Enter a dollar amount like 25 or 12.50.
 openrouter-keys-expires = Expires
 
 
-openrouter-keys-expires-never = Never
+openrouter-keys-expires-1-hour = 1 hour
+
+
+openrouter-keys-expires-1-day = 1 day
 
 
 openrouter-keys-expires-7-days = 7 days
@@ -2438,6 +2441,15 @@ openrouter-keys-expires-30-days = 30 days
 
 
 openrouter-keys-expires-90-days = 90 days
+
+
+openrouter-keys-expires-180-days = 180 days
+
+
+openrouter-keys-expires-1-year = 1 year
+
+
+openrouter-keys-expires-never = No expiration
 
 
 openrouter-keys-track = Track this key in Minibar
