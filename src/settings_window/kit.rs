@@ -358,6 +358,8 @@ pub(crate) struct Menus {
     closed: Rc<RefCell<Option<(SharedString, Instant)>>>,
     /// The menu that is fading out, and when it started to.
     leaving: Rc<RefCell<Option<(SharedString, Instant)>>>,
+    /// Last painted width of each dropdown button, so its list matches it.
+    widths: Rc<RefCell<HashMap<SharedString, f32>>>,
     /// Scroll state of the open menu's list, reset on every opening.
     list_scroll: Rc<RefCell<Option<(SharedString, gpui::ScrollHandle)>>>,
 }
@@ -1765,7 +1767,31 @@ pub(crate) fn dropdown_with_placeholder(
             .on_click(move |_, window, _| menus.toggle(toggle_id.clone(), window));
     }
     let items = options.into_iter().map(MenuItem::new).collect::<Vec<_>>();
-    let mut wrapper = div().relative().flex_none().child(button);
+    // Measure the button every frame; the list opens at its painted width.
+    let widths = Rc::clone(&k.menus.widths);
+    let measured_id = id.clone();
+    let measure = canvas(
+        |_, _, _| {},
+        move |bounds, (), _, _| {
+            widths
+                .borrow_mut()
+                .insert(measured_id.clone(), f32::from(bounds.size.width));
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full();
+    let list_width = k
+        .menus
+        .widths
+        .borrow()
+        .get(&id)
+        .copied()
+        .unwrap_or(width)
+        .max(width)
+        .max(160.0);
+    let mut wrapper = div().relative().flex_none().child(button).child(measure);
     if width <= 0.0 {
         wrapper = wrapper.w_full().flex_1();
     }
@@ -1774,13 +1800,7 @@ pub(crate) fn dropdown_with_placeholder(
         .flatten();
     if (open && !disabled) || leaving.is_some() {
         wrapper = wrapper.child(menu_panel(
-            k,
-            &id,
-            items,
-            selected,
-            width.max(160.0),
-            on_select,
-            leaving,
+            k, &id, items, selected, list_width, on_select, leaving,
         ));
     }
     wrapper.into_any_element()
