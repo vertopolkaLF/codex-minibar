@@ -502,6 +502,7 @@ popup-theme = Tema do popup
 popup-theme-description = Altera apenas o popup. As configurações mantêm a aparência do Windows.
 popup-theme-fluent = Fluent
 popup-theme-vercel = Vercel
+popup-theme-apple = Apple
 
 acrylic = Acrílico
 

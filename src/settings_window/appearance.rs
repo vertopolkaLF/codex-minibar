@@ -322,6 +322,7 @@ impl SettingsWindow {
         let label = match value {
             PopupTheme::Fluent => crate::i18n::tr("popup-theme-fluent"),
             PopupTheme::Vercel => crate::i18n::tr("popup-theme-vercel"),
+            PopupTheme::Apple => crate::i18n::tr("popup-theme-apple"),
         };
         let font = popup_theme::popup_font_family(
             value,

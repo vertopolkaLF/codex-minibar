@@ -502,6 +502,7 @@ popup-theme = Tema de la ventana emergente
 popup-theme-description = Solo cambia la ventana emergente. La configuración mantiene el aspecto de Windows.
 popup-theme-fluent = Fluent
 popup-theme-vercel = Vercel
+popup-theme-apple = Apple
 
 acrylic = Acrílico
 

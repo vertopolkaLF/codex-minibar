@@ -499,6 +499,7 @@ popup-theme = 弹出窗口主题
 popup-theme-description = 仅更改弹出窗口。设置窗口保持 Windows 外观。
 popup-theme-fluent = Fluent
 popup-theme-vercel = Vercel
+popup-theme-apple = Apple
 
 acrylic = 亚克力
 

@@ -315,10 +315,12 @@ pub enum PopupTheme {
     Fluent,
     /// Vercel's Geist system: monochrome, hairline borders, Geist type.
     Vercel,
+    /// Apple's web system: parchment canvas, soft cards, Action Blue accent.
+    Apple,
 }
 
 impl PopupTheme {
-    pub const ALL: [Self; 2] = [Self::Fluent, Self::Vercel];
+    pub const ALL: [Self; 3] = [Self::Fluent, Self::Vercel, Self::Apple];
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

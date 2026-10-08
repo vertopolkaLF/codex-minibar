@@ -753,6 +753,7 @@ popup-theme = Popup theme
 popup-theme-description = Changes only the popup. Settings keep the Windows look.
 popup-theme-fluent = Fluent
 popup-theme-vercel = Vercel
+popup-theme-apple = Apple
 
 # src/settings_window/appearance.rs
 acrylic = Acrylic

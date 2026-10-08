@@ -754,6 +754,7 @@ popup-theme = Тема всплывающего окна
 popup-theme-description = Меняет только всплывающее окно. Настройки сохраняют вид Windows.
 popup-theme-fluent = Fluent
 popup-theme-vercel = Vercel
+popup-theme-apple = Apple
 
 # src/settings_window/appearance.rs
 acrylic = Акрил

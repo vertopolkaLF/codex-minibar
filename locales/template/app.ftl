@@ -1030,6 +1030,10 @@ popup-theme-fluent = { "" }
 popup-theme-vercel = { "" }
 
 # English source:
+# popup-theme-apple = Apple
+popup-theme-apple = { "" }
+
+# English source:
 # acrylic = Acrylic
 acrylic = { "" }
 
