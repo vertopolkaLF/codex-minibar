@@ -1255,18 +1255,19 @@ impl PopupRoot {
         }
         let new_key = {
             let account_id = account_id.clone();
-            self.key_button(
-                format!("new-{account_id}"),
-                crate::i18n::tr("openrouter-keys-new").into(),
-                Some("fluent-add"),
-                Tone::Standard,
-                false,
-                None,
-                move |this, window, cx| {
-                    this.open_create_page(provider, account_id.clone(), window, cx)
-                },
-                cx,
+            let page = cx.entity().downgrade();
+            kit::Button::new(
+                format!("or-key-new-{account_id}"),
+                crate::i18n::tr("openrouter-keys-new"),
             )
+            .with_icon("fluent-add")
+            .size(kit::ButtonSize::Small)
+            .on_click(kit::handler(move |(), window, cx| {
+                let _ = page.update(cx, |this, cx| {
+                    this.open_create_page(provider, account_id.clone(), window, cx)
+                });
+            }))
+            .render(&self.kit)
         };
         let header = components::split_row(title, new_key)
             .px(px(4.0))

@@ -1037,11 +1037,37 @@ pub(crate) enum ButtonKind {
     Link,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ButtonSize {
+    /// Compact control for dense surfaces such as popup section headers.
+    Small,
+    #[default]
+    Medium,
+}
+
+impl ButtonSize {
+    fn height(self) -> f32 {
+        match self {
+            Self::Small => 28.0,
+            Self::Medium => CONTROL_HEIGHT,
+        }
+    }
+
+    /// Horizontal padding as (icon side, text side).
+    fn padding(self) -> (f32, f32) {
+        match self {
+            Self::Small => (8.0, 10.0),
+            Self::Medium => (10.0, 12.0),
+        }
+    }
+}
+
 pub(crate) struct Button {
     id: SharedString,
     label: Option<SharedString>,
     icon: Option<&'static str>,
     kind: ButtonKind,
+    size: ButtonSize,
     ghost: bool,
     disabled: bool,
     full_width: bool,
@@ -1056,6 +1082,7 @@ impl Button {
             label: Some(label.into()),
             icon: None,
             kind: ButtonKind::Standard,
+            size: ButtonSize::Medium,
             ghost: false,
             disabled: false,
             full_width: false,
@@ -1104,6 +1131,11 @@ impl Button {
         self
     }
 
+    pub(crate) fn size(mut self, size: ButtonSize) -> Self {
+        self.size = size;
+        self
+    }
+
     pub(crate) fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
@@ -1129,6 +1161,8 @@ impl Button {
         let fg = skin.fg;
         let icon_only = self.label.is_none();
         let key = hover_key(&self.id);
+        let height = self.size.height();
+        let (pad_icon, pad_text) = self.size.padding();
         let mut button = div()
             .id(eid(self.id))
             .flex()
@@ -1136,19 +1170,19 @@ impl Button {
             .items_center()
             .justify_center()
             .gap(px(6.0))
-            .h(px(CONTROL_HEIGHT))
+            .h(px(height))
             .rounded(px(CONTROL_RADIUS))
             .text_color(fg)
             .text_size(px(13.0))
             .when_some(self.icon, |el, name| el.child(icon(name, 14.0, fg)))
             .when_some(self.label, |el, label| el.child(label));
         button = match (icon_only, self.kind, self.icon.is_some()) {
-            (true, ..) => button.w(px(CONTROL_HEIGHT)),
+            (true, ..) => button.w(px(height)),
             (false, ButtonKind::Link, _) => button.px(px(6.0)),
             // Optically balance a leading glyph: its box reads lighter
             // than text, so the icon side takes less padding.
-            (false, _, true) => button.pl(px(10.0)).pr(px(12.0)),
-            (false, _, false) => button.px(px(12.0)),
+            (false, _, true) => button.pl(px(pad_icon)).pr(px(pad_text)),
+            (false, _, false) => button.px(px(pad_text)),
         };
         if self.full_width {
             button = button.w_full().flex_1();
