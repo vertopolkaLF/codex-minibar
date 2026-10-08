@@ -12,6 +12,7 @@ pub(crate) mod controls;
 mod footer;
 pub(crate) mod fx;
 mod home;
+mod keys;
 #[cfg(test)]
 pub(crate) use home::donut_segments;
 #[cfg(windows)]

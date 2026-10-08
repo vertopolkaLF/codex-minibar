@@ -233,6 +233,11 @@ pub(crate) struct PopupRoot {
     pub(super) overview_breakdown: BreakdownMode,
     pub(super) chart_hover: Option<usize>,
     pub(super) open_reset_card: Option<String>,
+    /// OpenRouter key administration on the OpenRouter tab.
+    pub(super) keys: super::keys::KeyAdmin,
+    /// Settings-window controls (dropdowns) reused by popup forms.
+    pub(super) kit: crate::settings_window::kit::Kit,
+    kit_fonts: crate::settings_window::theme::Fonts,
     pub(super) tab_scroll: f32,
     pub(super) snapshots: HashMap<SnapshotSlot, SnapshotCache>,
     pub(super) usage_chart_cache: Option<super::usage::UsageChartCache>,
@@ -323,6 +328,9 @@ impl PopupRoot {
             overview_breakdown: BreakdownMode::default(),
             chart_hover: None,
             open_reset_card: None,
+            keys: Default::default(),
+            kit: crate::settings_window::kit::Kit::with_caret("fluent-chevron-down"),
+            kit_fonts: crate::settings_window::theme::Fonts::resolve(cx),
             tab_scroll: 0.0,
             snapshots: HashMap::new(),
             usage_chart_cache: None,
@@ -594,6 +602,7 @@ impl PopupRoot {
             self.host.last_region = None;
             self.tip = None;
             self.hover.clear();
+            self.keys.mark_stale();
             // Every open flashes the scrollbar again on overflowing pages.
             for metrics in self.pages.values_mut() {
                 metrics.overflowing = false;
@@ -690,6 +699,8 @@ impl PopupRoot {
             backdrop.hide();
         }
         self.host.offset = 0.0;
+        self.keys.on_hidden();
+        self.kit.menus.close_silently();
         self.hover.clear();
         self.tip = None;
         self.widget_drag = None;
@@ -1040,6 +1051,7 @@ impl PopupRoot {
     // ----- actions ------------------------------------------------------------
 
     pub(super) fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.keys.mark_stale();
         if refresh_all_workers(&self.state.worker_commands()) {
             let mut ui = (*self.ui).clone();
             ui.refreshing = true;
@@ -1213,7 +1225,17 @@ impl Render for PopupRoot {
             return div().id("popup-root").size_full();
         }
         let now = Instant::now();
+        self.sync_key_pin();
         self.fx.begin_frame(super::animations_enabled(&self.ui));
+        let kit_theme = crate::settings_window::theme::Theme::new(
+            self.palette.dark,
+            self.accent,
+            crate::settings_window::theme::Fonts {
+                text: self.palette.font_family.clone(),
+                ..self.kit_fonts.clone()
+            },
+        );
+        self.kit.begin_frame(kit_theme, window);
         if !cx.has_active_drag() {
             self.widget_drag = None;
             self.widget_drop = None;
@@ -1458,6 +1480,7 @@ impl Render for PopupRoot {
         if self.fx.is_animating() || (ui.refreshing && self.host.visible()) {
             window.request_animation_frame();
         }
+        self.kit.end_frame(window);
 
         div()
             .id("popup-root")
@@ -1935,6 +1958,17 @@ impl PopupRoot {
                 provider_error: error_message.as_deref(),
                 now: Utc::now(),
             };
+            let openrouter = provider.kind() == ProviderKind::OpenRouter;
+            // A New key or reveal page replaces this account's section.
+            if openrouter && let Some(page) = self.render_key_page(provider, window, cx) {
+                sections.push(
+                    div()
+                        .id(eid(format!("provider-key-page-{}", provider.id())))
+                        .child(page)
+                        .into_any_element(),
+                );
+                continue;
+            }
             let cards = provider_cards(
                 provider,
                 index == 0,
@@ -1943,13 +1977,17 @@ impl PopupRoot {
                 &forced_resets,
                 &options,
             );
+            let mut children = self.render_cards(&cards, PopupSurface::ProviderTab, window, cx);
+            if openrouter && let Some(keys) = self.render_keys_section(provider, window, cx) {
+                children.push(keys);
+            }
             sections.push(
                 div()
                     .id(eid(format!("provider-section-{}", provider.id())))
                     .flex()
                     .flex_col()
                     .gap(px(PAGE_SPACING))
-                    .children(self.render_cards(&cards, PopupSurface::ProviderTab, window, cx))
+                    .children(children)
                     .into_any_element(),
             );
         }

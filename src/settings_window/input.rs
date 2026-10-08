@@ -98,6 +98,8 @@ pub(crate) struct TextInput {
     pub(crate) placeholder: SharedString,
     pub(crate) password: bool,
     pub(crate) disabled: bool,
+    /// Edits whose resulting text fails this check are dropped.
+    pub(crate) accept: Option<fn(&str) -> bool>,
     pub(crate) colors: InputColors,
     /// Last value pushed from settings; lets the owner resync the field when
     /// the stored value changes elsewhere without clobbering active typing.
@@ -135,6 +137,7 @@ impl TextInput {
             placeholder: SharedString::default(),
             password: false,
             disabled: false,
+            accept: None,
             colors: InputColors::default(),
             external: None,
             selected_range: 0..0,
@@ -493,9 +496,12 @@ impl EntityInputHandler for TextInput {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
         let new_text = new_text.replace(['\r', '\n'], "");
-        self.content =
-            (self.content[0..range.start].to_owned() + &new_text + &self.content[range.end..])
-                .into();
+        let content =
+            self.content[0..range.start].to_owned() + &new_text + &self.content[range.end..];
+        if self.accept.is_some_and(|accept| !accept(&content)) {
+            return;
+        }
+        self.content = content.into();
         self.selected_range = range.start + new_text.len()..range.start + new_text.len();
         self.selection_reversed = false;
         self.marked_range.take();
@@ -519,9 +525,12 @@ impl EntityInputHandler for TextInput {
             .map(|range_utf16| self.range_from_utf16(range_utf16))
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
-        self.content =
-            (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
-                .into();
+        let content =
+            self.content[0..range.start].to_owned() + new_text + &self.content[range.end..];
+        if self.accept.is_some_and(|accept| !accept(&content)) {
+            return;
+        }
+        self.content = content.into();
         self.marked_range =
             (!new_text.is_empty()).then(|| range.start..range.start + new_text.len());
         self.selected_range = new_selected_range_utf16
