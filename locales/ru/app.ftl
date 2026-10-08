@@ -283,6 +283,10 @@ refresh-last-updated-relative = Обновить | Последнее обнов
 
 # src/popup_window/ui/home.rs
 edit-home = Изменить главную
+home-card-layout = Вид
+home-card-layout-cards = Карточки
+home-card-layout-lines = Строки
+home-card-layout-rings = Кольца
 drag-to-reorder = Перетащите, чтобы изменить порядок
 
 # src/popup_window/ui/home.rs

@@ -162,11 +162,37 @@ impl PopupRoot {
                         &forced_resets,
                         &options,
                     );
+                    let layout = ui.home_card_layout(provider);
+                    let has_limits = cards.iter().any(|card| matches!(card, Card::Limit { .. }));
+                    let mut body = self.render_home_cards(&cards, layout, window, cx);
+                    let heading = body.drain(..1.min(body.len())).collect::<Vec<_>>();
+                    // A changed layout fades in instead of popping.
+                    let fade = self.fx.value(
+                        fx::key(("card-layout-fade", provider.id())),
+                        1.0,
+                        fx::NORMAL,
+                    );
+                    let mut content = div().flex().flex_col();
+                    if let Some(picker) =
+                        self.card_layout_picker(provider, layout, has_limits, window, cx)
+                    {
+                        content = content.child(picker);
+                    }
                     div()
                         .flex()
                         .flex_col()
                         .gap(px(SECTION_GAP))
-                        .children(self.render_cards(&cards, PopupSurface::HomeTab, window, cx))
+                        .children(heading)
+                        .child(
+                            content.child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(SECTION_GAP))
+                                    .opacity(fade)
+                                    .children(body),
+                            ),
+                        )
                         .into_any_element()
                 })
             };
@@ -200,6 +226,79 @@ impl PopupRoot {
                 .child(div().flex_1().min_w_0().child(right))
                 .into_any_element(),
         ]
+    }
+
+    /// Edit-mode row choosing how a provider widget lays out its quota
+    /// windows. It folds open under the heading while Home is being edited.
+    fn card_layout_picker(
+        &mut self,
+        provider: ProviderId,
+        layout: HomeCardLayout,
+        available: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        const PICKER_HEIGHT: f32 = 28.0 + SECTION_GAP;
+        let reveal = self.fx.toggle(
+            fx::key(("card-layout-picker", provider.id())),
+            self.home_editing && available,
+            fx::FAST,
+        );
+        if reveal < 0.001 {
+            return None;
+        }
+        let layouts = HomeCardLayout::ALL;
+        let labels = [
+            "home-card-layout-cards",
+            "home-card-layout-lines",
+            "home-card-layout-rings",
+        ]
+        .into_iter()
+        .map(|key| SharedString::from(crate::i18n::tr(key)))
+        .collect();
+        let selector = self.segmented_control_compact(
+            fx::key(("card-layout", provider.id())),
+            labels,
+            layouts.iter().position(|item| *item == layout).unwrap_or(0),
+            move |this, index, cx| {
+                let next = layouts[index];
+                if this.ui.home_card_layout(provider) == next {
+                    return;
+                }
+                this.fx
+                    .snap(fx::key(("card-layout-fade", provider.id())), 0.0);
+                let id = provider.id().to_owned();
+                let local_id = id.clone();
+                this.persist(
+                    cx,
+                    move |ui| set_card_layout(&mut ui.popup_home_card_layouts, local_id, next),
+                    move |settings| {
+                        set_card_layout(&mut settings.popup_home_card_layouts, id, next);
+                    },
+                );
+            },
+            window,
+            cx,
+        );
+        let palette = &self.palette;
+        Some(
+            div()
+                .flex_none()
+                .overflow_hidden()
+                .h(px(PICKER_HEIGHT * reveal))
+                .opacity(reveal)
+                .child(
+                    components::split_row(
+                        nowrap(caption(
+                            crate::i18n::tr("home-card-layout"),
+                            palette.text_tertiary,
+                        )),
+                        selector,
+                    )
+                    .px(px(4.0)),
+                )
+                .into_any_element(),
+        )
     }
 
     /// A column's sections, recording the column origin for reorder motion.
@@ -746,6 +845,19 @@ impl PopupRoot {
             )
             .child(legend)
             .into_any_element()
+    }
+}
+
+/// Ordinary cards are the default, so they leave no entry behind.
+fn set_card_layout(
+    layouts: &mut std::collections::BTreeMap<String, HomeCardLayout>,
+    id: String,
+    layout: HomeCardLayout,
+) {
+    if layout == HomeCardLayout::Cards {
+        layouts.remove(&id);
+    } else {
+        layouts.insert(id, layout);
     }
 }
 

@@ -386,6 +386,22 @@ refresh-last-updated-relative = { "" }
 edit-home = { "" }
 
 # English source:
+# home-card-layout = Layout
+home-card-layout = { "" }
+
+# English source:
+# home-card-layout-cards = Cards
+home-card-layout-cards = { "" }
+
+# English source:
+# home-card-layout-lines = Lines
+home-card-layout-lines = { "" }
+
+# English source:
+# home-card-layout-rings = Rings
+home-card-layout-rings = { "" }
+
+# English source:
 # drag-to-reorder = Drag to reorder
 drag-to-reorder = { "" }
 

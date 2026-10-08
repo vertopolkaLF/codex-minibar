@@ -1402,6 +1402,23 @@ impl TotalSpendPresentation {
     }
 }
 
+/// How a Home provider widget lays out its quota windows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HomeCardLayout {
+    /// The ordinary quota cards (compact or legacy, per `compact_usage_cards`).
+    #[default]
+    Cards,
+    /// One line per window with a thin bar along the card's bottom edge.
+    Lines,
+    /// Ring gauges, two per row.
+    Rings,
+}
+
+impl HomeCardLayout {
+    pub const ALL: [Self; 3] = [Self::Cards, Self::Lines, Self::Rings];
+}
+
 /// Time range for the Usage Stats card on the popup Home tab.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1716,6 +1733,8 @@ pub struct Settings {
     /// Home widgets in the right column. None balances visible widgets
     /// automatically until the first user move.
     pub popup_home_right_column: Option<Vec<HomeWidgetId>>,
+    /// Home widget id -> quota layout. Missing entries use ordinary cards.
+    pub popup_home_card_layouts: BTreeMap<String, HomeCardLayout>,
     /// Brand-colored provider glyphs in the popup. Settings expose the inverse
     /// as "Use monochrome icons".
     pub use_colored_provider_icons: bool,
@@ -1782,6 +1801,7 @@ impl Default for Settings {
             popup_two_columns: false,
             popup_home_order: Vec::new(),
             popup_home_right_column: None,
+            popup_home_card_layouts: BTreeMap::new(),
             use_colored_provider_icons: true,
             use_colored_sidebar_icons: true,
             replace_chatgpt_logo_with_codex: false,
@@ -2068,6 +2088,10 @@ impl Settings {
             right.retain(|widget| known(instances, widget));
             changed |= right.len() != len;
         }
+        let layouts = self.popup_home_card_layouts.len();
+        self.popup_home_card_layouts
+            .retain(|id, _| instances.iter().any(|instance| instance.id == *id));
+        changed |= self.popup_home_card_layouts.len() != layouts;
         let selections = self.grouped_tab_selection.len();
         self.grouped_tab_selection.retain(|driver, id| {
             instances
@@ -2248,6 +2272,7 @@ impl Settings {
         let removed = self.instances.remove(index);
         let id = removed.id.as_str();
         self.popup_home_order.retain(|widget| widget.id() != id);
+        self.popup_home_card_layouts.remove(id);
         self.popup_visibility.instances.remove(id);
         if let Some(right) = &mut self.popup_home_right_column {
             right.retain(|widget| widget.id() != id);

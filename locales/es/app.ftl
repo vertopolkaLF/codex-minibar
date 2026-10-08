@@ -189,6 +189,10 @@ updated = Actualizado{ " " }
 refresh-last-updated-relative = Actualizar · Última actualización { $relative }
 
 edit-home = Editar inicio
+home-card-layout = Diseño
+home-card-layout-cards = Tarjetas
+home-card-layout-lines = Líneas
+home-card-layout-rings = Anillos
 drag-to-reorder = Arrastra para reordenar
 
 drop-here = Suelta aquí

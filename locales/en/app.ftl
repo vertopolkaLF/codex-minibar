@@ -288,6 +288,10 @@ refresh-last-updated-relative = Refresh | Last updated { $relative }
 
 # src/popup_window/ui/home.rs
 edit-home = Edit Home
+home-card-layout = Layout
+home-card-layout-cards = Cards
+home-card-layout-lines = Lines
+home-card-layout-rings = Rings
 drag-to-reorder = Drag to reorder
 
 # src/popup_window/ui/home.rs

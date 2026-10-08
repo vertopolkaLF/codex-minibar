@@ -1,8 +1,9 @@
 //! Rendering of the framework-free card plan from [`crate::popup_window::model`].
 
 use gpui::{
-    AnyElement, ClickEvent, Context, Div, InteractiveElement, IntoElement, ParentElement,
-    SharedString, StatefulInteractiveElement, Styled, Transformation, Window, div, px, radians,
+    AnyElement, Bounds, ClickEvent, Context, Div, Hsla, InteractiveElement, IntoElement,
+    ParentElement, PathBuilder, Pixels, SharedString, StatefulInteractiveElement, Styled,
+    Transformation, Window, canvas, div, point, px, radians,
 };
 
 use super::{
@@ -19,6 +20,11 @@ use crate::popup_window::{model::*, *};
 const RESET_ROW_HEIGHT: f32 = 58.0;
 /// Name line plus gap added when a row stacks its date under the name.
 const STACKED_ROW_EXTRA: f32 = 24.0;
+/// Ring gauge diameter and stroke of the Rings layout.
+const RING_SIZE: f32 = 46.0;
+const RING_STROKE: f32 = 5.0;
+/// Narrower cards stack ring tiles one per row.
+const RING_PAIR_MIN_WIDTH: f32 = 260.0;
 
 fn compact_title_fits(available: f32, title: f32, usage: f32, reset: f32) -> bool {
     // Two 10 DIP gaps between the three groups in the compact row.
@@ -135,6 +141,7 @@ impl PopupRoot {
             } => self.render_banked_resets(
                 limits,
                 expansion_key,
+                false,
                 self.card_inner_width(surface),
                 window,
                 cx,
@@ -178,6 +185,218 @@ impl PopupRoot {
                 .children(self.render_cards(cards, surface, window, cx))
                 .into_any_element(),
         }
+    }
+
+    /// Home cards in the widget's chosen layout. Only quota windows change
+    /// shape; every other card renders as usual.
+    pub(super) fn render_home_cards(
+        &mut self,
+        cards: &[Card<'_>],
+        layout: HomeCardLayout,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        if layout == HomeCardLayout::Cards {
+            return self.render_cards(cards, PopupSurface::HomeTab, window, cx);
+        }
+        let style = self.card_style();
+        let paired = self.card_inner_width(PopupSurface::HomeTab) >= RING_PAIR_MIN_WIDTH;
+        let mut out = Vec::new();
+        let mut rings = Vec::new();
+        for card_spec in cards {
+            match card_spec {
+                Card::Limit {
+                    key,
+                    title,
+                    window: limit,
+                    usage_amount,
+                    disabled,
+                } => {
+                    if layout == HomeCardLayout::Rings {
+                        rings.push(self.render_limit_ring(key, title, limit, *disabled, style));
+                    } else {
+                        out.push(self.render_limit_line(
+                            key,
+                            title,
+                            limit,
+                            *usage_amount,
+                            *disabled,
+                            style,
+                            cx,
+                        ));
+                    }
+                }
+                Card::BankedResets {
+                    limits,
+                    expansion_key,
+                } => {
+                    flush_rings(&mut out, &mut rings, paired);
+                    out.push(self.render_banked_resets(
+                        limits,
+                        expansion_key,
+                        true,
+                        self.card_inner_width(PopupSurface::HomeTab),
+                        window,
+                        cx,
+                    ));
+                }
+                _ => {
+                    flush_rings(&mut out, &mut rings, paired);
+                    out.push(self.render_card(card_spec, PopupSurface::HomeTab, window, cx));
+                }
+            }
+        }
+        flush_rings(&mut out, &mut rings, paired);
+        out
+    }
+
+    /// Lines layout: title, value and countdown on one row over the compact
+    /// full-card fill. The pace summary moves to a tooltip.
+    #[allow(clippy::too_many_arguments)]
+    fn render_limit_line(
+        &mut self,
+        key: &str,
+        title: &str,
+        limit: &LimitWindow,
+        usage_amount: Option<&UsageAmount>,
+        disabled: bool,
+        style: CardStyle,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let palette = self.palette.clone();
+        let (label, progress, show_reset, exhausted) =
+            limit_card_presentation(limit, style.show_used_percentage, disabled);
+        let progress = self.fx.value(
+            fx::key(("limit-progress", key)),
+            progress as f32,
+            fx::NORMAL,
+        );
+        let pace = (style.show_usage_pace && !exhausted)
+            .then(|| limit.pace_tip(style.show_used_percentage, Utc::now()))
+            .flatten();
+        let mut row = div()
+            .relative()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(10.0))
+            .px(px(12.0))
+            .py(px(9.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(nowrap(caption(title.to_owned(), palette.text_secondary))),
+            )
+            .child(self.usage_label(label, usage_amount, style.show_usage_values));
+        if show_reset {
+            row = row.child(match limit.resets_at {
+                Some(at) => nowrap(caption(format_reset_in(Some(at)), palette.text_primary)),
+                None => card_metadata(crate::i18n::tr("session-not-started"), &palette),
+            });
+        }
+        let mut element = card(&palette)
+            .id(eid(format!("limit-line-{key}")))
+            .relative()
+            .overflow_hidden()
+            .children(components::compact_progress_layers(
+                progress,
+                pace.map(|pace| pace.percent as f32),
+                interval_tick_count(limit),
+                palette.accent,
+                &palette,
+            ));
+        if let Some(pace) = pace {
+            let hover_id = fx::key(("limit-line-pace", key));
+            element =
+                element.on_hover(self.hover_listener(hover_id, Some(pace.summary().into()), cx));
+        }
+        element.child(row).into_any_element()
+    }
+
+    /// Rings layout: a gauge with the percentage inside and the countdown
+    /// beside it. Pace is a short radial tick across the ring, as on the
+    /// Stream Deck ring key.
+    fn render_limit_ring(
+        &mut self,
+        key: &str,
+        title: &str,
+        limit: &LimitWindow,
+        disabled: bool,
+        style: CardStyle,
+    ) -> AnyElement {
+        let palette = self.palette.clone();
+        let (_, progress, show_reset, exhausted) =
+            limit_card_presentation(limit, style.show_used_percentage, disabled);
+        let progress = self.fx.value(
+            fx::key(("limit-progress", key)),
+            progress as f32,
+            fx::NORMAL,
+        );
+        let pace = (style.show_usage_pace && !exhausted)
+            .then(|| limit.pace_tip(style.show_used_percentage, Utc::now()))
+            .flatten();
+        let percent = if disabled {
+            None
+        } else if style.show_used_percentage {
+            limit.used_percent
+        } else {
+            limit.remaining_percent()
+        };
+        let value = percent.map_or_else(|| "–".to_owned(), |value| format!("{value}%"));
+        let accent = palette.accent;
+        let marker = palette.pace_marker;
+        let pace_percent = pace.map(|pace| pace.percent as f32);
+        let gauge = div()
+            .relative()
+            .flex_none()
+            .size(px(RING_SIZE))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| {
+                        paint_ring(bounds, progress, pace_percent, accent, marker, window);
+                    },
+                )
+                .absolute()
+                .inset_0(),
+            )
+            .child(components::caption_strong(value, palette.text_primary));
+        let mut details = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .child(nowrap(caption(title.to_owned(), palette.text_secondary)));
+        if show_reset {
+            details = details.child(match limit.resets_at {
+                Some(at) => nowrap(components::body_strong(
+                    format_reset_in(Some(at)),
+                    palette.text_primary,
+                )),
+                None => nowrap(card_metadata(
+                    crate::i18n::tr("session-not-started"),
+                    &palette,
+                )),
+            });
+        } else if disabled {
+            details = details.child(nowrap(card_metadata(crate::i18n::tr("disabled"), &palette)));
+        }
+        if let Some(pace) = pace {
+            details = details.child(nowrap(card_metadata(pace.summary(), &palette)));
+        }
+        card(&palette)
+            .p(px(10.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(10.0))
+            .child(gauge)
+            .child(details)
+            .into_any_element()
     }
 
     fn render_heading(
@@ -776,18 +995,22 @@ impl PopupRoot {
             .into_any_element()
     }
 
+    /// `compact` is the one-line header of the Lines and Rings layouts: the
+    /// count and the next expiry countdown, without the date.
     fn render_banked_resets(
         &mut self,
         limits: &RateLimits,
         expansion_key: &str,
+        compact: bool,
         available_width: f32,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = self.palette.clone();
         let metrics = self.metrics(window);
-        // These rows use 16 DIP side padding instead of the usual 12.
-        let available_width = available_width - 8.0;
+        // Full rows use 16 DIP side padding instead of the usual 12.
+        let pad_x = if compact { 12.0 } else { 16.0 };
+        let available_width = available_width - (pad_x - 12.0) * 2.0;
         let date_status_width = |date: &str, status: f32| metrics.caption(date).max(status);
         let count = limits.available_reset_count();
         let count_label =
@@ -840,7 +1063,11 @@ impl PopupRoot {
         let header_fits = TextMetrics::fits_split(
             available_width,
             title_width,
-            date_status_width(&expiration_date, expiration_status_width),
+            if compact {
+                expiration_status_width
+            } else {
+                date_status_width(&expiration_date, expiration_status_width)
+            },
         );
         let mut title =
             div()
@@ -859,17 +1086,21 @@ impl PopupRoot {
                 ),
             );
         }
-        let header_content = components::adaptive_split(
-            header_fits,
-            title,
-            div()
-                .flex()
-                .flex_col()
-                .items_end()
-                .gap(px(1.0))
-                .child(card_metadata(expiration_date, &palette))
-                .child(expiration_status),
-        );
+        let header_content = if compact {
+            components::adaptive_split(header_fits, title, expiration_status)
+        } else {
+            components::adaptive_split(
+                header_fits,
+                title,
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_end()
+                    .gap(px(1.0))
+                    .child(card_metadata(expiration_date, &palette))
+                    .child(expiration_status),
+            )
+        };
         let hover_id = fx::key(("reset-card", expansion_key));
         let hover = self.fx.toggle(
             fx::key(("reset-card-hover", hover_id)),
@@ -879,8 +1110,8 @@ impl PopupRoot {
         let mut header = div()
             .id(eid(format!("reset-card-{expansion_key}")))
             .relative()
-            .px(px(16.0))
-            .py(px(12.0));
+            .px(px(pad_x))
+            .py(px(if compact { 9.0 } else { 12.0 }));
         if expandable {
             let key = expansion_key.to_owned();
             header = header
@@ -981,7 +1212,7 @@ impl PopupRoot {
                     .overflow_hidden()
                     .max_h(px(cap))
                     .opacity(reveal)
-                    .child(div().px(px(16.0)).pb(px(12.0)).child(rows)),
+                    .child(div().px(px(pad_x)).pb(px(12.0)).child(rows)),
             );
         }
         element.into_any_element()
@@ -1075,6 +1306,68 @@ impl PopupRoot {
         element
             .child(div().relative().p(px(12.0)).child(rows))
             .into_any_element()
+    }
+}
+
+/// Ring tiles sit two to a row while the card is wide enough.
+fn flush_rings(out: &mut Vec<AnyElement>, rings: &mut Vec<AnyElement>, paired: bool) {
+    let per_row = if paired { 2 } else { 1 };
+    let mut tiles = std::mem::take(rings).into_iter().peekable();
+    while tiles.peek().is_some() {
+        let mut row = div().flex().flex_row().gap(px(6.0)).w_full();
+        for tile in tiles.by_ref().take(per_row) {
+            row = row.child(div().flex_1().min_w_0().child(tile));
+        }
+        out.push(row.into_any_element());
+    }
+}
+
+/// Track, clockwise value arc from 12 o'clock, and a radial pace tick the
+/// width of the stroke.
+fn paint_ring(
+    bounds: Bounds<Pixels>,
+    percent: f32,
+    pace: Option<f32>,
+    color: Hsla,
+    marker: Hsla,
+    window: &mut Window,
+) {
+    use std::f32::consts::PI;
+    let cx = f32::from(bounds.origin.x) + f32::from(bounds.size.width) / 2.0;
+    let cy = f32::from(bounds.origin.y) + f32::from(bounds.size.height) / 2.0;
+    let radius = (RING_SIZE - RING_STROKE) / 2.0;
+    let at = |radius: f32, fraction: f32| {
+        let angle = -PI / 2.0 + fraction * 2.0 * PI;
+        point(px(cx + radius * angle.cos()), px(cy + radius * angle.sin()))
+    };
+    let arc = |fraction: f32, color: Hsla, window: &mut Window| {
+        let fraction = fraction.clamp(0.0, 1.0);
+        if fraction <= 0.0 {
+            return;
+        }
+        let mut builder = PathBuilder::stroke(px(RING_STROKE));
+        let size = point(px(radius), px(radius));
+        builder.move_to(at(radius, 0.0));
+        if fraction >= 0.999 {
+            builder.arc_to(size, px(0.0), false, true, at(radius, 0.5));
+            builder.arc_to(size, px(0.0), false, true, at(radius, 0.0));
+        } else {
+            builder.arc_to(size, px(0.0), fraction > 0.5, true, at(radius, fraction));
+        }
+        if let Ok(path) = builder.build() {
+            window.paint_path(path, color);
+        }
+    };
+    arc(1.0, color.opacity(0.2), window);
+    arc(percent / 100.0, color, window);
+    if let Some(pace) = pace {
+        let fraction = pace.clamp(0.0, 100.0) / 100.0;
+        let mut builder = PathBuilder::stroke(px(2.0));
+        builder.move_to(at(radius - RING_STROKE / 2.0, fraction));
+        builder.line_to(at(radius + RING_STROKE / 2.0, fraction));
+        if let Ok(path) = builder.build() {
+            window.paint_path(path, marker);
+        }
     }
 }
 

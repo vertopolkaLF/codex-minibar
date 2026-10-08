@@ -337,6 +337,7 @@ pub(crate) struct UiState {
     pub(super) popup_two_columns: bool,
     pub(super) popup_home_order: Vec<HomeWidgetId>,
     pub(super) popup_home_right_column: Option<Vec<HomeWidgetId>>,
+    pub(super) popup_home_card_layouts: std::collections::BTreeMap<String, HomeCardLayout>,
     pub(super) use_colored_provider_icons: bool,
     pub(super) replace_chatgpt_logo_with_codex: bool,
     pub(super) update_version: Option<String>,
@@ -378,6 +379,7 @@ impl Default for UiState {
             popup_two_columns: false,
             popup_home_order: Vec::new(),
             popup_home_right_column: None,
+            popup_home_card_layouts: Default::default(),
             use_colored_provider_icons: true,
             replace_chatgpt_logo_with_codex: false,
             update_version: None,
@@ -398,6 +400,7 @@ impl UiState {
             popup_two_columns: settings.popup_two_columns,
             popup_home_order: settings.popup_home_order.clone(),
             popup_home_right_column: settings.popup_home_right_column.clone(),
+            popup_home_card_layouts: settings.popup_home_card_layouts.clone(),
             ..Self::default()
         }
     }
@@ -428,8 +431,16 @@ impl UiState {
         self.popup_two_columns = settings.popup_two_columns;
         self.popup_home_order = settings.popup_home_order.clone();
         self.popup_home_right_column = settings.popup_home_right_column.clone();
+        self.popup_home_card_layouts = settings.popup_home_card_layouts.clone();
         self.use_colored_provider_icons = settings.use_colored_provider_icons;
         self.replace_chatgpt_logo_with_codex = settings.replace_chatgpt_logo_with_codex;
+    }
+
+    pub(super) fn home_card_layout(&self, provider: ProviderId) -> HomeCardLayout {
+        self.popup_home_card_layouts
+            .get(provider.id())
+            .copied()
+            .unwrap_or_default()
     }
 
     pub(super) fn instance(&self, provider: ProviderId) -> Option<&ProviderInstance> {
