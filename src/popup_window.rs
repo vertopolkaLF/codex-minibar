@@ -29,8 +29,8 @@ use crate::{
     },
     settings::{
         AccentColor, AppTheme, HomeCardLayout, HomeWidgetId, NotificationSettings,
-        PopupBackgroundMaterial, PopupSurface, PopupTabMode, PopupVisibility, ProviderKind,
-        Settings, TimeFormat, TotalSpendPeriod, TotalSpendPresentation, TrayWidget,
+        PopupBackgroundMaterial, PopupSurface, PopupTabMode, PopupTheme, PopupVisibility,
+        ProviderKind, Settings, TimeFormat, TotalSpendPeriod, TotalSpendPresentation, TrayWidget,
     },
     tray::{TrayManager, TrayMenuAction},
     updater::{UpdateController, UpdatePhase},

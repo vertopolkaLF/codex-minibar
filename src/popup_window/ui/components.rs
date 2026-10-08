@@ -11,7 +11,6 @@ use gpui::{
 
 use super::{assets::icon_path, theme::Palette};
 
-pub(crate) const CARD_RADIUS: f32 = crate::popup::CARD_CORNER_RADIUS_DIP as f32;
 pub(crate) const PROGRESS_TRACK_HEIGHT: f32 = 6.0;
 
 /// Measure with the same font, size and weight used to render the label.
@@ -153,7 +152,7 @@ pub(crate) fn provider_mark(
 /// Standard Fluent card surface.
 pub(crate) fn card(palette: &Palette) -> Div {
     div()
-        .rounded(px(CARD_RADIUS))
+        .rounded(px(palette.card_radius))
         .bg(palette.card_background)
         .border_1()
         .border_color(palette.card_stroke)
@@ -377,6 +376,7 @@ pub(crate) fn compact_progress_layers(
     palette: &Palette,
 ) -> Vec<AnyElement> {
     let value = value.clamp(0.0, 100.0);
+    let radius = palette.card_radius - 1.0;
     let mut layers = Vec::with_capacity(3);
     if value > 0.0 {
         // Overflow masks are rectangular in GPUI. Paint the full card's
@@ -393,7 +393,7 @@ pub(crate) fn compact_progress_layers(
                     }),
                     |window| {
                         let mut quad = gpui::fill(bounds, fill.opacity(0.2));
-                        quad.corner_radii = gpui::Corners::all(px(CARD_RADIUS - 1.0));
+                        quad.corner_radii = gpui::Corners::all(px(radius));
                         window.paint_quad(quad);
                     },
                 );
@@ -473,7 +473,7 @@ pub(crate) fn info_bar_with_action(
         .gap(px(12.0))
         .px(px(15.0))
         .py(px(13.0))
-        .rounded(px(4.0))
+        .rounded(px(palette.control_radius))
         .bg(background)
         .border_1()
         .border_color(palette.card_stroke)

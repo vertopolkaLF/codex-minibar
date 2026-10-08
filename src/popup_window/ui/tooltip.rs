@@ -212,7 +212,11 @@ impl PopupRoot {
             .absolute()
             .left(self.capsule_origin.x + px(left))
             .top(self.capsule_origin.y + px(top + (1.0 - reveal) * 4.0))
-            .rounded(px(if follows_cursor { 6.0 } else { 4.0 }))
+            .rounded(px(if follows_cursor {
+                6.0_f32.max(palette.control_radius)
+            } else {
+                palette.control_radius
+            }))
             // Reveal by motion only: the surface must occlude underlying UI
             // from its first visible frame rather than fading its background.
             .bg(palette.tooltip_background.alpha(1.0))

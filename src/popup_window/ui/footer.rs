@@ -312,7 +312,7 @@ impl PopupRoot {
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(4.0))
+            .rounded(px(palette.control_radius))
             .opacity(if dragging_this { 0.45 } else { 1.0 })
             .on_hover(self.hover_listener(hover_id, Some(tab.tip.clone().into()), cx))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -326,7 +326,7 @@ impl PopupRoot {
                 div()
                     .absolute()
                     .inset_0()
-                    .rounded(px(4.0))
+                    .rounded(px(palette.control_radius))
                     .border_1()
                     .border_color(palette.accent),
             );

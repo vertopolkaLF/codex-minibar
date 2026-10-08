@@ -7,7 +7,32 @@
 
 use gpui::{Hsla, Rgba, SharedString};
 
-use crate::settings::{AccentColor, AppTheme, PopupBackgroundMaterial, ProviderKind};
+use crate::settings::{AccentColor, AppTheme, PopupBackgroundMaterial, PopupTheme, ProviderKind};
+
+/// Family name of the bundled Geist faces used by the Vercel popup theme.
+pub(crate) const GEIST_FAMILY: &str = "Geist";
+
+/// Registers the bundled fonts with GPUI's text system. Call once at startup,
+/// before any window resolves its font family.
+pub(crate) fn register_bundled_fonts(cx: &gpui::App) {
+    let fonts = vec![
+        std::borrow::Cow::Borrowed(
+            include_bytes!("../../../assets/fonts/geist/Geist-Regular.ttf").as_slice(),
+        ),
+        std::borrow::Cow::Borrowed(
+            include_bytes!("../../../assets/fonts/geist/Geist-Medium.ttf").as_slice(),
+        ),
+        std::borrow::Cow::Borrowed(
+            include_bytes!("../../../assets/fonts/geist/Geist-SemiBold.ttf").as_slice(),
+        ),
+        std::borrow::Cow::Borrowed(
+            include_bytes!("../../../assets/fonts/geist/Geist-Bold.ttf").as_slice(),
+        ),
+    ];
+    if let Err(error) = cx.text_system().add_fonts(fonts) {
+        eprintln!("could not register the bundled Geist font: {error:#}");
+    }
+}
 
 pub(crate) fn rgba8(r: u8, g: u8, b: u8, a: u8) -> Hsla {
     Rgba {
@@ -48,6 +73,18 @@ pub(crate) fn installed_font_families(cx: &gpui::App) -> Vec<SharedString> {
     names.into_iter().map(SharedString::from).collect()
 }
 
+/// The popup's family: the user's pick, else the theme's own typeface.
+pub(crate) fn popup_font_family(
+    theme: PopupTheme,
+    custom: Option<&str>,
+    default: &SharedString,
+) -> SharedString {
+    match theme {
+        PopupTheme::Fluent => ui_font_family(custom, default),
+        PopupTheme::Vercel => ui_font_family(custom, &SharedString::from(GEIST_FAMILY)),
+    }
+}
+
 /// The UI family to render with: the user's pick, or the system default.
 pub(crate) fn ui_font_family(custom: Option<&str>, default: &SharedString) -> SharedString {
     custom
@@ -70,7 +107,14 @@ fn ink(dark: bool, alpha: u8) -> Hsla {
 
 #[derive(Clone, Debug)]
 pub(crate) struct Palette {
+    pub(crate) theme: PopupTheme,
     pub(crate) dark: bool,
+    /// Corner radius of popup cards in DIPs.
+    pub(crate) card_radius: f32,
+    /// Corner radius of buttons, tabs, chips and anchored tooltips.
+    pub(crate) control_radius: f32,
+    /// Vertical gap between stacked cards and Home widgets.
+    pub(crate) card_gap: f32,
     pub(crate) font_family: SharedString,
     pub(crate) text_primary: Hsla,
     pub(crate) text_secondary: Hsla,
@@ -129,6 +173,31 @@ impl Palette {
     }
 
     pub(crate) fn new(
+        theme: PopupTheme,
+        dark: bool,
+        accent: crate::theme::AccentRamp,
+        material: PopupBackgroundMaterial,
+        font_family: SharedString,
+    ) -> Self {
+        match theme {
+            PopupTheme::Fluent => Self::fluent(dark, accent, material, font_family),
+            PopupTheme::Vercel => Self::vercel(dark, material, font_family),
+        }
+    }
+
+    /// Accent fill this theme paints with; Vercel is monochrome.
+    pub(crate) fn accent_for(
+        theme: PopupTheme,
+        dark: bool,
+        accent: crate::theme::AccentRamp,
+    ) -> Hsla {
+        match theme {
+            PopupTheme::Fluent => rgb8(accent.fill(dark)),
+            PopupTheme::Vercel => vercel_gray_1000(dark),
+        }
+    }
+
+    fn fluent(
         dark: bool,
         accent: crate::theme::AccentRamp,
         material: PopupBackgroundMaterial,
@@ -136,7 +205,12 @@ impl Palette {
     ) -> Self {
         let accent_fill = rgb8(accent.fill(dark));
         Self {
+            theme: PopupTheme::Fluent,
             dark,
+            card_radius: crate::popup::CARD_CORNER_RADIUS_DIP as f32,
+            // ControlCornerRadius.
+            control_radius: 4.0,
+            card_gap: 6.0,
             font_family,
             // TextFillColorPrimary/Secondary/Tertiary.
             text_primary: if dark {
@@ -253,6 +327,62 @@ impl Palette {
         }
     }
 
+    /// Vercel's Geist tokens (vercel.com/design.md): a monochrome gray
+    /// scale, hairline alpha borders, 8 px cards and color reserved for state.
+    fn vercel(dark: bool, material: PopupBackgroundMaterial, font_family: SharedString) -> Self {
+        let pick =
+            |light: (u8, u8, u8), dark_rgb: (u8, u8, u8)| rgb8(if dark { dark_rgb } else { light });
+        // --vbg-gray-alpha-N: black on light, white on dark.
+        let gray_alpha = |light: f32, dark_alpha: f32| {
+            let alpha = if dark { dark_alpha } else { light };
+            ink(dark, (alpha * 255.0).round() as u8)
+        };
+        let gray_1000 = vercel_gray_1000(dark);
+        let gray_900 = pick((0x4D, 0x4D, 0x4D), (0xA0, 0xA0, 0xA0));
+        let gray_700 = rgb8((0x8F, 0x8F, 0x8F));
+        Self {
+            theme: PopupTheme::Vercel,
+            dark,
+            // --vbg-radius / --vbg-radius-small / --vbg-space-2.
+            card_radius: 8.0,
+            control_radius: 6.0,
+            card_gap: 8.0,
+            font_family,
+            text_primary: gray_1000,
+            text_secondary: gray_900,
+            text_tertiary: gray_700,
+            // --vbg-background-100 on a gray-1000 fill.
+            text_on_accent: pick((0xFF, 0xFF, 0xFF), (0x00, 0x00, 0x00)),
+            accent: gray_1000,
+            // --vbg-surface-primary cards over the background-200 canvas.
+            card_background: pick((0xFF, 0xFF, 0xFF), (0x0A, 0x0A, 0x0A)),
+            // --vbg-border-default.
+            card_stroke: gray_alpha(0.08, 0.14),
+            subtle_fill: gray_alpha(0.05, 0.07),
+            control_fill: gray_alpha(0.05, 0.07),
+            // --vbg-border-subtle.
+            divider: gray_alpha(0.10, 0.13),
+            solid_background: pick((0xFA, 0xFA, 0xFA), (0x00, 0x00, 0x00)),
+            tooltip_background: pick((0xFF, 0xFF, 0xFF), (0x0A, 0x0A, 0x0A)),
+            // Spacing, not a tinted band, separates the footer.
+            footer_background: rgba8(0, 0, 0, 0),
+            // --vbg-red-900 / red-100.
+            critical: pick((0xD8, 0x00, 0x1B), (0xFF, 0x56, 0x5F)),
+            critical_background: pick((0xFF, 0xEE, 0xEF), (0x33, 0x0A, 0x11)),
+            attention_background: gray_alpha(0.05, 0.07),
+            // --vbg-amber-900 / amber-100.
+            caution: pick((0xAA, 0x4D, 0x00), (0xFF, 0x93, 0x00)),
+            caution_background: pick((0xFF, 0xF6, 0xDE), (0x2A, 0x17, 0x00)),
+            chrome_icon: gray_900,
+            chrome_icon_hover: gray_1000,
+            pace_marker: gray_1000,
+            interval_tick: gray_alpha(0.21, 0.24),
+            chart_grid: gray_alpha(0.081, 0.09),
+            mono_provider_icon: gray_900,
+            material,
+        }
+    }
+
     /// Brand tint of a small provider mark on this theme's cards.
     pub(crate) fn provider_icon(&self, provider: ProviderKind, colored: bool) -> Hsla {
         if !colored {
@@ -358,6 +488,15 @@ impl Palette {
             _ => crate::provider_registry::descriptor(provider).brand_rgb,
         })
     }
+}
+
+/// --vbg-gray-1000: Vercel's primary text and fill.
+fn vercel_gray_1000(dark: bool) -> Hsla {
+    rgb8(if dark {
+        (0xED, 0xED, 0xED)
+    } else {
+        (0x17, 0x17, 0x17)
+    })
 }
 
 /// Resolve Auto against the window's system appearance.

@@ -48,7 +48,6 @@ pub(super) const PROFILE_STRIP_HEIGHT: f32 = 46.0;
 /// Small inner inset keeps page/footer content clear of the capsule stroke.
 const CHROME_INSET: f32 = 1.0;
 const PAGE_PADDING: f32 = 16.0;
-const PAGE_SPACING: f32 = 6.0;
 
 /// One account bar's text and its animated, measured height.
 #[derive(Default)]
@@ -280,10 +279,11 @@ impl PopupRoot {
         let accent = theme::accent_ramp(ui.accent_color);
         let dark = theme::resolve_dark(ui.theme, system_dark(window));
         let palette = Palette::new(
+            ui.popup_theme,
             dark,
             accent,
             crate::popup::background_material(),
-            theme::ui_font_family(ui.font_family.as_deref(), &default_font),
+            theme::popup_font_family(ui.popup_theme, ui.font_family.as_deref(), &default_font),
         );
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             this.refresh_palette(window);
@@ -390,11 +390,17 @@ impl PopupRoot {
     pub(super) fn refresh_palette(&mut self, window: &Window) {
         let dark = theme::resolve_dark(self.ui.theme, system_dark(window));
         let material = crate::popup::background_material();
-        let font = theme::ui_font_family(self.ui.font_family.as_deref(), &self.default_font);
-        if self.palette.dark != dark
+        let popup_theme = self.ui.popup_theme;
+        let font = theme::popup_font_family(
+            popup_theme,
+            self.ui.font_family.as_deref(),
+            &self.default_font,
+        );
+        if self.palette.theme != popup_theme
+            || self.palette.dark != dark
             || self.palette.font_family != font
             || self.palette.material != material
-            || self.palette.accent != theme::rgb8(self.accent.fill(dark))
+            || self.palette.accent != Palette::accent_for(popup_theme, dark, self.accent)
         {
             #[cfg(windows)]
             if (self.palette.material != material || self.palette.dark != dark)
@@ -402,8 +408,17 @@ impl PopupRoot {
             {
                 backdrop.set_appearance(material, dark);
             }
-            self.palette = Palette::new(dark, self.accent, material, font);
+            self.palette = Palette::new(popup_theme, dark, self.accent, material, font);
         }
+    }
+
+    /// Gap between stacked cards; glides when the popup theme changes it.
+    pub(super) fn card_gap(&mut self) -> f32 {
+        self.fx.value(
+            fx::key("card-gap"),
+            self.palette.card_gap,
+            crate::theme::CONTROL_NORMAL_ANIMATION,
+        )
     }
 
     pub(crate) fn appearance_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1519,6 +1534,7 @@ impl PopupRoot {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let body = self.build_body(view, window, cx);
+        let gap = self.card_gap();
         let presence = std::mem::take(&mut self.body_presence);
         let metrics = self.page_metrics(view);
         let max_scroll = (metrics.content_height.get() - viewport_height).max(0.0);
@@ -1536,14 +1552,14 @@ impl PopupRoot {
             .w(px(page_width))
             .flex()
             .flex_col()
-            .gap(px(PAGE_SPACING))
+            .gap(px(gap))
             .p(px(PAGE_PADDING))
             .children(body.into_iter().enumerate().map(|(index, body)| {
                 let item = div().flex_none().child(body);
                 // A growing item also grows its gap: the negative margin
                 // cancels the gap while the item is still collapsed.
                 match presence.iter().find(|(at, _)| *at == index) {
-                    Some((_, shown)) => item.mb(px(-PAGE_SPACING * (1.0 - shown))),
+                    Some((_, shown)) => item.mb(px(-gap * (1.0 - shown))),
                     None => item,
                 }
             }))
@@ -1940,6 +1956,7 @@ impl PopupRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
+        let gap = self.card_gap();
         let members = match self.page_provider(view) {
             Some(provider) => vec![provider],
             None => tab_members(&self.ui.instances, view),
@@ -1993,7 +2010,7 @@ impl PopupRoot {
                     .id(eid(format!("provider-section-{}", provider.id())))
                     .flex()
                     .flex_col()
-                    .gap(px(PAGE_SPACING))
+                    .gap(px(gap))
                     .children(children)
                     .into_any_element(),
             );

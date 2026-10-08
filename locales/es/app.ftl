@@ -498,6 +498,10 @@ msg-12-hour = 12 horas
 msg-24-hour = 24 horas
 
 popup-background = Fondo de la ventana emergente
+popup-theme = Tema de la ventana emergente
+popup-theme-description = Solo cambia la ventana emergente. La configuración mantiene el aspecto de Windows.
+popup-theme-fluent = Fluent
+popup-theme-vercel = Vercel
 
 acrylic = Acrílico
 

@@ -495,6 +495,10 @@ msg-12-hour = 12 小时制
 msg-24-hour = 24 小时制
 
 popup-background = 弹出窗口背景
+popup-theme = 弹出窗口主题
+popup-theme-description = 仅更改弹出窗口。设置窗口保持 Windows 外观。
+popup-theme-fluent = Fluent
+popup-theme-vercel = Vercel
 
 acrylic = 亚克力
 

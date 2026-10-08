@@ -7,9 +7,10 @@ use gpui::{
 
 use super::kit::{self, Kit, Row, SliderRange, eid};
 use super::window::SettingsWindow;
-use crate::popup_window::ui::theme::rgb8;
+use crate::popup_window::ui::theme::{self as popup_theme, Palette, rgb8};
 use crate::settings::{
-    AccentColor, AppTheme, BottomBarSize, PopupBackgroundMaterial, PopupCornerRadius, TimeFormat,
+    AccentColor, AppTheme, BottomBarSize, PopupBackgroundMaterial, PopupCornerRadius, PopupTheme,
+    TimeFormat,
 };
 
 const ACCENTS: [AccentColor; 8] = [
@@ -97,6 +98,25 @@ impl SettingsWindow {
                             this.edit(cx, move |settings| settings.time_format = value)
                         }),
                     ))
+                    .render(k),
+            ]
+        });
+
+        let popup_theme_cards = div().flex().gap(px(12.0)).w_full().children(
+            PopupTheme::ALL
+                .into_iter()
+                .map(|value| self.popup_theme_card(k, value, cx)),
+        );
+        let themes = kit::card_of(k, |k| {
+            vec![
+                Row::new("appearance-popup-theme", crate::i18n::tr("popup-theme"))
+                    .description(k, crate::i18n::tr("popup-theme-description"))
+                    .detail(
+                        div()
+                            .pt(px(12.0))
+                            .child(popup_theme_cards)
+                            .into_any_element(),
+                    )
                     .render(k),
             ]
         });
@@ -189,6 +209,7 @@ impl SettingsWindow {
         vec![
             look,
             kit::section_heading(k, crate::i18n::tr("popup")),
+            themes,
             popup,
             kit::section_heading(k, crate::i18n::tr("motion")),
             motion,
@@ -287,6 +308,117 @@ impl SettingsWindow {
                 .items_center()
                 .gap(px(6.0))
                 .text_size(px(13.0))
+                .when(selected, |el| el.font_weight(FontWeight::SEMIBOLD))
+                .child(label),
+        )
+        .into_any_element()
+    }
+
+    /// A miniature popup painted with one popup theme's own palette, in the
+    /// light or dark mode Settings currently resolves to.
+    fn popup_theme_card(&self, k: &Kit, value: PopupTheme, cx: &mut Context<Self>) -> AnyElement {
+        let theme = &k.theme;
+        let selected = self.settings.popup_theme == value;
+        let label = match value {
+            PopupTheme::Fluent => crate::i18n::tr("popup-theme-fluent"),
+            PopupTheme::Vercel => crate::i18n::tr("popup-theme-vercel"),
+        };
+        let font = popup_theme::popup_font_family(
+            value,
+            self.settings.font_family.as_deref(),
+            &popup_theme::default_font_family(cx),
+        );
+        let palette = Palette::new(
+            value,
+            theme.dark,
+            crate::theme::accent_ramp(self.settings.accent_color),
+            PopupBackgroundMaterial::Solid,
+            font.clone(),
+        );
+        let line = |width: f32, color| div().h(px(4.0)).w(relative(width)).rounded_full().bg(color);
+        let mock_card = |fill: f32| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(5.0))
+                .p(px(6.0))
+                .rounded(px(palette.card_radius * 0.6))
+                .bg(palette.card_background)
+                .border_1()
+                .border_color(palette.card_stroke)
+                .child(line(0.45, palette.text_primary))
+                .child(
+                    div()
+                        .h(px(4.0))
+                        .w_full()
+                        .rounded_full()
+                        .bg(palette.control_fill)
+                        .child(
+                            div()
+                                .h_full()
+                                .w(relative(fill))
+                                .rounded_full()
+                                .bg(palette.accent),
+                        ),
+                )
+                .child(line(0.3, palette.text_tertiary))
+        };
+        let preview = div()
+            .h(px(96.0))
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(5.0))
+            .p(px(8.0))
+            .rounded(px(6.0))
+            .overflow_hidden()
+            .bg(palette.solid_background)
+            .border_1()
+            .border_color(theme.divider)
+            .child(mock_card(0.62))
+            .child(mock_card(0.28))
+            .child(
+                div()
+                    .mt_auto()
+                    .flex()
+                    .items_center()
+                    .gap(px(5.0))
+                    .child(div().size(px(6.0)).rounded_full().bg(palette.accent))
+                    .child(div().size(px(6.0)).rounded_full().bg(palette.chrome_icon))
+                    .child(div().size(px(6.0)).rounded_full().bg(palette.chrome_icon)),
+            );
+        let hover = theme.card_hover;
+        let card_id = format!("popup-theme-card-{label}");
+        let rest = if selected {
+            theme.accent_soft
+        } else {
+            theme.card
+        };
+        kit::hover_bg(
+            k,
+            div().id(eid(card_id.clone())),
+            kit::hover_key(&card_id),
+            rest,
+            if selected { rest } else { hover },
+        )
+        .flex_1()
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+        .p(px(8.0))
+        .rounded(px(kit::CARD_RADIUS))
+        .shadow(kit::card_shadow(theme))
+        .cursor_pointer()
+        .on_click(cx.listener(move |this, _, _, cx| {
+            if this.settings.popup_theme != value {
+                this.edit(cx, move |settings| settings.popup_theme = value);
+            }
+        }))
+        .child(preview)
+        .child(
+            div()
+                .text_size(px(13.0))
+                .font_family(font)
                 .when(selected, |el| el.font_weight(FontWeight::SEMIBOLD))
                 .child(label),
         )

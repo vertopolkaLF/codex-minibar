@@ -749,6 +749,10 @@ msg-24-hour = 24-hour
 
 # src/settings_window/appearance.rs
 popup-background = Popup background
+popup-theme = Popup theme
+popup-theme-description = Changes only the popup. Settings keep the Windows look.
+popup-theme-fluent = Fluent
+popup-theme-vercel = Vercel
 
 # src/settings_window/appearance.rs
 acrylic = Acrylic

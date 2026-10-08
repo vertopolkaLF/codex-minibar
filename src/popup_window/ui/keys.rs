@@ -18,7 +18,7 @@ use gpui::{
 use zeroize::Zeroizing;
 
 use super::{
-    components::{self, CARD_RADIUS, Severity, caption, icon, nowrap},
+    components::{self, Severity, caption, icon, nowrap},
     fx,
     root::{PopupRoot, eid},
     theme::HslaExt,
@@ -253,9 +253,9 @@ struct RowEdge {
 }
 
 /// Full-size tint behind a row's content, rounded to match the card's edge.
-fn edge_layer(edge: RowEdge, color: Hsla) -> Option<AnyElement> {
+fn edge_layer(edge: RowEdge, color: Hsla, card_radius: f32) -> Option<AnyElement> {
     (color.a > 0.001).then(|| {
-        let radius = px(CARD_RADIUS - 1.0);
+        let radius = px(card_radius - 1.0);
         div()
             .absolute()
             .inset_0()
@@ -985,7 +985,7 @@ impl PopupRoot {
             .justify_center()
             .gap(px(6.0))
             .flex_none()
-            .rounded(px(4.0))
+            .rounded(px(palette.control_radius))
             .when_some(background, |el, background| el.bg(background))
             .when(tone == Tone::Standard, |el| {
                 el.border_1().border_color(palette.card_stroke)
@@ -1104,7 +1104,7 @@ impl PopupRoot {
             .items_center()
             .h(px(32.0))
             .px(px(10.0))
-            .rounded(px(4.0))
+            .rounded(px(palette.control_radius))
             .overflow_hidden()
             .bg(if focused {
                 palette.subtle_fill
@@ -1403,6 +1403,7 @@ impl PopupRoot {
                             last: true,
                         },
                         palette.subtle_fill.opacity(hover),
+                        palette.card_radius,
                     ))
                     .child(div().relative().child(caption(label, palette.accent))),
             );
@@ -1555,7 +1556,11 @@ impl PopupRoot {
                 }),
         );
         head = head
-            .children(edge_layer(edge, palette.subtle_fill.opacity(hover)))
+            .children(edge_layer(
+                edge,
+                palette.subtle_fill.opacity(hover),
+                palette.card_radius,
+            ))
             .child(content);
 
         let mut element = div()
@@ -1567,7 +1572,11 @@ impl PopupRoot {
                 el.border_t_1().border_color(palette.divider)
             })
             .when(open, |el| {
-                el.children(edge_layer(edge, palette.subtle_fill.opacity(0.5)))
+                el.children(edge_layer(
+                    edge,
+                    palette.subtle_fill.opacity(0.5),
+                    palette.card_radius,
+                ))
             })
             .child(head);
         if reveal > 0.001 {
@@ -1925,7 +1934,7 @@ impl PopupRoot {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(4.0))
+                    .rounded(px(palette.control_radius))
                     .on_hover(self.hover_listener(
                         hover_id,
                         Some(crate::i18n::tr("openrouter-keys-back").into()),

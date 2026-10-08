@@ -305,6 +305,22 @@ impl PopupBackgroundMaterial {
     }
 }
 
+/// Visual design language of the popup. Settings and onboarding always keep
+/// the Fluent look; only the popup switches themes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PopupTheme {
+    /// Windows 11 Fluent tokens with the configured accent.
+    #[default]
+    Fluent,
+    /// Vercel's Geist system: monochrome, hairline borders, Geist type.
+    Vercel,
+}
+
+impl PopupTheme {
+    pub const ALL: [Self; 2] = [Self::Fluent, Self::Vercel];
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TimeFormat {
     #[serde(rename = "hour_12", alias = "hour12")]
@@ -1717,6 +1733,8 @@ pub struct Settings {
     pub popup_corner_radius: PopupCornerRadius,
     /// Material used by the popup's full-window background.
     pub popup_background_material: PopupBackgroundMaterial,
+    /// Design language of the popup only.
+    pub popup_theme: PopupTheme,
     /// 12-hour or 24-hour clocks. Missing values follow the Windows locale.
     pub time_format: TimeFormat,
     /// Provider instances in the user's order for the Settings sidebar and
@@ -1791,6 +1809,7 @@ impl Default for Settings {
             bottom_bar_size: BottomBarSize::default(),
             popup_corner_radius: PopupCornerRadius::default(),
             popup_background_material: PopupBackgroundMaterial::default(),
+            popup_theme: PopupTheme::default(),
             time_format: TimeFormat::from_windows(),
             instances: ProviderKind::ALL
                 .into_iter()
@@ -3541,6 +3560,7 @@ show_usage_stats = false
             bottom_bar_size: BottomBarSize::Compact,
             popup_corner_radius: PopupCornerRadius::Large,
             popup_background_material: PopupBackgroundMaterial::Solid,
+            popup_theme: PopupTheme::Vercel,
             ..Default::default()
         };
         expected.save(&path).unwrap();

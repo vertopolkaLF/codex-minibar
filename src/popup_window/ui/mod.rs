@@ -132,6 +132,7 @@ fn run(
     Application::new()
         .with_assets(assets::PopupAssets)
         .run(move |cx| {
+            theme::register_bundled_fonts(cx);
             crate::settings_window::init(cx);
             let default_font = theme::default_font_family(cx);
             let settings_state = Arc::clone(&state);

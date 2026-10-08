@@ -498,6 +498,10 @@ msg-12-hour = 12 horas
 msg-24-hour = 24 horas
 
 popup-background = Fundo do popup
+popup-theme = Tema do popup
+popup-theme-description = Altera apenas o popup. As configurações mantêm a aparência do Windows.
+popup-theme-fluent = Fluent
+popup-theme-vercel = Vercel
 
 acrylic = Acrílico
 

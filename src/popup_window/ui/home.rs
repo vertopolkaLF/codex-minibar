@@ -9,7 +9,7 @@ use gpui::{
 };
 
 use super::{
-    components::{self, CARD_RADIUS, caption, card, nowrap},
+    components::{self, caption, card, nowrap},
     fx,
     root::{PopupRoot, SnapshotSlot, eid},
     theme::{HslaExt, Palette},
@@ -17,7 +17,6 @@ use super::{
 use crate::popup_window::{model::*, *};
 use crate::usage_overview::OverviewSnapshot;
 
-const SECTION_GAP: f32 = 6.0;
 pub(super) const COLUMN_GAP: f32 = 20.0;
 const HEADING_TOP: f32 = 8.0;
 
@@ -121,6 +120,7 @@ impl PopupRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
+        let gap = self.card_gap();
         let ui = Rc::clone(&self.ui);
         let limits = Rc::clone(&self.limits);
         let forced_resets = Rc::clone(&self.forced_resets);
@@ -181,14 +181,14 @@ impl PopupRoot {
                     div()
                         .flex()
                         .flex_col()
-                        .gap(px(SECTION_GAP))
+                        .gap(px(gap))
                         .children(heading)
                         .child(
                             content.child(
                                 div()
                                     .flex()
                                     .flex_col()
-                                    .gap(px(SECTION_GAP))
+                                    .gap(px(gap))
                                     .opacity(fade)
                                     .children(body),
                             ),
@@ -238,7 +238,8 @@ impl PopupRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        const PICKER_HEIGHT: f32 = 28.0 + SECTION_GAP;
+        let gap = self.card_gap();
+        let picker_height = 28.0 + gap;
         let reveal = self.fx.toggle(
             fx::key(("card-layout-picker", provider.id())),
             self.home_editing && available,
@@ -285,7 +286,7 @@ impl PopupRoot {
             div()
                 .flex_none()
                 .overflow_hidden()
-                .h(px(PICKER_HEIGHT * reveal))
+                .h(px(picker_height * reveal))
                 .opacity(reveal)
                 .child(
                     components::split_row(
@@ -303,13 +304,14 @@ impl PopupRoot {
 
     /// A column's sections, recording the column origin for reorder motion.
     fn measured_column(&mut self, column: Option<usize>, sections: Vec<AnyElement>) -> gpui::Div {
+        let gap = self.card_gap();
         let bounds = Rc::clone(&self.widget_bounds);
         let slot = column.unwrap_or(0);
         div()
             .relative()
             .flex()
             .flex_col()
-            .gap(px(SECTION_GAP))
+            .gap(px(gap))
             .w_full()
             .children(sections)
             .child(
@@ -456,7 +458,7 @@ impl PopupRoot {
                 div()
                     .absolute()
                     .inset(px(-3.0))
-                    .rounded(px(CARD_RADIUS))
+                    .rounded(px(palette.card_radius))
                     .border_1()
                     .border_color(palette.accent.alpha(outline)),
             );
@@ -503,6 +505,7 @@ impl PopupRoot {
     /// measured heights) and glide it there from its old position, so the
     /// first frame of the new layout never jumps.
     fn animate_widget_reflow(&mut self, order: &[HomeWidgetId], right: &[HomeWidgetId]) {
+        let gap = self.card_gap();
         if !self.fx.enabled() {
             return;
         }
@@ -537,7 +540,7 @@ impl PopupRoot {
                     _ => {}
                 }
                 targets.insert(widget.clone(), (x, y));
-                y += height + SECTION_GAP;
+                y += height + gap;
             }
         }
         let deltas = targets
@@ -566,6 +569,7 @@ impl PopupRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let gap = self.card_gap();
         let palette = self.palette.clone();
         let period = self.ui.total_spend_period;
         let enabled = self.enabled_spend();
@@ -693,14 +697,16 @@ impl PopupRoot {
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.navigate(PopupView::Usage, cx);
             }));
-        if let Some(layer) = components::hover_layer(&palette, card_hover, CARD_RADIUS - 1.0) {
+        if let Some(layer) =
+            components::hover_layer(&palette, card_hover, palette.card_radius - 1.0)
+        {
             body = body.child(layer);
         }
         let _ = window;
         div()
             .flex()
             .flex_col()
-            .gap(px(SECTION_GAP))
+            .gap(px(gap))
             .child(heading)
             .child(body.child(div().relative().p(px(12.0)).child(content)))
             .into_any_element()

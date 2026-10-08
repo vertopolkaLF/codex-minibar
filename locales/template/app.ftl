@@ -1014,6 +1014,22 @@ msg-24-hour = { "" }
 popup-background = { "" }
 
 # English source:
+# popup-theme = Popup theme
+popup-theme = { "" }
+
+# English source:
+# popup-theme-description = Changes only the popup. Settings keep the Windows look.
+popup-theme-description = { "" }
+
+# English source:
+# popup-theme-fluent = Fluent
+popup-theme-fluent = { "" }
+
+# English source:
+# popup-theme-vercel = Vercel
+popup-theme-vercel = { "" }
+
+# English source:
 # acrylic = Acrylic
 acrylic = { "" }
 

@@ -7,9 +7,7 @@ use gpui::{
 };
 
 use super::{
-    components::{
-        self, CARD_RADIUS, TextMetrics, caption, card, card_metadata, icon, nowrap, status_row,
-    },
+    components::{self, TextMetrics, caption, card, card_metadata, icon, nowrap, status_row},
     fx,
     root::{PopupRoot, eid},
     theme::HslaExt,
@@ -973,7 +971,7 @@ impl PopupRoot {
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(4.0))
+            .rounded(px(palette.control_radius))
             .on_hover(self.hover_listener(hover_id, Some(crate::i18n::tr("remove-key").into()), cx))
             .on_click(move |_: &ClickEvent, _, _| {
                 let account_id = account_id.clone();
@@ -1131,9 +1129,9 @@ impl PopupRoot {
                     .inset_0()
                     .bg(palette.subtle_fill.opacity(hover));
                 header = header.child(if reveal > 0.0 {
-                    layer.rounded_t(px(CARD_RADIUS - 1.0))
+                    layer.rounded_t(px(palette.card_radius - 1.0))
                 } else {
-                    layer.rounded(px(CARD_RADIUS - 1.0))
+                    layer.rounded(px(palette.card_radius - 1.0))
                 });
             }
         }
@@ -1300,7 +1298,7 @@ impl PopupRoot {
             .id("forced-resets")
             .relative()
             .on_hover(self.hover_listener(hover_id, None, cx));
-        if let Some(layer) = components::hover_layer(&palette, hover, CARD_RADIUS - 1.0) {
+        if let Some(layer) = components::hover_layer(&palette, hover, palette.card_radius - 1.0) {
             element = element.child(layer);
         }
         element

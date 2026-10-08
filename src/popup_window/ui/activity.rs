@@ -1135,7 +1135,7 @@ impl PopupRoot {
             .flex_row()
             .items_center()
             .gap(px(5.0))
-            .rounded(px(4.0))
+            .rounded(px(palette.control_radius))
             .opacity(if available { 1.0 } else { 0.4 })
             .on_hover(self.hover_listener(hover_id, Some(tip), cx));
         if let Some(layer) = components::hover_layer(&palette, hover, 4.0) {

@@ -305,7 +305,7 @@ impl PopupRoot {
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(4.0));
+            .rounded(px(palette.control_radius));
         if let Some(layer) = components::hover_layer(&palette, fill, 4.0) {
             grip = grip.child(layer);
         }
