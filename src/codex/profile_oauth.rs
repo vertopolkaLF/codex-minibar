@@ -158,6 +158,8 @@ pub(crate) fn login(explicit: Option<&Path>, folder: &Path, control: &LoginContr
     ensure!(!control.cancelled(), "Codex sign-in cancelled.");
     let executable = native_login_executable(explicit)
         .context("Install native Windows Codex CLI or Codex desktop to sign in from Minibar.")?;
+    let prepared = crate::discovery::prepare(&executable)?;
+    let executable = &prepared.path;
     ensure!(
         executable
             .extension()
@@ -169,7 +171,7 @@ pub(crate) fn login(explicit: Option<&Path>, folder: &Path, control: &LoginContr
         !crate::claude::profile_oauth::is_link(&std::fs::symlink_metadata(folder)?),
         "The config folder must not be a link."
     );
-    let command = login_command(&executable, folder);
+    let command = login_command(executable, folder);
     #[cfg(windows)]
     let mut child = crate::claude::profile_oauth::login_child::LoginChild::spawn(&command)?;
     #[cfg(not(windows))]

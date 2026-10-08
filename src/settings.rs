@@ -2359,6 +2359,12 @@ impl Settings {
         );
         crate::provider_registry::apply_logo_settings(self.replace_chatgpt_logo_with_codex);
         crate::instances::publish(&self.instances);
+        crate::discovery::protect_configured_paths(
+            self.instances
+                .iter()
+                .filter(|instance| instance.driver == ProviderKind::Codex)
+                .filter_map(|instance| instance.binary_path.as_deref()),
+        );
         self.time_format.apply();
         apply_startup_registration(self.start_at_login)
     }

@@ -120,7 +120,8 @@ impl CodexActivator {
             ACTIVATION_MODEL
         ));
         let args = activation_args(&workspace, &last_message_path);
-        let mut child = command_for_codex(&self.executable, &args, self.home.as_deref())
+        let prepared = crate::discovery::prepare(&self.executable)?;
+        let mut child = command_for_codex(&prepared.path, &args, self.home.as_deref())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -897,7 +898,10 @@ fn activation_args(workspace: &Path, last_message: &Path) -> Vec<String> {
 }
 
 fn spawn_codex(executable: &Path, args: &[&str], home: Option<&Path>) -> Result<Child> {
-    command_for_codex(executable, args, home)
+    let prepared = crate::discovery::prepare(executable)?;
+    // The lease covers the preparation-to-spawn gap. Windows protects the
+    // executable mapping from deletion for the child's lifetime afterwards.
+    command_for_codex(&prepared.path, args, home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

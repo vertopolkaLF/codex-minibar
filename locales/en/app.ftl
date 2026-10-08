@@ -169,6 +169,12 @@ loading-model-breakdown = Loading model breakdown
 # src/popup_window/ui/activity.rs
 group-tokens-or-cost-by-model = Group tokens or cost by model
 
+# src/popup_window/ui/activity.rs
+split-type = Type
+
+# src/popup_window/ui/activity.rs
+split-by-token-type = Split bars by token type
+
 # src/popup_window/ui/usage.rs
 model = Model
 
