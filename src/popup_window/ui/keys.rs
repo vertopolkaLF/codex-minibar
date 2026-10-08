@@ -11,14 +11,14 @@ use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Local, Utc};
 use gpui::{
-    AnyElement, AppContext as _, ClickEvent, ClipboardItem, Context, Entity, Focusable as _,
+    AnyElement, AppContext as _, ClickEvent, ClipboardItem, Context, Entity, Focusable as _, Hsla,
     InteractiveElement, IntoElement, ParentElement, SharedString, StatefulInteractiveElement,
     Styled, Subscription, Transformation, Window, div, prelude::FluentBuilder as _, px, radians,
 };
 use zeroize::Zeroizing;
 
 use super::{
-    components::{self, Severity, caption, icon, nowrap},
+    components::{self, CARD_RADIUS, Severity, caption, icon, nowrap},
     fx,
     root::{PopupRoot, eid},
     theme::HslaExt,
@@ -215,6 +215,28 @@ fn is_amount_draft(text: &str) -> bool {
             .chars()
             .chain(cents.chars())
             .all(|c| c.is_ascii_digit())
+}
+
+/// Where a row sits in the key list. Clipping in GPUI is rectangular, so tints
+/// on the outer rows must round their own corners to stay inside the card.
+#[derive(Clone, Copy)]
+struct RowEdge {
+    first: bool,
+    last: bool,
+}
+
+/// Full-size tint behind a row's content, rounded to match the card's edge.
+fn edge_layer(edge: RowEdge, color: Hsla) -> Option<AnyElement> {
+    (color.a > 0.001).then(|| {
+        let radius = px(CARD_RADIUS - 1.0);
+        div()
+            .absolute()
+            .inset_0()
+            .when(edge.first, |el| el.rounded_tl(radius).rounded_tr(radius))
+            .when(edge.last, |el| el.rounded_bl(radius).rounded_br(radius))
+            .bg(color)
+            .into_any_element()
+    })
 }
 
 /// Editable text for a stored limit: `25`, `12.5`, or empty for none.
@@ -1255,28 +1277,35 @@ impl PopupRoot {
             .flex()
             .flex_col()
             .overflow_hidden();
-        let mut shown = 0;
-        for (index, key) in keys.iter().enumerate() {
-            let listed = show_all
-                || index < COLLAPSED_ROWS
-                || open_hash.as_deref() == Some(key.hash.as_str());
-            if !listed {
-                continue;
-            }
+        let has_footer = keys.len() > COLLAPSED_ROWS;
+        let listed: Vec<&ManagedKey> = keys
+            .iter()
+            .enumerate()
+            .filter(|(index, key)| {
+                show_all
+                    || *index < COLLAPSED_ROWS
+                    || open_hash.as_deref() == Some(key.hash.as_str())
+            })
+            .map(|(_, key)| key)
+            .collect();
+        for (shown, key) in listed.iter().enumerate() {
             let tracked = masks.iter().any(|mask| key.matches_mask(mask));
+            let edge = RowEdge {
+                first: shown == 0,
+                last: shown + 1 == listed.len() && !has_footer,
+            };
             list = list.child(self.render_key_row(
                 provider,
                 &account_id,
                 key,
                 tracked,
-                shown == 0,
+                edge,
                 now,
                 window,
                 cx,
             ));
-            shown += 1;
         }
-        if keys.len() > COLLAPSED_ROWS {
+        if has_footer {
             let label = if show_all {
                 crate::i18n::tr("openrouter-keys-show-fewer").to_owned()
             } else {
@@ -1307,7 +1336,13 @@ impl PopupRoot {
                         }
                         cx.notify();
                     }))
-                    .children(components::hover_layer(&palette, hover, 0.0))
+                    .children(edge_layer(
+                        RowEdge {
+                            first: false,
+                            last: true,
+                        },
+                        palette.subtle_fill.opacity(hover),
+                    ))
                     .child(div().relative().child(caption(label, palette.accent))),
             );
         }
@@ -1321,7 +1356,7 @@ impl PopupRoot {
         account_id: &str,
         key: &ManagedKey,
         tracked: bool,
-        first: bool,
+        edge: RowEdge,
         now: DateTime<Utc>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1459,15 +1494,20 @@ impl PopupRoot {
                 }),
         );
         head = head
-            .children(components::hover_layer(&palette, hover, 0.0))
+            .children(edge_layer(edge, palette.subtle_fill.opacity(hover)))
             .child(content);
 
         let mut element = div()
+            .relative()
             .flex()
             .flex_col()
             .overflow_hidden()
-            .when(!first, |el| el.border_t_1().border_color(palette.divider))
-            .when(open, |el| el.bg(palette.subtle_fill.opacity(0.5)))
+            .when(!edge.first, |el| {
+                el.border_t_1().border_color(palette.divider)
+            })
+            .when(open, |el| {
+                el.children(edge_layer(edge, palette.subtle_fill.opacity(0.5)))
+            })
             .child(head);
         if reveal > 0.001 {
             let body = if self.keys.confirm_delete.as_ref() == Some(&row) {
