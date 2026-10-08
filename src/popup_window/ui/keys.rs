@@ -1733,7 +1733,7 @@ impl PopupRoot {
         );
         let reset_control = {
             let row = row.clone();
-            self.segmented_control_quiet(
+            self.segmented_control_quiet_wide(
                 fx::key(("or-key-reset", id.as_str())),
                 Self::reset_labels(),
                 LimitReset::ALL
@@ -2078,7 +2078,7 @@ impl PopupRoot {
             window,
             cx,
         );
-        let reset_control = self.segmented_control_quiet(
+        let reset_control = self.segmented_control_quiet_wide(
             fx::key("or-key-create-reset"),
             Self::reset_labels(),
             LimitReset::ALL
