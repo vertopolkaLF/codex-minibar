@@ -8,8 +8,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use super::{KEYS_API_URL, management_secret_name, money_value, parse_optional_timestamp};
@@ -19,7 +20,7 @@ const ADMIN_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_PAGES: usize = 50;
 
 /// How often a key's spending limit starts over.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) enum LimitReset {
     #[default]
     Never,
@@ -60,7 +61,8 @@ impl LimitReset {
 }
 
 /// One key from the account's key directory. Amounts are micro-dollars.
-#[derive(Clone, Debug, PartialEq)]
+/// Holds no secret: OpenRouter only lists masked labels and hashes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct ManagedKey {
     pub(crate) hash: String,
     pub(crate) name: String,
@@ -149,6 +151,45 @@ pub(crate) fn load_management_key(account_id: &str) -> Result<Zeroizing<String>>
         .filter(|value| !value.trim().is_empty())
         .map(|value| Zeroizing::new(value.trim().to_owned()))
         .ok_or_else(|| anyhow!(crate::i18n::tr("openrouter-keys-no-management-key")))
+}
+
+/// The last key directory fetched for an account, shown while a fresh one
+/// loads. Tied to the management key that listed it, so replacing the key
+/// never shows another account's keys.
+#[derive(Serialize, Deserialize)]
+struct CachedDirectory {
+    identity: String,
+    keys: Vec<ManagedKey>,
+}
+
+fn directory_identity(management_key: &str) -> String {
+    format!("{:x}", Sha256::digest(management_key.as_bytes()))
+}
+
+/// The cached key directory of `account_id`, if its management key still matches.
+pub(crate) fn load_cached_keys(account_id: &str) -> Result<Option<Vec<ManagedKey>>> {
+    let management_key = load_management_key(account_id)?;
+    let Some(raw) =
+        crate::store::with_store(|store| store.load_openrouter_key_directory(account_id))?
+    else {
+        return Ok(None);
+    };
+    let cached: CachedDirectory =
+        serde_json::from_str(&raw).context("parse cached OpenRouter key directory")?;
+    Ok((cached.identity == directory_identity(&management_key)).then_some(cached.keys))
+}
+
+/// Remember the key directory `management_key` just listed for `account_id`.
+pub(crate) fn save_cached_keys(
+    account_id: &str,
+    management_key: &str,
+    keys: &[ManagedKey],
+) -> Result<()> {
+    let raw = serde_json::to_string(&CachedDirectory {
+        identity: directory_identity(management_key),
+        keys: keys.to_vec(),
+    })?;
+    crate::store::with_store(|store| store.save_openrouter_key_directory(account_id, &raw))
 }
 
 fn agent() -> ureq::Agent {
@@ -444,6 +485,21 @@ mod tests {
             Some(Utc.with_ymd_and_hms(2026, 10, 31, 0, 0, 0).unwrap())
         );
         assert!(second.is_expired(Utc.with_ymd_and_hms(2026, 11, 1, 0, 0, 0).unwrap()));
+    }
+
+    #[test]
+    fn cached_directory_round_trips_and_is_bound_to_its_management_key() {
+        let keys = parse_key_list(LIST).unwrap();
+        let raw = serde_json::to_string(&CachedDirectory {
+            identity: directory_identity("sk-or-v1-management"),
+            keys: keys.clone(),
+        })
+        .unwrap();
+        assert!(!raw.contains("sk-or-v1-management"));
+        let cached: CachedDirectory = serde_json::from_str(&raw).unwrap();
+        assert_eq!(cached.keys, keys);
+        assert_eq!(cached.identity, directory_identity("sk-or-v1-management"));
+        assert_ne!(cached.identity, directory_identity("sk-or-v1-replacement"));
     }
 
     #[test]

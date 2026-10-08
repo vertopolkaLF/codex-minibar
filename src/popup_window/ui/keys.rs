@@ -57,6 +57,8 @@ struct AccountKeys {
     loading: bool,
     /// Refetch on the next render (popup reopened, refresh, or a change).
     stale: bool,
+    /// The stored list from an earlier run was already looked up.
+    cache_checked: bool,
     error: Option<String>,
     generation: u64,
 }
@@ -364,14 +366,47 @@ impl PopupRoot {
         entry.stale = false;
         entry.generation = entry.generation.wrapping_add(1);
         let generation = entry.generation;
+        let check_cache = !entry.loaded && !std::mem::replace(&mut entry.cache_checked, true);
         let account = account.to_owned();
         cx.spawn(async move |this, cx| {
+            // Paint the list stored by an earlier run while the fresh one loads.
+            if check_cache {
+                let lookup = account.clone();
+                let cached = cx
+                    .background_executor()
+                    .spawn(async move { admin::load_cached_keys(&lookup) })
+                    .await;
+                match cached {
+                    Ok(Some(keys)) => {
+                        let _ = this.update(cx, |this, cx| {
+                            if let Some(entry) = this.keys.accounts.get_mut(&account)
+                                && entry.generation == generation
+                                && !entry.loaded
+                            {
+                                entry.keys = keys;
+                                entry.loaded = true;
+                                cx.notify();
+                            }
+                        });
+                    }
+                    Ok(None) => {}
+                    Err(error) => crate::logger::info(format!(
+                        "OpenRouter cached key list unavailable: {error:#}"
+                    )),
+                }
+            }
             let lookup = account.clone();
             let result = cx
                 .background_executor()
                 .spawn(async move {
                     let management_key = admin::load_management_key(&lookup)?;
-                    admin::list_keys(&management_key)
+                    let keys = admin::list_keys(&management_key)?;
+                    if let Err(error) = admin::save_cached_keys(&lookup, &management_key, &keys) {
+                        crate::logger::info(format!(
+                            "OpenRouter key list was not cached: {error:#}"
+                        ));
+                    }
+                    Ok::<_, anyhow::Error>(keys)
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
