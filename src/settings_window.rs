@@ -31,7 +31,7 @@ mod appearance;
 mod backdrop;
 mod customize;
 mod general;
-mod input;
+pub(crate) mod input;
 mod integrations;
 mod kit;
 mod log;
@@ -49,7 +49,7 @@ mod window;
 mod tests;
 
 pub(crate) use persistence::{persist_update, try_persist_update_fallible};
-pub(crate) use providers::OpenRouterSettingsSnapshot;
+pub(crate) use providers::{OpenRouterSettingsSnapshot, persist_openrouter_credentials};
 
 const WINDOW_WIDTH: f32 = 1000.0;
 const WINDOW_HEIGHT: f32 = 740.0;

@@ -447,7 +447,7 @@ fn persist_openrouter_account(
 /// Commits protected OpenRouter secrets as one file update, then commits the
 /// matching account metadata. If the settings write fails, protected storage
 /// is restored to its exact previous values so neither side can be orphaned.
-fn persist_openrouter_credentials(
+pub(crate) fn persist_openrouter_credentials(
     settings_tx: Sender<Settings>,
     account_id: String,
     changes: Vec<crate::openrouter::AccountSecretChange>,

@@ -37,6 +37,14 @@ fn source(name: &str) -> Option<&'static str> {
             include_str!("../../../assets/icons/fluent-error-circle-16-filled.svg")
         }
         "fluent-warning" => include_str!("../../../assets/icons/fluent-warning-16-filled.svg"),
+        "fluent-add" => include_str!("../../../assets/icons/fluent-add-16-regular.svg"),
+        "fluent-arrow-left" => {
+            include_str!("../../../assets/icons/fluent-arrow-left-16-regular.svg")
+        }
+        "fluent-copy" => include_str!("../../../assets/icons/fluent-copy-16-regular.svg"),
+        "fluent-checkmark-circle" => {
+            include_str!("../../../assets/icons/fluent-checkmark-circle-16-filled.svg")
+        }
         "codex" => include_str!("../../../assets/icons/openai-iconify.svg"),
         "claude" => include_str!("../../../assets/icons/claude-iconify.svg"),
         "cursor" => include_str!("../../../assets/icons/cursor-iconify.svg"),

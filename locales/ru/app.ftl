@@ -2300,3 +2300,199 @@ range-90d = 90 дн
 
 # Home usage card title
 home-usage-title = Расход
+
+# OpenRouter key administration
+
+could-not-reach-openrouter = Не удалось связаться с OpenRouter
+
+
+openrouter-keys-title = Ключи
+
+
+openrouter-keys-new = Новый ключ
+
+
+openrouter-keys-new-title = Новый ключ
+
+
+openrouter-keys-back = Назад
+
+
+openrouter-keys-updating = Обновление…
+
+
+openrouter-keys-loading = Загрузка ключей…
+
+
+openrouter-keys-load-failed = Не удалось загрузить ключи
+
+
+openrouter-keys-retry = Повторить
+
+
+openrouter-keys-empty = У этого аккаунта пока нет ключей.
+
+
+openrouter-keys-this-app = Это приложение
+
+
+openrouter-keys-no-limit = Без лимита
+
+
+openrouter-keys-of-limit = { $amount } из { $limit }
+
+
+openrouter-keys-resets-daily = сброс ежедневно
+
+
+openrouter-keys-resets-weekly = сброс еженедельно
+
+
+openrouter-keys-resets-monthly = сброс ежемесячно
+
+
+openrouter-keys-expires-on = истекает { $date }
+
+
+openrouter-keys-expired-on = истёк { $date }
+
+
+openrouter-keys-today = сегодня { $amount }
+
+
+openrouter-keys-usage-breakdown = Сегодня { $today } · неделя { $week } · месяц { $month } · всего { $total }
+
+
+openrouter-keys-show-all = Показать все ключи ({ $count })
+
+
+openrouter-keys-show-fewer = Свернуть
+
+
+openrouter-keys-spending-limit = Лимит расходов
+
+
+openrouter-keys-limit-hint = Оставьте пустым, чтобы не ограничивать.
+
+
+openrouter-keys-resets = Сброс
+
+
+openrouter-keys-reset-never = Никогда
+
+
+openrouter-keys-reset-daily = День
+
+
+openrouter-keys-reset-weekly = Неделя
+
+
+openrouter-keys-reset-monthly = Месяц
+
+
+openrouter-keys-byok = Учитывать BYOK в лимите
+
+
+openrouter-keys-enabled = Включён
+
+
+openrouter-keys-delete = Удалить
+
+
+openrouter-keys-delete-tracked = Этот ключ использует приложение. Сначала удалите его в настройках.
+
+
+openrouter-keys-saving = Сохранение…
+
+
+openrouter-keys-delete-title = Удалить «{ $name }»?
+
+
+openrouter-keys-delete-message = Всё, что использует этот ключ, сразу перестанет работать. Это нельзя отменить, а отключение ключа — можно.
+
+
+openrouter-keys-keep = Оставить
+
+
+openrouter-keys-delete-confirm = Удалить ключ
+
+
+openrouter-keys-deleting = Удаление…
+
+
+openrouter-keys-name = Название
+
+
+openrouter-keys-name-placeholder = например, laptop-cursor
+
+
+openrouter-keys-name-required = Введите название ключа.
+
+
+openrouter-keys-invalid-amount = Введите сумму в долларах, например 25 или 12.50.
+
+
+openrouter-keys-expires = Срок действия
+
+
+openrouter-keys-expires-never = Бессрочно
+
+
+openrouter-keys-expires-7-days = 7 дней
+
+
+openrouter-keys-expires-30-days = 30 дней
+
+
+openrouter-keys-expires-90-days = 90 дней
+
+
+openrouter-keys-track = Отслеживать ключ в Minibar
+
+
+openrouter-keys-create = Создать ключ
+
+
+openrouter-keys-creating = Создание…
+
+
+openrouter-keys-created = Ключ создан
+
+
+openrouter-keys-copy = Скопировать ключ
+
+
+openrouter-keys-copied = Скопировано
+
+
+openrouter-keys-done = Готово
+
+
+openrouter-keys-once-title = Ключ больше не будет показан
+
+
+openrouter-keys-once-message = OpenRouter показывает новый ключ только один раз. Скопируйте его сейчас.
+
+
+openrouter-keys-pinned = Окно не закроется, пока вы не нажмёте «Готово».
+
+
+openrouter-keys-tracking = Добавление ключа в Minibar…
+
+
+openrouter-keys-tracked = Minibar теперь отслеживает этот ключ.
+
+
+openrouter-keys-track-failed = Не удалось добавить ключ в Minibar: { $error }
+
+
+openrouter-keys-no-management-key = У этого аккаунта нет ключа управления.
+
+
+openrouter-keys-management-key-rejected = OpenRouter отклонил ключ управления. Замените его в настройках.
+
+
+openrouter-keys-not-a-management-key = Этот ключ не может управлять другими ключами. Используйте ключ управления.
+
+
+openrouter-keys-key-not-found = Этот ключ больше не существует.

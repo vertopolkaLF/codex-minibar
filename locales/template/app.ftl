@@ -3051,3 +3051,329 @@ range-90d = { "" }
 # English source:
 # home-usage-title = Usage
 home-usage-title = { "" }
+
+# OpenRouter key administration
+
+# English source:
+# could-not-reach-openrouter = Could not reach OpenRouter
+could-not-reach-openrouter = { "" }
+
+
+# English source:
+# openrouter-keys-title = Keys
+openrouter-keys-title = { "" }
+
+
+# English source:
+# openrouter-keys-new = New key
+openrouter-keys-new = { "" }
+
+
+# English source:
+# openrouter-keys-new-title = New key
+openrouter-keys-new-title = { "" }
+
+
+# English source:
+# openrouter-keys-back = Back
+openrouter-keys-back = { "" }
+
+
+# English source:
+# openrouter-keys-updating = Updating…
+openrouter-keys-updating = { "" }
+
+
+# English source:
+# openrouter-keys-loading = Loading keys…
+openrouter-keys-loading = { "" }
+
+
+# English source:
+# openrouter-keys-load-failed = Could not load keys
+openrouter-keys-load-failed = { "" }
+
+
+# English source:
+# openrouter-keys-retry = Retry
+openrouter-keys-retry = { "" }
+
+
+# English source:
+# openrouter-keys-empty = This account has no keys yet.
+openrouter-keys-empty = { "" }
+
+
+# English source:
+# openrouter-keys-this-app = This app
+openrouter-keys-this-app = { "" }
+
+
+# English source:
+# openrouter-keys-no-limit = No limit
+openrouter-keys-no-limit = { "" }
+
+
+# English source:
+# openrouter-keys-of-limit = { $amount } of { $limit }
+openrouter-keys-of-limit = { "" }
+
+
+# English source:
+# openrouter-keys-resets-daily = resets daily
+openrouter-keys-resets-daily = { "" }
+
+
+# English source:
+# openrouter-keys-resets-weekly = resets weekly
+openrouter-keys-resets-weekly = { "" }
+
+
+# English source:
+# openrouter-keys-resets-monthly = resets monthly
+openrouter-keys-resets-monthly = { "" }
+
+
+# English source:
+# openrouter-keys-expires-on = expires { $date }
+openrouter-keys-expires-on = { "" }
+
+
+# English source:
+# openrouter-keys-expired-on = expired { $date }
+openrouter-keys-expired-on = { "" }
+
+
+# English source:
+# openrouter-keys-today = today { $amount }
+openrouter-keys-today = { "" }
+
+
+# English source:
+# openrouter-keys-usage-breakdown = Today { $today } · week { $week } · month { $month } · total { $total }
+openrouter-keys-usage-breakdown = { "" }
+
+
+# English source:
+# openrouter-keys-show-all = Show all { $count } keys
+openrouter-keys-show-all = { "" }
+
+
+# English source:
+# openrouter-keys-show-fewer = Show fewer
+openrouter-keys-show-fewer = { "" }
+
+
+# English source:
+# openrouter-keys-spending-limit = Spending limit
+openrouter-keys-spending-limit = { "" }
+
+
+# English source:
+# openrouter-keys-limit-hint = Leave empty for no limit.
+openrouter-keys-limit-hint = { "" }
+
+
+# English source:
+# openrouter-keys-resets = Resets
+openrouter-keys-resets = { "" }
+
+
+# English source:
+# openrouter-keys-reset-never = Never
+openrouter-keys-reset-never = { "" }
+
+
+# English source:
+# openrouter-keys-reset-daily = Daily
+openrouter-keys-reset-daily = { "" }
+
+
+# English source:
+# openrouter-keys-reset-weekly = Weekly
+openrouter-keys-reset-weekly = { "" }
+
+
+# English source:
+# openrouter-keys-reset-monthly = Monthly
+openrouter-keys-reset-monthly = { "" }
+
+
+# English source:
+# openrouter-keys-byok = Count BYOK usage toward limit
+openrouter-keys-byok = { "" }
+
+
+# English source:
+# openrouter-keys-enabled = Enabled
+openrouter-keys-enabled = { "" }
+
+
+# English source:
+# openrouter-keys-delete = Delete
+openrouter-keys-delete = { "" }
+
+
+# English source:
+# openrouter-keys-delete-tracked = This app uses this key. Remove it in Settings first.
+openrouter-keys-delete-tracked = { "" }
+
+
+# English source:
+# openrouter-keys-saving = Saving…
+openrouter-keys-saving = { "" }
+
+
+# English source:
+# openrouter-keys-delete-title = Delete “{ $name }”?
+openrouter-keys-delete-title = { "" }
+
+
+# English source:
+# openrouter-keys-delete-message = Anything still using this key stops working right away. This can't be undone; disabling the key is reversible.
+openrouter-keys-delete-message = { "" }
+
+
+# English source:
+# openrouter-keys-keep = Keep key
+openrouter-keys-keep = { "" }
+
+
+# English source:
+# openrouter-keys-delete-confirm = Delete key
+openrouter-keys-delete-confirm = { "" }
+
+
+# English source:
+# openrouter-keys-deleting = Deleting…
+openrouter-keys-deleting = { "" }
+
+
+# English source:
+# openrouter-keys-name = Name
+openrouter-keys-name = { "" }
+
+
+# English source:
+# openrouter-keys-name-placeholder = e.g. laptop-cursor
+openrouter-keys-name-placeholder = { "" }
+
+
+# English source:
+# openrouter-keys-name-required = Enter a name for the key.
+openrouter-keys-name-required = { "" }
+
+
+# English source:
+# openrouter-keys-invalid-amount = Enter a dollar amount like 25 or 12.50.
+openrouter-keys-invalid-amount = { "" }
+
+
+# English source:
+# openrouter-keys-expires = Expires
+openrouter-keys-expires = { "" }
+
+
+# English source:
+# openrouter-keys-expires-never = Never
+openrouter-keys-expires-never = { "" }
+
+
+# English source:
+# openrouter-keys-expires-7-days = 7 days
+openrouter-keys-expires-7-days = { "" }
+
+
+# English source:
+# openrouter-keys-expires-30-days = 30 days
+openrouter-keys-expires-30-days = { "" }
+
+
+# English source:
+# openrouter-keys-expires-90-days = 90 days
+openrouter-keys-expires-90-days = { "" }
+
+
+# English source:
+# openrouter-keys-track = Track this key in Minibar
+openrouter-keys-track = { "" }
+
+
+# English source:
+# openrouter-keys-create = Create key
+openrouter-keys-create = { "" }
+
+
+# English source:
+# openrouter-keys-creating = Creating…
+openrouter-keys-creating = { "" }
+
+
+# English source:
+# openrouter-keys-created = Key created
+openrouter-keys-created = { "" }
+
+
+# English source:
+# openrouter-keys-copy = Copy key
+openrouter-keys-copy = { "" }
+
+
+# English source:
+# openrouter-keys-copied = Copied
+openrouter-keys-copied = { "" }
+
+
+# English source:
+# openrouter-keys-done = Done
+openrouter-keys-done = { "" }
+
+
+# English source:
+# openrouter-keys-once-title = You won't see this key again
+openrouter-keys-once-title = { "" }
+
+
+# English source:
+# openrouter-keys-once-message = OpenRouter shows a new key only once. Copy it now.
+openrouter-keys-once-message = { "" }
+
+
+# English source:
+# openrouter-keys-pinned = The popup stays open until you press Done.
+openrouter-keys-pinned = { "" }
+
+
+# English source:
+# openrouter-keys-tracking = Adding the key to Minibar…
+openrouter-keys-tracking = { "" }
+
+
+# English source:
+# openrouter-keys-tracked = Minibar now tracks this key.
+openrouter-keys-tracked = { "" }
+
+
+# English source:
+# openrouter-keys-track-failed = Could not add the key to Minibar: { $error }
+openrouter-keys-track-failed = { "" }
+
+
+# English source:
+# openrouter-keys-no-management-key = This account has no management key.
+openrouter-keys-no-management-key = { "" }
+
+
+# English source:
+# openrouter-keys-management-key-rejected = OpenRouter rejected the management key. Replace it in Settings.
+openrouter-keys-management-key-rejected = { "" }
+
+
+# English source:
+# openrouter-keys-not-a-management-key = This key can't manage other keys. Use a management key.
+openrouter-keys-not-a-management-key = { "" }
+
+
+# English source:
+# openrouter-keys-key-not-found = This key no longer exists.
+openrouter-keys-key-not-found = { "" }

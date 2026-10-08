@@ -2293,3 +2293,199 @@ range-90d = 90d
 
 # Home usage card title
 home-usage-title = Usage
+
+# OpenRouter key administration
+
+could-not-reach-openrouter = Could not reach OpenRouter
+
+
+openrouter-keys-title = Keys
+
+
+openrouter-keys-new = New key
+
+
+openrouter-keys-new-title = New key
+
+
+openrouter-keys-back = Back
+
+
+openrouter-keys-updating = Updating…
+
+
+openrouter-keys-loading = Loading keys…
+
+
+openrouter-keys-load-failed = Could not load keys
+
+
+openrouter-keys-retry = Retry
+
+
+openrouter-keys-empty = This account has no keys yet.
+
+
+openrouter-keys-this-app = This app
+
+
+openrouter-keys-no-limit = No limit
+
+
+openrouter-keys-of-limit = { $amount } of { $limit }
+
+
+openrouter-keys-resets-daily = resets daily
+
+
+openrouter-keys-resets-weekly = resets weekly
+
+
+openrouter-keys-resets-monthly = resets monthly
+
+
+openrouter-keys-expires-on = expires { $date }
+
+
+openrouter-keys-expired-on = expired { $date }
+
+
+openrouter-keys-today = today { $amount }
+
+
+openrouter-keys-usage-breakdown = Today { $today } · week { $week } · month { $month } · total { $total }
+
+
+openrouter-keys-show-all = Show all { $count } keys
+
+
+openrouter-keys-show-fewer = Show fewer
+
+
+openrouter-keys-spending-limit = Spending limit
+
+
+openrouter-keys-limit-hint = Leave empty for no limit.
+
+
+openrouter-keys-resets = Resets
+
+
+openrouter-keys-reset-never = Never
+
+
+openrouter-keys-reset-daily = Daily
+
+
+openrouter-keys-reset-weekly = Weekly
+
+
+openrouter-keys-reset-monthly = Monthly
+
+
+openrouter-keys-byok = Count BYOK usage toward limit
+
+
+openrouter-keys-enabled = Enabled
+
+
+openrouter-keys-delete = Delete
+
+
+openrouter-keys-delete-tracked = This app uses this key. Remove it in Settings first.
+
+
+openrouter-keys-saving = Saving…
+
+
+openrouter-keys-delete-title = Delete “{ $name }”?
+
+
+openrouter-keys-delete-message = Anything still using this key stops working right away. This can't be undone; disabling the key is reversible.
+
+
+openrouter-keys-keep = Keep key
+
+
+openrouter-keys-delete-confirm = Delete key
+
+
+openrouter-keys-deleting = Deleting…
+
+
+openrouter-keys-name = Name
+
+
+openrouter-keys-name-placeholder = e.g. laptop-cursor
+
+
+openrouter-keys-name-required = Enter a name for the key.
+
+
+openrouter-keys-invalid-amount = Enter a dollar amount like 25 or 12.50.
+
+
+openrouter-keys-expires = Expires
+
+
+openrouter-keys-expires-never = Never
+
+
+openrouter-keys-expires-7-days = 7 days
+
+
+openrouter-keys-expires-30-days = 30 days
+
+
+openrouter-keys-expires-90-days = 90 days
+
+
+openrouter-keys-track = Track this key in Minibar
+
+
+openrouter-keys-create = Create key
+
+
+openrouter-keys-creating = Creating…
+
+
+openrouter-keys-created = Key created
+
+
+openrouter-keys-copy = Copy key
+
+
+openrouter-keys-copied = Copied
+
+
+openrouter-keys-done = Done
+
+
+openrouter-keys-once-title = You won't see this key again
+
+
+openrouter-keys-once-message = OpenRouter shows a new key only once. Copy it now.
+
+
+openrouter-keys-pinned = The popup stays open until you press Done.
+
+
+openrouter-keys-tracking = Adding the key to Minibar…
+
+
+openrouter-keys-tracked = Minibar now tracks this key.
+
+
+openrouter-keys-track-failed = Could not add the key to Minibar: { $error }
+
+
+openrouter-keys-no-management-key = This account has no management key.
+
+
+openrouter-keys-management-key-rejected = OpenRouter rejected the management key. Replace it in Settings.
+
+
+openrouter-keys-not-a-management-key = This key can't manage other keys. Use a management key.
+
+
+openrouter-keys-key-not-found = This key no longer exists.
