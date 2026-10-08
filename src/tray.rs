@@ -613,7 +613,7 @@ mod platform {
         last_pixels: Vec<Vec<u8>>,
         last_tooltips: Vec<String>,
         update_available: bool,
-        language_is_russian: bool,
+        language: crate::i18n::Language,
         uses_light_theme: bool,
         next_theme_check: Instant,
     }
@@ -632,7 +632,7 @@ mod platform {
                 last_pixels: Vec::new(),
                 last_tooltips: Vec::new(),
                 update_available: false,
-                language_is_russian: crate::i18n::is_russian(),
+                language: crate::i18n::current_language(),
                 uses_light_theme: system_uses_light_theme(),
                 next_theme_check: Instant::now(),
             }
@@ -646,10 +646,10 @@ mod platform {
         ) -> Result<()> {
             self.uses_light_theme = system_uses_light_theme();
             self.next_theme_check = Instant::now() + Duration::from_millis(250);
-            let language_is_russian = crate::i18n::is_russian();
-            let menu_changed = self.update_available != update_available
-                || self.language_is_russian != language_is_russian;
-            self.language_is_russian = language_is_russian;
+            let language = crate::i18n::current_language();
+            let menu_changed =
+                self.update_available != update_available || self.language != language;
+            self.language = language;
             self.update_available = update_available;
             // No configured widgets is a deliberate state: retain one ordinary app icon.
             let icon_count = widgets.len().max(1);

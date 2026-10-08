@@ -239,7 +239,7 @@ pub(crate) struct PopupRoot {
     pub(super) usage_plot: Option<Entity<super::usage::UsagePlot>>,
     pub(super) charts: HashMap<String, super::activity::ChartState>,
     pub(super) tip: Option<TipRequest>,
-    language_is_russian: bool,
+    language: crate::i18n::Language,
     pub(super) pages: HashMap<PopupView, PageMetrics>,
     pub(super) widget_bounds: Rc<RefCell<WidgetLayout>>,
     pub(super) usage_spinner_started: Option<Instant>,
@@ -329,7 +329,7 @@ impl PopupRoot {
             usage_plot: None,
             charts: HashMap::new(),
             tip: None,
-            language_is_russian: crate::i18n::is_russian(),
+            language: crate::i18n::current_language(),
             pages: HashMap::new(),
             widget_bounds: Rc::new(RefCell::new(WidgetLayout::default())),
             usage_spinner_started: None,
@@ -1202,9 +1202,9 @@ fn initial_ui_state(state: &AppState) -> UiState {
 
 impl Render for PopupRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let language_is_russian = crate::i18n::is_russian();
-        if self.language_is_russian != language_is_russian {
-            self.language_is_russian = language_is_russian;
+        let language = crate::i18n::current_language();
+        if self.language != language {
+            self.language = language;
             // Tooltips retain formatted chart text while hovered. Rebuild on
             // the next pointer event rather than retaining the old language.
             self.tip = None;

@@ -80,7 +80,7 @@ pub(crate) struct SettingsWindow {
     detection_revision: u64,
     detection_task: Option<Task<()>>,
     pub(super) status_revision: u64,
-    language_is_russian: bool,
+    language: crate::i18n::Language,
     pub(super) provider_dialog: Option<ProviderDialog>,
     pub(super) openrouter: OpenRouterSettingsSnapshot,
     pub(super) discovered_bricks: BTreeMap<String, String>,
@@ -181,7 +181,7 @@ impl SettingsWindow {
             detection_revision: 0,
             detection_task: None,
             status_revision: 0,
-            language_is_russian: crate::i18n::is_russian(),
+            language: crate::i18n::current_language(),
             provider_dialog: None,
             openrouter: super::cached_openrouter_snapshot(),
             discovered_bricks: super::cached_discovered_popup_bricks(),
@@ -1238,9 +1238,9 @@ impl SettingsWindow {
 
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let language_is_russian = crate::i18n::is_russian();
-        if self.language_is_russian != language_is_russian {
-            self.language_is_russian = language_is_russian;
+        let language = crate::i18n::current_language();
+        if self.language != language {
+            self.language = language;
             self.status_revision = self.status_revision.wrapping_add(1);
         }
         window.set_window_title(super::settings_window_title());

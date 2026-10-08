@@ -292,11 +292,7 @@ impl OnboardingWindow {
                     "onboarding-language",
                     crate::i18n::tr("language"),
                     None,
-                    kit::options(&[
-                        crate::i18n::tr("auto-windows"),
-                        crate::i18n::tr("english"),
-                        crate::i18n::tr("msg-russian"),
-                    ]),
+                    kit::options(&crate::i18n::Language::labels()),
                     s.language.index() as i32,
                     false,
                     Self::h(cx, |this, index: usize, _, cx| {

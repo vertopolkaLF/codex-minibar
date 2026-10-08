@@ -74,13 +74,12 @@ mod platform {
 
     fn focus_existing_window() {
         // Prefer Settings: it is already an independently focusable surface.
-        let hwnd = [
-            crate::i18n::Language::English,
-            crate::i18n::Language::Russian,
-        ]
-        .into_iter()
-        .find_map(|language| find_window(crate::i18n::tr_in(language, "codex-minibar-settings")))
-        .or_else(|| find_window(POPUP_TITLE));
+        let hwnd = crate::i18n::Language::SUPPORTED
+            .into_iter()
+            .find_map(|language| {
+                find_window(crate::i18n::tr_in(language, "codex-minibar-settings"))
+            })
+            .or_else(|| find_window(POPUP_TITLE));
         let Some(hwnd) = hwnd else { return };
 
         unsafe {

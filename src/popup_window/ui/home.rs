@@ -452,7 +452,7 @@ impl PopupRoot {
             crate::store::codex_accounts::cached_current_id(),
             crate::usage::truncate_local_hour(Local::now()),
             period.key(),
-            crate::i18n::is_russian()
+            crate::i18n::current_language().index()
         );
         let snapshot = self.snapshot(
             SnapshotSlot::Spend,
