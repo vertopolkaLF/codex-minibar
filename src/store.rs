@@ -1121,6 +1121,21 @@ impl ProviderStore {
         Ok(())
     }
 
+    pub(crate) fn load_openrouter_key_directory(&self, account: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = ?1",
+                params![format!("openrouter-key-directory:{account}")],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub(crate) fn save_openrouter_key_directory(&self, account: &str, value: &str) -> Result<()> {
+        self.set_meta(&format!("openrouter-key-directory:{account}"), value)
+    }
+
     fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         self.conn.execute(
             "INSERT INTO meta(key, value) VALUES(?1, ?2)

@@ -43,6 +43,8 @@ static POPUP_CLOSING: AtomicBool = AtomicBool::new(false);
 static BUTTON_WAS_DOWN: AtomicBool = AtomicBool::new(false);
 static ESCAPE_WAS_DOWN: AtomicBool = AtomicBool::new(false);
 static IGNORE_OUTSIDE_UNTIL_MS: AtomicI64 = AtomicI64::new(0);
+/// While set, outside clicks and Escape do not dismiss the popup.
+static PINNED: AtomicBool = AtomicBool::new(false);
 static BOTTOM_BAR_SIZE: AtomicU8 = AtomicU8::new(BottomBarSize::Comfortable.index() as u8);
 static CORNER_RADIUS_DIP: AtomicI32 = AtomicI32::new(WINDOW_CORNER_RADIUS_DIP);
 static POPUP_BACKGROUND_MATERIAL: AtomicU8 =
@@ -76,6 +78,16 @@ pub fn is_closing() -> bool {
 pub(crate) fn set_lifecycle(visible: bool, closing: bool) {
     POPUP_VISIBLE.store(visible, Ordering::SeqCst);
     POPUP_CLOSING.store(closing, Ordering::SeqCst);
+}
+
+/// Keep the popup open while it shows something the user must not lose,
+/// such as a newly created key that can never be shown again.
+pub(crate) fn set_pinned(pinned: bool) {
+    PINNED.store(pinned, Ordering::SeqCst);
+}
+
+pub(crate) fn is_pinned() -> bool {
+    PINNED.load(Ordering::SeqCst)
 }
 
 /// GPUI thread only: the capsule is now visible, so the press that opened it
@@ -318,7 +330,7 @@ fn surface_rect() -> SurfaceRect {
 
 /// Detect a new mouse press that lands outside the visible capsule.
 pub fn clicked_outside() -> bool {
-    if !is_visible() || now_ms() < IGNORE_OUTSIDE_UNTIL_MS.load(Ordering::SeqCst) {
+    if !is_visible() || is_pinned() || now_ms() < IGNORE_OUTSIDE_UNTIL_MS.load(Ordering::SeqCst) {
         BUTTON_WAS_DOWN.store(any_mouse_button_down(), Ordering::SeqCst);
         return false;
     }
@@ -345,7 +357,7 @@ pub fn escape_pressed() -> bool {
     }
     let down = unsafe { GetAsyncKeyState(VK_ESCAPE as i32) < 0 };
     let was_down = ESCAPE_WAS_DOWN.swap(down, Ordering::SeqCst);
-    down && !was_down
+    down && !was_down && !is_pinned()
 }
 
 #[cfg(not(windows))]

@@ -71,9 +71,19 @@ pub(crate) struct Kit {
     reveals: Rc<RefCell<HashSet<SharedString>>>,
     /// A dismissed overlay is still fading out this frame.
     exiting: Cell<bool>,
+    /// Dropdown caret glyph; the popup swaps in its Fluent chevron.
+    pub(crate) caret: Option<&'static str>,
 }
 
 impl Kit {
+    /// A kit whose dropdowns show `caret` instead of the default glyph.
+    pub(crate) fn with_caret(caret: &'static str) -> Self {
+        Self {
+            caret: Some(caret),
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn begin_frame(&mut self, theme: Theme, window: &Window) {
         self.theme = theme;
         self.text_system = Some(Arc::clone(window.text_system()));
@@ -339,11 +349,17 @@ fn row_hover_fill(k: &Kit, t: f32) -> AnyElement {
     .into_any_element()
 }
 
+const MENU_FADE: Duration = Duration::from_millis(167);
+
 /// The one open popover menu of a window.
 #[derive(Clone, Default)]
 pub(crate) struct Menus {
     open: Rc<RefCell<Option<SharedString>>>,
     closed: Rc<RefCell<Option<(SharedString, Instant)>>>,
+    /// The menu that is fading out, and when it started to.
+    leaving: Rc<RefCell<Option<(SharedString, Instant)>>>,
+    /// Last painted width of each dropdown button, so its list matches it.
+    widths: Rc<RefCell<HashMap<SharedString, f32>>>,
     /// Scroll state of the open menu's list, reset on every opening.
     list_scroll: Rc<RefCell<Option<(SharedString, gpui::ScrollHandle)>>>,
 }
@@ -366,11 +382,15 @@ impl Menus {
                 *closed == id && at.elapsed() < Duration::from_millis(250)
             });
         let mut open = self.open.borrow_mut();
-        *open = if open.as_ref() == Some(&id) || just_closed {
-            None
-        } else {
-            Some(id)
-        };
+        if let Some(previous) = open.take() {
+            *self.leaving.borrow_mut() = Some((previous.clone(), Instant::now()));
+            if previous != id && !just_closed {
+                *open = Some(id);
+            }
+        } else if !just_closed {
+            self.leaving.borrow_mut().take();
+            *open = Some(id);
+        }
         self.list_scroll.borrow_mut().take();
         window.refresh();
     }
@@ -398,9 +418,20 @@ impl Menus {
 
     pub(crate) fn close(&self, window: &mut Window) {
         if let Some(id) = self.open.borrow_mut().take() {
-            *self.closed.borrow_mut() = Some((id, Instant::now()));
+            *self.closed.borrow_mut() = Some((id.clone(), Instant::now()));
+            *self.leaving.borrow_mut() = Some((id, Instant::now()));
             window.refresh();
         }
+    }
+
+    /// Opacity of `id`'s menu while it fades out after closing.
+    fn leaving(&self, id: &str) -> Option<f32> {
+        let leaving = self.leaving.borrow();
+        let (_, at) = leaving
+            .as_ref()
+            .filter(|(leaving, _)| leaving.as_ref() == id)?;
+        let progress = at.elapsed().as_secs_f32() / MENU_FADE.as_secs_f32();
+        (progress < 1.0).then(|| 1.0 - fx::ease_out_cubic(progress))
     }
 }
 
@@ -1550,6 +1581,7 @@ fn menu_panel(
     selected: Option<usize>,
     min_width: f32,
     on_select: Handler<usize>,
+    leaving: Option<f32>,
 ) -> AnyElement {
     let theme = &k.theme;
     let menus = k.menus.clone();
@@ -1606,7 +1638,8 @@ fn menu_panel(
             })
             .when_some(item.icon, |el, name| el.child(icon(name, 14.0, color)))
             .child(div().whitespace_nowrap().child(item.label));
-        if !item.disabled {
+        // A closing menu only fades; it no longer reacts to the pointer.
+        if !item.disabled && leaving.is_none() {
             let key = hover_key(&format!("menu-{id}-{index}"));
             entry = hover_bg(k, entry, key, rest, if is_selected { rest } else { hover })
                 .cursor_pointer()
@@ -1621,15 +1654,23 @@ fn menu_panel(
     let menus = k.menus.clone();
     let panel = div()
         .id(eid(format!("menu-panel-{id}")))
-        .occlude()
+        .when(leaving.is_none(), |el| el.occlude())
         .mt(px(4.0))
         .min_w(px(min_width))
         .rounded(px(10.0))
         .bg(theme.popover)
         .shadow(float_shadow(theme, 8.0))
-        .on_mouse_down_out(move |_, window, _| menus.close(window))
+        .when(leaving.is_none(), |el| {
+            el.on_mouse_down_out(move |_, window, _| menus.close(window))
+        })
         .child(list);
-    let panel: AnyElement = if k.animate() {
+    let panel: AnyElement = if let Some(opacity) = leaving {
+        k.exiting.set(true);
+        panel
+            .opacity(opacity)
+            .mt(px(4.0 - (1.0 - opacity) * 8.0))
+            .into_any_element()
+    } else if k.animate() {
         panel
             .with_animation(
                 eid(format!("menu-anim-{id}")),
@@ -1710,7 +1751,10 @@ pub(crate) fn dropdown_with_placeholder(
         .text_size(px(13.0))
         .text_color(label_color)
         .child(div().flex_1().min_w_0().truncate().child(label))
-        .child(icon("caret-down-bold", 10.0, theme.text_secondary));
+        .child(match k.caret {
+            Some(caret) => icon(caret, 14.0, theme.text_secondary),
+            None => icon("caret-down-bold", 10.0, theme.text_secondary),
+        });
     if width > 0.0 {
         button = button.w(px(width));
     } else {
@@ -1723,18 +1767,40 @@ pub(crate) fn dropdown_with_placeholder(
             .on_click(move |_, window, _| menus.toggle(toggle_id.clone(), window));
     }
     let items = options.into_iter().map(MenuItem::new).collect::<Vec<_>>();
-    let mut wrapper = div().relative().flex_none().child(button);
+    // Measure the button every frame; the list opens at its painted width.
+    let widths = Rc::clone(&k.menus.widths);
+    let measured_id = id.clone();
+    let measure = canvas(
+        |_, _, _| {},
+        move |bounds, (), _, _| {
+            widths
+                .borrow_mut()
+                .insert(measured_id.clone(), f32::from(bounds.size.width));
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full();
+    let list_width = k
+        .menus
+        .widths
+        .borrow()
+        .get(&id)
+        .copied()
+        .unwrap_or(width)
+        .max(width)
+        .max(160.0);
+    let mut wrapper = div().relative().flex_none().child(button).child(measure);
     if width <= 0.0 {
         wrapper = wrapper.w_full().flex_1();
     }
-    if open && !disabled {
+    let leaving = (!open && k.animate())
+        .then(|| k.menus.leaving(&id))
+        .flatten();
+    if (open && !disabled) || leaving.is_some() {
         wrapper = wrapper.child(menu_panel(
-            k,
-            &id,
-            items,
-            selected,
-            width.max(160.0),
-            on_select,
+            k, &id, items, selected, list_width, on_select, leaving,
         ));
     }
     wrapper.into_any_element()
@@ -1806,8 +1872,11 @@ pub(crate) fn more_menu(
         }))
         .render(k);
     let mut wrapper = div().relative().flex_none().child(button);
-    if open {
-        wrapper = wrapper.child(menu_panel(k, &id, items, None, 170.0, on_select));
+    let leaving = (!open && k.animate())
+        .then(|| k.menus.leaving(&id))
+        .flatten();
+    if open || leaving.is_some() {
+        wrapper = wrapper.child(menu_panel(k, &id, items, None, 170.0, on_select, leaving));
     }
     wrapper.into_any_element()
 }

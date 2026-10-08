@@ -159,6 +159,28 @@ impl PopupRoot {
         self.segmented_control_quiet_ext(key, segments, selected, on_select, window, cx)
     }
 
+    /// [`Self::segmented_control_quiet`] stretched to fill its container,
+    /// with the segments sharing the width evenly.
+    pub(super) fn segmented_control_quiet_wide(
+        &mut self,
+        key: u64,
+        labels: Vec<SharedString>,
+        selected: usize,
+        on_select: impl Fn(&mut Self, usize, &mut Context<Self>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let segments = labels
+            .into_iter()
+            .map(|label| QuietSegment {
+                label,
+                tip: None,
+                disabled: false,
+            })
+            .collect();
+        self.quiet_segments(key, segments, selected, true, on_select, window, cx)
+    }
+
     /// [`Self::segmented_control_quiet`] whose segments carry hover tips and
     /// may be disabled (still hoverable so their tip explains why).
     pub(super) fn segmented_control_quiet_ext(
@@ -166,6 +188,20 @@ impl PopupRoot {
         key: u64,
         segments: Vec<QuietSegment>,
         selected: usize,
+        on_select: impl Fn(&mut Self, usize, &mut Context<Self>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.quiet_segments(key, segments, selected, false, on_select, window, cx)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn quiet_segments(
+        &mut self,
+        key: u64,
+        segments: Vec<QuietSegment>,
+        selected: usize,
+        stretch: bool,
         on_select: impl Fn(&mut Self, usize, &mut Context<Self>) + 'static,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -201,7 +237,7 @@ impl PopupRoot {
             divider: palette.divider.opacity(0.0),
             height: COMPACT_SEGMENT_HEIGHT,
         };
-        self.segmented_control_styled(key, segments, tips, selected, false, style, on_select, cx)
+        self.segmented_control_styled(key, segments, tips, selected, stretch, style, on_select, cx)
     }
 
     #[allow(clippy::too_many_arguments)]

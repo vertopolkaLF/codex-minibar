@@ -31,6 +31,7 @@ const SECRET_PREFIX: &str = "openrouter-account-";
 const LEGACY_ACCOUNT_ID: &str = "legacy";
 const LEGACY_API_KEY_ID: &str = "legacy";
 
+pub(crate) mod admin;
 pub(crate) mod analytics;
 
 pub struct OpenRouterClient {

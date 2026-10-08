@@ -29,6 +29,7 @@ tempfile = "3"
 ureq = { version = "2", default-features = false, features = ["tls", "native-tls"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 zip = "2"
+zeroize = "1"
 # windows-rs is pinned to one commit so windows-core, windows and
 # windows-numerics always resolve to matching versions.
 windows-core = { git = "https://github.com/microsoft/windows-rs", rev = "07f344c019b8fdae4d398d4c2591596044cb416a" }
