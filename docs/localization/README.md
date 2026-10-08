@@ -2,7 +2,7 @@
 
 Codex Minibar uses embedded Mozilla Fluent catalogs. English is the source
 language. Complete translations are available in Russian, Brazilian Portuguese,
-Spanish, and Simplified Chinese. Each catalog contains 755 messages.
+Spanish, and Simplified Chinese. Each catalog contains 757 messages.
 
 - `locales/en/app.ftl`: existing English copy and full-message templates.
 - `locales/ru/app.ftl`: Russian translations, including plural rules and dates.

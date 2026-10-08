@@ -1511,3 +1511,8 @@ range-30d = 30天
 range-90d = 90天
 
 home-usage-title = 用量
+
+# Activity chart grouping
+split-type = 类型
+
+split-by-token-type = 按 token 类型拆分柱状图

@@ -1532,3 +1532,8 @@ range-30d = 30d
 range-90d = 90d
 
 home-usage-title = Uso
+
+# Activity chart grouping
+split-type = Tipo
+
+split-by-token-type = Dividir barras por tipo de token
