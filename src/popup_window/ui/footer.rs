@@ -71,7 +71,7 @@ impl PopupRoot {
             icon: "fluent-home",
             driver: None,
             badge: None,
-            tip: "Home".into(),
+            tip: crate::i18n::tr("home").into(),
             view: PopupView::Home,
             has_error: false,
             selected: current == PopupView::Home,
@@ -82,7 +82,7 @@ impl PopupRoot {
                 icon: "fluent-chart",
                 driver: None,
                 badge: None,
-                tip: "Usage".into(),
+                tip: crate::i18n::tr("usage-0bb186").into(),
                 view: PopupView::Usage,
                 has_error: false,
                 selected: current == PopupView::Usage,
@@ -212,7 +212,7 @@ impl PopupRoot {
             .child(self.render_action_button(
                 "settings",
                 "fluent-settings",
-                "Settings".into(),
+                crate::i18n::tr("settings").into(),
                 button,
                 size.icon_glyph_size() as f32,
                 false,
@@ -223,7 +223,7 @@ impl PopupRoot {
             actions = actions.child(self.render_action_button(
                 "update",
                 "fluent-arrow-download",
-                "Install update".into(),
+                crate::i18n::tr("install-update").into(),
                 button,
                 size.icon_glyph_size() as f32,
                 true,
@@ -421,11 +421,16 @@ impl PopupRoot {
             _ => 0.0,
         };
         let tooltip = if refreshing {
-            "Refreshing limits and usage…".to_owned()
+            crate::i18n::tr("refreshing-limits-and-usage").to_owned()
         } else {
             let updated = format_last_updated(model::latest_sampled_at(&self.limits), 0);
-            let relative = updated.strip_prefix("Updated ").unwrap_or(&updated);
-            format!("Refresh | Last updated {relative}")
+            let relative = updated
+                .strip_prefix(crate::i18n::tr("updated"))
+                .unwrap_or(&updated);
+            crate::i18n::format(
+                "refresh-last-updated-relative",
+                &[("relative", relative.to_string())],
+            )
         };
         let mut element = div()
             .id("action-refresh")

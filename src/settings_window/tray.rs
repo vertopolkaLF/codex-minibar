@@ -15,21 +15,33 @@ use crate::settings::{
     TrayPresentation, TrayWidget, TrayWidgetKind,
 };
 
-const PRESENTATION_LABELS: [&str; 5] = [
-    "Numbers",
-    "Progress bars",
-    "Rings",
-    "Reset time",
-    "Countdown",
-];
-const COLOR_LABELS: [&str; 5] = ["Status", "Fixed", "Provider", "App accent", "Monochrome"];
-const PRESENTATION_HINTS: [&str; 5] = [
-    "Percentages as digits",
-    "One bar per indicator",
-    "Nested rings, one per indicator",
-    "When the limit resets",
-    "Time left until the reset",
-];
+fn presentation_labels() -> [&'static str; 5] {
+    [
+        crate::i18n::tr("numbers"),
+        crate::i18n::tr("progress-bars"),
+        crate::i18n::tr("rings"),
+        crate::i18n::tr("reset-time"),
+        crate::i18n::tr("countdown"),
+    ]
+}
+fn color_labels() -> [&'static str; 5] {
+    [
+        crate::i18n::tr("status"),
+        crate::i18n::tr("fixed"),
+        crate::i18n::tr("provider"),
+        crate::i18n::tr("app-accent"),
+        crate::i18n::tr("monochrome"),
+    ]
+}
+fn presentation_hints() -> [&'static str; 5] {
+    [
+        crate::i18n::tr("percentages-as-digits"),
+        crate::i18n::tr("one-bar-per-indicator"),
+        crate::i18n::tr("nested-rings-one-per-indicator"),
+        crate::i18n::tr("when-the-limit-resets"),
+        crate::i18n::tr("time-left-until-the-reset"),
+    ]
+}
 const MAX_INDICATORS: usize = 3;
 
 /// The open widget editor: which widget and which indicator is expanded.
@@ -96,12 +108,15 @@ fn provider_label(provider: ProviderId) -> String {
     if crate::instances::published_enabled_providers().contains(&provider) {
         provider.qualified_name()
     } else {
-        format!("{} (off)", provider.qualified_name())
+        crate::i18n::format(
+            "off-45080e",
+            &[("v0", provider.qualified_name().to_string())],
+        )
     }
 }
 
 fn color_mode_label(mode: TrayColorMode) -> &'static str {
-    COLOR_LABELS[color_mode_index(mode)]
+    color_labels()[color_mode_index(mode)]
 }
 
 fn color_mode_index(mode: TrayColorMode) -> usize {
@@ -158,8 +173,8 @@ fn indicator_detail(indicator: &TrayIndicator) -> String {
         },
     );
     let value = match indicator.limit_value {
-        LimitValue::Used => "Used",
-        LimitValue::Remaining => "Remaining",
+        LimitValue::Used => crate::i18n::tr("used"),
+        LimitValue::Remaining => crate::i18n::tr("remaining"),
     };
     format!(
         "{metric} · {value} · {}",
@@ -188,18 +203,18 @@ fn dialog_section(k: &Kit, title: &'static str, hint: impl Into<SharedString>) -
 
 fn widget_title(index: usize, widget: &TrayWidget) -> String {
     if widget.kind == TrayWidgetKind::AppIcon {
-        "App icon".into()
+        crate::i18n::tr("app-icon").into()
     } else {
-        format!("Widget {}", index + 1)
+        crate::i18n::format("widget", &[("v0", (index + 1).to_string())])
     }
 }
 
 /// Style and the providers a widget reads, for list rows and the editor.
 fn widget_short_summary(widget: &TrayWidget) -> String {
     if widget.kind == TrayWidgetKind::AppIcon {
-        return "The Codex Minibar icon".into();
+        return crate::i18n::tr("the-codex-minibar-icon").into();
     }
-    let style = PRESENTATION_LABELS[presentation_index(widget.presentation)];
+    let style = presentation_labels()[presentation_index(widget.presentation)];
     let mut providers: Vec<String> = Vec::new();
     for provider in widget.indicators.iter().filter_map(TrayIndicator::provider) {
         let name = provider.qualified_name().to_string();
@@ -208,7 +223,7 @@ fn widget_short_summary(widget: &TrayWidget) -> String {
         }
     }
     if providers.is_empty() {
-        format!("{style} · No indicators")
+        crate::i18n::format("style-no-indicators", &[("style", style.to_string())])
     } else {
         format!("{style} · {}", providers.join(", "))
     }
@@ -257,12 +272,12 @@ fn preview_limits() -> crate::limits::ProviderLimits {
                 additional_limits: vec![
                     crate::limits::AdditionalLimit {
                         id: "cursor-api".into(),
-                        title: "Other Models".into(),
+                        title: crate::i18n::tr("other-models").into(),
                         window: window(47),
                     },
                     crate::limits::AdditionalLimit {
                         id: "cursor-grok-bot".into(),
-                        title: "Grok Bot".into(),
+                        title: crate::i18n::tr("grok-bot").into(),
                         window: window(1),
                     },
                 ],
@@ -379,7 +394,7 @@ impl SettingsWindow {
         let enabled = self.enabled_tray_providers();
         let mut rows = vec![kit::caption(
             k,
-            "Each widget is one icon in the notification area. Indicators show a provider's quota as numbers, bars, rings or a reset clock.",
+            crate::i18n::tr("each-widget-is-one-icon-in-the-notification-area-indicators-show"),
         )];
         if let Some((index, removed)) = self.removed_widget.clone() {
             let undo = Self::h(cx, move |this, (), _, cx| {
@@ -400,15 +415,22 @@ impl SettingsWindow {
                     .py(px(8.0))
                     .rounded(px(kit::CARD_RADIUS))
                     .bg(k.theme.accent_soft)
-                    .child(kit::text("Widget removed", 13.0, k.theme.text).flex_1())
-                    .child(Button::new("tray-undo", "Undo").on_click(undo).render(k))
+                    .child(
+                        kit::text(crate::i18n::tr("widget-removed"), 13.0, k.theme.text).flex_1(),
+                    )
+                    .child(
+                        Button::new("tray-undo", crate::i18n::tr("undo"))
+                            .on_click(undo)
+                            .render(k),
+                    )
                     .into_any_element(),
             ));
         }
         if widgets.is_empty() {
             rows.push(kit::row_card(
                 k,
-                Row::new("tray-empty", "Tray icon").description(k, "Shows the app icon."),
+                Row::new("tray-empty", crate::i18n::tr("tray-icon"))
+                    .description(k, crate::i18n::tr("shows-the-app-icon")),
             ));
         } else {
             let count = widgets.len();
@@ -440,7 +462,7 @@ impl SettingsWindow {
                 .gap(px(8.0))
                 .pt(px(8.0))
                 .child(
-                    Button::new("tray-add-widget", "Add widget")
+                    Button::new("tray-add-widget", crate::i18n::tr("add-widget"))
                         .accent()
                         .with_icon("plus-bold")
                         .disabled(enabled.is_empty())
@@ -448,7 +470,7 @@ impl SettingsWindow {
                         .render(k),
                 )
                 .child(
-                    Button::new("tray-add-icon", "Add app icon")
+                    Button::new("tray-add-icon", crate::i18n::tr("add-app-icon"))
                         .on_click(add_icon)
                         .render(k),
                 )
@@ -474,19 +496,21 @@ impl SettingsWindow {
             cx.notify();
         });
         let menu_id = id.clone();
-        let mut up = kit::MenuItem::new("Move up").icon("arrow-up-bold");
+        let mut up = kit::MenuItem::new(crate::i18n::tr("move-up")).icon("arrow-up-bold");
         up.disabled = index == 0;
-        let mut down = kit::MenuItem::new("Move down").icon("arrow-down-bold");
+        let mut down = kit::MenuItem::new(crate::i18n::tr("move-down")).icon("arrow-down-bold");
         down.disabled = index + 1 >= count;
         let menu = kit::more_menu(
             k,
             format!("tray-{id}-menu"),
             vec![
-                kit::MenuItem::new("Edit").icon("pencil-simple-fill"),
+                kit::MenuItem::new(crate::i18n::tr("edit")).icon("pencil-simple-fill"),
                 up,
                 down,
-                kit::MenuItem::new("Duplicate").icon("copy"),
-                kit::MenuItem::new("Remove").icon("trash-fill").danger(),
+                kit::MenuItem::new(crate::i18n::tr("duplicate")).icon("copy"),
+                kit::MenuItem::new(crate::i18n::tr("remove"))
+                    .icon("trash-fill")
+                    .danger(),
             ],
             Self::h(cx, move |this, choice: usize, _, cx| match choice {
                 0 => {
@@ -603,21 +627,28 @@ impl SettingsWindow {
         if widget.kind == TrayWidgetKind::AppIcon {
             body.push(kit::caption(
                 k,
-                "Shows the Codex Minibar icon in the notification area. It has no indicators to set up.",
+                crate::i18n::tr(
+                    "shows-the-codex-minibar-icon-in-the-notification-area-it-has-no-i",
+                ),
             ));
         } else {
             let style = presentation_index(widget.presentation);
-            body.push(dialog_section(k, "Style", PRESENTATION_HINTS[style]));
+            body.push(dialog_section(
+                k,
+                crate::i18n::tr("style"),
+                presentation_hints()[style],
+            ));
             body.push(self.tray_style_picker(k, index, &widget, cx));
             let reset_clock = widget.presentation.is_reset_clock();
             let hint = if reset_clock {
-                "A reset clock follows one quota.".to_string()
+                crate::i18n::tr("a-reset-clock-follows-one-quota").to_string()
             } else {
-                format!(
-                    "Up to {MAX_INDICATORS} quotas, drawn in this order. Expand one to change it."
+                crate::i18n::format(
+                    "up-to-max-indicators-quotas-drawn-in-this-order-expand-one-to-cha",
+                    &[("max_indicators", MAX_INDICATORS.to_string())],
                 )
             };
-            body.push(dialog_section(k, "Indicators", hint));
+            body.push(dialog_section(k, crate::i18n::tr("indicators"), hint));
             let indicators = self.tray_indicators(k, index, &widget, dialog.expanded, window, cx);
             body.push(kit::appear(
                 k,
@@ -625,14 +656,14 @@ impl SettingsWindow {
                 indicators,
             ));
         }
-        let remove = Button::new("tray-dlg-remove", "Remove widget")
+        let remove = Button::new("tray-dlg-remove", crate::i18n::tr("remove-widget"))
             .danger()
             .with_icon("trash-fill")
             .full_width()
             .on_click(Self::h(cx, move |this, (), _, cx| {
                 this.remove_widget(index, cx)
             }));
-        let done = Button::new("tray-dlg-done", "Done")
+        let done = Button::new("tray-dlg-done", crate::i18n::tr("done"))
             .accent()
             .full_width()
             .on_click(close.clone());
@@ -661,7 +692,7 @@ impl SettingsWindow {
             .copied()
             .unwrap_or_default();
         let current = presentation_index(widget.presentation);
-        let tiles = (0..PRESENTATION_LABELS.len())
+        let tiles = (0..presentation_labels().len())
             .map(|choice| {
                 let selected = choice == current;
                 let preview = if selected {
@@ -715,7 +746,7 @@ impl SettingsWindow {
                             } else {
                                 theme.text
                             })
-                            .child(PRESENTATION_LABELS[choice]),
+                            .child(presentation_labels()[choice]),
                     );
                 kit::hover_bg(k, tile, kit::hover_key(&id), rest, hover)
                     .cursor_pointer()
@@ -812,17 +843,20 @@ impl SettingsWindow {
                 .unwrap_or(first_enabled);
             column = column.child(
                 div().flex().child(
-                    Button::new(format!("tray-{}-add-indicator", widget.id), "Add indicator")
-                        .with_icon("plus-bold")
-                        .on_click(Self::h(cx, move |this, (), _, cx| {
-                            this.update_widgets(cx, |widgets| {
-                                if let Some(widget) = widgets.get_mut(index) {
-                                    widget.indicators.push(default_indicator(fallback));
-                                }
-                            });
-                            this.set_tray_dialog(cx, |dialog| dialog.expanded = Some(count));
-                        }))
-                        .render(k),
+                    Button::new(
+                        format!("tray-{}-add-indicator", widget.id),
+                        crate::i18n::tr("add-indicator"),
+                    )
+                    .with_icon("plus-bold")
+                    .on_click(Self::h(cx, move |this, (), _, cx| {
+                        this.update_widgets(cx, |widgets| {
+                            if let Some(widget) = widgets.get_mut(index) {
+                                widget.indicators.push(default_indicator(fallback));
+                            }
+                        });
+                        this.set_tray_dialog(cx, |dialog| dialog.expanded = Some(count));
+                    }))
+                    .render(k),
                 ),
             );
         }
@@ -900,7 +934,7 @@ impl SettingsWindow {
             None => (
                 "warning-fill",
                 theme.caution,
-                format!("Unsupported {}", indicator.provider_id),
+                crate::i18n::format("unsupported", &[("v0", indicator.provider_id.to_string())]),
             ),
         };
         let mark = div()
@@ -929,7 +963,7 @@ impl SettingsWindow {
             .child(
                 Button::icon_only(format!("{id}-up"), "arrow-up-bold")
                     .ghost()
-                    .tooltip("Move up")
+                    .tooltip(crate::i18n::tr("move-up"))
                     .disabled(slot == 0)
                     .on_click(swap(-1))
                     .render(k),
@@ -937,7 +971,7 @@ impl SettingsWindow {
             .child(
                 Button::icon_only(format!("{id}-down"), "arrow-down-bold")
                     .ghost()
-                    .tooltip("Move down")
+                    .tooltip(crate::i18n::tr("move-down"))
                     .disabled(slot + 1 >= count)
                     .on_click(swap(1))
                     .render(k),
@@ -945,7 +979,7 @@ impl SettingsWindow {
             .child(
                 Button::icon_only(format!("{id}-remove"), "trash-fill")
                     .ghost()
-                    .tooltip("Remove indicator")
+                    .tooltip(crate::i18n::tr("remove-indicator"))
                     .disabled(count <= 1)
                     .on_click(remove)
                     .render(k),
@@ -979,7 +1013,13 @@ impl SettingsWindow {
         let provider_index = known
             .and_then(|provider| options.iter().position(|option| *option == provider))
             .unwrap_or_else(|| {
-                provider_labels.push(format!("Unsupported ({})", indicator.provider_id).into());
+                provider_labels.push(
+                    crate::i18n::format(
+                        "unsupported-bba2a8",
+                        &[("v0", indicator.provider_id.to_string())],
+                    )
+                    .into(),
+                );
                 provider_labels.len() - 1
             });
         let metrics = crate::provider_registry::tray_metric_options(
@@ -994,7 +1034,13 @@ impl SettingsWindow {
             .iter()
             .position(|(id, _)| id == &indicator.metric_id)
             .unwrap_or_else(|| {
-                metric_labels.push(format!("Unavailable ({})", indicator.metric_id).into());
+                metric_labels.push(
+                    crate::i18n::format(
+                        "unavailable-0c5d75",
+                        &[("v0", indicator.metric_id.to_string())],
+                    )
+                    .into(),
+                );
                 metric_labels.len() - 1
             });
         let key = format!("tray-{widget_index}-{slot}");
@@ -1063,7 +1109,7 @@ impl SettingsWindow {
         let color_box = kit::dropdown(
             k,
             format!("{key}-color"),
-            kit::options(&COLOR_LABELS),
+            kit::options(&color_labels()),
             Some(color_mode_index(indicator.color_mode)),
             false,
             0.0,
@@ -1078,15 +1124,15 @@ impl SettingsWindow {
             div()
                 .flex()
                 .gap(px(12.0))
-                .child(kit::field(k, "Provider", provider_box))
-                .child(kit::field(k, "Metric", metric_box)),
+                .child(kit::field(k, crate::i18n::tr("provider"), provider_box))
+                .child(kit::field(k, crate::i18n::tr("metric"), metric_box)),
         );
         let mut second = div().flex().gap(px(12.0));
         if with_value {
             let value_box = kit::dropdown(
                 k,
                 format!("{key}-value"),
-                kit::options(&["Remaining", "Used"]),
+                kit::options(&[crate::i18n::tr("remaining"), crate::i18n::tr("used")]),
                 Some(usize::from(indicator.limit_value == LimitValue::Used)),
                 false,
                 0.0,
@@ -1103,9 +1149,9 @@ impl SettingsWindow {
                     Vec::new(),
                 ),
             );
-            second = second.child(kit::field(k, "Show", value_box));
+            second = second.child(kit::field(k, crate::i18n::tr("show"), value_box));
         }
-        second = second.child(kit::field(k, "Color", color_box));
+        second = second.child(kit::field(k, crate::i18n::tr("color"), color_box));
         grid = grid.child(second);
         if indicator.color_mode == TrayColorMode::Fixed {
             grid = grid.child(self.color_picker(
@@ -1194,7 +1240,7 @@ impl SettingsWindow {
             .bg(rgb8((current.red, current.green, current.blue)));
         kit::field(
             k,
-            "Fixed color",
+            crate::i18n::tr("fixed-color"),
             div()
                 .flex()
                 .flex_col()
@@ -1246,10 +1292,10 @@ mod tests {
 
     #[test]
     fn presentation_and_color_indices_round_trip() {
-        for index in 0..PRESENTATION_LABELS.len() {
+        for index in 0..presentation_labels().len() {
             assert_eq!(presentation_index(presentation_from_index(index)), index);
         }
-        for index in 0..COLOR_LABELS.len() {
+        for index in 0..color_labels().len() {
             assert_eq!(color_mode_index(color_mode_from_index(index)), index);
         }
     }

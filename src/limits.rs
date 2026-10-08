@@ -141,14 +141,14 @@ impl PaceTip {
     pub fn summary(self) -> String {
         const ON_PACE_TOLERANCE: f64 = 2.0;
         if self.delta_percent.abs() <= ON_PACE_TOLERANCE {
-            return "On pace".into();
+            return crate::i18n::tr("on-pace").into();
         }
 
         let delta = self.delta_percent.abs().round() as u32;
         if self.delta_percent > 0.0 {
-            format!("{delta}% in deficit")
+            crate::i18n::format("delta-in-deficit", &[("delta", delta.to_string())])
         } else {
-            format!("{delta}% in reserve")
+            crate::i18n::format("delta-in-reserve", &[("delta", delta.to_string())])
         }
     }
 }

@@ -77,8 +77,8 @@ impl AddStep {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Provider => "Provider",
-            Self::Details => "Details",
+            Self::Provider => crate::i18n::tr("provider"),
+            Self::Details => crate::i18n::tr("details"),
         }
     }
 }
@@ -192,7 +192,7 @@ fn driver_card(
     )
     .selected(selected);
     if blocked.is_some() {
-        card = card.trailing(kit::chip(k, "Added"));
+        card = card.trailing(kit::chip(k, crate::i18n::tr("added")));
     } else if let Some(on_click) = on_click {
         card = card.on_click(on_click);
     }
@@ -209,50 +209,71 @@ fn claude_instructions(k: &Kit, method: ProfileCredentialMethod) -> Vec<AnyEleme
         ProfileCredentialMethod::BrowserSession => vec![
             instruction(
                 k,
-                "Reads the session and weekly limits of a Claude subscription without a Claude Code login.",
+                crate::i18n::tr(
+                    "reads-the-session-and-weekly-limits-of-a-claude-subscription-with",
+                ),
             ),
             instruction(
                 k,
-                "1. Open Claude in a separate browser profile or private window. Sign in to the account you want to track and confirm its email in Claude's settings.",
+                crate::i18n::tr(
+                    "msg-1-open-claude-in-a-separate-browser-profile-or-private-window-sig",
+                ),
             ),
-            link(k, "claude-open", "Open claude.ai", "https://claude.ai"),
+            link(
+                k,
+                "claude-open",
+                crate::i18n::tr("open-claude-ai"),
+                "https://claude.ai",
+            ),
             instruction(
                 k,
-                "2. In Chrome or Edge, press F12. Open Application > Storage > Cookies and select https://claude.ai.",
+                crate::i18n::tr(
+                    "msg-2-in-chrome-or-edge-press-f12-open-application-storage-cookies-an",
+                ),
             ),
             instruction(
                 k,
-                "3. Find sessionKey. Copy its Value, not its name or the whole cookie table, and paste it into the field above.",
+                crate::i18n::tr(
+                    "msg-3-find-sessionkey-copy-its-value-not-its-name-or-the-whole-cookie",
+                ),
             ),
             link(
                 k,
                 "claude-cookies",
-                "How to view cookies in Chrome",
+                crate::i18n::tr("how-to-view-cookies-in-chrome"),
                 "https://developer.chrome.com/docs/devtools/application/cookies",
             ),
             instruction(
                 k,
-                "A Cookie header containing sessionKey also works. When the session expires, paste a fresh one here.",
+                crate::i18n::tr(
+                    "a-cookie-header-containing-sessionkey-also-works-when-the-session",
+                ),
             ),
         ],
         ProfileCredentialMethod::OAuthToken => vec![
             instruction(
                 k,
-                "Use the access token from a Claude Code subscription login. Minibar cannot refresh a pasted token; prefer Source: Config folder when you can.",
+                crate::i18n::tr(
+                    "use-the-access-token-from-a-claude-code-subscription-login-miniba",
+                ),
             ),
             instruction(
                 k,
-                "Copy only claudeAiOauth.accessToken (starts with sk-ant-oat) from that login's .credentials.json, without quotes. Do not use claude setup-token: it may lack usage access.",
+                crate::i18n::tr(
+                    "copy-only-claudeaioauth-accesstoken-starts-with-sk-ant-oat-from-t",
+                ),
             ),
             link(
                 k,
                 "claude-multi",
-                "Claude Code: log in with multiple accounts",
+                crate::i18n::tr("claude-code-log-in-with-multiple-accounts"),
                 "https://code.claude.com/docs/en/authentication#log-in-with-multiple-accounts",
             ),
             instruction(
                 k,
-                "Requires a Claude subscription login with usage access. API keys and Admin API keys do not show subscription limits.",
+                crate::i18n::tr(
+                    "requires-a-claude-subscription-login-with-usage-access-api-keys-a",
+                ),
             ),
         ],
     }
@@ -374,7 +395,7 @@ impl SettingsWindow {
                 .iter()
                 .find(|instance| instance.id == provider.id())
                 .map(|instance| provider_label(instance, &instances))
-                .unwrap_or_else(|| "this provider".into())
+                .unwrap_or_else(|| crate::i18n::tr("this-provider").into())
         };
         let account_name = |account_id: &str| {
             find_account_instance(&instances, account_id)
@@ -389,7 +410,9 @@ impl SettingsWindow {
                 wide = true;
                 fields.push(kit::caption(
                     k,
-                    "Track another account or a provider Minibar has not shown yet.",
+                    crate::i18n::tr(
+                        "track-another-account-or-a-provider-minibar-has-not-shown-yet",
+                    ),
                 ));
                 let step = dialog.add_step;
                 fields.push(add_stepper(
@@ -433,15 +456,17 @@ impl SettingsWindow {
                     AddStep::Details => {
                         let placeholder = dialog
                             .driver
-                            .map_or("e.g. Work", |driver| driver.display_name());
+                            .map_or(crate::i18n::tr("e-g-work"), |driver| driver.display_name());
                         let name = self.dialog_input(
                             k,
                             FIELD_NAME,
-                            "Name",
+                            crate::i18n::tr("name"),
                             placeholder,
                             &dialog.initial_name,
                             false,
-                            Some("Shown on its tab, Home card, tray and notifications."),
+                            Some(crate::i18n::tr(
+                                "shown-on-its-tab-home-card-tray-and-notifications",
+                            )),
                             window,
                             cx,
                         );
@@ -449,8 +474,8 @@ impl SettingsWindow {
                         let badge = self.dialog_input(
                             k,
                             FIELD_BADGE,
-                            "Badge",
-                            "Auto",
+                            crate::i18n::tr("badge"),
+                            crate::i18n::tr("auto"),
                             "",
                             false,
                             None,
@@ -459,7 +484,7 @@ impl SettingsWindow {
                         );
                         let color = kit::field(
                             k,
-                            "Badge color",
+                            crate::i18n::tr("badge-color"),
                             badge_color_swatches(
                                 k,
                                 "dlg-badge-color",
@@ -488,7 +513,7 @@ impl SettingsWindow {
                             .child(color)
                             .child(kit::caption(
                                 k,
-                                "Up to three letters; empty uses the name's initials. Badges show while a provider has more than one instance turned on.",
+                                crate::i18n::tr("up-to-three-letters-empty-uses-the-name-s-initials-badges-show-wh"),
                             ))
                             .into_any_element()
                     }
@@ -499,10 +524,10 @@ impl SettingsWindow {
                 };
                 fields.push(kit::appear(k, format!("dlg-add-{key}"), content));
                 (
-                    "Add provider".to_owned(),
+                    crate::i18n::tr("add-provider").to_owned(),
                     match step {
-                        AddStep::Provider => "Next",
-                        AddStep::Details => "Add",
+                        AddStep::Provider => crate::i18n::tr("next"),
+                        AddStep::Details => crate::i18n::tr("add"),
                     },
                 )
             }
@@ -517,39 +542,65 @@ impl SettingsWindow {
                     });
                 fields.push(kit::caption(
                     k,
-                    format!(
-                        "Minibar stops reading {name} and forgets its saved keys, schedules, tray indicators and Home position.{}",
-                        if folder {
-                            " Its config folder stays on disk."
-                        } else {
-                            ""
-                        }
+                    crate::i18n::format(
+                        "minibar-stops-reading-name-and-forgets-its-saved-keys-schedules-t",
+                        &[
+                            ("name", name.to_string()),
+                            (
+                                "v0",
+                                (if folder {
+                                    crate::i18n::tr("its-config-folder-stays-on-disk")
+                                } else {
+                                    ""
+                                })
+                                .to_string(),
+                            ),
+                        ],
                     ),
                 ));
-                (format!("Delete {name}?"), "Delete")
+                (
+                    crate::i18n::format("delete-name", &[("name", name.to_string())]),
+                    crate::i18n::tr("delete"),
+                )
             }
             ProviderDialogKind::SignIn { provider } => {
                 let name = instance_name(provider);
                 fields.push(kit::caption(
                     k,
                     if dialog.checking {
-                        "Finish signing in in your browser. Cancel stops this login.".to_owned()
+                        crate::i18n::tr("finish-signing-in-in-your-browser-cancel-stops-this-login")
+                            .to_owned()
                     } else if provider.kind() == ProviderKind::Claude {
-                        format!("Runs Claude Code's own login for {name} with its config folder as CLAUDE_CONFIG_DIR. The login stays in that folder, where Claude Code keeps it fresh. Requires native Windows Claude Code.")
+                        crate::i18n::format(
+                            "runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c",
+                            &[("name", name.to_string())],
+                        )
                     } else {
-                        format!("Runs Codex's own login for {name} with its config folder as CODEX_HOME. The login stays in that folder, where Codex keeps it fresh. Requires the native Codex CLI or desktop app.")
+                        crate::i18n::format(
+                            "runs-codex-s-own-login-for-name-with-its-config-folder-as-codex-h",
+                            &[("name", name.to_string())],
+                        )
                     },
                 ));
-                (format!("Sign in to {name}"), "Sign in")
+                (
+                    crate::i18n::format("sign-in-to-name", &[("name", name.to_string())]),
+                    crate::i18n::tr("sign-in"),
+                )
             }
             ProviderDialogKind::ManualCredential { provider } => {
                 wide = true;
-                fields.push(kit::caption(k, format!("For {}.", instance_name(provider))));
+                fields.push(kit::caption(
+                    k,
+                    crate::i18n::format("for", &[("v0", (instance_name(provider)).to_string())]),
+                ));
                 let method = dialog.claude_method;
                 fields.push(kit::segmented(
                     k,
                     "dlg-claude-method",
-                    &["Browser session", "OAuth token"],
+                    &[
+                        crate::i18n::tr("browser-session"),
+                        crate::i18n::tr("oauth-token"),
+                    ],
                     usize::from(method == ProfileCredentialMethod::OAuthToken),
                     dialog.checking,
                     Self::h(cx, |this, index: usize, _, cx| {
@@ -566,12 +617,16 @@ impl SettingsWindow {
                     }),
                 ));
                 let (id, label, placeholder) = match method {
-                    ProfileCredentialMethod::BrowserSession => {
-                        (FIELD_KEY, "Session key", "Paste the sessionKey value")
-                    }
-                    ProfileCredentialMethod::OAuthToken => {
-                        (FIELD_SECOND, "OAuth access token", "sk-ant-oat…")
-                    }
+                    ProfileCredentialMethod::BrowserSession => (
+                        FIELD_KEY,
+                        crate::i18n::tr("session-key"),
+                        crate::i18n::tr("paste-the-sessionkey-value"),
+                    ),
+                    ProfileCredentialMethod::OAuthToken => (
+                        FIELD_SECOND,
+                        crate::i18n::tr("oauth-access-token"),
+                        "sk-ant-oat…",
+                    ),
                 };
                 fields.push(self.dialog_input(
                     k,
@@ -590,7 +645,9 @@ impl SettingsWindow {
                 }
                 fields.push(instruction(
                     k,
-                    "The saved credential is replaced only after the new one passes the check.",
+                    crate::i18n::tr(
+                        "the-saved-credential-is-replaced-only-after-the-new-one-passes-th",
+                    ),
                 ));
                 let steps = claude_instructions(k, method);
                 fields.push(kit::appear(
@@ -603,7 +660,10 @@ impl SettingsWindow {
                         .children(steps)
                         .into_any_element(),
                 ));
-                ("Claude credential".to_owned(), "Check and save")
+                (
+                    crate::i18n::tr("claude-credential").to_owned(),
+                    crate::i18n::tr("check-and-save"),
+                )
             }
             ProviderDialogKind::OpenRouterApiKey { account_id, key_id } => {
                 let replacing = key_id.as_ref().is_some_and(|key_id| {
@@ -611,17 +671,19 @@ impl SettingsWindow {
                 });
                 fields.push(kit::caption(
                     k,
-                    format!("For {}.", account_name(account_id)),
+                    crate::i18n::format("for", &[("v0", (account_name(account_id)).to_string())]),
                 ));
                 if !replacing {
                     fields.push(self.dialog_input(
                         k,
                         FIELD_NAME,
-                        "Key name (optional)",
-                        "e.g. Personal",
+                        crate::i18n::tr("key-name-optional"),
+                        crate::i18n::tr("e-g-personal"),
                         &dialog.initial_name,
                         false,
-                        Some("Leave blank to use the name from OpenRouter."),
+                        Some(crate::i18n::tr(
+                            "leave-blank-to-use-the-name-from-openrouter",
+                        )),
                         window,
                         cx,
                     ));
@@ -630,23 +692,25 @@ impl SettingsWindow {
                 fields.push(self.dialog_input(
                     k,
                     FIELD_KEY,
-                    "API key",
+                    crate::i18n::tr("api-key"),
                     "sk-or-v1-…",
                     "",
                     true,
-                    Some("Minibar checks the key with OpenRouter before saving it."),
+                    Some(crate::i18n::tr(
+                        "minibar-checks-the-key-with-openrouter-before-saving-it",
+                    )),
                     window,
                     cx,
                 ));
                 first_input.get_or_insert(FIELD_KEY);
                 (
                     if replacing {
-                        "Replace API key"
+                        crate::i18n::tr("replace-api-key")
                     } else {
-                        "Add API key"
+                        crate::i18n::tr("add-api-key")
                     }
                     .to_owned(),
-                    "Check and save",
+                    crate::i18n::tr("check-and-save"),
                 )
             }
             ProviderDialogKind::OpenRouterManagementKey {
@@ -655,99 +719,123 @@ impl SettingsWindow {
             } => {
                 fields.push(kit::caption(
                     k,
-                    format!("For {}.", account_name(account_id)),
+                    crate::i18n::format("for", &[("v0", (account_name(account_id)).to_string())]),
                 ));
                 fields.push(self.dialog_input(
                     k,
                     FIELD_KEY,
-                    "Management key",
+                    crate::i18n::tr("management-key"),
                     "sk-or-v1-…",
                     "",
                     true,
-                    Some("Create one under Settings → Management keys on openrouter.ai."),
+                    Some(crate::i18n::tr(
+                        "create-one-under-settings-management-keys-on-openrouter-ai",
+                    )),
                     window,
                     cx,
                 ));
                 first_input = Some(FIELD_KEY);
                 (
                     if *replace {
-                        "Replace management key"
+                        crate::i18n::tr("replace-management-key")
                     } else {
-                        "Add management key"
+                        crate::i18n::tr("add-management-key")
                     }
                     .to_owned(),
-                    "Check and save",
+                    crate::i18n::tr("check-and-save"),
                 )
             }
             ProviderDialogKind::RenameOpenRouterApiKey { .. } => {
                 fields.push(self.dialog_input(
                     k,
                     FIELD_NAME,
-                    "Key name",
-                    "e.g. Personal",
+                    crate::i18n::tr("key-name"),
+                    crate::i18n::tr("e-g-personal"),
                     &dialog.initial_name,
                     false,
-                    Some("Leave blank to use the name from OpenRouter."),
+                    Some(crate::i18n::tr(
+                        "leave-blank-to-use-the-name-from-openrouter",
+                    )),
                     window,
                     cx,
                 ));
                 first_input = Some(FIELD_NAME);
-                ("Rename key".to_owned(), "Save")
+                (
+                    crate::i18n::tr("rename-key").to_owned(),
+                    crate::i18n::tr("save"),
+                )
             }
             ProviderDialogKind::RemoveOpenRouterApiKey { account_id, key_id } => {
                 let hint = crate::openrouter::api_key_hint(account_id, key_id)
                     .ok()
                     .flatten()
-                    .unwrap_or_else(|| "this key".into());
+                    .unwrap_or_else(|| crate::i18n::tr("this-key").into());
                 fields.push(kit::caption(
                     k,
-                    format!("Minibar stops tracking {hint}. The key keeps working on OpenRouter."),
+                    crate::i18n::format(
+                        "minibar-stops-tracking-hint-the-key-keeps-working-on-openrouter",
+                        &[("hint", hint.to_string())],
+                    ),
                 ));
-                ("Remove API key?".to_owned(), "Remove")
+                (
+                    crate::i18n::tr("remove-api-key").to_owned(),
+                    crate::i18n::tr("remove"),
+                )
             }
             ProviderDialogKind::RemoveOpenRouterManagementKey { account_id } => {
                 fields.push(kit::caption(
                     k,
-                    format!(
-                        "Minibar stops showing credit balance and usage history for {}. The key keeps working on OpenRouter.",
-                        account_name(account_id)
+                    crate::i18n::format(
+                        "minibar-stops-showing-credit-balance-and-usage-history-for-the-ke",
+                        &[("v0", (account_name(account_id)).to_string())],
                     ),
                 ));
-                ("Remove management key?".to_owned(), "Remove")
+                (
+                    crate::i18n::tr("remove-management-key").to_owned(),
+                    crate::i18n::tr("remove"),
+                )
             }
             ProviderDialogKind::OpenCodeKey { provider, replace } => {
-                fields.push(kit::caption(k, format!("For {}.", instance_name(provider))));
+                fields.push(kit::caption(
+                    k,
+                    crate::i18n::format("for", &[("v0", (instance_name(provider)).to_string())]),
+                ));
                 fields.push(self.dialog_input(
                     k,
                     FIELD_KEY,
-                    "API key",
+                    crate::i18n::tr("api-key"),
                     "sk-…",
                     "",
                     true,
-                    Some("Saved in Windows user storage, never in the settings file."),
+                    Some(crate::i18n::tr(
+                        "saved-in-windows-user-storage-never-in-the-settings-file",
+                    )),
                     window,
                     cx,
                 ));
                 first_input = Some(FIELD_KEY);
                 (
                     if *replace {
-                        "Replace API key"
+                        crate::i18n::tr("replace-api-key")
                     } else {
-                        "Add API key"
+                        crate::i18n::tr("add-api-key")
                     }
                     .to_owned(),
-                    "Save key",
+                    crate::i18n::tr("save-key"),
                 )
             }
             ProviderDialogKind::RemoveOpenCodeKey { provider } => {
                 fields.push(kit::caption(
                     k,
-                    format!(
-                        "Minibar forgets the saved key of {}. It keeps working with OpenCode.",
-                        instance_name(provider)
+                    crate::i18n::format(
+                        "minibar-forgets-the-saved-key-of-it-keeps-working-with-opencode",
+                        &[("v0", (instance_name(provider)).to_string())],
                     ),
                 ));
-                ("Remove API key?".to_owned(), "Remove")
+                (
+                    crate::i18n::tr("remove-api-key").to_owned(),
+                    crate::i18n::tr("remove"),
+                )
             }
         };
         if let Some(error) = &dialog.error
@@ -775,9 +863,9 @@ impl SettingsWindow {
         );
         let primary_label = if dialog.checking {
             if dialog.is_sign_in() {
-                "Signing in…"
+                crate::i18n::tr("signing-in")
             } else {
-                "Checking…"
+                crate::i18n::tr("checking")
             }
         } else {
             primary
@@ -798,16 +886,23 @@ impl SettingsWindow {
         let login_pending = dialog.checking && dialog.is_sign_in();
         let detailing =
             dialog.kind == ProviderDialogKind::AddInstance && dialog.add_step == AddStep::Details;
-        let cancel = Button::new("dlg-cancel", if detailing { "Back" } else { "Cancel" })
-            .full_width()
-            .disabled(dialog.checking && !login_pending)
-            .on_click(Self::h(cx, move |this, (), _, cx| {
-                if detailing {
-                    this.set_add_step(AddStep::Provider, cx);
-                } else {
-                    this.dismiss_provider_dialog(cx);
-                }
-            }));
+        let cancel = Button::new(
+            "dlg-cancel",
+            if detailing {
+                crate::i18n::tr("back")
+            } else {
+                crate::i18n::tr("cancel")
+            },
+        )
+        .full_width()
+        .disabled(dialog.checking && !login_pending)
+        .on_click(Self::h(cx, move |this, (), _, cx| {
+            if detailing {
+                this.set_add_step(AddStep::Provider, cx);
+            } else {
+                this.dismiss_provider_dialog(cx);
+            }
+        }));
         let dismiss = (!dialog.checking)
             .then(|| Self::h(cx, |this, (), _, cx| this.dismiss_provider_dialog(cx)));
         Some(kit::dialog(
@@ -909,7 +1004,7 @@ impl SettingsWindow {
         match dialog.kind.clone() {
             ProviderDialogKind::AddInstance => {
                 let Some(driver) = dialog.driver else {
-                    return self.fail_dialog("Choose a provider.", cx);
+                    return self.fail_dialog(crate::i18n::tr("choose-a-provider"), cx);
                 };
                 if dialog.add_step == AddStep::Provider {
                     return self.set_add_step(AddStep::Details, cx);
@@ -918,7 +1013,13 @@ impl SettingsWindow {
                     .into_iter()
                     .find(|(choice, _)| *choice == driver)
                 {
-                    return self.fail_dialog(format!("{reason}. It is already in the list."), cx);
+                    return self.fail_dialog(
+                        crate::i18n::format(
+                            "reason-it-is-already-in-the-list",
+                            &[("reason", reason.to_string())],
+                        ),
+                        cx,
+                    );
                 }
                 let name = if name.is_empty() {
                     driver.display_name().to_owned()
@@ -943,7 +1044,10 @@ impl SettingsWindow {
                         self.reload_settings();
                         self.finish_dialog(
                             DialogOutcome {
-                                notice: format!("Added {name}."),
+                                notice: crate::i18n::format(
+                                    "added-name",
+                                    &[("name", name.to_string())],
+                                ),
                             },
                             cx,
                         );
@@ -951,9 +1055,13 @@ impl SettingsWindow {
                             self.select_provider(provider, cx);
                         }
                     }
-                    Err(error) => {
-                        self.fail_dialog(format!("Could not add the provider: {error:#}"), cx)
-                    }
+                    Err(error) => self.fail_dialog(
+                        crate::i18n::format(
+                            "could-not-add-the-provider-error",
+                            &[("error", format!("{:#}", error))],
+                        ),
+                        cx,
+                    ),
                 }
             }
             ProviderDialogKind::SignIn { provider } => {
@@ -964,7 +1072,10 @@ impl SettingsWindow {
                 let mut removed = None;
                 let result = try_persist_update_fallible(settings_tx, |settings| {
                     removed = settings.remove_instance(provider);
-                    anyhow::ensure!(removed.is_some(), "This provider no longer exists.");
+                    anyhow::ensure!(
+                        removed.is_some(),
+                        crate::i18n::tr("this-provider-no-longer-exists")
+                    );
                     Ok(())
                 });
                 match result {
@@ -980,16 +1091,23 @@ impl SettingsWindow {
                         self.reload_settings();
                         self.finish_dialog(
                             DialogOutcome {
-                                notice: format!("{name} deleted."),
+                                notice: crate::i18n::format(
+                                    "name-deleted",
+                                    &[("name", name.to_string())],
+                                ),
                             },
                             cx,
                         );
                         let page = super::super::nav::first_provider_page(&self.settings.instances);
                         self.navigate(page, cx);
                     }
-                    Err(error) => {
-                        self.fail_dialog(format!("Could not delete the provider: {error:#}"), cx)
-                    }
+                    Err(error) => self.fail_dialog(
+                        crate::i18n::format(
+                            "could-not-delete-the-provider-error",
+                            &[("error", format!("{:#}", error))],
+                        ),
+                        cx,
+                    ),
                 }
             }
             ProviderDialogKind::ManualCredential { provider } => {
@@ -998,7 +1116,7 @@ impl SettingsWindow {
                     ProfileCredentialMethod::OAuthToken => second,
                 };
                 if credential.is_empty() {
-                    return self.fail_dialog("Paste a credential first.", cx);
+                    return self.fail_dialog(crate::i18n::tr("paste-a-credential-first"), cx);
                 }
                 if let Err(error) = dialog.claude_method.validate(&credential) {
                     return self.fail_dialog(error.to_string(), cx);
@@ -1007,19 +1125,19 @@ impl SettingsWindow {
                     crate::claude::verify_credential(&credential)?;
                     persist_claude_manual_credential(settings_tx, provider, &credential)?;
                     Ok(DialogOutcome {
-                        notice: "Credential saved in Windows user storage.".into(),
+                        notice: crate::i18n::tr("credential-saved-in-windows-user-storage").into(),
                     })
                 });
             }
             ProviderDialogKind::OpenRouterApiKey { account_id, key_id } => {
                 if key.is_empty() {
-                    return self.fail_dialog("Paste a key first.", cx);
+                    return self.fail_dialog(crate::i18n::tr("paste-a-key-first"), cx);
                 }
                 if !looks_like_openrouter_key(&key) {
-                    return self.fail_dialog(NOT_OPENROUTER_KEY, cx);
+                    return self.fail_dialog(not_openrouter_key(), cx);
                 }
                 if !account_exists(&account_id) {
-                    return self.fail_dialog("This account no longer exists.", cx);
+                    return self.fail_dialog(crate::i18n::tr("this-account-no-longer-exists"), cx);
                 }
                 let local_name = name;
                 self.run_dialog_work(cx, move || {
@@ -1045,7 +1163,7 @@ impl SettingsWindow {
                         },
                     )?;
                     Ok(DialogOutcome {
-                        notice: "API key saved in Windows user storage.".into(),
+                        notice: crate::i18n::tr("api-key-saved-in-windows-user-storage").into(),
                     })
                 });
             }
@@ -1054,13 +1172,13 @@ impl SettingsWindow {
                 replace,
             } => {
                 if key.is_empty() {
-                    return self.fail_dialog("Paste a key first.", cx);
+                    return self.fail_dialog(crate::i18n::tr("paste-a-key-first"), cx);
                 }
                 if !looks_like_openrouter_key(&key) {
-                    return self.fail_dialog(NOT_OPENROUTER_KEY, cx);
+                    return self.fail_dialog(not_openrouter_key(), cx);
                 }
                 if !account_exists(&account_id) {
-                    return self.fail_dialog("This account no longer exists.", cx);
+                    return self.fail_dialog(crate::i18n::tr("this-account-no-longer-exists"), cx);
                 }
                 self.run_dialog_work(cx, move || {
                     crate::openrouter::verify_management_key(&key)?;
@@ -1075,9 +1193,9 @@ impl SettingsWindow {
                     )?;
                     Ok(DialogOutcome {
                         notice: if replace {
-                            "Management key replaced.".to_owned()
+                            crate::i18n::tr("management-key-replaced").to_owned()
                         } else {
-                            "Management key added.".to_owned()
+                            crate::i18n::tr("management-key-added").to_owned()
                         },
                     })
                 });
@@ -1091,7 +1209,7 @@ impl SettingsWindow {
                     move |account| {
                         anyhow::ensure!(
                             account.api_key_ids.contains(&key_id),
-                            "OpenRouter API key no longer exists"
+                            crate::i18n::tr("openrouter-api-key-no-longer-exists")
                         );
                         if name.is_empty() {
                             account.api_key_names.remove(&key_id);
@@ -1101,12 +1219,18 @@ impl SettingsWindow {
                         Ok(())
                     },
                 ) {
-                    return self.fail_dialog(format!("Could not rename the key: {error:#}"), cx);
+                    return self.fail_dialog(
+                        crate::i18n::format(
+                            "could-not-rename-the-key-error",
+                            &[("error", format!("{:#}", error))],
+                        ),
+                        cx,
+                    );
                 }
                 self.reload_settings();
                 self.finish_dialog(
                     DialogOutcome {
-                        notice: "API key renamed.".into(),
+                        notice: crate::i18n::tr("api-key-renamed").into(),
                     },
                     cx,
                 );
@@ -1127,17 +1251,23 @@ impl SettingsWindow {
                         account.api_key_names.remove(&key_id);
                         anyhow::ensure!(
                             account.api_key_ids.len() != before,
-                            "OpenRouter API key no longer exists"
+                            crate::i18n::tr("openrouter-api-key-no-longer-exists")
                         );
                         Ok(())
                     },
                 ) {
-                    return self.fail_dialog(format!("Could not remove the key: {error:#}"), cx);
+                    return self.fail_dialog(
+                        crate::i18n::format(
+                            "could-not-remove-the-key-error",
+                            &[("error", format!("{:#}", error))],
+                        ),
+                        cx,
+                    );
                 }
                 self.reload_settings();
                 self.finish_dialog(
                     DialogOutcome {
-                        notice: "API key removed.".into(),
+                        notice: crate::i18n::tr("api-key-removed").into(),
                     },
                     cx,
                 );
@@ -1151,39 +1281,57 @@ impl SettingsWindow {
                     )],
                     |_| Ok(()),
                 ) {
-                    return self.fail_dialog(format!("Could not remove the key: {error:#}"), cx);
+                    return self.fail_dialog(
+                        crate::i18n::format(
+                            "could-not-remove-the-key-error",
+                            &[("error", format!("{:#}", error))],
+                        ),
+                        cx,
+                    );
                 }
                 self.reload_settings();
                 self.finish_dialog(
                     DialogOutcome {
-                        notice: "Management key removed.".into(),
+                        notice: crate::i18n::tr("management-key-removed").into(),
                     },
                     cx,
                 );
             }
             ProviderDialogKind::OpenCodeKey { provider, .. } => {
                 if key.is_empty() {
-                    return self.fail_dialog("Paste a key first.", cx);
+                    return self.fail_dialog(crate::i18n::tr("paste-a-key-first"), cx);
                 }
                 if let Err(error) = persist_opencode_manual_key(settings_tx, provider, Some(key)) {
-                    return self.fail_dialog(format!("Could not save the key: {error:#}"), cx);
+                    return self.fail_dialog(
+                        crate::i18n::format(
+                            "could-not-save-the-key-error",
+                            &[("error", format!("{:#}", error))],
+                        ),
+                        cx,
+                    );
                 }
                 self.reload_settings();
                 self.finish_dialog(
                     DialogOutcome {
-                        notice: "API key saved.".into(),
+                        notice: crate::i18n::tr("api-key-saved").into(),
                     },
                     cx,
                 );
             }
             ProviderDialogKind::RemoveOpenCodeKey { provider } => {
                 if let Err(error) = persist_opencode_manual_key(settings_tx, provider, None) {
-                    return self.fail_dialog(format!("Could not remove the key: {error:#}"), cx);
+                    return self.fail_dialog(
+                        crate::i18n::format(
+                            "could-not-remove-the-key-error",
+                            &[("error", format!("{:#}", error))],
+                        ),
+                        cx,
+                    );
                 }
                 self.reload_settings();
                 self.finish_dialog(
                     DialogOutcome {
-                        notice: "API key removed.".into(),
+                        notice: crate::i18n::tr("api-key-removed").into(),
                     },
                     cx,
                 );
@@ -1209,18 +1357,18 @@ fn sign_in(
     let instance = settings
         .instance(provider)
         .cloned()
-        .ok_or_else(|| anyhow::anyhow!("This provider no longer exists."))?;
+        .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr("this-provider-no-longer-exists")))?;
     anyhow::ensure!(
         !instance.uses_manual_credential(),
-        "Switch Source to Config folder to sign in."
+        crate::i18n::tr("switch-source-to-config-folder-to-sign-in")
     );
     let folder = instance
         .config_folder()
         .or_else(|| crate::instances::default_folder(instance.driver))
-        .ok_or_else(|| anyhow::anyhow!("This provider has no config folder."))?;
+        .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr("this-provider-has-no-config-folder")))?;
     anyhow::ensure!(
         !crate::instances::folder_conflicts(&settings.instances).contains_key(&instance.id),
-        "Another instance already reads this config folder. Choose a different folder first."
+        crate::i18n::tr("another-instance-already-reads-this-config-folder-choose-a-differ")
     );
     match instance.driver {
         ProviderKind::Claude => {
@@ -1229,7 +1377,7 @@ fn sign_in(
         ProviderKind::Codex => {
             crate::codex::profile_oauth::login(instance.binary_path.as_deref(), &folder, &control)?
         }
-        _ => anyhow::bail!("This provider has no sign-in."),
+        _ => anyhow::bail!(crate::i18n::tr("this-provider-has-no-sign-in")),
     }
     control.begin_save()?;
     if !instance.is_primary()
@@ -1247,9 +1395,9 @@ fn sign_in(
     }
     bump_credentials(settings_tx, provider)?;
     Ok(DialogOutcome {
-        notice: format!(
-            "{} signed in. Its CLI keeps the login fresh in its config folder.",
-            instance.display_name()
+        notice: crate::i18n::format(
+            "signed-in-its-cli-keeps-the-login-fresh-in-its-config-folder",
+            &[("v0", instance.display_name().to_string())],
         ),
     })
 }

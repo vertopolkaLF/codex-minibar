@@ -31,18 +31,20 @@ impl SettingsWindow {
                     k,
                     "advanced-export",
                     "upload-simple-fill",
-                    "Export settings",
-                    "Save every setting to a .toml file. Saved keys stay in Windows user storage.",
-                    Button::new("advanced-export", "Export")
+                    crate::i18n::tr("export-settings"),
+                    crate::i18n::tr(
+                        "save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user",
+                    ),
+                    Button::new("advanced-export", crate::i18n::tr("export"))
                         .on_click(Self::h(cx, |this, (), _, cx| this.export_settings(cx))),
                 ),
                 action_row(
                     k,
                     "advanced-import",
                     "download-simple-fill",
-                    "Import settings",
-                    "Replace the current settings with a previously exported file.",
-                    Button::new("advanced-import", "Import")
+                    crate::i18n::tr("import-settings"),
+                    crate::i18n::tr("replace-the-current-settings-with-a-previously-exported-file"),
+                    Button::new("advanced-import", crate::i18n::tr("import"))
                         .on_click(Self::h(cx, |this, (), _, cx| this.import_settings(cx))),
                 ),
             ]
@@ -53,9 +55,11 @@ impl SettingsWindow {
                     k,
                     "advanced-clear",
                     "broom-fill",
-                    "Clear Usage data",
-                    "Delete the collected Usage history. It is rebuilt from local provider logs on the next scan.",
-                    Button::new("advanced-clear", "Clear").on_click(Self::h(
+                    crate::i18n::tr("clear-usage-data"),
+                    crate::i18n::tr(
+                        "delete-the-collected-usage-history-it-is-rebuilt-from-local-provi",
+                    ),
+                    Button::new("advanced-clear", crate::i18n::tr("clear")).on_click(Self::h(
                         cx,
                         |this, (), _, cx| {
                             if let Err(error) =
@@ -63,11 +67,11 @@ impl SettingsWindow {
                             {
                                 eprintln!("failed to queue usage data clear: {error}");
                                 crate::notifications::show(
-                                    "Usage data clear failed",
-                                    "The background worker is unavailable.",
+                                    crate::i18n::tr("usage-data-clear-failed"),
+                                    crate::i18n::tr("the-background-worker-is-unavailable"),
                                 );
                             } else {
-                                this.show_notice("Usage data cleared.", cx);
+                                this.show_notice(crate::i18n::tr("usage-data-cleared"), cx);
                             }
                         },
                     )),
@@ -76,9 +80,9 @@ impl SettingsWindow {
                     k,
                     "advanced-reset",
                     "arrow-counter-clockwise-bold",
-                    "Reset all settings",
-                    "Restore every default and start the welcome flow again.",
-                    Button::new("advanced-reset", "Reset")
+                    crate::i18n::tr("reset-all-settings"),
+                    crate::i18n::tr("restore-every-default-and-start-the-welcome-flow-again"),
+                    Button::new("advanced-reset", crate::i18n::tr("reset"))
                         .danger()
                         .on_click(Self::h(cx, |this, (), _, cx| {
                             this.confirm_reset = true;
@@ -88,9 +92,9 @@ impl SettingsWindow {
             ]
         });
         vec![
-            kit::section_heading(k, "Backup"),
+            kit::section_heading(k, crate::i18n::tr("backup")),
             backup,
-            kit::section_heading(k, "Data"),
+            kit::section_heading(k, crate::i18n::tr("data")),
             data,
         ]
     }
@@ -109,10 +113,13 @@ impl SettingsWindow {
                 .and_then(|current| Settings::load_or_create(&current))
                 .and_then(|settings| settings.save(&path));
             let _ = this.update(cx, |this, cx| match result {
-                Ok(()) => this.show_notice("Settings exported.", cx),
+                Ok(()) => this.show_notice(crate::i18n::tr("settings-exported"), cx),
                 Err(error) => {
                     eprintln!("failed to export settings: {error:#}");
-                    crate::notifications::show("Settings export failed", &format!("{error:#}"));
+                    crate::notifications::show(
+                        crate::i18n::tr("settings-export-failed"),
+                        &format!("{error:#}"),
+                    );
                 }
             });
         })
@@ -124,7 +131,7 @@ impl SettingsWindow {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Import".into()),
+            prompt: Some(crate::i18n::tr("import").into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = prompt.await else {
@@ -141,11 +148,14 @@ impl SettingsWindow {
                 match result {
                     Ok(settings) => {
                         this.settings = settings;
-                        this.show_notice("Settings imported.", cx);
+                        this.show_notice(crate::i18n::tr("settings-imported"), cx);
                     }
                     Err(error) => {
                         eprintln!("failed to import settings: {error:#}");
-                        crate::notifications::show("Settings import failed", &format!("{error:#}"));
+                        crate::notifications::show(
+                            crate::i18n::tr("settings-import-failed"),
+                            &format!("{error:#}"),
+                        );
                     }
                 }
             });
@@ -180,7 +190,10 @@ impl SettingsWindow {
                 }
                 Err(error) => {
                     eprintln!("failed to reset settings: {error:#}");
-                    crate::notifications::show("Settings reset failed", &format!("{error:#}"));
+                    crate::notifications::show(
+                        crate::i18n::tr("settings-reset-failed"),
+                        &format!("{error:#}"),
+                    );
                 }
             }
             cx.notify();
@@ -191,18 +204,20 @@ impl SettingsWindow {
             phase,
             420.0,
             vec![
-                kit::dialog_title(k, "Reset all settings?"),
+                kit::dialog_title(k, crate::i18n::tr("reset-all-settings-bbfe66")),
                 kit::caption(
                     k,
-                    "Every setting returns to its default and the welcome flow opens again. Saved keys and Usage data are kept.",
+                    crate::i18n::tr(
+                        "every-setting-returns-to-its-default-and-the-welcome-flow-opens-a",
+                    ),
                 ),
             ],
             vec![
-                Button::new("reset-cancel", "Cancel")
+                Button::new("reset-cancel", crate::i18n::tr("cancel"))
                     .full_width()
                     .on_click(cancel.clone())
                     .render(k),
-                Button::new("reset-confirm", "Reset")
+                Button::new("reset-confirm", crate::i18n::tr("reset"))
                     .accent()
                     .full_width()
                     .on_click(reset)

@@ -277,7 +277,10 @@ impl PopupRoot {
                                             .flex()
                                             .flex_col()
                                             .gap(px(2.0))
-                                            .child(caption("Tokens", palette.text_secondary))
+                                            .child(caption(
+                                                crate::i18n::tr("tokens"),
+                                                palette.text_secondary,
+                                            ))
                                             .child(
                                                 components::text(
                                                     total,
@@ -294,7 +297,10 @@ impl PopupRoot {
                                             .flex_col()
                                             .items_end()
                                             .gap(px(2.0))
-                                            .child(caption("Cost", palette.text_secondary))
+                                            .child(caption(
+                                                crate::i18n::tr("cost"),
+                                                palette.text_secondary,
+                                            ))
                                             .child(
                                                 components::text(cost, 16.0, 22.0, palette.accent)
                                                     .font_weight(FontWeight::SEMIBOLD),
@@ -314,7 +320,10 @@ impl PopupRoot {
             }) => {
                 let mut list = div().flex().flex_col().gap(px(6.0));
                 if rows.is_empty() {
-                    list = list.child(caption("No model data", palette.text_secondary));
+                    list = list.child(caption(
+                        crate::i18n::tr("no-model-data"),
+                        palette.text_secondary,
+                    ));
                 }
                 for (name, amount, color) in rows {
                     list = list.child(row(
@@ -364,7 +373,7 @@ impl PopupRoot {
                     ));
                 }
                 list = list.child(components::rule(&palette)).child(row(
-                    caption("Total", palette.text_secondary),
+                    caption(crate::i18n::tr("total"), palette.text_secondary),
                     chart.total,
                     palette.accent,
                 ));

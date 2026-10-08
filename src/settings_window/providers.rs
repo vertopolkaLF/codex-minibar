@@ -123,7 +123,9 @@ pub(crate) fn instance_install_status(instance: &ProviderInstance) -> ProviderIn
                 crate::openrouter::is_installed_for_accounts(std::slice::from_ref(account))
             });
             ProviderInstallStatus {
-                app: detected.then(|| "OpenRouter account credentials are configured".into()),
+                app: detected.then(|| {
+                    crate::i18n::tr("openrouter-account-credentials-are-configured").into()
+                }),
                 used: detected.then_some(ProviderInstallSource::App),
                 ..provider_install_status(ProviderKind::OpenRouter, "")
             }
@@ -132,7 +134,7 @@ pub(crate) fn instance_install_status(instance: &ProviderInstance) -> ProviderIn
             // Secondary OpenCode instances read only their own API key.
             let detected = crate::opencode::key_is_configured(provider);
             ProviderInstallStatus {
-                app: detected.then(|| "Saved API key".into()),
+                app: detected.then(|| crate::i18n::tr("saved-api-key").into()),
                 used: detected.then_some(ProviderInstallSource::App),
                 ..provider_install_status(instance.driver, "")
             }
@@ -143,7 +145,7 @@ pub(crate) fn instance_install_status(instance: &ProviderInstance) -> ProviderIn
                 .flatten()
                 .is_some_and(|value| !value.trim().is_empty());
             ProviderInstallStatus {
-                app: detected.then(|| "Saved credential".into()),
+                app: detected.then(|| crate::i18n::tr("saved-credential").into()),
                 cli: None,
                 used: detected.then_some(ProviderInstallSource::App),
                 cli_applicable: false,
@@ -210,7 +212,8 @@ pub(crate) fn provider_install_status(
         }
         ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
             let detected = crate::opencode::is_installed(provider);
-            let detail = detected.then(|| "OpenCode auth.json or local database".into());
+            let detail =
+                detected.then(|| crate::i18n::tr("opencode-auth-json-or-local-database").into());
             (detail, None, detected.then_some(ProviderInstallSource::App))
         }
         ProviderKind::OpenRouter => (None, None, None),
@@ -307,8 +310,9 @@ fn display_fs_path(path: &std::path::Path) -> String {
     }
 }
 
-const NOT_OPENROUTER_KEY: &str =
-    "That doesn't look like an OpenRouter key. Keys start with sk-or-.";
+fn not_openrouter_key() -> &'static str {
+    crate::i18n::tr("that-doesn-t-look-like-an-openrouter-key-keys-start-with-sk-or")
+}
 
 /// OpenRouter usage the worker last published. Settings only reads labels,
 /// masked keys, spend and balances from it; it never holds secrets.
@@ -367,10 +371,6 @@ pub(crate) fn provider_readiness(status: &ProviderInstallStatus) -> ProviderRead
     }
 }
 
-fn plural(count: usize, word: &str) -> String {
-    format!("{count} {word}{}", if count == 1 { "" } else { "s" })
-}
-
 fn money(microusd: u64) -> String {
     format!("${:.2}", microusd as f64 / 1_000_000.0)
 }
@@ -402,7 +402,7 @@ fn persist_instance(
     try_persist_update_fallible(settings_tx, move |settings| {
         let instance = settings
             .instance_mut(provider)
-            .ok_or_else(|| anyhow::anyhow!("This provider no longer exists."))?;
+            .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr("this-provider-no-longer-exists")))?;
         mutate(instance)?;
         instance.normalize();
         Ok(())
@@ -422,7 +422,9 @@ fn persist_openrouter_account(
     try_persist_update_fallible(settings_tx, move |settings| {
         let provider = find_account_instance(&settings.instances, &account_id)
             .map(ProviderInstance::provider_id)
-            .ok_or_else(|| anyhow::anyhow!("OpenRouter account no longer exists"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(crate::i18n::tr("openrouter-account-no-longer-exists"))
+            })?;
         let instance = settings
             .instance_mut(provider)
             .expect("instance just found");
@@ -622,46 +624,52 @@ fn folder_configs(driver: ProviderKind) -> Vec<FolderConfig> {
     };
     match driver {
         ProviderKind::Codex => vec![binary(
-            "Codex CLI folder",
-            "Folder with codex.exe, codex.cmd, or codex.ps1. Leave empty to find it automatically.",
+            crate::i18n::tr("codex-cli-folder"),
+            crate::i18n::tr("folder-with-codex-exe-codex-cmd-or-codex-ps1-leave-empty-to-find"),
             r"C:\Users\you\AppData\Roaming\npm",
         )],
         ProviderKind::Claude => vec![binary(
-            "Claude Code CLI folder",
-            "Folder with claude.exe, claude.cmd, or claude.ps1. Leave empty to find it automatically.",
+            crate::i18n::tr("claude-code-cli-folder"),
+            crate::i18n::tr("folder-with-claude-exe-claude-cmd-or-claude-ps1-leave-empty-to-fi"),
             r"C:\Users\you\AppData\Roaming\npm",
         )],
         ProviderKind::Cursor => vec![binary(
-            "Cursor app folder",
-            "Folder with Cursor.exe. Leave empty to find it automatically. Usage still comes from the signed-in profile.",
+            crate::i18n::tr("cursor-app-folder"),
+            crate::i18n::tr("folder-with-cursor-exe-leave-empty-to-find-it-automatically-usage"),
             r"C:\Users\you\AppData\Local\Programs\Cursor",
         )],
         ProviderKind::Antigravity => vec![binary(
-            "agy CLI folder",
-            "Folder with agy.exe, agy.cmd, or agy.ps1. Leave empty to find it automatically.",
+            crate::i18n::tr("agy-cli-folder"),
+            crate::i18n::tr("folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut"),
             r"C:\Users\you\AppData\Local\agy\bin",
         )],
         ProviderKind::Grok => vec![binary(
-            "Grok CLI folder",
-            "Folder with grok.exe, grok.cmd, or grok.ps1. Leave empty to find it automatically.",
+            crate::i18n::tr("grok-cli-folder"),
+            crate::i18n::tr("folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it"),
             r"C:\Users\you\.grok\bin",
         )],
         ProviderKind::Kiro => vec![
             binary(
-                "Kiro IDE folder",
-                "Folder containing Kiro.exe, or the executable itself. Leave empty to find it automatically.",
+                crate::i18n::tr("kiro-ide-folder"),
+                crate::i18n::tr(
+                    "folder-containing-kiro-exe-or-the-executable-itself-leave-empty-t",
+                ),
                 r"C:\Users\you\AppData\Local\Programs\Kiro",
             ),
             FolderConfig {
                 field: PathField::KiroCrew,
-                label: "Kiro Crew app path",
-                description: "Folder containing KiroCrew.exe, or the executable itself. Leave empty to detect per-user and all-users installs automatically.",
+                label: crate::i18n::tr("kiro-crew-app-path"),
+                description: crate::i18n::tr(
+                    "folder-containing-kirocrew-exe-or-the-executable-itself-leave-emp",
+                ),
                 placeholder: r"C:\Users\you\AppData\Local\Programs\KiroCrew",
             },
             FolderConfig {
                 field: PathField::KiroCli,
-                label: "Kiro CLI folder",
-                description: "Folder containing kiro-cli.exe, or the executable itself. Leave empty to find it automatically.",
+                label: crate::i18n::tr("kiro-cli-folder"),
+                description: crate::i18n::tr(
+                    "folder-containing-kiro-cli-exe-or-the-executable-itself-leave-emp",
+                ),
                 placeholder: r"C:\Users\you\AppData\Local\kiro-cli",
             },
         ],
@@ -673,22 +681,26 @@ fn folder_configs(driver: ProviderKind) -> Vec<FolderConfig> {
 
 fn provider_description(provider: ProviderKind) -> &'static str {
     match provider {
-        ProviderKind::Codex => "Reads the signed-in Codex CLI or desktop app.",
-        ProviderKind::Claude => "Reads your existing Claude Code login.",
-        ProviderKind::Cursor => "Reads the signed-in Cursor app for this billing cycle.",
-        ProviderKind::OpenCodeZen => "Reads Zen auth and local OpenCode history.",
-        ProviderKind::OpenCodeGo => "Reads Go quota windows and local OpenCode history.",
+        ProviderKind::Codex => crate::i18n::tr("reads-the-signed-in-codex-cli-or-desktop-app"),
+        ProviderKind::Claude => crate::i18n::tr("reads-your-existing-claude-code-login"),
+        ProviderKind::Cursor => {
+            crate::i18n::tr("reads-the-signed-in-cursor-app-for-this-billing-cycle")
+        }
+        ProviderKind::OpenCodeZen => crate::i18n::tr("reads-zen-auth-and-local-opencode-history"),
+        ProviderKind::OpenCodeGo => {
+            crate::i18n::tr("reads-go-quota-windows-and-local-opencode-history")
+        }
         ProviderKind::OpenRouter => {
-            "Reads API-key usage and spend limits. A management key also enables usage history and credit balance."
+            crate::i18n::tr("reads-api-key-usage-and-spend-limits-a-management-key-also-enable")
         }
         ProviderKind::Antigravity => {
-            "Reads subscription quota from your existing official agy Windows sign-in."
+            crate::i18n::tr("reads-subscription-quota-from-your-existing-official-agy-windows")
         }
         ProviderKind::Grok => {
-            "Reads SuperGrok subscription credits from your existing official Grok CLI sign-in."
+            crate::i18n::tr("reads-supergrok-subscription-credits-from-your-existing-official")
         }
         ProviderKind::Kiro => {
-            "Fetches Kiro's live monthly credits with its shared sign-in; recognizes IDE, Crew, and CLI installs."
+            crate::i18n::tr("fetches-kiro-s-live-monthly-credits-with-its-shared-sign-in-recog")
         }
     }
 }
@@ -696,12 +708,24 @@ fn provider_description(provider: ProviderKind) -> &'static str {
 /// Display names for the app, Crew app, and CLI sources a provider can read from.
 fn source_labels(provider: ProviderKind) -> (&'static str, &'static str, &'static str) {
     match provider {
-        ProviderKind::Codex => ("Codex desktop app", "", "Codex CLI"),
-        ProviderKind::Claude => ("Claude desktop app", "", "Claude Code CLI"),
-        ProviderKind::Cursor => ("Cursor app", "", ""),
-        ProviderKind::Antigravity => ("Antigravity app", "", "agy CLI"),
-        ProviderKind::Grok => ("", "", "Grok CLI"),
-        ProviderKind::Kiro => ("Kiro IDE", "Kiro Crew", "Kiro CLI"),
+        ProviderKind::Codex => (
+            crate::i18n::tr("codex-desktop-app"),
+            "",
+            crate::i18n::tr("codex-cli"),
+        ),
+        ProviderKind::Claude => (
+            crate::i18n::tr("claude-desktop-app"),
+            "",
+            crate::i18n::tr("claude-code-cli"),
+        ),
+        ProviderKind::Cursor => (crate::i18n::tr("cursor-app"), "", ""),
+        ProviderKind::Antigravity => (crate::i18n::tr("antigravity-app"), "", "agy CLI"),
+        ProviderKind::Grok => ("", "", crate::i18n::tr("grok-cli")),
+        ProviderKind::Kiro => (
+            crate::i18n::tr("kiro-ide"),
+            crate::i18n::tr("kiro-crew"),
+            crate::i18n::tr("kiro-cli"),
+        ),
         ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo | ProviderKind::OpenRouter => {
             ("", "", "")
         }
@@ -727,8 +751,12 @@ fn add_instance_choices(instances: &[ProviderInstance]) -> Vec<(ProviderKind, Op
             let single = !crate::provider_registry::descriptor(driver).supports_multiple_instances;
             (
                 driver,
-                (exists && single)
-                    .then(|| format!("{} supports one instance", driver.display_name())),
+                (exists && single).then(|| {
+                    crate::i18n::format(
+                        "supports-one-instance",
+                        &[("v0", driver.display_name().to_string())],
+                    )
+                }),
             )
         })
         .collect()

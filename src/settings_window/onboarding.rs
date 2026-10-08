@@ -11,7 +11,7 @@ use gpui::{
     WindowControlArea, div, px,
 };
 
-use super::general::{LIMIT_REFRESH_LABELS, USAGE_REFRESH_LABELS};
+use super::general::{limit_refresh_labels, usage_refresh_labels};
 use super::kit::{self, Button, Handler, Kit};
 use super::persistence::{load_settings_for_window, replace_settings};
 use super::theme::{Fonts, Theme};
@@ -63,23 +63,35 @@ fn detected_providers(settings: &Settings) -> [bool; DRIVERS] {
 fn detection_note(driver: ProviderKind, found: bool) -> &'static str {
     match (driver, found) {
         (ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo, true) => {
-            "Found in OpenCode auth or local history."
+            crate::i18n::tr("found-in-opencode-auth-or-local-history")
         }
         (ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo, false) => {
-            "Not found. Turn it on if it's set up elsewhere."
+            crate::i18n::tr("not-found-turn-it-on-if-it-s-set-up-elsewhere")
         }
-        (ProviderKind::OpenRouter, true) => "Account credentials are already set.",
-        (ProviderKind::OpenRouter, false) => "Optional. Add accounts later in Providers.",
-        (ProviderKind::Antigravity, true) => "Found an official agy sign-in on this PC.",
-        (ProviderKind::Antigravity, false) => "Not found. Sign in with agy before enabling it.",
-        (ProviderKind::Grok, true) => "Found an official Grok CLI sign-in on this PC.",
-        (ProviderKind::Grok, false) => "Not found. Run grok login before enabling it.",
-        (ProviderKind::Kiro, true) => "Found Kiro IDE, Kiro Crew, or a signed-in Kiro CLI.",
+        (ProviderKind::OpenRouter, true) => crate::i18n::tr("account-credentials-are-already-set"),
+        (ProviderKind::OpenRouter, false) => {
+            crate::i18n::tr("optional-add-accounts-later-in-providers")
+        }
+        (ProviderKind::Antigravity, true) => {
+            crate::i18n::tr("found-an-official-agy-sign-in-on-this-pc")
+        }
+        (ProviderKind::Antigravity, false) => {
+            crate::i18n::tr("not-found-sign-in-with-agy-before-enabling-it")
+        }
+        (ProviderKind::Grok, true) => {
+            crate::i18n::tr("found-an-official-grok-cli-sign-in-on-this-pc")
+        }
+        (ProviderKind::Grok, false) => {
+            crate::i18n::tr("not-found-run-grok-login-before-enabling-it")
+        }
+        (ProviderKind::Kiro, true) => {
+            crate::i18n::tr("found-kiro-ide-kiro-crew-or-a-signed-in-kiro-cli")
+        }
         (ProviderKind::Kiro, false) => {
-            "Not found. Install Kiro IDE or Kiro Crew, or sign in to Kiro CLI."
+            crate::i18n::tr("not-found-install-kiro-ide-or-kiro-crew-or-sign-in-to-kiro-cli")
         }
-        (_, true) => "Found on this PC.",
-        (_, false) => "Not found. Turn it on if it's installed somewhere else.",
+        (_, true) => crate::i18n::tr("found-on-this-pc"),
+        (_, false) => crate::i18n::tr("not-found-turn-it-on-if-it-s-installed-somewhere-else"),
     }
 }
 
@@ -202,7 +214,10 @@ impl OnboardingWindow {
             .collect();
         if let Err(error) = replace_settings(self.state.settings_tx.clone(), completed) {
             eprintln!("failed to complete onboarding: {error:#}");
-            crate::notifications::show("Setup could not be saved", &format!("{error:#}"));
+            crate::notifications::show(
+                crate::i18n::tr("setup-could-not-be-saved"),
+                &format!("{error:#}"),
+            );
             return;
         }
         // Show the popup before dismissing onboarding so Done always lands on it.
@@ -247,7 +262,7 @@ impl OnboardingWindow {
             .icon(mark)
             .description(k, detection_note(driver, found));
             if found {
-                row = row.trailing(kit::chip(k, "Detected"));
+                row = row.trailing(kit::chip(k, crate::i18n::tr("detected")));
             }
             let switch = kit::toggle(
                 k,
@@ -271,27 +286,50 @@ impl OnboardingWindow {
     fn general_step(&mut self, k: &mut Kit, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let s = &self.settings;
         let startup = kit::card_of(k, |k| {
-            vec![kit::toggle_row(
-                k,
-                "onboarding-start",
-                "Start with Windows",
-                None,
-                s.start_at_login,
-                Self::h(cx, |this, value: bool, _, cx| {
-                    this.settings.start_at_login = value;
-                    cx.notify();
-                }),
-            )]
+            vec![
+                kit::dropdown_row(
+                    k,
+                    "onboarding-language",
+                    crate::i18n::tr("language"),
+                    None,
+                    kit::options(&[
+                        crate::i18n::tr("auto-windows"),
+                        crate::i18n::tr("english"),
+                        crate::i18n::tr("msg-russian"),
+                    ]),
+                    s.language.index() as i32,
+                    false,
+                    Self::h(cx, |this, index: usize, _, cx| {
+                        this.settings.language = crate::i18n::Language::from_index(index);
+                        this.settings.language.apply();
+                        cx.refresh_windows();
+                        cx.notify();
+                    }),
+                ),
+                kit::toggle_row(
+                    k,
+                    "onboarding-start",
+                    crate::i18n::tr("start-with-windows"),
+                    None,
+                    s.start_at_login,
+                    Self::h(cx, |this, value: bool, _, cx| {
+                        this.settings.start_at_login = value;
+                        cx.notify();
+                    }),
+                ),
+            ]
         });
         let features = kit::card_of(k, |k| {
             vec![
                 kit::toggle_row(
                     k,
                     "onboarding-automatic",
-                    "Start 5-hour sessions automatically",
+                    crate::i18n::tr("start-5-hour-sessions-automatically"),
                     Some(
-                        "Starts a new Codex or Claude session as soon as a window is available, instead of waiting for your first request."
-                            .into(),
+                        crate::i18n::tr(
+                            "starts-a-new-codex-or-claude-session-as-soon-as-a-window-is-avail",
+                        )
+                        .into(),
                     ),
                     self.automatic,
                     Self::h(cx, |this, value: bool, _, cx| {
@@ -302,9 +340,9 @@ impl OnboardingWindow {
                 kit::dropdown_row(
                     k,
                     "onboarding-limit-refresh",
-                    "Refresh limits",
+                    crate::i18n::tr("refresh-limits"),
                     None,
-                    kit::options(&LIMIT_REFRESH_LABELS),
+                    kit::options(&limit_refresh_labels()),
                     s.limit_refresh_interval.index(),
                     false,
                     Self::h(cx, |this, index: usize, _, cx| {
@@ -316,9 +354,11 @@ impl OnboardingWindow {
                 kit::dropdown_row(
                     k,
                     "onboarding-usage-refresh",
-                    "Collect usage data",
-                    Some("Scans local provider history for Usage Stats."),
-                    kit::options(&USAGE_REFRESH_LABELS),
+                    crate::i18n::tr("collect-usage-data"),
+                    Some(crate::i18n::tr(
+                        "scans-local-provider-history-for-usage-stats",
+                    )),
+                    kit::options(&usage_refresh_labels()),
                     s.usage_refresh_interval.index(),
                     false,
                     Self::h(cx, |this, index: usize, _, cx| {
@@ -334,7 +374,7 @@ impl OnboardingWindow {
                 kit::toggle_row(
                     k,
                     "onboarding-show-used",
-                    "Show used instead of remaining",
+                    crate::i18n::tr("show-used-instead-of-remaining"),
                     None,
                     s.show_used_percentage,
                     Self::h(cx, |this, value: bool, _, cx| {
@@ -345,10 +385,12 @@ impl OnboardingWindow {
                 kit::toggle_row(
                     k,
                     "onboarding-pace",
-                    "Show usage pace",
+                    crate::i18n::tr("show-usage-pace"),
                     Some(
-                        "Marks whether you're burning quota faster or slower than an even pace."
-                            .into(),
+                        crate::i18n::tr(
+                            "marks-whether-you-re-burning-quota-faster-or-slower-than-an-even",
+                        )
+                        .into(),
                     ),
                     s.show_usage_pace,
                     Self::h(cx, |this, value: bool, _, cx| {
@@ -359,7 +401,7 @@ impl OnboardingWindow {
                 kit::toggle_row(
                     k,
                     "onboarding-account",
-                    "Show account name",
+                    crate::i18n::tr("show-account-name"),
                     None,
                     s.show_account_name,
                     Self::h(cx, |this, value: bool, _, cx| {
@@ -370,11 +412,11 @@ impl OnboardingWindow {
             ]
         });
         vec![
-            kit::section_heading(k, "Startup"),
+            kit::section_heading(k, crate::i18n::tr("startup")),
             startup,
-            kit::section_heading(k, "Features"),
+            kit::section_heading(k, crate::i18n::tr("features")),
             features,
-            kit::section_heading(k, "Customization"),
+            kit::section_heading(k, crate::i18n::tr("customization")),
             customize,
         ]
     }
@@ -386,7 +428,7 @@ impl OnboardingWindow {
                 kit::toggle_row(
                     k,
                     "onboarding-notif-activation-success",
-                    "Successful activations",
+                    crate::i18n::tr("successful-activations"),
                     None,
                     n.activation_success,
                     Self::h(cx, |this, value: bool, _, cx| {
@@ -397,7 +439,7 @@ impl OnboardingWindow {
                 kit::toggle_row(
                     k,
                     "onboarding-notif-activation-failure",
-                    "Failed activations",
+                    crate::i18n::tr("failed-activations"),
                     None,
                     n.activation_failure,
                     Self::h(cx, |this, value: bool, _, cx| {
@@ -408,7 +450,7 @@ impl OnboardingWindow {
                 kit::toggle_row(
                     k,
                     "onboarding-notif-limits-reset",
-                    "When limits reset",
+                    crate::i18n::tr("when-limits-reset"),
                     None,
                     n.limits_changed,
                     Self::h(cx, |this, value: bool, _, cx| {
@@ -423,9 +465,9 @@ impl OnboardingWindow {
                 kit::toggle_row(
                     k,
                     "onboarding-notif-low-usage",
-                    format!(
-                        "When 5-hour remaining hits {}%",
-                        n.low_usage_threshold_percent
+                    crate::i18n::format(
+                        "when-5-hour-remaining-hits",
+                        &[("v0", n.low_usage_threshold_percent.to_string())],
                     ),
                     None,
                     n.low_usage_enabled,
@@ -437,9 +479,9 @@ impl OnboardingWindow {
                 kit::toggle_row(
                     k,
                     "onboarding-notif-weekly-low-usage",
-                    format!(
-                        "When weekly remaining hits {}%",
-                        n.weekly_low_usage_threshold_percent
+                    crate::i18n::format(
+                        "when-weekly-remaining-hits",
+                        &[("v0", n.weekly_low_usage_threshold_percent.to_string())],
                     ),
                     None,
                     n.weekly_low_usage_enabled,
@@ -454,7 +496,7 @@ impl OnboardingWindow {
             vec![kit::toggle_row(
                 k,
                 "onboarding-notif-update",
-                "When a new version is found",
+                crate::i18n::tr("when-a-new-version-is-found"),
                 None,
                 n.update_available,
                 Self::h(cx, |this, value: bool, _, cx| {
@@ -464,11 +506,11 @@ impl OnboardingWindow {
             )]
         });
         vec![
-            kit::section_heading(k, "Activity"),
+            kit::section_heading(k, crate::i18n::tr("activity")),
             activity,
-            kit::section_heading(k, "Low usage"),
+            kit::section_heading(k, crate::i18n::tr("low-usage")),
             low,
-            kit::section_heading(k, "Updates"),
+            kit::section_heading(k, crate::i18n::tr("updates")),
             updates,
         ]
     }
@@ -497,6 +539,7 @@ impl OnboardingWindow {
 
 impl Render for OnboardingWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        window.set_window_title(super::onboarding_window_title());
         let mut k = std::mem::take(&mut self.kit);
         let mut theme = Theme::resolve(
             self.settings.theme,
@@ -508,21 +551,25 @@ impl Render for OnboardingWindow {
             theme = theme.with_mica();
         }
         self.backdrop.sync(theme.dark, window.appearance());
-        k.begin_frame(theme);
+        k.begin_frame(theme, window);
         let (heading, description, rows) = match self.step {
             Step::Providers => (
-                "Choose providers",
-                "We turned on the providers found on this PC. You can change this later.",
+                crate::i18n::tr("choose-providers"),
+                crate::i18n::tr(
+                    "we-turned-on-the-providers-found-on-this-pc-you-can-change-this-l",
+                ),
                 self.providers_step(&mut k, cx),
             ),
             Step::General => (
-                "General settings",
-                "You can change these later in Settings.",
+                crate::i18n::tr("general-settings"),
+                crate::i18n::tr("you-can-change-these-later-in-settings"),
                 self.general_step(&mut k, cx),
             ),
             Step::Notifications => (
-                "Notifications",
-                "Turn off anything you don't want to hear about. You can change these later in Settings.",
+                crate::i18n::tr("notifications"),
+                crate::i18n::tr(
+                    "turn-off-anything-you-don-t-want-to-hear-about-you-can-change-the",
+                ),
                 self.notifications_step(&mut k, cx),
             ),
         };
@@ -544,30 +591,32 @@ impl Render for OnboardingWindow {
         let dots = self.step_dots(&mut k);
         let back: AnyElement = match self.step {
             Step::Providers => div().into_any_element(),
-            Step::General | Step::Notifications => Button::new("onboarding-back", "Back")
-                .on_click(Self::h(cx, |this, (), _, cx| {
-                    this.step = match this.step {
-                        Step::Notifications => Step::General,
-                        _ => Step::Providers,
-                    };
-                    cx.notify();
-                }))
-                .render(&k),
+            Step::General | Step::Notifications => {
+                Button::new("onboarding-back", crate::i18n::tr("back"))
+                    .on_click(Self::h(cx, |this, (), _, cx| {
+                        this.step = match this.step {
+                            Step::Notifications => Step::General,
+                            _ => Step::Providers,
+                        };
+                        cx.notify();
+                    }))
+                    .render(&k)
+            }
         };
         let action = match self.step {
-            Step::Providers => Button::new("onboarding-continue", "Continue")
+            Step::Providers => Button::new("onboarding-continue", crate::i18n::tr("continue"))
                 .accent()
                 .on_click(Self::h(cx, |this, (), _, cx| {
                     this.step = Step::General;
                     cx.notify();
                 })),
-            Step::General => Button::new("onboarding-next", "Continue")
+            Step::General => Button::new("onboarding-next", crate::i18n::tr("continue"))
                 .accent()
                 .on_click(Self::h(cx, |this, (), _, cx| {
                     this.step = Step::Notifications;
                     cx.notify();
                 })),
-            Step::Notifications => Button::new("onboarding-done", "Done")
+            Step::Notifications => Button::new("onboarding-done", crate::i18n::tr("done"))
                 .accent()
                 .on_click(Self::h(cx, |this, (), window, _| this.finish(window))),
         }
@@ -614,7 +663,7 @@ impl Render for OnboardingWindow {
                             .flex_1()
                             .child(kit::image("color/app-icon-32.png", 16.0))
                             .child(kit::text(
-                                SharedString::from(super::ONBOARDING_WINDOW_TITLE),
+                                SharedString::from(super::onboarding_window_title()),
                                 12.0,
                                 theme.text_secondary,
                             )),

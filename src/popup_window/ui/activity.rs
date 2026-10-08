@@ -103,9 +103,9 @@ impl Series {
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Input => "Input",
-            Self::Cache => "Cache",
-            Self::Output => "Output",
+            Self::Input => crate::i18n::tr("input"),
+            Self::Cache => crate::i18n::tr("cache"),
+            Self::Output => crate::i18n::tr("output"),
         }
     }
 
@@ -120,9 +120,9 @@ impl Series {
 
     pub(crate) fn menu_label(self) -> &'static str {
         match self {
-            Self::Input => "Input (uncached)",
-            Self::Cache => "Cached input",
-            Self::Output => "Output",
+            Self::Input => crate::i18n::tr("input-uncached"),
+            Self::Cache => crate::i18n::tr("cached-input"),
+            Self::Output => crate::i18n::tr("output"),
         }
     }
 
@@ -179,25 +179,29 @@ pub(crate) fn cost_label(usage: &TokenUsage) -> String {
     if usage.priced_requests > 0 {
         let value = format_usd(usage.estimated_cost_microusd as f64 / 1_000_000.0);
         if usage.priced_requests < usage.requests {
-            format!("{value} (partially priced)")
+            crate::i18n::format("value-partially-priced", &[("value", value.to_string())])
         } else {
             value
         }
     } else if usage.requests == 0 {
         "$0.00".into()
     } else {
-        "Unavailable".into()
+        crate::i18n::tr("unavailable").into()
     }
 }
 
 fn bucket_title(bucket: &Bucket) -> String {
     if bucket.first == bucket.last {
-        bucket.first.format("%a, %b %-d, %Y").to_string()
+        format!(
+            "{}, {}",
+            crate::i18n::weekday(chrono::Datelike::weekday(&bucket.first)),
+            crate::i18n::date_with_year(bucket.first)
+        )
     } else {
         format!(
             "{} – {}",
-            bucket.first.format("%b %-d, %Y"),
-            bucket.last.format("%b %-d, %Y")
+            crate::i18n::date_with_year(bucket.first),
+            crate::i18n::date_with_year(bucket.last)
         )
     }
 }
@@ -534,7 +538,12 @@ impl PopupRoot {
                         }
                     })
                     .map(|rows| Arc::new(group_models(rows, &query_bounds, provider.kind())))
-                    .map_err(|error| format!("Could not load model data: {error:#}"))
+                    .map_err(|error| {
+                        crate::i18n::format(
+                            "could-not-load-model-data-error",
+                            &[("error", format!("{:#}", error))],
+                        )
+                    })
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
@@ -566,11 +575,11 @@ impl PopupRoot {
                 .flex_col()
                 .gap(px(6.0))
                 .child(components::body_strong(
-                    "Usage activity",
+                    crate::i18n::tr("usage-activity"),
                     palette.text_primary,
                 ))
                 .child(caption(
-                    "Waiting for Cursor's usage export. Refresh to retry.",
+                    crate::i18n::tr("waiting-for-cursor-s-usage-export-refresh-to-retry"),
                     palette.text_tertiary,
                 ))
                 .into_any_element();
@@ -793,15 +802,15 @@ impl PopupRoot {
             bars = bars.child(slot);
         }
         let empty_label = if by_model && failed {
-            Some("Model data unavailable")
+            Some(crate::i18n::tr("model-data-unavailable"))
         } else if by_model && (loading || models.is_none()) {
-            Some("Loading models…")
+            Some(crate::i18n::tr("loading-models"))
         } else if by_model && availability.series == 0 && !availability.cost {
-            Some("No model data")
+            Some(crate::i18n::tr("no-model-data"))
         } else if availability.series == 0 && !availability.cost {
-            Some("No usage data")
+            Some(crate::i18n::tr("no-usage-data"))
         } else if !by_model && !cost_mode && mask == 0 {
-            Some("No series selected")
+            Some(crate::i18n::tr("no-series-selected"))
         } else {
             None
         };
@@ -841,15 +850,20 @@ impl PopupRoot {
                 );
                 let hover_id = fx::key(("legend-hover", chart.as_str(), series as u8));
                 let tip = if available {
-                    format!(
-                        "{}: {} tokens",
-                        series.menu_label(),
-                        format_token_count(series.value(&statistics.history))
+                    crate::i18n::format(
+                        "tokens-94e0b9",
+                        &[
+                            ("v0", series.menu_label().to_string()),
+                            (
+                                "v1",
+                                (format_token_count(series.value(&statistics.history))).to_string(),
+                            ),
+                        ],
                     )
                 } else {
-                    format!(
-                        "No {} tokens in this period",
-                        series.menu_label().to_lowercase()
+                    crate::i18n::format(
+                        "no-tokens-in-this-period",
+                        &[("v0", (series.menu_label().to_lowercase()).to_string())],
                     )
                 };
                 let chart_key = chart.clone();
@@ -887,11 +901,11 @@ impl PopupRoot {
 
         let model_available = models.as_ref().is_some_and(|m| m.has_data()) || !by_model;
         let model_hint: SharedString = if by_model && loading {
-            "Loading model breakdown".into()
+            crate::i18n::tr("loading-model-breakdown").into()
         } else if by_model && failed {
-            "Model data unavailable".into()
+            crate::i18n::tr("model-data-unavailable").into()
         } else {
-            "Group tokens or cost by model".into()
+            crate::i18n::tr("group-tokens-or-cost-by-model").into()
         };
         let model_on = self
             .fx
@@ -924,7 +938,7 @@ impl PopupRoot {
                     .items_center()
                     .justify_center()
                     .child(components::text(
-                        "Model",
+                        crate::i18n::tr("model"),
                         10.0,
                         12.0,
                         palette
@@ -945,9 +959,12 @@ impl PopupRoot {
                 0,
                 if palette.dark { 35 } else { 14 },
             ));
-        for (index, (label, cost, width)) in [("Tokens", false, 46.0), ("Cost", true, 38.0)]
-            .into_iter()
-            .enumerate()
+        for (index, (label, cost, width)) in [
+            (crate::i18n::tr("tokens"), false, 46.0),
+            (crate::i18n::tr("cost"), true, 38.0),
+        ]
+        .into_iter()
+        .enumerate()
         {
             let available = if cost {
                 availability.cost
@@ -972,13 +989,13 @@ impl PopupRoot {
                 )
             };
             let tip = if !available && cost {
-                "No cost data for this period"
+                crate::i18n::tr("no-cost-data-for-this-period")
             } else if !available {
-                "No token data for this period"
+                crate::i18n::tr("no-token-data-for-this-period")
             } else if cost {
-                "Daily cost in USD"
+                crate::i18n::tr("daily-cost-in-usd")
             } else {
-                "Daily token volume"
+                crate::i18n::tr("daily-token-volume")
             };
             let chart_key = chart.clone();
             let mut cell = div()
@@ -1059,12 +1076,18 @@ impl PopupRoot {
             let (rows, total) = models.page_rows(bucket.first, cost, dark, page);
             let page = page.min(models.pages(bucket.first).saturating_sub(1));
             let footer = if rows.is_empty() {
-                Some("No model data".into())
+                Some(crate::i18n::tr("no-model-data").into())
             } else if total > MODEL_PAGE_SIZE {
-                Some(format!(
-                    "{}–{} of {total} models · Scroll for more",
-                    page * MODEL_PAGE_SIZE + 1,
-                    ((page + 1) * MODEL_PAGE_SIZE).min(total)
+                Some(crate::i18n::format(
+                    "of-total-models-scroll-for-more",
+                    &[
+                        ("v0", (page * MODEL_PAGE_SIZE + 1).to_string()),
+                        (
+                            "v1",
+                            (((page + 1) * MODEL_PAGE_SIZE).min(total)).to_string(),
+                        ),
+                        ("total", total.to_string()),
+                    ],
                 ))
             } else {
                 None
@@ -1072,9 +1095,9 @@ impl PopupRoot {
             return ActivityTip::Models {
                 title,
                 metric: if cost {
-                    "Cost (USD) by model".into()
+                    crate::i18n::tr("cost-usd-by-model").into()
                 } else {
-                    "Tokens by model".into()
+                    crate::i18n::tr("tokens-by-model").into()
                 },
                 rows,
                 footer,
@@ -1086,15 +1109,18 @@ impl PopupRoot {
         } else if usage.requests == 0 {
             "$0.00".into()
         } else {
-            "Unavailable".into()
+            crate::i18n::tr("unavailable").into()
         };
         let requests = if usage.priced_requests > 0 && usage.priced_requests < usage.requests {
-            format!(
-                "{} requests · {} priced",
-                usage.requests, usage.priced_requests
+            crate::i18n::format(
+                "requests-priced",
+                &[
+                    ("v0", usage.requests.to_string()),
+                    ("v1", usage.priced_requests.to_string()),
+                ],
             )
         } else {
-            format!("{} requests", usage.requests)
+            crate::i18n::format("requests", &[("v0", usage.requests.to_string())])
         };
         ActivityTip::Usage {
             title,
@@ -1159,15 +1185,18 @@ fn usage_card_metrics(
         let spend = |usage: &TokenUsage| format_usd(usage.estimated_cost_microusd as f64 / 1e6);
         return row
             .child(metric_cell(
-                "Today".into(),
+                crate::i18n::tr("today").into(),
                 spend(&statistics.today),
-                format!("{} requests", statistics.today.requests),
+                crate::i18n::format("requests", &[("v0", statistics.today.requests.to_string())]),
                 palette,
             ))
             .child(metric_cell(
-                format!("Last {period} days"),
+                crate::i18n::format("last-period-days", &[("period", period.to_string())]),
                 spend(&statistics.history),
-                format!("{} requests", statistics.history.requests),
+                crate::i18n::format(
+                    "requests",
+                    &[("v0", statistics.history.requests.to_string())],
+                ),
                 palette,
             ));
     }
@@ -1179,17 +1208,17 @@ fn usage_card_metrics(
             usage
                 .estimated_api_value_usd()
                 .map(format_usd)
-                .unwrap_or_else(|| "No data".into())
+                .unwrap_or_else(|| crate::i18n::tr("no-data").into())
         )
     };
     row.child(metric_cell(
-        "Today".into(),
+        crate::i18n::tr("today").into(),
         format_token_count(statistics.today.total_tokens()),
         value(&statistics.today),
         palette,
     ))
     .child(metric_cell(
-        format!("Last {period} days"),
+        crate::i18n::format("last-period-days", &[("period", period.to_string())]),
         format_token_count(statistics.history.total_tokens()),
         value(&statistics.history),
         palette,

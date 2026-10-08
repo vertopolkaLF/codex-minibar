@@ -8,25 +8,29 @@ use crate::settings::{
     LimitRefreshInterval, ProviderKind, ResetAnnouncementRefreshInterval, UsageRefreshInterval,
 };
 
-pub(super) const LIMIT_REFRESH_LABELS: [&str; 7] = [
-    "30 seconds",
-    "1 minute",
-    "2 minutes",
-    "3 minutes",
-    "5 minutes",
-    "10 minutes",
-    "15 minutes",
-];
+pub(super) fn limit_refresh_labels() -> [&'static str; 7] {
+    [
+        crate::i18n::tr("msg-30-seconds"),
+        crate::i18n::tr("msg-1-minute"),
+        crate::i18n::tr("msg-2-minutes"),
+        crate::i18n::tr("msg-3-minutes"),
+        crate::i18n::tr("msg-5-minutes"),
+        crate::i18n::tr("msg-10-minutes"),
+        crate::i18n::tr("msg-15-minutes"),
+    ]
+}
 
-pub(super) const USAGE_REFRESH_LABELS: [&str; 7] = [
-    "1 minute",
-    "5 minutes",
-    "10 minutes",
-    "15 minutes",
-    "30 minutes",
-    "45 minutes",
-    "60 minutes",
-];
+pub(super) fn usage_refresh_labels() -> [&'static str; 7] {
+    [
+        crate::i18n::tr("msg-1-minute"),
+        crate::i18n::tr("msg-5-minutes"),
+        crate::i18n::tr("msg-10-minutes"),
+        crate::i18n::tr("msg-15-minutes"),
+        crate::i18n::tr("msg-30-minutes"),
+        crate::i18n::tr("msg-45-minutes"),
+        crate::i18n::tr("msg-60-minutes"),
+    ]
+}
 
 impl SettingsWindow {
     pub(super) fn general_page(
@@ -42,13 +46,35 @@ impl SettingsWindow {
         let feed_toasts = s.notifications.forced_reset_notifications;
         let feed_interval = s.reset_announcement_refresh_interval;
 
+        let language = kit::card_of(k, |k| {
+            vec![kit::dropdown_row(
+                k,
+                "general-language",
+                crate::i18n::tr("language"),
+                Some(crate::i18n::tr(
+                    "applies-immediately-to-every-app-window-and-notification-auto-fol",
+                )),
+                kit::options(&[
+                    crate::i18n::tr("auto-windows"),
+                    crate::i18n::tr("english"),
+                    crate::i18n::tr("msg-russian"),
+                ]),
+                s.language.index() as i32,
+                false,
+                Self::h(cx, |this, index: usize, _, cx| {
+                    let language = crate::i18n::Language::from_index(index);
+                    this.edit(cx, move |settings| settings.language = language);
+                }),
+            )]
+        });
+
         let startup = kit::card_of(k, |k| {
             vec![
                 kit::toggle_row(
                     k,
                     "general-startup",
-                    "Start with Windows",
-                    Some("Open Codex Minibar in the tray when you sign in.".into()),
+                    crate::i18n::tr("start-with-windows"),
+                    Some(crate::i18n::tr("open-codex-minibar-in-the-tray-when-you-sign-in").into()),
                     start_at_login,
                     Self::h(cx, |this, value: bool, _, cx| {
                         this.edit(cx, move |settings| settings.start_at_login = value)
@@ -57,9 +83,9 @@ impl SettingsWindow {
                 kit::dropdown_row(
                     k,
                     "general-limit-refresh",
-                    "Refresh limits",
-                    Some("How often provider quotas are read."),
-                    kit::options(&LIMIT_REFRESH_LABELS),
+                    crate::i18n::tr("refresh-limits"),
+                    Some(crate::i18n::tr("how-often-provider-quotas-are-read")),
+                    kit::options(&limit_refresh_labels()),
                     limit_interval.index(),
                     false,
                     Self::h(cx, |this, index: usize, _, cx| {
@@ -75,8 +101,13 @@ impl SettingsWindow {
                 kit::toggle_row(
                     k,
                     "general-usage-stats",
-                    "Enable Usage Stats",
-                    Some("Scan local provider history for the Usage tab and cost totals.".into()),
+                    crate::i18n::tr("enable-usage-stats"),
+                    Some(
+                        crate::i18n::tr(
+                            "scan-local-provider-history-for-the-usage-tab-and-cost-totals",
+                        )
+                        .into(),
+                    ),
                     usage_enabled,
                     Self::h(cx, |this, value: bool, _, cx| {
                         this.edit(cx, move |settings| settings.usage_stats_enabled = value)
@@ -86,9 +117,11 @@ impl SettingsWindow {
                 kit::dropdown_row(
                     k,
                     "general-usage-refresh",
-                    "Collection period",
-                    Some("How often local provider history is scanned."),
-                    kit::options(&USAGE_REFRESH_LABELS),
+                    crate::i18n::tr("collection-period"),
+                    Some(crate::i18n::tr(
+                        "how-often-local-provider-history-is-scanned",
+                    )),
+                    kit::options(&usage_refresh_labels()),
                     usage_interval.index(),
                     !usage_enabled,
                     Self::h(cx, |this, index: usize, _, cx| {
@@ -104,10 +137,12 @@ impl SettingsWindow {
                 kit::toggle_row(
                     k,
                     "general-tibo-feed",
-                    "Check for confirmed Tibo resets",
+                    crate::i18n::tr("check-for-confirmed-tibo-resets"),
                     Some(
-                        "Reads the app's public GitHub feed and keeps the latest announcement cached."
-                            .into(),
+                        crate::i18n::tr(
+                            "reads-the-app-s-public-github-feed-and-keeps-the-latest-announcem",
+                        )
+                        .into(),
                     ),
                     feed,
                     Self::h(cx, |this, value: bool, _, cx| {
@@ -119,10 +154,12 @@ impl SettingsWindow {
                 kit::toggle_row(
                     k,
                     "general-tibo-toast",
-                    "Notify when new reset info arrives",
+                    crate::i18n::tr("notify-when-new-reset-info-arrives"),
                     Some(
-                        "Shows a notification when the feed reports a possible reset, never at the reset time."
-                            .into(),
+                        crate::i18n::tr(
+                            "shows-a-notification-when-the-feed-reports-a-possible-reset-never",
+                        )
+                        .into(),
                     ),
                     feed_toasts,
                     Self::h(cx, |this, value: bool, _, cx| {
@@ -134,18 +171,18 @@ impl SettingsWindow {
                 kit::dropdown_row(
                     k,
                     "general-tibo-interval",
-                    "Check every",
-                    Some(
-                        "The feed is also checked immediately when the app starts or this option is enabled.",
-                    ),
+                    crate::i18n::tr("check-every"),
+                    Some(crate::i18n::tr(
+                        "the-feed-is-also-checked-immediately-when-the-app-starts-or-this",
+                    )),
                     kit::options(&[
-                        "15 minutes",
-                        "30 minutes",
-                        "1 hour",
-                        "3 hours",
-                        "6 hours",
-                        "12 hours",
-                        "24 hours",
+                        crate::i18n::tr("msg-15-minutes"),
+                        crate::i18n::tr("msg-30-minutes"),
+                        crate::i18n::tr("msg-1-hour"),
+                        crate::i18n::tr("msg-3-hours"),
+                        crate::i18n::tr("msg-6-hours"),
+                        crate::i18n::tr("msg-12-hours"),
+                        crate::i18n::tr("msg-24-hours"),
                     ]),
                     feed_interval.index(),
                     !feed,
@@ -160,10 +197,11 @@ impl SettingsWindow {
         });
 
         vec![
+            language,
             startup,
-            kit::section_heading(k, "Usage Stats"),
+            kit::section_heading(k, crate::i18n::tr("usage-stats")),
             usage,
-            kit::section_heading(k, "Tibo Resets™"),
+            kit::section_heading(k, crate::i18n::tr("tibo-resets")),
             resets,
         ]
     }
@@ -189,7 +227,7 @@ impl SettingsWindow {
         if available.is_empty() {
             grid = grid.child(kit::caption(
                 k,
-                "Enable a provider in the Providers tab to include it here.",
+                crate::i18n::tr("enable-a-provider-in-the-providers-tab-to-include-it-here"),
             ));
         }
         for instance in &available {
@@ -201,11 +239,12 @@ impl SettingsWindow {
             .or_else(|| {
                 (instance.driver == ProviderKind::OpenRouter
                     && !crate::openrouter::has_management_key(instance.openrouter.as_slice()))
-                .then_some("Add a management key")
+                .then_some(crate::i18n::tr("add-a-management-key"))
             })
             .or_else(|| {
-                (!instance.usage_stats)
-                    .then_some("Usage statistics are off on this provider's page")
+                (!instance.usage_stats).then_some(crate::i18n::tr(
+                    "usage-statistics-are-off-on-this-provider-s-page",
+                ))
             });
             let checked = reason.is_none() && instance.in_usage_overview;
             let check = kit::checkbox(
@@ -228,13 +267,16 @@ impl SettingsWindow {
             };
             grid = grid.child(div().w(relative(1.0 / 3.0)).pr(px(12.0)).child(check));
         }
-        Row::new("general-usage-providers", "Included providers")
-            .description(
-                k,
-                "Choose which accounts count toward this machine's Usage tab and Home total. Excluded accounts keep collecting and still show usage on their own page.",
-            )
-            .detail(div().pt(px(10.0)).child(grid).into_any_element())
-            .disabled(!usage_enabled)
-            .render(k)
+        Row::new(
+            "general-usage-providers",
+            crate::i18n::tr("included-providers"),
+        )
+        .description(
+            k,
+            crate::i18n::tr("choose-which-accounts-count-toward-this-machine-s-usage-tab-and-h"),
+        )
+        .detail(div().pt(px(10.0)).child(grid).into_any_element())
+        .disabled(!usage_enabled)
+        .render(k)
     }
 }

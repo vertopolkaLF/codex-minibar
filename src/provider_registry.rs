@@ -21,7 +21,14 @@ pub enum MetricSource {
 pub struct MetricDescriptor {
     pub id: &'static str,
     pub label: &'static str,
+    pub label_key: &'static str,
     pub source: MetricSource,
+}
+
+impl MetricDescriptor {
+    pub fn localized_label(&self) -> &'static str {
+        crate::i18n::tr(self.label_key)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,16 +56,19 @@ const CODEX_METRICS: &[MetricDescriptor] = &[
     MetricDescriptor {
         id: "codex.session",
         label: "5h session",
+        label_key: "msg-5h-session",
         source: MetricSource::Primary,
     },
     MetricDescriptor {
         id: "codex.weekly",
         label: "Weekly",
+        label_key: "weekly",
         source: MetricSource::Secondary,
     },
     MetricDescriptor {
         id: "codex.lunaReserve",
         label: "Luna Reserve",
+        label_key: "luna-reserve",
         source: MetricSource::Additional("gpt-reserve"),
     },
 ];
@@ -67,11 +77,13 @@ const CLAUDE_METRICS: &[MetricDescriptor] = &[
     MetricDescriptor {
         id: "claude.session",
         label: "5h session",
+        label_key: "msg-5h-session",
         source: MetricSource::Primary,
     },
     MetricDescriptor {
         id: "claude.weekly",
         label: "Weekly",
+        label_key: "weekly",
         source: MetricSource::Secondary,
     },
 ];
@@ -80,21 +92,25 @@ const CURSOR_METRICS: &[MetricDescriptor] = &[
     MetricDescriptor {
         id: "cursor.auto",
         label: "Cursor Models",
+        label_key: "cursor-models",
         source: MetricSource::Secondary,
     },
     MetricDescriptor {
         id: "cursor.api",
         label: "Other Models",
+        label_key: "other-models",
         source: MetricSource::Additional("cursor-api"),
     },
     MetricDescriptor {
         id: "cursor.allModels",
         label: "All Models",
+        label_key: "all-models",
         source: MetricSource::Additional("cursor-all-models"),
     },
     MetricDescriptor {
         id: "cursor.grokBot",
         label: "Grok Bot",
+        label_key: "grok-bot",
         source: MetricSource::Additional("cursor-grok-bot"),
     },
 ];
@@ -108,16 +124,19 @@ const OPENCODE_GO_METRICS: &[MetricDescriptor] = &[
     MetricDescriptor {
         id: "opencode-go.session",
         label: "5h session",
+        label_key: "msg-5h-session",
         source: MetricSource::Primary,
     },
     MetricDescriptor {
         id: "opencode-go.weekly",
         label: "Weekly",
+        label_key: "weekly",
         source: MetricSource::Secondary,
     },
     MetricDescriptor {
         id: "opencode-go.monthly",
         label: "Monthly",
+        label_key: "monthly",
         source: MetricSource::Additional("monthly"),
     },
 ];
@@ -125,6 +144,7 @@ const OPENCODE_GO_METRICS: &[MetricDescriptor] = &[
 const OPENROUTER_METRICS: &[MetricDescriptor] = &[MetricDescriptor {
     id: "openrouter.limit",
     label: "Spending limit",
+    label_key: "spending-limit",
     source: MetricSource::Primary,
 }];
 
@@ -132,11 +152,13 @@ const ANTIGRAVITY_METRICS: &[MetricDescriptor] = &[
     MetricDescriptor {
         id: "antigravity.gemini",
         label: "Gemini",
+        label_key: "gemini",
         source: MetricSource::Primary,
     },
     MetricDescriptor {
         id: "antigravity.thirdParty",
         label: "Claude + GPT",
+        label_key: "claude-gpt",
         source: MetricSource::Secondary,
     },
 ];
@@ -144,6 +166,7 @@ const ANTIGRAVITY_METRICS: &[MetricDescriptor] = &[
 const GROK_METRICS: &[MetricDescriptor] = &[MetricDescriptor {
     id: "grok.credits",
     label: "Credits",
+    label_key: "credits",
     source: MetricSource::Primary,
 }];
 
@@ -152,6 +175,7 @@ const KIRO_METRICS: &[MetricDescriptor] = &[MetricDescriptor {
     // settings survive the switch from an extra lane to the primary monthly quota.
     id: "kiro.additional.credits",
     label: "Monthly credits",
+    label_key: "monthly-credits",
     source: MetricSource::Secondary,
 }];
 
@@ -426,20 +450,20 @@ pub fn catalog_brick_ids(provider: ProviderKind) -> Vec<String> {
 /// Human label for a popup brick id shown in Settings.
 pub fn brick_label(provider: ProviderKind, brick_id: &str) -> String {
     if let Some(metric) = metric(provider, brick_id) {
-        return metric.label.into();
+        return metric.localized_label().into();
     }
     let provider_id = descriptor(provider).id;
     if brick_id == resets_brick_id(provider) {
-        return "Banked resets".into();
+        return crate::i18n::tr("banked-resets").into();
     }
     if brick_id == credits_brick_id(provider) {
-        return "Credits".into();
+        return crate::i18n::tr("credits").into();
     }
     if brick_id == usage_brick_id(provider) {
-        return "Usage stats".into();
+        return crate::i18n::tr("usage-stats-7b9e1a").into();
     }
     if brick_id == spending_brick_id(provider) {
-        return "Spending".into();
+        return crate::i18n::tr("spending").into();
     }
     if let Some(source_id) = brick_id.strip_prefix(&format!("{provider_id}.additional.")) {
         return source_id.replace(['-', '_'], " ");
@@ -475,7 +499,7 @@ pub fn tray_metric_options(
     let mut options = descriptor(provider)
         .metrics
         .iter()
-        .map(|metric| (metric.id.to_string(), metric.label.to_string()))
+        .map(|metric| (metric.id.to_string(), metric.localized_label().to_string()))
         .collect::<Vec<_>>();
     let prefix = format!("{}.additional.", descriptor(provider).id);
     for (id, label) in discovered_labels {
@@ -559,17 +583,27 @@ pub enum LimitSectionKind {
 
 pub fn metric_label(provider: ProviderKind, limits: &RateLimits, id: &str) -> String {
     if uses_codex_luna_reserve_override(provider, limits, id) {
-        return crate::limits::LUNA_RESERVE_TITLE.into();
+        return crate::i18n::tr("luna-reserve").into();
     }
     if let Some(metric) = metric(provider, id) {
-        return metric.label.into();
+        return metric.localized_label().into();
     }
     limits
         .additional_limits
         .iter()
         .find(|limit| dynamic_metric_id(provider, &limit.id) == id)
-        .map(|limit| limit.title.clone())
+        .map(additional_label)
         .unwrap_or_else(|| id.rsplit('.').next().unwrap_or(id).replace('-', " "))
+}
+
+/// Localize application-owned lane names by their stable API identity. Model
+/// names and unknown provider-supplied titles remain provider data.
+pub fn additional_label(limit: &crate::limits::AdditionalLimit) -> String {
+    if limit.id == crate::limits::GPT_RESERVE_LIMIT_ID {
+        crate::i18n::tr("luna-reserve").into()
+    } else {
+        limit.title.clone()
+    }
 }
 
 pub fn metric_window<'a>(
@@ -643,7 +677,7 @@ pub fn resolve_metric<'a>(
         (!limit.window.is_empty()).then(|| {
             (
                 dynamic_metric_id(provider, &limit.id),
-                limit.title.clone(),
+                additional_label(limit),
                 &limit.window,
             )
         })

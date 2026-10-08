@@ -18,29 +18,34 @@ impl SettingsWindow {
         }
         let actions = kit::card_of(k, |k| {
             vec![
-                Row::new("log-troubleshoot", "Run Troubleshoot with AI")
-                    .icon(kit::row_icon(k, "sparkle-fill"))
-                    .description(
-                        k,
-                        "Let an installed AI CLI read the log and investigate a problem.",
-                    )
-                    .trailing(
-                        Button::new("log-troubleshoot", "Choose tool")
-                            .accent()
-                            .on_click(Self::h(cx, |this, (), _, cx| this.open_troubleshoot(cx)))
-                            .render(k),
-                    )
-                    .render(k),
-                Row::new("log-file", "Application log")
+                Row::new(
+                    "log-troubleshoot",
+                    crate::i18n::tr("run-troubleshoot-with-ai"),
+                )
+                .icon(kit::row_icon(k, "sparkle-fill"))
+                .description(
+                    k,
+                    crate::i18n::tr(
+                        "let-an-installed-ai-cli-read-the-log-and-investigate-a-problem",
+                    ),
+                )
+                .trailing(
+                    Button::new("log-troubleshoot", crate::i18n::tr("choose-tool"))
+                        .accent()
+                        .on_click(Self::h(cx, |this, (), _, cx| this.open_troubleshoot(cx)))
+                        .render(k),
+                )
+                .render(k),
+                Row::new("log-file", crate::i18n::tr("application-log"))
                     .icon(kit::row_icon(k, "file-text-fill"))
-                    .description(k, "log.txt in the app data folder.")
+                    .description(k, crate::i18n::tr("log-txt-in-the-app-data-folder"))
                     .trailing(
-                        Button::new("log-open-file", "Open log.txt")
+                        Button::new("log-open-file", crate::i18n::tr("open-log-txt"))
                             .on_click(kit::handler(|(), _, _| {
                                 if let Err(error) = crate::logger::open() {
                                     eprintln!("failed to open log.txt: {error:#}");
                                     crate::notifications::show(
-                                        "Could not open log.txt",
+                                        crate::i18n::tr("could-not-open-log-txt"),
                                         &error.to_string(),
                                     );
                                 }
@@ -49,12 +54,12 @@ impl SettingsWindow {
                     )
                     .trailing(
                         Button::icon_only("log-open-folder", "folder-open-fill")
-                            .tooltip("Open logs folder")
+                            .tooltip(crate::i18n::tr("open-logs-folder"))
                             .on_click(kit::handler(|(), _, _| {
                                 if let Err(error) = crate::logger::open_folder() {
                                     eprintln!("failed to open logs folder: {error:#}");
                                     crate::notifications::show(
-                                        "Could not open logs folder",
+                                        crate::i18n::tr("could-not-open-logs-folder"),
                                         &error.to_string(),
                                     );
                                 }
@@ -66,7 +71,7 @@ impl SettingsWindow {
         });
         let theme = &k.theme;
         let text = if self.log.is_empty() {
-            "No log events yet.".into()
+            crate::i18n::tr("no-log-events-yet").into()
         } else {
             self.log.clone()
         };
@@ -84,7 +89,11 @@ impl SettingsWindow {
             .text_color(theme.text_secondary)
             .child(text)
             .into_any_element();
-        vec![actions, kit::section_heading(k, "Live tail"), tail]
+        vec![
+            actions,
+            kit::section_heading(k, crate::i18n::tr("live-tail")),
+            tail,
+        ]
     }
 
     fn open_troubleshoot(&mut self, cx: &mut gpui::Context<Self>) {
@@ -102,8 +111,8 @@ impl SettingsWindow {
         );
         if tools.is_empty() {
             crate::notifications::show(
-                "No supported AI tool found",
-                "Install Codex or Claude Code and make it available to Minibar.",
+                crate::i18n::tr("no-supported-ai-tool-found"),
+                crate::i18n::tr("install-codex-or-claude-code-and-make-it-available-to-minibar"),
             );
         } else {
             self.troubleshoot = Some(crate::troubleshoot::ToolPickerState::new(tools));

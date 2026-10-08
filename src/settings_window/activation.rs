@@ -11,7 +11,17 @@ use crate::settings::{
     AutoActivationPause, ProviderId, ProviderInstance, ScheduledActivation, TimeFormat,
 };
 
-const WEEKDAY_LABELS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+fn weekday_labels() -> [&'static str; 7] {
+    [
+        crate::i18n::tr("mon"),
+        crate::i18n::tr("tue"),
+        crate::i18n::tr("wed"),
+        crate::i18n::tr("thu"),
+        crate::i18n::tr("fri"),
+        crate::i18n::tr("sat"),
+        crate::i18n::tr("sun"),
+    ]
+}
 
 /// Enabled instances that can start sessions with their own login.
 fn activation_providers(instances: &[ProviderInstance]) -> Vec<ProviderId> {
@@ -47,13 +57,13 @@ pub(super) fn weekdays_summary(weekdays: &[u8]) -> String {
     weekdays.sort_unstable();
     weekdays.dedup();
     match weekdays.as_slice() {
-        [0, 1, 2, 3, 4, 5, 6] => "Every day".into(),
-        [0, 1, 2, 3, 4] => "Weekdays".into(),
-        [5, 6] => "Weekends".into(),
-        [] => "No days".into(),
+        [0, 1, 2, 3, 4, 5, 6] => crate::i18n::tr("every-day").into(),
+        [0, 1, 2, 3, 4] => crate::i18n::tr("weekdays").into(),
+        [5, 6] => crate::i18n::tr("weekends").into(),
+        [] => crate::i18n::tr("no-days").into(),
         days => days
             .iter()
-            .map(|day| WEEKDAY_LABELS[*day as usize])
+            .map(|day| weekday_labels()[*day as usize])
             .collect::<Vec<_>>()
             .join(", "),
     }
@@ -140,23 +150,26 @@ impl SettingsWindow {
             .collect::<Vec<_>>();
         rows.push(kit::section_header(
             k,
-            "Start 5-hour sessions automatically",
+            crate::i18n::tr("start-5-hour-sessions-automatically"),
             Some(
-                "Starts a new session as soon as a window is available, instead of waiting for your first request. Each account uses its own login."
+                crate::i18n::tr("starts-a-new-session-as-soon-as-a-window-is-available-instead-of")
                     .into(),
             ),
             None,
         ));
         if candidates.is_empty() {
-            rows.push(kit::caption(k, "Add Codex or Claude in Providers first."));
+            rows.push(kit::caption(
+                k,
+                crate::i18n::tr("add-codex-or-claude-in-providers-first"),
+            ));
         } else {
             let mut automatic = Vec::new();
             for instance in candidates {
                 use crate::instances::{Capabilities, Capability};
                 let provider = instance.provider_id();
                 let reason = Capabilities::reason(instance, Capability::AutoActivation);
-                let description =
-                    (!instance.enabled).then(|| SharedString::from("Off in Providers"));
+                let description = (!instance.enabled)
+                    .then(|| SharedString::from(crate::i18n::tr("off-in-providers")));
                 automatic.push(kit::toggle_row_with(
                     k,
                     format!("activation-auto-{}", instance.id),
@@ -187,10 +200,10 @@ impl SettingsWindow {
         });
         rows.push(kit::section_header(
             k,
-            "Quiet periods",
-            Some("Don't auto-start sessions during these times.".into()),
+            crate::i18n::tr("quiet-periods"),
+            Some(crate::i18n::tr("don-t-auto-start-sessions-during-these-times").into()),
             Some(
-                Button::new("activation-add-pause", "Add")
+                Button::new("activation-add-pause", crate::i18n::tr("add"))
                     .with_icon("plus-bold")
                     .disabled(default_provider.is_none())
                     .on_click(add_pause)
@@ -205,7 +218,7 @@ impl SettingsWindow {
                 let all_day =
                     pause.start_time_minutes == 0 && pause.end_time_minutes == LAST_MINUTE;
                 let times = if all_day {
-                    "All day".to_owned()
+                    crate::i18n::tr("all-day").to_owned()
                 } else {
                     format!(
                         "{}–{}",
@@ -219,8 +232,8 @@ impl SettingsWindow {
                     provider: pause.provider(),
                     weekdays: pause.weekdays.clone(),
                     times: vec![
-                        ("From", pause.start_time_minutes),
-                        ("Until", pause.end_time_minutes),
+                        (crate::i18n::tr("from"), pause.start_time_minutes),
+                        (crate::i18n::tr("until"), pause.end_time_minutes),
                     ],
                     summary: format!("{} · {times}", weekdays_summary(&pause.weekdays)),
                 }
@@ -240,10 +253,10 @@ impl SettingsWindow {
         });
         rows.push(kit::section_header(
             k,
-            "Scheduled activations",
-            Some("Start a 5-hour session at a set time.".into()),
+            crate::i18n::tr("scheduled-activations"),
+            Some(crate::i18n::tr("start-a-5-hour-session-at-a-set-time").into()),
             Some(
-                Button::new("activation-add-schedule", "Add")
+                Button::new("activation-add-schedule", crate::i18n::tr("add"))
                     .with_icon("plus-bold")
                     .disabled(default_provider.is_none())
                     .on_click(add_schedule)
@@ -259,7 +272,7 @@ impl SettingsWindow {
                 enabled: schedule.enabled,
                 provider: schedule.provider(),
                 weekdays: schedule.weekdays.clone(),
-                times: vec![("Time", schedule.time_minutes)],
+                times: vec![(crate::i18n::tr("time"), schedule.time_minutes)],
                 summary: format!(
                     "{} · {}",
                     weekdays_summary(&schedule.weekdays),
@@ -310,11 +323,11 @@ impl SettingsWindow {
     ) -> Vec<AnyElement> {
         if rules.is_empty() {
             let message = if activation_providers(instances).is_empty() {
-                "Turn on Codex or Claude in Providers first, with a config folder login."
+                crate::i18n::tr("turn-on-codex-or-claude-in-providers-first-with-a-config-folder-l")
             } else if list == RuleList::Pause {
-                "No quiet periods yet."
+                crate::i18n::tr("no-quiet-periods-yet")
             } else {
-                "No scheduled activations yet."
+                crate::i18n::tr("no-scheduled-activations-yet")
             };
             return vec![
                 div()
@@ -366,7 +379,7 @@ impl SettingsWindow {
                 format!("{card_id}-header"),
                 rule.provider
                     .map(ProviderId::qualified_name)
-                    .unwrap_or_else(|| "Unknown provider".into()),
+                    .unwrap_or_else(|| crate::i18n::tr("unknown-provider").into()),
             )
             .icon(kit::row_icon(
                 k,
@@ -383,9 +396,9 @@ impl SettingsWindow {
                     .danger()
                     .ghost()
                     .tooltip(if list == RuleList::Pause {
-                        "Remove quiet period"
+                        crate::i18n::tr("remove-quiet-period")
                     } else {
-                        "Remove activation"
+                        crate::i18n::tr("remove-activation")
                     })
                     .on_click(remove)
                     .render(k),
@@ -414,7 +427,9 @@ impl SettingsWindow {
         if choices.is_empty() {
             fields = fields.child(kit::caption(
                 k,
-                "Turn on Codex or Claude in Providers first, with a config folder login.",
+                crate::i18n::tr(
+                    "turn-on-codex-or-claude-in-providers-first-with-a-config-folder-l",
+                ),
             ));
         } else if choices.len() > 1 || rule.provider.is_none() {
             let labels = choices
@@ -427,7 +442,7 @@ impl SettingsWindow {
             let rule_id = rule.id.clone();
             fields = fields.child(kit::field(
                 k,
-                "Provider",
+                crate::i18n::tr("provider"),
                 kit::dropdown(
                     k,
                     format!("{}-{}-provider", list.prefix(), rule.id),
@@ -497,7 +512,7 @@ impl SettingsWindow {
                 format!("{}-{}-all-day", list.prefix(), rule.id),
                 all_day,
                 false,
-                Some("All day".into()),
+                Some(crate::i18n::tr("all-day").into()),
                 Self::h(cx, move |this, value: bool, _, cx| {
                     this.edit_rule(cx, list, rule_id.clone(), move |_, _, _, times| {
                         let next = if value {
@@ -539,7 +554,7 @@ impl SettingsWindow {
         }
 
         let mut days = div().flex().gap(px(6.0));
-        for (day, label) in WEEKDAY_LABELS.iter().enumerate() {
+        for (day, label) in weekday_labels().iter().enumerate() {
             let selected = rule.weekdays.contains(&(day as u8));
             let rule_id = rule.id.clone();
             let theme = &k.theme;
@@ -584,7 +599,7 @@ impl SettingsWindow {
                 .child(*label),
             );
         }
-        let days = kit::field(k, "Days", days.into_any_element());
+        let days = kit::field(k, crate::i18n::tr("days"), days.into_any_element());
         if pause {
             fields = fields.child(time_row).child(days);
         } else {
