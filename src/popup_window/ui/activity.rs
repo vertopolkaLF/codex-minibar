@@ -1,7 +1,7 @@
 //! Per-provider usage activity card: metrics, daily stacked bars, legend.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::Arc,
 };
 
@@ -27,6 +27,9 @@ const HEIGHT: f32 = 56.0;
 const MAX_BARS: usize = 60;
 const CHART_WIDTH: f32 = crate::popup::POPUP_WIDTH as f32 - 2.0 - 32.0 - 2.0 - 24.0;
 pub(super) const MODEL_PAGE_SIZE: usize = 8;
+/// Input and output; cache reads dwarf both, so they start hidden.
+const DEFAULT_SERIES: u8 = 0b101;
+const LEGEND_GAP: f32 = 2.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Selection {
@@ -85,8 +88,13 @@ impl Availability {
     }
 
     pub(crate) fn selection(self, requested: Selection) -> Selection {
+        let mut mask = requested.mask & self.series;
+        // A cache-only history would otherwise open on an empty chart.
+        if mask == 0 && requested.mask == DEFAULT_SERIES {
+            mask = self.series;
+        }
         Selection {
-            mask: requested.mask & self.series,
+            mask,
             cost: self.cost && (requested.cost || self.series == 0),
         }
     }
@@ -275,6 +283,85 @@ pub(crate) fn model_color(model: &str, dark: bool) -> Hsla {
     ))
 }
 
+/// Legend label for a model id: no vendor prefix or snapshot date, words
+/// capitalized and split versions rejoined (`claude-sonnet-4-5-20250929`
+/// reads "Sonnet 4.5", `openai/gpt-5-codex` reads "GPT-5 Codex"). The full
+/// id stays in the entry's tooltip.
+pub(crate) fn short_model_name(model: &str) -> String {
+    let model = model.rsplit('/').next().unwrap_or(model);
+    let mut parts: Vec<&str> = model
+        .split(['-', '_', ' '])
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts
+        .last()
+        .is_some_and(|part| part.len() == 8 && part.bytes().all(|b| b.is_ascii_digit()))
+    {
+        parts.pop();
+    }
+    // Keep "Claude" when nothing but a version follows it.
+    if parts.len() > 1
+        && parts[0].eq_ignore_ascii_case("claude")
+        && !parts[1].starts_with(|c: char| c.is_ascii_digit())
+    {
+        parts.remove(0);
+    }
+    let numeric = |part: &str| part.bytes().all(|b| b.is_ascii_digit() || b == b'.');
+    let mut words: Vec<String> = Vec::new();
+    let mut previous_numeric = false;
+    for part in parts {
+        let is_numeric = numeric(part);
+        let last = words.last_mut();
+        match last {
+            Some(last) if is_numeric && previous_numeric => {
+                last.push('.');
+                last.push_str(part);
+            }
+            Some(last) if is_numeric && (last == "GPT" || last == "GLM") => {
+                last.push('-');
+                last.push_str(part);
+            }
+            _ if part.eq_ignore_ascii_case("gpt") || part.eq_ignore_ascii_case("glm") => {
+                words.push(part.to_ascii_uppercase());
+            }
+            _ => {
+                let mut chars = part.chars();
+                words.push(match chars.next() {
+                    Some(first) => first.to_uppercase().chain(chars).collect(),
+                    None => String::new(),
+                });
+            }
+        }
+        previous_numeric = is_numeric;
+    }
+    if words.is_empty() {
+        model.to_owned()
+    } else {
+        words.join(" ")
+    }
+}
+
+/// How many legend entries fit inline beside a `+N` chip for the rest.
+pub(crate) fn inline_legend_count(
+    widths: &[f32],
+    chip_width: impl Fn(usize) -> f32,
+    available: f32,
+) -> usize {
+    let span = |count: usize| {
+        widths[..count].iter().sum::<f32>() + LEGEND_GAP * count.saturating_sub(1) as f32
+    };
+    if span(widths.len()) <= available {
+        return widths.len();
+    }
+    (0..widths.len())
+        .rev()
+        .find(|&count| {
+            let gap = if count == 0 { 0.0 } else { LEGEND_GAP };
+            span(count) + gap + chip_width(widths.len() - count) <= available
+        })
+        .unwrap_or(0)
+}
+
 pub(crate) fn next_page(current: usize, pages: usize, wheel: f32) -> usize {
     let last = pages.saturating_sub(1);
     if wheel < 0.0 {
@@ -305,37 +392,59 @@ impl ModelData {
         )
     }
 
-    pub(crate) fn has_data(&self) -> bool {
+    fn visible<'a>(
+        &'a self,
+        date: NaiveDate,
+        hidden: &'a BTreeSet<String>,
+    ) -> impl Iterator<Item = (&'a String, &'a TokenUsage)> + 'a {
         self.days
-            .values()
-            .flat_map(|models| models.values())
-            .any(|usage| {
-                usage.requests > 0 || usage.total_tokens() > 0 || usage.priced_requests > 0
-            })
-    }
-
-    pub(crate) fn value(&self, date: NaiveDate, cost: bool) -> u64 {
-        self.days
-            .get(&date)
-            .into_iter()
-            .flat_map(|models| models.values())
-            .fold(0_u64, |total, usage| {
-                total.saturating_add(model_value(usage, cost))
-            })
-    }
-
-    pub(crate) fn pages(&self, date: NaiveDate) -> usize {
-        self.days
-            .get(&date)
-            .map_or(1, |models| models.len().div_ceil(MODEL_PAGE_SIZE).max(1))
-    }
-
-    fn sorted(&self, date: NaiveDate, cost: bool) -> Vec<(&str, &TokenUsage)> {
-        let mut rows: Vec<_> = self
-            .days
             .get(&date)
             .into_iter()
             .flat_map(|models| models.iter())
+            .filter(move |(model, _)| !hidden.contains(*model))
+    }
+
+    pub(crate) fn value(&self, date: NaiveDate, cost: bool, hidden: &BTreeSet<String>) -> u64 {
+        self.visible(date, hidden).fold(0_u64, |total, (_, usage)| {
+            total.saturating_add(model_value(usage, cost))
+        })
+    }
+
+    pub(crate) fn pages(&self, date: NaiveDate, hidden: &BTreeSet<String>) -> usize {
+        self.visible(date, hidden)
+            .count()
+            .div_ceil(MODEL_PAGE_SIZE)
+            .max(1)
+    }
+
+    /// Every model of the period with its total, largest first: the legend
+    /// order, so the inline entries are the ones that shape the chart.
+    pub(crate) fn ranking(&self, cost: bool) -> Vec<(String, TokenUsage)> {
+        let mut totals = BTreeMap::<&str, TokenUsage>::new();
+        for (model, usage) in self.days.values().flat_map(|models| models.iter()) {
+            totals.entry(model.as_str()).or_default().add(usage);
+        }
+        let mut rows: Vec<_> = totals
+            .into_iter()
+            .filter(|(_, usage)| usage.total_tokens() > 0 || usage.estimated_cost_microusd > 0)
+            .map(|(model, usage)| (model.to_owned(), usage))
+            .collect();
+        rows.sort_by(|a, b| {
+            model_value(&b.1, cost)
+                .cmp(&model_value(&a.1, cost))
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        rows
+    }
+
+    fn sorted<'a>(
+        &'a self,
+        date: NaiveDate,
+        cost: bool,
+        hidden: &'a BTreeSet<String>,
+    ) -> Vec<(&'a str, &'a TokenUsage)> {
+        let mut rows: Vec<_> = self
+            .visible(date, hidden)
             .map(|(model, usage)| (model.as_str(), usage))
             .collect();
         rows.sort_by(|a, b| {
@@ -352,9 +461,10 @@ impl ModelData {
         cost: bool,
         dark: bool,
         page: usize,
+        hidden: &BTreeSet<String>,
     ) -> (Vec<(String, String, Hsla)>, usize) {
-        let all = self.sorted(date, cost);
-        let page = page.min(self.pages(date).saturating_sub(1));
+        let all = self.sorted(date, cost, hidden);
+        let page = page.min(self.pages(date, hidden).saturating_sub(1));
         let total = all.len();
         let rows = all
             .iter()
@@ -373,11 +483,14 @@ impl ModelData {
     }
 
     /// Stacked segments of one day, largest last so it sits on top.
-    fn segments(&self, date: NaiveDate, cost: bool, dark: bool) -> Vec<(Hsla, f32)> {
-        self.days
-            .get(&date)
-            .into_iter()
-            .flat_map(|models| models.iter())
+    fn segments(
+        &self,
+        date: NaiveDate,
+        cost: bool,
+        dark: bool,
+        hidden: &BTreeSet<String>,
+    ) -> Vec<(Hsla, f32)> {
+        self.visible(date, hidden)
             .map(|(name, usage)| (model_color(name, dark), model_value(usage, cost) as f32))
             .collect()
     }
@@ -395,6 +508,8 @@ enum ModelLoad {
 pub(crate) struct ChartState {
     requested: Selection,
     by_model: bool,
+    hidden_models: BTreeSet<String>,
+    models_menu: bool,
     model_page: usize,
     hovered: Option<NaiveDate>,
     model_key: Option<String>,
@@ -448,10 +563,12 @@ impl ChartState {
     fn new(cost_based: bool) -> Self {
         Self {
             requested: Selection {
-                mask: 7,
+                mask: DEFAULT_SERIES,
                 cost: cost_based,
             },
             by_model: false,
+            hidden_models: BTreeSet::new(),
+            models_menu: false,
             model_page: 0,
             hovered: None,
             model_key: None,
@@ -485,6 +602,7 @@ impl ChartState {
         self.buckets = None;
         self.bars = HashMap::new();
         self.hovered = None;
+        self.models_menu = false;
     }
 }
 
@@ -607,6 +725,7 @@ impl PopupRoot {
             self.ensure_models(&chart, provider, statistics, today, &data, cx);
         }
         let state = &self.charts[&chart];
+        let hidden = Arc::new(state.hidden_models.clone());
         let models = match &state.models {
             Some(ModelLoad::Ready(models)) => Some(Arc::clone(models)),
             _ => None,
@@ -634,7 +753,7 @@ impl PopupRoot {
             if by_model {
                 models
                     .as_ref()
-                    .map_or(0, |models| models.value(bucket.first, cost_mode))
+                    .map_or(0, |models| models.value(bucket.first, cost_mode, &hidden))
             } else if cost_mode {
                 bucket.usage.estimated_cost_microusd
             } else {
@@ -687,7 +806,7 @@ impl PopupRoot {
             };
             if by_model && value > 0 {
                 if let Some(models) = models.as_ref() {
-                    for (color, weight) in models.segments(date, cost_mode, palette.dark) {
+                    for (color, weight) in models.segments(date, cost_mode, palette.dark, &hidden) {
                         bar_style.segments.push((color, weight));
                     }
                 }
@@ -739,7 +858,10 @@ impl PopupRoot {
             let bucket_for_tip = bucket.clone();
             let tip_owner = fx::key(("activity-tip", chart.as_str()));
             let models_for_tip = models.clone();
-            let pages = models.as_ref().map_or(1, |models| models.pages(date));
+            let pages = models
+                .as_ref()
+                .map_or(1, |models| models.pages(date, &hidden));
+            let hidden_for_tip = Arc::clone(&hidden);
             let mut slot = div()
                 .id(eid(format!("activity-{chart}-{date}")))
                 .flex_1()
@@ -761,6 +883,7 @@ impl PopupRoot {
                             by_model,
                             cost_mode,
                             0,
+                            &hidden_for_tip,
                         );
                         this.show_tip(tip_owner, TipContent::Activity(content), window, cx);
                     } else if state.hovered == Some(date) {
@@ -774,6 +897,7 @@ impl PopupRoot {
             if by_model && pages > 1 {
                 let bucket_for_page = bucket.clone();
                 let models_for_page = models.clone();
+                let hidden_for_page = Arc::clone(&hidden);
                 slot = slot.on_scroll_wheel(cx.listener(
                     move |this, event: &ScrollWheelEvent, _, cx| {
                         let delta = f32::from(event.delta.pixel_delta(px(20.0)).y);
@@ -792,6 +916,7 @@ impl PopupRoot {
                             true,
                             cost_mode,
                             page,
+                            &hidden_for_page,
                         );
                         if let Some(tip) = this.tip.as_mut() {
                             tip.content = TipContent::Activity(content);
@@ -808,6 +933,8 @@ impl PopupRoot {
             Some(crate::i18n::tr("loading-models"))
         } else if by_model && availability.series == 0 && !availability.cost {
             Some(crate::i18n::tr("no-model-data"))
+        } else if by_model && maximum == 0 && !hidden.is_empty() {
+            Some(crate::i18n::tr("no-series-selected"))
         } else if availability.series == 0 && !availability.cost {
             Some(crate::i18n::tr("no-usage-data"))
         } else if !by_model && !cost_mode && mask == 0 {
@@ -827,80 +954,37 @@ impl PopupRoot {
             );
         }
 
-        // Legend: one toggle per token series.
-        let mut legend = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(2.0))
-            .h(px(24.0));
-        if !by_model {
-            for series in Series::ALL {
-                let available = availability.series & (1 << series as u8) != 0;
-                let selected = selection.selected(series);
-                let opacity = self.fx.value(
-                    fx::key(("legend", chart.as_str(), series as u8)),
-                    if !available {
-                        0.3
-                    } else if selected {
-                        1.0
-                    } else {
-                        0.45
-                    },
-                    fx::FAST,
-                );
-                let hover_id = fx::key(("legend-hover", chart.as_str(), series as u8));
-                let tip = if available {
-                    crate::i18n::format(
-                        "tokens-94e0b9",
-                        &[
-                            ("v0", series.menu_label().to_string()),
-                            (
-                                "v1",
-                                (format_token_count(series.value(&statistics.history))).to_string(),
-                            ),
-                        ],
-                    )
-                } else {
-                    crate::i18n::format(
-                        "no-tokens-in-this-period",
-                        &[("v0", (series.menu_label().to_lowercase()).to_string())],
-                    )
-                };
-                let chart_key = chart.clone();
-                let mut item = div()
-                    .id(eid(format!("legend-{chart}-{}", series.label())))
-                    .px(px(3.0))
-                    .h(px(24.0))
-                    .flex()
-                    .items_center()
-                    .rounded(px(4.0))
-                    .opacity(opacity)
-                    .on_hover(self.hover_listener(hover_id, Some(tip.into()), cx))
-                    .child(components::text(
-                        format!("● {}", series.label()),
-                        11.0,
-                        14.0,
-                        series.color(&palette),
-                    ));
-                if available {
-                    item = item.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        if let Some(state) = this.charts.get_mut(&chart_key) {
-                            let current = Selection {
-                                cost: availability.selection(state.requested).cost,
-                                ..state.requested
-                            };
-                            state.requested =
-                                current.with_series(series, !current.selected(series));
-                            cx.notify();
-                        }
-                    }));
-                }
-                legend = legend.child(item);
-            }
-        }
+        let split_labels: [SharedString; 2] = [
+            crate::i18n::tr("split-type").into(),
+            crate::i18n::tr("model").into(),
+        ];
+        // Quiet segments are their label plus 20 DIP of padding.
+        let split_width = split_labels
+            .iter()
+            .map(|label| {
+                components::measure_text(
+                    window.text_system(),
+                    palette.font_family.clone(),
+                    12.0,
+                    FontWeight::SEMIBOLD,
+                    label,
+                ) + 20.0
+            })
+            .sum::<f32>();
+        let legend = if by_model {
+            self.model_legend(
+                &chart,
+                models.as_deref(),
+                &hidden,
+                cost_mode,
+                CHART_WIDTH - split_width - 8.0,
+                window,
+                cx,
+            )
+        } else {
+            self.series_legend(&chart, statistics, availability, selection, cx)
+        };
 
-        let model_available = models.as_ref().is_some_and(|m| m.has_data()) || !by_model;
         let model_hint: SharedString = if by_model && loading {
             crate::i18n::tr("loading-model-breakdown").into()
         } else if by_model && failed {
@@ -908,75 +992,31 @@ impl PopupRoot {
         } else {
             crate::i18n::tr("group-tokens-or-cost-by-model").into()
         };
-        let model_on = self
-            .fx
-            .toggle(fx::key(("model-on", chart.as_str())), by_model, fx::FAST);
-        let model_hover_id = fx::key(("model-selector", chart.as_str()));
-        let model_hover = self.fx.toggle(
-            fx::key(("model-hover", chart.as_str())),
-            self.hovered(model_hover_id) && !by_model,
-            fx::FASTER,
-        );
-        let model_label = crate::i18n::tr("model");
-        // Same look as the quiet segmented control beside it.
-        let model_width = components::measure_text(
-            window.text_system(),
-            palette.font_family.clone(),
-            12.0,
-            FontWeight::SEMIBOLD,
-            model_label,
-        ) + 20.0;
+        let [type_label, model_label] = split_labels;
         let chart_key = chart.clone();
-        let mut model_selector = div()
-            .id(eid(format!("model-selector-{chart}")))
-            .relative()
-            .flex_none()
-            .w(px(model_width))
-            .h(px(28.0))
-            .rounded(px(8.0))
-            .overflow_hidden()
-            .bg(palette.control_fill)
-            .cursor_pointer()
-            .on_hover(self.hover_listener(model_hover_id, Some(model_hint), cx))
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+        let split_selector = self.segmented_control_quiet_ext(
+            fx::key(("activity-split", chart.as_str())),
+            vec![
+                QuietSegment {
+                    label: type_label,
+                    tip: Some(crate::i18n::tr("split-by-token-type").into()),
+                    disabled: false,
+                },
+                QuietSegment {
+                    label: model_label,
+                    tip: Some(model_hint),
+                    disabled: false,
+                },
+            ],
+            usize::from(by_model),
+            move |this, index, _| {
                 if let Some(state) = this.charts.get_mut(&chart_key) {
-                    state.by_model = !state.by_model;
-                    cx.notify();
+                    state.by_model = index == 1;
+                    state.models_menu = false;
                 }
-            }))
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .rounded(px(8.0))
-                    .bg(palette.text_primary.opacity(0.14 * model_on)),
-            );
-        if model_hover > 0.001 {
-            model_selector = model_selector.child(
-                div()
-                    .absolute()
-                    .inset(px(2.0))
-                    .rounded(px(6.0))
-                    .bg(palette.subtle_fill.opacity(model_hover)),
-            );
-        }
-        let model_selector = model_selector.child(
-            div()
-                .relative()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    nowrap(components::caption(
-                        model_label,
-                        palette
-                            .text_tertiary
-                            .mix(palette.text_primary, model_on)
-                            .opacity(if model_available { 1.0 } else { 0.5 }),
-                    ))
-                    .font_weight(FontWeight::SEMIBOLD),
-                ),
+            },
+            window,
+            cx,
         );
         let metric_segments = [false, true]
             .into_iter()
@@ -996,7 +1036,11 @@ impl PopupRoot {
                     crate::i18n::tr("daily-token-volume")
                 };
                 QuietSegment {
-                    label: crate::i18n::tr(if cost { "cost" } else { "tokens" }).into(),
+                    label: if cost {
+                        "$".into()
+                    } else {
+                        crate::i18n::tr("tokens").into()
+                    },
                     tip: Some(tip.into()),
                     disabled: !available,
                 }
@@ -1015,27 +1059,27 @@ impl PopupRoot {
             window,
             cx,
         );
+        // The metric only changes what the bars measure, so it sits with the
+        // totals; the footer keeps what the colors mean and how bars split.
+        let header = usage_card_metrics(provider.kind(), statistics, &palette)
+            .items_start()
+            .child(div().flex_none().child(metric_selector));
         let footer = div()
             .flex()
             .flex_row()
             .items_center()
+            .gap(px(8.0))
             .w_full()
+            .h(px(28.0))
             .child(div().flex_1().min_w_0().child(legend))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap(px(8.0))
-                    .child(model_selector)
-                    .child(metric_selector),
-            );
+            .child(split_selector);
 
         card(&palette)
             .p(px(12.0))
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .child(usage_card_metrics(provider.kind(), statistics, &palette))
+            .child(header)
             .child(
                 div()
                     .flex()
@@ -1047,6 +1091,299 @@ impl PopupRoot {
             .into_any_element()
     }
 
+    /// One legend toggle: a filled dot while its series is drawn, a hollow
+    /// ring while it is hidden, with a hover fill so it reads as clickable.
+    #[allow(clippy::too_many_arguments)]
+    fn legend_entry(
+        &mut self,
+        id: &str,
+        label: String,
+        color: Hsla,
+        on: bool,
+        available: bool,
+        tip: SharedString,
+        on_click: Option<Box<dyn Fn(&mut Self, &mut Context<Self>)>>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let palette = self.palette.clone();
+        let hover_id = fx::key(("legend-hover", id));
+        let shown = self
+            .fx
+            .toggle(fx::key(("legend-on", id)), on && available, fx::FAST);
+        let hover = self.fx.toggle(
+            fx::key(("legend-hover-fx", id)),
+            self.hovered(hover_id) && available,
+            fx::FASTER,
+        );
+        let dot = div()
+            .size(px(7.0))
+            .rounded_full()
+            .flex_none()
+            .border_1()
+            .border_color(palette.text_tertiary.mix(color, shown))
+            .bg(color.opacity(shown));
+        let mut entry = div()
+            .id(eid(format!("legend-{id}")))
+            .relative()
+            .flex_none()
+            .h(px(24.0))
+            .px(px(4.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(5.0))
+            .rounded(px(4.0))
+            .opacity(if available { 1.0 } else { 0.4 })
+            .on_hover(self.hover_listener(hover_id, Some(tip), cx));
+        if let Some(layer) = components::hover_layer(&palette, hover, 4.0) {
+            entry = entry.child(layer);
+        }
+        entry = entry.child(dot).child(nowrap(components::text(
+            label,
+            11.0,
+            14.0,
+            palette.text_tertiary.mix(palette.text_secondary, shown),
+        )));
+        if available && let Some(on_click) = on_click {
+            entry =
+                entry
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        on_click(this, cx);
+                        cx.notify();
+                    }));
+        }
+        entry
+    }
+
+    fn series_legend(
+        &mut self,
+        chart: &str,
+        statistics: &UsageStatistics,
+        availability: Availability,
+        selection: Selection,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let palette = self.palette.clone();
+        let mut legend = div().flex().flex_row().items_center().gap(px(LEGEND_GAP));
+        for series in Series::ALL {
+            let available = availability.series & (1 << series as u8) != 0;
+            let tip = if available {
+                crate::i18n::format(
+                    "tokens-94e0b9",
+                    &[
+                        ("v0", series.menu_label().to_string()),
+                        (
+                            "v1",
+                            format_token_count(series.value(&statistics.history)).to_string(),
+                        ),
+                    ],
+                )
+            } else {
+                crate::i18n::format(
+                    "no-tokens-in-this-period",
+                    &[("v0", series.menu_label().to_lowercase())],
+                )
+            };
+            let chart_key = chart.to_owned();
+            let toggle: Box<dyn Fn(&mut Self, &mut Context<Self>)> = Box::new(move |this, _| {
+                if let Some(state) = this.charts.get_mut(&chart_key) {
+                    let current = Selection {
+                        cost: availability.selection(state.requested).cost,
+                        ..state.requested
+                    };
+                    state.requested = current.with_series(series, !current.selected(series));
+                }
+            });
+            legend = legend.child(self.legend_entry(
+                &format!("{chart}-{}", series as u8),
+                series.label().to_owned(),
+                series.color(&palette),
+                selection.selected(series),
+                available,
+                tip.into(),
+                Some(toggle),
+                cx,
+            ));
+        }
+        legend.into_any_element()
+    }
+
+    /// Model legend: as many entries as fit inline (largest first), the rest
+    /// behind a `+N` chip whose menu toggles them the same way.
+    #[allow(clippy::too_many_arguments)]
+    fn model_legend(
+        &mut self,
+        chart: &str,
+        models: Option<&ModelData>,
+        hidden: &BTreeSet<String>,
+        cost: bool,
+        available: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let palette = self.palette.clone();
+        let ranking = models
+            .map(|models| models.ranking(cost))
+            .unwrap_or_default();
+        let labels: Vec<String> = ranking
+            .iter()
+            .map(|(model, _)| short_model_name(model))
+            .collect();
+        let measure = |text: &str, weight: FontWeight| {
+            components::measure_text(
+                window.text_system(),
+                palette.font_family.clone(),
+                11.0,
+                weight,
+                text,
+            )
+        };
+        // Padding, dot and gap around each label; see `legend_entry`.
+        let widths: Vec<f32> = labels
+            .iter()
+            .map(|label| measure(label, FontWeight::NORMAL) + 20.0)
+            .collect();
+        let inline = inline_legend_count(
+            &widths,
+            |rest| measure(&format!("+{rest}"), FontWeight::SEMIBOLD) + 12.0,
+            available,
+        );
+        let menu_open = self
+            .charts
+            .get(chart)
+            .is_some_and(|state| state.models_menu)
+            && inline < ranking.len();
+        let reveal = self
+            .fx
+            .toggle(fx::key(("models-menu", chart)), menu_open, fx::FAST);
+
+        let mut entries = Vec::with_capacity(ranking.len());
+        for ((model, usage), label) in ranking.iter().zip(labels) {
+            let amount = if cost {
+                cost_label(usage)
+            } else {
+                format_token_count(usage.total_tokens()).to_string()
+            };
+            let chart_key = chart.to_owned();
+            let model_key = model.clone();
+            let toggle: Box<dyn Fn(&mut Self, &mut Context<Self>)> = Box::new(move |this, _| {
+                if let Some(state) = this.charts.get_mut(&chart_key)
+                    && !state.hidden_models.remove(&model_key)
+                {
+                    state.hidden_models.insert(model_key.clone());
+                }
+            });
+            entries.push(self.legend_entry(
+                &format!("{chart}-model-{model}"),
+                label,
+                model_color(model, palette.dark),
+                !hidden.contains(model),
+                true,
+                format!("{model} · {amount}").into(),
+                Some(toggle),
+                cx,
+            ));
+        }
+        let rest = entries.split_off(inline.min(entries.len()));
+        let mut legend = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(LEGEND_GAP))
+            .children(entries);
+        if rest.is_empty() {
+            return legend.into_any_element();
+        }
+
+        let rest_hidden = ranking[inline..]
+            .iter()
+            .any(|(model, _)| hidden.contains(model));
+        let chip_hover_id = fx::key(("models-chip", chart));
+        let chip_hover = self.fx.toggle(
+            fx::key(("models-chip-fx", chart)),
+            self.hovered(chip_hover_id) || menu_open,
+            fx::FASTER,
+        );
+        let chart_key = chart.to_owned();
+        let mut chip = div()
+            .id(eid(format!("models-chip-{chart}")))
+            .relative()
+            .flex_none()
+            .h(px(20.0))
+            .px(px(6.0))
+            .flex()
+            .items_center()
+            .rounded(px(5.0))
+            .bg(palette.control_fill)
+            .cursor_pointer()
+            .on_hover(self.hover_listener(chip_hover_id, None, cx))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                if let Some(state) = this.charts.get_mut(&chart_key) {
+                    state.models_menu = !state.models_menu;
+                    cx.notify();
+                }
+            }));
+        if let Some(layer) = components::hover_layer(&palette, chip_hover, 5.0) {
+            chip = chip.child(layer);
+        }
+        // Dimmed while any model behind it is hidden from the chart.
+        chip = chip.child(
+            nowrap(caption(
+                format!("+{}", rest.len()),
+                if rest_hidden {
+                    palette.text_tertiary
+                } else {
+                    palette.text_secondary
+                },
+            ))
+            .font_weight(FontWeight::SEMIBOLD),
+        );
+
+        let mut holder = div().relative().flex_none().child(chip);
+        if menu_open {
+            let chart_key = chart.to_owned();
+            let panel = div()
+                .id(eid(format!("models-menu-{chart}")))
+                .occlude()
+                .mb(px(4.0 + (1.0 - reveal) * 4.0))
+                .p(px(4.0))
+                .flex()
+                .flex_col()
+                .rounded(px(8.0))
+                // Reveal by motion only, like tooltips: the surface occludes
+                // the chart from its first visible frame.
+                .bg(palette.tooltip_background.alpha(1.0))
+                .border_1()
+                .border_color(palette.card_stroke.opacity(4.0))
+                .shadow_md()
+                .on_mouse_down_out(cx.listener(move |this, _: &gpui::MouseDownEvent, _, cx| {
+                    // The chip's own click toggles the menu closed.
+                    if this.hovered(chip_hover_id) {
+                        return;
+                    }
+                    if let Some(state) = this.charts.get_mut(&chart_key) {
+                        state.models_menu = false;
+                        cx.notify();
+                    }
+                }))
+                .children(rest);
+            holder = holder.child(
+                div().absolute().top_0().left_0().child(
+                    gpui::deferred(
+                        gpui::anchored()
+                            .anchor(gpui::Corner::BottomLeft)
+                            .snap_to_window_with_margin(px(8.0))
+                            .child(panel),
+                    )
+                    .with_priority(2),
+                ),
+            );
+        }
+        legend = legend.child(holder);
+        legend.into_any_element()
+    }
+
     pub(super) fn activity_tip(
         &self,
         bucket: &Bucket,
@@ -1054,12 +1391,13 @@ impl PopupRoot {
         by_model: bool,
         cost: bool,
         page: usize,
+        hidden: &BTreeSet<String>,
     ) -> ActivityTip {
         let title = bucket_title(bucket);
         let dark = self.palette.dark;
         if by_model && let Some(models) = models {
-            let (rows, total) = models.page_rows(bucket.first, cost, dark, page);
-            let page = page.min(models.pages(bucket.first).saturating_sub(1));
+            let (rows, total) = models.page_rows(bucket.first, cost, dark, page, hidden);
+            let page = page.min(models.pages(bucket.first, hidden).saturating_sub(1));
             let footer = if rows.is_empty() {
                 Some(crate::i18n::tr("no-model-data").into())
             } else if total > MODEL_PAGE_SIZE {
@@ -1264,5 +1602,74 @@ mod cache_tests {
         assert!(state.by_model);
         assert!(state.requested.cost);
         assert_eq!(state.model_page, 2);
+    }
+}
+
+#[cfg(test)]
+mod legend_tests {
+    use super::*;
+
+    #[test]
+    fn short_model_names_drop_vendor_and_date() {
+        assert_eq!(short_model_name("claude-sonnet-4-5-20250929"), "Sonnet 4.5");
+        assert_eq!(short_model_name("claude-opus-4-1"), "Opus 4.1");
+        assert_eq!(short_model_name("openai/gpt-5-codex"), "GPT-5 Codex");
+        assert_eq!(short_model_name("gpt-5.1-codex-max"), "GPT-5.1 Codex Max");
+        assert_eq!(short_model_name("anthropic/claude-haiku-4.5"), "Haiku 4.5");
+        assert_eq!(short_model_name("gemini-2.5-pro"), "Gemini 2.5 Pro");
+        assert_eq!(short_model_name("claude-4.5-sonnet"), "Claude 4.5 Sonnet");
+        assert_eq!(short_model_name("o3"), "O3");
+    }
+
+    #[test]
+    fn inline_legend_leaves_room_for_the_overflow_chip() {
+        let chip = |_| 20.0;
+        assert_eq!(inline_legend_count(&[50.0, 50.0], chip, 102.0), 2);
+        // 50 + 2 + 50 + 2 + 20 = 124 fits; a third entry does not.
+        assert_eq!(inline_legend_count(&[50.0, 50.0, 50.0], chip, 130.0), 2);
+        assert_eq!(inline_legend_count(&[50.0, 50.0, 50.0], chip, 60.0), 0);
+        assert_eq!(inline_legend_count(&[], chip, 10.0), 0);
+    }
+
+    #[test]
+    fn hidden_models_leave_bars_and_tips() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 6).unwrap();
+        let usage = |tokens| TokenUsage {
+            input_tokens: tokens,
+            requests: 1,
+            ..Default::default()
+        };
+        let bounds = [Bucket {
+            first: day,
+            last: day,
+            usage: TokenUsage::default(),
+        }];
+        let models = group_models(
+            vec![("a".into(), day, usage(10)), ("b".into(), day, usage(30))],
+            &bounds,
+            ProviderKind::Codex,
+        );
+        let none = BTreeSet::new();
+        let hidden = BTreeSet::from(["b".to_owned()]);
+        assert_eq!(models.value(day, false, &none), 40);
+        assert_eq!(models.value(day, false, &hidden), 10);
+        assert_eq!(models.page_rows(day, false, true, 0, &hidden).1, 1);
+        let ranking: Vec<_> = models.ranking(false).into_iter().map(|(m, _)| m).collect();
+        assert_eq!(ranking, ["b", "a"]);
+    }
+
+    #[test]
+    fn cache_starts_hidden_unless_it_is_the_only_series() {
+        let requested = ChartState::new(false).requested;
+        let all = Availability {
+            series: 0b111,
+            cost: true,
+        };
+        assert_eq!(all.selection(requested).mask, DEFAULT_SERIES);
+        let cache_only = Availability {
+            series: 0b010,
+            cost: false,
+        };
+        assert_eq!(cache_only.selection(requested).mask, 0b010);
     }
 }

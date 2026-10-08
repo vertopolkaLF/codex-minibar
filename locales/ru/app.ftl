@@ -362,6 +362,12 @@ msg-5h-session = Сессия 5 ч
 # src/provider_registry.rs
 weekly = Неделя
 
+# src/popup_window/ui/activity.rs
+split-type = Тип
+
+# src/popup_window/ui/activity.rs
+split-by-token-type = Разбить столбцы по типу токенов
+
 # src/provider_registry.rs
 cursor-models = Модели Cursor
 

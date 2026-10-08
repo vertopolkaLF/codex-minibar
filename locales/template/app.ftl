@@ -227,6 +227,14 @@ loading-model-breakdown = { "" }
 group-tokens-or-cost-by-model = { "" }
 
 # English source:
+# split-type = Type
+split-type = { "" }
+
+# English source:
+# split-by-token-type = Split bars by token type
+split-by-token-type = { "" }
+
+# English source:
 # model = Model
 model = { "" }
 
