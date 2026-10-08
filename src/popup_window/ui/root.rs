@@ -802,6 +802,11 @@ impl PopupRoot {
     }
 
     fn target_height(&self, view: PopupView) -> f32 {
+        // Usage loads asynchronously and its content height swings with the
+        // range and provider count; a fixed full-height shell never jumps.
+        if view == PopupView::Usage {
+            return self.host.max_height();
+        }
         let content = self
             .pages
             .get(&view)

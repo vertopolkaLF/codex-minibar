@@ -133,6 +133,7 @@ impl PopupRoot {
         let metric = self.overview_metric;
         let range = self.overview_range;
         let enabled = self.enabled_spend();
+        let enabled_count = enabled.len();
         let key = format!(
             "overview|{}|{:?}|{}|{}|{:?}|{:?}|{}",
             self.ui.usage_revision,
@@ -161,6 +162,9 @@ impl PopupRoot {
                 .snapshots
                 .get(&SnapshotSlot::Overview)
                 .is_some_and(|cache| cache.pending.is_some());
+        if snapshot.providers.is_empty() && recalculating && enabled_count > 0 {
+            return self.usage_skeleton(enabled_count, window, cx);
+        }
         if snapshot.providers.is_empty() {
             return div()
                 .flex()
@@ -188,11 +192,22 @@ impl PopupRoot {
             self.usage_chart_cache = Some(UsageChartCache::new(Arc::clone(&snapshot), metric));
         }
         let chart_data = Arc::clone(&self.usage_chart_cache.as_ref().unwrap().data);
-        let header = self.usage_header(&range_label, recalculating, window, cx);
+        let header = self.usage_header(Some(&range_label), recalculating, window, cx);
         let hero = self.usage_hero(&snapshot, window, cx);
         let chart = self.usage_chart_card(&snapshot, chart_data, cx);
-        let totals = usage_totals_card(&snapshot.totals, &palette);
+        let totals = usage_totals_card(Some(&snapshot.totals), &palette, palette.subtle_fill);
         let breakdown = self.usage_breakdown_card(&snapshot, window, cx);
+        self.usage_layout(header, hero, chart, totals, breakdown)
+    }
+
+    fn usage_layout(
+        &self,
+        header: AnyElement,
+        hero: AnyElement,
+        chart: AnyElement,
+        totals: AnyElement,
+        breakdown: AnyElement,
+    ) -> AnyElement {
         let two_columns = self.two_columns();
         let page = div().flex().flex_col().gap(px(10.0)).w_full().child(header);
         if two_columns {
@@ -231,6 +246,151 @@ impl PopupRoot {
                 .child(breakdown)
                 .into_any_element()
         }
+    }
+
+    /// Pulsing placeholder color for loading bones. Static when animations
+    /// are off.
+    fn usage_bone(&mut self) -> Hsla {
+        let base = self.palette.text_primary.opacity(0.08);
+        if !super::animations_enabled(&self.ui) {
+            return base;
+        }
+        // Shares the header spinner's clock: both run only while loading.
+        let started = *self.usage_spinner_started.get_or_insert_with(Instant::now);
+        let phase = started.elapsed().as_secs_f32() * 2.0 * PI / 1.6;
+        self.fx.mark_animating();
+        base.opacity(0.65 + 0.35 * phase.cos())
+    }
+
+    /// First load: the real header, controls and labels with bones in place
+    /// of the data, laid out like the loaded page so nothing jumps.
+    fn usage_skeleton(
+        &mut self,
+        providers: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let palette = self.palette.clone();
+        let header = self.usage_header(None, true, window, cx);
+        let bone = self.usage_bone();
+        let metric_control = self.usage_metric_control(window, cx);
+        let mut grid = div().flex().flex_row().flex_wrap().gap_y(px(16.0));
+        for _ in 0..providers {
+            grid = grid.child(
+                div()
+                    .w(relative(0.5))
+                    .pr(px(8.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.0))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(8.0))
+                            .h(px(20.0))
+                            .child(bone_block(bone, px(16.0), 16.0, 4.0))
+                            .child(bone_block(bone, px(72.0), 14.0, 4.0)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(1.0))
+                            .child(bone_line(bone, px(96.0), 16.0, 12.0))
+                            .child(bone_line(bone, px(124.0), 16.0, 12.0)),
+                    ),
+            );
+        }
+        let hero = usage_card(&palette)
+            .gap(px(16.0))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(components::split_row(
+                                bone_line(bone, px(128.0), 36.0, 28.0),
+                                metric_control,
+                            ))
+                            .child(bone_line(bone, px(148.0), 16.0, 12.0)),
+                    )
+                    .child(bone_block(bone, relative(1.0), 10.0, 4.0)),
+            )
+            .child(grid)
+            .into_any_element();
+
+        let hourly = self.overview_range == OverviewRange::Past24h;
+        let mut y_axis = div()
+            .w(px(CHART_Y_AXIS_WIDTH))
+            .h(px(CHART_PLOT_HEIGHT))
+            .flex_none()
+            .flex()
+            .flex_col()
+            .justify_between();
+        for _ in 0..4 {
+            y_axis = y_axis.child(bone_line(bone, px(28.0), 16.0, 10.0));
+        }
+        let x_axis = div()
+            .flex()
+            .flex_row()
+            .justify_between()
+            .w_full()
+            .children((0..3).map(|_| bone_line(bone, px(40.0), 16.0, 10.0)));
+        let chart = usage_card(&palette)
+            .gap(px(6.0))
+            .child(components::body_strong(
+                chart_title(hourly, self.overview_metric),
+                palette.text_primary,
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.0))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(CHART_Y_GAP))
+                            .child(y_axis)
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .h(px(CHART_PLOT_HEIGHT))
+                                    .rounded(px(6.0))
+                                    .bg(bone),
+                            ),
+                    )
+                    .child(div().pl(px(CHART_Y_AXIS_WIDTH + CHART_Y_GAP)).child(x_axis)),
+            )
+            .into_any_element();
+
+        let totals = usage_totals_card(None, &palette, bone);
+
+        let breakdown_control = self.usage_breakdown_control(window, cx);
+        let mut rows = div().flex().flex_col().gap(px(6.0));
+        for width in [0.62, 0.48, 0.55, 0.4, 0.5] {
+            rows = rows.child(components::split_row(
+                bone_line(bone, relative(width), 20.0, 14.0),
+                bone_line(bone, px(96.0), 20.0, 12.0),
+            ));
+        }
+        let breakdown = usage_card(&palette)
+            .gap(px(14.0))
+            .child(components::split_row(
+                components::body_strong(crate::i18n::tr("breakdown"), palette.text_primary),
+                breakdown_control,
+            ))
+            .child(rows)
+            .into_any_element();
+
+        self.usage_layout(header, hero, chart, totals, breakdown)
     }
 
     fn usage_title(&mut self, range_label: Option<&str>, recalculating: bool) -> gpui::Div {
@@ -281,7 +441,7 @@ impl PopupRoot {
 
     fn usage_header(
         &mut self,
-        range_label: &str,
+        range_label: Option<&str>,
         recalculating: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -311,19 +471,44 @@ impl PopupRoot {
             window,
             cx,
         );
+        let mut title = self.usage_title(range_label, recalculating);
+        if range_label.is_none() {
+            let bone = self.usage_bone();
+            title = title.child(bone_line(bone, px(108.0), 20.0, 12.0));
+        }
         div()
             .flex()
             .flex_row()
             .items_center()
             .gap_x(px(8.0))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(self.usage_title(Some(range_label), recalculating)),
-            )
+            .child(div().flex_1().min_w_0().child(title))
             .child(div().flex_none().ml_auto().child(range_control))
             .into_any_element()
+    }
+
+    /// Cost/Tokens only changes how the numbers read, so it sits beside
+    /// the headline it switches, quieter than the range control.
+    fn usage_metric_control(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let metric = self.overview_metric;
+        self.segmented_control_quiet(
+            fx::key("usage-metric"),
+            vec![
+                crate::i18n::tr("cost").into(),
+                crate::i18n::tr("tokens").into(),
+            ],
+            usize::from(metric == OverviewMetric::Tokens),
+            |this, index, _| {
+                this.overview_metric = if index == 0 {
+                    OverviewMetric::Cost
+                } else {
+                    OverviewMetric::Tokens
+                };
+                this.chart_hover = None;
+                this.tip = None;
+            },
+            window,
+            cx,
+        )
     }
 
     fn usage_hero(
@@ -343,27 +528,7 @@ impl PopupRoot {
         if metric == OverviewMetric::Cost {
             meta = format!("{meta} · {}", crate::i18n::tr("api-estimate"));
         }
-        // Cost/Tokens only changes how the numbers read, so it sits beside
-        // the headline it switches, quieter than the range control.
-        let metric_control = self.segmented_control_quiet(
-            fx::key("usage-metric"),
-            vec![
-                crate::i18n::tr("cost").into(),
-                crate::i18n::tr("tokens").into(),
-            ],
-            usize::from(metric == OverviewMetric::Tokens),
-            |this, index, _| {
-                this.overview_metric = if index == 0 {
-                    OverviewMetric::Cost
-                } else {
-                    OverviewMetric::Tokens
-                };
-                this.chart_hover = None;
-                this.tip = None;
-            },
-            window,
-            cx,
-        );
+        let metric_control = self.usage_metric_control(window, cx);
         let mut entries: Vec<(ProviderId, u64)> = snapshot
             .providers
             .iter()
@@ -424,12 +589,7 @@ impl PopupRoot {
         let metric = self.overview_metric;
         let series = Arc::clone(&data.series);
         let hourly = snapshot.hourly;
-        let title = match (hourly, metric) {
-            (true, OverviewMetric::Cost) => crate::i18n::tr("hourly-cost"),
-            (true, OverviewMetric::Tokens) => crate::i18n::tr("hourly-processed-tokens"),
-            (false, OverviewMetric::Cost) => crate::i18n::tr("cost"),
-            (false, OverviewMetric::Tokens) => crate::i18n::tr("tokens"),
-        };
+        let title = chart_title(hourly, metric);
         let card = usage_card(&palette)
             .gap(px(6.0))
             .child(components::body_strong(title, palette.text_primary));
@@ -662,15 +822,13 @@ impl PopupRoot {
         ChartTip { title, rows, total }
     }
 
-    fn usage_breakdown_card(
+    fn usage_breakdown_control(
         &mut self,
-        snapshot: &OverviewSnapshot,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let palette = self.palette.clone();
         let breakdown = self.overview_breakdown;
-        let control = self.segmented_control_quiet(
+        self.segmented_control_quiet(
             fx::key("usage-breakdown"),
             vec![
                 crate::i18n::tr("model").into(),
@@ -686,7 +844,18 @@ impl PopupRoot {
             },
             window,
             cx,
-        );
+        )
+    }
+
+    fn usage_breakdown_card(
+        &mut self,
+        snapshot: &OverviewSnapshot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let palette = self.palette.clone();
+        let breakdown = self.overview_breakdown;
+        let control = self.usage_breakdown_control(window, cx);
         let colored = self.ui.use_colored_provider_icons;
         let table = match breakdown {
             BreakdownMode::Model => model_breakdown_table(&snapshot.model_rows, &palette, colored),
@@ -817,8 +986,9 @@ fn provider_tile(
         )
 }
 
-fn usage_totals_card(totals: &TokenUsage, palette: &Palette) -> AnyElement {
-    let metric = |label: &'static str, value: String| {
+/// `None` renders the loading skeleton with the same labels and row heights.
+fn usage_totals_card(totals: Option<&TokenUsage>, palette: &Palette, bone: Hsla) -> AnyElement {
+    let metric = |label: &'static str, value: Option<String>| {
         div()
             .flex_1()
             .min_w_0()
@@ -826,8 +996,15 @@ fn usage_totals_card(totals: &TokenUsage, palette: &Palette) -> AnyElement {
             .flex_col()
             .gap(px(2.0))
             .child(caption(label, palette.text_tertiary))
-            .child(components::body_strong(value, palette.text_primary))
+            .child(match value {
+                Some(value) => components::body_strong(value, palette.text_primary),
+                None => bone_line(bone, px(64.0), 20.0, 14.0),
+            })
     };
+    let empty = TokenUsage::default();
+    let loaded = totals.is_some();
+    let totals = totals.unwrap_or(&empty);
+    let value = |value: String| loaded.then_some(value);
     let pair = |a, b| div().flex().flex_row().gap(px(8.0)).child(a).child(b);
     let uncached = totals
         .input_tokens
@@ -846,26 +1023,26 @@ fn usage_totals_card(totals: &TokenUsage, palette: &Palette) -> AnyElement {
                 .child(pair(
                     metric(
                         crate::i18n::tr("processed-tokens"),
-                        format_token_count(totals.total_tokens()),
+                        value(format_token_count(totals.total_tokens())),
                     ),
                     metric(
                         crate::i18n::tr("cached-input"),
-                        format_token_count(totals.cached_input_tokens),
+                        value(format_token_count(totals.cached_input_tokens)),
                     ),
                 ))
                 .child(pair(
                     metric(
                         crate::i18n::tr("uncached-input"),
-                        format_token_count(uncached),
+                        value(format_token_count(uncached)),
                     ),
                     metric(
                         crate::i18n::tr("output"),
-                        format_token_count(totals.output_tokens),
+                        value(format_token_count(totals.output_tokens)),
                     ),
                 ))
                 .child(metric(
                     crate::i18n::tr("cache-savings"),
-                    format_spend(totals.cache_savings_microusd),
+                    value(format_spend(totals.cache_savings_microusd)),
                 )),
         )
         .into_any_element()
@@ -1219,6 +1396,45 @@ fn paint_area_chart(
             color,
         ));
     }
+}
+
+fn chart_title(hourly: bool, metric: OverviewMetric) -> &'static str {
+    match (hourly, metric) {
+        (true, OverviewMetric::Cost) => crate::i18n::tr("hourly-cost"),
+        (true, OverviewMetric::Tokens) => crate::i18n::tr("hourly-processed-tokens"),
+        (false, OverviewMetric::Cost) => crate::i18n::tr("cost"),
+        (false, OverviewMetric::Tokens) => crate::i18n::tr("tokens"),
+    }
+}
+
+/// Loading placeholder block.
+fn bone_block(
+    color: Hsla,
+    width: impl Into<gpui::Length> + Clone,
+    height: f32,
+    radius: f32,
+) -> gpui::Div {
+    div()
+        .flex_none()
+        .w(width)
+        .h(px(height))
+        .rounded(px(radius))
+        .bg(color)
+}
+
+/// A bone sized like a glyph run, vertically centered in a text line box so
+/// it occupies the same height as the text it stands in for.
+fn bone_line(
+    color: Hsla,
+    width: impl Into<gpui::Length> + Clone,
+    line: f32,
+    glyph: f32,
+) -> gpui::Div {
+    div()
+        .h(px(line))
+        .flex()
+        .items_center()
+        .child(bone_block(color, width, glyph, 4.0))
 }
 
 fn paint_spinner(bounds: Bounds<Pixels>, angle: f32, color: Hsla, window: &mut Window) {
