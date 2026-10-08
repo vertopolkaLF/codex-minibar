@@ -235,28 +235,25 @@ impl PopupRoot {
         let shift = self
             .fx
             .toggle(fx::key("usage-title-shift"), recalculating, fx::FAST);
-        let mut title = div()
-            .relative()
+        let mut heading = div()
             .flex()
             .flex_row()
             .items_center()
             .gap(px(8.0))
             .h(px(24.0))
-            .pl(px(24.0 * shift));
+            .child(components::body_strong("Usage", palette.text_primary));
         if shift > 0.001 {
             let started = *self.usage_spinner_started.get_or_insert_with(Instant::now);
             let angle = started.elapsed().as_secs_f32() * 2.0 * PI;
             let color = palette.accent.opacity(shift);
-            title = title.child(
+            heading = heading.child(
                 canvas(
                     |_, _, _| {},
                     move |bounds, _, window, _| {
                         paint_spinner(bounds, angle, color, window);
                     },
                 )
-                .absolute()
-                .left_0()
-                .top(px(4.0))
+                .flex_none()
                 .size(px(16.0)),
             );
             if recalculating {
@@ -265,7 +262,7 @@ impl PopupRoot {
         } else {
             self.usage_spinner_started = None;
         }
-        title = title.child(components::body_strong("Usage", palette.text_primary));
+        let mut title = div().flex().flex_col().min_w_0().child(heading);
         if let Some(label) = range_label {
             title = title.child(nowrap(components::body(
                 label.to_owned(),
