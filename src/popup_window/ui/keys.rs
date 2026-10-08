@@ -203,6 +203,20 @@ pub(crate) fn parse_limit(text: &str) -> Result<Option<u64>, ()> {
     Ok(Some((value * 1_000_000.0).round() as u64))
 }
 
+/// Whether `text` can be a dollar amount being typed: digits with at most one
+/// decimal separator and two decimals. Anything else never reaches the field.
+fn is_amount_draft(text: &str) -> bool {
+    let mut parts = text.splitn(2, ['.', ',']);
+    let whole = parts.next().unwrap_or_default();
+    let cents = parts.next().unwrap_or_default();
+    whole.len() <= 10
+        && cents.len() <= 2
+        && whole
+            .chars()
+            .chain(cents.chars())
+            .all(|c| c.is_ascii_digit())
+}
+
 /// Editable text for a stored limit: `25`, `12.5`, or empty for none.
 fn limit_text(limit: Option<u64>) -> String {
     limit.map_or_else(String::new, |limit| {
@@ -393,9 +407,16 @@ impl PopupRoot {
         if self.keys.inputs.is_some() {
             return;
         }
-        let limit = cx.new(|cx| TextInput::new(window, cx));
+        let amount_input = |window: &mut Window, cx: &mut Context<Self>| {
+            cx.new(|cx| {
+                let mut input = TextInput::new(window, cx);
+                input.accept = Some(is_amount_draft);
+                input
+            })
+        };
+        let limit = amount_input(window, cx);
         let name = cx.new(|cx| TextInput::new(window, cx));
-        let new_limit = cx.new(|cx| TextInput::new(window, cx));
+        let new_limit = amount_input(window, cx);
         let subscriptions = vec![
             cx.subscribe(&limit, |this, _, event: &InputEvent, cx| match event {
                 InputEvent::Submit => this.save_editor(cx),
@@ -2135,6 +2156,25 @@ mod tests {
         assert_eq!(parse_limit("-1"), Err(()));
         assert_eq!(parse_limit("ten"), Err(()));
         assert_eq!(parse_limit("NaN"), Err(()));
+    }
+
+    #[test]
+    fn amount_fields_only_take_money() {
+        for ok in ["", "0", "25", "12.5", "12,50", ".5", "7.", "1000000000"] {
+            assert!(is_amount_draft(ok), "{ok:?}");
+        }
+        for bad in [
+            "ee",
+            "$5",
+            "-1",
+            "1 000",
+            "1.2.3",
+            "1.234",
+            "1e5",
+            "12345678901",
+        ] {
+            assert!(!is_amount_draft(bad), "{bad:?}");
+        }
     }
 
     #[test]
