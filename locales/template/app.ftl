@@ -1178,10 +1178,6 @@ msg-1-minute = { "" }
 msg-2-minutes = { "" }
 
 # English source:
-# msg-3-minutes = 3 minutes
-msg-3-minutes = { "" }
-
-# English source:
 # msg-5-minutes = 5 minutes
 msg-5-minutes = { "" }
 
@@ -1214,12 +1210,12 @@ start-with-windows = { "" }
 open-codex-minibar-in-the-tray-when-you-sign-in = { "" }
 
 # English source:
-# refresh-limits = Refresh limits
-refresh-limits = { "" }
+# refresh-interval = Refresh interval
+refresh-interval = { "" }
 
 # English source:
-# how-often-provider-quotas-are-read = How often provider quotas are read.
-how-often-provider-quotas-are-read = { "" }
+# how-often-this-instance-s-quotas-are-read = How often this instance's quotas are read. Longer intervals avoid provider rate limits.
+how-often-this-instance-s-quotas-are-read = { "" }
 
 # English source:
 # enable-usage-stats = Enable Usage Stats
@@ -1268,6 +1264,14 @@ msg-1-hour = { "" }
 # English source:
 # msg-3-hours = 3 hours
 msg-3-hours = { "" }
+
+# English source:
+# msg-2-hours = 2 hours
+msg-2-hours = { "" }
+
+# English source:
+# msg-5-hours = 5 hours
+msg-5-hours = { "" }
 
 # English source:
 # msg-6-hours = 6 hours

@@ -108,7 +108,7 @@ pub(crate) fn start_provider_worker_with_limits(
         history_retention_days: settings.history_retention_days,
         usage_refresh_interval: Duration::from_secs(settings.usage_refresh_interval.seconds()),
         usage_collection_enabled: settings.usage_stats_collection_enabled(provider),
-        limit_refresh_interval: Duration::from_secs(settings.limit_refresh_interval.seconds()),
+        limit_refresh_interval: Duration::from_secs(instance.refresh_interval().seconds()),
     };
     // A replaced worker can still have queued output. Tag every forwarded
     // event so the bridge rejects anything from an older credential.

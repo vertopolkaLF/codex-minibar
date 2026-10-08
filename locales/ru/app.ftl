@@ -883,9 +883,6 @@ msg-1-minute = 1 минута
 msg-2-minutes = 2 минуты
 
 # src/settings_window/general.rs
-msg-3-minutes = 3 минуты
-
-# src/settings_window/general.rs
 msg-5-minutes = 5 минут
 
 # src/settings_window/general.rs
@@ -910,10 +907,10 @@ start-with-windows = Запускать вместе с Windows
 open-codex-minibar-in-the-tray-when-you-sign-in = Открывать Codex Minibar в трее при входе в систему.
 
 # src/settings_window/onboarding.rs
-refresh-limits = Обновление лимитов
+refresh-interval = Интервал обновления
 
 # src/settings_window/general.rs
-how-often-provider-quotas-are-read = Как часто считываются лимиты провайдеров.
+how-often-this-instance-s-quotas-are-read = Как часто считываются лимиты этого экземпляра. Более длинный интервал помогает не упираться в ограничения запросов провайдера.
 
 # src/settings_window/general.rs
 enable-usage-stats = Включить статистику использования
@@ -950,6 +947,12 @@ msg-1-hour = 1 час
 
 # src/settings_window/general.rs
 msg-3-hours = 3 часа
+
+# src/settings_window/general.rs
+msg-2-hours = 2 часа
+
+# src/settings_window/general.rs
+msg-5-hours = 5 часов
 
 # src/settings_window/general.rs
 msg-6-hours = 6 часов

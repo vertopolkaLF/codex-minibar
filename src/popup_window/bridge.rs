@@ -311,9 +311,11 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                 let _ = commands.send(WorkerCommand::SetAutoActivationPauses(
                     crate::provider::auto_activation_pauses_for(provider, &settings),
                 ));
-                let _ = commands.send(WorkerCommand::SetLimitRefreshInterval(Duration::from_secs(
-                    settings.limit_refresh_interval.seconds(),
-                )));
+                if let Some(instance) = settings.instance(provider) {
+                    let _ = commands.send(WorkerCommand::SetLimitRefreshInterval(
+                        Duration::from_secs(instance.refresh_interval().seconds()),
+                    ));
+                }
                 let _ = commands.send(WorkerCommand::SetUsageRefreshInterval(Duration::from_secs(
                     settings.usage_refresh_interval.seconds(),
                 )));

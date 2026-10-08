@@ -10,7 +10,7 @@ use super::super::kit::{self, Button, Kit, MenuItem, Row};
 use super::super::window::SettingsWindow;
 use super::*;
 use crate::popup_window::ui::fx;
-use crate::settings::{BadgeColor, TimeFormat};
+use crate::settings::{BadgeColor, LimitRefreshInterval, TimeFormat};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Dot {
@@ -964,7 +964,22 @@ impl SettingsWindow {
         use crate::instances::{Capabilities, Capability};
         let provider = instance.provider_id();
         let descriptor = crate::provider_registry::descriptor(instance.driver);
-        let mut rows = Vec::new();
+        let intervals = LimitRefreshInterval::ALL.map(|interval| crate::i18n::tr(interval.label_key()));
+        let mut rows = vec![kit::dropdown_row(
+            k,
+            &format!("provider-{}-refresh", provider.id()),
+            crate::i18n::tr("refresh-interval"),
+            Some(crate::i18n::tr("how-often-this-instance-s-quotas-are-read")),
+            kit::options(&intervals),
+            instance.refresh_interval().index(),
+            false,
+            Self::h(cx, move |this, index: usize, _, cx| {
+                let value = LimitRefreshInterval::from_index(index as i32);
+                this.edit_instance(cx, provider, move |instance| {
+                    instance.refresh_interval = Some(value)
+                })
+            }),
+        )];
         if descriptor.supports_activation {
             rows.push(kit::toggle_row_with(
                 k,

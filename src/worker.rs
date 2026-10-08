@@ -508,6 +508,9 @@ fn run_limit_task(
     // This worker belongs to one provider, so its deadline and any retry stay
     // provider-local. A failing provider cannot wake another provider's loop.
     let mut next_poll = Instant::now();
+    // The regular deadline is measured from here, so an interval change can
+    // reschedule without waiting a whole new interval.
+    let mut last_poll: Option<Instant> = None;
     let mut manual_refresh_requested = false;
     loop {
         let now = Instant::now();
@@ -565,6 +568,7 @@ fn run_limit_task(
             // probe must not clear or restart the existing cooldown. A new
             // 429 response can still escalate it through record_429 above.
             if !(manual_refresh && pause_before_request.is_some() && !rate_limited) {
+                last_poll = Some(completed_at);
                 next_poll = completed_at
                     + effective_limit_poll_interval(poll_interval, automatic_activation, &state);
             }
@@ -597,10 +601,19 @@ fn run_limit_task(
                 next_poll = Instant::now();
             }
             Ok(WorkerCommand::SetLimitRefreshInterval(interval)) => {
+                // Every settings change resends the interval. Only a real
+                // change may move the deadline, or unrelated edits would keep
+                // postponing the next poll.
+                if poll_interval == interval {
+                    continue;
+                }
                 poll_interval = interval;
-                // Apply the setting immediately without an extra request.
-                next_poll = Instant::now()
-                    + effective_limit_poll_interval(poll_interval, automatic_activation, &state);
+                // Apply the setting immediately: a shorter interval that has
+                // already elapsed polls now, a longer one extends the wait.
+                if let Some(last_poll) = last_poll {
+                    next_poll = last_poll
+                        + effective_limit_poll_interval(poll_interval, automatic_activation, &state);
+                }
             }
             Ok(WorkerCommand::Refresh) => manual_refresh_requested = true,
             Ok(WorkerCommand::RateLimitPauseChanged) => {}

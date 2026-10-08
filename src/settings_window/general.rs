@@ -1,24 +1,10 @@
-//! General: startup, refresh cadence, Usage Stats and the reset feed.
+//! General: startup, Usage Stats and the reset feed.
 
 use gpui::{AnyElement, Context, IntoElement, ParentElement, Styled, Window, div, px, relative};
 
 use super::kit::{self, Kit, Row};
 use super::window::SettingsWindow;
-use crate::settings::{
-    LimitRefreshInterval, ProviderKind, ResetAnnouncementRefreshInterval, UsageRefreshInterval,
-};
-
-pub(super) fn limit_refresh_labels() -> [&'static str; 7] {
-    [
-        crate::i18n::tr("msg-30-seconds"),
-        crate::i18n::tr("msg-1-minute"),
-        crate::i18n::tr("msg-2-minutes"),
-        crate::i18n::tr("msg-3-minutes"),
-        crate::i18n::tr("msg-5-minutes"),
-        crate::i18n::tr("msg-10-minutes"),
-        crate::i18n::tr("msg-15-minutes"),
-    ]
-}
+use crate::settings::{ProviderKind, ResetAnnouncementRefreshInterval, UsageRefreshInterval};
 
 pub(super) fn usage_refresh_labels() -> [&'static str; 7] {
     [
@@ -40,7 +26,7 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let s = &self.settings;
-        let (start_at_login, limit_interval) = (s.start_at_login, s.limit_refresh_interval);
+        let start_at_login = s.start_at_login;
         let (usage_enabled, usage_interval) = (s.usage_stats_enabled, s.usage_refresh_interval);
         let feed = s.notifications.forced_reset_feed_enabled;
         let feed_toasts = s.notifications.forced_reset_notifications;
@@ -65,31 +51,16 @@ impl SettingsWindow {
         });
 
         let startup = kit::card_of(k, |k| {
-            vec![
-                kit::toggle_row(
-                    k,
-                    "general-startup",
-                    crate::i18n::tr("start-with-windows"),
-                    Some(crate::i18n::tr("open-codex-minibar-in-the-tray-when-you-sign-in").into()),
-                    start_at_login,
-                    Self::h(cx, |this, value: bool, _, cx| {
-                        this.edit(cx, move |settings| settings.start_at_login = value)
-                    }),
-                ),
-                kit::dropdown_row(
-                    k,
-                    "general-limit-refresh",
-                    crate::i18n::tr("refresh-limits"),
-                    Some(crate::i18n::tr("how-often-provider-quotas-are-read")),
-                    kit::options(&limit_refresh_labels()),
-                    limit_interval.index(),
-                    false,
-                    Self::h(cx, |this, index: usize, _, cx| {
-                        let value = LimitRefreshInterval::from_index(index as i32);
-                        this.edit(cx, move |settings| settings.limit_refresh_interval = value)
-                    }),
-                ),
-            ]
+            vec![kit::toggle_row(
+                k,
+                "general-startup",
+                crate::i18n::tr("start-with-windows"),
+                Some(crate::i18n::tr("open-codex-minibar-in-the-tray-when-you-sign-in").into()),
+                start_at_login,
+                Self::h(cx, |this, value: bool, _, cx| {
+                    this.edit(cx, move |settings| settings.start_at_login = value)
+                }),
+            )]
         });
 
         let usage = kit::card_of(k, |k| {

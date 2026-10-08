@@ -882,9 +882,6 @@ msg-1-minute = 1 minute
 msg-2-minutes = 2 minutes
 
 # src/settings_window/general.rs
-msg-3-minutes = 3 minutes
-
-# src/settings_window/general.rs
 msg-5-minutes = 5 minutes
 
 # src/settings_window/general.rs
@@ -909,10 +906,10 @@ start-with-windows = Start with Windows
 open-codex-minibar-in-the-tray-when-you-sign-in = Open Codex Minibar in the tray when you sign in.
 
 # src/settings_window/onboarding.rs
-refresh-limits = Refresh limits
+refresh-interval = Refresh interval
 
 # src/settings_window/general.rs
-how-often-provider-quotas-are-read = How often provider quotas are read.
+how-often-this-instance-s-quotas-are-read = How often this instance's quotas are read. Longer intervals avoid provider rate limits.
 
 # src/settings_window/general.rs
 enable-usage-stats = Enable Usage Stats
@@ -949,6 +946,12 @@ msg-1-hour = 1 hour
 
 # src/settings_window/general.rs
 msg-3-hours = 3 hours
+
+# src/settings_window/general.rs
+msg-2-hours = 2 hours
+
+# src/settings_window/general.rs
+msg-5-hours = 5 hours
 
 # src/settings_window/general.rs
 msg-6-hours = 6 hours

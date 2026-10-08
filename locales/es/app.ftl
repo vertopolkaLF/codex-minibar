@@ -585,8 +585,6 @@ msg-1-minute = 1 minuto
 
 msg-2-minutes = 2 minutos
 
-msg-3-minutes = 3 minutos
-
 msg-5-minutes = 5 minutos
 
 msg-10-minutes = 10 minutos
@@ -603,9 +601,9 @@ start-with-windows = Iniciar con Windows
 
 open-codex-minibar-in-the-tray-when-you-sign-in = Abrir Codex Minibar en la bandeja al iniciar sesión.
 
-refresh-limits = Actualizar límites
+refresh-interval = Intervalo de actualización
 
-how-often-provider-quotas-are-read = Frecuencia con la que se leen las cuotas de los proveedores.
+how-often-this-instance-s-quotas-are-read = Frecuencia con la que se leen las cuotas de esta instancia. Los intervalos más largos evitan los límites de solicitudes del proveedor.
 
 enable-usage-stats = Activar estadísticas de uso
 
@@ -630,6 +628,12 @@ the-feed-is-also-checked-immediately-when-the-app-starts-or-this = El canal tamb
 msg-1-hour = 1 hora
 
 msg-3-hours = 3 horas
+
+# src/settings_window/general.rs
+msg-2-hours = 2 horas
+
+# src/settings_window/general.rs
+msg-5-hours = 5 horas
 
 msg-6-hours = 6 horas
 

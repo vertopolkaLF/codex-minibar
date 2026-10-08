@@ -1766,6 +1766,30 @@ pub(crate) fn dropdown_with_placeholder(
     let toggle_id = id.clone();
     let hover = theme.control_hover;
     let rest = if open { hover } else { theme.control };
+    let leaving = (!open && k.animate())
+        .then(|| k.menus.leaving(&id))
+        .flatten();
+    let caret = match k.caret {
+        Some(caret) => icon(caret, 14.0, theme.text_secondary),
+        None => icon("caret-down-bold", 10.0, theme.text_secondary),
+    };
+    let turn = |progress: f32| Transformation::rotate(radians(std::f32::consts::PI * progress));
+    // Half a turn while the list is open, glided in step with its fade.
+    let caret: AnyElement = if let Some(opacity) = leaving {
+        caret.with_transformation(turn(opacity)).into_any_element()
+    } else if open && k.animate() {
+        caret
+            .with_animation(
+                eid(format!("dropdown-caret-{id}")),
+                Animation::new(MENU_FADE).with_easing(fx::ease_out_cubic),
+                move |el, delta| el.with_transformation(turn(delta)),
+            )
+            .into_any_element()
+    } else if open {
+        caret.with_transformation(turn(1.0)).into_any_element()
+    } else {
+        caret.into_any_element()
+    };
     let mut button = div()
         .id(eid(format!("dropdown-{id}")))
         .flex()
@@ -1785,10 +1809,7 @@ pub(crate) fn dropdown_with_placeholder(
         .text_size(px(13.0))
         .text_color(label_color)
         .child(div().flex_1().min_w_0().truncate().child(label))
-        .child(match k.caret {
-            Some(caret) => icon(caret, 14.0, theme.text_secondary),
-            None => icon("caret-down-bold", 10.0, theme.text_secondary),
-        });
+        .child(caret);
     if width > 0.0 {
         button = button.w(px(width));
     } else {
@@ -1829,9 +1850,6 @@ pub(crate) fn dropdown_with_placeholder(
     if width <= 0.0 {
         wrapper = wrapper.w_full().flex_1();
     }
-    let leaving = (!open && k.animate())
-        .then(|| k.menus.leaving(&id))
-        .flatten();
     if (open && !disabled) || leaving.is_some() {
         wrapper = wrapper.child(menu_panel(
             k, &id, items, selected, list_width, on_select, leaving,

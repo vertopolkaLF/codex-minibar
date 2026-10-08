@@ -11,14 +11,14 @@ use gpui::{
     WindowControlArea, div, px,
 };
 
-use super::general::{limit_refresh_labels, usage_refresh_labels};
+use super::general::usage_refresh_labels;
 use super::kit::{self, Button, Handler, Kit};
 use super::persistence::{load_settings_for_window, replace_settings};
 use super::theme::{Fonts, Theme};
 use crate::popup_window::AppState;
 use crate::popup_window::ui::fx;
 use crate::settings::{
-    LimitRefreshInterval, ProviderInstance, ProviderKind, Settings, TrayWidget,
+    ProviderInstance, ProviderKind, Settings, TrayWidget,
     UsageRefreshInterval,
 };
 
@@ -330,20 +330,6 @@ impl OnboardingWindow {
                     self.automatic,
                     Self::h(cx, |this, value: bool, _, cx| {
                         this.automatic = value;
-                        cx.notify();
-                    }),
-                ),
-                kit::dropdown_row(
-                    k,
-                    "onboarding-limit-refresh",
-                    crate::i18n::tr("refresh-limits"),
-                    None,
-                    kit::options(&limit_refresh_labels()),
-                    s.limit_refresh_interval.index(),
-                    false,
-                    Self::h(cx, |this, index: usize, _, cx| {
-                        this.settings.limit_refresh_interval =
-                            LimitRefreshInterval::from_index(index as i32);
                         cx.notify();
                     }),
                 ),

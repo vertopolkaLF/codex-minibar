@@ -582,8 +582,6 @@ msg-1-minute = 1 分钟
 
 msg-2-minutes = 2 分钟
 
-msg-3-minutes = 3 分钟
-
 msg-5-minutes = 5 分钟
 
 msg-10-minutes = 10 分钟
@@ -600,9 +598,9 @@ start-with-windows = 随 Windows 启动
 
 open-codex-minibar-in-the-tray-when-you-sign-in = 登录 Windows 时在托盘中打开 Codex Minibar。
 
-refresh-limits = 刷新额度
+refresh-interval = 刷新间隔
 
-how-often-provider-quotas-are-read = 读取提供商额度的频率。
+how-often-this-instance-s-quotas-are-read = 读取此实例额度的频率。较长的间隔可避免触发提供商的请求频率限制。
 
 enable-usage-stats = 启用用量统计
 
@@ -627,6 +625,12 @@ the-feed-is-also-checked-immediately-when-the-app-starts-or-this = 启动应用�
 msg-1-hour = 1 小时
 
 msg-3-hours = 3 小时
+
+# src/settings_window/general.rs
+msg-2-hours = 2 小时
+
+# src/settings_window/general.rs
+msg-5-hours = 5 小时
 
 msg-6-hours = 6 小时
 

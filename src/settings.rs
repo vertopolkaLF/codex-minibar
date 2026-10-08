@@ -480,54 +480,91 @@ fn read_international_value(name: &str) -> Option<String> {
     Some(String::from_utf16_lossy(&data[..units]).trim().to_string())
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// How often one provider instance reads its quotas. Each instance polls on
+/// its own cadence so one provider's rate limit never forces the others to
+/// slow down.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LimitRefreshInterval {
     Seconds30,
-    #[default]
     Minute1,
     Minutes2,
-    Minutes3,
     Minutes5,
     Minutes10,
     Minutes15,
+    Minutes30,
+    Hour1,
+    Hours2,
+    Hours5,
 }
 
 impl LimitRefreshInterval {
+    /// Dropdown order.
+    pub const ALL: [Self; 10] = [
+        Self::Seconds30,
+        Self::Minute1,
+        Self::Minutes2,
+        Self::Minutes5,
+        Self::Minutes10,
+        Self::Minutes15,
+        Self::Minutes30,
+        Self::Hour1,
+        Self::Hours2,
+        Self::Hours5,
+    ];
+
+    /// Claude answers frequent quota reads with HTTP 429, and OpenRouter
+    /// credits rarely move, so both poll slower than the rest.
+    pub const fn default_for(driver: ProviderKind) -> Self {
+        match driver {
+            ProviderKind::Claude => Self::Minutes2,
+            ProviderKind::OpenRouter => Self::Minutes10,
+            _ => Self::Minute1,
+        }
+    }
+
     pub const fn seconds(self) -> u64 {
         match self {
             Self::Seconds30 => 30,
             Self::Minute1 => 60,
             Self::Minutes2 => 2 * 60,
-            Self::Minutes3 => 3 * 60,
             Self::Minutes5 => 5 * 60,
             Self::Minutes10 => 10 * 60,
             Self::Minutes15 => 15 * 60,
+            Self::Minutes30 => 30 * 60,
+            Self::Hour1 => 60 * 60,
+            Self::Hours2 => 2 * 60 * 60,
+            Self::Hours5 => 5 * 60 * 60,
         }
     }
 
-    pub const fn index(self) -> i32 {
+    pub const fn label_key(self) -> &'static str {
         match self {
-            Self::Seconds30 => 0,
-            Self::Minute1 => 1,
-            Self::Minutes2 => 2,
-            Self::Minutes3 => 3,
-            Self::Minutes5 => 4,
-            Self::Minutes10 => 5,
-            Self::Minutes15 => 6,
+            Self::Seconds30 => "msg-30-seconds",
+            Self::Minute1 => "msg-1-minute",
+            Self::Minutes2 => "msg-2-minutes",
+            Self::Minutes5 => "msg-5-minutes",
+            Self::Minutes10 => "msg-10-minutes",
+            Self::Minutes15 => "msg-15-minutes",
+            Self::Minutes30 => "msg-30-minutes",
+            Self::Hour1 => "msg-1-hour",
+            Self::Hours2 => "msg-2-hours",
+            Self::Hours5 => "msg-5-hours",
         }
     }
 
-    pub const fn from_index(index: i32) -> Self {
-        match index {
-            0 => Self::Seconds30,
-            2 => Self::Minutes2,
-            3 => Self::Minutes3,
-            4 => Self::Minutes5,
-            5 => Self::Minutes10,
-            6 => Self::Minutes15,
-            _ => Self::Minute1,
-        }
+    pub fn index(self) -> i32 {
+        Self::ALL
+            .iter()
+            .position(|interval| *interval == self)
+            .map_or(1, |index| index as i32)
+    }
+
+    pub fn from_index(index: i32) -> Self {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| Self::ALL.get(index).copied())
+            .unwrap_or(Self::Minute1)
     }
 }
 
@@ -1693,7 +1730,6 @@ pub struct Settings {
     pub auto_activation_pauses: Vec<AutoActivationPause>,
     /// Enables the Usage tab, Usage Stats home card, and background usage collection.
     pub usage_stats_enabled: bool,
-    pub limit_refresh_interval: LimitRefreshInterval,
     pub usage_refresh_interval: UsageRefreshInterval,
     pub reset_announcement_refresh_interval: ResetAnnouncementRefreshInterval,
     pub start_at_login: bool,
@@ -1752,7 +1788,6 @@ impl Default for Settings {
             scheduled_activations: Vec::new(),
             auto_activation_pauses: Vec::new(),
             usage_stats_enabled: true,
-            limit_refresh_interval: LimitRefreshInterval::default(),
             usage_refresh_interval: UsageRefreshInterval::default(),
             reset_announcement_refresh_interval: ResetAnnouncementRefreshInterval::default(),
             start_at_login: true,

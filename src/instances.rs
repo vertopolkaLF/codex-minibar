@@ -17,7 +17,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::settings::{OpenRouterAccount, ProviderKind};
+use crate::settings::{LimitRefreshInterval, OpenRouterAccount, ProviderKind};
 
 /// Identity of one provider instance. `Copy` so it can replace the former
 /// provider enum everywhere a provider was used as a key.
@@ -336,6 +336,9 @@ pub struct ProviderInstance {
     /// Counts toward the machine-wide Usage tab and Home total spend. Off
     /// keeps collecting for this instance's own page.
     pub in_usage_overview: bool,
+    /// How often quotas are read. `None` follows the driver's default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_interval: Option<LimitRefreshInterval>,
     /// Explicit CLI or app location. Empty keeps automatic discovery.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub binary_path: Option<PathBuf>,
@@ -372,6 +375,7 @@ impl ProviderInstance {
             auto_activation: false,
             usage_stats: true,
             in_usage_overview: true,
+            refresh_interval: None,
             binary_path: None,
             source: InstanceSource::default(),
             kiro_crew_path: None,
@@ -400,6 +404,11 @@ impl ProviderInstance {
 
     pub fn provider_id(&self) -> ProviderId {
         ProviderId::new(self.driver, &self.id)
+    }
+
+    pub fn refresh_interval(&self) -> LimitRefreshInterval {
+        self.refresh_interval
+            .unwrap_or(LimitRefreshInterval::default_for(self.driver))
     }
 
     pub fn is_primary(&self) -> bool {
