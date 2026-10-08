@@ -36,6 +36,13 @@ fn run() -> Result<()> {
     if let Err(error) = settings.apply_runtime_effects() {
         eprintln!("failed to apply startup registration: {error:#}");
     }
+    std::thread::spawn(|| {
+        if let Err(error) = codex_minibar::discovery::cleanup() {
+            codex_minibar::logger::info(format!(
+                "Codex CLI startup cache cleanup deferred: {error:#}"
+            ));
+        }
+    });
     let activation_path = path.with_file_name("activation.toml");
     let last_activation_at: Option<DateTime<Utc>> =
         ActivationState::load_or_default(&activation_path)

@@ -88,6 +88,10 @@ pub fn launch_selected(tool: &AvailableAiTool) -> Result<()> {
 
 fn launch_terminal(selected: Option<&AvailableAiTool>) -> Result<()> {
     let script = script_path()?;
+    let prepared = selected
+        .filter(|tool| tool.tool == AiTool::Codex)
+        .map(|tool| crate::discovery::prepare(&tool.executable))
+        .transpose()?;
     let mut powershell_args = vec![
         "-NoLogo".to_owned(),
         "-NoProfile".to_owned(),
@@ -101,11 +105,31 @@ fn launch_terminal(selected: Option<&AvailableAiTool>) -> Result<()> {
         powershell_args.push("-Tool".to_owned());
         powershell_args.push(tool.tool.id().to_owned());
         powershell_args.push("-Executable".to_owned());
-        powershell_args.push(tool.executable.to_string_lossy().into_owned());
+        let executable = prepared
+            .as_ref()
+            .map(|cli| cli.path.as_path())
+            .unwrap_or(&tool.executable);
+        powershell_args.push(executable.to_string_lossy().into_owned());
     }
 
     #[cfg(windows)]
     {
+        // A terminal launcher such as wt.exe exits before its shell starts.
+        // For cached CLIs own the shell child instead, retaining the lease
+        // across that gap and until the troubleshooting console closes.
+        if let Some(prepared) = prepared.filter(|cli| cli.is_cached()) {
+            use std::os::windows::process::CommandExt;
+            let mut child = Command::new("powershell.exe")
+                .args(&powershell_args)
+                .creation_flags(0x0000_0010) // CREATE_NEW_CONSOLE
+                .spawn()
+                .context("open Codex troubleshooting terminal")?;
+            std::thread::spawn(move || {
+                let _lease = prepared;
+                let _ = child.wait();
+            });
+            return Ok(());
+        }
         if let Some(windows_terminal) = find_on_path("wt.exe") {
             let mut command = Command::new(windows_terminal);
             command.args(["new-tab", "--", "powershell.exe"]);
