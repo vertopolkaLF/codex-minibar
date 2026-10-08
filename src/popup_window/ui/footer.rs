@@ -212,7 +212,11 @@ impl PopupRoot {
             .child(self.render_refresh_button(button, size.icon_glyph_size() as f32, cx))
             .child(self.render_action_button(
                 "edit-home",
-                if editing { "fluent-checkmark" } else { "fluent-edit" },
+                if editing {
+                    "fluent-checkmark"
+                } else {
+                    "fluent-edit"
+                },
                 crate::i18n::tr(if editing { "done" } else { "edit-home" }).into(),
                 button,
                 size.icon_glyph_size() as f32,
