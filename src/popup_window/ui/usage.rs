@@ -62,10 +62,15 @@ impl UsageChartData {
 enum ChartMotion<'a> {
     Settled,
     /// Values blend from `from` (sampled at the same relative position).
-    Morph { from: &'a [DailySeriesPoint], progress: f32 },
+    Morph {
+        from: &'a [DailySeriesPoint],
+        progress: f32,
+    },
     /// The painted series is right-aligned to the window end and the window
     /// spans `span` days, so days slide in or out at the left edge.
-    Pan { span: f32 },
+    Pan {
+        span: f32,
+    },
 }
 
 pub(super) struct UsageChartCache {
@@ -705,8 +710,7 @@ impl PopupRoot {
             .value(fx::key("usage-chart-scale"), max_value as f32, fx::NORMAL);
         // Period/metric switches morph the curves out of the previous chart.
         let progress = if previous.is_some() {
-            self.fx
-                .value(fx::key("usage-chart-morph"), 1.0, fx::NORMAL)
+            self.fx.value(fx::key("usage-chart-morph"), 1.0, fx::NORMAL)
         } else {
             1.0
         };
@@ -1471,7 +1475,9 @@ fn paint_area_chart(
     };
     // Panned days outside the window must not spill over the y-axis.
     window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
-        paint_curves(series, motion, lines, &xs, max_value, plot_h, baseline, ox, oy, window);
+        paint_curves(
+            series, motion, lines, &xs, max_value, plot_h, baseline, ox, oy, window,
+        );
     });
     hline(baseline, 1.25, baseline_color, window);
     if let Some((index, color)) = hover {

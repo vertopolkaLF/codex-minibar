@@ -31,6 +31,9 @@ pub(super) const MODEL_PAGE_SIZE: usize = 8;
 const DEFAULT_SERIES: u8 = 0b101;
 const LEGEND_GAP: f32 = 2.0;
 
+/// Click handler of one legend toggle.
+type LegendClick = Box<dyn Fn(&mut PopupRoot, &mut Context<PopupRoot>)>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Selection {
     pub(crate) mask: u8,
@@ -1102,7 +1105,7 @@ impl PopupRoot {
         on: bool,
         available: bool,
         tip: SharedString,
-        on_click: Option<Box<dyn Fn(&mut Self, &mut Context<Self>)>>,
+        on_click: Option<LegendClick>,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let palette = self.palette.clone();
@@ -1186,7 +1189,7 @@ impl PopupRoot {
                 )
             };
             let chart_key = chart.to_owned();
-            let toggle: Box<dyn Fn(&mut Self, &mut Context<Self>)> = Box::new(move |this, _| {
+            let toggle: LegendClick = Box::new(move |this, _| {
                 if let Some(state) = this.charts.get_mut(&chart_key) {
                     let current = Selection {
                         cost: availability.selection(state.requested).cost,
@@ -1267,7 +1270,7 @@ impl PopupRoot {
             };
             let chart_key = chart.to_owned();
             let model_key = model.clone();
-            let toggle: Box<dyn Fn(&mut Self, &mut Context<Self>)> = Box::new(move |this, _| {
+            let toggle: LegendClick = Box::new(move |this, _| {
                 if let Some(state) = this.charts.get_mut(&chart_key)
                     && !state.hidden_models.remove(&model_key)
                 {
