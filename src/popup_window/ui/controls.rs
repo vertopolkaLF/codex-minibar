@@ -14,7 +14,8 @@ use super::{
     theme::HslaExt,
 };
 
-const SEGMENT_HEIGHT: f32 = 34.0;
+pub(crate) const SEGMENT_HEIGHT: f32 = 34.0;
+const COMPACT_SEGMENT_HEIGHT: f32 = 28.0;
 
 impl PopupRoot {
     /// Pill segmented control with a sliding accent thumb.
@@ -33,6 +34,30 @@ impl PopupRoot {
         self.segmented_control_badged(key, segments, selected, stretch, on_select, window, cx)
     }
 
+    /// [`Self::segmented_control`] at the quiet control's 28 DIP height, for
+    /// headings where the full-size pill would dominate.
+    pub(super) fn segmented_control_compact(
+        &mut self,
+        key: u64,
+        labels: Vec<SharedString>,
+        selected: usize,
+        on_select: impl Fn(&mut Self, usize, &mut Context<Self>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let segments = labels.into_iter().map(|label| (label, None)).collect();
+        self.segmented_control_accent(
+            key,
+            segments,
+            selected,
+            false,
+            COMPACT_SEGMENT_HEIGHT,
+            on_select,
+            window,
+            cx,
+        )
+    }
+
     /// [`Self::segmented_control`] whose segments may lead with an instance
     /// badge.
     #[allow(clippy::too_many_arguments)]
@@ -42,6 +67,30 @@ impl PopupRoot {
         segments: Vec<(SharedString, Option<crate::instances::Badge>)>,
         selected: usize,
         stretch: bool,
+        on_select: impl Fn(&mut Self, usize, &mut Context<Self>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.segmented_control_accent(
+            key,
+            segments,
+            selected,
+            stretch,
+            SEGMENT_HEIGHT,
+            on_select,
+            window,
+            cx,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn segmented_control_accent(
+        &mut self,
+        key: u64,
+        segments: Vec<(SharedString, Option<crate::instances::Badge>)>,
+        selected: usize,
+        stretch: bool,
+        height: f32,
         on_select: impl Fn(&mut Self, usize, &mut Context<Self>) + 'static,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -64,6 +113,7 @@ impl PopupRoot {
                 badge: badge.map(|badge| {
                     components::badge_plate(&badge, 14.0, &palette).into_any_element()
                 }),
+                disabled: false,
             })
             .collect();
         let style = SegmentStyle {
@@ -73,8 +123,104 @@ impl PopupRoot {
             text_on_thumb: palette.text_on_accent,
             hover: palette.subtle_fill,
             divider: palette.divider,
+            height,
         };
+        self.segmented_control_styled(
+            key,
+            segments,
+            Vec::new(),
+            selected,
+            stretch,
+            style,
+            on_select,
+            cx,
+        )
+    }
+
+    /// Compact neutral variant for secondary choices (display mode rather
+    /// than data scope), so it never competes with an accent control.
+    pub(super) fn segmented_control_quiet(
+        &mut self,
+        key: u64,
+        labels: Vec<SharedString>,
+        selected: usize,
+        on_select: impl Fn(&mut Self, usize, &mut Context<Self>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let segments = labels
+            .into_iter()
+            .map(|label| QuietSegment {
+                label,
+                tip: None,
+                disabled: false,
+            })
+            .collect();
+        self.segmented_control_quiet_ext(key, segments, selected, on_select, window, cx)
+    }
+
+    /// [`Self::segmented_control_quiet`] whose segments carry hover tips and
+    /// may be disabled (still hoverable so their tip explains why).
+    pub(super) fn segmented_control_quiet_ext(
+        &mut self,
+        key: u64,
+        segments: Vec<QuietSegment>,
+        selected: usize,
+        on_select: impl Fn(&mut Self, usize, &mut Context<Self>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let palette = self.palette.clone();
+        let tips = segments.iter().map(|segment| segment.tip.clone()).collect();
+        let segments = segments
+            .into_iter()
+            .map(
+                |QuietSegment {
+                     label, disabled, ..
+                 }| {
+                    let width = components::measure_text(
+                        window.text_system(),
+                        palette.font_family.clone(),
+                        12.0,
+                        FontWeight::SEMIBOLD,
+                        &label,
+                    );
+                    Segment {
+                        disabled,
+                        ..Segment::text(label, width)
+                    }
+                },
+            )
+            .collect();
+        let style = SegmentStyle {
+            track: palette.control_fill,
+            thumb: palette.text_primary.opacity(0.14),
+            text: palette.text_tertiary,
+            text_on_thumb: palette.text_primary,
+            hover: palette.subtle_fill,
+            divider: palette.divider.opacity(0.0),
+            height: COMPACT_SEGMENT_HEIGHT,
+        };
+        self.segmented_control_styled(key, segments, tips, selected, false, style, on_select, cx)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn segmented_control_styled(
+        &mut self,
+        key: u64,
+        segments: Vec<Segment>,
+        tips: Vec<Option<SharedString>>,
+        selected: usize,
+        stretch: bool,
+        style: SegmentStyle,
+        on_select: impl Fn(&mut Self, usize, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let on_select = Rc::new(on_select);
+        let disabled = segments
+            .iter()
+            .map(|segment| segment.disabled)
+            .collect::<Vec<_>>();
         let hover_ids = (0..64)
             .map(|index| fx::key(("segment-hover", key, index)))
             .collect::<Vec<_>>();
@@ -85,12 +231,16 @@ impl PopupRoot {
         // The listeners borrow `self`; the tweens are swapped out meanwhile.
         let mut tweens = std::mem::take(&mut self.fx);
         let mut wire = |index: usize, cell: gpui::Stateful<gpui::Div>| {
+            let tip = tips.get(index).cloned().flatten();
+            let cell = cell.on_hover(self.hover_listener(hover_ids[index.min(63)], tip, cx));
+            if disabled.get(index).copied().unwrap_or(false) {
+                return cell;
+            }
             let on_select = Rc::clone(&on_select);
-            cell.on_hover(self.hover_listener(hover_ids[index.min(63)], None, cx))
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    on_select(this, index, cx);
-                    cx.notify();
-                }))
+            cell.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                on_select(this, index, cx);
+                cx.notify();
+            }))
         };
         let control = segmented_track(
             &mut tweens,
@@ -104,49 +254,6 @@ impl PopupRoot {
         );
         self.fx = tweens;
         control
-    }
-
-    /// Text tabs (Today / Yesterday / 30 days) with crossfaded colors.
-    pub(super) fn text_tabs(
-        &mut self,
-        key: u64,
-        labels: &[(&'static str, bool)],
-        on_select: impl Fn(&mut Self, usize, &mut Context<Self>) + 'static,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let palette = self.palette.clone();
-        let on_select = Rc::new(on_select);
-        let mut row = div().flex().flex_row().items_center().gap(px(12.0));
-        for (index, (label, selected)) in labels.iter().copied().enumerate() {
-            let hover_id = fx::key(("text-tab", key, index));
-            let hovered = self.hovered(hover_id);
-            let hover = self.fx.toggle(
-                fx::key(("text-tab-hover", hover_id)),
-                hovered,
-                fx::TEXT_FADE,
-            );
-            let on = self.fx.toggle(
-                fx::key(("text-tab-on", key, index)),
-                selected,
-                fx::TEXT_FADE,
-            );
-            let color = palette
-                .text_tertiary
-                .mix(palette.text_secondary, hover)
-                .mix(palette.accent, on);
-            let on_select = Rc::clone(&on_select);
-            row = row.child(
-                div()
-                    .id(eid(format!("text-tab-{key}-{index}")))
-                    .on_hover(self.hover_listener(hover_id, None, cx))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        on_select(this, index, cx);
-                        cx.notify();
-                    }))
-                    .child(components::nowrap(components::body_strong(label, color))),
-            );
-        }
-        row.into_any_element()
     }
 
     /// Small 28 DIP reorder grip shown in Home headings.
@@ -184,6 +291,7 @@ pub(crate) struct SegmentStyle {
     pub(crate) text_on_thumb: Hsla,
     pub(crate) hover: Hsla,
     pub(crate) divider: Hsla,
+    pub(crate) height: f32,
 }
 
 pub(crate) struct Segment {
@@ -192,6 +300,15 @@ pub(crate) struct Segment {
     /// Leading mark (an instance badge), with its width for fixed layouts.
     pub(crate) badge: Option<AnyElement>,
     pub(crate) badge_width: f32,
+    /// Dimmed and unclickable; still wired so hover tips can explain why.
+    pub(crate) disabled: bool,
+}
+
+/// One option of [`PopupRoot::segmented_control_quiet_ext`].
+pub(super) struct QuietSegment {
+    pub(super) label: SharedString,
+    pub(super) tip: Option<SharedString>,
+    pub(super) disabled: bool,
 }
 
 impl Segment {
@@ -201,6 +318,7 @@ impl Segment {
             label_width,
             badge: None,
             badge_width: 0.0,
+            disabled: false,
         }
     }
 }
@@ -245,7 +363,7 @@ pub(crate) fn segmented_track(
         .relative()
         .flex()
         .flex_row()
-        .h(px(SEGMENT_HEIGHT))
+        .h(px(style.height))
         .rounded(px(8.0))
         .overflow_hidden()
         .bg(style.track)
@@ -273,7 +391,7 @@ pub(crate) fn segmented_track(
         );
         let hover = fx.toggle(
             fx::key(("segment-hover-fx", key, index)),
-            hovered(index) && index != selected,
+            hovered(index) && index != selected && !segment.disabled,
             fx::FASTER,
         );
         let hide_divider = index == 0 || selected == index || selected + 1 == index;
@@ -282,7 +400,10 @@ pub(crate) fn segmented_track(
             !hide_divider,
             fx::FAST,
         );
-        let color = style.text.mix(style.text_on_thumb, on);
+        let mut color = style.text.mix(style.text_on_thumb, on);
+        if segment.disabled {
+            color = color.opacity(0.5);
+        }
         let mut cell = div()
             .id(eid(format!("segment-{key}-{index}")))
             .relative()
@@ -292,7 +413,11 @@ pub(crate) fn segmented_track(
             .justify_center()
             .px(px(10.0));
         if index != selected {
-            cell = wire(index, cell.cursor_pointer());
+            cell = if segment.disabled {
+                wire(index, cell)
+            } else {
+                wire(index, cell.cursor_pointer())
+            };
         }
         // flex_none() leaves flex_basis unchanged in GPUI. Applying
         // flex_1() first would retain a zero basis and collapse fixed

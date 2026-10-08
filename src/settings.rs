@@ -1380,7 +1380,7 @@ impl TotalSpendPeriod {
         match self {
             Self::Today => crate::i18n::tr("today"),
             Self::Yesterday => crate::i18n::tr("yesterday"),
-            Self::ThirtyDays => crate::i18n::tr("msg-30-days"),
+            Self::ThirtyDays => crate::i18n::tr("range-30d"),
         }
     }
 

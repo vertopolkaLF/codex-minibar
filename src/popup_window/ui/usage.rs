@@ -189,7 +189,7 @@ impl PopupRoot {
         }
         let chart_data = Arc::clone(&self.usage_chart_cache.as_ref().unwrap().data);
         let header = self.usage_header(&range_label, recalculating, window, cx);
-        let hero = self.usage_hero(&snapshot);
+        let hero = self.usage_hero(&snapshot, window, cx);
         let chart = self.usage_chart_card(&snapshot, chart_data, cx);
         let totals = usage_totals_card(&snapshot.totals, &palette);
         let breakdown = self.usage_breakdown_card(&snapshot, window, cx);
@@ -286,15 +286,72 @@ impl PopupRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let ranges = [
+            OverviewRange::Past24h,
+            OverviewRange::SevenDays,
+            OverviewRange::ThirtyDays,
+            OverviewRange::NinetyDays,
+        ];
+        let range_control = self.segmented_control(
+            fx::key("usage-range"),
+            ranges
+                .iter()
+                .map(|range| SharedString::from(range.short_label()))
+                .collect(),
+            ranges
+                .iter()
+                .position(|range| *range == self.overview_range)
+                .unwrap_or(2),
+            false,
+            move |this, index, _| {
+                this.overview_range = ranges[index];
+                this.chart_hover = None;
+                this.tip = None;
+            },
+            window,
+            cx,
+        );
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_x(px(8.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(self.usage_title(Some(range_label), recalculating)),
+            )
+            .child(div().flex_none().ml_auto().child(range_control))
+            .into_any_element()
+    }
+
+    fn usage_hero(
+        &mut self,
+        snapshot: &OverviewSnapshot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let palette = self.palette.clone();
         let metric = self.overview_metric;
-        let metric_control = self.segmented_control(
+        let headline = match metric {
+            OverviewMetric::Cost => format_total_cost(&snapshot.totals),
+            OverviewMetric::Tokens => format_token_count(snapshot.totals.total_tokens()),
+        };
+        let mut meta =
+            crate::i18n::format("sessions", &[("v0", snapshot.total_sessions.to_string())]);
+        if metric == OverviewMetric::Cost {
+            meta = format!("{meta} · {}", crate::i18n::tr("api-estimate"));
+        }
+        // Cost/Tokens only changes how the numbers read, so it sits beside
+        // the headline it switches, quieter than the range control.
+        let metric_control = self.segmented_control_quiet(
             fx::key("usage-metric"),
             vec![
                 crate::i18n::tr("cost").into(),
                 crate::i18n::tr("tokens").into(),
             ],
             usize::from(metric == OverviewMetric::Tokens),
-            false,
             |this, index, _| {
                 this.overview_metric = if index == 0 {
                     OverviewMetric::Cost
@@ -307,75 +364,6 @@ impl PopupRoot {
             window,
             cx,
         );
-        let ranges = [
-            OverviewRange::Past24h,
-            OverviewRange::SevenDays,
-            OverviewRange::ThirtyDays,
-            OverviewRange::NinetyDays,
-        ];
-        let range_control = self.segmented_control(
-            fx::key("usage-range"),
-            ranges
-                .iter()
-                .map(|range| SharedString::from(range.label()))
-                .collect(),
-            ranges
-                .iter()
-                .position(|range| *range == self.overview_range)
-                .unwrap_or(2),
-            true,
-            move |this, index, _| {
-                this.overview_range = ranges[index];
-                this.chart_hover = None;
-                this.tip = None;
-            },
-            window,
-            cx,
-        );
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(12.0))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_start()
-                    .gap_x(px(8.0))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(self.usage_title(Some(range_label), recalculating)),
-                    )
-                    .child(div().flex_none().ml_auto().child(metric_control)),
-            )
-            .child(range_control)
-            .into_any_element()
-    }
-
-    fn usage_hero(&mut self, snapshot: &OverviewSnapshot) -> AnyElement {
-        let palette = self.palette.clone();
-        let metric = self.overview_metric;
-        let headline = match metric {
-            OverviewMetric::Cost => format_total_cost(&snapshot.totals),
-            OverviewMetric::Tokens => format_token_count(snapshot.totals.total_tokens()),
-        };
-        let mut meta = div()
-            .flex()
-            .flex_col()
-            .items_end()
-            .gap(px(2.0))
-            .child(components::body(
-                crate::i18n::format("sessions", &[("v0", snapshot.total_sessions.to_string())]),
-                palette.text_secondary,
-            ));
-        if metric == OverviewMetric::Cost {
-            meta = meta.child(caption(
-                crate::i18n::tr("api-estimate"),
-                palette.text_tertiary,
-            ));
-        }
         let mut entries: Vec<(ProviderId, u64)> = snapshot
             .providers
             .iter()
@@ -407,11 +395,17 @@ impl PopupRoot {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
-                    .child(components::split_row(
-                        components::text(headline, 28.0, 36.0, palette.text_primary)
-                            .font_weight(FontWeight::SEMIBOLD),
-                        meta,
-                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(components::split_row(
+                                components::text(headline, 28.0, 36.0, palette.text_primary)
+                                    .font_weight(FontWeight::SEMIBOLD),
+                                metric_control,
+                            ))
+                            .child(caption(meta, palette.text_tertiary)),
+                    )
                     .child(share_bar(&entries, |provider| {
                         palette.spend_color(provider)
                     })),
@@ -676,14 +670,13 @@ impl PopupRoot {
     ) -> AnyElement {
         let palette = self.palette.clone();
         let breakdown = self.overview_breakdown;
-        let control = self.segmented_control(
+        let control = self.segmented_control_quiet(
             fx::key("usage-breakdown"),
             vec![
                 crate::i18n::tr("model").into(),
                 crate::i18n::tr("day").into(),
             ],
             usize::from(breakdown == BreakdownMode::Day),
-            false,
             |this, index, _| {
                 this.overview_breakdown = if index == 0 {
                     BreakdownMode::Model

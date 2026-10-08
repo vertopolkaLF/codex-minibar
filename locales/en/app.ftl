@@ -2037,8 +2037,8 @@ tokens-94e0b9 = { $v0 }: { $v1 } tokens
 
 # application
 requests-priced = { $v0 ->
-    [one] { $v0 } requests ? { $v1 } priced
-   *[other] { $v0 } requests ? { $v1 } priced
+    [one] { $v0 } request · { $v1 } priced
+   *[other] { $v0 } requests · { $v1 } priced
     }
 
 # application
@@ -2064,7 +2064,7 @@ name-error = { $name } error
 
 # application
 sessions = { $v0 ->
-    [one] { $v0 } sessions
+    [one] { $v0 } session
    *[other] { $v0 } sessions
     }
 
@@ -2088,8 +2088,8 @@ tokens-339143 = tokens
 
 # application
 sessions-0e5e29 = { $v0 ->
-    [one] ? { $v0 } sessions
-   *[other] ? { $v0 } sessions
+    [one] · { $v0 } session
+   *[other] · { $v0 } sessions
     }
 
 # application
@@ -2272,3 +2272,18 @@ cloud-amount-used = { $amount } of { $limit } used
 
 # { $amount } of { $limit } left
 cloud-amount-left = { $amount } of { $limit } left
+
+# Short usage range
+range-24h = 24h
+
+# Short usage range
+range-7d = 7d
+
+# Short usage range
+range-30d = 30d
+
+# Short usage range
+range-90d = 90d
+
+# Home usage card title
+home-usage-title = Usage

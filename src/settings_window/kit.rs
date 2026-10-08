@@ -25,7 +25,7 @@ use super::input::TextInput;
 use super::theme::Theme;
 use crate::popup_window::ui::{
     assets,
-    controls::{Segment, SegmentStyle, segmented_track},
+    controls::{SEGMENT_HEIGHT, Segment, SegmentStyle, segmented_track},
     fx::{self, Fx},
     theme::{HslaExt, rgb8},
 };
@@ -1465,6 +1465,7 @@ pub(crate) fn segmented(
         },
         hover: theme.subtle_hover,
         divider: theme.divider,
+        height: SEGMENT_HEIGHT,
     };
     let segments = labels
         .iter()

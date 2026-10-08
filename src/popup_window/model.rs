@@ -667,7 +667,7 @@ pub(crate) fn any_provider_enabled(ui: &UiState) -> bool {
 
 pub(crate) fn home_widget_label(ui: &UiState, widget: &HomeWidgetId) -> String {
     if widget.is_total_spend() {
-        return crate::i18n::tr("usage-stats").into();
+        return crate::i18n::tr("home-usage-title").into();
     }
     ui.instances
         .iter()

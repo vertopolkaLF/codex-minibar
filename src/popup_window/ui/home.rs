@@ -489,22 +489,22 @@ impl PopupRoot {
                 16.0,
                 palette.text_secondary.mix(palette.accent, title_hover),
             ))
-            .child(components::body_strong(
-                crate::i18n::tr("usage-stats"),
+            .child(nowrap(components::body_strong(
+                crate::i18n::tr("home-usage-title"),
                 palette.text_secondary.mix(palette.accent, title_hover),
-            ));
+            )));
         let periods = [
             TotalSpendPeriod::Today,
             TotalSpendPeriod::Yesterday,
             TotalSpendPeriod::ThirtyDays,
         ];
-        let tabs = periods
-            .iter()
-            .map(|item| (item.label(), *item == period))
-            .collect::<Vec<_>>();
-        let selector = self.text_tabs(
+        let selector = self.segmented_control_compact(
             fx::key("spend-period"),
-            &tabs,
+            periods
+                .iter()
+                .map(|item| SharedString::from(item.label()))
+                .collect(),
+            periods.iter().position(|item| *item == period).unwrap_or(2),
             move |this, index, cx| {
                 let period = periods[index];
                 if this.ui.total_spend_period != period {
@@ -515,6 +515,7 @@ impl PopupRoot {
                     );
                 }
             },
+            window,
             cx,
         );
         let mut trailing = div()
@@ -526,21 +527,11 @@ impl PopupRoot {
         if can_reorder {
             trailing = trailing.child(self.widget_drag_handle(HomeWidgetId::total_spend(), cx));
         }
-        // Keep both groups at their natural widths. Longer translations move
-        // the period selector onto a new line instead of painting over it.
-        let heading = div()
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .items_center()
-            .w_full()
-            .gap_x(px(8.0))
-            .gap_y(px(4.0))
+        // Same row as provider headings so the drag grips line up.
+        let heading = components::split_row(title, trailing)
             .px(px(4.0))
             .mt(px(if is_first { 0.0 } else { HEADING_TOP }))
-            .mb(px(2.0))
-            .child(title.flex_none().max_w(gpui::relative(1.0)))
-            .child(trailing.flex_none().ml_auto());
+            .mb(px(2.0));
 
         let initial_loading = self
             .snapshots

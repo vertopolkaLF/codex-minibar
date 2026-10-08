@@ -7,13 +7,14 @@ use std::{
 
 use chrono::NaiveDate;
 use gpui::{
-    AnyElement, AnyView, AppContext, ClickEvent, Context, Entity, Hsla, InteractiveElement,
-    IntoElement, ParentElement, Render, ScrollWheelEvent, SharedString, StatefulInteractiveElement,
-    Styled, Task, Window, div, px,
+    AnyElement, AnyView, AppContext, ClickEvent, Context, Entity, FontWeight, Hsla,
+    InteractiveElement, IntoElement, ParentElement, Render, ScrollWheelEvent, SharedString,
+    StatefulInteractiveElement, Styled, Task, Window, div, px,
 };
 
 use super::{
     components::{self, caption, card, nowrap},
+    controls::QuietSegment,
     fx,
     root::{PopupRoot, eid},
     theme::{HslaExt, Palette},
@@ -910,19 +911,33 @@ impl PopupRoot {
         let model_on = self
             .fx
             .toggle(fx::key(("model-on", chart.as_str())), by_model, fx::FAST);
+        let model_hover_id = fx::key(("model-selector", chart.as_str()));
+        let model_hover = self.fx.toggle(
+            fx::key(("model-hover", chart.as_str())),
+            self.hovered(model_hover_id) && !by_model,
+            fx::FASTER,
+        );
+        let model_label = crate::i18n::tr("model");
+        // Same look as the quiet segmented control beside it.
+        let model_width = components::measure_text(
+            window.text_system(),
+            palette.font_family.clone(),
+            12.0,
+            FontWeight::SEMIBOLD,
+            model_label,
+        ) + 20.0;
         let chart_key = chart.clone();
-        let model_selector = div()
+        let mut model_selector = div()
             .id(eid(format!("model-selector-{chart}")))
-            .w(px(48.0))
-            .h(px(26.0))
-            .p(px(2.0))
-            .rounded(px(6.0))
-            .bg(palette.subtle_fill)
-            .on_hover(self.hover_listener(
-                fx::key(("model-selector", chart.as_str())),
-                Some(model_hint),
-                cx,
-            ))
+            .relative()
+            .flex_none()
+            .w(px(model_width))
+            .h(px(28.0))
+            .rounded(px(8.0))
+            .overflow_hidden()
+            .bg(palette.control_fill)
+            .cursor_pointer()
+            .on_hover(self.hover_listener(model_hover_id, Some(model_hint), cx))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 if let Some(state) = this.charts.get_mut(&chart_key) {
                     state.by_model = !state.by_model;
@@ -931,104 +946,75 @@ impl PopupRoot {
             }))
             .child(
                 div()
-                    .size_full()
-                    .rounded(px(4.0))
-                    .bg(palette.control_fill.alpha(model_on))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(components::text(
-                        crate::i18n::tr("model"),
-                        10.0,
-                        12.0,
-                        palette
-                            .text_secondary
-                            .mix(palette.text_primary, model_on)
-                            .alpha(if model_available { 1.0 } else { 0.5 }),
-                    )),
+                    .absolute()
+                    .inset_0()
+                    .rounded(px(8.0))
+                    .bg(palette.text_primary.opacity(0.14 * model_on)),
             );
-        let mut metric_selector = div()
-            .flex()
-            .flex_row()
-            .h(px(26.0))
-            .p(px(2.0))
-            .rounded(px(6.0))
-            .bg(super::theme::rgba8(
-                0,
-                0,
-                0,
-                if palette.dark { 35 } else { 14 },
-            ));
-        for (index, (label, cost, width)) in [
-            (crate::i18n::tr("tokens"), false, 46.0),
-            (crate::i18n::tr("cost"), true, 38.0),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let available = if cost {
-                availability.cost
-            } else {
-                availability.series != 0
-            };
-            let selected = available && cost_mode == cost;
-            let on = self.fx.toggle(
-                fx::key(("metric-on", chart.as_str(), index)),
-                selected,
-                fx::FAST,
+        if model_hover > 0.001 {
+            model_selector = model_selector.child(
+                div()
+                    .absolute()
+                    .inset(px(2.0))
+                    .rounded(px(6.0))
+                    .bg(palette.subtle_fill.opacity(model_hover)),
             );
-            let (idle, active) = if palette.dark {
-                (
-                    super::theme::rgb8((155, 155, 155)),
-                    super::theme::rgb8((245, 245, 245)),
-                )
-            } else {
-                (
-                    super::theme::rgb8((100, 100, 100)),
-                    super::theme::rgb8((24, 24, 24)),
-                )
-            };
-            let tip = if !available && cost {
-                crate::i18n::tr("no-cost-data-for-this-period")
-            } else if !available {
-                crate::i18n::tr("no-token-data-for-this-period")
-            } else if cost {
-                crate::i18n::tr("daily-cost-in-usd")
-            } else {
-                crate::i18n::tr("daily-token-volume")
-            };
-            let chart_key = chart.clone();
-            let mut cell = div()
-                .id(eid(format!("metric-{chart}-{label}")))
-                .w(px(width))
-                .h_full()
-                .rounded(px(4.0))
-                .bg(palette.control_fill.alpha(on))
+        }
+        let model_selector = model_selector.child(
+            div()
+                .relative()
+                .size_full()
                 .flex()
                 .items_center()
                 .justify_center()
-                .on_hover(self.hover_listener(
-                    fx::key(("metric-hover", chart.as_str(), index)),
-                    Some(tip.into()),
-                    cx,
-                ))
-                .child(components::text(
-                    label,
-                    10.0,
-                    12.0,
-                    idle.mix(active, on)
-                        .alpha(if available { 1.0 } else { 0.5 }),
-                ));
-            if available {
-                cell = cell.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    if let Some(state) = this.charts.get_mut(&chart_key) {
-                        state.requested.cost = cost;
-                        cx.notify();
-                    }
-                }));
-            }
-            metric_selector = metric_selector.child(cell);
-        }
+                .child(
+                    nowrap(components::caption(
+                        model_label,
+                        palette
+                            .text_tertiary
+                            .mix(palette.text_primary, model_on)
+                            .opacity(if model_available { 1.0 } else { 0.5 }),
+                    ))
+                    .font_weight(FontWeight::SEMIBOLD),
+                ),
+        );
+        let metric_segments = [false, true]
+            .into_iter()
+            .map(|cost| {
+                let available = if cost {
+                    availability.cost
+                } else {
+                    availability.series != 0
+                };
+                let tip = if !available && cost {
+                    crate::i18n::tr("no-cost-data-for-this-period")
+                } else if !available {
+                    crate::i18n::tr("no-token-data-for-this-period")
+                } else if cost {
+                    crate::i18n::tr("daily-cost-in-usd")
+                } else {
+                    crate::i18n::tr("daily-token-volume")
+                };
+                QuietSegment {
+                    label: crate::i18n::tr(if cost { "cost" } else { "tokens" }).into(),
+                    tip: Some(tip.into()),
+                    disabled: !available,
+                }
+            })
+            .collect();
+        let chart_key = chart.clone();
+        let metric_selector = self.segmented_control_quiet_ext(
+            fx::key(("activity-metric", chart.as_str())),
+            metric_segments,
+            usize::from(cost_mode),
+            move |this, index, _| {
+                if let Some(state) = this.charts.get_mut(&chart_key) {
+                    state.requested.cost = index == 1;
+                }
+            },
+            window,
+            cx,
+        );
         let footer = div()
             .flex()
             .flex_row()
@@ -1044,7 +1030,6 @@ impl PopupRoot {
                     .child(metric_selector),
             );
 
-        let _ = window;
         card(&palette)
             .p(px(12.0))
             .flex()

@@ -360,7 +360,7 @@ sun = Вс
 msg-5h-session = Сессия 5 ч
 
 # src/provider_registry.rs
-weekly = За неделю
+weekly = Неделя
 
 # src/provider_registry.rs
 cursor-models = Модели Cursor
@@ -375,7 +375,7 @@ all-models = Все модели
 grok-bot = Бот Grok
 
 # src/provider_registry.rs
-monthly = За месяц
+monthly = Месяц
 
 # src/provider_registry.rs
 spending-limit = Лимит расходов
@@ -2028,7 +2028,7 @@ monthly-credits-976559 = Кредиты за месяц
 msg-5h-session-de7ce8 = Сессия 5 ч
 
 # application
-name-weekly = { $name }: за неделю
+name-weekly = { $name }: неделя
 
 # application
 remaining-remaining = Осталось { $remaining }%
@@ -2279,3 +2279,18 @@ cloud-amount-used = Использовано { $amount } из { $limit }
 
 # { $amount } of { $limit } left
 cloud-amount-left = Осталось { $amount } из { $limit }
+
+# Short usage range
+range-24h = 24 ч
+
+# Short usage range
+range-7d = 7 дн
+
+# Short usage range
+range-30d = 30 дн
+
+# Short usage range
+range-90d = 90 дн
+
+# Home usage card title
+home-usage-title = Расход

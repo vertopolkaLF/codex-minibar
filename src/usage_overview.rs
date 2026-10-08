@@ -49,6 +49,15 @@ impl OverviewRange {
             Self::NinetyDays => crate::i18n::tr("msg-90-days"),
         }
     }
+
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Self::Past24h => crate::i18n::tr("range-24h"),
+            Self::SevenDays => crate::i18n::tr("range-7d"),
+            Self::ThirtyDays => crate::i18n::tr("range-30d"),
+            Self::NinetyDays => crate::i18n::tr("range-90d"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

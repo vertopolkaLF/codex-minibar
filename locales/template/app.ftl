@@ -2715,8 +2715,8 @@ tokens-94e0b9 = { "" }
 
 # English source:
 # requests-priced = { $v0 ->
-#     [one] { $v0 } requests ? { $v1 } priced
-#    *[other] { $v0 } requests ? { $v1 } priced
+#     [one] { $v0 } request · { $v1 } priced
+#    *[other] { $v0 } requests · { $v1 } priced
 #     }
 requests-priced = { "" }
 
@@ -2748,7 +2748,7 @@ name-error = { "" }
 
 # English source:
 # sessions = { $v0 ->
-#     [one] { $v0 } sessions
+#     [one] { $v0 } session
 #    *[other] { $v0 } sessions
 #     }
 sessions = { "" }
@@ -2779,8 +2779,8 @@ tokens-339143 = { "" }
 
 # English source:
 # sessions-0e5e29 = { $v0 ->
-#     [one] ? { $v0 } sessions
-#    *[other] ? { $v0 } sessions
+#     [one] · { $v0 } session
+#    *[other] · { $v0 } sessions
 #     }
 sessions-0e5e29 = { "" }
 
@@ -3023,3 +3023,23 @@ cloud-amount-used = { "" }
 # English source:
 # cloud-amount-left = { $amount } of { $limit } left
 cloud-amount-left = { "" }
+
+# English source:
+# range-24h = 24h
+range-24h = { "" }
+
+# English source:
+# range-7d = 7d
+range-7d = { "" }
+
+# English source:
+# range-30d = 30d
+range-30d = { "" }
+
+# English source:
+# range-90d = 90d
+range-90d = { "" }
+
+# English source:
+# home-usage-title = Usage
+home-usage-title = { "" }
