@@ -37,6 +37,12 @@ const CLOSE_ANIMATION: Duration = Duration::from_millis(167);
 const SLIDE_MAX_FRAME_STEP: Duration = Duration::from_millis(34);
 /// Invisible frames rendered at launch before the popup host is parked.
 const PREWARM_FRAMES: u32 = 3;
+/// Following prewarm frames park the capsule one pixel from the screen edge,
+/// where every open slide starts, and expose that pixel. DWM skips windows
+/// with an empty region, so without this the first real open pays for the
+/// backdrop's effect compilation and desktop capture inside DWM, a stall the
+/// slide clock cannot see.
+const PREWARM_EXPOSED_FRAMES: u32 = 6;
 /// Pinned profile switcher between the page and the footer.
 pub(super) const PROFILE_STRIP_HEIGHT: f32 = 46.0;
 /// Small inner inset keeps page/footer content clear of the capsule stroke.
@@ -119,6 +125,13 @@ impl Host {
 
     pub(super) fn visible(&self) -> bool {
         !matches!(self.phase, Phase::Hidden)
+    }
+
+    /// The prewarm frame that shows DWM the capsule's edge pixel.
+    fn prewarm_exposed(&self) -> bool {
+        self.phase == Phase::Prewarm
+            && (PREWARM_FRAMES..PREWARM_FRAMES + PREWARM_EXPOSED_FRAMES)
+                .contains(&self.prewarm_frames)
     }
 
     /// Wide two-column layout fits on the monitor that owns the popup.
@@ -608,7 +621,7 @@ impl PopupRoot {
     /// a real open already took over.
     pub(crate) fn prewarm_settled(&self) -> bool {
         self.host.phase != Phase::Prewarm
-            || (self.host.prewarm_frames >= PREWARM_FRAMES
+            || (self.host.prewarm_frames >= PREWARM_FRAMES + PREWARM_EXPOSED_FRAMES
                 && self.snapshots.values().all(|cache| cache.pending.is_none()))
     }
 
@@ -794,6 +807,7 @@ impl PopupRoot {
         }
         let travel = width + self.host.margin();
         let offset = match self.host.phase {
+            Phase::Prewarm if self.host.prewarm_exposed() => travel - 1.0,
             Phase::Hidden | Phase::Prewarm | Phase::Open => 0.0,
             Phase::Opening(started) => {
                 let progress = now.saturating_duration_since(started).as_secs_f64()
@@ -848,18 +862,34 @@ impl PopupRoot {
                     crate::popup::corner_radius_dip() as f32 * scale,
                 );
             }
-            if self.host.phase == Phase::Prewarm {
-                // Render everything, show nothing, publish no hit bounds.
-                const EMPTY: (i32, i32, i32, i32, i32) = (0, 0, 0, 0, 0);
-                if self.host.last_region != Some(EMPTY) {
-                    self.host.last_region = Some(EMPTY);
-                    super::win32::set_region(hwnd, None, 0);
-                }
-                return;
-            }
             let viewport = window.viewport_size();
             let window_w = (f32::from(viewport.width) * scale).round() as i32;
             let window_h = (f32::from(viewport.height) * scale).round() as i32;
+            if self.host.phase == Phase::Prewarm {
+                // Render everything, show at most the capsule's edge pixel at
+                // the screen edge, publish no hit bounds.
+                let region = if self.host.prewarm_exposed() {
+                    let y = (((y + height * 0.5) * scale).round() as i32).clamp(0, window_h - 1);
+                    (window_w - 1, y, window_w, y + 1, 0)
+                } else {
+                    (0, 0, 0, 0, 0)
+                };
+                if self.host.last_region != Some(region) {
+                    self.host.last_region = Some(region);
+                    let (left, top, right, bottom, _) = region;
+                    super::win32::set_region(
+                        hwnd,
+                        Some(super::win32::Rect {
+                            left,
+                            top,
+                            right,
+                            bottom,
+                        }),
+                        0,
+                    );
+                }
+                return;
+            }
             let left = ((x * scale).round() as i32).clamp(0, window_w);
             let right = (((x + width) * scale).round() as i32).clamp(left, window_w);
             let top = ((y * scale).round() as i32).clamp(0, window_h);
@@ -1350,7 +1380,7 @@ impl Render for PopupRoot {
 
         if self.host.phase == Phase::Prewarm {
             self.host.prewarm_frames = self.host.prewarm_frames.saturating_add(1);
-            if self.host.prewarm_frames < PREWARM_FRAMES {
+            if self.host.prewarm_frames <= PREWARM_FRAMES + PREWARM_EXPOSED_FRAMES {
                 window.request_animation_frame();
             }
         }
@@ -1522,9 +1552,10 @@ impl PopupRoot {
         }
         // One account's page shows its error; pages with several accounts
         // show only bars that need a new sign-in, since their headings
-        // already mark other errors.
+        // already mark other errors. Usage reads local logs, so provider
+        // errors don't apply to it.
         let (accounts, every_error) = match view {
-            PopupView::Usage => (self.enabled_spend(), true),
+            PopupView::Usage => (Vec::new(), false),
             PopupView::Home => (ui.enabled_providers(), false),
             other => match self.page_provider(other) {
                 Some(provider) => (vec![provider], true),
