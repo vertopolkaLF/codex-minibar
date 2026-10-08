@@ -71,9 +71,19 @@ pub(crate) struct Kit {
     reveals: Rc<RefCell<HashSet<SharedString>>>,
     /// A dismissed overlay is still fading out this frame.
     exiting: Cell<bool>,
+    /// Dropdown caret glyph; the popup swaps in its Fluent chevron.
+    pub(crate) caret: Option<&'static str>,
 }
 
 impl Kit {
+    /// A kit whose dropdowns show `caret` instead of the default glyph.
+    pub(crate) fn with_caret(caret: &'static str) -> Self {
+        Self {
+            caret: Some(caret),
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn begin_frame(&mut self, theme: Theme, window: &Window) {
         self.theme = theme;
         self.text_system = Some(Arc::clone(window.text_system()));
@@ -1710,7 +1720,10 @@ pub(crate) fn dropdown_with_placeholder(
         .text_size(px(13.0))
         .text_color(label_color)
         .child(div().flex_1().min_w_0().truncate().child(label))
-        .child(icon("caret-down-bold", 10.0, theme.text_secondary));
+        .child(match k.caret {
+            Some(caret) => icon(caret, 14.0, theme.text_secondary),
+            None => icon("caret-down-bold", 10.0, theme.text_secondary),
+        });
     if width > 0.0 {
         button = button.w(px(width));
     } else {

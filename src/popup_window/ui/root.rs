@@ -235,6 +235,9 @@ pub(crate) struct PopupRoot {
     pub(super) open_reset_card: Option<String>,
     /// OpenRouter key administration on the OpenRouter tab.
     pub(super) keys: super::keys::KeyAdmin,
+    /// Settings-window controls (dropdowns) reused by popup forms.
+    pub(super) kit: crate::settings_window::kit::Kit,
+    kit_fonts: crate::settings_window::theme::Fonts,
     pub(super) tab_scroll: f32,
     pub(super) snapshots: HashMap<SnapshotSlot, SnapshotCache>,
     pub(super) usage_chart_cache: Option<super::usage::UsageChartCache>,
@@ -326,6 +329,8 @@ impl PopupRoot {
             chart_hover: None,
             open_reset_card: None,
             keys: Default::default(),
+            kit: crate::settings_window::kit::Kit::with_caret("fluent-chevron-down"),
+            kit_fonts: crate::settings_window::theme::Fonts::resolve(cx),
             tab_scroll: 0.0,
             snapshots: HashMap::new(),
             usage_chart_cache: None,
@@ -695,6 +700,7 @@ impl PopupRoot {
         }
         self.host.offset = 0.0;
         self.keys.on_hidden();
+        self.kit.menus.close_silently();
         self.hover.clear();
         self.tip = None;
         self.widget_drag = None;
@@ -1221,6 +1227,15 @@ impl Render for PopupRoot {
         let now = Instant::now();
         self.sync_key_pin();
         self.fx.begin_frame(super::animations_enabled(&self.ui));
+        let kit_theme = crate::settings_window::theme::Theme::new(
+            self.palette.dark,
+            self.accent,
+            crate::settings_window::theme::Fonts {
+                text: self.palette.font_family.clone(),
+                ..self.kit_fonts.clone()
+            },
+        );
+        self.kit.begin_frame(kit_theme, window);
         if !cx.has_active_drag() {
             self.widget_drag = None;
             self.widget_drop = None;
@@ -1465,6 +1480,7 @@ impl Render for PopupRoot {
         if self.fx.is_animating() || (ui.refreshing && self.host.visible()) {
             window.request_animation_frame();
         }
+        self.kit.end_frame(window);
 
         div()
             .id("popup-root")
