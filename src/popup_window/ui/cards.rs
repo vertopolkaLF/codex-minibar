@@ -187,6 +187,17 @@ impl PopupRoot {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = self.palette.clone();
+        let provider = heading.provider;
+        // Home headings open their provider's tab, like the Usage Stats title.
+        let link_id = fx::key(("heading-link", provider.id()));
+        let link = matches!(surface, PopupSurface::HomeTab)
+            && self.show_provider_tabs()
+            && model::tab_for_provider(&self.ui, provider).is_some();
+        let link_hover = self.fx.toggle(
+            fx::key(("heading-link-fx", link_id)),
+            link && self.hovered(link_id),
+            fx::TEXT_FADE,
+        );
         let mut title = div()
             .flex()
             .flex_row()
@@ -212,7 +223,7 @@ impl PopupRoot {
         }
         title = title.child(nowrap(components::body_strong(
             driver.display_name(),
-            palette.text_secondary,
+            palette.text_secondary.mix(palette.accent, link_hover),
         )));
         if let Some(plan) = heading.plan.as_ref() {
             title = title.child(nowrap(components::body(
@@ -221,7 +232,6 @@ impl PopupRoot {
             )));
         }
         if let Some(error) = heading.error.as_ref() {
-            let provider = heading.provider;
             let id = fx::key(("heading-error", provider.id(), heading.first));
             title = title.child(
                 div()
@@ -255,6 +265,19 @@ impl PopupRoot {
             trailing =
                 self.with_widget_grip(trailing, HomeWidgetId::provider(heading.provider), cx);
         }
+        let title = if link {
+            div()
+                .id(eid(format!("heading-link-{}", provider.id())))
+                .min_w_0()
+                .on_hover(self.hover_listener(link_id, None, cx))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.select_view(PopupView::from_provider(provider), cx);
+                }))
+                .child(title)
+                .into_any_element()
+        } else {
+            title.into_any_element()
+        };
         components::split_row(title, trailing)
             .px(px(4.0))
             .mt(px(if heading.first { 0.0 } else { 8.0 }))
