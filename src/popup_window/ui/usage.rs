@@ -37,12 +37,44 @@ pub(super) struct UsageChartData {
     series: Arc<Vec<DailySeriesPoint>>,
     providers: Arc<Vec<ProviderId>>,
     max_value: u64,
+    hourly: bool,
+    end_date: NaiveDate,
+    metric: OverviewMetric,
+}
+
+impl UsageChartData {
+    /// Daily charts of the same metric ending on the same day differ only in
+    /// how far back they reach, so the switch pans the time window instead
+    /// of morphing values.
+    fn pans_from(&self, previous: &Self) -> bool {
+        !self.hourly
+            && !previous.hourly
+            && self.end_date == previous.end_date
+            && self.metric == previous.metric
+            && self.series.len() != previous.series.len()
+            && self.series.len() > 1
+            && previous.series.len() > 1
+    }
+}
+
+/// How the plot moves from the previously shown chart into the current one.
+#[derive(Clone, Copy)]
+enum ChartMotion<'a> {
+    Settled,
+    /// Values blend from `from` (sampled at the same relative position).
+    Morph { from: &'a [DailySeriesPoint], progress: f32 },
+    /// The painted series is right-aligned to the window end and the window
+    /// spans `span` days, so days slide in or out at the left edge.
+    Pan { span: f32 },
 }
 
 pub(super) struct UsageChartCache {
     source: Arc<OverviewSnapshot>,
     metric: OverviewMetric,
     data: Arc<UsageChartData>,
+    /// Chart shown before the last period/metric/data change; the plot morphs
+    /// from it into `data`.
+    previous: Option<Arc<UsageChartData>>,
 }
 
 impl UsageChartCache {
@@ -66,6 +98,7 @@ impl UsageChartCache {
             })
             .max()
             .unwrap_or(0);
+        let (hourly, end_date) = (source.hourly, source.end_date);
         Self {
             source,
             metric,
@@ -73,7 +106,11 @@ impl UsageChartCache {
                 series: Arc::new(series),
                 providers: Arc::new(providers),
                 max_value: chart_scale_max(raw_max),
+                hourly,
+                end_date,
+                metric,
             }),
+            previous: None,
         }
     }
 
@@ -86,6 +123,9 @@ impl UsageChartCache {
 /// rebuild or tessellate the unchanged area chart.
 pub(super) struct UsagePlot {
     data: Arc<UsageChartData>,
+    previous: Option<Arc<UsageChartData>>,
+    /// Morph progress from `previous` to `data` (1.0 = settled).
+    progress: f32,
     scale: f32,
     palette: Palette,
 }
@@ -93,19 +133,57 @@ pub(super) struct UsagePlot {
 impl Render for UsagePlot {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let data = Arc::clone(&self.data);
+        let previous = self
+            .previous
+            .clone()
+            .filter(|_| self.progress < 1.0)
+            .map(|previous| (previous, self.progress));
         let scale = self.scale;
         let palette = self.palette.clone();
-        let lines: Vec<_> = data
-            .providers
-            .iter()
-            .map(|provider| (*provider, palette.series_color(*provider)))
+        // Providers that left the chart keep painting while they sink away.
+        let mut providers = data.providers.to_vec();
+        if let Some((previous, _)) = &previous {
+            for provider in previous.providers.iter() {
+                if !providers.contains(provider) {
+                    providers.push(*provider);
+                }
+            }
+        }
+        let lines: Vec<_> = providers
+            .into_iter()
+            .map(|provider| (provider, palette.series_color(provider)))
             .collect();
         canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
+                let (series, motion) = match &previous {
+                    None => (data.series.as_slice(), ChartMotion::Settled),
+                    Some((previous, progress)) if data.pans_from(previous) => {
+                        // Paint the longer series so the whole window stays
+                        // covered; overlapping days hold the same values.
+                        let series = if previous.series.len() > data.series.len() {
+                            previous.series.as_slice()
+                        } else {
+                            data.series.as_slice()
+                        };
+                        // Interpolate in log space so zooming feels uniform.
+                        let from = (previous.series.len() - 1) as f32;
+                        let to = (data.series.len() - 1) as f32;
+                        let span = (from.ln() + (to.ln() - from.ln()) * progress).exp();
+                        (series, ChartMotion::Pan { span })
+                    }
+                    Some((previous, progress)) => (
+                        data.series.as_slice(),
+                        ChartMotion::Morph {
+                            from: previous.series.as_slice(),
+                            progress: *progress,
+                        },
+                    ),
+                };
                 paint_area_chart(
                     bounds,
-                    &data.series,
+                    series,
+                    motion,
                     &lines,
                     scale.max(1.0),
                     palette.chart_grid,
@@ -189,12 +267,22 @@ impl PopupRoot {
             .as_ref()
             .is_none_or(|cache| !cache.matches(&snapshot, metric))
         {
-            self.usage_chart_cache = Some(UsageChartCache::new(Arc::clone(&snapshot), metric));
+            let mut cache = UsageChartCache::new(Arc::clone(&snapshot), metric);
+            cache.previous = self
+                .usage_chart_cache
+                .take()
+                .map(|previous| previous.data)
+                .filter(|previous| !previous.series.is_empty());
+            // Restart the morph; with animations off it settles immediately.
+            self.fx.snap(fx::key("usage-chart-morph"), 0.0);
+            self.usage_chart_cache = Some(cache);
         }
-        let chart_data = Arc::clone(&self.usage_chart_cache.as_ref().unwrap().data);
+        let cache = self.usage_chart_cache.as_ref().unwrap();
+        let chart_data = Arc::clone(&cache.data);
+        let chart_previous = cache.previous.clone();
         let header = self.usage_header(Some(&range_label), recalculating, window, cx);
         let hero = self.usage_hero(&snapshot, window, cx);
-        let chart = self.usage_chart_card(&snapshot, chart_data, cx);
+        let chart = self.usage_chart_card(&snapshot, chart_data, chart_previous, cx);
         let totals = usage_totals_card(Some(&snapshot.totals), &palette, palette.subtle_fill);
         let breakdown = self.usage_breakdown_card(&snapshot, window, cx);
         self.usage_layout(header, hero, chart, totals, breakdown)
@@ -583,6 +671,7 @@ impl PopupRoot {
         &mut self,
         snapshot: &OverviewSnapshot,
         data: Arc<UsageChartData>,
+        previous: Option<Arc<UsageChartData>>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = self.palette.clone();
@@ -614,6 +703,13 @@ impl PopupRoot {
         let scale = self
             .fx
             .value(fx::key("usage-chart-scale"), max_value as f32, fx::NORMAL);
+        // Period/metric switches morph the curves out of the previous chart.
+        let progress = if previous.is_some() {
+            self.fx
+                .value(fx::key("usage-chart-morph"), 1.0, fx::NORMAL)
+        } else {
+            1.0
+        };
         let count = series.len();
         let hover = self.chart_hover.filter(|index| *index < count);
         let plot_bounds: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
@@ -621,12 +717,21 @@ impl PopupRoot {
         let rule_color = palette.text_primary;
         if let Some(plot) = self.usage_plot.as_ref() {
             plot.update(cx, |plot, cx| {
+                let same_previous = match (&plot.previous, &previous) {
+                    (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                    (None, None) => true,
+                    _ => false,
+                };
                 if !Arc::ptr_eq(&plot.data, &data)
+                    || !same_previous
+                    || plot.progress != progress
                     || plot.scale != scale
                     || plot.palette.dark != palette.dark
                     || plot.palette.accent != palette.accent
                 {
                     plot.data = Arc::clone(&data);
+                    plot.previous = previous.clone();
+                    plot.progress = progress;
                     plot.scale = scale;
                     plot.palette = palette.clone();
                     cx.notify();
@@ -635,6 +740,8 @@ impl PopupRoot {
         } else {
             self.usage_plot = Some(cx.new(|_| UsagePlot {
                 data: Arc::clone(&data),
+                previous: previous.clone(),
+                progress,
                 scale,
                 palette: palette.clone(),
             }));
@@ -1315,6 +1422,7 @@ fn monotone_path(builder: &mut PathBuilder, xs: &[f32], ys: &[f32], ox: f32, oy:
 fn paint_area_chart(
     bounds: Bounds<Pixels>,
     series: &[DailySeriesPoint],
+    motion: ChartMotion<'_>,
     lines: &[(ProviderId, Hsla)],
     max_value: f32,
     grid: Hsla,
@@ -1346,45 +1454,25 @@ fn paint_area_chart(
         );
     }
     let count = series.len();
-    let xs: Vec<f32> = if count == 1 {
+    let xs: Vec<f32> = if let ChartMotion::Pan { span } = motion {
+        let plot_w = (width - CHART_PAD_X * 2.0).max(1.0);
+        (0..count)
+            .map(|index| {
+                let days_back = (count - 1 - index) as f32;
+                CHART_PAD_X + plot_w * (1.0 - days_back / span.max(1.0))
+            })
+            .collect()
+    } else if count == 1 {
         vec![CHART_PAD_X, width - CHART_PAD_X]
     } else {
         (0..count)
             .map(|index| chart_x_at(index, count, width))
             .collect()
     };
-    let mut strokes = Vec::new();
-    for (provider, color) in lines {
-        let mut ys: Vec<f32> = series
-            .iter()
-            .map(|point| {
-                let value = point.by_provider.get(provider).copied().unwrap_or(0) as f32;
-                baseline - (value / max_value).min(1.2) * plot_h
-            })
-            .collect();
-        if ys.len() == 1 {
-            ys.push(ys[0]);
-        }
-        if ys.iter().all(|y| (*y - baseline).abs() < 0.01) {
-            continue;
-        }
-        let mut fill = PathBuilder::fill();
-        monotone_path(&mut fill, &xs, &ys, ox, oy, true);
-        fill.line_to(point(px(ox + xs[xs.len() - 1]), px(oy + baseline)));
-        fill.line_to(point(px(ox + xs[0]), px(oy + baseline)));
-        fill.close();
-        if let Ok(path) = fill.build() {
-            window.paint_path(path, color.opacity(0.2));
-        }
-        strokes.push((ys, *color));
-    }
-    for (ys, color) in strokes {
-        let mut stroke = PathBuilder::stroke(px(2.0));
-        monotone_path(&mut stroke, &xs, &ys, ox, oy, true);
-        if let Ok(path) = stroke.build() {
-            window.paint_path(path, color);
-        }
-    }
+    // Panned days outside the window must not spill over the y-axis.
+    window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+        paint_curves(series, motion, lines, &xs, max_value, plot_h, baseline, ox, oy, window);
+    });
     hline(baseline, 1.25, baseline_color, window);
     if let Some((index, color)) = hover {
         let x = chart_x_at(index, count, width);
@@ -1396,6 +1484,86 @@ fn paint_area_chart(
             color,
         ));
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_curves(
+    series: &[DailySeriesPoint],
+    motion: ChartMotion<'_>,
+    lines: &[(ProviderId, Hsla)],
+    xs: &[f32],
+    max_value: f32,
+    plot_h: f32,
+    baseline: f32,
+    ox: f32,
+    oy: f32,
+    window: &mut Window,
+) {
+    let count = series.len();
+    let mut strokes = Vec::new();
+    for (provider, color) in lines {
+        let mut ys: Vec<f32> = series
+            .iter()
+            .enumerate()
+            .map(|(index, point)| {
+                let mut value = point.by_provider.get(provider).copied().unwrap_or(0) as f32;
+                if let ChartMotion::Morph {
+                    from: previous,
+                    progress,
+                } = motion
+                {
+                    let t = if count > 1 {
+                        index as f32 / (count - 1) as f32
+                    } else {
+                        0.5
+                    };
+                    let from = sample_series(previous, *provider, t);
+                    value = from + (value - from) * progress;
+                }
+                baseline - (value / max_value).min(1.2) * plot_h
+            })
+            .collect();
+        if ys.len() == 1 {
+            ys.push(ys[0]);
+        }
+        if ys.iter().all(|y| (*y - baseline).abs() < 0.01) {
+            continue;
+        }
+        let mut fill = PathBuilder::fill();
+        monotone_path(&mut fill, xs, &ys, ox, oy, true);
+        fill.line_to(point(px(ox + xs[xs.len() - 1]), px(oy + baseline)));
+        fill.line_to(point(px(ox + xs[0]), px(oy + baseline)));
+        fill.close();
+        if let Ok(path) = fill.build() {
+            window.paint_path(path, color.opacity(0.2));
+        }
+        strokes.push((ys, *color));
+    }
+    for (ys, color) in strokes {
+        let mut stroke = PathBuilder::stroke(px(2.0));
+        monotone_path(&mut stroke, xs, &ys, ox, oy, true);
+        if let Ok(path) = stroke.build() {
+            window.paint_path(path, color);
+        }
+    }
+}
+
+/// Value of `provider` at normalized position `t` (0..=1) along `series`,
+/// linearly interpolated between neighbouring points.
+fn sample_series(series: &[DailySeriesPoint], provider: ProviderId, t: f32) -> f32 {
+    let value = |index: usize| {
+        series
+            .get(index)
+            .and_then(|point| point.by_provider.get(&provider).copied())
+            .unwrap_or(0) as f32
+    };
+    if series.len() < 2 {
+        return value(0);
+    }
+    let position = t.clamp(0.0, 1.0) * (series.len() - 1) as f32;
+    let index = (position.floor() as usize).min(series.len() - 2);
+    let fraction = position - index as f32;
+    value(index) + (value(index + 1) - value(index)) * fraction
 }
 
 fn chart_title(hourly: bool, metric: OverviewMetric) -> &'static str {
