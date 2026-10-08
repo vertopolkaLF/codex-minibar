@@ -282,6 +282,7 @@ updated = Обновлено{ " " }
 refresh-last-updated-relative = Обновить | Последнее обновление: { $relative }
 
 # src/popup_window/ui/home.rs
+edit-home = Изменить главную
 drag-to-reorder = Перетащите, чтобы изменить порядок
 
 # src/popup_window/ui/home.rs

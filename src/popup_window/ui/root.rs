@@ -248,6 +248,8 @@ pub(crate) struct PopupRoot {
     pub(super) pages: HashMap<PopupView, PageMetrics>,
     pub(super) widget_bounds: Rc<RefCell<WidgetLayout>>,
     pub(super) usage_spinner_started: Option<Instant>,
+    /// Home edit mode: reveals the widget reorder grips.
+    pub(super) home_editing: bool,
     pub(super) widget_drag: Option<HomeWidgetId>,
     pub(super) widget_drop: Option<(HomeWidgetId, Option<usize>)>,
     pub(super) tab_drag: Option<PopupView>,
@@ -341,6 +343,7 @@ impl PopupRoot {
             pages: HashMap::new(),
             widget_bounds: Rc::new(RefCell::new(WidgetLayout::default())),
             usage_spinner_started: None,
+            home_editing: false,
             widget_drag: None,
             widget_drop: None,
             tab_drag: None,
@@ -475,6 +478,9 @@ impl PopupRoot {
     }
 
     pub(super) fn navigate(&mut self, view: PopupView, cx: &mut Context<Self>) {
+        if view != PopupView::Home {
+            self.home_editing = false;
+        }
         let before = self.pager.animation_id;
         self.pager = reduce_pager(self.pager.clone(), PagerAction::Select(view));
         if self.pager.animation_id != before {
@@ -703,6 +709,7 @@ impl PopupRoot {
         self.kit.menus.close_silently();
         self.hover.clear();
         self.tip = None;
+        self.home_editing = false;
         self.widget_drag = None;
         self.tab_drag = None;
         // Keep only interaction choices, tiny page measurements and the last

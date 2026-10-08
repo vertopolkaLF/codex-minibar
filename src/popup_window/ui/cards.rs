@@ -252,8 +252,8 @@ impl PopupRoot {
             ));
         }
         if heading.drag_handle {
-            trailing = trailing
-                .child(self.widget_drag_handle(HomeWidgetId::provider(heading.provider), cx));
+            trailing =
+                self.with_widget_grip(trailing, HomeWidgetId::provider(heading.provider), cx);
         }
         components::split_row(title, trailing)
             .px(px(4.0))

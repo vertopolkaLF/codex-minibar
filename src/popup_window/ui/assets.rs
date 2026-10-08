@@ -24,6 +24,10 @@ fn source(name: &str) -> Option<&'static str> {
         }
         "fluent-settings" => include_str!("../../../assets/icons/fluent-settings-20-filled.svg"),
         "fluent-power" => include_str!("../../../assets/icons/fluent-power-20-filled.svg"),
+        "fluent-edit" => include_str!("../../../assets/icons/fluent-edit-20-filled.svg"),
+        "fluent-checkmark" => {
+            include_str!("../../../assets/icons/fluent-checkmark-20-filled.svg")
+        }
         "fluent-delete" => include_str!("../../../assets/icons/fluent-delete-20-regular.svg"),
         "fluent-drag" => {
             include_str!("../../../assets/icons/fluent-re-order-dots-vertical-16-filled.svg")
@@ -244,6 +248,8 @@ mod tests {
             "fluent-refresh",
             "fluent-arrow-download",
             "fluent-settings",
+            "fluent-edit",
+            "fluent-checkmark",
             "fluent-delete",
             "fluent-drag",
             "fluent-chevron-down",

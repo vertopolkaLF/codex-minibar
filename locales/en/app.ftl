@@ -287,6 +287,7 @@ updated = Updated{ " " }
 refresh-last-updated-relative = Refresh | Last updated { $relative }
 
 # src/popup_window/ui/home.rs
+edit-home = Edit Home
 drag-to-reorder = Drag to reorder
 
 # src/popup_window/ui/home.rs

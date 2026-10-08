@@ -185,6 +185,7 @@ updated = 已更新{ " " }
 
 refresh-last-updated-relative = 刷新 · 上次更新于 { $relative }
 
+edit-home = 编辑主页
 drag-to-reorder = 拖动以重新排序
 
 drop-here = 拖放到此处

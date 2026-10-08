@@ -57,11 +57,36 @@ impl Render for WidgetDrag {
 }
 
 impl PopupRoot {
-    pub(super) fn widget_drag_handle(
+    /// Heading trailing content plus the reorder grip, which slides in only
+    /// while Home is in edit mode.
+    pub(super) fn with_widget_grip(
         &mut self,
+        trailing: gpui::Div,
         widget: HomeWidgetId,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> gpui::Div {
+        let reveal = self.fx.toggle(
+            fx::key(("widget-grip", widget.id())),
+            self.home_editing,
+            fx::FAST,
+        );
+        let row = div().flex().flex_row().items_center().child(trailing);
+        if reveal < 0.001 {
+            return row;
+        }
+        row.child(
+            div()
+                .flex_none()
+                .flex()
+                .justify_end()
+                .w(px(32.0 * reveal))
+                .overflow_hidden()
+                .opacity(reveal)
+                .child(self.widget_drag_handle(widget, cx)),
+        )
+    }
+
+    fn widget_drag_handle(&mut self, widget: HomeWidgetId, cx: &mut Context<Self>) -> AnyElement {
         let hover_id = fx::key(("drag-handle", widget.id()));
         let active = self.widget_drag.as_ref() == Some(&widget);
         let grip = self.drag_grip(hover_id, active);
@@ -525,7 +550,7 @@ impl PopupRoot {
             .gap(px(4.0))
             .child(selector);
         if can_reorder {
-            trailing = trailing.child(self.widget_drag_handle(HomeWidgetId::total_spend(), cx));
+            trailing = self.with_widget_grip(trailing, HomeWidgetId::total_spend(), cx);
         }
         // Same row as provider headings so the drag grips line up.
         let heading = components::split_row(title, trailing)

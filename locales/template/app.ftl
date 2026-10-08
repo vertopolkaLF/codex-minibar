@@ -382,6 +382,10 @@ updated = { "" }
 refresh-last-updated-relative = { "" }
 
 # English source:
+# edit-home = Edit Home
+edit-home = { "" }
+
+# English source:
 # drag-to-reorder = Drag to reorder
 drag-to-reorder = { "" }
 

@@ -188,6 +188,7 @@ updated = Atualizado{ " " }
 
 refresh-last-updated-relative = Atualizar · Última atualização { $relative }
 
+edit-home = Editar início
 drag-to-reorder = Arraste para reordenar
 
 drop-here = Solte aqui
