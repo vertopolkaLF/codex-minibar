@@ -66,6 +66,14 @@ struct AccountBarSpec {
 }
 /// Smooth wheel scrolling: one notch glides over this duration.
 const SCROLL_GLIDE: Duration = Duration::from_millis(140);
+/// How long the overlay scrollbar stays after the last wheel tick.
+const SCROLLBAR_LINGER: Duration = Duration::from_millis(900);
+/// Brief scrollbar flash when a page first overflows, hinting it scrolls.
+const SCROLLBAR_FLASH: Duration = Duration::from_millis(1100);
+/// Pointer zone along the right edge that reveals the scrollbar.
+const SCROLLBAR_HOVER_ZONE: f32 = 14.0;
+/// Edge shadows hinting at content above or below the viewport.
+const SCROLL_SHADE_HEIGHT: f32 = 14.0;
 
 /// Round the independent MaxContent measurement once to physical pixels.
 fn measured_page_height(height: f32, scale: f32) -> f32 {
@@ -175,6 +183,11 @@ pub(super) struct WidgetLayout {
 pub(super) struct PageMetrics {
     pub(super) content_height: Rc<Cell<f32>>,
     pub(super) scroll_target: f32,
+    /// Whether the page overflowed on its last frame; a rising edge flashes
+    /// the scrollbar.
+    pub(super) overflowing: bool,
+    /// The overlay scrollbar stays visible until this moment.
+    pub(super) reveal_until: Option<Instant>,
 }
 
 pub(super) struct SnapshotCache {
@@ -244,6 +257,8 @@ pub(crate) struct PopupRoot {
     pub(super) capsule_size: (f32, f32),
     pub(super) _subscriptions: Vec<Subscription>,
     pub(super) _clock: Option<Task<()>>,
+    /// Repaints once the scrollbar reveal expires so it can fade out.
+    pub(super) scrollbar_timer: Option<Task<()>>,
 }
 
 impl PopupRoot {
@@ -329,6 +344,7 @@ impl PopupRoot {
             capsule_size: (0.0, 0.0),
             _subscriptions: vec![appearance],
             _clock: Some(clock),
+            scrollbar_timer: None,
         }
     }
 
@@ -465,7 +481,11 @@ impl PopupRoot {
     fn on_page_entered(&mut self, view: PopupView) {
         let metrics = self.pages.entry(view).or_default();
         metrics.scroll_target = 0.0;
+        metrics.overflowing = false;
+        metrics.reveal_until = None;
         self.fx.snap(fx::key(("scroll", view_key(view))), 0.0);
+        self.fx
+            .snap(fx::key(("scroll-shade-top", view_key(view))), 0.0);
         self.chart_hover = None;
     }
 
@@ -572,6 +592,11 @@ impl PopupRoot {
             self.host.last_region = None;
             self.tip = None;
             self.hover.clear();
+            // Every open flashes the scrollbar again on overflowing pages.
+            for metrics in self.pages.values_mut() {
+                metrics.overflowing = false;
+                metrics.reveal_until = None;
+            }
         }
         crate::popup::set_lifecycle(true, false);
         cx.notify();
@@ -1090,8 +1115,23 @@ impl PopupRoot {
         let next = (metrics.scroll_target - delta * 2.0).clamp(0.0, max);
         if (next - metrics.scroll_target).abs() > 0.1 {
             metrics.scroll_target = next;
+            self.reveal_scrollbar(view, SCROLLBAR_LINGER, cx);
             cx.notify();
         }
+    }
+
+    /// Keeps the overlay scrollbar visible for `duration`, then lets it fade.
+    fn reveal_scrollbar(&mut self, view: PopupView, duration: Duration, cx: &mut Context<Self>) {
+        let until = Instant::now() + duration;
+        let metrics = self.pages.entry(view).or_default();
+        if metrics.reveal_until.is_some_and(|at| at >= until) {
+            return;
+        }
+        metrics.reveal_until = Some(until);
+        self.scrollbar_timer = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(duration).await;
+            let _ = this.update(cx, |_, cx| cx.notify());
+        }));
     }
 }
 
@@ -1492,10 +1532,24 @@ impl PopupRoot {
             // A growing shell can temporarily be shorter than its content.
             // Only show a scrollbar when the final shell cannot fit the page.
             let final_viewport = (self.target_height(view) - self.chrome_height()).max(0.0);
-            if metrics.content_height.get() - final_viewport > 1.0 / window.scale_factor()
-                && max_scroll > 0.5
-            {
-                page = page.child(self.render_scrollbar(view, scroll, max_scroll, viewport_height));
+            let overflowing = metrics.content_height.get() - final_viewport
+                > 1.0 / window.scale_factor()
+                && max_scroll > 0.5;
+            let page_state = self.pages.entry(view).or_default();
+            let newly_overflowing = overflowing && !page_state.overflowing;
+            page_state.overflowing = overflowing;
+            if newly_overflowing {
+                self.reveal_scrollbar(view, SCROLLBAR_FLASH, cx);
+            }
+            page = page.children(self.render_scroll_shades(
+                view,
+                overflowing && scroll > 0.5,
+                overflowing && max_scroll - scroll > 0.5,
+            ));
+            if overflowing {
+                page = page
+                    .child(self.render_scrollbar(view, scroll, max_scroll, viewport_height))
+                    .child(self.render_scrollbar_zone(view, cx));
             }
         }
         page.into_any_element()
@@ -1512,12 +1566,18 @@ impl PopupRoot {
         let track = (viewport_height - 8.0).max(16.0);
         let thumb = (track * viewport_height / content).clamp(24.0, track);
         let top = 4.0 + (track - thumb) * (scroll / max_scroll.max(1.0));
-        let scrolling =
-            (scroll - self.pages.get(&view).map_or(0.0, |m| m.scroll_target)).abs() > 0.5;
-        let visible = self.fx.toggle(
+        let metrics = self.pages.get(&view);
+        let scrolling = (scroll - metrics.map_or(0.0, |m| m.scroll_target)).abs() > 0.5;
+        let revealed = metrics
+            .and_then(|m| m.reveal_until)
+            .is_some_and(|until| Instant::now() < until);
+        let shown =
+            scrolling || revealed || self.hovered(fx::key(("scrollbar-zone", view_key(view))));
+        // Hidden at rest; appears quickly and fades out more gently.
+        let visible = self.fx.value(
             fx::key(("scrollbar", view_key(view))),
-            scrolling || self.hovered(fx::key(("page-hover", view_key(view)))),
-            fx::FAST,
+            if shown { 1.0 } else { 0.0 },
+            if shown { fx::FAST } else { fx::NORMAL },
         );
         div()
             .absolute()
@@ -1526,7 +1586,71 @@ impl PopupRoot {
             .w(px(3.0))
             .h(px(thumb))
             .rounded(px(1.5))
-            .bg(self.palette.text_tertiary.opacity(0.35 + 0.35 * visible))
+            .bg(self.palette.text_tertiary.opacity(0.7 * visible))
+    }
+
+    /// Invisible strip along the right edge; pointing at it shows the
+    /// scrollbar without revealing it for every pointer move over the page.
+    fn render_scrollbar_zone(&self, view: PopupView, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id(ElementId::Name(
+                format!("popup-scrollbar-zone-{}", view_key(view)).into(),
+            ))
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .right_0()
+            .w(px(SCROLLBAR_HOVER_ZONE))
+            .on_hover(self.hover_listener(fx::key(("scrollbar-zone", view_key(view))), None, cx))
+    }
+
+    /// Soft shadows at the viewport edges while content continues beyond
+    /// them. Shadows blend with every backdrop material, unlike a tint fade.
+    fn render_scroll_shades(&mut self, view: PopupView, above: bool, below: bool) -> Vec<Div> {
+        let top = self.fx.toggle(
+            fx::key(("scroll-shade-top", view_key(view))),
+            above,
+            fx::FAST,
+        );
+        let bottom = self.fx.toggle(
+            fx::key(("scroll-shade-bottom", view_key(view))),
+            below,
+            fx::FAST,
+        );
+        let strength = if self.palette.dark { 0.32 } else { 0.10 };
+        let shade = |alpha: f32| gpui::hsla(0.0, 0.0, 0.0, alpha);
+        let mut shades = Vec::new();
+        if top > 0.001 {
+            shades.push(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(SCROLL_SHADE_HEIGHT))
+                    .bg(gpui::linear_gradient(
+                        180.0,
+                        gpui::linear_color_stop(shade(strength * top), 0.0),
+                        gpui::linear_color_stop(shade(0.0), 1.0),
+                    )),
+            );
+        }
+        if bottom > 0.001 {
+            shades.push(
+                div()
+                    .absolute()
+                    .bottom_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(SCROLL_SHADE_HEIGHT))
+                    .bg(gpui::linear_gradient(
+                        180.0,
+                        gpui::linear_color_stop(shade(0.0), 0.0),
+                        gpui::linear_color_stop(shade(strength * bottom), 1.0),
+                    )),
+            );
+        }
+        shades
     }
 
     /// Body sections for one page.
