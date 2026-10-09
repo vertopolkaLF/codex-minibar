@@ -105,8 +105,9 @@ pub fn open_sign_in(provider: crate::instances::ProviderId) {
     post(Command::SignIn(provider));
 }
 
-/// Open the two-step first-launch flow. Choices stay local until Done so a
-/// dismissed onboarding window never half-configures provider workers.
+/// Open the first-launch flow beside the popup, which previews each choice.
+/// A dismissed onboarding window restores the settings it found, so it never
+/// half-configures provider workers.
 pub fn open_onboarding() {
     post(Command::OpenOnboarding);
 }
@@ -349,6 +350,13 @@ fn open_onboarding_window(state: Arc<AppState>, cx: &mut AsyncApp) {
         Ok(Ok(handle)) => {
             ONBOARDING_OPEN.store(true, Ordering::SeqCst);
             ONBOARDING_WINDOW.with(|slot| *slot.borrow_mut() = Some(handle));
+            // The popup stays up beside onboarding as a live preview of
+            // every choice (`is_open` keeps it from being dismissed).
+            // Home lists every provider onboarding turns on.
+            crate::popup_window::request_home_view();
+            if !crate::popup::is_visible() || crate::popup::is_closing() {
+                crate::popup::show_on_primary();
+            }
             let _ = handle.update(cx, |_, window, _| window.activate_window());
         }
         Ok(Err(error)) => eprintln!("Could not open onboarding: {error:#}"),

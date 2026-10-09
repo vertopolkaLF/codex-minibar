@@ -13,11 +13,13 @@ use gpui::{
     Transformation, Window, div, img, prelude::FluentBuilder, px, radians,
 };
 
-use super::appearance::popup_mock;
-use super::kit::{self, Button, ButtonSize, Kit, Row, eid};
+use super::appearance::{ThemePicker, popup_mock};
+use super::input::{HasInputs, Inputs};
+use super::kit::{self, Button, ButtonSize, Handler, Kit, Row, eid};
+use super::theme::Fonts;
 use super::window::SettingsWindow;
 use crate::popup_window::ui::fx;
-use crate::settings::PopupTheme;
+use crate::settings::{PopupTheme, Settings};
 use crate::vscode_themes::{self, ThemeSource, VsCodeTheme, open_vsx};
 
 const SEARCH_INPUT: &str = "appearance-open-vsx-search";
@@ -71,29 +73,65 @@ pub(super) struct ThemeBrowser {
     previewing: Option<String>,
 }
 
-impl SettingsWindow {
-    /// "VS Code themes" row with the file import button.
-    pub(super) fn vscode_import_row(&mut self, k: &mut Kit, cx: &mut Context<Self>) -> AnyElement {
-        let importing = self.theme_browser.importing;
-        Row::new("appearance-vscode-themes", crate::i18n::tr("vscode-themes"))
-            .description(k, crate::i18n::tr("vscode-themes-description"))
-            .trailing(
-                Button::new(
-                    "appearance-vscode-import",
-                    if importing {
-                        crate::i18n::tr("importing-theme")
-                    } else {
-                        crate::i18n::tr("import-theme")
-                    },
-                )
-                .with_icon("download-simple-fill")
-                .disabled(importing)
-                .on_click(Self::h(cx, |this, (), _, cx| this.import_vscode_theme(cx)))
-                .render(k),
-            )
-            .render(k)
+/// A window that hosts the theme pickers: the Settings Appearance page and
+/// the onboarding Theme step.
+pub(super) trait ThemeHost: HasInputs {
+    fn settings(&self) -> &Settings;
+    fn fonts(&self) -> &Fonts;
+    fn theme_browser(&self) -> &ThemeBrowser;
+    fn theme_browser_mut(&mut self) -> &mut ThemeBrowser;
+    /// Apply an edit right away and persist it.
+    fn edit_settings(
+        &mut self,
+        cx: &mut Context<Self>,
+        edit: impl Fn(&mut Settings) + Send + 'static,
+    );
+    /// Confirm a finished install.
+    fn theme_installed(&mut self, cx: &mut Context<Self>);
+
+    /// Wrap a method into a component handler.
+    fn h<T: 'static>(
+        cx: &Context<Self>,
+        f: impl Fn(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
+    ) -> Handler<T> {
+        let this = cx.weak_entity();
+        std::rc::Rc::new(move |value, window, cx| {
+            let _ = this.update(cx, |this, cx| f(this, value, window, cx));
+        })
+    }
+}
+
+impl ThemeHost for SettingsWindow {
+    fn settings(&self) -> &Settings {
+        &self.settings
     }
 
+    fn fonts(&self) -> &Fonts {
+        &self.fonts
+    }
+
+    fn theme_browser(&self) -> &ThemeBrowser {
+        &self.theme_browser
+    }
+
+    fn theme_browser_mut(&mut self) -> &mut ThemeBrowser {
+        &mut self.theme_browser
+    }
+
+    fn edit_settings(
+        &mut self,
+        cx: &mut Context<Self>,
+        edit: impl Fn(&mut Settings) + Send + 'static,
+    ) {
+        self.edit(cx, edit);
+    }
+
+    fn theme_installed(&mut self, cx: &mut Context<Self>) {
+        self.show_notice(crate::i18n::tr("theme-installed"), cx);
+    }
+}
+
+impl SettingsWindow {
     /// "Browse Open VSX" row; the browser itself is a dialog.
     pub(super) fn open_vsx_entry_row(&mut self, k: &mut Kit, cx: &mut Context<Self>) -> AnyElement {
         Row::new(BROWSER_ID, crate::i18n::tr("browse-open-vsx"))
@@ -112,11 +150,7 @@ impl SettingsWindow {
 
     fn open_open_vsx(&mut self, cx: &mut Context<Self>) {
         self.theme_browser.open = true;
-        // The first open lists the most popular themes.
-        if self.theme_browser.results.is_none() && !self.theme_browser.searching {
-            let query = self.theme_browser.query.clone();
-            self.search_open_vsx(query, cx);
-        }
+        self.ensure_open_vsx_results(cx);
         cx.notify();
     }
 
@@ -190,6 +224,59 @@ impl SettingsWindow {
             Some(close),
         ))
     }
+}
+
+/// Open VSX search, previews and theme install / remove, shared by every
+/// [`ThemeHost`].
+pub(super) trait ThemeBrowserUi: ThemeHost {
+    /// The first look at the browser lists the most popular themes.
+    fn ensure_open_vsx_results(&mut self, cx: &mut Context<Self>) {
+        let browser = self.theme_browser();
+        if browser.results.is_none() && !browser.searching {
+            let query = browser.query.clone();
+            self.search_open_vsx(query, cx);
+        }
+    }
+
+    /// The search field and results laid out on the page itself, scrolling
+    /// with it, for hosts without the browser dialog.
+    fn open_vsx_inline(
+        &mut self,
+        k: &mut Kit,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (search_row, content) = self.open_vsx_body(k, window, cx);
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .child(search_row)
+            .child(content)
+            .into_any_element()
+    }
+
+    /// "VS Code themes" row with the file import button.
+    fn vscode_import_row(&mut self, k: &mut Kit, cx: &mut Context<Self>) -> AnyElement {
+        let importing = self.theme_browser().importing;
+        Row::new("appearance-vscode-themes", crate::i18n::tr("vscode-themes"))
+            .description(k, crate::i18n::tr("vscode-themes-description"))
+            .trailing(
+                Button::new(
+                    "appearance-vscode-import",
+                    if importing {
+                        crate::i18n::tr("importing-theme")
+                    } else {
+                        crate::i18n::tr("import-theme")
+                    },
+                )
+                .with_icon("download-simple-fill")
+                .disabled(importing)
+                .on_click(Self::h(cx, |this, (), _, cx| this.import_vscode_theme(cx)))
+                .render(k),
+            )
+            .render(k)
+    }
 
     /// The search field, and the status or result list below it.
     fn open_vsx_body(
@@ -198,18 +285,19 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> (AnyElement, AnyElement) {
-        let query = self.theme_browser.query.clone();
-        let input = self.input(
-            SEARCH_INPUT,
+        let query = self.theme_browser().query.clone();
+        let input = Inputs::input(
+            self,
+            SEARCH_INPUT.into(),
             &query,
-            crate::i18n::tr("search-color-themes"),
+            crate::i18n::tr("search-color-themes").into(),
             false,
             false,
             window,
             cx,
             |this, text, event, _, cx| {
                 // Blur keeps the text; only Enter runs a search.
-                this.theme_browser.query = text.clone();
+                this.theme_browser_mut().query = text.clone();
                 if matches!(event, super::input::InputEvent::Submit) {
                     this.search_open_vsx(text, cx);
                 }
@@ -221,8 +309,8 @@ impl SettingsWindow {
             .on_click(Self::h(cx, |this, (), _, cx| {
                 let text = this
                     .inputs_text(SEARCH_INPUT, cx)
-                    .unwrap_or_else(|| this.theme_browser.query.clone());
-                this.theme_browser.query = text.clone();
+                    .unwrap_or_else(|| this.theme_browser_mut().query.clone());
+                this.theme_browser_mut().query = text.clone();
                 this.search_open_vsx(text, cx);
             }))
             .render(k);
@@ -233,7 +321,7 @@ impl SettingsWindow {
             .child(div().flex_1().min_w_0().child(field))
             .child(search);
 
-        let browser = &self.theme_browser;
+        let browser = self.theme_browser();
         let status = if let Some(error) = &browser.error {
             let retry = Button::new(
                 "appearance-open-vsx-retry",
@@ -241,7 +329,7 @@ impl SettingsWindow {
             )
             .size(ButtonSize::Small)
             .on_click(Self::h(cx, |this, (), _, cx| {
-                let query = this.theme_browser.query.clone();
+                let query = this.theme_browser_mut().query.clone();
                 this.search_open_vsx(query, cx);
             }))
             .render(k);
@@ -315,7 +403,7 @@ impl SettingsWindow {
                             _ => None,
                         });
                     let key = extension.key();
-                    let installing = self.theme_browser.installing.contains(&key);
+                    let installing = self.theme_browser().installing.contains(&key);
                     rows.push(self.open_vsx_row(
                         k,
                         index,
@@ -324,7 +412,7 @@ impl SettingsWindow {
                         installing,
                         cx,
                     ));
-                    let open = self.theme_browser.previewing.as_deref() == Some(key.as_str());
+                    let open = self.theme_browser().previewing.as_deref() == Some(key.as_str());
                     let panel_key = fx::key(("open-vsx-preview", key.as_str()));
                     rows.extend(kit::collapsible(k, panel_key, open, |k| {
                         self.open_vsx_preview(k, extension, cx)
@@ -359,7 +447,7 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let key = extension.key();
-        let open = self.theme_browser.previewing.as_deref() == Some(key.as_str());
+        let open = self.theme_browser().previewing.as_deref() == Some(key.as_str());
         let turn =
             k.fx.toggle(fx::key(("open-vsx-caret", key.as_str())), open, fx::NORMAL);
         let theme = &k.theme;
@@ -469,7 +557,7 @@ impl SettingsWindow {
         let icon = extension
             .icon_url
             .as_ref()
-            .and_then(|url| self.theme_browser.icons.get(url));
+            .and_then(|url| self.theme_browser().icons.get(url));
         if let (Some(Icon::Ready(image)), Some(url)) = (icon, &extension.icon_url) {
             let logo = div()
                 .size(px(ICON_SIZE))
@@ -518,7 +606,7 @@ impl SettingsWindow {
         extension: &open_vsx::Extension,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let body = match self.theme_browser.previews.get(&extension.key()) {
+        let body = match self.theme_browser().previews.get(&extension.key()) {
             None | Some(Preview::Loading) => {
                 kit::caption(k, crate::i18n::tr("open-vsx-preview-loading"))
             }
@@ -540,7 +628,7 @@ impl SettingsWindow {
                 .into_any_element(),
             Some(Preview::Ready(themes)) => {
                 let previewing = vscode_themes::preview();
-                let accent = crate::theme::accent_ramp(self.settings.accent_color);
+                let accent = crate::theme::accent_ramp(self.settings().accent_color);
                 let tiles = themes
                     .iter()
                     .map(|vscode| {
@@ -632,7 +720,7 @@ impl SettingsWindow {
     ) -> AnyElement {
         let installed = vscode_themes::get(&vscode.id).is_some();
         let installing = self
-            .theme_browser
+            .theme_browser()
             .installing
             .contains(&single_install_key(&vscode.id));
         let (icon, tooltip) = if installed {
@@ -657,10 +745,10 @@ impl SettingsWindow {
 
     fn install_one_theme(&mut self, theme: Arc<VsCodeTheme>, cx: &mut Context<Self>) {
         let key = single_install_key(&theme.id);
-        if !self.theme_browser.installing.insert(key.clone()) {
+        if !self.theme_browser_mut().installing.insert(key.clone()) {
             return;
         }
-        self.theme_browser.error = None;
+        self.theme_browser_mut().error = None;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -668,7 +756,7 @@ impl SettingsWindow {
                 .spawn(async move { vscode_themes::install(vec![(*theme).clone()]) })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                this.theme_browser.installing.remove(&key);
+                this.theme_browser_mut().installing.remove(&key);
                 this.finish_theme_install(result, cx);
             });
         })
@@ -677,7 +765,7 @@ impl SettingsWindow {
 
     fn toggle_open_vsx_preview(&mut self, extension: open_vsx::Extension, cx: &mut Context<Self>) {
         let key = extension.key();
-        let browser = &mut self.theme_browser;
+        let browser = self.theme_browser_mut();
         if browser.previewing.as_deref() == Some(key.as_str()) {
             browser.previewing = None;
             cx.notify();
@@ -709,7 +797,7 @@ impl SettingsWindow {
                         Preview::Failed(format!("{error:#}").into())
                     }
                 };
-                this.theme_browser.previews.insert(key, preview);
+                this.theme_browser_mut().previews.insert(key, preview);
                 cx.notify();
             });
         })
@@ -727,7 +815,7 @@ impl SettingsWindow {
 
     /// Fetch logos for search results that have not been requested yet.
     fn load_open_vsx_icons(&mut self, cx: &mut Context<Self>) {
-        let browser = &mut self.theme_browser;
+        let browser = self.theme_browser_mut();
         let urls = browser
             .results
             .iter()
@@ -755,7 +843,7 @@ impl SettingsWindow {
                         None => Icon::Missing,
                     };
                     let updated = this.update(cx, |this, cx| {
-                        this.theme_browser.icons.insert(url, icon);
+                        this.theme_browser_mut().icons.insert(url, icon);
                         cx.notify();
                     });
                     if updated.is_err() {
@@ -768,11 +856,11 @@ impl SettingsWindow {
     }
 
     fn inputs_text(&self, id: &str, cx: &Context<Self>) -> Option<String> {
-        self.input_entity(id).map(|input| input.read(cx).text())
+        self.inputs().get(id).map(|input| input.read(cx).text())
     }
 
     fn search_open_vsx(&mut self, query: String, cx: &mut Context<Self>) {
-        let browser = &mut self.theme_browser;
+        let browser = self.theme_browser_mut();
         browser.searching = true;
         browser.error = None;
         let search = cx.background_executor().spawn({
@@ -783,7 +871,7 @@ impl SettingsWindow {
         browser.search_task = Some(cx.spawn(async move |this, cx| {
             let result = search.await;
             let _ = this.update(cx, |this, cx| {
-                let browser = &mut this.theme_browser;
+                let browser = this.theme_browser_mut();
                 browser.searching = false;
                 browser.search_task = None;
                 match result {
@@ -807,12 +895,12 @@ impl SettingsWindow {
 
     fn install_from_open_vsx(&mut self, extension: open_vsx::Extension, cx: &mut Context<Self>) {
         let key = extension.key();
-        if !self.theme_browser.installing.insert(key.clone()) {
+        if !self.theme_browser_mut().installing.insert(key.clone()) {
             return;
         }
-        self.theme_browser.error = None;
+        self.theme_browser_mut().error = None;
         // A package already downloaded for its preview is not fetched again.
-        let downloaded = match self.theme_browser.previews.get(&key) {
+        let downloaded = match self.theme_browser().previews.get(&key) {
             Some(Preview::Ready(themes)) => Some(
                 themes
                     .iter()
@@ -833,7 +921,7 @@ impl SettingsWindow {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                this.theme_browser.installing.remove(&key);
+                this.theme_browser_mut().installing.remove(&key);
                 this.finish_theme_install(result, cx);
             });
         })
@@ -855,7 +943,7 @@ impl SettingsWindow {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
-                this.theme_browser.importing = true;
+                this.theme_browser_mut().importing = true;
                 cx.notify();
             });
             let result = cx
@@ -863,7 +951,7 @@ impl SettingsWindow {
                 .spawn(async move { vscode_themes::import_file(&path) })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                this.theme_browser.importing = false;
+                this.theme_browser_mut().importing = false;
                 this.finish_theme_install(result, cx);
             });
         })
@@ -887,7 +975,7 @@ impl SettingsWindow {
                     self.select_vscode_theme(id, cx);
                 }
                 end_theme_preview(cx);
-                self.show_notice(crate::i18n::tr("theme-installed"), cx);
+                self.theme_installed(cx);
             }
             Err(error) => {
                 eprintln!("failed to install a VS Code theme: {error:#}");
@@ -902,16 +990,16 @@ impl SettingsWindow {
         cx.notify();
     }
 
-    pub(super) fn select_vscode_theme(&mut self, id: String, cx: &mut Context<Self>) {
-        self.edit(cx, move |settings| {
+    fn select_vscode_theme(&mut self, id: String, cx: &mut Context<Self>) {
+        self.edit_settings(cx, move |settings| {
             settings.popup_theme = PopupTheme::VsCode;
             settings.popup_vscode_theme = Some(id.clone());
         });
     }
 
-    pub(super) fn remove_vscode_theme(&mut self, id: String, cx: &mut Context<Self>) {
-        let selected = self.settings.popup_theme == PopupTheme::VsCode
-            && self.settings.popup_vscode_theme.as_deref() == Some(id.as_str());
+    fn remove_vscode_theme(&mut self, id: String, cx: &mut Context<Self>) {
+        let selected = self.settings().popup_theme == PopupTheme::VsCode
+            && self.settings().popup_vscode_theme.as_deref() == Some(id.as_str());
         if let Err(error) = vscode_themes::remove(&id) {
             eprintln!("failed to remove VS Code theme {id}: {error:#}");
             crate::notifications::show(
@@ -921,7 +1009,7 @@ impl SettingsWindow {
             return;
         }
         if selected {
-            self.edit(cx, |settings| {
+            self.edit_settings(cx, |settings| {
                 settings.popup_theme = PopupTheme::Fluent;
                 settings.popup_vscode_theme = None;
             });
@@ -930,6 +1018,8 @@ impl SettingsWindow {
         cx.notify();
     }
 }
+
+impl<T: ThemeHost> ThemeBrowserUi for T {}
 
 /// `ThemeBrowser::installing` entry of a single theme, apart from the
 /// `Extension::key`s of whole packages.

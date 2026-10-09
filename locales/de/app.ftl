@@ -1222,6 +1222,8 @@ activity = Aktivität
 
 # src/settings_window/onboarding.rs
 choose-providers = Anbieter auswählen
+choose-a-theme = Theme auswählen
+theme-step-description = Wählen Sie die Farben für die Einstellungen und das Pop-up. Das Pop-up zeigt jede Auswahl sofort an.
 
 # src/settings_window/onboarding.rs
 we-turned-on-the-providers-found-on-this-pc-you-can-change-this-l = Wir haben die auf diesem PC gefundenen Anbieter aktiviert. Sie können dies später ändern.

@@ -805,3 +805,95 @@ impl Render for TextInput {
             .child(TextElement { input: cx.entity() })
     }
 }
+
+type CommitHandler<V> =
+    std::rc::Rc<dyn Fn(&mut V, String, InputEvent, &mut Window, &mut Context<V>)>;
+
+/// A window's persistent text inputs, keyed by field id.
+pub(crate) struct Inputs<V: 'static> {
+    entities: std::collections::HashMap<SharedString, Entity<TextInput>>,
+    commits: std::collections::HashMap<SharedString, CommitHandler<V>>,
+    subscriptions: std::collections::HashMap<SharedString, Subscription>,
+}
+
+impl<V: 'static> Default for Inputs<V> {
+    fn default() -> Self {
+        Self {
+            entities: Default::default(),
+            commits: Default::default(),
+            subscriptions: Default::default(),
+        }
+    }
+}
+
+/// A window view that owns an [`Inputs`] registry.
+pub(crate) trait HasInputs: Sized + 'static {
+    fn inputs(&self) -> &Inputs<Self>;
+    fn inputs_mut(&mut self) -> &mut Inputs<Self>;
+}
+
+impl<V: HasInputs> Inputs<V> {
+    /// A persistent text input for `id`, synced to `value` when it changes
+    /// elsewhere. `on_commit` runs on Enter ([`InputEvent::Submit`]) and when
+    /// focus leaves ([`InputEvent::Blur`]).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn input(
+        this: &mut V,
+        id: SharedString,
+        value: &str,
+        placeholder: SharedString,
+        password: bool,
+        disabled: bool,
+        window: &mut Window,
+        cx: &mut Context<V>,
+        on_commit: impl Fn(&mut V, String, InputEvent, &mut Window, &mut Context<V>) + 'static,
+    ) -> Entity<TextInput> {
+        let entity = match this.inputs_mut().entities.get(&id) {
+            Some(entity) => entity.clone(),
+            None => {
+                let entity = cx.new(|cx| TextInput::new(window, cx));
+                let sub_id = id.clone();
+                let subscription = cx.subscribe_in(
+                    &entity,
+                    window,
+                    move |this: &mut V, input, event: &InputEvent, window, cx| {
+                        if matches!(event, InputEvent::Submit | InputEvent::Blur)
+                            && let Some(commit) = this.inputs_mut().commits.get(&sub_id).cloned()
+                        {
+                            let text = input.read(cx).text();
+                            commit(this, text, *event, window, cx);
+                        }
+                    },
+                );
+                let inputs = this.inputs_mut();
+                inputs.subscriptions.insert(id.clone(), subscription);
+                inputs.entities.insert(id.clone(), entity.clone());
+                entity
+            }
+        };
+        entity.update(cx, |input, cx| {
+            input.placeholder = placeholder;
+            input.password = password;
+            input.disabled = disabled;
+            input.sync_external(value, window, cx);
+        });
+        this.inputs_mut()
+            .commits
+            .insert(id, std::rc::Rc::new(on_commit));
+        entity
+    }
+}
+
+impl<V: 'static> Inputs<V> {
+    /// The live input for `id`, if it has been built.
+    pub(crate) fn get(&self, id: &str) -> Option<Entity<TextInput>> {
+        self.entities.get(id).cloned()
+    }
+
+    /// Drop inputs whose id starts with `prefix`.
+    pub(crate) fn remove_prefixed(&mut self, prefix: &str) {
+        self.entities.retain(|id, _| !id.starts_with(prefix));
+        self.commits.retain(|id, _| !id.starts_with(prefix));
+        self.subscriptions.retain(|id, _| !id.starts_with(prefix));
+    }
+}

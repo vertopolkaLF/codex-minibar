@@ -1223,6 +1223,8 @@ activity = Activité
 
 # src/settings_window/onboarding.rs
 choose-providers = Choisir les fournisseurs
+choose-a-theme = Choisir un thème
+theme-step-description = Choisissez les couleurs des paramètres et de la fenêtre contextuelle. La fenêtre contextuelle affiche chaque choix immédiatement.
 
 # src/settings_window/onboarding.rs
 we-turned-on-the-providers-found-on-this-pc-you-can-change-this-l = Nous avons activé les fournisseurs trouvés sur ce PC. Vous pourrez modifier cela plus tard.

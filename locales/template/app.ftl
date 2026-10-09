@@ -1730,6 +1730,14 @@ activity = { "" }
 choose-providers = { "" }
 
 # English source:
+# choose-a-theme = Choose a theme
+choose-a-theme = { "" }
+
+# English source:
+# theme-step-description = Pick the colors for Settings and the popup. The popup shows each choice as you make it.
+theme-step-description = { "" }
+
+# English source:
 # we-turned-on-the-providers-found-on-this-pc-you-can-change-this-l = We turned on the providers found on this PC. You can change this later.
 we-turned-on-the-providers-found-on-this-pc-you-can-change-this-l = { "" }
 

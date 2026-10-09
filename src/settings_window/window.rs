@@ -16,7 +16,7 @@ use gpui::{
 };
 
 use super::{
-    input::{InputEvent, TextInput},
+    input::{HasInputs, InputEvent, Inputs, TextInput},
     kit::{self, Button, Handler, Kit, eid, icon},
     nav::{NavMode, Page, Tab, first_provider_page, provider_nav_order, shows_badge},
     persistence,
@@ -36,9 +36,6 @@ const TITLEBAR_HEIGHT: f32 = 44.0;
 const NAV_ITEM_HEIGHT: f32 = 36.0;
 const NAV_ITEM_GAP: f32 = 2.0;
 const CONTENT_MAX_WIDTH: f32 = 1000.0;
-
-type CommitHandler =
-    Rc<dyn Fn(&mut SettingsWindow, String, InputEvent, &mut Window, &mut Context<SettingsWindow>)>;
 
 /// Instance fields that drive install detection; names, badges and toggles
 /// never re-run it.
@@ -71,9 +68,7 @@ pub(crate) struct SettingsWindow {
     pub(super) page: Page,
     scroll: ScrollHandle,
     // Text inputs keyed by field id.
-    inputs: HashMap<SharedString, Entity<TextInput>>,
-    commits: HashMap<SharedString, CommitHandler>,
-    input_subscriptions: HashMap<SharedString, Subscription>,
+    inputs: Inputs<SettingsWindow>,
     // Provider pages.
     pub(super) install_statuses: HashMap<String, ProviderInstallStatus>,
     detection_inputs: Option<Vec<DetectionInput>>,
@@ -102,6 +97,16 @@ pub(crate) struct SettingsWindow {
     pub(super) theme_browser: super::vscode_themes::ThemeBrowser,
     _poll: Task<()>,
     _subscriptions: Vec<Subscription>,
+}
+
+impl HasInputs for SettingsWindow {
+    fn inputs(&self) -> &Inputs<Self> {
+        &self.inputs
+    }
+
+    fn inputs_mut(&mut self) -> &mut Inputs<Self> {
+        &mut self.inputs
+    }
 }
 
 impl Focusable for SettingsWindow {
@@ -178,9 +183,7 @@ impl SettingsWindow {
             return_tab: Tab::General,
             page,
             scroll: ScrollHandle::new(),
-            inputs: HashMap::new(),
-            commits: HashMap::new(),
-            input_subscriptions: HashMap::new(),
+            inputs: Inputs::default(),
             install_statuses: HashMap::new(),
             detection_inputs: None,
             detection_revision: 0,
@@ -305,52 +308,23 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
         on_commit: impl Fn(&mut Self, String, InputEvent, &mut Window, &mut Context<Self>) + 'static,
     ) -> Entity<TextInput> {
-        let id: SharedString = id.into();
-        let entity = match self.inputs.get(&id) {
-            Some(entity) => entity.clone(),
-            None => {
-                let entity = cx.new(|cx| TextInput::new(window, cx));
-                let sub_id = id.clone();
-                let subscription = cx.subscribe_in(
-                    &entity,
-                    window,
-                    move |this, input, event: &InputEvent, window, cx| {
-                        if matches!(event, InputEvent::Submit | InputEvent::Blur)
-                            && let Some(commit) = this.commits.get(&sub_id).cloned()
-                        {
-                            let text = input.read(cx).text();
-                            commit(this, text, *event, window, cx);
-                        }
-                    },
-                );
-                self.input_subscriptions.insert(id.clone(), subscription);
-                self.inputs.insert(id.clone(), entity.clone());
-                entity
-            }
-        };
-        let placeholder = placeholder.into();
-        entity.update(cx, |input, cx| {
-            input.placeholder = placeholder;
-            input.password = password;
-            input.disabled = disabled;
-            input.sync_external(value, window, cx);
-        });
-        self.commits.insert(id, Rc::new(on_commit));
-        entity
-    }
-
-    /// The live input for `id`, if it has been built.
-    pub(super) fn input_entity(&self, id: &str) -> Option<Entity<TextInput>> {
-        self.inputs.get(id).cloned()
+        Inputs::input(
+            self,
+            id.into(),
+            value,
+            placeholder.into(),
+            password,
+            disabled,
+            window,
+            cx,
+            on_commit,
+        )
     }
 
     /// Drop inputs whose id starts with `prefix` (dialog fields), so the next
     /// dialog starts empty.
     pub(super) fn reset_inputs(&mut self, prefix: &str) {
-        self.inputs.retain(|id, _| !id.starts_with(prefix));
-        self.commits.retain(|id, _| !id.starts_with(prefix));
-        self.input_subscriptions
-            .retain(|id, _| !id.starts_with(prefix));
+        self.inputs.remove_prefixed(prefix);
     }
 
     pub(super) fn input_text(&self, id: &str, cx: &App) -> String {

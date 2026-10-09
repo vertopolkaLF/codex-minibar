@@ -1219,6 +1219,8 @@ activity = アクティビティ
 
 # src/settings_window/onboarding.rs
 choose-providers = プロバイダーを選択
+choose-a-theme = テーマを選択
+theme-step-description = 設定とポップアップの色を選びます。選んだ内容はすぐにポップアップに反映されます。
 
 # src/settings_window/onboarding.rs
 we-turned-on-the-providers-found-on-this-pc-you-can-change-this-l = この PC で見つかったプロバイダーをオンにしました。これは後で変更できます。

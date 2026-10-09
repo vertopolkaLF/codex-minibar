@@ -826,6 +826,8 @@ when-a-new-version-is-found = Cuando se encuentre una nueva versión
 activity = Actividad
 
 choose-providers = Elegir proveedores
+choose-a-theme = Elegir un tema
+theme-step-description = Elige los colores de Configuración y de la ventana emergente. La ventana emergente muestra cada cambio al instante.
 
 we-turned-on-the-providers-found-on-this-pc-you-can-change-this-l = Hemos activado los proveedores encontrados en este PC. Puedes cambiarlo más adelante.
 

@@ -826,6 +826,8 @@ when-a-new-version-is-found = Quando uma nova versão for encontrada
 activity = Atividade
 
 choose-providers = Escolher provedores
+choose-a-theme = Escolher um tema
+theme-step-description = Escolha as cores das Configurações e do pop-up. O pop-up mostra cada escolha na hora.
 
 we-turned-on-the-providers-found-on-this-pc-you-can-change-this-l = Ativamos os provedores encontrados neste PC. Você pode alterar isso depois.
 

@@ -823,6 +823,8 @@ when-a-new-version-is-found = 发现新版本时
 activity = 活动
 
 choose-providers = 选择提供商
+choose-a-theme = 选择主题
+theme-step-description = 为设置和弹出窗口选择颜色。弹出窗口会即时显示每个选择。
 
 we-turned-on-the-providers-found-on-this-pc-you-can-change-this-l = 已启用此电脑上找到的提供商。稍后可以更改。
 

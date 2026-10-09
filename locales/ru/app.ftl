@@ -1223,6 +1223,8 @@ activity = Активность
 
 # src/settings_window/onboarding.rs
 choose-providers = Выберите провайдеров
+choose-a-theme = Выберите тему
+theme-step-description = Выберите цвета для настроек и всплывающего окна. Всплывающее окно сразу показывает каждый выбор.
 
 # src/settings_window/onboarding.rs
 we-turned-on-the-providers-found-on-this-pc-you-can-change-this-l = Мы включили провайдеров, найденных на этом компьютере. Это можно изменить позже.
