@@ -612,7 +612,11 @@ fn run_limit_task(
                 // already elapsed polls now, a longer one extends the wait.
                 if let Some(last_poll) = last_poll {
                     next_poll = last_poll
-                        + effective_limit_poll_interval(poll_interval, automatic_activation, &state);
+                        + effective_limit_poll_interval(
+                            poll_interval,
+                            automatic_activation,
+                            &state,
+                        );
                 }
             }
             Ok(WorkerCommand::Refresh) => manual_refresh_requested = true,
