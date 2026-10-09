@@ -58,10 +58,14 @@ pub(crate) fn text(value: impl Into<SharedString>, size: f32, line: f32, color: 
 /// Odometer-style label. A digit that changed spins through every digit in
 /// between (upward when the value rose, downward when it fell), and glyphs
 /// fade as they leave the line, like a soft mask on its edges. Other
-/// characters (separators, a new leading digit) slide in or out while their
-/// slot eases between glyph widths. See [`roll_pairs`] for how the old and
-/// new text line up. At rest it is a plain single-line text element, so
-/// callers may still wrap it in [`nowrap`].
+/// characters (separators, a new leading digit) slide in or out.
+///
+/// Every glyph glides from its place in the shaped old text to its place in
+/// the shaped new text, and the label's width follows, so the first frame
+/// matches the old label and the last matches the new one exactly (kerning
+/// included) before it settles back into plain text. See [`roll_pairs`] for
+/// how the two texts line up. At rest it is a plain single-line text
+/// element, so callers may still wrap it in [`nowrap`].
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn rolling_text(
     frame: &RollFrame,
@@ -80,11 +84,28 @@ pub(crate) fn rolling_text(
     let Some(from) = frame.from.as_ref() else {
         return glyphs(frame.to.to_string());
     };
-    let width = |ch: Option<char>| {
-        ch.map_or(0.0, |ch| {
-            measure_text(text_system, family.clone(), size, weight, &ch.to_string())
-        })
+    let old = ShapedChars::new(text_system, family.clone(), size, weight, from);
+    let new = ShapedChars::new(text_system, family, size, weight, &frame.to);
+    let pairs = roll_pairs(from, &frame.to);
+    // A glyph missing on one side enters or leaves at the place of the next
+    // glyph that side does have, with no width.
+    let edges = |side: &ShapedChars, pick: fn(&RollPair) -> Option<usize>| {
+        let mut next = side.width;
+        let mut edges = vec![(0.0, 0.0); pairs.len()];
+        for (index, pair) in pairs.iter().enumerate().rev() {
+            edges[index] = match pick(pair) {
+                Some(at) => {
+                    next = side.x[at];
+                    (side.x[at], side.advance(at))
+                }
+                None => (next, 0.0),
+            };
+        }
+        edges
     };
+    let (old_edges, new_edges) = (edges(&old, |pair| pair.0), edges(&new, |pair| pair.1));
+    let p = frame.progress;
+    let mix = |a: f32, b: f32| a + (b - a) * p.min(1.0);
     // Glyph `offset` steps away from its resting place. Steps are a bit
     // taller than the line and glyphs are gone by half a step, so only one
     // digit reads at a time instead of two half-faded neighbors.
@@ -95,26 +116,31 @@ pub(crate) fn rolling_text(
             .top(px(offset * line * 1.2))
             .opacity((1.0 - offset.abs() * 1.8).clamp(0.0, 1.0))
     };
-    let p = frame.progress;
     let travel = if frame.rising { 1.0 } else { -1.0 };
-    let mut row = div().flex().flex_row().flex_none().h(px(line));
-    let mut run = String::new();
-    for (before, after) in roll_pairs(from, &frame.to) {
+    let mut label = div()
+        .relative()
+        .flex_none()
+        .h(px(line))
+        .w(px(mix(old.width, new.width)));
+    for (index, (before, after)) in pairs.iter().enumerate() {
+        let (before, after) = (
+            before.map(|at| old.chars[at]),
+            after.map(|at| new.chars[at]),
+        );
+        let ((old_x, old_w), (new_x, new_w)) = (old_edges[index], new_edges[index]);
+        let mut slot = div()
+            .absolute()
+            .top_0()
+            .left(px(mix(old_x, new_x)))
+            .w(px(mix(old_w, new_w)))
+            .h(px(line));
         if before == after {
-            run.extend(after);
+            if let Some(ch) = after {
+                label = label.child(slot.child(glyphs(ch.to_string()).absolute().left_0()));
+            }
             continue;
         }
-        if !run.is_empty() {
-            row = row.child(glyphs(std::mem::take(&mut run)).flex_none());
-        }
-        let mut slot = div()
-            .relative()
-            .flex_none()
-            .overflow_hidden()
-            .h(px(line))
-            .w(px(
-                width(before) + (width(after) - width(before)) * p.min(1.0)
-            ));
+        slot = slot.overflow_hidden();
         match (
             before.and_then(|ch| ch.to_digit(10)),
             after.and_then(|ch| ch.to_digit(10)),
@@ -144,47 +170,90 @@ pub(crate) fn rolling_text(
                 }
             }
         }
-        row = row.child(slot);
+        label = label.child(slot);
     }
-    if !run.is_empty() {
-        row = row.child(glyphs(run).flex_none());
-    }
-    row
+    label
 }
 
-/// Pairs each character of `old` with the one it rolls into in `new`.
+/// Character indices of a glyph in the old and the new text.
+type RollPair = (Option<usize>, Option<usize>);
+
+/// A label shaped as one line: each character's x position and the width.
+struct ShapedChars {
+    chars: Vec<char>,
+    x: Vec<f32>,
+    width: f32,
+}
+
+impl ShapedChars {
+    fn new(
+        text_system: &gpui::WindowTextSystem,
+        family: SharedString,
+        size: f32,
+        weight: FontWeight,
+        value: &str,
+    ) -> Self {
+        let mut font = gpui::font(family);
+        font.weight = weight;
+        let run = gpui::TextRun {
+            len: value.len(),
+            font,
+            color: gpui::black(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let shaped = text_system.shape_line(value.to_owned().into(), px(size), &[run], None);
+        Self {
+            chars: value.chars().collect(),
+            x: value
+                .char_indices()
+                .map(|(at, _)| f32::from(shaped.x_for_index(at)))
+                .collect(),
+            width: f32::from(shaped.width),
+        }
+    }
+
+    fn advance(&self, at: usize) -> f32 {
+        self.x.get(at + 1).copied().unwrap_or(self.width) - self.x[at]
+    }
+}
+
+/// Pairs each character of `old` with the one it rolls into in `new`, as
+/// character indices.
 ///
 /// Texts that share their wording (`$996.00` / `$1,604.17`, `62.0% of cost
 /// · 51.6M` / `16.5% of cost · 714.4M`) pair number by number, each aligned
 /// on the right so decimals and thousands separators keep their columns.
 /// Otherwise (`4.5B` / `714.4M`) the shared non-digit prefix and suffix stay
 /// put and the rest aligns on the right.
-pub(crate) fn roll_pairs(old: &str, new: &str) -> Vec<(Option<char>, Option<char>)> {
+pub(crate) fn roll_pairs(old: &str, new: &str) -> Vec<RollPair> {
     let numeric = |ch: char| ch.is_ascii_digit() || ch == '.' || ch == ',';
-    let runs = |text: &str| {
-        let mut runs: Vec<(bool, Vec<char>)> = Vec::new();
-        for ch in text.chars() {
+    let (a, b): (Vec<char>, Vec<char>) = (old.chars().collect(), new.chars().collect());
+    let runs = |chars: &[char]| {
+        let mut runs: Vec<(bool, std::ops::Range<usize>)> = Vec::new();
+        for (index, ch) in chars.iter().enumerate() {
             match runs.last_mut() {
-                Some((kind, chars)) if *kind == numeric(ch) => chars.push(ch),
-                _ => runs.push((numeric(ch), vec![ch])),
+                Some((kind, range)) if *kind == numeric(*ch) => range.end = index + 1,
+                _ => runs.push((numeric(*ch), index..index + 1)),
             }
         }
         runs
     };
-    let (a, b) = (runs(old), runs(new));
-    let same_wording = a.len() == b.len()
-        && a.iter()
-            .zip(&b)
-            .all(|((x, xs), (y, ys))| x == y && (*x || xs == ys));
+    let (ra, rb) = (runs(&a), runs(&b));
+    let same_wording = ra.len() == rb.len()
+        && ra
+            .iter()
+            .zip(&rb)
+            .all(|((x, xs), (y, ys))| x == y && (*x || a[xs.clone()] == b[ys.clone()]));
     let mut pairs = Vec::new();
     if same_wording {
-        for ((_, xs), (_, ys)) in a.iter().zip(&b) {
+        for ((_, xs), (_, ys)) in ra.into_iter().zip(rb) {
             right_aligned(xs, ys, &mut pairs);
         }
         return pairs;
     }
-    let (a, b): (Vec<char>, Vec<char>) = (old.chars().collect(), new.chars().collect());
-    let fixed = |x: &&char, y: &&char| x == y && !x.is_ascii_digit();
+    let fixed = |x: &char, y: &char| x == y && !x.is_ascii_digit();
     let prefix = a.iter().zip(&b).take_while(|(x, y)| fixed(x, y)).count();
     let suffix = a[prefix..]
         .iter()
@@ -192,28 +261,33 @@ pub(crate) fn roll_pairs(old: &str, new: &str) -> Vec<(Option<char>, Option<char
         .zip(b[prefix..].iter().rev())
         .take_while(|(x, y)| fixed(x, y))
         .count();
-    pairs.extend(b[..prefix].iter().map(|ch| (Some(*ch), Some(*ch))));
+    pairs.extend((0..prefix).map(|index| (Some(index), Some(index))));
     right_aligned(
-        &a[prefix..a.len() - suffix],
-        &b[prefix..b.len() - suffix],
+        prefix..a.len() - suffix,
+        prefix..b.len() - suffix,
         &mut pairs,
     );
-    pairs.extend(
-        b[b.len() - suffix..]
-            .iter()
-            .map(|ch| (Some(*ch), Some(*ch))),
-    );
+    pairs.extend((0..suffix).map(|index| {
+        (
+            Some(a.len() - suffix + index),
+            Some(b.len() - suffix + index),
+        )
+    }));
     pairs
 }
 
-fn right_aligned(old: &[char], new: &[char], pairs: &mut Vec<(Option<char>, Option<char>)>) {
+fn right_aligned(
+    old: std::ops::Range<usize>,
+    new: std::ops::Range<usize>,
+    pairs: &mut Vec<RollPair>,
+) {
     let len = old.len().max(new.len());
-    let at = |chars: &[char], index: usize| {
-        (index + chars.len())
+    let at = |range: &std::ops::Range<usize>, index: usize| {
+        (index + range.len())
             .checked_sub(len)
-            .map(|index| chars[index])
+            .map(|index| range.start + index)
     };
-    pairs.extend((0..len).map(|index| (at(old, index), at(new, index))));
+    pairs.extend((0..len).map(|index| (at(&old, index), at(&new, index))));
 }
 
 pub(crate) fn caption(value: impl Into<SharedString>, color: Hsla) -> Div {
@@ -671,9 +745,16 @@ mod tests {
     use super::roll_pairs;
 
     fn changed(old: &str, new: &str) -> String {
+        let (a, b): (Vec<char>, Vec<char>) = (old.chars().collect(), new.chars().collect());
         roll_pairs(old, new)
             .into_iter()
-            .map(|(a, b)| if a == b { '=' } else { '^' })
+            .map(|(x, y)| {
+                if x.map(|x| a[x]) == y.map(|y| b[y]) {
+                    '='
+                } else {
+                    '^'
+                }
+            })
             .collect()
     }
 
