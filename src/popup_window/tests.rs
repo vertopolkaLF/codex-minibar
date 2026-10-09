@@ -814,6 +814,45 @@ fn openrouter_places_each_chart_inside_its_own_account_on_both_surfaces() {
 }
 
 #[test]
+fn duplicate_account_names_keep_separate_heading_identities() {
+    let limits = RateLimits {
+        openrouter_accounts: ["account-a", "account-b"]
+            .into_iter()
+            .map(|id| OpenRouterAccountSnapshot {
+                id: id.into(),
+                name: "Production".into(),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    };
+    for surface in [PopupSurface::HomeTab, PopupSurface::ProviderTab] {
+        let cards = test_cards(
+            ProviderKind::OpenRouter,
+            true,
+            &limits,
+            &all_visible(),
+            surface,
+            true,
+            false,
+            true,
+        );
+        let headings = cards
+            .iter()
+            .flat_map(Card::nested)
+            .filter_map(|card| match card {
+                Card::AccountHeading { id, name, .. } => Some((*id, *name)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            headings,
+            vec![("account-a", "Production"), ("account-b", "Production")]
+        );
+    }
+}
+
+#[test]
 fn two_columns_only_widen_home_and_usage_for_every_provider() {
     for enabled in [false, true] {
         assert_eq!(PopupView::Home.uses_two_columns(enabled), enabled);

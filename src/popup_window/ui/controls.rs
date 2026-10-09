@@ -18,6 +18,72 @@ pub(crate) const SEGMENT_HEIGHT: f32 = 34.0;
 const COMPACT_SEGMENT_HEIGHT: f32 = 28.0;
 
 impl PopupRoot {
+    /// One row of the profile grid. Rows without the selected account have
+    /// no thumb; clicking a cell still selects its original stable member ID.
+    pub(super) fn profile_row_control(
+        &mut self,
+        key: u64,
+        members: Vec<crate::instances::ProviderId>,
+        selected: Option<usize>,
+        driver: crate::settings::ProviderKind,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let palette = self.palette.clone();
+        let labels = members
+            .iter()
+            .map(|member| SharedString::from(member.display_name()))
+            .collect::<Vec<_>>();
+        let tips = labels.iter().cloned().map(Some).collect();
+        let segments = members
+            .iter()
+            .zip(labels)
+            .map(|(member, label)| {
+                let badge = member.badge();
+                Segment {
+                    label_width: components::measure_text(
+                        window.text_system(),
+                        palette.font_family.clone(),
+                        12.0,
+                        FontWeight::SEMIBOLD,
+                        &label,
+                    ),
+                    label,
+                    badge_width: badge
+                        .as_ref()
+                        .map_or(0.0, |badge| badge.text.chars().count() as f32 * 7.0 + 12.0),
+                    badge: badge.map(|badge| {
+                        components::badge_plate(&badge, 14.0, &palette).into_any_element()
+                    }),
+                    disabled: false,
+                }
+            })
+            .collect();
+        let style = SegmentStyle {
+            track: palette.control_fill,
+            thumb: palette.accent,
+            text: palette.text_primary,
+            text_on_thumb: palette.text_on_accent,
+            hover: palette.subtle_fill,
+            divider: palette.divider,
+            height: SEGMENT_HEIGHT,
+        };
+        self.segmented_control_styled(
+            key,
+            segments,
+            tips,
+            selected,
+            true,
+            style,
+            move |this, index, cx| {
+                if let Some(member) = members.get(index).copied() {
+                    this.select_group_member(driver, member, cx);
+                }
+            },
+            cx,
+        )
+    }
+
     /// Pill segmented control with a sliding accent thumb.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn segmented_control(
@@ -129,7 +195,7 @@ impl PopupRoot {
             key,
             segments,
             Vec::new(),
-            selected,
+            Some(selected),
             stretch,
             style,
             on_select,
@@ -237,7 +303,16 @@ impl PopupRoot {
             divider: palette.divider.opacity(0.0),
             height: COMPACT_SEGMENT_HEIGHT,
         };
-        self.segmented_control_styled(key, segments, tips, selected, stretch, style, on_select, cx)
+        self.segmented_control_styled(
+            key,
+            segments,
+            tips,
+            Some(selected),
+            stretch,
+            style,
+            on_select,
+            cx,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -246,12 +321,13 @@ impl PopupRoot {
         key: u64,
         segments: Vec<Segment>,
         tips: Vec<Option<SharedString>>,
-        selected: usize,
+        selected: Option<usize>,
         stretch: bool,
         style: SegmentStyle,
         on_select: impl Fn(&mut Self, usize, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let selected = selected.map(|index| index.min(segments.len().saturating_sub(1)));
         let on_select = Rc::new(on_select);
         let disabled = segments
             .iter()
@@ -269,7 +345,7 @@ impl PopupRoot {
         let mut wire = |index: usize, cell: gpui::Stateful<gpui::Div>| {
             let tip = tips.get(index).cloned().flatten();
             let cell = cell.on_hover(self.hover_listener(hover_ids[index.min(63)], tip, cx));
-            if disabled.get(index).copied().unwrap_or(false) {
+            if disabled.get(index).copied().unwrap_or(false) || selected == Some(index) {
                 return cell;
             }
             let on_select = Rc::clone(&on_select);
@@ -278,7 +354,7 @@ impl PopupRoot {
                 cx.notify();
             }))
         };
-        let control = segmented_track(
+        let control = segmented_track_optional(
             &mut tweens,
             key,
             segments,
@@ -373,8 +449,40 @@ pub(crate) fn segmented_track(
     hovered: &dyn Fn(usize) -> bool,
     wire: &mut dyn FnMut(usize, gpui::Stateful<gpui::Div>) -> gpui::Stateful<gpui::Div>,
 ) -> AnyElement {
+    let selected = selected.min(segments.len().saturating_sub(1));
+    // The Settings kit retains its existing selected-cell interaction.
+    let mut wire_unselected = |index, cell| {
+        if index == selected {
+            cell
+        } else {
+            wire(index, cell)
+        }
+    };
+    segmented_track_optional(
+        fx,
+        key,
+        segments,
+        Some(selected),
+        stretch,
+        style,
+        hovered,
+        &mut wire_unselected,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn segmented_track_optional(
+    fx: &mut fx::Fx,
+    key: u64,
+    segments: Vec<Segment>,
+    selected: Option<usize>,
+    stretch: bool,
+    style: SegmentStyle,
+    hovered: &dyn Fn(usize) -> bool,
+    wire: &mut dyn FnMut(usize, gpui::Stateful<gpui::Div>) -> gpui::Stateful<gpui::Div>,
+) -> AnyElement {
     let count = segments.len().max(1);
-    let selected = selected.min(count - 1);
+    let selected = selected.map(|index| index.min(count - 1));
     let widths = segments
         .iter()
         .enumerate()
@@ -386,12 +494,18 @@ pub(crate) fn segmented_track(
             fx.value(fx::key(("segment-width", key, index)), width, fx::FAST)
         })
         .collect::<Vec<_>>();
-    let (total_width, target_left, target_width) = segment_geometry(&widths, selected, stretch);
+    let (total_width, target_left, target_width) =
+        segment_geometry(&widths, selected.unwrap_or(0), stretch);
     // Fixed segments have independent text-sized widths; stretch stays equal.
     let thumb = fx.value(fx::key(("segment-thumb", key)), target_left, fx::FAST);
     let thumb_width = fx.value(
         fx::key(("segment-thumb-width", key)),
         target_width,
+        fx::FAST,
+    );
+    let thumb_opacity = fx.toggle(
+        fx::key(("segment-thumb-visible", key)),
+        selected.is_some(),
         fx::FAST,
     );
     let mut track = div()
@@ -417,20 +531,23 @@ pub(crate) fn segmented_track(
             .left(relative(thumb))
             .w(relative(thumb_width))
             .rounded(px(8.0))
+            .opacity(thumb_opacity)
             .bg(style.thumb),
     );
     for (index, segment) in segments.into_iter().enumerate() {
         let on = fx.toggle(
             fx::key(("segment-on", key, index)),
-            index == selected,
+            Some(index) == selected,
             fx::FAST,
         );
         let hover = fx.toggle(
             fx::key(("segment-hover-fx", key, index)),
-            hovered(index) && index != selected && !segment.disabled,
+            hovered(index) && Some(index) != selected && !segment.disabled,
             fx::FASTER,
         );
-        let hide_divider = index == 0 || selected == index || selected + 1 == index;
+        let hide_divider = index == 0
+            || selected == Some(index)
+            || selected.is_some_and(|selected| selected + 1 == index);
         let divider = fx.toggle(
             fx::key(("segment-rule", key, index)),
             !hide_divider,
@@ -448,13 +565,11 @@ pub(crate) fn segmented_track(
             .items_center()
             .justify_center()
             .px(px(10.0));
-        if index != selected {
-            cell = if segment.disabled {
-                wire(index, cell)
-            } else {
-                wire(index, cell.cursor_pointer())
-            };
-        }
+        cell = if segment.disabled || Some(index) == selected {
+            wire(index, cell)
+        } else {
+            wire(index, cell.cursor_pointer())
+        };
         // flex_none() leaves flex_basis unchanged in GPUI. Applying
         // flex_1() first would retain a zero basis and collapse fixed
         // cells to their padding while the thumb keeps its full width.

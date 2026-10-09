@@ -680,7 +680,7 @@ impl PopupRoot {
                 .into_any_element()
         } else {
             match self.ui.total_spend_presentation {
-                TotalSpendPresentation::Donut => self.spend_donut_content(&entries, total),
+                TotalSpendPresentation::Donut => self.spend_donut_content(&entries, total, window),
                 TotalSpendPresentation::ProgressBar => self.spend_hero_content(&entries, total),
             }
         };
@@ -771,8 +771,21 @@ impl PopupRoot {
             .into_any_element()
     }
 
-    fn spend_donut_content(&self, entries: &[(ProviderId, u64)], total: u64) -> AnyElement {
+    fn spend_donut_content(
+        &self,
+        entries: &[(ProviderId, u64)],
+        total: u64,
+        window: &Window,
+    ) -> AnyElement {
         let palette = self.palette.clone();
+        let total_label = format_spend_full(total);
+        let fits_ring = components::measure_text(
+            window.text_system(),
+            palette.font_family.clone(),
+            18.0,
+            gpui::FontWeight::SEMIBOLD,
+            &total_label,
+        ) <= 64.0;
         let colored = self.ui.use_colored_provider_icons;
         let mut legend = div().flex().flex_col().gap(px(12.0)).flex_1().min_w_0();
         for (provider, spend) in entries {
@@ -799,7 +812,7 @@ impl PopupRoot {
                             ))),
                     )
                     .child(components::body_strong(
-                        format_spend_compact(*spend),
+                        format_spend_full(*spend),
                         palette.text_primary,
                     )),
             );
@@ -816,7 +829,7 @@ impl PopupRoot {
                 )
             })
             .collect::<Vec<_>>();
-        div()
+        let row = div()
             .flex()
             .flex_row()
             .items_center()
@@ -839,18 +852,26 @@ impl PopupRoot {
                         .absolute()
                         .inset_0(),
                     )
-                    .child(
-                        components::text(
-                            format_spend_compact(total),
-                            18.0,
-                            24.0,
-                            palette.text_primary,
-                        )
-                        .font_weight(gpui::FontWeight::SEMIBOLD),
-                    ),
+                    .children(fits_ring.then(|| {
+                        components::text(total_label.clone(), 18.0, 24.0, palette.text_primary)
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                    })),
             )
-            .child(legend)
-            .into_any_element()
+            .child(legend);
+        if fits_ring {
+            row.into_any_element()
+        } else {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(
+                    components::text(total_label, 18.0, 24.0, palette.text_primary)
+                        .font_weight(gpui::FontWeight::SEMIBOLD),
+                )
+                .child(row)
+                .into_any_element()
+        }
     }
 }
 
@@ -1020,24 +1041,9 @@ fn paint_donut(bounds: Bounds<Pixels>, segments: &[(Hsla, f32, f32)], window: &m
 }
 
 pub(super) fn format_spend_full(microusd: u64) -> String {
-    let cents = (microusd as f64 / 10_000.0)
-        .round()
-        .clamp(0.0, u64::MAX as f64) as u64;
+    // Integer rounding also preserves cents at the u64 upper bound.
+    let cents = microusd / 10_000 + u64::from(microusd % 10_000 >= 5_000);
     format!("${}.{:02}", format_thousands(cents / 100), cents % 100)
-}
-
-pub(super) fn format_spend_compact(microusd: u64) -> String {
-    format_spend_dollars((microusd as f64 / 1_000_000.0).round() as u64)
-}
-
-pub(super) fn format_spend_dollars(dollars: u64) -> String {
-    if dollars >= 1_000_000 {
-        format!("${:.1}M", dollars as f64 / 1_000_000.0)
-    } else if dollars >= 1_000 {
-        format!("${:.1}K", dollars as f64 / 1_000.0)
-    } else {
-        format!("${dollars}")
-    }
 }
 
 pub(super) fn format_thousands(value: u64) -> String {
@@ -1054,3 +1060,24 @@ pub(super) fn format_thousands(value: u64) -> String {
 
 #[allow(dead_code)]
 fn _unused(_: &OverviewSnapshot) {}
+
+#[cfg(test)]
+mod money_tests {
+    use super::format_spend_full;
+
+    #[test]
+    fn microdollars_keep_cents_through_rounding_and_u64_boundaries() {
+        for (value, expected) in [
+            (0, "$0.00"),
+            (4_999, "$0.00"),
+            (5_000, "$0.01"),
+            (995_000, "$1.00"),
+            (999_995_000, "$1,000.00"),
+            (1_284_000_000, "$1,284.00"),
+            (1_299_000_000, "$1,299.00"),
+            (u64::MAX, "$18,446,744,073,709.55"),
+        ] {
+            assert_eq!(format_spend_full(value), expected);
+        }
+    }
+}

@@ -1,9 +1,11 @@
 //! Rendering of the framework-free card plan from [`crate::popup_window::model`].
 
+use std::{cell::Cell, rc::Rc};
+
 use gpui::{
     AnyElement, Bounds, ClickEvent, Context, Div, Hsla, InteractiveElement, IntoElement,
     ParentElement, PathBuilder, Pixels, SharedString, StatefulInteractiveElement, Styled,
-    Transformation, Window, canvas, div, point, px, radians,
+    Transformation, Window, canvas, div, point, px, radians, relative,
 };
 
 use super::{
@@ -30,6 +32,67 @@ fn compact_title_fits(available: f32, title: f32, usage: f32, reset: f32) -> boo
 }
 
 impl PopupRoot {
+    /// Compare against the final laid-out label width, not a guessed number
+    /// of characters. Only a genuinely clipped name gets a full-value tip.
+    fn account_name_label(
+        &self,
+        key: u64,
+        name: String,
+        strong: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let palette = &self.palette;
+        let display_name = name.replace(['\r', '\n', '\t'], " ");
+        let measured = Rc::new(Cell::new(false));
+        let probe_state = Rc::clone(&measured);
+        let font = palette.font_family.clone();
+        let probe_text = display_name.clone();
+        let probe = canvas(
+            move |bounds, window, _| {
+                let full_width = components::measure_text(
+                    window.text_system(),
+                    font.clone(),
+                    if strong { 14.0 } else { 12.0 },
+                    if strong {
+                        gpui::FontWeight::SEMIBOLD
+                    } else {
+                        gpui::FontWeight::NORMAL
+                    },
+                    &probe_text,
+                );
+                probe_state.set(full_width > f32::from(bounds.size.width));
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0();
+        let label = if strong {
+            components::body_strong(display_name, palette.text_secondary)
+        } else {
+            caption(display_name, palette.text_tertiary).text_right()
+        };
+        div()
+            .id(eid(format!("account-name-{key}")))
+            .relative()
+            .w_full()
+            .min_w_0()
+            .on_hover(cx.listener(move |this, hovered: &bool, window, cx| {
+                if *hovered && measured.get() {
+                    this.show_tip(
+                        key,
+                        super::tooltip::TipContent::Text(name.clone().into()),
+                        window,
+                        cx,
+                    );
+                } else if this.tip.as_ref().is_some_and(|tip| tip.owner == key) {
+                    this.tip = None;
+                    cx.notify();
+                }
+            }))
+            .child(nowrap(label).w_full())
+            .child(probe)
+            .into_any_element()
+    }
     fn metrics<'a>(&self, window: &'a Window) -> TextMetrics<'a> {
         TextMetrics::new(window, self.palette.font_family.clone())
     }
@@ -97,15 +160,22 @@ impl PopupRoot {
                 cx,
             ),
             Card::AccountHeading {
+                id,
                 name,
                 balance_microusd,
                 ..
             } => {
                 let palette = &self.palette;
-                let name = nowrap(components::body_strong(
+                let name = self.account_name_label(
+                    fx::key((
+                        "openrouter-account-name",
+                        *id,
+                        surface == PopupSurface::HomeTab,
+                    )),
                     name.to_string(),
-                    palette.text_secondary,
-                ));
+                    true,
+                    cx,
+                );
                 let row = match balance_microusd {
                     Some(balance) => components::split_row(
                         name,
@@ -473,8 +543,21 @@ impl PopupRoot {
             );
         }
         let mut trailing = div().flex().flex_row().items_center().gap(px(4.0));
+        let has_account_name = heading.account_name.is_some();
         if let Some(name) = heading.account_name.clone() {
-            trailing = trailing.child(card_metadata(name, &palette));
+            trailing =
+                trailing
+                    .min_w_0()
+                    .child(div().flex_1().min_w_0().child(self.account_name_label(
+                        fx::key((
+                            "heading-account-name",
+                            provider.id(),
+                            surface == PopupSurface::HomeTab,
+                        )),
+                        name,
+                        false,
+                        cx,
+                    )));
         }
         if let Some(balance) = heading.balance_microusd {
             trailing = trailing.child(components::body_strong(
@@ -499,8 +582,20 @@ impl PopupRoot {
         } else {
             title.into_any_element()
         };
-        components::split_row(title, trailing)
-            .px(px(4.0))
+        let row = if has_account_name {
+            div()
+                .flex()
+                .items_center()
+                .w_full()
+                .gap(px(components::SPLIT_GAP))
+                .child(div().flex_1().min_w_0().child(title))
+                // Definite width makes ellipsis resolve against the actual
+                // available slot while retaining the driver/plan on the left.
+                .child(trailing.w(relative(0.5)).flex_none())
+        } else {
+            components::split_row(title, trailing)
+        };
+        row.px(px(4.0))
             .mt(px(if heading.first { 0.0 } else { 8.0 }))
             .mb(px(2.0))
             .into_any_element()
