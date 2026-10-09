@@ -386,8 +386,9 @@ pub(crate) fn scan_file_delta(
         .seek(SeekFrom::Start(cached.offset))
         .with_context(|| format!("seek {}", path.display()))?;
     let mut offset = cached.offset;
+    let mut bytes = Vec::new();
     loop {
-        let mut bytes = Vec::new();
+        bytes.clear();
         let read = reader
             .read_until(b'\n', &mut bytes)
             .with_context(|| format!("read {}", path.display()))?;
@@ -691,8 +692,14 @@ pub fn refresh_claude_usage_statistics(
     config_folder: Option<&Path>,
     history_days: u16,
 ) -> Result<UsageStatistics> {
-    let mut cache = store::with_store(|store| store.load_claude_cache(provider))?;
     let files = collect_claude_session_files(config_folder);
+    // Idle refreshes usually find every log exactly where the last scan left
+    // it. Answer those from the stored rollups instead of loading, rebuilding
+    // and rewriting every cached event.
+    if claude_logs_unchanged(provider, &files)? {
+        return load_cached_claude_usage_statistics(provider, history_days);
+    }
+    let mut cache = store::with_store(|store| store.load_claude_cache(provider))?;
     let known_paths: BTreeSet<String> = files
         .iter()
         .map(|path| path.to_string_lossy().into_owned())
@@ -709,63 +716,90 @@ pub fn refresh_claude_usage_statistics(
             .retain(|entry| entry.timestamp.with_timezone(&Local).date_naive() >= oldest);
     }
     cache.version = CLAUDE_CACHE_VERSION;
-    let stats = statistics_from_claude_cache(&cache, history_days);
+    let entries = deduplicate_claude_entries(&cache);
+    let stats = claude_statistics(&entries, history_days);
+    let model_daily = claude_model_daily(&entries)
+        .into_iter()
+        .map(|(date, model, usage)| (model, date, usage))
+        .collect::<Vec<_>>();
+    drop(entries);
     store::with_store(|store| {
         store.save_claude_cache(provider, &cache)?;
         store.replace_usage_daily(provider, &stats.daily)?;
-        store.replace_usage_model_daily(
-            provider,
-            &aggregate_claude_model_daily(&cache)
-                .into_iter()
-                .map(|(date, model, usage)| (model, date, usage))
-                .collect::<Vec<_>>(),
-        )
+        store.replace_usage_model_daily(provider, &model_daily)
     })?;
     Ok(stats)
+}
+
+/// True when the stored scan already covers every current Claude log: the
+/// same files, each with its full length incorporated.
+fn claude_logs_unchanged(provider: ProviderId, files: &[PathBuf]) -> Result<bool> {
+    let Some(offsets) = store::with_store(|store| store.load_claude_scan_offsets(provider))?
+    else {
+        return Ok(false);
+    };
+    if offsets.len() != files.len() {
+        return Ok(false);
+    }
+    Ok(files.iter().all(|path| {
+        offsets
+            .get(path.to_string_lossy().as_ref())
+            .is_some_and(|&offset| fs::metadata(path).is_ok_and(|meta| meta.len() == offset))
+    }))
 }
 
 pub(crate) fn statistics_from_claude_cache(
     cache: &ClaudeUsageCache,
     history_days: u16,
 ) -> UsageStatistics {
-    let days: Vec<DailyTokenUsage> = deduplicate_claude_entries(cache)
-        .into_iter()
-        .map(|entry| DailyTokenUsage {
-            date: entry.timestamp.with_timezone(&Local).date_naive(),
-            usage: entry.usage,
-        })
-        .collect();
-    statistics_from_daily(&days, history_days)
+    claude_statistics(&deduplicate_claude_entries(cache), history_days)
 }
 
 pub(crate) fn aggregate_claude_model_daily(
     cache: &ClaudeUsageCache,
 ) -> Vec<(NaiveDate, String, TokenUsage)> {
-    let mut merged = BTreeMap::<(String, NaiveDate), TokenUsage>::new();
-    for entry in deduplicate_claude_entries(cache) {
-        let model = entry.model.clone().unwrap_or_else(|| "unknown".to_string());
+    claude_model_daily(&deduplicate_claude_entries(cache))
+}
+
+fn claude_statistics(entries: &[&CachedClaudeUsageEntry], history_days: u16) -> UsageStatistics {
+    let days: Vec<DailyTokenUsage> = entries
+        .iter()
+        .map(|entry| DailyTokenUsage {
+            date: entry.timestamp.with_timezone(&Local).date_naive(),
+            usage: entry.usage.clone(),
+        })
+        .collect();
+    statistics_from_daily(&days, history_days)
+}
+
+fn claude_model_daily(entries: &[&CachedClaudeUsageEntry]) -> Vec<(NaiveDate, String, TokenUsage)> {
+    let mut merged = BTreeMap::<(&str, NaiveDate), TokenUsage>::new();
+    for entry in entries {
+        let model = entry.model.as_deref().unwrap_or("unknown");
         let date = entry.timestamp.with_timezone(&Local).date_naive();
         merged.entry((model, date)).or_default().add(&entry.usage);
     }
     merged
         .into_iter()
-        .map(|((model, date), usage)| (date, model, usage))
+        .map(|((model, date), usage)| (date, model.to_owned(), usage))
         .collect()
 }
 
 /// Mirrors Claude Code/OpenUsage's duplicate preference: the original message
 /// beats a sidechain replay; otherwise retain the richer/larger record.
-pub(crate) fn deduplicate_claude_entries(cache: &ClaudeUsageCache) -> Vec<CachedClaudeUsageEntry> {
-    let mut entries: Vec<CachedClaudeUsageEntry> = Vec::new();
-    let mut exact = HashMap::<(String, Option<String>), usize>::new();
-    let mut by_message = HashMap::<String, Vec<usize>>::new();
+pub(crate) fn deduplicate_claude_entries(
+    cache: &ClaudeUsageCache,
+) -> Vec<&CachedClaudeUsageEntry> {
+    let mut entries: Vec<&CachedClaudeUsageEntry> = Vec::new();
+    let mut exact = HashMap::<(&str, Option<&str>), usize>::new();
+    let mut by_message = HashMap::<&str, Vec<usize>>::new();
 
     for entry in cache.files.values().flat_map(|file| &file.entries) {
-        let Some(message_id) = &entry.message_id else {
-            entries.push(entry.clone());
+        let Some(message_id) = entry.message_id.as_deref() else {
+            entries.push(entry);
             continue;
         };
-        let key = (message_id.clone(), entry.request_id.clone());
+        let key = (message_id, entry.request_id.as_deref());
         let collision = exact.get(&key).copied().or_else(|| {
             by_message.get(message_id).and_then(|indices| {
                 indices
@@ -780,24 +814,21 @@ pub(crate) fn deduplicate_claude_entries(cache: &ClaudeUsageCache) -> Vec<Cached
             if exact.contains_key(&key) {
                 continue;
             }
-            if claude_entry_should_replace(entry, &entries[index]) {
-                let previous = &entries[index];
-                if let Some(previous_id) = &previous.message_id {
-                    exact.remove(&(previous_id.clone(), previous.request_id.clone()));
+            if claude_entry_should_replace(entry, entries[index]) {
+                let previous = entries[index];
+                if let Some(previous_id) = previous.message_id.as_deref() {
+                    exact.remove(&(previous_id, previous.request_id.as_deref()));
                 }
-                entries[index] = entry.clone();
+                entries[index] = entry;
                 exact.insert(key, index);
             }
             continue;
         }
 
         let index = entries.len();
-        entries.push(entry.clone());
+        entries.push(entry);
         exact.insert(key, index);
-        by_message
-            .entry(message_id.clone())
-            .or_default()
-            .push(index);
+        by_message.entry(message_id).or_default().push(index);
     }
     entries
 }
@@ -833,8 +864,9 @@ fn scan_claude_file_delta(path: &Path, cached: &mut CachedClaudeSessionFile) -> 
         .seek(SeekFrom::Start(cached.offset))
         .with_context(|| format!("seek {}", path.display()))?;
     let mut offset = cached.offset;
+    let mut bytes = Vec::new();
     loop {
-        let mut bytes = Vec::new();
+        bytes.clear();
         let read = reader
             .read_until(b'\n', &mut bytes)
             .with_context(|| format!("read {}", path.display()))?;
@@ -853,16 +885,41 @@ fn scan_claude_file_delta(path: &Path, cached: &mut CachedClaudeSessionFile) -> 
     Ok(())
 }
 
+/// The few fields a Claude log line contributes. Everything else (message
+/// content, tool output, attachments) is skipped while parsing instead of
+/// being materialized as a `Value` tree. Scalars stay `Value` so a field of an
+/// unexpected type is ignored exactly as before rather than rejecting the line.
+#[derive(Deserialize)]
+struct ClaudeLogLine {
+    #[serde(rename = "type")]
+    kind: Option<Value>,
+    timestamp: Option<Value>,
+    message: Option<ClaudeLogMessage>,
+    #[serde(rename = "requestId")]
+    request_id: Option<Value>,
+    #[serde(rename = "isSidechain")]
+    is_sidechain: Option<Value>,
+    #[serde(rename = "costUSD")]
+    cost_usd: Option<Value>,
+}
+
+#[derive(Deserialize)]
+struct ClaudeLogMessage {
+    id: Option<Value>,
+    model: Option<Value>,
+    usage: Option<Value>,
+}
+
 fn claude_usage_from_line(line: &[u8]) -> Option<CachedClaudeUsageEntry> {
-    let event: Value = serde_json::from_slice(line).ok()?;
-    if event.get("type").and_then(Value::as_str) != Some("assistant") {
+    let event: ClaudeLogLine = serde_json::from_slice(line).ok()?;
+    if event.kind.as_ref().and_then(Value::as_str) != Some("assistant") {
         return None;
     }
-    let timestamp = DateTime::parse_from_rfc3339(event.get("timestamp")?.as_str()?)
+    let timestamp = DateTime::parse_from_rfc3339(event.timestamp.as_ref()?.as_str()?)
         .ok()?
         .with_timezone(&Utc);
-    let message = event.get("message")?;
-    let usage_json = message.get("usage")?;
+    let message = event.message.as_ref()?;
+    let usage_json = message.usage.as_ref()?;
     let input_tokens = usage_json.get("input_tokens")?.as_u64()?;
     let output_tokens = usage_json.get("output_tokens")?.as_u64()?;
     let cache_read = usage_json
@@ -884,12 +941,14 @@ fn claude_usage_from_line(line: &[u8]) -> Option<CachedClaudeUsageEntry> {
         .unwrap_or(0);
     let cache_creation_tokens = cache_write_5m.saturating_add(cache_write_1h);
     let model = message
-        .get("model")
+        .model
+        .as_ref()
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|name| !name.is_empty())?;
     let reported_cost = event
-        .get("costUSD")
+        .cost_usd
+        .as_ref()
         .and_then(Value::as_f64)
         .filter(|cost| cost.is_finite() && *cost >= 0.0);
     let estimated_cost_microusd = reported_cost
@@ -917,13 +976,15 @@ fn claude_usage_from_line(line: &[u8]) -> Option<CachedClaudeUsageEntry> {
     };
     Some(CachedClaudeUsageEntry {
         timestamp,
-        message_id: message.get("id").and_then(Value::as_str).map(str::to_owned),
+        message_id: message.id.as_ref().and_then(Value::as_str).map(str::to_owned),
         request_id: event
-            .get("requestId")
+            .request_id
+            .as_ref()
             .and_then(Value::as_str)
             .map(str::to_owned),
         is_sidechain: event
-            .get("isSidechain")
+            .is_sidechain
+            .as_ref()
             .and_then(Value::as_bool)
             .unwrap_or(false),
         has_speed: usage_json.get("speed").is_some(),

@@ -3,7 +3,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::Arc,
+    sync::{Arc, OnceLock},
     thread,
     time::{Duration, Instant},
 };
@@ -376,6 +376,9 @@ pub struct ClaudeClient {
     account_cache: ClaudeAccountCache,
     last_refresh: Option<RefreshAttempt>,
     rate_limited: bool,
+    /// Reused across polls so each one does not build a new Schannel
+    /// credential and TLS handshake.
+    agent: OnceLock<ureq::Agent>,
 }
 
 /// The last renewal tried for one refresh token. A new token (another
@@ -423,6 +426,7 @@ impl ClaudeClient {
             account_cache: ClaudeAccountCache::default(),
             last_refresh: None,
             rate_limited: false,
+            agent: OnceLock::new(),
         }
     }
 
@@ -436,6 +440,7 @@ impl ClaudeClient {
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self.agent = OnceLock::new();
         self
     }
 
@@ -558,14 +563,18 @@ impl ClaudeClient {
     }
 
     fn agent(&self) -> Result<ureq::Agent> {
+        if let Some(agent) = self.agent.get() {
+            return Ok(agent.clone());
+        }
         // `ureq` is built without its default Rustls backend. Configure the
         // native TLS adapter explicitly so Claude's HTTPS endpoint uses the
         // Windows certificate store (Schannel), as the updater already does.
         let tls = ureq::native_tls::TlsConnector::new().context("create Windows TLS connector")?;
-        Ok(ureq::AgentBuilder::new()
+        let agent = ureq::AgentBuilder::new()
             .timeout(self.timeout)
             .tls_connector(Arc::new(tls))
-            .build())
+            .build();
+        Ok(self.agent.get_or_init(|| agent).clone())
     }
 
     fn read_oauth(
