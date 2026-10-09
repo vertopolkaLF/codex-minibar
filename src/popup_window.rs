@@ -40,6 +40,7 @@ use crate::{
 mod actions;
 mod bridge;
 mod formatting;
+mod limits_persist;
 pub(crate) mod model;
 mod navigation;
 mod state;

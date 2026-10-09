@@ -13,7 +13,7 @@ use gpui::{
 
 use super::general::usage_refresh_labels;
 use super::kit::{self, Button, Handler, Kit};
-use super::persistence::{load_settings_for_window, replace_settings};
+use super::persistence::load_settings_for_window;
 use super::theme::{Fonts, Theme};
 use crate::popup_window::AppState;
 use crate::popup_window::ui::fx;
@@ -195,7 +195,7 @@ impl OnboardingWindow {
         })
     }
 
-    fn finish(&mut self, window: &mut Window) {
+    fn finish(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut completed = self.settings.clone();
         completed.onboarding_completed = true;
         apply_onboarding_choices(&mut completed, self.enabled, self.automatic);
@@ -209,18 +209,29 @@ impl OnboardingWindow {
             })
             .map(TrayWidget::for_provider)
             .collect();
-        if let Err(error) = replace_settings(self.state.settings_tx.clone(), completed) {
-            eprintln!("failed to complete onboarding: {error:#}");
-            crate::notifications::show(
-                crate::i18n::tr("setup-could-not-be-saved"),
-                &format!("{error:#}"),
-            );
-            return;
-        }
-        // Show the popup before dismissing onboarding so Done always lands on it.
-        crate::popup::show_near_cursor();
-        super::window_closed(true);
-        window.remove_window();
+        let outcome = super::persistence::queue_replace(self.state.settings_tx.clone(), completed);
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { super::persistence::wait(outcome) })
+                .await;
+            let _ = this.update_in(cx, |_, window, _| match result {
+                Ok(()) => {
+                    // Show the popup before dismissing onboarding so Done always lands on it.
+                    crate::popup::show_near_cursor();
+                    super::window_closed(true);
+                    window.remove_window();
+                }
+                Err(error) => {
+                    eprintln!("failed to complete onboarding: {error:#}");
+                    crate::notifications::show(
+                        crate::i18n::tr("setup-could-not-be-saved"),
+                        &format!("{error:#}"),
+                    );
+                }
+            });
+        })
+        .detach();
     }
 
     fn providers_step(&mut self, k: &mut Kit, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -597,7 +608,7 @@ impl Render for OnboardingWindow {
                 })),
             Step::Notifications => Button::new("onboarding-done", crate::i18n::tr("done"))
                 .accent()
-                .on_click(Self::h(cx, |this, (), window, _| this.finish(window))),
+                .on_click(Self::h(cx, |this, (), window, cx| this.finish(window, cx))),
         }
         .render(&k);
         let minimize = kit::caption_button(

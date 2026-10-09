@@ -52,7 +52,7 @@ fn login_session(value: &serde_json::Value) -> Option<String> {
         .map(|at| format!("auth:{at}"))
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Observation {
     Account(Identity),
     LoggedOut,
@@ -71,14 +71,30 @@ fn last_id() -> Option<String> {
     LAST_ID.lock().ok().and_then(|last| last.clone())
 }
 
+type AuthMemo = Option<(PathBuf, std::time::SystemTime, u64, Observation)>;
+
+/// Last decoded `auth.json`, keyed by path, mtime and length. Usage queries
+/// resolve the account several times per overview build; an unchanged file
+/// then costs one metadata call instead of a read and a JWT decode.
+static AUTH_MEMO: Mutex<AuthMemo> = Mutex::new(None);
+
 fn observe_auth(path: &Path) -> Observation {
-    let before = match fs::metadata(path).and_then(|meta| meta.modified()) {
-        Ok(modified) => modified,
+    let (before, len) = match fs::metadata(path).and_then(|meta| Ok((meta.modified()?, meta.len())))
+    {
+        Ok(stamp) => stamp,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Observation::LoggedOut;
         }
         Err(_) => return Observation::Uncertain,
     };
+    if let Ok(memo) = AUTH_MEMO.lock()
+        && let Some((memo_path, modified, memo_len, observed)) = memo.as_ref()
+        && memo_path == path
+        && *modified == before
+        && *memo_len == len
+    {
+        return observed.clone();
+    }
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -96,7 +112,17 @@ fn observe_auth(path: &Path) -> Observation {
     if before != after {
         return Observation::Uncertain;
     }
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+    let observed = decode_auth(&bytes, after);
+    if !matches!(observed, Observation::Uncertain)
+        && let Ok(mut memo) = AUTH_MEMO.lock()
+    {
+        *memo = Some((path.to_owned(), after, len, observed.clone()));
+    }
+    observed
+}
+
+fn decode_auth(bytes: &[u8], after: std::time::SystemTime) -> Observation {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
         return Observation::Uncertain;
     };
     let Some(id) = value
@@ -246,6 +272,7 @@ impl Attribution {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct AccountEvent {
     pub source: String,
     pub offset: u64,
@@ -272,30 +299,55 @@ fn archive_alias(source: &str) -> Option<String> {
 const VALUES: &str = "input_tokens,cached_input_tokens,output_tokens,requests,estimated_cost_microusd,priced_requests,cache_savings_microusd";
 const SUMS: &str = "SUM(input_tokens), SUM(cached_input_tokens), SUM(output_tokens), SUM(requests), SUM(estimated_cost_microusd), SUM(priced_requests), SUM(cache_savings_microusd)";
 
+/// Deterministic 64-bit FNV-1a of an event key. Stored as the compact event
+/// identity; it must never change (persisted), so do not use `DefaultHasher`.
+fn sig_hash(key: &str) -> i64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in key.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash as i64
+}
+
+const COMPACT_VACUUM_PENDING: &str = "codex.compact_events.vacuum_pending";
+
+const COMPACT_SCHEMA: &str = "
+    CREATE TABLE IF NOT EXISTS codex_names(
+        id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+    CREATE TABLE IF NOT EXISTS codex_events(
+        session INTEGER NOT NULL, ts INTEGER NOT NULL, sig INTEGER NOT NULL,
+        account INTEGER NOT NULL, date TEXT NOT NULL, model INTEGER NOT NULL,
+        input_tokens INTEGER NOT NULL, cached_input_tokens INTEGER NOT NULL,
+        output_tokens INTEGER NOT NULL, requests INTEGER NOT NULL,
+        estimated_cost_microusd INTEGER NOT NULL, priced_requests INTEGER NOT NULL,
+        cache_savings_microusd INTEGER NOT NULL, covered INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY(session, ts, sig)) WITHOUT ROWID;
+    CREATE INDEX IF NOT EXISTS codex_events_date ON codex_events(account,date);
+    CREATE INDEX IF NOT EXISTS codex_events_time ON codex_events(account,ts);
+    CREATE TABLE IF NOT EXISTS codex_event_links(
+        source INTEGER NOT NULL, session INTEGER NOT NULL, ts INTEGER NOT NULL,
+        sig INTEGER NOT NULL, PRIMARY KEY(source, session, ts, sig)) WITHOUT ROWID;
+    CREATE INDEX IF NOT EXISTS codex_event_links_event ON codex_event_links(session,ts,sig);";
+
+fn name_id(conn: &Connection, name: &str) -> Result<Option<i64>> {
+    Ok(conn
+        .prepare_cached("SELECT id FROM codex_names WHERE name=?1")?
+        .query_row([name], |r| r.get(0))
+        .optional()?)
+}
+
+fn intern(conn: &Connection, name: &str) -> Result<i64> {
+    if let Some(id) = name_id(conn, name)? {
+        return Ok(id);
+    }
+    conn.prepare_cached("INSERT INTO codex_names(name) VALUES(?1)")?
+        .execute([name])?;
+    Ok(conn.last_insert_rowid())
+}
+
 impl ProviderStore {
     pub(super) fn migrate_codex_accounts(&self) -> Result<()> {
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS codex_account_events (
-            account TEXT NOT NULL, source TEXT NOT NULL DEFAULT '',
-            session TEXT NOT NULL, ts INTEGER NOT NULL,
-            signature TEXT NOT NULL, date TEXT NOT NULL, model TEXT NOT NULL,
-            input_tokens INTEGER NOT NULL, cached_input_tokens INTEGER NOT NULL,
-            output_tokens INTEGER NOT NULL, requests INTEGER NOT NULL,
-            estimated_cost_microusd INTEGER NOT NULL, priced_requests INTEGER NOT NULL,
-            cache_savings_microusd INTEGER NOT NULL,
-            PRIMARY KEY(session, ts, signature));",
-        )?;
-        self.ensure_column("codex_account_events", "source", "TEXT NOT NULL DEFAULT ''")?;
-        self.ensure_column(
-            "codex_account_events",
-            "covered",
-            "INTEGER NOT NULL DEFAULT 0",
-        )?;
-        self.conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS codex_account_date ON codex_account_events(account,date);
-            CREATE INDEX IF NOT EXISTS codex_account_time ON codex_account_events(account,ts);
-            CREATE INDEX IF NOT EXISTS codex_account_source ON codex_account_events(source);",
-        )?;
         for (kind, columns) in [
             ("daily", "date"),
             ("model_daily", "date,model"),
@@ -305,67 +357,173 @@ impl ProviderStore {
         }
         self.conn.execute_batch("CREATE TABLE IF NOT EXISTS codex_legacy_cursors(source TEXT PRIMARY KEY, offset INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS codex_legacy_sessions(account TEXT NOT NULL,session TEXT NOT NULL,date TEXT NOT NULL,PRIMARY KEY(account,session,date));")?;
-        self.conn.execute_batch("CREATE TABLE IF NOT EXISTS codex_event_sources (
-            source TEXT NOT NULL, session TEXT NOT NULL, ts INTEGER NOT NULL,
-            signature TEXT NOT NULL, PRIMARY KEY(source,session,ts,signature));
-            CREATE INDEX IF NOT EXISTS codex_event_sources_event ON codex_event_sources(session,ts,signature);")?;
-        // Existing preview databases did not persist sources. Recover links from
-        // the still-present scanner metadata before the version-8 full replay.
+        self.migrate_compact_events()?;
+        self.vacuum_after_compaction();
+        Ok(())
+    }
+
+    /// Creates the compact event tables and, once, converts the earlier
+    /// text-keyed preview/release tables (`codex_account_events`,
+    /// `codex_event_sources`) into them inside a single transaction.
+    fn migrate_compact_events(&self) -> Result<()> {
         let tx = rusqlite::Transaction::new_unchecked(
             &self.conn,
             rusqlite::TransactionBehavior::Immediate,
+        )?;
+        tx.execute_batch(COMPACT_SCHEMA)?;
+        let has_old: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='codex_account_events')",
+            [],
+            |r| r.get(0),
+        )?;
+        if has_old {
+            self.recover_preview_sources(&tx)?;
+            Self::convert_old_events(&tx)?;
+            tx.execute(
+                "INSERT OR REPLACE INTO meta(key,value) VALUES(?1,'1')",
+                [COMPACT_VACUUM_PENDING],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Existing preview databases did not persist sources. Recover links from
+    /// the still-present scanner metadata. Operates on the old text tables.
+    fn recover_preview_sources(&self, tx: &rusqlite::Transaction<'_>) -> Result<()> {
+        self.ensure_column("codex_account_events", "source", "TEXT NOT NULL DEFAULT ''")?;
+        self.ensure_column(
+            "codex_account_events",
+            "covered",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS codex_event_sources (
+            source TEXT NOT NULL, session TEXT NOT NULL, ts INTEGER NOT NULL,
+            signature TEXT NOT NULL, PRIMARY KEY(source,session,ts,signature));",
         )?;
         let migrated: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM meta WHERE key='codex.event_sources.v1')",
             [],
             |r| r.get(0),
         )?;
-        if !migrated {
+        if migrated {
+            return Ok(());
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO codex_event_sources
+             SELECT source,session,ts,signature FROM codex_account_events WHERE source<>''",
+            [],
+        )?;
+        let files = {
+            let mut query =
+                tx.prepare("SELECT path,meta_json FROM scan_files WHERE provider='codex'")?;
+            query
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        let mut basename_counts = BTreeMap::new();
+        for (path, _) in &files {
+            *basename_counts
+                .entry(Path::new(path).file_name().unwrap_or_default().to_owned())
+                .or_insert(0) += 1;
+        }
+        for (path, raw) in files {
+            let meta: serde_json::Value = serde_json::from_str(&raw)?;
+            let basename = Path::new(&path).file_name().unwrap_or_default();
+            let old_name = basename.to_string_lossy();
+            let session = meta
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .filter(|v| !v.is_empty())
+                .unwrap_or(&old_name);
             tx.execute(
                 "INSERT OR IGNORE INTO codex_event_sources
-                 SELECT source,session,ts,signature FROM codex_account_events WHERE source<>''",
-                [],
+                SELECT ?1,session,ts,signature FROM codex_account_events WHERE session=?2 AND source=''",
+                params![path, session],
             )?;
-            let files = {
-                let mut query =
-                    tx.prepare("SELECT path,meta_json FROM scan_files WHERE provider='codex'")?;
-                query
-                    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?
-            };
-            let mut basename_counts = BTreeMap::new();
-            for (path, _) in &files {
-                *basename_counts
-                    .entry(Path::new(path).file_name().unwrap_or_default().to_owned())
-                    .or_insert(0) += 1;
+            // Older preview cursors cannot be split if their basenames
+            // collide. Never guess their offsets or change frozen totals.
+            if basename_counts.get(basename) == Some(&1) {
+                tx.execute("INSERT OR IGNORE INTO codex_legacy_cursors SELECT ?1,offset FROM codex_legacy_cursors WHERE source=?2",params![path,old_name.as_ref()])?;
             }
-            for (path, raw) in files {
-                let meta: serde_json::Value = serde_json::from_str(&raw)?;
-                let basename = Path::new(&path).file_name().unwrap_or_default();
-                let old_name = basename.to_string_lossy();
-                let session = meta
-                    .get("session_id")
-                    .and_then(|v| v.as_str())
-                    .filter(|v| !v.is_empty())
-                    .unwrap_or(&old_name);
-                tx.execute(
-                    "INSERT OR IGNORE INTO codex_event_sources
-                    SELECT ?1,session,ts,signature FROM codex_account_events WHERE session=?2 AND source=''",
-                    params![path, session],
-                )?;
-                // Older preview cursors cannot be split if their basenames
-                // collide. Never guess their offsets or change frozen totals.
-                if basename_counts.get(basename) == Some(&1) {
-                    tx.execute("INSERT OR IGNORE INTO codex_legacy_cursors SELECT ?1,offset FROM codex_legacy_cursors WHERE source=?2",params![path,old_name.as_ref()])?;
-                }
-            }
-            tx.execute(
-                "INSERT INTO meta(key,value) VALUES('codex.event_sources.v1','1')",
-                [],
-            )?;
         }
-        tx.commit()?;
+        tx.execute(
+            "INSERT INTO meta(key,value) VALUES('codex.event_sources.v1','1')",
+            [],
+        )?;
         Ok(())
+    }
+
+    fn convert_old_events(tx: &rusqlite::Transaction<'_>) -> Result<()> {
+        tx.execute_batch(
+            "INSERT OR IGNORE INTO codex_names(name)
+                SELECT name FROM (
+                    SELECT account AS name FROM codex_account_events
+                    UNION SELECT session FROM codex_account_events
+                    UNION SELECT model FROM codex_account_events
+                    UNION SELECT source FROM codex_event_sources
+                    UNION SELECT session FROM codex_event_sources) ORDER BY name;
+             CREATE TEMP TABLE IF NOT EXISTS codex_sig_map(old TEXT PRIMARY KEY, new INTEGER NOT NULL) WITHOUT ROWID;
+             DELETE FROM codex_sig_map;",
+        )?;
+        {
+            let mut keys = tx.prepare(
+                "SELECT signature FROM codex_account_events UNION SELECT signature FROM codex_event_sources",
+            )?;
+            let mut map = tx.prepare("INSERT OR IGNORE INTO codex_sig_map VALUES(?1,?2)")?;
+            for key in keys.query_map([], |r| r.get::<_, String>(0))? {
+                let key = key?;
+                map.execute(params![key, sig_hash(&key)])?;
+            }
+        }
+        tx.execute_batch(
+            "INSERT OR IGNORE INTO codex_events(session,ts,sig,account,date,model,
+                    input_tokens,cached_input_tokens,output_tokens,requests,
+                    estimated_cost_microusd,priced_requests,cache_savings_microusd,covered)
+                SELECT s.id,e.ts,m.new,a.id,e.date,md.id,
+                    e.input_tokens,e.cached_input_tokens,e.output_tokens,e.requests,
+                    e.estimated_cost_microusd,e.priced_requests,e.cache_savings_microusd,e.covered
+                FROM codex_account_events e
+                JOIN codex_names s ON s.name=e.session
+                JOIN codex_sig_map m ON m.old=e.signature
+                JOIN codex_names a ON a.name=e.account
+                JOIN codex_names md ON md.name=e.model
+                ORDER BY s.id,e.ts,m.new;
+             INSERT OR IGNORE INTO codex_event_links(source,session,ts,sig)
+                SELECT so.id,se.id,l.ts,m.new
+                FROM codex_event_sources l
+                JOIN codex_names so ON so.name=l.source
+                JOIN codex_names se ON se.name=l.session
+                JOIN codex_sig_map m ON m.old=l.signature
+                ORDER BY so.id,se.id,l.ts,m.new;
+             DROP TABLE codex_sig_map;
+             DROP TABLE codex_account_events;
+             DROP TABLE codex_event_sources;",
+        )?;
+        Ok(())
+    }
+
+    /// The file only shrinks after a VACUUM. It runs once, outside any
+    /// transaction; a failure (e.g. another connection) retries next launch.
+    fn vacuum_after_compaction(&self) {
+        let pending = self
+            .conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM meta WHERE key=?1)",
+                [COMPACT_VACUUM_PENDING],
+                |r| r.get::<_, bool>(0),
+            )
+            .unwrap_or(false);
+        if !pending || self.conn.execute_batch("VACUUM").is_err() {
+            return;
+        }
+        let _ = self
+            .conn
+            .execute("DELETE FROM meta WHERE key=?1", [COMPACT_VACUUM_PENDING]);
+        let _ = self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
     }
 
     pub(crate) fn codex_attribution(&self) -> Result<Option<Attribution>> {
@@ -378,10 +536,15 @@ impl ProviderStore {
             .transpose()
     }
 
-    pub(crate) fn use_codex_account_data(&self) -> Result<bool> {
-        Ok(self
-            .codex_attribution()?
-            .is_some_and(|state| state.ready || state.historical_owner != current_id()))
+    /// The account whose attributed history a read should use, or `None` while
+    /// the legacy per-provider tables are still authoritative. Resolve it once
+    /// per logical read so one result never mixes two accounts.
+    pub(crate) fn codex_account_for_reads(&self) -> Result<Option<String>> {
+        let Some(state) = self.codex_attribution()? else {
+            return Ok(None);
+        };
+        let current = current_id();
+        Ok((state.ready || state.historical_owner != current).then_some(current))
     }
 
     pub(crate) fn initialize_codex_attribution(&self) -> Result<Attribution> {
@@ -416,21 +579,20 @@ impl ProviderStore {
                         params![identity.id, state.historical_owner],
                     )?;
                 }
-                tx.execute(
-                    "UPDATE codex_account_events SET account=?1 WHERE account=?2 AND ts<=?3",
-                    params![
-                        identity.id,
-                        state.historical_owner,
-                        state.initialized_at.timestamp_millis()
-                    ],
-                )?;
+                if let Some(old) = name_id(&tx, &state.historical_owner)? {
+                    let new = intern(&tx, &identity.id)?;
+                    tx.execute(
+                        "UPDATE codex_events SET account=?1 WHERE account=?2 AND ts<=?3",
+                        params![new, old, state.initialized_at.timestamp_millis()],
+                    )?;
+                }
                 state.historical_owner = identity.id.clone();
                 state.history_pending = false;
                 self.set_meta(STATE, &serde_json::to_string(&state)?)?;
             }
             // Upgrade early account caches without discarding known ownership.
             if state.ready && state.spans.is_empty() {
-                let mut query=self.conn.prepare("SELECT ts,account FROM codex_account_events WHERE ts>?1 AND account<>?2 ORDER BY ts")?;
+                let mut query=self.conn.prepare("SELECT e.ts,n.name FROM codex_events e JOIN codex_names n ON n.id=e.account WHERE e.ts>?1 AND n.name<>?2 ORDER BY e.ts")?;
                 for row in query.query_map(
                     params![state.initialized_at.timestamp_millis(), UNKNOWN],
                     |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
@@ -550,22 +712,25 @@ impl ProviderStore {
         let tx = self.conn.unchecked_transaction()?;
         let mut previous = std::collections::BTreeSet::new();
         for source in rebuilt_sources {
-            if let Some(alias) = archive_alias(source) {
-                tx.execute("INSERT OR IGNORE INTO codex_event_sources SELECT ?1,session,ts,signature FROM codex_event_sources WHERE source=?2",params![source,alias])?;
-                tx.execute("DELETE FROM codex_event_sources WHERE source=?1", [alias])?;
+            let source_id = intern(&tx, source)?;
+            if let Some(alias) = archive_alias(source)
+                && let Some(alias_id) = name_id(&tx, &alias)?
+            {
+                tx.execute("INSERT OR IGNORE INTO codex_event_links SELECT ?1,session,ts,sig FROM codex_event_links WHERE source=?2",params![source_id,alias_id])?;
+                tx.execute("DELETE FROM codex_event_links WHERE source=?1", [alias_id])?;
             }
             let mut query =
-                tx.prepare("SELECT session,ts,signature FROM codex_event_sources WHERE source=?1")?;
-            for row in query.query_map([source], |r| {
+                tx.prepare("SELECT session,ts,sig FROM codex_event_links WHERE source=?1")?;
+            for row in query.query_map([source_id], |r| {
                 Ok((
-                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(0)?,
                     r.get::<_, i64>(1)?,
-                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(2)?,
                 ))
             })? {
                 previous.insert(row?);
             }
-            tx.execute("DELETE FROM codex_event_sources WHERE source=?1", [source])?;
+            tx.execute("DELETE FROM codex_event_links WHERE source=?1", [source_id])?;
         }
 
         {
@@ -575,11 +740,11 @@ impl ProviderStore {
                     Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
                 })?
                 .collect::<rusqlite::Result<BTreeMap<_, _>>>()?;
-            let mut insert = tx.prepare("INSERT INTO codex_account_events(
-                    account,session,ts,signature,date,model,input_tokens,cached_input_tokens,
+            let mut insert = tx.prepare("INSERT INTO codex_events(
+                    account,session,ts,sig,date,model,input_tokens,cached_input_tokens,
                     output_tokens,requests,estimated_cost_microusd,priced_requests,cache_savings_microusd,covered)
                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
-                ON CONFLICT(session,ts,signature) DO UPDATE SET
+                ON CONFLICT(session,ts,sig) DO UPDATE SET
                     model=excluded.model,input_tokens=excluded.input_tokens,cached_input_tokens=excluded.cached_input_tokens,
                     output_tokens=excluded.output_tokens,requests=excluded.requests,estimated_cost_microusd=excluded.estimated_cost_microusd,
                     priced_requests=excluded.priced_requests,cache_savings_microusd=excluded.cache_savings_microusd
@@ -587,54 +752,56 @@ impl ProviderStore {
                     OR output_tokens IS NOT excluded.output_tokens OR requests IS NOT excluded.requests OR estimated_cost_microusd IS NOT excluded.estimated_cost_microusd
                     OR priced_requests IS NOT excluded.priced_requests OR cache_savings_microusd IS NOT excluded.cache_savings_microusd")?;
             let mut link =
-                tx.prepare("INSERT OR IGNORE INTO codex_event_sources VALUES(?1,?2,?3,?4)")?;
+                tx.prepare("INSERT OR IGNORE INTO codex_event_links VALUES(?1,?2,?3,?4)")?;
             // Older previews keyed only by timestamp + usage. Promote their
             // existing row and every source link before inserting a record key,
             // retaining ownership/coverage instead of counting the old row twice.
-            let mut legacy = tx.prepare("SELECT EXISTS(SELECT 1 FROM codex_account_events WHERE session=?1 AND ts=?2 AND signature=?3)")?;
-            let mut promote = tx.prepare(&format!("INSERT OR IGNORE INTO codex_account_events(account,source,session,ts,signature,date,model,{VALUES},covered)
-                SELECT account,source,session,ts,?4,date,model,{VALUES},covered FROM codex_account_events
-                WHERE session=?1 AND ts=?2 AND signature=?3"))?;
-            let mut promote_links = tx.prepare("INSERT OR IGNORE INTO codex_event_sources
-                SELECT source,session,ts,?4 FROM codex_event_sources WHERE session=?1 AND ts=?2 AND signature=?3")?;
-            let mut remove_legacy_links = tx.prepare(
-                "DELETE FROM codex_event_sources WHERE session=?1 AND ts=?2 AND signature=?3",
+            let mut legacy = tx.prepare(
+                "SELECT EXISTS(SELECT 1 FROM codex_events WHERE session=?1 AND ts=?2 AND sig=?3)",
             )?;
-            let mut remove_legacy = tx.prepare(
-                "DELETE FROM codex_account_events WHERE session=?1 AND ts=?2 AND signature=?3",
-            )?;
+            let mut promote = tx.prepare(&format!("INSERT OR IGNORE INTO codex_events(account,session,ts,sig,date,model,{VALUES},covered)
+                SELECT account,session,ts,?4,date,model,{VALUES},covered FROM codex_events
+                WHERE session=?1 AND ts=?2 AND sig=?3"))?;
+            let mut promote_links = tx.prepare("INSERT OR IGNORE INTO codex_event_links
+                SELECT source,session,ts,?4 FROM codex_event_links WHERE session=?1 AND ts=?2 AND sig=?3")?;
+            let mut remove_legacy_links =
+                tx.prepare("DELETE FROM codex_event_links WHERE session=?1 AND ts=?2 AND sig=?3")?;
+            let mut remove_legacy =
+                tx.prepare("DELETE FROM codex_events WHERE session=?1 AND ts=?2 AND sig=?3")?;
+            let mut ids = std::collections::HashMap::<String, i64>::new();
+            let mut id_of = |name: &str| -> Result<i64> {
+                if let Some(id) = ids.get(name) {
+                    return Ok(*id);
+                }
+                let id = intern(&tx, name)?;
+                ids.insert(name.to_owned(), id);
+                Ok(id)
+            };
             for e in events {
                 // Byte offsets distinguish repeated A/B/A records even when
                 // timestamps collide. Moving a rollout to the archive preserves
                 // its record offsets and therefore its persisted event identity.
-                let record = format!("record:{}:{}", e.offset, e.signature);
-                let old_key = params![e.session, e.timestamp.timestamp_millis(), e.signature];
+                let record = sig_hash(&format!("record:{}:{}", e.offset, e.signature));
+                let session = id_of(&e.session)?;
+                let at = e.timestamp.timestamp_millis();
+                let old_sig = sig_hash(&e.signature);
+                let old_key = params![session, at, old_sig];
                 if legacy.query_row(old_key, |r| r.get::<_, bool>(0))? {
-                    let keys = params![
-                        e.session,
-                        e.timestamp.timestamp_millis(),
-                        e.signature,
-                        record
-                    ];
+                    let keys = params![session, at, old_sig, record];
                     promote.execute(keys)?;
                     promote_links.execute(keys)?;
                     remove_legacy_links.execute(old_key)?;
                     remove_legacy.execute(old_key)?;
                 }
-                link.execute(params![
-                    e.source,
-                    e.session,
-                    e.timestamp.timestamp_millis(),
-                    record
-                ])?;
+                link.execute(params![id_of(&e.source)?, session, at, record])?;
                 let u = &e.usage;
                 insert.execute(params![
-                    state.owner(e.timestamp, before, after, end),
-                    e.session,
-                    e.timestamp.timestamp_millis(),
+                    id_of(state.owner(e.timestamp, before, after, end))?,
+                    session,
+                    at,
                     record,
                     e.timestamp.with_timezone(&Local).date_naive().to_string(),
-                    e.model,
+                    id_of(&e.model)?,
                     u.input_tokens as i64,
                     u.cached_input_tokens as i64,
                     u.output_tokens as i64,
@@ -654,10 +821,10 @@ impl ProviderStore {
         }
         // Delete only obsolete events after replay, preserving both ownership
         // of surviving events and copies still present in another rollout.
-        for (session, at, signature) in previous {
-            tx.execute("DELETE FROM codex_account_events WHERE session=?1 AND ts=?2 AND signature=?3
-                AND NOT EXISTS(SELECT 1 FROM codex_event_sources WHERE session=?1 AND ts=?2 AND signature=?3)",
-                params![session,at,signature])?;
+        for (session, at, sig) in previous {
+            tx.execute("DELETE FROM codex_events WHERE session=?1 AND ts=?2 AND sig=?3
+                AND NOT EXISTS(SELECT 1 FROM codex_event_links WHERE session=?1 AND ts=?2 AND sig=?3)",
+                params![session,at,sig])?;
         }
         let mut updated = state.clone();
         updated.advance(before, after, end);
@@ -674,7 +841,7 @@ impl ProviderStore {
         let today = Local::now().date_naive();
         let start = today - Duration::days(i64::from(days.clamp(1, 365) - 1));
         let mut query=self.conn.prepare(&format!("SELECT date,{SUMS} FROM (
-            SELECT date,{VALUES} FROM codex_account_events WHERE account=?1 AND date>=?2 AND date<=?3 AND covered=0
+            SELECT date,{VALUES} FROM codex_events WHERE account=(SELECT id FROM codex_names WHERE name=?1) AND date>=?2 AND date<=?3 AND covered=0
             UNION ALL SELECT date,{VALUES} FROM codex_legacy_daily WHERE account=?1 AND date>=?2 AND date<=?3
             ) GROUP BY date ORDER BY date"))?;
         let rows = query
@@ -700,7 +867,7 @@ impl ProviderStore {
         end: NaiveDate,
     ) -> Result<Vec<(String, NaiveDate, TokenUsage)>> {
         let mut stmt = self.conn.prepare(&format!("SELECT model,date,{SUMS} FROM (
-            SELECT model,date,{VALUES} FROM codex_account_events WHERE account=?1 AND date>=?2 AND date<=?3 AND covered=0
+            SELECT n.name AS model,e.date AS date,{VALUES} FROM codex_events e JOIN codex_names n ON n.id=e.model WHERE e.account=(SELECT id FROM codex_names WHERE name=?1) AND e.date>=?2 AND e.date<=?3 AND e.covered=0
             UNION ALL SELECT model,date,{VALUES} FROM codex_legacy_model_daily WHERE account=?1 AND date>=?2 AND date<=?3
             ) GROUP BY date,model ORDER BY date,model"))?;
         let rows = stmt.query_map(params![account, start.to_string(), end.to_string()], |r| {
@@ -717,21 +884,14 @@ impl ProviderStore {
         .collect()
     }
 
-    pub(super) fn account_hourly(
-        &self,
-        start: DateTime<Local>,
-        end: DateTime<Local>,
-    ) -> Result<BTreeMap<DateTime<Local>, TokenUsage>> {
-        self.account_hourly_for(&current_id(), start, end)
-    }
 
-    fn account_hourly_for(
+    pub(crate) fn account_hourly_for(
         &self,
         account: &str,
         start: DateTime<Local>,
         end: DateTime<Local>,
     ) -> Result<BTreeMap<DateTime<Local>, TokenUsage>> {
-        let mut stmt = self.conn.prepare("SELECT ts,input_tokens,cached_input_tokens,output_tokens,requests,estimated_cost_microusd,priced_requests,cache_savings_microusd,covered FROM codex_account_events WHERE account=?1 AND ts>=?2 AND ts<?3")?;
+        let mut stmt = self.conn.prepare("SELECT ts,input_tokens,cached_input_tokens,output_tokens,requests,estimated_cost_microusd,priced_requests,cache_savings_microusd,covered FROM codex_events WHERE account=(SELECT id FROM codex_names WHERE name=?1) AND ts>=?2 AND ts<?3")?;
         let rows = stmt.query_map(
             params![
                 account,
@@ -785,12 +945,13 @@ impl ProviderStore {
         Ok(result)
     }
 
-    pub(super) fn account_sessions(&self, start: NaiveDate, end: NaiveDate) -> Result<u64> {
-        self.account_sessions_for(&current_id(), start, end)
-    }
-
-    fn account_sessions_for(&self, account: &str, start: NaiveDate, end: NaiveDate) -> Result<u64> {
-        Ok(self.conn.query_row("SELECT COUNT(DISTINCT session) FROM (SELECT session FROM codex_account_events WHERE account=?1 AND date>=?2 AND date<=?3 AND covered=0 UNION SELECT session FROM codex_legacy_sessions WHERE account=?1 AND date>=?2 AND date<=?3)",params![account,start.to_string(),end.to_string()], |r| r.get::<_,i64>(0))? as u64)
+    pub(crate) fn account_sessions_for(
+        &self,
+        account: &str,
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> Result<u64> {
+        Ok(self.conn.query_row("SELECT COUNT(DISTINCT session) FROM (SELECT n.name AS session FROM codex_events e JOIN codex_names n ON n.id=e.session WHERE e.account=(SELECT id FROM codex_names WHERE name=?1) AND e.date>=?2 AND e.date<=?3 AND e.covered=0 UNION SELECT session FROM codex_legacy_sessions WHERE account=?1 AND date>=?2 AND date<=?3)",params![account,start.to_string(),end.to_string()], |r| r.get::<_,i64>(0))? as u64)
     }
 }
 
@@ -836,6 +997,230 @@ mod tests {
                 ..Default::default()
             },
         }
+    }
+    /// Replaces the compact tables with the previous text-keyed layout.
+    fn old_schema(db: &ProviderStore, with_sources: bool) {
+        db.conn
+            .execute_batch(
+                "DROP TABLE codex_events; DROP TABLE codex_event_links; DROP TABLE codex_names;
+                DELETE FROM meta WHERE key IN ('codex.event_sources.v1','codex.compact_events.vacuum_pending');
+                CREATE TABLE codex_account_events (
+                    account TEXT NOT NULL, source TEXT NOT NULL DEFAULT '',
+                    session TEXT NOT NULL, ts INTEGER NOT NULL,
+                    signature TEXT NOT NULL, date TEXT NOT NULL, model TEXT NOT NULL,
+                    input_tokens INTEGER NOT NULL, cached_input_tokens INTEGER NOT NULL,
+                    output_tokens INTEGER NOT NULL, requests INTEGER NOT NULL,
+                    estimated_cost_microusd INTEGER NOT NULL, priced_requests INTEGER NOT NULL,
+                    cache_savings_microusd INTEGER NOT NULL, covered INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(session, ts, signature));
+                CREATE INDEX codex_account_date ON codex_account_events(account,date);
+                CREATE INDEX codex_account_time ON codex_account_events(account,ts);
+                CREATE INDEX codex_account_source ON codex_account_events(source);",
+            )
+            .unwrap();
+        if with_sources {
+            db.conn
+                .execute_batch(
+                    "CREATE TABLE codex_event_sources (
+                    source TEXT NOT NULL, session TEXT NOT NULL, ts INTEGER NOT NULL,
+                    signature TEXT NOT NULL, PRIMARY KEY(source,session,ts,signature));
+                CREATE INDEX codex_event_sources_event ON codex_event_sources(session,ts,signature);",
+                )
+                .unwrap();
+        }
+    }
+    fn old_event(
+        db: &ProviderStore,
+        e: &AccountEvent,
+        account: &str,
+        source_column: &str,
+        record: bool,
+        link: bool,
+        covered: bool,
+    ) {
+        let signature = if record {
+            format!("record:{}:{}", e.offset, e.signature)
+        } else {
+            e.signature.clone()
+        };
+        let u = &e.usage;
+        db.conn
+            .execute(
+                "INSERT INTO codex_account_events(account,source,session,ts,signature,date,model,
+                    input_tokens,cached_input_tokens,output_tokens,requests,estimated_cost_microusd,
+                    priced_requests,cache_savings_microusd,covered)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+                params![
+                    account,
+                    source_column,
+                    e.session,
+                    e.timestamp.timestamp_millis(),
+                    signature,
+                    e.timestamp.with_timezone(&Local).date_naive().to_string(),
+                    e.model,
+                    u.input_tokens as i64,
+                    u.cached_input_tokens as i64,
+                    u.output_tokens as i64,
+                    u.requests as i64,
+                    u.estimated_cost_microusd as i64,
+                    u.priced_requests as i64,
+                    u.cache_savings_microusd as i64,
+                    covered
+                ],
+            )
+            .unwrap();
+        if link {
+            db.conn
+                .execute(
+                    "INSERT OR IGNORE INTO codex_event_sources VALUES(?1,?2,?3,?4)",
+                    params![
+                        e.source,
+                        e.session,
+                        e.timestamp.timestamp_millis(),
+                        signature
+                    ],
+                )
+                .unwrap();
+        }
+    }
+    #[test]
+    fn sig_hash_is_stable() {
+        assert_eq!(sig_hash(""), 0xcbf2_9ce4_8422_2325_u64 as i64);
+        assert_eq!(sig_hash("a"), 0xaf63_dc4c_8601_ec8c_u64 as i64);
+    }
+    #[test]
+    fn migration_from_text_keyed_schema_preserves_every_semantic() {
+        let db = store();
+        let s = state();
+        db.set_meta(STATE, &serde_json::to_string(&s).unwrap())
+            .unwrap();
+        old_schema(&db, true);
+        let mut covered = event(90, 100);
+        covered.source = "sessions/day/a.jsonl".into();
+        covered.offset = 100;
+        let mut owned = event(115, 10);
+        owned.source = "sessions/day/a.jsonl".into();
+        let mut shared = event(116, 20);
+        shared.source = "sessions/day/a.jsonl".into();
+        let mut copy = shared.clone();
+        copy.source = "sessions/day/b.jsonl".into();
+        let mut third = event(128, 7);
+        third.source = "archived_sessions/day/c.jsonl".into();
+        third.session = "other".into();
+        old_event(&db, &covered, "old", "", true, true, true);
+        old_event(&db, &owned, "new", "", true, true, false);
+        old_event(&db, &shared, "new", "", true, true, false);
+        db.conn
+            .execute(
+                "INSERT INTO codex_event_sources VALUES(?1,?2,?3,?4)",
+                params![
+                    copy.source,
+                    copy.session,
+                    copy.timestamp.timestamp_millis(),
+                    format!("record:{}:{}", copy.offset, copy.signature)
+                ],
+            )
+            .unwrap();
+        old_event(&db, &third, "third", "", true, true, false);
+        let count = |db: &ProviderStore, table: &str| -> i64 {
+            db.conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap()
+        };
+        db.migrate_codex_accounts().unwrap();
+        db.migrate_codex_accounts().unwrap();
+        for gone in [
+            "codex_account_events",
+            "codex_event_sources",
+            "codex_account_source",
+        ] {
+            assert_eq!(
+                db.conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE name=?1",
+                        [gone],
+                        |r| r.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                0
+            );
+        }
+        // The one-time VACUUM ran and cleared its marker.
+        assert_eq!(
+            db.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM meta WHERE key='codex.compact_events.vacuum_pending'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(count(&db, "codex_events"), 4);
+        assert_eq!(count(&db, "codex_event_links"), 5);
+        let day = |db: &ProviderStore, who: &str| {
+            db.account_daily_for(who, at(0).date_naive(), at(200).date_naive())
+                .unwrap()
+                .iter()
+                .map(|r| r.2.input_tokens)
+                .sum::<u64>()
+        };
+        // The covered row stays out of live sums.
+        assert_eq!(day(&db, "old"), 0);
+        assert_eq!(day(&db, "new"), 30);
+        assert_eq!(day(&db, "third"), 7);
+        assert_eq!(
+            db.conn
+                .query_row("SELECT SUM(covered) FROM codex_events", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        // Replay of the same records is idempotent and keeps ownership.
+        db.save_account_scan(
+            &[covered.clone(), owned.clone(), shared.clone()],
+            &["sessions/day/a.jsonl".into()],
+            &s,
+            &None,
+            &None,
+            at(130),
+        )
+        .unwrap();
+        assert_eq!(count(&db, "codex_events"), 4);
+        assert_eq!(day(&db, "new"), 30);
+        assert_eq!(day(&db, "old"), 0);
+        // Links survived: dropping a.jsonl keeps the copy in b.jsonl.
+        db.save_account_scan(
+            &[],
+            &["sessions/day/a.jsonl".into()],
+            &s,
+            &None,
+            &None,
+            at(140),
+        )
+        .unwrap();
+        assert_eq!(day(&db, "new"), 20);
+        db.save_account_scan(
+            &[],
+            &["sessions/day/b.jsonl".into()],
+            &s,
+            &None,
+            &None,
+            at(150),
+        )
+        .unwrap();
+        assert_eq!(day(&db, "new"), 0);
+        // Archive-alias handling: the migrated archived link is moved, then removed.
+        db.save_account_scan(
+            &[],
+            &["sessions/day/c.jsonl".into()],
+            &s,
+            &None,
+            &None,
+            at(160),
+        )
+        .unwrap();
+        assert_eq!(day(&db, "third"), 0);
     }
     fn store() -> ProviderStore {
         let store = ProviderStore {
@@ -1251,7 +1636,7 @@ mod tests {
         }
         assert_eq!(
             db.conn
-                .query_row("SELECT COUNT(*) FROM codex_account_events", [], |r| r
+                .query_row("SELECT COUNT(*) FROM codex_events", [], |r| r
                     .get::<_, i64>(0))
                 .unwrap(),
             3
@@ -1270,7 +1655,7 @@ mod tests {
         );
         assert_eq!(
             db.conn
-                .query_row("SELECT COUNT(*) FROM codex_account_events", [], |r| r
+                .query_row("SELECT COUNT(*) FROM codex_events", [], |r| r
                     .get::<_, i64>(0))
                 .unwrap(),
             0
@@ -1350,7 +1735,7 @@ mod tests {
         save(crate::usage::scan_file_delta(&path, source, &mut file).unwrap());
         assert_eq!(
             db.conn
-                .query_row("SELECT COUNT(*) FROM codex_account_events", [], |r| r
+                .query_row("SELECT COUNT(*) FROM codex_events", [], |r| r
                     .get::<_, i64>(0))
                 .unwrap(),
             1
@@ -1453,7 +1838,7 @@ mod tests {
         );
         assert_eq!(
             db.conn
-                .query_row("SELECT COUNT(*) FROM codex_event_sources", [], |r| r
+                .query_row("SELECT COUNT(*) FROM codex_event_links", [], |r| r
                     .get::<_, i64>(0))
                 .unwrap(),
             1
@@ -1544,8 +1929,10 @@ mod tests {
     fn upgrading_preview_recovers_source_links_without_reassigning_history() {
         let db = store();
         let s = state();
-        db.save_account_events(&[event(115, 10)], &s, &s.observed, &s.observed, at(120))
+        db.set_meta(STATE, &serde_json::to_string(&s).unwrap())
             .unwrap();
+        old_schema(&db, false);
+        old_event(&db, &event(115, 10), "new", "", false, false, false);
         db.conn.execute("INSERT INTO scan_files VALUES('codex','sessions/path/same-conversation.jsonl',200,?1)",[json!({"session_id":"same-conversation"}).to_string()]).unwrap();
         db.conn
             .execute(
@@ -1553,7 +1940,6 @@ mod tests {
                 [],
             )
             .unwrap();
-        db.conn.execute_batch("DROP TABLE codex_event_sources; DELETE FROM meta WHERE key='codex.event_sources.v1';").unwrap();
         db.migrate_codex_accounts().unwrap();
         db.migrate_codex_accounts().unwrap();
         assert_eq!(db.conn.query_row("SELECT offset FROM codex_legacy_cursors WHERE source='sessions/path/same-conversation.jsonl'",[],|r|r.get::<_,i64>(0)).unwrap(),100);
@@ -1594,7 +1980,7 @@ mod tests {
             .unwrap();
         assert!(
             db.conn
-                .query_row("SELECT covered FROM codex_account_events", [], |r| r
+                .query_row("SELECT covered FROM codex_events", [], |r| r
                     .get::<_, bool>(0))
                 .unwrap()
         );
@@ -1624,7 +2010,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             db.conn
-                .query_row("SELECT COUNT(*) FROM codex_account_events", [], |r| r
+                .query_row("SELECT COUNT(*) FROM codex_events", [], |r| r
                     .get::<_, i64>(0))
                 .unwrap(),
             0
@@ -1664,7 +2050,7 @@ mod tests {
         assert_eq!(rows[0].2.input_tokens, 7);
         assert_eq!(
             db.conn
-                .query_row("SELECT COUNT(*) FROM codex_account_events", [], |row| {
+                .query_row("SELECT COUNT(*) FROM codex_events", [], |row| {
                     row.get::<_, i64>(0)
                 })
                 .unwrap(),
@@ -1675,20 +2061,23 @@ mod tests {
     fn upgrading_single_source_preview_recovers_explicit_links() {
         let db = store();
         let s = state();
-        db.save_account_events(&[event(115, 10)], &s, &s.observed, &s.observed, at(120))
+        db.set_meta(STATE, &serde_json::to_string(&s).unwrap())
             .unwrap();
         // The maintainer's preview persisted a source directly on each event.
         // Its scanner metadata may already have been cleared for a rebuild.
-        db.conn
-            .execute_batch(
-                "UPDATE codex_account_events SET source='sessions/old/rollout.jsonl';
-            DROP TABLE codex_event_sources;
-            DELETE FROM meta WHERE key='codex.event_sources.v1';",
-            )
-            .unwrap();
+        old_schema(&db, false);
+        old_event(
+            &db,
+            &event(115, 10),
+            "new",
+            "sessions/old/rollout.jsonl",
+            false,
+            false,
+            false,
+        );
         db.migrate_codex_accounts().unwrap();
         db.migrate_codex_accounts().unwrap();
-        assert_eq!(db.conn.query_row("SELECT COUNT(*) FROM codex_event_sources WHERE source='sessions/old/rollout.jsonl'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(db.conn.query_row("SELECT COUNT(*) FROM codex_event_links l JOIN codex_names n ON n.id=l.source WHERE n.name='sessions/old/rollout.jsonl'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(
             db.account_daily_for("new", at(0).date_naive(), at(200).date_naive())
                 .unwrap()[0]
@@ -1715,14 +2104,12 @@ mod tests {
     fn legacy_shared_session_rows_survive_rebuilding_only_one_source() {
         let db = store();
         let s = state();
-        db.save_account_events(
-            &[event(115, 10), event(116, 20)],
-            &s,
-            &s.observed,
-            &s.observed,
-            at(120),
-        )
-        .unwrap();
+        db.set_meta(STATE, &serde_json::to_string(&s).unwrap())
+            .unwrap();
+        old_schema(&db, false);
+        for e in [event(115, 10), event(116, 20)] {
+            old_event(&db, &e, "new", "", false, false, false);
+        }
         for path in ["sessions/a.jsonl", "sessions/b.jsonl"] {
             db.conn
                 .execute(
@@ -1731,7 +2118,6 @@ mod tests {
                 )
                 .unwrap();
         }
-        db.conn.execute_batch("DROP TABLE codex_event_sources; DELETE FROM meta WHERE key='codex.event_sources.v1';").unwrap();
         db.migrate_codex_accounts().unwrap();
         // Before both old sources have been observed again, do not guess which
         // file contributed an event or erase another file's conversation rows.
@@ -1841,10 +2227,11 @@ mod tests {
             .unwrap();
         // Simulate a preview's old key, retained by a second unavailable file.
         db.conn
-            .execute_batch(
-                "UPDATE codex_account_events SET signature='usage-10', covered=1;
-            UPDATE codex_event_sources SET signature='usage-10';",
-            )
+            .execute_batch(&format!(
+                "UPDATE codex_events SET sig={0}, covered=1;
+            UPDATE codex_event_links SET sig={0};",
+                sig_hash("usage-10")
+            ))
             .unwrap();
         let mut replay = event(115, 10);
         replay.source = "sessions/a.jsonl".into();
@@ -1857,20 +2244,20 @@ mod tests {
             at(130),
         )
         .unwrap();
-        let (owner, covered, signature): (String, bool, String) = db
+        let (owner, covered, signature): (String, bool, i64) = db
             .conn
             .query_row(
-                "SELECT account,covered,signature FROM codex_account_events",
+                "SELECT n.name,e.covered,e.sig FROM codex_events e JOIN codex_names n ON n.id=e.account",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .unwrap();
         assert_eq!(owner, "new");
         assert!(covered);
-        assert!(signature.starts_with("record:"));
+        assert_eq!(signature, sig_hash("record:200:usage-10"));
         assert_eq!(
             db.conn
-                .query_row("SELECT COUNT(*) FROM codex_account_events", [], |r| r
+                .query_row("SELECT COUNT(*) FROM codex_events", [], |r| r
                     .get::<_, i64>(0))
                 .unwrap(),
             1
@@ -1879,7 +2266,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             db.conn
-                .query_row("SELECT COUNT(*) FROM codex_account_events", [], |r| r
+                .query_row("SELECT COUNT(*) FROM codex_events", [], |r| r
                     .get::<_, i64>(0))
                 .unwrap(),
             1
@@ -1888,7 +2275,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             db.conn
-                .query_row("SELECT COUNT(*) FROM codex_account_events", [], |r| r
+                .query_row("SELECT COUNT(*) FROM codex_events", [], |r| r
                     .get::<_, i64>(0))
                 .unwrap(),
             0

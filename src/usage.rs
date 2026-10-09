@@ -153,10 +153,16 @@ pub(crate) struct CachedSessionFile {
     pub(crate) fork_copy_anchor_ms: i64,
     #[serde(default)]
     pub(crate) session_id: String,
+    /// True when the stored rows for this file are known to equal this value.
+    /// Defaults to false so freshly built files are always written; the store
+    /// sets it on load and every mutation below clears it.
+    #[serde(skip)]
+    pub(crate) persisted: bool,
 }
 
 impl CachedSessionFile {
     fn reset_scan_state(&mut self) {
+        self.persisted = false;
         self.offset = 0;
         self.daily.clear();
         self.model_daily.clear();
@@ -189,11 +195,17 @@ impl CachedSessionFile {
     }
 
     fn prune_before(&mut self, oldest: NaiveDate) {
+        let rows =
+            |file: &Self| file.daily.len() + file.model_daily.values().map(Vec::len).sum::<usize>();
+        let before = rows(self);
         self.daily.retain(|entry| entry.date >= oldest);
         self.daily.sort_by_key(|entry| entry.date);
         for entries in self.model_daily.values_mut() {
             entries.retain(|entry| entry.date >= oldest);
             entries.sort_by_key(|entry| entry.date);
+        }
+        if rows(self) != before {
+            self.persisted = false;
         }
     }
 }
@@ -252,6 +264,8 @@ pub fn refresh_usage_statistics(
         let cached = cache.files.entry(key.clone()).or_default();
         // Older caches kept daily totals but dropped per-model rows on load.
         // Rescanning from zero rebuilds the breakdown without double-counting.
+        // Current scans only add a daily row together with a non-empty model
+        // row, so this fires once for legacy data and never again afterwards.
         if cached.model_daily.is_empty() && !cached.daily.is_empty() {
             cached.reset_scan_state();
         }
@@ -420,6 +434,9 @@ pub(crate) fn scan_file_delta(
             });
             cached.add(timestamp, usage, model.as_deref());
         }
+    }
+    if offset != cached.offset {
+        cached.persisted = false;
     }
     cached.offset = offset;
     Ok(FileDelta { events, rebuilt })
@@ -674,6 +691,10 @@ pub(crate) struct CachedClaudeSessionFile {
     /// Number of complete JSONL bytes incorporated into `entries`.
     pub(crate) offset: u64,
     pub(crate) entries: Vec<CachedClaudeUsageEntry>,
+    /// `(offset, entry count)` as last stored, when `entries[..count]` is known
+    /// to equal the stored rows `0..count`. `None` forces a full rewrite.
+    #[serde(skip)]
+    pub(crate) persisted: Option<(u64, usize)>,
 }
 
 /// Returns Claude Code usage from the on-disk cache without opening a log.
@@ -751,9 +772,14 @@ fn prune_claude_history(
     oldest: NaiveDate,
 ) {
     for cached in cache.files.values_mut() {
+        let before = cached.entries.len();
         cached
             .entries
             .retain(|entry| entry.timestamp.with_timezone(&Local).date_naive() >= oldest);
+        if cached.entries.len() != before {
+            // Event ordinals shift, so the stored rows must be rewritten.
+            cached.persisted = None;
+        }
     }
     cache
         .files
@@ -886,6 +912,7 @@ fn scan_claude_file_delta(path: &Path, cached: &mut CachedClaudeSessionFile) -> 
     if file_size < cached.offset {
         cached.offset = 0;
         cached.entries.clear();
+        cached.persisted = None;
     }
     if file_size == cached.offset {
         return Ok(());
@@ -1153,6 +1180,7 @@ mod tests {
                 CachedClaudeSessionFile {
                     offset: 0,
                     entries: vec![first.clone(), repeat],
+                    persisted: None,
                 },
             )]),
         };
@@ -1192,6 +1220,7 @@ mod tests {
                     CachedClaudeSessionFile {
                         offset: 0,
                         entries: vec![original],
+                        persisted: None,
                     },
                 ),
                 (
@@ -1199,6 +1228,7 @@ mod tests {
                     CachedClaudeSessionFile {
                         offset: 0,
                         entries: vec![replay],
+                        persisted: None,
                     },
                 ),
             ]),
@@ -1223,7 +1253,11 @@ mod tests {
     }
 
     fn claude_file(entries: Vec<CachedClaudeUsageEntry>) -> CachedClaudeSessionFile {
-        CachedClaudeSessionFile { offset: 1, entries }
+        CachedClaudeSessionFile {
+            offset: 1,
+            entries,
+            persisted: None,
+        }
     }
 
     fn key(path: &Path) -> String {

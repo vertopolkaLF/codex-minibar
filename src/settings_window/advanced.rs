@@ -3,7 +3,7 @@
 use gpui::{AnyElement, Context, PathPromptOptions};
 
 use super::kit::{self, Button, Kit, Row};
-use super::persistence::replace_settings;
+use super::persistence;
 use super::window::SettingsWindow;
 use crate::settings::Settings;
 use crate::worker::UsageAction;
@@ -140,23 +140,30 @@ impl SettingsWindow {
             let Some(path) = paths.into_iter().next() else {
                 return;
             };
-            let _ = this.update(cx, |this, cx| {
-                let result = Settings::load_or_create(&path).and_then(|settings| {
-                    replace_settings(this.settings_tx(), settings.clone())?;
-                    Ok(settings)
-                });
-                match result {
-                    Ok(settings) => {
-                        this.settings = settings;
-                        this.show_notice(crate::i18n::tr("settings-imported"), cx);
-                    }
-                    Err(error) => {
-                        eprintln!("failed to import settings: {error:#}");
-                        crate::notifications::show(
-                            crate::i18n::tr("settings-import-failed"),
-                            &format!("{error:#}"),
-                        );
-                    }
+            let Ok(settings_tx) = this.update(cx, |this, _| this.settings_tx()) else {
+                return;
+            };
+            // Read-only decode of the chosen file, then commit through the
+            // serial writer; neither step runs on the UI thread.
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let settings = Settings::load_from_import(&path)?;
+                    persistence::wait(persistence::queue_replace(settings_tx, settings.clone()))?;
+                    anyhow::Ok(settings)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(settings) => {
+                    this.settings = settings;
+                    this.show_notice(crate::i18n::tr("settings-imported"), cx);
+                }
+                Err(error) => {
+                    eprintln!("failed to import settings: {error:#}");
+                    crate::notifications::show(
+                        crate::i18n::tr("settings-import-failed"),
+                        &format!("{error:#}"),
+                    );
                 }
             });
         })
@@ -179,23 +186,34 @@ impl SettingsWindow {
         let reset = Self::h(cx, |this, (), window, cx| {
             this.confirm_reset = false;
             let settings = Settings::default();
-            match replace_settings(this.settings_tx(), settings.clone()) {
-                Ok(()) => {
-                    this.settings = settings;
-                    // Resetting returns to the same first-launch path as a
-                    // new install; onboarding replaces this window.
-                    window.remove_window();
-                    super::window_closed(false);
-                    super::open_onboarding();
-                }
-                Err(error) => {
-                    eprintln!("failed to reset settings: {error:#}");
-                    crate::notifications::show(
-                        crate::i18n::tr("settings-reset-failed"),
-                        &format!("{error:#}"),
-                    );
-                }
-            }
+            let outcome = persistence::queue_replace(this.settings_tx(), settings.clone());
+            cx.spawn_in(window, async move |this, cx| {
+                let result = cx
+                    .background_executor()
+                    .spawn(async move { persistence::wait(outcome) })
+                    .await;
+                let _ = this.update_in(cx, |this, window, cx| {
+                    match result {
+                        Ok(()) => {
+                            this.settings = settings;
+                            // Resetting returns to the same first-launch path as a
+                            // new install; onboarding replaces this window.
+                            window.remove_window();
+                            super::window_closed(false);
+                            super::open_onboarding();
+                        }
+                        Err(error) => {
+                            eprintln!("failed to reset settings: {error:#}");
+                            crate::notifications::show(
+                                crate::i18n::tr("settings-reset-failed"),
+                                &format!("{error:#}"),
+                            );
+                        }
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
             cx.notify();
         });
         Some(kit::dialog(

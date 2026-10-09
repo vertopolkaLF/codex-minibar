@@ -1141,8 +1141,9 @@ impl PopupRoot {
         self.ui = Rc::new(ui);
         cx.notify();
         let settings_tx = self.state.settings_tx.clone();
-        // Disk I/O and the settings broadcast stay off the render thread.
-        std::thread::spawn(move || crate::settings_window::persist_update(settings_tx, update));
+        // Disk I/O and the settings broadcast run on the serial settings
+        // writer, off the render thread and ordered with every other write.
+        crate::settings_window::persist_update(settings_tx, update);
     }
 
     // ----- snapshots ------------------------------------------------------------
