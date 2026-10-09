@@ -779,13 +779,21 @@ impl PopupRoot {
     ) -> AnyElement {
         let palette = self.palette.clone();
         let total_label = format_spend_full(total);
-        let fits_ring = components::measure_text(
+        // The total sits in the ring's 68 DIP hole; long amounts shrink
+        // (text width scales linearly with size) instead of moving out.
+        let label_width = components::measure_text(
             window.text_system(),
             palette.font_family.clone(),
             18.0,
             gpui::FontWeight::SEMIBOLD,
             &total_label,
-        ) <= 64.0;
+        );
+        let label_size = if label_width > DONUT_LABEL_WIDTH {
+            ((18.0 * DONUT_LABEL_WIDTH / label_width) * 2.0).floor() / 2.0
+        } else {
+            18.0
+        }
+        .max(9.0);
         let colored = self.ui.use_colored_provider_icons;
         let mut legend = div().flex().flex_col().gap(px(12.0)).flex_1().min_w_0();
         for (provider, spend) in entries {
@@ -829,7 +837,7 @@ impl PopupRoot {
                 )
             })
             .collect::<Vec<_>>();
-        let row = div()
+        div()
             .flex()
             .flex_row()
             .items_center()
@@ -852,26 +860,18 @@ impl PopupRoot {
                         .absolute()
                         .inset_0(),
                     )
-                    .children(fits_ring.then(|| {
-                        components::text(total_label.clone(), 18.0, 24.0, palette.text_primary)
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                    })),
-            )
-            .child(legend);
-        if fits_ring {
-            row.into_any_element()
-        } else {
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(8.0))
-                .child(
-                    components::text(total_label, 18.0, 24.0, palette.text_primary)
+                    .child(nowrap(
+                        components::text(
+                            total_label,
+                            label_size,
+                            (label_size * 4.0 / 3.0).ceil(),
+                            palette.text_primary,
+                        )
                         .font_weight(gpui::FontWeight::SEMIBOLD),
-                )
-                .child(row)
-                .into_any_element()
-        }
+                    )),
+            )
+            .child(legend)
+            .into_any_element()
     }
 }
 
@@ -959,6 +959,9 @@ pub(crate) fn donut_segments(
     }
     segments
 }
+
+/// Widest total label that clears the donut's inner edge with some air.
+const DONUT_LABEL_WIDTH: f32 = 60.0;
 
 fn paint_donut(bounds: Bounds<Pixels>, segments: &[(Hsla, f32, f32)], window: &mut Window) {
     const OUTER: f32 = 53.0;
