@@ -884,7 +884,6 @@ impl ProviderStore {
         .collect()
     }
 
-
     pub(crate) fn account_hourly_for(
         &self,
         account: &str,

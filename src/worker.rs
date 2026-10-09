@@ -1713,7 +1713,11 @@ mod tests {
         while refreshes.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(20));
         }
-        assert_eq!(refreshes.load(Ordering::SeqCst), 1, "no rescan after resume");
+        assert_eq!(
+            refreshes.load(Ordering::SeqCst),
+            1,
+            "no rescan after resume"
+        );
 
         commands_tx.send(WorkerCommand::Shutdown).unwrap();
         task.join().unwrap();

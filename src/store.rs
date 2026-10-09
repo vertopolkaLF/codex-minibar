@@ -474,10 +474,10 @@ impl ProviderStore {
         {
             return Ok(UsageStatistics::default());
         }
-        if provider == ProviderId::primary(ProviderKind::Codex) {
-            if let Some(account) = self.codex_account_for_reads()? {
-                return self.account_statistics_for(&account, history_days);
-            }
+        if provider == ProviderId::primary(ProviderKind::Codex)
+            && let Some(account) = self.codex_account_for_reads()?
+        {
+            return self.account_statistics_for(&account, history_days);
         }
         let mut statement = self.conn.prepare(
             "SELECT date, input_tokens, cached_input_tokens, output_tokens,
@@ -551,10 +551,10 @@ impl ProviderStore {
         start: DateTime<Local>,
         end: DateTime<Local>,
     ) -> Result<BTreeMap<DateTime<Local>, TokenUsage>> {
-        if provider == ProviderId::primary(ProviderKind::Codex) {
-            if let Some(account) = self.codex_account_for_reads()? {
-                return self.account_hourly_for(&account, start, end);
-            }
+        if provider == ProviderId::primary(ProviderKind::Codex)
+            && let Some(account) = self.codex_account_for_reads()?
+        {
+            return self.account_hourly_for(&account, start, end);
         }
         if provider.kind() == ProviderKind::OpenRouter {
             let mut hours = BTreeMap::<DateTime<Local>, TokenUsage>::new();
@@ -586,9 +586,15 @@ impl ProviderStore {
             let (hour_str, usage) = row?;
             if let Some(dt) = parse_datetime_option(&hour_str) {
                 let hour = dt.with_timezone(&Local);
-                hourly.entry(truncate_local_hour(hour)).or_default().add(&usage);
+                hourly
+                    .entry(truncate_local_hour(hour))
+                    .or_default()
+                    .add(&usage);
             } else {
-                eprintln!("Skipping usage_hourly row with malformed hour: {}", hour_str);
+                eprintln!(
+                    "Skipping usage_hourly row with malformed hour: {}",
+                    hour_str
+                );
             }
         }
         Ok(hourly)
@@ -631,7 +637,10 @@ impl ProviderStore {
                     .or_default()
                     .add(&usage);
             } else {
-                eprintln!("Skipping usage_events row with malformed timestamp: {}", ts_str);
+                eprintln!(
+                    "Skipping usage_events row with malformed timestamp: {}",
+                    ts_str
+                );
             }
         }
         Ok(hourly)
@@ -860,7 +869,10 @@ impl ProviderStore {
                     let file = files.entry(path).or_default();
                     file.daily.push(DailyTokenUsage { date, usage });
                 } else {
-                    eprintln!("Skipping usage_file_daily row with malformed date: {}", date_str);
+                    eprintln!(
+                        "Skipping usage_file_daily row with malformed date: {}",
+                        date_str
+                    );
                 }
             }
         }
@@ -887,7 +899,10 @@ impl ProviderStore {
                         .or_default()
                         .push(DailyTokenUsage { date, usage });
                 } else {
-                    eprintln!("Skipping usage_file_model_daily row with malformed date: {}", date_str);
+                    eprintln!(
+                        "Skipping usage_file_model_daily row with malformed date: {}",
+                        date_str
+                    );
                 }
             }
         }
@@ -919,8 +934,8 @@ impl ProviderStore {
                         offset=excluded.offset,
                         meta_json=excluded.meta_json",
                 )?;
-                let mut clear_daily = tx
-                    .prepare("DELETE FROM usage_file_daily WHERE provider = ?1 AND path = ?2")?;
+                let mut clear_daily =
+                    tx.prepare("DELETE FROM usage_file_daily WHERE provider = ?1 AND path = ?2")?;
                 let mut clear_models = tx.prepare(
                     "DELETE FROM usage_file_model_daily WHERE provider = ?1 AND path = ?2",
                 )?;
@@ -1104,7 +1119,16 @@ impl ProviderStore {
                 ))
             })?;
             for row in rows {
-                let (path, ts_str, message_id, request_id, is_sidechain_i64, has_speed_i64, usage, model) = row?;
+                let (
+                    path,
+                    ts_str,
+                    message_id,
+                    request_id,
+                    is_sidechain_i64,
+                    has_speed_i64,
+                    usage,
+                    model,
+                ) = row?;
                 if let Some(timestamp) = parse_datetime_option(&ts_str) {
                     let entry = CachedClaudeUsageEntry {
                         timestamp,
@@ -1117,7 +1141,10 @@ impl ProviderStore {
                     };
                     files.entry(path).or_default().entries.push(entry);
                 } else {
-                    eprintln!("Skipping usage_events row with malformed timestamp: {}", ts_str);
+                    eprintln!(
+                        "Skipping usage_events row with malformed timestamp: {}",
+                        ts_str
+                    );
                 }
             }
         }
@@ -1342,13 +1369,11 @@ impl ProviderStore {
     }
 
     fn has_openrouter_analytics(&self, provider: ProviderId) -> Result<bool> {
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM meta WHERE key = ?1)",
-                params![openrouter_analytics_key(provider)],
-                |row| row.get(0),
-            )?)
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM meta WHERE key = ?1)",
+            params![openrouter_analytics_key(provider)],
+            |row| row.get(0),
+        )?)
     }
 
     pub(crate) fn save_openrouter_analytics(
@@ -1399,10 +1424,10 @@ impl ProviderStore {
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<u64> {
-        if provider == ProviderId::primary(ProviderKind::Codex) {
-            if let Some(account) = self.codex_account_for_reads()? {
-                return self.account_sessions_for(&account, start, end);
-            }
+        if provider == ProviderId::primary(ProviderKind::Codex)
+            && let Some(account) = self.codex_account_for_reads()?
+        {
+            return self.account_sessions_for(&account, start, end);
         }
         let from_files: i64 = self.conn.query_row(
             "SELECT COUNT(DISTINCT path) FROM usage_file_daily
@@ -1441,16 +1466,14 @@ impl ProviderStore {
         {
             return Ok(Vec::new());
         }
-        if provider == ProviderId::primary(ProviderKind::Codex) {
-            if let Some(account) = self.codex_account_for_reads()? {
-                let mut merged = BTreeMap::<String, TokenUsage>::new();
-                for (model, _, usage) in
-                    self.account_daily_for(&account, start, end)?
-                {
-                    merged.entry(model).or_default().add(&usage);
-                }
-                return Ok(merged.into_iter().collect());
+        if provider == ProviderId::primary(ProviderKind::Codex)
+            && let Some(account) = self.codex_account_for_reads()?
+        {
+            let mut merged = BTreeMap::<String, TokenUsage>::new();
+            for (model, _, usage) in self.account_daily_for(&account, start, end)? {
+                merged.entry(model).or_default().add(&usage);
             }
+            return Ok(merged.into_iter().collect());
         }
         let mut statement = self.conn.prepare(
             "SELECT model, input_tokens, cached_input_tokens, output_tokens,
@@ -1486,10 +1509,10 @@ impl ProviderStore {
         {
             return Ok(Vec::new());
         }
-        if provider == ProviderId::primary(ProviderKind::Codex) {
-            if let Some(account) = self.codex_account_for_reads()? {
-                return self.account_daily_for(&account, start, end);
-            }
+        if provider == ProviderId::primary(ProviderKind::Codex)
+            && let Some(account) = self.codex_account_for_reads()?
+        {
+            return self.account_daily_for(&account, start, end);
         }
         let mut statement = self.conn.prepare(
             "SELECT model, date, input_tokens, cached_input_tokens, output_tokens,
@@ -2365,9 +2388,8 @@ mod tests {
     /// Counts writes to the per-file Codex tables, ignoring temp-table
     /// bookkeeping that `total_changes()` would also include.
     fn track_file_writes(store: &ProviderStore) {
-        let mut sql = String::from(
-            "CREATE TEMP TABLE IF NOT EXISTS file_writes(n INTEGER NOT NULL);",
-        );
+        let mut sql =
+            String::from("CREATE TEMP TABLE IF NOT EXISTS file_writes(n INTEGER NOT NULL);");
         for table in ["scan_files", "usage_file_daily", "usage_file_model_daily"] {
             for op in ["INSERT", "UPDATE", "DELETE"] {
                 sql.push_str(&format!(
@@ -2382,7 +2404,9 @@ mod tests {
     fn file_writes(store: &ProviderStore) -> i64 {
         store
             .conn
-            .query_row("SELECT COUNT(*) FROM temp.file_writes", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM temp.file_writes", [], |row| {
+                row.get(0)
+            })
             .unwrap()
     }
 
@@ -2600,4 +2624,3 @@ mod tests {
         assert_eq!(models[0].1.total_tokens(), 15);
     }
 }
-
