@@ -754,6 +754,25 @@ popup-theme-description = Changes only the popup. Settings keep the Windows look
 popup-theme-fluent = Fluent
 popup-theme-vercel = Vercel
 popup-theme-apple = Apple
+popup-theme-built-in = Built-in
+popup-theme-vscode = VS Code theme
+vscode-themes = VS Code themes
+vscode-themes-description = Import a .vsix package or a color theme .json file. Themes recolor the popup only.
+import-theme = Import theme
+importing-theme = Importing…
+remove-theme = Remove theme
+browse-open-vsx = Browse Open VSX
+browse-open-vsx-description = Find and install color themes from the open-vsx.org registry
+search-color-themes = Search color themes
+open-vsx-search = Search
+open-vsx-searching = Searching…
+no-themes-found = No color themes found
+open-vsx-install = Install
+open-vsx-installed = Installed
+open-vsx-installing = Installing…
+theme-installed = Theme installed
+theme-install-failed = Couldn't install the theme
+theme-remove-failed = Couldn't remove the theme
 
 # src/settings_window/appearance.rs
 acrylic = Acrylic

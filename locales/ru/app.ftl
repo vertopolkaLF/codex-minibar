@@ -755,6 +755,25 @@ popup-theme-description = Меняет только всплывающее ок�
 popup-theme-fluent = Fluent
 popup-theme-vercel = Vercel
 popup-theme-apple = Apple
+popup-theme-built-in = Встроенная
+popup-theme-vscode = Тема VS Code
+vscode-themes = Темы VS Code
+vscode-themes-description = Импортируйте пакет .vsix или файл цветовой темы .json. Темы меняют цвета только во всплывающем окне.
+import-theme = Импортировать тему
+importing-theme = Импорт…
+remove-theme = Удалить тему
+browse-open-vsx = Каталог Open VSX
+browse-open-vsx-description = Поиск и установка цветовых тем из каталога open-vsx.org
+search-color-themes = Поиск цветовых тем
+open-vsx-search = Найти
+open-vsx-searching = Поиск…
+no-themes-found = Цветовые темы не найдены
+open-vsx-install = Установить
+open-vsx-installed = Установлено
+open-vsx-installing = Установка…
+theme-installed = Тема установлена
+theme-install-failed = Не удалось установить тему
+theme-remove-failed = Не удалось удалить тему
 
 # src/settings_window/appearance.rs
 acrylic = Акрил

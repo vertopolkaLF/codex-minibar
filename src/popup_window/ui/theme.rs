@@ -5,9 +5,12 @@
 //! accent roles follow the Fluent mapping shared with the
 //! Settings window (fill = Light2/Dark1, text = Light3/Dark2).
 
+use std::sync::Arc;
+
 use gpui::{Hsla, Rgba, SharedString};
 
 use crate::settings::{AccentColor, AppTheme, PopupBackgroundMaterial, PopupTheme, ProviderKind};
+use crate::vscode_themes::VsCodeTheme;
 
 /// Family name of the bundled Geist faces used by the Vercel popup theme.
 pub(crate) const GEIST_FAMILY: &str = "Geist";
@@ -85,7 +88,27 @@ pub(crate) fn popup_font_family(
         // SF Pro is licensed for Apple platforms only; Segoe UI Variable is
         // the closest system face on Windows.
         PopupTheme::Apple => ui_font_family(custom, default),
+        // VS Code themes carry colors only.
+        PopupTheme::VsCode => ui_font_family(custom, default),
     }
+}
+
+/// The installed VS Code theme the popup paints with: only while it is the
+/// selected design and still installed.
+pub(crate) fn selected_vscode_theme(
+    theme: PopupTheme,
+    id: Option<&str>,
+) -> Option<Arc<VsCodeTheme>> {
+    if theme != PopupTheme::VsCode {
+        return None;
+    }
+    crate::vscode_themes::get(id?)
+}
+
+/// Light or dark for a palette: a VS Code theme has a fixed base, every
+/// built-in design follows the app theme.
+pub(crate) fn palette_dark(vscode: Option<&VsCodeTheme>, app_dark: bool) -> bool {
+    vscode.map_or(app_dark, |theme| theme.kind.is_dark())
 }
 
 /// The UI family to render with: the user's pick, or the system default.
@@ -144,6 +167,8 @@ pub(crate) struct Palette {
     pub(crate) chart_grid: Hsla,
     pub(crate) mono_provider_icon: Hsla,
     pub(crate) material: PopupBackgroundMaterial,
+    /// The VS Code theme this palette was mapped from.
+    pub(crate) vscode: Option<Arc<VsCodeTheme>>,
 }
 
 impl Palette {
@@ -175,8 +200,11 @@ impl Palette {
         self.solid_background.opacity(opacity)
     }
 
+    /// `vscode` is the theme from [`selected_vscode_theme`]; a VS Code
+    /// selection whose theme is gone renders as Fluent.
     pub(crate) fn new(
         theme: PopupTheme,
+        vscode: Option<Arc<VsCodeTheme>>,
         dark: bool,
         accent: crate::theme::AccentRamp,
         material: PopupBackgroundMaterial,
@@ -186,6 +214,13 @@ impl Palette {
             PopupTheme::Fluent => Self::fluent(dark, accent, material, font_family),
             PopupTheme::Vercel => Self::vercel(dark, material, font_family),
             PopupTheme::Apple => Self::apple(dark, material, font_family),
+            PopupTheme::VsCode => match vscode {
+                Some(vscode) => Self::vscode(vscode, material, font_family),
+                None => Self {
+                    theme: PopupTheme::VsCode,
+                    ..Self::fluent(dark, accent, material, font_family)
+                },
+            },
         }
     }
 
@@ -197,7 +232,7 @@ impl Palette {
         accent: crate::theme::AccentRamp,
     ) -> Hsla {
         match theme {
-            PopupTheme::Fluent => rgb8(accent.fill(dark)),
+            PopupTheme::Fluent | PopupTheme::VsCode => rgb8(accent.fill(dark)),
             PopupTheme::Vercel => vercel_gray_1000(dark),
             PopupTheme::Apple => apple_action_blue(dark),
         }
@@ -330,6 +365,7 @@ impl Palette {
                 rgb8((96, 96, 96))
             },
             material,
+            vscode: None,
         }
     }
 
@@ -386,6 +422,7 @@ impl Palette {
             chart_grid: gray_alpha(0.081, 0.09),
             mono_provider_icon: gray_900,
             material,
+            vscode: None,
         }
     }
 
@@ -446,6 +483,185 @@ impl Palette {
             chart_grid: ink(dark, if dark { 0x1A } else { 0x14 }),
             mono_provider_icon: ink_secondary,
             material,
+            vscode: None,
+        }
+    }
+
+    /// A VS Code theme's workbench colors mapped onto popup roles: the side
+    /// bar is the canvas, editor surfaces are cards, the activity bar drives
+    /// the footer glyphs and the primary button is the accent. Keys a theme
+    /// omits fall back to VS Code's own Dark/Light Modern defaults.
+    fn vscode(
+        theme: Arc<VsCodeTheme>,
+        material: PopupBackgroundMaterial,
+        font_family: SharedString,
+    ) -> Self {
+        let dark = theme.kind.is_dark();
+        let pick =
+            |light: (u8, u8, u8), dark_rgb: (u8, u8, u8)| rgb8(if dark { dark_rgb } else { light });
+        let color = |keys: &[&str]| {
+            keys.iter()
+                .find_map(|key| theme.color(key))
+                .map(|[r, g, b, a]| rgba8(r, g, b, a))
+        };
+        let editor = flatten(
+            color(&["editor.background"])
+                .unwrap_or_else(|| pick((0xFF, 0xFF, 0xFF), (0x1F, 0x1F, 0x1F))),
+            pick((0xFF, 0xFF, 0xFF), (0x00, 0x00, 0x00)),
+        );
+        let canvas = flatten(
+            color(&[
+                "sideBar.background",
+                "panel.background",
+                "editorGroupHeader.tabsBackground",
+            ])
+            .unwrap_or(editor),
+            editor,
+        );
+        // Cards lift off the canvas; themes that paint both alike get a tint.
+        let card_background = if contrast(editor, canvas) < 1.04 {
+            let ink = color(&["foreground"]).unwrap_or_else(|| pick((0, 0, 0), (255, 255, 255)));
+            canvas.mix(flatten(ink, canvas), if dark { 0.05 } else { 0.03 })
+        } else {
+            editor
+        };
+        // Many themes keep `foreground` muted and brighten only editor text;
+        // card titles take whichever reads best.
+        let mut foreground = ["foreground", "editor.foreground", "sideBar.foreground"]
+            .into_iter()
+            .filter_map(|key| color(&[key]))
+            .map(|ink| flatten(ink, card_background))
+            .max_by(|a, b| contrast(*a, card_background).total_cmp(&contrast(*b, card_background)))
+            .unwrap_or_else(|| pick((0x3B, 0x3B, 0x3B), (0xCC, 0xCC, 0xCC)));
+        // A theme whose text barely shows on its own cards is unreadable here.
+        if contrast(foreground, card_background) < 3.0 {
+            foreground = pick((0x1F, 0x1F, 0x1F), (0xF0, 0xF0, 0xF0));
+        }
+        let tone = |alpha: f32| foreground.alpha(alpha);
+        // Usage bars must stand out from their card, and many themes use a
+        // muted gray for buttons: take the first accent role that does.
+        let accents = [
+            ("button.background", "button.foreground"),
+            ("activityBarBadge.background", "activityBarBadge.foreground"),
+            ("progressBar.background", ""),
+            ("focusBorder", ""),
+            ("textLink.foreground", ""),
+        ]
+        .into_iter()
+        .filter_map(|(fill, ink)| {
+            let fill = flatten(color(&[fill])?, card_background);
+            Some((fill, contrast(fill, card_background), ink))
+        })
+        .collect::<Vec<_>>();
+        let (accent, accent_ink) = accents
+            .iter()
+            .find(|(_, contrast, _)| *contrast >= 2.2)
+            .or_else(|| accents.iter().max_by(|a, b| a.1.total_cmp(&b.1)))
+            .map_or((rgb8((0x00, 0x78, 0xD4)), ""), |&(fill, _, ink)| {
+                (fill, ink)
+            });
+        let text_on_accent = color(&[accent_ink])
+            .map(|ink| flatten(ink, accent))
+            .filter(|ink| contrast(*ink, accent) >= 2.5)
+            .unwrap_or_else(|| {
+                let white = rgb8((0xFF, 0xFF, 0xFF));
+                let black = rgb8((0x00, 0x00, 0x00));
+                if contrast(white, accent) >= contrast(black, accent) {
+                    white
+                } else {
+                    black
+                }
+            });
+        let critical = color(&[
+            "errorForeground",
+            "editorError.foreground",
+            "list.errorForeground",
+        ])
+        .map(|ink| flatten(ink, card_background))
+        .unwrap_or_else(|| pick((0xA1, 0x26, 0x0D), (0xF4, 0x87, 0x71)));
+        let caution = color(&["editorWarning.foreground", "list.warningForeground"])
+            .map(|ink| flatten(ink, card_background))
+            .unwrap_or_else(|| pick((0xBF, 0x88, 0x03), (0xCC, 0xA7, 0x00)));
+        // Secondary text has to sit visibly below the titles.
+        let primary_contrast = contrast(foreground, card_background);
+        let text_secondary = color(&["descriptionForeground", "foreground"])
+            .map(|ink| flatten(ink, card_background))
+            .filter(|ink| {
+                let ratio = contrast(*ink, card_background);
+                ratio >= 2.5 && ratio < primary_contrast * 0.9
+            })
+            .unwrap_or_else(|| tone(0.78));
+        Self {
+            theme: PopupTheme::VsCode,
+            dark,
+            card_radius: crate::popup::CARD_CORNER_RADIUS_DIP as f32,
+            control_radius: 4.0,
+            card_gap: 6.0,
+            font_family,
+            text_primary: foreground,
+            text_secondary,
+            text_tertiary: tone(0.58),
+            text_on_accent,
+            accent,
+            card_background,
+            card_stroke: color(&[
+                "widget.border",
+                "editorWidget.border",
+                "panel.border",
+                "contrastBorder",
+            ])
+            .unwrap_or_else(|| tone(if dark { 0.08 } else { 0.10 })),
+            subtle_fill: color(&["list.hoverBackground", "toolbar.hoverBackground"])
+                .unwrap_or_else(|| tone(if dark { 0.06 } else { 0.04 })),
+            // Usage tracks and hover plates must read on any card color, so
+            // they are tinted from the text rather than taken from input
+            // backgrounds that often match the editor.
+            control_fill: tone(if dark { 0.10 } else { 0.08 }),
+            divider: color(&[
+                "editorGroup.border",
+                "panel.border",
+                "sideBarSectionHeader.border",
+            ])
+            .filter(|line| line.a > 0.0)
+            .unwrap_or_else(|| tone(0.10)),
+            solid_background: canvas,
+            tooltip_background: flatten(
+                color(&[
+                    "editorHoverWidget.background",
+                    "editorWidget.background",
+                    "menu.background",
+                ])
+                .unwrap_or(card_background),
+                card_background,
+            ),
+            // A tint toward the activity bar, so translucent materials keep
+            // showing through the footer band.
+            footer_background: color(&["activityBar.background"])
+                .map(|band| band.alpha(0.55))
+                .unwrap_or_else(|| rgba8(0, 0, 0, 0)),
+            critical,
+            critical_background: color(&["inputValidation.errorBackground"])
+                .map(|fill| flatten(fill, card_background))
+                .unwrap_or_else(|| card_background.mix(critical, 0.16)),
+            attention_background: tone(if dark { 0.04 } else { 0.03 }),
+            caution,
+            caution_background: color(&["inputValidation.warningBackground"])
+                .map(|fill| flatten(fill, card_background))
+                .unwrap_or_else(|| card_background.mix(caution, 0.16)),
+            chrome_icon: color(&["activityBar.inactiveForeground"])
+                .map(|ink| flatten(ink, canvas))
+                .filter(|ink| contrast(*ink, canvas) >= 2.0)
+                .unwrap_or(text_secondary),
+            chrome_icon_hover: color(&["activityBar.foreground"])
+                .map(|ink| flatten(ink, canvas))
+                .filter(|ink| contrast(*ink, canvas) >= 3.0)
+                .unwrap_or(foreground),
+            pace_marker: foreground,
+            interval_tick: rgba8(0, 0, 0, 0x44),
+            chart_grid: tone(if dark { 0.12 } else { 0.10 }),
+            mono_provider_icon: text_secondary,
+            material,
+            vscode: Some(theme),
         }
     }
 
@@ -574,6 +790,37 @@ fn apple_action_blue(dark: bool) -> Hsla {
     })
 }
 
+/// `color` composited over an opaque `base`.
+fn flatten(color: Hsla, base: Hsla) -> Hsla {
+    let top = color.to_rgb();
+    let under = base.to_rgb();
+    let t = top.a.clamp(0.0, 1.0);
+    Rgba {
+        r: under.r + (top.r - under.r) * t,
+        g: under.g + (top.g - under.g) * t,
+        b: under.b + (top.b - under.b) * t,
+        a: 1.0,
+    }
+    .into()
+}
+
+/// WCAG contrast ratio between two opaque colors.
+fn contrast(a: Hsla, b: Hsla) -> f32 {
+    fn luminance(color: Hsla) -> f32 {
+        let rgb = color.to_rgb();
+        let channel = |value: f32| {
+            if value <= 0.039_28 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b)
+    }
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
 /// Resolve Auto against the window's system appearance.
 pub(crate) fn resolve_dark(theme: AppTheme, system_dark: bool) -> bool {
     match theme {
@@ -616,5 +863,85 @@ impl HslaExt for Hsla {
             a: a.a + (b.a - a.a) * t,
         }
         .into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vscode_themes::{ThemeKind, ThemeSource};
+
+    fn vscode(kind: ThemeKind, colors: &[(&str, &str)]) -> Palette {
+        let theme = VsCodeTheme {
+            id: "test".into(),
+            label: "Test".into(),
+            extension: None,
+            kind,
+            source: ThemeSource::File {
+                name: "test.json".into(),
+            },
+            colors: colors
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect(),
+        };
+        Palette::vscode(
+            Arc::new(theme),
+            PopupBackgroundMaterial::Solid,
+            "Segoe UI".into(),
+        )
+    }
+
+    fn bytes(color: Hsla) -> (u8, u8, u8) {
+        let rgb = color.to_rgb();
+        let byte = |value: f32| (value * 255.0).round() as u8;
+        (byte(rgb.r), byte(rgb.g), byte(rgb.b))
+    }
+
+    #[test]
+    fn themes_without_colors_stay_readable() {
+        for kind in [ThemeKind::Dark, ThemeKind::Light] {
+            let palette = vscode(kind, &[]);
+            assert_eq!(palette.dark, kind.is_dark());
+            assert!(contrast(palette.text_primary, palette.card_background) >= 4.5);
+            assert!(contrast(palette.accent, palette.card_background) >= 2.2);
+        }
+    }
+
+    #[test]
+    fn muted_buttons_hand_the_accent_to_a_visible_role() {
+        // Dracula: gray buttons, purple badge.
+        let palette = vscode(
+            ThemeKind::Dark,
+            &[
+                ("editor.background", "#282a36"),
+                ("sideBar.background", "#21222c"),
+                ("foreground", "#f8f8f2"),
+                ("button.background", "#44475a"),
+                ("activityBarBadge.background", "#bd93f9"),
+                ("activityBarBadge.foreground", "#f8f8f2"),
+            ],
+        );
+        assert_eq!(bytes(palette.accent), (0xbd, 0x93, 0xf9));
+        assert_eq!(bytes(palette.solid_background), (0x21, 0x22, 0x2c));
+        assert_eq!(bytes(palette.card_background), (0x28, 0x2a, 0x36));
+    }
+
+    #[test]
+    fn titles_use_the_brightest_foreground() {
+        let palette = vscode(
+            ThemeKind::Dark,
+            &[
+                ("editor.background", "#1a1b26"),
+                ("foreground", "#787c99"),
+                ("editor.foreground", "#a9b1d6"),
+            ],
+        );
+        assert_eq!(bytes(palette.text_primary), (0xa9, 0xb1, 0xd6));
+        let secondary = flatten(palette.text_secondary, palette.card_background);
+        assert!(
+            contrast(secondary, palette.card_background)
+                < contrast(palette.text_primary, palette.card_background)
+        );
     }
 }

@@ -99,6 +99,9 @@ fn source(name: &str) -> Option<&'static str> {
         "house-fill" => include_str!("../../../assets/icons/ph-house-fill.svg"),
         "info-fill" => include_str!("../../../assets/icons/ph-info-fill.svg"),
         "key-fill" => include_str!("../../../assets/icons/ph-key-fill.svg"),
+        "magnifying-glass-bold" => {
+            include_str!("../../../assets/icons/ph-magnifying-glass-bold.svg")
+        }
         "package-fill" => include_str!("../../../assets/icons/ph-package-fill.svg"),
         "paint-brush-fill" => include_str!("../../../assets/icons/ph-paint-brush-fill.svg"),
         "pencil-simple-fill" => include_str!("../../../assets/icons/ph-pencil-simple-fill.svg"),
@@ -107,6 +110,7 @@ fn source(name: &str) -> Option<&'static str> {
         "plus-fill" => include_str!("../../../assets/icons/ph-plus-fill.svg"),
         "puzzle-piece-fill" => include_str!("../../../assets/icons/ph-puzzle-piece-fill.svg"),
         "scroll-fill" => include_str!("../../../assets/icons/ph-scroll-fill.svg"),
+        "seal-check-fill" => include_str!("../../../assets/icons/ph-seal-check-fill.svg"),
         "sign-in-bold" => include_str!("../../../assets/icons/ph-sign-in-bold.svg"),
         "sparkle-fill" => include_str!("../../../assets/icons/ph-sparkle-fill.svg"),
         "squares-four-fill" => include_str!("../../../assets/icons/ph-squares-four-fill.svg"),

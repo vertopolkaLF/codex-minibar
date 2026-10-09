@@ -43,6 +43,7 @@ mod providers;
 pub(crate) mod theme;
 mod tray;
 mod troubleshoot;
+mod vscode_themes;
 mod window;
 
 #[cfg(test)]

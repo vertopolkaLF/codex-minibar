@@ -500,6 +500,25 @@ popup-theme-description = 仅更改弹出窗口。设置窗口保持 Windows 外
 popup-theme-fluent = Fluent
 popup-theme-vercel = Vercel
 popup-theme-apple = Apple
+popup-theme-built-in = 内置
+popup-theme-vscode = VS Code 主题
+vscode-themes = VS Code 主题
+vscode-themes-description = 导入 .vsix 扩展包或颜色主题 .json 文件。主题只会改变弹出窗口的配色。
+import-theme = 导入主题
+importing-theme = 正在导入…
+remove-theme = 删除主题
+browse-open-vsx = 浏览 Open VSX
+browse-open-vsx-description = 从 open-vsx.org 查找并安装颜色主题
+search-color-themes = 搜索颜色主题
+open-vsx-search = 搜索
+open-vsx-searching = 正在搜索…
+no-themes-found = 未找到颜色主题
+open-vsx-install = 安装
+open-vsx-installed = 已安装
+open-vsx-installing = 正在安装…
+theme-installed = 主题已安装
+theme-install-failed = 无法安装主题
+theme-remove-failed = 无法删除主题
 
 acrylic = 亚克力
 

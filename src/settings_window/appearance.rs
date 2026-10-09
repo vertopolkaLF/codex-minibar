@@ -1,17 +1,29 @@
 //! Appearance: theme, accent, font, icons, time format, popup material and motion.
 
+use std::sync::Arc;
+
 use gpui::{
     AnyElement, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, div, prelude::FluentBuilder, px, relative,
+    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px, relative,
 };
 
-use super::kit::{self, Kit, Row, SliderRange, eid};
+use super::kit::{self, Button, ButtonSize, Kit, Row, SliderRange, eid};
 use super::window::SettingsWindow;
 use crate::popup_window::ui::theme::{self as popup_theme, Palette, rgb8};
 use crate::settings::{
     AccentColor, AppTheme, BottomBarSize, PopupBackgroundMaterial, PopupCornerRadius, PopupTheme,
     TimeFormat,
 };
+use crate::vscode_themes::VsCodeTheme;
+
+/// Popup theme cards per row.
+const THEME_COLUMNS: usize = 3;
+
+/// One card in the popup theme grid.
+enum ThemeChoice {
+    Builtin(PopupTheme),
+    VsCode(Arc<VsCodeTheme>),
+}
 
 const ACCENTS: [AccentColor; 8] = [
     AccentColor::Windows,
@@ -28,6 +40,7 @@ impl SettingsWindow {
     pub(super) fn appearance_page(
         &mut self,
         k: &mut Kit,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let s = &self.settings;
@@ -102,11 +115,8 @@ impl SettingsWindow {
             ]
         });
 
-        let popup_theme_cards = div().flex().gap(px(12.0)).w_full().children(
-            PopupTheme::ALL
-                .into_iter()
-                .map(|value| self.popup_theme_card(k, value, cx)),
-        );
+        let popup_theme_cards = self.popup_theme_grid(k, cx);
+        let import_row = self.vscode_import_row(k, cx);
         let themes = kit::card_of(k, |k| {
             vec![
                 Row::new("appearance-popup-theme", crate::i18n::tr("popup-theme"))
@@ -118,8 +128,10 @@ impl SettingsWindow {
                             .into_any_element(),
                     )
                     .render(k),
+                import_row,
             ]
         });
+        let open_vsx = self.open_vsx_browser(k, window, cx);
 
         let radius_value = radius.dip();
         let popup = kit::card_of(k, |k| {
@@ -210,6 +222,7 @@ impl SettingsWindow {
             look,
             kit::section_heading(k, crate::i18n::tr("popup")),
             themes,
+            open_vsx,
             popup,
             kit::section_heading(k, crate::i18n::tr("motion")),
             motion,
@@ -314,15 +327,70 @@ impl SettingsWindow {
         .into_any_element()
     }
 
+    /// Built-in designs followed by every installed VS Code theme, in rows.
+    fn popup_theme_grid(&self, k: &Kit, cx: &mut Context<Self>) -> AnyElement {
+        let installed = crate::vscode_themes::installed();
+        let choices = PopupTheme::ALL
+            .into_iter()
+            .map(ThemeChoice::Builtin)
+            .chain(installed.iter().cloned().map(ThemeChoice::VsCode));
+        let mut rows = Vec::new();
+        let mut row = Vec::with_capacity(THEME_COLUMNS);
+        for choice in choices {
+            row.push(self.popup_theme_card(k, choice, cx));
+            if row.len() == THEME_COLUMNS {
+                rows.push(std::mem::take(&mut row));
+            }
+        }
+        if !row.is_empty() {
+            // Keep the last row's cards the same width as the ones above.
+            while row.len() < THEME_COLUMNS {
+                row.push(div().flex_1().into_any_element());
+            }
+            rows.push(row);
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .w_full()
+            .children(
+                rows.into_iter()
+                    .map(|cards| div().flex().gap(px(12.0)).w_full().children(cards)),
+            )
+            .into_any_element()
+    }
+
     /// A miniature popup painted with one popup theme's own palette, in the
-    /// light or dark mode Settings currently resolves to.
-    fn popup_theme_card(&self, k: &Kit, value: PopupTheme, cx: &mut Context<Self>) -> AnyElement {
+    /// light or dark mode Settings currently resolves to (VS Code themes
+    /// always show their own base).
+    fn popup_theme_card(&self, k: &Kit, choice: ThemeChoice, cx: &mut Context<Self>) -> AnyElement {
         let theme = &k.theme;
-        let selected = self.settings.popup_theme == value;
-        let label = match value {
-            PopupTheme::Fluent => crate::i18n::tr("popup-theme-fluent"),
-            PopupTheme::Vercel => crate::i18n::tr("popup-theme-vercel"),
-            PopupTheme::Apple => crate::i18n::tr("popup-theme-apple"),
+        let (value, vscode) = match choice {
+            ThemeChoice::Builtin(value) => (value, None),
+            ThemeChoice::VsCode(vscode) => (PopupTheme::VsCode, Some(vscode)),
+        };
+        let selected = self.settings.popup_theme == value
+            && vscode.as_ref().is_none_or(|vscode| {
+                self.settings.popup_vscode_theme.as_deref() == Some(vscode.id.as_str())
+            });
+        let label: SharedString = match value {
+            PopupTheme::Fluent => crate::i18n::tr("popup-theme-fluent").into(),
+            PopupTheme::Vercel => crate::i18n::tr("popup-theme-vercel").into(),
+            PopupTheme::Apple => crate::i18n::tr("popup-theme-apple").into(),
+            PopupTheme::VsCode => vscode.as_ref().map_or_else(
+                || crate::i18n::tr("popup-theme-vscode").into(),
+                |vscode| vscode.label.clone().into(),
+            ),
+        };
+        // Every card carries a caption line so a row's cards stay level.
+        let caption: SharedString = match &vscode {
+            Some(vscode) => vscode
+                .extension
+                .clone()
+                .unwrap_or_else(|| crate::i18n::tr("popup-theme-vscode").to_owned())
+                .into(),
+            None => crate::i18n::tr("popup-theme-built-in").into(),
         };
         let font = popup_theme::popup_font_family(
             value,
@@ -331,11 +399,13 @@ impl SettingsWindow {
         );
         let palette = Palette::new(
             value,
-            theme.dark,
+            vscode.clone(),
+            popup_theme::palette_dark(vscode.as_deref(), theme.dark),
             crate::theme::accent_ramp(self.settings.accent_color),
             PopupBackgroundMaterial::Solid,
             font.clone(),
         );
+        let vscode_id = vscode.as_ref().map(|vscode| vscode.id.clone());
         let line = |width: f32, color| div().h(px(4.0)).w(relative(width)).rounded_full().bg(color);
         let mock_card = |fill: f32| {
             div()
@@ -389,13 +459,53 @@ impl SettingsWindow {
                     .child(div().size(px(6.0)).rounded_full().bg(palette.chrome_icon)),
             );
         let hover = theme.card_hover;
-        let card_id = format!("popup-theme-card-{label}");
+        let card_id = match &vscode_id {
+            Some(id) => format!("popup-theme-card-vscode-{id}"),
+            None => format!("popup-theme-card-{label}"),
+        };
         let rest = if selected {
             theme.accent_soft
         } else {
             theme.card
         };
-        kit::hover_bg(
+        let remove = vscode_id.clone().map(|id| {
+            Button::icon_only(format!("{card_id}-remove"), "trash-fill")
+                .ghost()
+                .size(ButtonSize::Small)
+                .tooltip(crate::i18n::tr("remove-theme"))
+                .on_click(Self::h(cx, move |this, (), _, cx| {
+                    this.remove_vscode_theme(id.clone(), cx)
+                }))
+                .render(k)
+        });
+        let title = div()
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(px(13.0))
+                            .font_family(font)
+                            .when(selected, |el| el.font_weight(FontWeight::SEMIBOLD))
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(px(11.0))
+                            .text_color(theme.text_tertiary)
+                            .child(caption),
+                    ),
+            )
+            .children(remove);
+        let card = kit::hover_bg(
             k,
             div().id(eid(card_id.clone())),
             kit::hover_key(&card_id),
@@ -403,6 +513,7 @@ impl SettingsWindow {
             if selected { rest } else { hover },
         )
         .flex_1()
+        .min_w_0()
         .flex()
         .flex_col()
         .gap(px(8.0))
@@ -411,19 +522,26 @@ impl SettingsWindow {
         .shadow(kit::card_shadow(theme))
         .cursor_pointer()
         .on_click(cx.listener(move |this, _, _, cx| {
-            if this.settings.popup_theme != value {
-                this.edit(cx, move |settings| settings.popup_theme = value);
+            if selected {
+                return;
+            }
+            match vscode_id.clone() {
+                Some(id) => this.select_vscode_theme(id, cx),
+                None => this.edit(cx, move |settings| settings.popup_theme = value),
             }
         }))
         .child(preview)
-        .child(
-            div()
-                .text_size(px(13.0))
-                .font_family(font)
-                .when(selected, |el| el.font_weight(FontWeight::SEMIBOLD))
-                .child(label),
-        )
-        .into_any_element()
+        .child(title)
+        .into_any_element();
+        // Newly installed themes fade in rather than popping into the grid.
+        match &vscode {
+            Some(_) => div()
+                .flex_1()
+                .min_w_0()
+                .child(kit::appear(k, card_id, card))
+                .into_any_element(),
+            None => card,
+        }
     }
 
     /// Installed font families, led by the Windows default.

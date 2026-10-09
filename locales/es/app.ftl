@@ -503,6 +503,25 @@ popup-theme-description = Solo cambia la ventana emergente. La configuración ma
 popup-theme-fluent = Fluent
 popup-theme-vercel = Vercel
 popup-theme-apple = Apple
+popup-theme-built-in = Integrado
+popup-theme-vscode = Tema de VS Code
+vscode-themes = Temas de VS Code
+vscode-themes-description = Importa un paquete .vsix o un archivo .json de tema de color. Los temas solo cambian los colores de la ventana emergente.
+import-theme = Importar tema
+importing-theme = Importando…
+remove-theme = Quitar tema
+browse-open-vsx = Explorar Open VSX
+browse-open-vsx-description = Busca e instala temas de color del registro open-vsx.org
+search-color-themes = Buscar temas de color
+open-vsx-search = Buscar
+open-vsx-searching = Buscando…
+no-themes-found = No se encontraron temas de color
+open-vsx-install = Instalar
+open-vsx-installed = Instalado
+open-vsx-installing = Instalando…
+theme-installed = Tema instalado
+theme-install-failed = No se pudo instalar el tema
+theme-remove-failed = No se pudo quitar el tema
 
 acrylic = Acrílico
 

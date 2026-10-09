@@ -34,5 +34,6 @@ pub mod troubleshoot;
 pub mod updater;
 pub mod usage;
 pub mod usage_overview;
+pub mod vscode_themes;
 pub mod widget_data;
 pub mod worker;

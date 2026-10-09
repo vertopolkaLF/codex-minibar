@@ -277,9 +277,14 @@ impl PopupRoot {
     ) -> Self {
         let ui = initial_ui_state(&state);
         let accent = theme::accent_ramp(ui.accent_color);
-        let dark = theme::resolve_dark(ui.theme, system_dark(window));
+        let vscode = theme::selected_vscode_theme(ui.popup_theme, ui.popup_vscode_theme.as_deref());
+        let dark = theme::palette_dark(
+            vscode.as_deref(),
+            theme::resolve_dark(ui.theme, system_dark(window)),
+        );
         let palette = Palette::new(
             ui.popup_theme,
+            vscode,
             dark,
             accent,
             crate::popup::background_material(),
@@ -388,19 +393,32 @@ impl PopupRoot {
     }
 
     pub(super) fn refresh_palette(&mut self, window: &Window) {
-        let dark = theme::resolve_dark(self.ui.theme, system_dark(window));
-        let material = crate::popup::background_material();
         let popup_theme = self.ui.popup_theme;
+        // Looked up on every refresh: reinstalling a theme replaces its entry.
+        let vscode =
+            theme::selected_vscode_theme(popup_theme, self.ui.popup_vscode_theme.as_deref());
+        let dark = theme::palette_dark(
+            vscode.as_deref(),
+            theme::resolve_dark(self.ui.theme, system_dark(window)),
+        );
+        let material = crate::popup::background_material();
         let font = theme::popup_font_family(
             popup_theme,
             self.ui.font_family.as_deref(),
             &self.default_font,
         );
+        let same_vscode = match (&self.palette.vscode, &vscode) {
+            (Some(current), Some(next)) => Arc::ptr_eq(current, next),
+            (None, None) => true,
+            _ => false,
+        };
         if self.palette.theme != popup_theme
+            || !same_vscode
             || self.palette.dark != dark
             || self.palette.font_family != font
             || self.palette.material != material
-            || self.palette.accent != Palette::accent_for(popup_theme, dark, self.accent)
+            || (vscode.is_none()
+                && self.palette.accent != Palette::accent_for(popup_theme, dark, self.accent))
         {
             #[cfg(windows)]
             if (self.palette.material != material || self.palette.dark != dark)
@@ -408,7 +426,7 @@ impl PopupRoot {
             {
                 backdrop.set_appearance(material, dark);
             }
-            self.palette = Palette::new(popup_theme, dark, self.accent, material, font);
+            self.palette = Palette::new(popup_theme, vscode, dark, self.accent, material, font);
         }
     }
 

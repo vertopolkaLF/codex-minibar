@@ -1034,6 +1034,82 @@ popup-theme-vercel = { "" }
 popup-theme-apple = { "" }
 
 # English source:
+# popup-theme-built-in = Built-in
+popup-theme-built-in = { "" }
+
+# English source:
+# popup-theme-vscode = VS Code theme
+popup-theme-vscode = { "" }
+
+# English source:
+# vscode-themes = VS Code themes
+vscode-themes = { "" }
+
+# English source:
+# vscode-themes-description = Import a .vsix package or a color theme .json file. Themes recolor the popup only.
+vscode-themes-description = { "" }
+
+# English source:
+# import-theme = Import theme
+import-theme = { "" }
+
+# English source:
+# importing-theme = Importing…
+importing-theme = { "" }
+
+# English source:
+# remove-theme = Remove theme
+remove-theme = { "" }
+
+# English source:
+# browse-open-vsx = Browse Open VSX
+browse-open-vsx = { "" }
+
+# English source:
+# browse-open-vsx-description = Find and install color themes from the open-vsx.org registry
+browse-open-vsx-description = { "" }
+
+# English source:
+# search-color-themes = Search color themes
+search-color-themes = { "" }
+
+# English source:
+# open-vsx-search = Search
+open-vsx-search = { "" }
+
+# English source:
+# open-vsx-searching = Searching…
+open-vsx-searching = { "" }
+
+# English source:
+# no-themes-found = No color themes found
+no-themes-found = { "" }
+
+# English source:
+# open-vsx-install = Install
+open-vsx-install = { "" }
+
+# English source:
+# open-vsx-installed = Installed
+open-vsx-installed = { "" }
+
+# English source:
+# open-vsx-installing = Installing…
+open-vsx-installing = { "" }
+
+# English source:
+# theme-installed = Theme installed
+theme-installed = { "" }
+
+# English source:
+# theme-install-failed = Couldn't install the theme
+theme-install-failed = { "" }
+
+# English source:
+# theme-remove-failed = Couldn't remove the theme
+theme-remove-failed = { "" }
+
+# English source:
 # acrylic = Acrylic
 acrylic = { "" }
 

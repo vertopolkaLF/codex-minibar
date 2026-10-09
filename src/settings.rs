@@ -317,9 +317,13 @@ pub enum PopupTheme {
     Vercel,
     /// Apple's web system: parchment canvas, soft cards, Action Blue accent.
     Apple,
+    /// An installed VS Code color theme, named by `popup_vscode_theme`.
+    #[serde(rename = "vscode")]
+    VsCode,
 }
 
 impl PopupTheme {
+    /// The built-in designs; VS Code themes are listed from the library.
     pub const ALL: [Self; 3] = [Self::Fluent, Self::Vercel, Self::Apple];
 }
 
@@ -1737,6 +1741,9 @@ pub struct Settings {
     pub popup_background_material: PopupBackgroundMaterial,
     /// Design language of the popup only.
     pub popup_theme: PopupTheme,
+    /// Installed VS Code theme id used while `popup_theme` is `VsCode`. A
+    /// theme that is no longer installed falls back to Fluent.
+    pub popup_vscode_theme: Option<String>,
     /// 12-hour or 24-hour clocks. Missing values follow the Windows locale.
     pub time_format: TimeFormat,
     /// Provider instances in the user's order for the Settings sidebar and
@@ -1812,6 +1819,7 @@ impl Default for Settings {
             popup_corner_radius: PopupCornerRadius::default(),
             popup_background_material: PopupBackgroundMaterial::default(),
             popup_theme: PopupTheme::default(),
+            popup_vscode_theme: None,
             time_format: TimeFormat::from_windows(),
             instances: ProviderKind::ALL
                 .into_iter()
@@ -3562,7 +3570,8 @@ show_usage_stats = false
             bottom_bar_size: BottomBarSize::Compact,
             popup_corner_radius: PopupCornerRadius::Large,
             popup_background_material: PopupBackgroundMaterial::Solid,
-            popup_theme: PopupTheme::Vercel,
+            popup_theme: PopupTheme::VsCode,
+            popup_vscode_theme: Some("acme.night.night".into()),
             ..Default::default()
         };
         expected.save(&path).unwrap();

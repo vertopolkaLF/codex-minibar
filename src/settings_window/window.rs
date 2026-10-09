@@ -99,6 +99,7 @@ pub(crate) struct SettingsWindow {
     /// Dialogs that are open or still playing their exit transition.
     pub(super) overlays: Overlays,
     pub(super) tray_previews: super::tray::PreviewCache,
+    pub(super) theme_browser: super::vscode_themes::ThemeBrowser,
     _poll: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
@@ -196,6 +197,7 @@ impl SettingsWindow {
             confirm_reset: false,
             overlays: Overlays::default(),
             tray_previews: Default::default(),
+            theme_browser: Default::default(),
             _poll: poll,
             _subscriptions: subscriptions,
         }
@@ -331,6 +333,11 @@ impl SettingsWindow {
         });
         self.commits.insert(id, Rc::new(on_commit));
         entity
+    }
+
+    /// The live input for `id`, if it has been built.
+    pub(super) fn input_entity(&self, id: &str) -> Option<Entity<TextInput>> {
+        self.inputs.get(id).cloned()
     }
 
     /// Drop inputs whose id starts with `prefix` (dialog fields), so the next
@@ -1138,7 +1145,10 @@ impl SettingsWindow {
             Page::Root(tab) => {
                 let (title, mut rows) = match tab {
                     Tab::General => (crate::i18n::tr("general"), self.general_page(k, window, cx)),
-                    Tab::Appearance => (crate::i18n::tr("appearance"), self.appearance_page(k, cx)),
+                    Tab::Appearance => (
+                        crate::i18n::tr("appearance"),
+                        self.appearance_page(k, window, cx),
+                    ),
                     Tab::Popup => (crate::i18n::tr("customize"), self.customize_page(k, cx)),
                     Tab::Schedule => (
                         crate::i18n::tr("limit-activation"),
