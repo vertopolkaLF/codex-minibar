@@ -59,8 +59,9 @@ pub(crate) fn text(value: impl Into<SharedString>, size: f32, line: f32, color: 
 /// between (upward when the value rose, downward when it fell), and glyphs
 /// fade as they leave the line, like a soft mask on its edges. Other
 /// characters (separators, a new leading digit) slide in or out while their
-/// slot eases between glyph widths. Shared leading symbols (`$`) stay put;
-/// the rest aligns on the right so decimals keep their columns.
+/// slot eases between glyph widths. See [`roll_pairs`] for how the old and
+/// new text line up. At rest it is a plain single-line text element, so
+/// callers may still wrap it in [`nowrap`].
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn rolling_text(
     frame: &RollFrame,
@@ -75,24 +76,9 @@ pub(crate) fn rolling_text(
         text(value, size, line, color)
             .font_weight(weight)
             .whitespace_nowrap()
-            .flex_none()
     };
     let Some(from) = frame.from.as_ref() else {
         return glyphs(frame.to.to_string());
-    };
-    let old: Vec<char> = from.chars().collect();
-    let new: Vec<char> = frame.to.chars().collect();
-    let prefix = old
-        .iter()
-        .zip(&new)
-        .take_while(|(a, b)| a == b && !a.is_ascii_digit())
-        .count();
-    let (old, new) = (&old[prefix..], &new[prefix..]);
-    let len = old.len().max(new.len());
-    let at = |chars: &[char], index: usize| {
-        (index + chars.len())
-            .checked_sub(len)
-            .map(|index| chars[index])
     };
     let width = |ch: Option<char>| {
         ch.map_or(0.0, |ch| {
@@ -112,15 +98,14 @@ pub(crate) fn rolling_text(
     let p = frame.progress;
     let travel = if frame.rising { 1.0 } else { -1.0 };
     let mut row = div().flex().flex_row().flex_none().h(px(line));
-    let mut run: String = frame.to.chars().take(prefix).collect();
-    for index in 0..len {
-        let (before, after) = (at(old, index), at(new, index));
+    let mut run = String::new();
+    for (before, after) in roll_pairs(from, &frame.to) {
         if before == after {
             run.extend(after);
             continue;
         }
         if !run.is_empty() {
-            row = row.child(glyphs(std::mem::take(&mut run)));
+            row = row.child(glyphs(std::mem::take(&mut run)).flex_none());
         }
         let mut slot = div()
             .relative()
@@ -162,9 +147,73 @@ pub(crate) fn rolling_text(
         row = row.child(slot);
     }
     if !run.is_empty() {
-        row = row.child(glyphs(run));
+        row = row.child(glyphs(run).flex_none());
     }
     row
+}
+
+/// Pairs each character of `old` with the one it rolls into in `new`.
+///
+/// Texts that share their wording (`$996.00` / `$1,604.17`, `62.0% of cost
+/// · 51.6M` / `16.5% of cost · 714.4M`) pair number by number, each aligned
+/// on the right so decimals and thousands separators keep their columns.
+/// Otherwise (`4.5B` / `714.4M`) the shared non-digit prefix and suffix stay
+/// put and the rest aligns on the right.
+pub(crate) fn roll_pairs(old: &str, new: &str) -> Vec<(Option<char>, Option<char>)> {
+    let numeric = |ch: char| ch.is_ascii_digit() || ch == '.' || ch == ',';
+    let runs = |text: &str| {
+        let mut runs: Vec<(bool, Vec<char>)> = Vec::new();
+        for ch in text.chars() {
+            match runs.last_mut() {
+                Some((kind, chars)) if *kind == numeric(ch) => chars.push(ch),
+                _ => runs.push((numeric(ch), vec![ch])),
+            }
+        }
+        runs
+    };
+    let (a, b) = (runs(old), runs(new));
+    let same_wording = a.len() == b.len()
+        && a.iter()
+            .zip(&b)
+            .all(|((x, xs), (y, ys))| x == y && (*x || xs == ys));
+    let mut pairs = Vec::new();
+    if same_wording {
+        for ((_, xs), (_, ys)) in a.iter().zip(&b) {
+            right_aligned(xs, ys, &mut pairs);
+        }
+        return pairs;
+    }
+    let (a, b): (Vec<char>, Vec<char>) = (old.chars().collect(), new.chars().collect());
+    let fixed = |x: &&char, y: &&char| x == y && !x.is_ascii_digit();
+    let prefix = a.iter().zip(&b).take_while(|(x, y)| fixed(x, y)).count();
+    let suffix = a[prefix..]
+        .iter()
+        .rev()
+        .zip(b[prefix..].iter().rev())
+        .take_while(|(x, y)| fixed(x, y))
+        .count();
+    pairs.extend(b[..prefix].iter().map(|ch| (Some(*ch), Some(*ch))));
+    right_aligned(
+        &a[prefix..a.len() - suffix],
+        &b[prefix..b.len() - suffix],
+        &mut pairs,
+    );
+    pairs.extend(
+        b[b.len() - suffix..]
+            .iter()
+            .map(|ch| (Some(*ch), Some(*ch))),
+    );
+    pairs
+}
+
+fn right_aligned(old: &[char], new: &[char], pairs: &mut Vec<(Option<char>, Option<char>)>) {
+    let len = old.len().max(new.len());
+    let at = |chars: &[char], index: usize| {
+        (index + chars.len())
+            .checked_sub(len)
+            .map(|index| chars[index])
+    };
+    pairs.extend((0..len).map(|index| (at(old, index), at(new, index))));
 }
 
 pub(crate) fn caption(value: impl Into<SharedString>, color: Hsla) -> Div {
@@ -615,4 +664,28 @@ pub(crate) fn info_bar_with_action(
 /// The compact error glyph used in headings and footer tabs.
 pub(crate) fn error_badge(size: f32, palette: &Palette) -> gpui::Svg {
     icon("fluent-error-circle", size, palette.critical)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::roll_pairs;
+
+    fn changed(old: &str, new: &str) -> String {
+        roll_pairs(old, new)
+            .into_iter()
+            .map(|(a, b)| if a == b { '=' } else { '^' })
+            .collect()
+    }
+
+    #[test]
+    fn rolled_numbers_keep_their_wording_and_decimal_columns() {
+        assert_eq!(changed("$996.00", "$1,604.17"), "=^^^^^=^^");
+        assert_eq!(changed("7495 sessions", "336 sessions"), "^^^^=========");
+        assert_eq!(
+            changed("62.0% of cost · 51.6M", "16.5% of cost · 714.4M"),
+            "^^=^============^^^=^="
+        );
+        // Different suffixes: the whole value aligns on the right.
+        assert_eq!(changed("4.5B", "714.4M"), "^^==^^");
+    }
 }

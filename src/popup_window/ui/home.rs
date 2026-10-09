@@ -974,26 +974,42 @@ impl PopupRoot {
         line: f32,
         window: &Window,
     ) -> gpui::Div {
-        let frame = self.fx.roll(
+        let color = self.palette.text_primary;
+        self.rolling_label(
             fx::key((scope, "amount", provider)),
             format_spend_full(spend),
             spend,
-            fx::ROLL,
-        );
+            (size, line, gpui::FontWeight::SEMIBOLD, color),
+            window,
+        )
+        .flex_none()
+    }
+
+    /// A label whose changed digits roll from its previous text; `value`
+    /// orders the two texts so the digits spin up or down.
+    pub(super) fn rolling_label(
+        &mut self,
+        id: u64,
+        text: impl Into<SharedString>,
+        value: u64,
+        (size, line, weight, color): (f32, f32, gpui::FontWeight, Hsla),
+        window: &Window,
+    ) -> gpui::Div {
+        let frame = self.fx.roll(id, text, value, fx::ROLL);
         components::rolling_text(
             &frame,
             window.text_system(),
             self.palette.font_family.clone(),
             size,
             line,
-            gpui::FontWeight::SEMIBOLD,
-            self.palette.text_primary,
+            weight,
+            color,
         )
     }
 
     /// Rounded segments sized by share, separated by 4 DIP gaps. Segments
     /// sit on animated spans so a period change resizes and reorders them.
-    fn share_bar(
+    pub(super) fn share_bar(
         &mut self,
         scope: &'static str,
         entries: &[(ProviderId, u64)],

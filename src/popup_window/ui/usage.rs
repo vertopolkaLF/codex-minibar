@@ -306,7 +306,8 @@ impl PopupRoot {
         let header = self.usage_header(Some(&range_label), recalculating, window, cx);
         let hero = self.usage_hero(&snapshot, window, cx);
         let chart = self.usage_chart_card(&snapshot, chart_data, chart_previous, window, cx);
-        let totals = usage_totals_card(Some(&snapshot.totals), &palette, palette.subtle_fill);
+        let totals = self.usage_totals_values(&snapshot.totals, window);
+        let totals = usage_totals_card(Some(totals), &palette, palette.subtle_fill);
         let breakdown = self.usage_breakdown_card(&snapshot, window, cx);
         self.usage_layout(header, hero, chart, totals, breakdown)
     }
@@ -672,39 +673,74 @@ impl PopupRoot {
             meta = format!("{meta} · {}", crate::i18n::tr("api-estimate"));
         }
         let metric_control = self.usage_metric_control(window, cx);
-        // Excluded segments shrink away instead of vanishing.
-        let mut entries: Vec<(ProviderId, u64, f32)> = snapshot
+        let headline_value = match metric {
+            OverviewMetric::Cost => snapshot.totals.estimated_cost_microusd,
+            OverviewMetric::Tokens => snapshot.totals.total_tokens(),
+        };
+        let headline = self.rolling_label(
+            fx::key(("usage-headline", metric as u8)),
+            headline,
+            headline_value,
+            (28.0, 36.0, FontWeight::SEMIBOLD, palette.text_primary),
+            window,
+        );
+        let meta = self.rolling_label(
+            fx::key(("usage-meta", metric as u8)),
+            meta,
+            snapshot.total_sessions,
+            (12.0, 16.0, FontWeight::NORMAL, palette.text_tertiary),
+            window,
+        );
+        // Excluded providers shrink out of the bar instead of vanishing.
+        let entries: Vec<(ProviderId, u64)> = snapshot
             .providers
             .iter()
             .map(|entry| {
-                let shown = self.fx.toggle(
-                    fx::key(("usage-share-shown", entry.provider)),
-                    !entry.excluded,
-                    fx::NORMAL,
-                );
-                (
-                    entry.provider,
-                    match metric {
-                        OverviewMetric::Cost => entry.usage.estimated_cost_microusd,
-                        OverviewMetric::Tokens => entry.usage.total_tokens(),
-                    },
-                    shown,
-                )
+                let value = match metric {
+                    OverviewMetric::Cost => entry.usage.estimated_cost_microusd,
+                    OverviewMetric::Tokens => entry.usage.total_tokens(),
+                };
+                (entry.provider, if entry.excluded { 0 } else { value })
             })
             .collect();
-        entries.sort_by(|(_, a, _), (_, b, _)| b.cmp(a));
+        let shown_total = entries
+            .iter()
+            .fold(0_u64, |sum, (_, value)| sum.saturating_add(*value));
+        let bar = self.share_bar("usage-share", &entries, shown_total);
         let colored = self.ui.use_colored_provider_icons;
         // Tiles carry 6px of hover padding; the grid bleeds it back out so
-        // the text stays aligned with the headline.
-        let mut grid = div()
-            .mx(px(-6.0))
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .gap_y(px(4.0));
-        for entry in &snapshot.providers {
-            let tile = self.usage_provider_tile(entry, metric, colored, cx);
-            grid = grid.child(div().w(relative(0.5)).pr(px(2.0)).child(tile));
+        // the text stays aligned with the headline. Tiles sit on animated
+        // cells so a new ranking slides each provider to its new place.
+        const TILE_HEIGHT: f32 = 69.0;
+        const ROW_PITCH: f32 = TILE_HEIGHT + 4.0;
+        let rows = snapshot.providers.len().div_ceil(2) as f32;
+        let height = self.fx.value(
+            fx::key("usage-tiles-height"),
+            (rows * ROW_PITCH - 4.0).max(0.0),
+            fx::SETTLE,
+        );
+        let mut grid = div().mx(px(-6.0)).relative().h(px(height));
+        for (index, entry) in snapshot.providers.iter().enumerate() {
+            let column = self.fx.value(
+                fx::key(("usage-tile-column", entry.provider)),
+                (index % 2) as f32,
+                fx::SETTLE,
+            );
+            let row = self.fx.value(
+                fx::key(("usage-tile-row", entry.provider)),
+                (index / 2) as f32,
+                fx::SETTLE,
+            );
+            let tile = self.usage_provider_tile(entry, metric, colored, window, cx);
+            grid = grid.child(
+                div()
+                    .absolute()
+                    .left(relative(column * 0.5))
+                    .top(px(row * ROW_PITCH))
+                    .w(relative(0.5))
+                    .pr(px(2.0))
+                    .child(tile),
+            );
         }
         usage_card(&palette)
             .gap(px(16.0))
@@ -717,16 +753,10 @@ impl PopupRoot {
                         div()
                             .flex()
                             .flex_col()
-                            .child(components::split_row(
-                                components::text(headline, 28.0, 36.0, palette.text_primary)
-                                    .font_weight(FontWeight::SEMIBOLD),
-                                metric_control,
-                            ))
-                            .child(caption(meta, palette.text_tertiary)),
+                            .child(components::split_row(headline, metric_control))
+                            .child(meta),
                     )
-                    .child(usage_share_bar(&entries, |provider| {
-                        palette.spend_color(provider)
-                    })),
+                    .child(bar),
             )
             .child(grid)
             .into_any_element()
@@ -739,10 +769,12 @@ impl PopupRoot {
         entry: &ProviderOverview,
         metric: OverviewMetric,
         colored: bool,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = self.palette.clone();
         let provider = entry.provider;
+        let labels = self.provider_tile_labels(entry, metric, window);
         let hover_id = fx::key(("usage-tile-hover", provider));
         let shown = self.fx.toggle(
             fx::key(("usage-tile-shown", provider)),
@@ -777,8 +809,102 @@ impl PopupRoot {
         if let Some(layer) = components::hover_layer(&palette, hover, palette.control_radius) {
             tile = tile.child(layer);
         }
-        tile.child(provider_tile(entry, metric, &palette, colored).opacity(0.4 + 0.6 * shown))
+        tile.child(provider_tile(entry, labels, &palette, colored).opacity(0.4 + 0.6 * shown))
             .into_any_element()
+    }
+
+    /// A tile's value, session count and share line, each rolling its
+    /// digits when the range or the metric changes.
+    fn provider_tile_labels(
+        &mut self,
+        entry: &ProviderOverview,
+        metric: OverviewMetric,
+        window: &Window,
+    ) -> [gpui::Div; 3] {
+        let palette = self.palette.clone();
+        let provider = entry.provider;
+        let value = match metric {
+            OverviewMetric::Cost => format_usage_cost(&entry.usage),
+            OverviewMetric::Tokens => format_token_count(entry.usage.total_tokens()),
+        };
+        let share = match metric {
+            OverviewMetric::Cost => entry.share_cost,
+            OverviewMetric::Tokens => entry.share_tokens,
+        };
+        let other = match metric {
+            OverviewMetric::Cost => format_token_count(entry.usage.total_tokens()),
+            OverviewMetric::Tokens => format_usage_cost(&entry.usage),
+        };
+        let detail = if entry.excluded {
+            crate::i18n::format("excluded-other", &[("other", other.to_string())])
+        } else {
+            crate::i18n::format(
+                "share-1-of-other",
+                &[
+                    ("share", format!("{:.1}", share)),
+                    (
+                        "v0",
+                        (match metric {
+                            OverviewMetric::Cost => crate::i18n::tr("cost-885dc4"),
+                            OverviewMetric::Tokens => crate::i18n::tr("tokens-339143"),
+                        })
+                        .to_string(),
+                    ),
+                    ("other", other.to_string()),
+                ],
+            )
+        };
+        let raw = match metric {
+            OverviewMetric::Cost => entry.usage.estimated_cost_microusd,
+            OverviewMetric::Tokens => entry.usage.total_tokens(),
+        };
+        let style = |weight, color| (12.0, 16.0, weight, color);
+        [
+            self.rolling_label(
+                fx::key(("usage-tile-value", provider, metric as u8)),
+                value,
+                raw,
+                style(FontWeight::SEMIBOLD, palette.text_primary),
+                window,
+            ),
+            self.rolling_label(
+                fx::key(("usage-tile-sessions", provider)),
+                crate::i18n::format("sessions-0e5e29", &[("v0", entry.sessions.to_string())]),
+                entry.sessions,
+                style(FontWeight::NORMAL, palette.text_secondary),
+                window,
+            ),
+            self.rolling_label(
+                fx::key(("usage-tile-detail", provider, metric as u8)),
+                detail,
+                (share * 10.0).round().max(0.0) as u64,
+                style(FontWeight::NORMAL, palette.text_tertiary),
+                window,
+            ),
+        ]
+    }
+
+    /// The Totals card's values, each rolling its digits on a range change.
+    fn usage_totals_values(&mut self, totals: &TokenUsage, window: &Window) -> [gpui::Div; 5] {
+        let style = (14.0, 20.0, FontWeight::SEMIBOLD, self.palette.text_primary);
+        let uncached = totals
+            .input_tokens
+            .saturating_sub(totals.cached_input_tokens);
+        [
+            ("processed", totals.total_tokens(), false),
+            ("cached", totals.cached_input_tokens, false),
+            ("uncached", uncached, false),
+            ("output", totals.output_tokens, false),
+            ("savings", totals.cache_savings_microusd, true),
+        ]
+        .map(|(id, value, money)| {
+            let text = if money {
+                format_spend(value)
+            } else {
+                format_token_count(value)
+            };
+            self.rolling_label(fx::key(("usage-totals", id)), text, value, style, window)
+        })
     }
 
     fn usage_chart_card(
@@ -1143,42 +1269,11 @@ fn range_label(snapshot: &OverviewSnapshot) -> String {
 
 fn provider_tile(
     entry: &ProviderOverview,
-    metric: OverviewMetric,
+    [value, sessions, detail]: [gpui::Div; 3],
     palette: &Palette,
     colored: bool,
 ) -> gpui::Div {
     let descriptor = crate::provider_registry::descriptor(entry.provider.kind());
-    let value = match metric {
-        OverviewMetric::Cost => format_usage_cost(&entry.usage),
-        OverviewMetric::Tokens => format_token_count(entry.usage.total_tokens()),
-    };
-    let share = match metric {
-        OverviewMetric::Cost => entry.share_cost,
-        OverviewMetric::Tokens => entry.share_tokens,
-    };
-    let other = match metric {
-        OverviewMetric::Cost => format_token_count(entry.usage.total_tokens()),
-        OverviewMetric::Tokens => format_usage_cost(&entry.usage),
-    };
-    let detail = if entry.excluded {
-        crate::i18n::format("excluded-other", &[("other", other.to_string())])
-    } else {
-        crate::i18n::format(
-            "share-1-of-other",
-            &[
-                ("share", format!("{:.1}", share)),
-                (
-                    "v0",
-                    (match metric {
-                        OverviewMetric::Cost => crate::i18n::tr("cost-885dc4"),
-                        OverviewMetric::Tokens => crate::i18n::tr("tokens-339143"),
-                    })
-                    .to_string(),
-                ),
-                ("other", other.to_string()),
-            ],
-        )
-    };
     div()
         .flex()
         .flex_col()
@@ -1211,22 +1306,18 @@ fn provider_tile(
                         .flex()
                         .flex_row()
                         .gap(px(4.0))
-                        .child(components::caption_strong(value, palette.text_primary))
-                        .child(nowrap(caption(
-                            crate::i18n::format(
-                                "sessions-0e5e29",
-                                &[("v0", entry.sessions.to_string())],
-                            ),
-                            palette.text_secondary,
-                        ))),
+                        .child(value.flex_none())
+                        .child(nowrap(sessions)),
                 )
-                .child(nowrap(caption(detail, palette.text_tertiary))),
+                .child(nowrap(detail)),
         )
 }
 
 /// `None` renders the loading skeleton with the same labels and row heights.
-fn usage_totals_card(totals: Option<&TokenUsage>, palette: &Palette, bone: Hsla) -> AnyElement {
-    let metric = |label: &'static str, value: Option<String>| {
+/// Values come in display order: processed, cached input, uncached input,
+/// output and cache savings.
+fn usage_totals_card(values: Option<[gpui::Div; 5]>, palette: &Palette, bone: Hsla) -> AnyElement {
+    let metric = |label: &'static str, value: Option<gpui::Div>| {
         div()
             .flex_1()
             .min_w_0()
@@ -1234,19 +1325,13 @@ fn usage_totals_card(totals: Option<&TokenUsage>, palette: &Palette, bone: Hsla)
             .flex_col()
             .gap(px(2.0))
             .child(caption(label, palette.text_tertiary))
-            .child(match value {
-                Some(value) => components::body_strong(value, palette.text_primary),
-                None => bone_line(bone, px(64.0), 20.0, 14.0),
-            })
+            .child(value.unwrap_or_else(|| bone_line(bone, px(64.0), 20.0, 14.0)))
     };
-    let empty = TokenUsage::default();
-    let loaded = totals.is_some();
-    let totals = totals.unwrap_or(&empty);
-    let value = |value: String| loaded.then_some(value);
+    let [processed, cached, uncached, output, savings] = match values {
+        Some(values) => values.map(Some),
+        None => [None, None, None, None, None],
+    };
     let pair = |a, b| div().flex().flex_row().gap(px(8.0)).child(a).child(b);
-    let uncached = totals
-        .input_tokens
-        .saturating_sub(totals.cached_input_tokens);
     usage_card(palette)
         .gap(px(8.0))
         .child(components::body_strong(
@@ -1259,65 +1344,16 @@ fn usage_totals_card(totals: Option<&TokenUsage>, palette: &Palette, bone: Hsla)
                 .flex_col()
                 .gap(px(8.0))
                 .child(pair(
-                    metric(
-                        crate::i18n::tr("processed-tokens"),
-                        value(format_token_count(totals.total_tokens())),
-                    ),
-                    metric(
-                        crate::i18n::tr("cached-input"),
-                        value(format_token_count(totals.cached_input_tokens)),
-                    ),
+                    metric(crate::i18n::tr("processed-tokens"), processed),
+                    metric(crate::i18n::tr("cached-input"), cached),
                 ))
                 .child(pair(
-                    metric(
-                        crate::i18n::tr("uncached-input"),
-                        value(format_token_count(uncached)),
-                    ),
-                    metric(
-                        crate::i18n::tr("output"),
-                        value(format_token_count(totals.output_tokens)),
-                    ),
+                    metric(crate::i18n::tr("uncached-input"), uncached),
+                    metric(crate::i18n::tr("output"), output),
                 ))
-                .child(metric(
-                    crate::i18n::tr("cache-savings"),
-                    value(format_spend(totals.cache_savings_microusd)),
-                )),
+                .child(metric(crate::i18n::tr("cache-savings"), savings)),
         )
         .into_any_element()
-}
-
-/// The hero's share bar. `shown` (0-1) scales each segment and the gap
-/// before it, so toggled providers glide out of and back into the bar.
-fn usage_share_bar(
-    entries: &[(ProviderId, u64, f32)],
-    color: impl Fn(ProviderId) -> Hsla,
-) -> gpui::Div {
-    let total: u64 = entries
-        .iter()
-        .fold(0, |sum, (_, value, _)| sum.saturating_add(*value));
-    let mut bar = div().flex().flex_row().h(px(10.0)).w_full();
-    let mut before = 0.0_f32;
-    for (provider, value, shown) in entries {
-        if *shown <= 0.001 {
-            continue;
-        }
-        let weight = if total == 0 {
-            1.0
-        } else {
-            (*value).max(1) as f32
-        };
-        let mut segment = div()
-            .h_full()
-            .flex_basis(px(0.0))
-            .min_w(px(4.0 * shown))
-            .ml(px(4.0 * shown.min(before)))
-            .rounded(px(4.0))
-            .bg(color(*provider));
-        segment.style().flex_grow = Some(weight * shown);
-        bar = bar.child(segment);
-        before = before.max(*shown);
-    }
-    bar
 }
 
 fn cell(width: f32, content: impl IntoElement) -> gpui::Div {
