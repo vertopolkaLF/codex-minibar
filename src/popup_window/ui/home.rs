@@ -69,7 +69,15 @@ impl PopupRoot {
             self.home_editing,
             fx::FAST,
         );
-        let row = div().flex().flex_row().items_center().child(trailing);
+        // The wrapper takes whatever width the caller gives the trailing
+        // group (half the heading row beside an account name); the group
+        // fills it so its content stays against the end, ahead of the grip.
+        let row = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_end()
+            .child(trailing.flex_1().min_w_0());
         if reveal < 0.001 {
             return row;
         }

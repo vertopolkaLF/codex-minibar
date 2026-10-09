@@ -66,10 +66,14 @@ impl PopupRoot {
         )
         .absolute()
         .inset_0();
+        // A text element is only as wide as its text, so `text_right` alone
+        // leaves it on the left; the flex container pushes it to the end.
         let label = if strong {
             components::body_strong(display_name, palette.text_secondary)
         } else {
-            caption(display_name, palette.text_tertiary).text_right()
+            caption(display_name, palette.text_tertiary)
+                .flex()
+                .justify_end()
         };
         div()
             .id(eid(format!("account-name-{key}")))
