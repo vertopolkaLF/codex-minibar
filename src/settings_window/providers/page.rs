@@ -964,7 +964,8 @@ impl SettingsWindow {
         use crate::instances::{Capabilities, Capability};
         let provider = instance.provider_id();
         let descriptor = crate::provider_registry::descriptor(instance.driver);
-        let intervals = LimitRefreshInterval::ALL.map(|interval| crate::i18n::tr(interval.label_key()));
+        let intervals =
+            LimitRefreshInterval::ALL.map(|interval| crate::i18n::tr(interval.label_key()));
         let mut rows = vec![kit::dropdown_row(
             k,
             &format!("provider-{}-refresh", provider.id()),

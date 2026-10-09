@@ -386,8 +386,9 @@ pub(crate) fn scan_file_delta(
         .seek(SeekFrom::Start(cached.offset))
         .with_context(|| format!("seek {}", path.display()))?;
     let mut offset = cached.offset;
+    let mut bytes = Vec::new();
     loop {
-        let mut bytes = Vec::new();
+        bytes.clear();
         let read = reader
             .read_until(b'\n', &mut bytes)
             .with_context(|| format!("read {}", path.display()))?;
@@ -691,81 +692,147 @@ pub fn refresh_claude_usage_statistics(
     config_folder: Option<&Path>,
     history_days: u16,
 ) -> Result<UsageStatistics> {
+    let roots = claude_projects_roots(config_folder);
+    let files = collect_claude_session_files(&roots);
+    // Idle refreshes usually find every log exactly where the last scan left
+    // it. Answer those from the stored rollups instead of loading, rebuilding
+    // and rewriting every cached event.
+    if claude_logs_unchanged(provider, &roots, &files)? {
+        return load_cached_claude_usage_statistics(provider, history_days);
+    }
     let mut cache = store::with_store(|store| store.load_claude_cache(provider))?;
-    let files = collect_claude_session_files(config_folder);
     let known_paths: BTreeSet<String> = files
         .iter()
         .map(|path| path.to_string_lossy().into_owned())
         .collect();
-    cache.files.retain(|path, _| known_paths.contains(path));
-
-    let oldest = Local::now().date_naive() - Duration::days(CACHE_RETENTION_DAYS - 1);
+    drop_foreign_claude_logs(&mut cache, &known_paths, &roots);
     for path in files {
         let key = path.to_string_lossy().into_owned();
         let cached = cache.files.entry(key).or_default();
         scan_claude_file_delta(&path, cached)?;
+    }
+    let oldest = Local::now().date_naive() - Duration::days(CACHE_RETENTION_DAYS - 1);
+    prune_claude_history(&mut cache, &known_paths, oldest);
+    cache.version = CLAUDE_CACHE_VERSION;
+    let entries = deduplicate_claude_entries(&cache);
+    let stats = claude_statistics(&entries, history_days);
+    let model_daily = claude_model_daily(&entries)
+        .into_iter()
+        .map(|(date, model, usage)| (model, date, usage))
+        .collect::<Vec<_>>();
+    drop(entries);
+    store::with_store(|store| {
+        store.save_claude_cache(provider, &cache)?;
+        store.replace_usage_daily(provider, &stats.daily)?;
+        store.replace_usage_model_daily(provider, &model_daily)
+    })?;
+    Ok(stats)
+}
+
+/// Claude Code deletes old transcripts (30 days by default), but their usage
+/// stays counted for the cache's own retention. Only logs outside this
+/// instance's folders are dropped: its folder was changed, so they belong to
+/// another account.
+fn drop_foreign_claude_logs(
+    cache: &mut ClaudeUsageCache,
+    known_paths: &BTreeSet<String>,
+    roots: &[PathBuf],
+) {
+    cache
+        .files
+        .retain(|path, _| known_paths.contains(path) || under_any_root(Path::new(path), roots));
+}
+
+/// Applies the cache retention to every log, and forgets deleted logs once
+/// none of their usage is retained.
+fn prune_claude_history(
+    cache: &mut ClaudeUsageCache,
+    known_paths: &BTreeSet<String>,
+    oldest: NaiveDate,
+) {
+    for cached in cache.files.values_mut() {
         cached
             .entries
             .retain(|entry| entry.timestamp.with_timezone(&Local).date_naive() >= oldest);
     }
-    cache.version = CLAUDE_CACHE_VERSION;
-    let stats = statistics_from_claude_cache(&cache, history_days);
-    store::with_store(|store| {
-        store.save_claude_cache(provider, &cache)?;
-        store.replace_usage_daily(provider, &stats.daily)?;
-        store.replace_usage_model_daily(
-            provider,
-            &aggregate_claude_model_daily(&cache)
-                .into_iter()
-                .map(|(date, model, usage)| (model, date, usage))
-                .collect::<Vec<_>>(),
-        )
-    })?;
-    Ok(stats)
+    cache
+        .files
+        .retain(|path, cached| !cached.entries.is_empty() || known_paths.contains(path));
+}
+
+/// True when the stored scan already covers every current Claude log with its
+/// full length incorporated, and holds no log a full refresh would drop.
+fn claude_logs_unchanged(
+    provider: ProviderId,
+    roots: &[PathBuf],
+    files: &[PathBuf],
+) -> Result<bool> {
+    let Some(offsets) = store::with_store(|store| store.load_claude_scan_offsets(provider))? else {
+        return Ok(false);
+    };
+    if !offsets
+        .keys()
+        .all(|path| under_any_root(Path::new(path), roots))
+    {
+        return Ok(false);
+    }
+    Ok(files.iter().all(|path| {
+        offsets
+            .get(path.to_string_lossy().as_ref())
+            .is_some_and(|&offset| fs::metadata(path).is_ok_and(|meta| meta.len() == offset))
+    }))
 }
 
 pub(crate) fn statistics_from_claude_cache(
     cache: &ClaudeUsageCache,
     history_days: u16,
 ) -> UsageStatistics {
-    let days: Vec<DailyTokenUsage> = deduplicate_claude_entries(cache)
-        .into_iter()
-        .map(|entry| DailyTokenUsage {
-            date: entry.timestamp.with_timezone(&Local).date_naive(),
-            usage: entry.usage,
-        })
-        .collect();
-    statistics_from_daily(&days, history_days)
+    claude_statistics(&deduplicate_claude_entries(cache), history_days)
 }
 
 pub(crate) fn aggregate_claude_model_daily(
     cache: &ClaudeUsageCache,
 ) -> Vec<(NaiveDate, String, TokenUsage)> {
-    let mut merged = BTreeMap::<(String, NaiveDate), TokenUsage>::new();
-    for entry in deduplicate_claude_entries(cache) {
-        let model = entry.model.clone().unwrap_or_else(|| "unknown".to_string());
+    claude_model_daily(&deduplicate_claude_entries(cache))
+}
+
+fn claude_statistics(entries: &[&CachedClaudeUsageEntry], history_days: u16) -> UsageStatistics {
+    let days: Vec<DailyTokenUsage> = entries
+        .iter()
+        .map(|entry| DailyTokenUsage {
+            date: entry.timestamp.with_timezone(&Local).date_naive(),
+            usage: entry.usage.clone(),
+        })
+        .collect();
+    statistics_from_daily(&days, history_days)
+}
+
+fn claude_model_daily(entries: &[&CachedClaudeUsageEntry]) -> Vec<(NaiveDate, String, TokenUsage)> {
+    let mut merged = BTreeMap::<(&str, NaiveDate), TokenUsage>::new();
+    for entry in entries {
+        let model = entry.model.as_deref().unwrap_or("unknown");
         let date = entry.timestamp.with_timezone(&Local).date_naive();
         merged.entry((model, date)).or_default().add(&entry.usage);
     }
     merged
         .into_iter()
-        .map(|((model, date), usage)| (date, model, usage))
+        .map(|((model, date), usage)| (date, model.to_owned(), usage))
         .collect()
 }
 
 /// Mirrors Claude Code/OpenUsage's duplicate preference: the original message
 /// beats a sidechain replay; otherwise retain the richer/larger record.
-pub(crate) fn deduplicate_claude_entries(cache: &ClaudeUsageCache) -> Vec<CachedClaudeUsageEntry> {
-    let mut entries: Vec<CachedClaudeUsageEntry> = Vec::new();
-    let mut exact = HashMap::<(String, Option<String>), usize>::new();
-    let mut by_message = HashMap::<String, Vec<usize>>::new();
+pub(crate) fn deduplicate_claude_entries(cache: &ClaudeUsageCache) -> Vec<&CachedClaudeUsageEntry> {
+    let mut entries: Vec<&CachedClaudeUsageEntry> = Vec::new();
+    let mut exact = HashMap::<(&str, Option<&str>), usize>::new();
+    let mut by_message = HashMap::<&str, Vec<usize>>::new();
 
     for entry in cache.files.values().flat_map(|file| &file.entries) {
-        let Some(message_id) = &entry.message_id else {
-            entries.push(entry.clone());
+        let Some(message_id) = entry.message_id.as_deref() else {
+            entries.push(entry);
             continue;
         };
-        let key = (message_id.clone(), entry.request_id.clone());
+        let key = (message_id, entry.request_id.as_deref());
         let collision = exact.get(&key).copied().or_else(|| {
             by_message.get(message_id).and_then(|indices| {
                 indices
@@ -780,24 +847,21 @@ pub(crate) fn deduplicate_claude_entries(cache: &ClaudeUsageCache) -> Vec<Cached
             if exact.contains_key(&key) {
                 continue;
             }
-            if claude_entry_should_replace(entry, &entries[index]) {
-                let previous = &entries[index];
-                if let Some(previous_id) = &previous.message_id {
-                    exact.remove(&(previous_id.clone(), previous.request_id.clone()));
+            if claude_entry_should_replace(entry, entries[index]) {
+                let previous = entries[index];
+                if let Some(previous_id) = previous.message_id.as_deref() {
+                    exact.remove(&(previous_id, previous.request_id.as_deref()));
                 }
-                entries[index] = entry.clone();
+                entries[index] = entry;
                 exact.insert(key, index);
             }
             continue;
         }
 
         let index = entries.len();
-        entries.push(entry.clone());
+        entries.push(entry);
         exact.insert(key, index);
-        by_message
-            .entry(message_id.clone())
-            .or_default()
-            .push(index);
+        by_message.entry(message_id).or_default().push(index);
     }
     entries
 }
@@ -833,8 +897,9 @@ fn scan_claude_file_delta(path: &Path, cached: &mut CachedClaudeSessionFile) -> 
         .seek(SeekFrom::Start(cached.offset))
         .with_context(|| format!("seek {}", path.display()))?;
     let mut offset = cached.offset;
+    let mut bytes = Vec::new();
     loop {
-        let mut bytes = Vec::new();
+        bytes.clear();
         let read = reader
             .read_until(b'\n', &mut bytes)
             .with_context(|| format!("read {}", path.display()))?;
@@ -853,16 +918,41 @@ fn scan_claude_file_delta(path: &Path, cached: &mut CachedClaudeSessionFile) -> 
     Ok(())
 }
 
+/// The few fields a Claude log line contributes. Everything else (message
+/// content, tool output, attachments) is skipped while parsing instead of
+/// being materialized as a `Value` tree. Scalars stay `Value` so a field of an
+/// unexpected type is ignored exactly as before rather than rejecting the line.
+#[derive(Deserialize)]
+struct ClaudeLogLine {
+    #[serde(rename = "type")]
+    kind: Option<Value>,
+    timestamp: Option<Value>,
+    message: Option<ClaudeLogMessage>,
+    #[serde(rename = "requestId")]
+    request_id: Option<Value>,
+    #[serde(rename = "isSidechain")]
+    is_sidechain: Option<Value>,
+    #[serde(rename = "costUSD")]
+    cost_usd: Option<Value>,
+}
+
+#[derive(Deserialize)]
+struct ClaudeLogMessage {
+    id: Option<Value>,
+    model: Option<Value>,
+    usage: Option<Value>,
+}
+
 fn claude_usage_from_line(line: &[u8]) -> Option<CachedClaudeUsageEntry> {
-    let event: Value = serde_json::from_slice(line).ok()?;
-    if event.get("type").and_then(Value::as_str) != Some("assistant") {
+    let event: ClaudeLogLine = serde_json::from_slice(line).ok()?;
+    if event.kind.as_ref().and_then(Value::as_str) != Some("assistant") {
         return None;
     }
-    let timestamp = DateTime::parse_from_rfc3339(event.get("timestamp")?.as_str()?)
+    let timestamp = DateTime::parse_from_rfc3339(event.timestamp.as_ref()?.as_str()?)
         .ok()?
         .with_timezone(&Utc);
-    let message = event.get("message")?;
-    let usage_json = message.get("usage")?;
+    let message = event.message.as_ref()?;
+    let usage_json = message.usage.as_ref()?;
     let input_tokens = usage_json.get("input_tokens")?.as_u64()?;
     let output_tokens = usage_json.get("output_tokens")?.as_u64()?;
     let cache_read = usage_json
@@ -884,12 +974,14 @@ fn claude_usage_from_line(line: &[u8]) -> Option<CachedClaudeUsageEntry> {
         .unwrap_or(0);
     let cache_creation_tokens = cache_write_5m.saturating_add(cache_write_1h);
     let model = message
-        .get("model")
+        .model
+        .as_ref()
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|name| !name.is_empty())?;
     let reported_cost = event
-        .get("costUSD")
+        .cost_usd
+        .as_ref()
         .and_then(Value::as_f64)
         .filter(|cost| cost.is_finite() && *cost >= 0.0);
     let estimated_cost_microusd = reported_cost
@@ -917,13 +1009,19 @@ fn claude_usage_from_line(line: &[u8]) -> Option<CachedClaudeUsageEntry> {
     };
     Some(CachedClaudeUsageEntry {
         timestamp,
-        message_id: message.get("id").and_then(Value::as_str).map(str::to_owned),
+        message_id: message
+            .id
+            .as_ref()
+            .and_then(Value::as_str)
+            .map(str::to_owned),
         request_id: event
-            .get("requestId")
+            .request_id
+            .as_ref()
             .and_then(Value::as_str)
             .map(str::to_owned),
         is_sidechain: event
-            .get("isSidechain")
+            .is_sidechain
+            .as_ref()
             .and_then(Value::as_bool)
             .unwrap_or(false),
         has_speed: usage_json.get("speed").is_some(),
@@ -932,45 +1030,37 @@ fn claude_usage_from_line(line: &[u8]) -> Option<CachedClaudeUsageEntry> {
     })
 }
 
-/// `config_folder` is an instance's own `CLAUDE_CONFIG_DIR`; `None` keeps the
-/// standard discovery used by the primary instance.
-fn collect_claude_session_files(config_folder: Option<&Path>) -> Vec<PathBuf> {
+/// The `projects` folders holding an instance's Claude logs. `config_folder`
+/// is the instance's own `CLAUDE_CONFIG_DIR`; `None` is this PC's standard
+/// login, the same folder its credentials are read from. The process
+/// environment is deliberately ignored: Minibar inherits whatever shell or
+/// tool launched it, and an unrelated `CLAUDE_CONFIG_DIR` there would make
+/// this instance count another account's logs.
+fn claude_projects_roots(config_folder: Option<&Path>) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(folder) = config_folder {
-        roots.push(folder.to_path_buf());
-    } else if let Some(config_dirs) = std::env::var_os("CLAUDE_CONFIG_DIR") {
-        // Claude Code accepts comma-separated roots; Windows also commonly
-        // receives a normal PATH-style list from launchers, so tolerate both.
-        let raw = config_dirs.to_string_lossy();
-        let configured_paths: Vec<PathBuf> = if raw.contains(',') {
-            raw.split(',')
-                .map(|part| PathBuf::from(part.trim()))
-                .collect()
-        } else {
-            std::env::split_paths(&config_dirs).collect()
-        };
-        for path in configured_paths
-            .into_iter()
-            .filter(|path| !path.as_os_str().is_empty())
-        {
-            roots.push(if path.file_name().is_some_and(|name| name == "projects") {
-                path.parent().map(Path::to_path_buf).unwrap_or(path)
-            } else {
-                path
-            });
-        }
+        roots.push(folder.join("projects"));
     } else if let Some(base) = directories::BaseDirs::new() {
-        roots.push(base.home_dir().join(".config").join("claude"));
-        roots.push(base.home_dir().join(".claude"));
+        roots.push(
+            base.home_dir()
+                .join(".config")
+                .join("claude")
+                .join("projects"),
+        );
+        roots.push(base.home_dir().join(".claude").join("projects"));
     }
+    roots.dedup();
+    roots
+}
 
-    let mut seen = BTreeSet::new();
+fn under_any_root(path: &Path, roots: &[PathBuf]) -> bool {
+    roots.iter().any(|root| path.starts_with(root))
+}
+
+fn collect_claude_session_files(roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    for root in roots {
-        let projects = root.join("projects");
-        if seen.insert(projects.clone()) {
-            let _ = collect_session_files(&projects, &mut files);
-        }
+    for projects in roots {
+        let _ = collect_session_files(projects, &mut files);
     }
     files.sort();
     files.dedup();
@@ -1114,6 +1204,105 @@ mod tests {
             ]),
         };
         assert_eq!(deduplicate_claude_entries(&cache).len(), 1);
+    }
+
+    fn claude_entry_at(timestamp: DateTime<Utc>, message_id: &str) -> CachedClaudeUsageEntry {
+        CachedClaudeUsageEntry {
+            timestamp,
+            message_id: Some(message_id.into()),
+            request_id: None,
+            is_sidechain: false,
+            has_speed: false,
+            usage: TokenUsage {
+                input_tokens: 10,
+                requests: 1,
+                ..Default::default()
+            },
+            model: Some("claude-sonnet-4-20250514".into()),
+        }
+    }
+
+    fn claude_file(entries: Vec<CachedClaudeUsageEntry>) -> CachedClaudeSessionFile {
+        CachedClaudeSessionFile { offset: 1, entries }
+    }
+
+    fn key(path: &Path) -> String {
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn deleted_claude_logs_keep_their_usage_inside_the_instance_folder() {
+        let root = PathBuf::from(r"C:\Users\me\.claude\projects");
+        let live = root.join("a").join("live.jsonl");
+        let deleted = root.join("a").join("deleted.jsonl");
+        let foreign = PathBuf::from(r"C:\Users\me\.claude-other\projects\b\x.jsonl");
+        let now = Utc::now();
+        let mut cache = ClaudeUsageCache {
+            version: CLAUDE_CACHE_VERSION,
+            files: BTreeMap::from([
+                (key(&live), claude_file(vec![claude_entry_at(now, "m1")])),
+                (key(&deleted), claude_file(vec![claude_entry_at(now, "m2")])),
+                (key(&foreign), claude_file(vec![claude_entry_at(now, "m3")])),
+            ]),
+        };
+        let known = BTreeSet::from([key(&live)]);
+
+        drop_foreign_claude_logs(&mut cache, &known, std::slice::from_ref(&root));
+
+        assert!(cache.files.contains_key(&key(&live)));
+        assert!(cache.files.contains_key(&key(&deleted)));
+        assert!(!cache.files.contains_key(&key(&foreign)));
+        assert_eq!(deduplicate_claude_entries(&cache).len(), 2);
+    }
+
+    #[test]
+    fn deleted_claude_logs_are_forgotten_once_their_usage_expires() {
+        let root = PathBuf::from(r"C:\Users\me\.claude\projects");
+        let live = root.join("live.jsonl");
+        let deleted = root.join("deleted.jsonl");
+        let expired = root.join("expired.jsonl");
+        let now = Utc::now();
+        let old = now - Duration::days(400);
+        let mut cache = ClaudeUsageCache {
+            version: CLAUDE_CACHE_VERSION,
+            files: BTreeMap::from([
+                (key(&live), claude_file(vec![claude_entry_at(old, "m1")])),
+                (
+                    key(&deleted),
+                    claude_file(vec![claude_entry_at(old, "m2"), claude_entry_at(now, "m3")]),
+                ),
+                (key(&expired), claude_file(vec![claude_entry_at(old, "m4")])),
+            ]),
+        };
+        let known = BTreeSet::from([key(&live)]);
+        let oldest = Local::now().date_naive() - Duration::days(CACHE_RETENTION_DAYS - 1);
+
+        prune_claude_history(&mut cache, &known, oldest);
+
+        // A live log keeps its scan offset even with nothing retained.
+        assert!(cache.files[&key(&live)].entries.is_empty());
+        assert_eq!(cache.files[&key(&deleted)].entries.len(), 1);
+        assert!(!cache.files.contains_key(&key(&expired)));
+    }
+
+    #[test]
+    fn primary_claude_logs_ignore_the_inherited_config_dir() {
+        let home = directories::BaseDirs::new()
+            .unwrap()
+            .home_dir()
+            .to_path_buf();
+        assert_eq!(
+            claude_projects_roots(None),
+            vec![
+                home.join(".config").join("claude").join("projects"),
+                home.join(".claude").join("projects"),
+            ]
+        );
+        let folder = PathBuf::from(r"D:\claude-work");
+        assert_eq!(
+            claude_projects_roots(Some(&folder)),
+            vec![folder.join("projects")]
+        );
     }
 
     #[test]

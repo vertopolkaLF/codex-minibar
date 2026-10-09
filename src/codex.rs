@@ -4,7 +4,7 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{Arc, mpsc},
+    sync::{Arc, OnceLock, mpsc},
     thread,
     time::{Duration as StdDuration, Instant},
 };
@@ -49,6 +49,9 @@ pub struct CodexClient {
     /// `None` reads this PC's standard Codex login.
     home: Option<PathBuf>,
     rate_limited: bool,
+    /// Reused across polls so each one does not build a new Schannel
+    /// credential and TLS handshake.
+    oauth_agent: OnceLock<ureq::Agent>,
 }
 
 impl LimitProvider for CodexClient {
@@ -188,6 +191,7 @@ impl CodexClient {
             provider: ProviderId::primary(crate::settings::ProviderKind::Codex),
             home: None,
             rate_limited: false,
+            oauth_agent: OnceLock::new(),
         }
     }
 
@@ -204,15 +208,20 @@ impl CodexClient {
     }
 
     fn oauth_agent(&self) -> Result<ureq::Agent> {
+        if let Some(agent) = self.oauth_agent.get() {
+            return Ok(agent.clone());
+        }
         let tls = ureq::native_tls::TlsConnector::new().context("create Windows TLS connector")?;
-        Ok(ureq::AgentBuilder::new()
+        let agent = ureq::AgentBuilder::new()
             .timeout(self.timeout)
             .tls_connector(Arc::new(tls))
-            .build())
+            .build();
+        Ok(self.oauth_agent.get_or_init(|| agent).clone())
     }
 
     pub fn with_timeout(mut self, timeout: StdDuration) -> Self {
         self.timeout = timeout;
+        self.oauth_agent = OnceLock::new();
         self
     }
 

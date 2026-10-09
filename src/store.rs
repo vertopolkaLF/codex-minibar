@@ -874,6 +874,29 @@ impl ProviderStore {
         Ok(())
     }
 
+    /// Scanned byte offset per Claude log, without loading any events. `None`
+    /// when the stored cache predates the current version and needs a rebuild.
+    pub(crate) fn load_claude_scan_offsets(
+        &self,
+        provider: ProviderId,
+    ) -> Result<Option<BTreeMap<String, u64>>> {
+        let flags = self.provider_flags(provider)?;
+        let version = flags
+            .get("cache_version")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(u64::from(CLAUDE_CACHE_VERSION)) as u8;
+        if version != CLAUDE_CACHE_VERSION {
+            return Ok(None);
+        }
+        let mut statement = self
+            .conn
+            .prepare("SELECT path, offset FROM scan_files WHERE provider = ?1")?;
+        let rows = statement.query_map(params![provider.id()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+        })?;
+        Ok(Some(rows.collect::<rusqlite::Result<_>>()?))
+    }
+
     pub(crate) fn load_claude_cache(&self, provider: ProviderId) -> Result<ClaudeUsageCache> {
         let flags = self.provider_flags(provider)?;
         let version = flags
@@ -942,7 +965,6 @@ impl ProviderStore {
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         let mut retained_files = BTreeSet::new();
-        let mut retained_events = BTreeSet::new();
         {
             let mut scan = tx.prepare(
                 "INSERT INTO scan_files(provider, path, offset, meta_json)
@@ -989,7 +1011,6 @@ impl ProviderStore {
                 retained_files.insert(path.clone());
                 scan.execute(params![provider.id(), path, file.offset as i64])?;
                 for (event_ord, entry) in file.entries.iter().enumerate() {
-                    retained_events.insert((path.clone(), event_ord as i64));
                     events.execute(params![
                         provider.id(),
                         path,
@@ -1011,7 +1032,7 @@ impl ProviderStore {
                 }
             }
         }
-        delete_stale_event_rows(&tx, provider, &retained_files, &retained_events)?;
+        delete_stale_event_rows(&tx, provider, cache, &retained_files)?;
         tx.commit()?;
 
         let flags = json!({ "cache_version": cache.version });
@@ -1519,15 +1540,21 @@ fn delete_stale_file_rows(
     Ok(())
 }
 
+/// Each file's events are stored at ordinals `0..entries.len()`, so only the
+/// tail past that length and files that left the cache are stale. This avoids
+/// loading every stored event key on each save.
 fn delete_stale_event_rows(
     tx: &rusqlite::Transaction<'_>,
     provider: ProviderId,
+    cache: &ClaudeUsageCache,
     retained_files: &BTreeSet<String>,
-    retained_events: &BTreeSet<(String, i64)>,
 ) -> Result<()> {
     let provider = provider.id();
     let existing_files = {
-        let mut statement = tx.prepare("SELECT path FROM scan_files WHERE provider = ?1")?;
+        let mut statement = tx.prepare(
+            "SELECT path FROM scan_files WHERE provider = ?1
+             UNION SELECT DISTINCT path FROM usage_events WHERE provider = ?1",
+        )?;
         let rows = statement.query_map(params![provider], |row| row.get::<_, String>(0))?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
@@ -1537,24 +1564,18 @@ fn delete_stale_event_rows(
                 "DELETE FROM scan_files WHERE provider = ?1 AND path = ?2",
                 params![provider, path],
             )?;
+            tx.execute(
+                "DELETE FROM usage_events WHERE provider = ?1 AND path = ?2",
+                params![provider, path],
+            )?;
         }
     }
 
-    let existing_events = {
-        let mut statement =
-            tx.prepare("SELECT path, event_ord FROM usage_events WHERE provider = ?1")?;
-        let rows = statement.query_map(params![provider], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-        })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
-    };
-    for (path, event_ord) in existing_events {
-        if !retained_events.contains(&(path.clone(), event_ord)) {
-            tx.execute(
-                "DELETE FROM usage_events WHERE provider = ?1 AND path = ?2 AND event_ord = ?3",
-                params![provider, path, event_ord],
-            )?;
-        }
+    let mut truncate = tx.prepare(
+        "DELETE FROM usage_events WHERE provider = ?1 AND path = ?2 AND event_ord >= ?3",
+    )?;
+    for (path, file) in &cache.files {
+        truncate.execute(params![provider, path, file.entries.len() as i64])?;
     }
     Ok(())
 }
@@ -1619,15 +1640,9 @@ fn aggregate_codex_model_daily(cache: &UsageCache) -> Vec<(String, NaiveDate, To
 }
 
 fn aggregate_claude_model_daily(cache: &ClaudeUsageCache) -> Vec<(String, NaiveDate, TokenUsage)> {
-    let mut merged = BTreeMap::<(String, NaiveDate), TokenUsage>::new();
-    for entry in crate::usage::deduplicate_claude_entries(cache) {
-        let model = entry.model.clone().unwrap_or_else(|| "unknown".to_string());
-        let date = entry.timestamp.with_timezone(&Local).date_naive();
-        merged.entry((model, date)).or_default().add(&entry.usage);
-    }
-    merged
+    crate::usage::aggregate_claude_model_daily(cache)
         .into_iter()
-        .map(|((model, date), usage)| (model, date, usage))
+        .map(|(date, model, usage)| (model, date, usage))
         .collect()
 }
 

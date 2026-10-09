@@ -3,7 +3,10 @@
      SetWindowSubclass; without this dependency the loader binds comctl32 v5
      and the process fails with STATUS_ENTRYPOINT_NOT_FOUND.
      Per-monitor v2 DPI awareness: the popup geometry and both GPUI windows
-     scale per monitor. -->
+     scale per monitor.
+     Segment heap: Rust's allocator uses the process heap, and the segment
+     heap returns freed memory to Windows after scan peaks instead of keeping
+     it committed the way the legacy NT heap does. -->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
     <dependency>
         <dependentAssembly>
@@ -14,6 +17,7 @@
         <windowsSettings>
             <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
             <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+            <heapType xmlns="http://schemas.microsoft.com/SMI/2020/WindowsSettings">SegmentHeap</heapType>
         </windowsSettings>
     </application>
     <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">

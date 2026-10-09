@@ -1152,10 +1152,7 @@ impl SettingsWindow {
             Page::Root(tab) => {
                 let (title, mut rows) = match tab {
                     Tab::General => (crate::i18n::tr("general"), self.general_page(k, window, cx)),
-                    Tab::Appearance => (
-                        crate::i18n::tr("appearance"),
-                        self.appearance_page(k, cx),
-                    ),
+                    Tab::Appearance => (crate::i18n::tr("appearance"), self.appearance_page(k, cx)),
                     Tab::Popup => (crate::i18n::tr("customize"), self.customize_page(k, cx)),
                     Tab::Schedule => (
                         crate::i18n::tr("limit-activation"),
