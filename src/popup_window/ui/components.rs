@@ -9,7 +9,7 @@ use gpui::{
     relative, svg,
 };
 
-use super::{assets::icon_path, theme::Palette};
+use super::{assets::icon_path, fx::RollFrame, theme::Palette};
 
 pub(crate) const PROGRESS_TRACK_HEIGHT: f32 = 6.0;
 
@@ -53,6 +53,118 @@ pub(crate) fn text(value: impl Into<SharedString>, size: f32, line: f32, color: 
         .line_height(px(line))
         .text_color(color)
         .child(value.into())
+}
+
+/// Odometer-style label. A digit that changed spins through every digit in
+/// between (upward when the value rose, downward when it fell), and glyphs
+/// fade as they leave the line, like a soft mask on its edges. Other
+/// characters (separators, a new leading digit) slide in or out while their
+/// slot eases between glyph widths. Shared leading symbols (`$`) stay put;
+/// the rest aligns on the right so decimals keep their columns.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rolling_text(
+    frame: &RollFrame,
+    text_system: &gpui::WindowTextSystem,
+    family: SharedString,
+    size: f32,
+    line: f32,
+    weight: FontWeight,
+    color: Hsla,
+) -> Div {
+    let glyphs = |value: String| {
+        text(value, size, line, color)
+            .font_weight(weight)
+            .whitespace_nowrap()
+            .flex_none()
+    };
+    let Some(from) = frame.from.as_ref() else {
+        return glyphs(frame.to.to_string());
+    };
+    let old: Vec<char> = from.chars().collect();
+    let new: Vec<char> = frame.to.chars().collect();
+    let prefix = old
+        .iter()
+        .zip(&new)
+        .take_while(|(a, b)| a == b && !a.is_ascii_digit())
+        .count();
+    let (old, new) = (&old[prefix..], &new[prefix..]);
+    let len = old.len().max(new.len());
+    let at = |chars: &[char], index: usize| {
+        (index + chars.len())
+            .checked_sub(len)
+            .map(|index| chars[index])
+    };
+    let width = |ch: Option<char>| {
+        ch.map_or(0.0, |ch| {
+            measure_text(text_system, family.clone(), size, weight, &ch.to_string())
+        })
+    };
+    // Glyph `offset` steps away from its resting place. Steps are a bit
+    // taller than the line and glyphs are gone by half a step, so only one
+    // digit reads at a time instead of two half-faded neighbors.
+    let glyph = |ch: char, offset: f32| {
+        glyphs(ch.to_string())
+            .absolute()
+            .left_0()
+            .top(px(offset * line * 1.2))
+            .opacity((1.0 - offset.abs() * 1.8).clamp(0.0, 1.0))
+    };
+    let p = frame.progress;
+    let travel = if frame.rising { 1.0 } else { -1.0 };
+    let mut row = div().flex().flex_row().flex_none().h(px(line));
+    let mut run: String = frame.to.chars().take(prefix).collect();
+    for index in 0..len {
+        let (before, after) = (at(old, index), at(new, index));
+        if before == after {
+            run.extend(after);
+            continue;
+        }
+        if !run.is_empty() {
+            row = row.child(glyphs(std::mem::take(&mut run)));
+        }
+        let mut slot = div()
+            .relative()
+            .flex_none()
+            .overflow_hidden()
+            .h(px(line))
+            .w(px(
+                width(before) + (width(after) - width(before)) * p.min(1.0)
+            ));
+        match (
+            before.and_then(|ch| ch.to_digit(10)),
+            after.and_then(|ch| ch.to_digit(10)),
+        ) {
+            (Some(start), Some(end)) => {
+                // Spin the shorter way in the value's direction: 3 → 7
+                // rising passes 4, 5, 6; 3 → 7 falling passes 2, 1, 0, 9, 8.
+                let steps = if frame.rising {
+                    (end + 10 - start) % 10
+                } else {
+                    (start + 10 - end) % 10
+                } as f32;
+                let position = start as f32 + travel * steps * p;
+                let base = position.floor();
+                for digit in [base, base + 1.0] {
+                    let ch =
+                        char::from_digit((digit as i32).rem_euclid(10) as u32, 10).unwrap_or('0');
+                    slot = slot.child(glyph(ch, digit - position));
+                }
+            }
+            _ => {
+                if let Some(ch) = before {
+                    slot = slot.child(glyph(ch, -travel * p));
+                }
+                if let Some(ch) = after {
+                    slot = slot.child(glyph(ch, travel * (1.0 - p)));
+                }
+            }
+        }
+        row = row.child(slot);
+    }
+    if !run.is_empty() {
+        row = row.child(glyphs(run));
+    }
+    row
 }
 
 pub(crate) fn caption(value: impl Into<SharedString>, color: Hsla) -> Div {

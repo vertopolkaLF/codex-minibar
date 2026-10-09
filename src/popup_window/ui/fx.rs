@@ -11,6 +11,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use gpui::SharedString;
+
 /// WinUI `ControlFasterAnimationDuration` — pointer-over / micro-interactions.
 pub(crate) const FASTER: Duration = Duration::from_millis(83);
 /// WinUI `ControlFastAnimationDuration`.
@@ -19,6 +21,10 @@ pub(crate) const FAST: Duration = Duration::from_millis(167);
 pub(crate) const TEXT_FADE: Duration = Duration::from_millis(200);
 /// WinUI `ControlNormalAnimationDuration`.
 pub(crate) const NORMAL: Duration = Duration::from_millis(250);
+/// Data changes: donut sweeps, rolling digits and reordered rows.
+pub(crate) const SETTLE: Duration = Duration::from_millis(420);
+/// Rolling digits: long enough to read the spin through intermediate digits.
+pub(crate) const ROLL: Duration = Duration::from_millis(640);
 
 #[derive(Clone, Copy, Debug)]
 enum Easing {
@@ -114,10 +120,32 @@ pub(crate) fn fluent(x: f64) -> f64 {
     cubic_bezier(0.55, 0.55, 0.0, 1.0, x)
 }
 
+/// A label rolling from its previous text to the current one.
+#[derive(Clone)]
+struct Roll {
+    from: Option<SharedString>,
+    to: SharedString,
+    value: u64,
+    rising: bool,
+    started: Instant,
+    duration: Duration,
+    last_frame: u64,
+}
+
+/// One frame of a [`Fx::roll`]: `from` is `None` once the label has settled.
+pub(crate) struct RollFrame {
+    pub(crate) from: Option<SharedString>,
+    pub(crate) to: SharedString,
+    /// Increasing values roll upward, like an odometer.
+    pub(crate) rising: bool,
+    pub(crate) progress: f32,
+}
+
 #[derive(Default)]
 pub(crate) struct Fx {
     tweens: HashMap<u64, Tween>,
     stretches: HashMap<u64, IndicatorStretch>,
+    rolls: HashMap<u64, Roll>,
     frame: u64,
     now: Option<Instant>,
     enabled: bool,
@@ -170,6 +198,8 @@ impl Fx {
                 .retain(|_, tween| frame.wrapping_sub(tween.last_frame) < 240);
             self.stretches
                 .retain(|_, stretch| frame.wrapping_sub(stretch.last_frame) < 240);
+            self.rolls
+                .retain(|_, roll| frame.wrapping_sub(roll.last_frame) < 240);
         }
     }
 
@@ -262,6 +292,64 @@ impl Fx {
             self.animating = true;
         }
         value
+    }
+
+    /// Text for a numeric label that rolls its changed characters from the
+    /// previous text; `value` orders the two texts to pick the direction.
+    pub(crate) fn roll(
+        &mut self,
+        id: u64,
+        text: impl Into<SharedString>,
+        value: u64,
+        duration: Duration,
+    ) -> RollFrame {
+        let text = text.into();
+        let now = self.now();
+        let frame = self.frame;
+        let enabled = self.enabled;
+        let roll = self.rolls.entry(id).or_insert(Roll {
+            from: None,
+            to: text.clone(),
+            value,
+            rising: true,
+            started: now,
+            duration: Duration::ZERO,
+            last_frame: frame,
+        });
+        roll.last_frame = frame;
+        if !enabled {
+            roll.from = None;
+            roll.duration = Duration::ZERO;
+        } else if roll.to != text {
+            // A retarget mid-roll starts from the text it was heading to.
+            roll.from = Some(roll.to.clone());
+            roll.rising = value >= roll.value;
+            roll.started = now;
+            roll.duration = duration;
+        }
+        roll.to = text;
+        roll.value = value;
+        let t = if roll.duration.is_zero() {
+            1.0
+        } else {
+            now.saturating_duration_since(roll.started).as_secs_f32() / roll.duration.as_secs_f32()
+        };
+        if t >= 1.0 {
+            roll.from = None;
+        }
+        let animating = roll.from.is_some();
+        let result = RollFrame {
+            from: roll.from.clone(),
+            to: roll.to.clone(),
+            rising: roll.rising,
+            // A quick start and a small overshoot so spinning digits land
+            // with a little settle instead of creeping in.
+            progress: cubic_bezier(0.34, 1.2, 0.64, 1.0, f64::from(t.min(1.0))) as f32,
+        };
+        if animating {
+            self.animating = true;
+        }
+        result
     }
 
     /// Boolean convenience: 0 → 1 while `on`.
@@ -555,6 +643,23 @@ mod tests {
         assert!(fx.is_animating());
         fx.begin_frame(false);
         assert_eq!(fx.value(1, 0.5, FAST), 0.5);
+        assert!(!fx.is_animating());
+    }
+
+    #[test]
+    fn rolled_label_keeps_its_previous_text_and_direction_until_it_settles() {
+        let mut fx = Fx::default();
+        fx.begin_frame(true);
+        assert!(fx.roll(1, "$5.00", 500, SETTLE).from.is_none());
+        fx.begin_frame(true);
+        let frame = fx.roll(1, "$3.00", 300, SETTLE);
+        assert_eq!(frame.from.as_ref().map(|text| text.as_ref()), Some("$5.00"));
+        assert!(!frame.rising);
+        assert!(fx.is_animating());
+        fx.begin_frame(false);
+        let frame = fx.roll(1, "$9.00", 900, SETTLE);
+        assert!(frame.from.is_none());
+        assert_eq!(frame.to, "$9.00");
         assert!(!fx.is_animating());
     }
 }

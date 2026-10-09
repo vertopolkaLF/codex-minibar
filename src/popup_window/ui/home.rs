@@ -5,7 +5,7 @@ use std::{collections::HashMap, f32::consts::PI, rc::Rc};
 use gpui::{
     AnyElement, AppContext, Bounds, ClickEvent, Context, DragMoveEvent, Hsla, InteractiveElement,
     IntoElement, ParentElement, PathBuilder, Pixels, Render, SharedString,
-    StatefulInteractiveElement, Styled, Window, canvas, div, point, px,
+    StatefulInteractiveElement, Styled, Window, canvas, div, point, px, relative,
 };
 
 use super::{
@@ -681,7 +681,9 @@ impl PopupRoot {
         } else {
             match self.ui.total_spend_presentation {
                 TotalSpendPresentation::Donut => self.spend_donut_content(&entries, total, window),
-                TotalSpendPresentation::ProgressBar => self.spend_hero_content(&entries, total),
+                TotalSpendPresentation::ProgressBar => {
+                    self.spend_hero_content(&entries, total, window)
+                }
             }
         };
         let card_id = fx::key("usage-stats-card");
@@ -712,14 +714,38 @@ impl PopupRoot {
             .into_any_element()
     }
 
-    fn spend_hero_content(&self, entries: &[(ProviderId, u64)], total: u64) -> AnyElement {
-        let palette = &self.palette;
+    fn spend_hero_content(
+        &mut self,
+        entries: &[(ProviderId, u64)],
+        total: u64,
+        window: &Window,
+    ) -> AnyElement {
+        const SCOPE: &str = "spend-cards";
+        const COLUMNS: usize = 3;
+        const TILE_HEIGHT: f32 = 40.0;
+        const ROW_PITCH: f32 = TILE_HEIGHT + 16.0;
+        let palette = self.palette.clone();
         let colored = self.ui.use_colored_provider_icons;
-        let mut tiles = div().grid().grid_cols(3).gap_x(px(8.0)).gap_y(px(16.0));
-        for (provider, spend) in entries {
+        let slots = self.spend_slots(SCOPE, entries, COLUMNS);
+        let rows = entries.len().div_ceil(COLUMNS) as f32;
+        let height = self.fx.value(
+            fx::key((SCOPE, "height")),
+            (rows * ROW_PITCH - 16.0).max(0.0),
+            fx::SETTLE,
+        );
+        // Tiles sit on animated grid cells so a new ranking slides each
+        // provider to its new place.
+        let mut tiles = div().relative().w_full().h(px(height));
+        for ((provider, spend), (column, row)) in entries.iter().zip(slots) {
+            let amount = self.spend_amount(SCOPE, Some(*provider), *spend, 12.0, 16.0, window);
             tiles = tiles.child(
                 div()
-                    .min_w_0()
+                    .absolute()
+                    .left(relative(column / COLUMNS as f32))
+                    .top(px(row * ROW_PITCH))
+                    .w(relative(1.0 / COLUMNS as f32))
+                    .h(px(TILE_HEIGHT))
+                    .pr(px(8.0))
                     .flex()
                     .flex_col()
                     .gap(px(4.0))
@@ -734,19 +760,18 @@ impl PopupRoot {
                                 16.0,
                                 palette.provider_icon(provider.kind(), colored),
                                 provider.badge().as_ref(),
-                                palette,
+                                &palette,
                             ))
                             .child(nowrap(components::body_strong(
                                 provider.qualified_name(),
                                 palette.text_primary,
                             ))),
                     )
-                    .child(components::caption_strong(
-                        format_spend_full(*spend),
-                        palette.text_primary,
-                    )),
+                    .child(amount),
             );
         }
+        let total_label = self.spend_amount(SCOPE, None, total, 28.0, 36.0, window);
+        let bar = self.share_bar(SCOPE, entries, total);
         div()
             .flex()
             .flex_col()
@@ -756,29 +781,23 @@ impl PopupRoot {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
-                    .child(
-                        components::text(
-                            format_spend_full(total),
-                            28.0,
-                            36.0,
-                            palette.text_primary,
-                        )
-                        .font_weight(gpui::FontWeight::SEMIBOLD),
-                    )
-                    .child(share_bar(entries, |provider| palette.spend_color(provider))),
+                    .child(total_label)
+                    .child(bar),
             )
             .child(tiles)
             .into_any_element()
     }
 
     fn spend_donut_content(
-        &self,
+        &mut self,
         entries: &[(ProviderId, u64)],
         total: u64,
         window: &Window,
     ) -> AnyElement {
+        const SCOPE: &str = "spend-donut";
+        const ROW_HEIGHT: f32 = 20.0;
+        const ROW_PITCH: f32 = ROW_HEIGHT + 12.0;
         let palette = self.palette.clone();
-        let total_label = format_spend_full(total);
         // The total sits in the ring's 68 DIP hole; long amounts shrink
         // (text width scales linearly with size) instead of moving out.
         let label_width = components::measure_text(
@@ -786,7 +805,7 @@ impl PopupRoot {
             palette.font_family.clone(),
             18.0,
             gpui::FontWeight::SEMIBOLD,
-            &total_label,
+            &format_spend_full(total),
         );
         let label_size = if label_width > DONUT_LABEL_WIDTH {
             ((18.0 * DONUT_LABEL_WIDTH / label_width) * 2.0).floor() / 2.0
@@ -794,11 +813,34 @@ impl PopupRoot {
             18.0
         }
         .max(9.0);
+        let label_size = self
+            .fx
+            .value(fx::key((SCOPE, "label-size")), label_size, fx::SETTLE);
+        let total_label = self.spend_amount(
+            SCOPE,
+            None,
+            total,
+            label_size,
+            (label_size * 4.0 / 3.0).ceil(),
+            window,
+        );
         let colored = self.ui.use_colored_provider_icons;
-        let mut legend = div().flex().flex_col().gap(px(12.0)).flex_1().min_w_0();
-        for (provider, spend) in entries {
+        let slots = self.spend_slots(SCOPE, entries, 1);
+        let height = self.fx.value(
+            fx::key((SCOPE, "height")),
+            (entries.len() as f32 * ROW_PITCH - 12.0).max(0.0),
+            fx::SETTLE,
+        );
+        let mut legend = div().relative().flex_1().min_w_0().h(px(height));
+        for ((provider, spend), (_, row)) in entries.iter().zip(slots) {
+            let amount = self.spend_amount(SCOPE, Some(*provider), *spend, 14.0, 20.0, window);
             legend = legend.child(
                 div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .top(px(row * ROW_PITCH))
+                    .h(px(ROW_HEIGHT))
                     .flex()
                     .flex_row()
                     .items_center()
@@ -819,24 +861,25 @@ impl PopupRoot {
                                 palette.text_primary,
                             ))),
                     )
-                    .child(components::body_strong(
-                        format_spend_full(*spend),
-                        palette.text_primary,
-                    )),
+                    .child(amount),
             );
         }
-        let segments = donut_segments(entries, total)
-            .into_iter()
-            .map(|(provider, start, end)| {
-                (
-                    provider.map_or(super::theme::rgb8((0x78, 0x78, 0x78)), |provider| {
-                        palette.spend_color(provider)
-                    }),
-                    start,
-                    end,
-                )
-            })
-            .collect::<Vec<_>>();
+        // The neutral ring fades in as the last share collapses.
+        let empty = self
+            .fx
+            .toggle(fx::key((SCOPE, "empty")), total == 0, fx::SETTLE);
+        let mut segments = Vec::new();
+        if empty > 0.0 {
+            segments.push((
+                super::theme::rgb8((0x78, 0x78, 0x78)).opacity(empty),
+                -90.0,
+                270.0,
+            ));
+        }
+        for (provider, start, end) in self.spend_spans(SCOPE, entries, total, false) {
+            let (start, end) = donut_arc(start, end);
+            segments.push((palette.spend_color(provider), start, end));
+        }
         div()
             .flex()
             .flex_row()
@@ -860,18 +903,126 @@ impl PopupRoot {
                         .absolute()
                         .inset_0(),
                     )
-                    .child(nowrap(
-                        components::text(
-                            total_label,
-                            label_size,
-                            (label_size * 4.0 / 3.0).ceil(),
-                            palette.text_primary,
-                        )
-                        .font_weight(gpui::FontWeight::SEMIBOLD),
-                    )),
+                    .child(total_label),
             )
             .child(legend)
             .into_any_element()
+    }
+
+    /// Each provider's animated `(column, row)` cell, so a new ranking
+    /// glides rows into place instead of jumping.
+    fn spend_slots(
+        &mut self,
+        scope: &'static str,
+        entries: &[(ProviderId, u64)],
+        columns: usize,
+    ) -> Vec<(f32, f32)> {
+        entries
+            .iter()
+            .enumerate()
+            .map(|(index, (provider, _))| {
+                (
+                    self.fx.value(
+                        fx::key((scope, "column", *provider)),
+                        (index % columns) as f32,
+                        fx::SETTLE,
+                    ),
+                    self.fx.value(
+                        fx::key((scope, "row", *provider)),
+                        (index / columns) as f32,
+                        fx::SETTLE,
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    /// Animated [`spend_spans`]: shares grow and shrink in place. Segments
+    /// keep the enabled-provider order rather than the ranking, so a new
+    /// ranking never slides one slice across another.
+    fn spend_spans(
+        &mut self,
+        scope: &'static str,
+        entries: &[(ProviderId, u64)],
+        total: u64,
+        even_when_empty: bool,
+    ) -> Vec<(ProviderId, f32, f32)> {
+        let order = self.enabled_spend();
+        let mut entries = entries.to_vec();
+        entries.sort_by_key(|(provider, _)| order.iter().position(|id| id == provider));
+        spend_spans(&entries, total, even_when_empty)
+            .into_iter()
+            .map(|(provider, start, end)| {
+                let start = self
+                    .fx
+                    .value(fx::key((scope, "start", provider)), start, fx::SETTLE);
+                let end = self
+                    .fx
+                    .value(fx::key((scope, "end", provider)), end, fx::SETTLE);
+                (provider, start, end.max(start))
+            })
+            .collect()
+    }
+
+    /// A dollar amount whose changed digits roll to the new value.
+    fn spend_amount(
+        &mut self,
+        scope: &'static str,
+        provider: Option<ProviderId>,
+        spend: u64,
+        size: f32,
+        line: f32,
+        window: &Window,
+    ) -> gpui::Div {
+        let frame = self.fx.roll(
+            fx::key((scope, "amount", provider)),
+            format_spend_full(spend),
+            spend,
+            fx::ROLL,
+        );
+        components::rolling_text(
+            &frame,
+            window.text_system(),
+            self.palette.font_family.clone(),
+            size,
+            line,
+            gpui::FontWeight::SEMIBOLD,
+            self.palette.text_primary,
+        )
+    }
+
+    /// Rounded segments sized by share, separated by 4 DIP gaps. Segments
+    /// sit on animated spans so a period change resizes and reorders them.
+    fn share_bar(
+        &mut self,
+        scope: &'static str,
+        entries: &[(ProviderId, u64)],
+        total: u64,
+    ) -> gpui::Div {
+        let mut segments = div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left(px(-2.0))
+            .right(px(-2.0));
+        for (provider, start, end) in self.spend_spans(scope, entries, total, true) {
+            segments = segments.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(relative(start))
+                    .w(relative(end - start))
+                    .px(px(2.0))
+                    .child(
+                        div()
+                            .size_full()
+                            .rounded(px(4.0))
+                            .bg(self.palette.spend_color(provider)),
+                    ),
+            );
+        }
+        div().relative().w_full().h(px(10.0)).child(segments)
     }
 }
 
@@ -896,68 +1047,70 @@ fn old_is_first(widgets: &HashMap<HomeWidgetId, Bounds<Pixels>>, bounds: Bounds<
     })
 }
 
-/// Rounded segments sized by weight, separated by 4 DIP gaps.
-pub(super) fn share_bar(
+/// Each provider's share as `(start, end)` fractions of the whole, in
+/// ranking order. With no spend, `even_when_empty` splits it evenly;
+/// otherwise every span collapses to zero width.
+fn spend_spans(
     entries: &[(ProviderId, u64)],
-    color: impl Fn(ProviderId) -> Hsla,
-) -> gpui::Div {
-    let total: u64 = entries
+    total: u64,
+    even_when_empty: bool,
+) -> Vec<(ProviderId, f32, f32)> {
+    let weight = |value: u64| {
+        if total == 0 && even_when_empty {
+            1.0
+        } else {
+            value as f64
+        }
+    };
+    let sum: f64 = entries.iter().map(|(_, value)| weight(*value)).sum();
+    let mut start = 0.0_f64;
+    entries
         .iter()
-        .fold(0, |sum, (_, value)| sum.saturating_add(*value));
-    let mut bar = div().flex().flex_row().gap(px(4.0)).h(px(10.0)).w_full();
-    for (provider, value) in entries {
-        let weight = if total == 0 { 1 } else { (*value).max(1) };
-        bar = bar.child(
-            div()
-                .h_full()
-                .flex_grow()
-                .flex_basis(px(0.0))
-                .min_w(px(4.0))
-                .rounded(px(4.0))
-                .bg(color(*provider))
-                .flex_grow_weight(weight as f32),
-        );
-    }
-    bar
+        .map(|(provider, value)| {
+            let end = if sum > 0.0 {
+                start + weight(*value) / sum
+            } else {
+                start
+            };
+            let span = (*provider, start as f32, end as f32);
+            start = end;
+            span
+        })
+        .collect()
 }
 
-trait FlexGrowWeight {
-    fn flex_grow_weight(self, weight: f32) -> Self;
-}
-
-impl FlexGrowWeight for gpui::Div {
-    fn flex_grow_weight(mut self, weight: f32) -> Self {
-        self.style().flex_grow = Some(weight);
-        self
+/// Donut angles for a `(start, end)` share, in degrees from 12 o'clock
+/// clockwise, keeping half of a 2° gap on both ends. A slice thinner than
+/// the gap comes back with a negative sweep, which the painter skips.
+fn donut_arc(start: f32, end: f32) -> (f32, f32) {
+    const GAP_DEGREES: f32 = 2.0;
+    let (start, end) = (-90.0 + start * 360.0, -90.0 + end * 360.0);
+    if end - start >= 359.0 {
+        (-90.0, 270.0)
+    } else {
+        (start + GAP_DEGREES / 2.0, end - GAP_DEGREES / 2.0)
     }
 }
 
-/// Angular spans of the spend donut, in degrees from 12 o'clock clockwise.
+/// Angular spans of the spend donut at rest.
 /// `None` marks the neutral ring drawn when there is no spend at all.
+#[cfg(test)]
 pub(crate) fn donut_segments(
     entries: &[(ProviderId, u64)],
     total: u64,
 ) -> Vec<(Option<ProviderId>, f32, f32)> {
-    const GAP_DEGREES: f32 = 2.0;
     if total == 0 {
         return vec![(None, -90.0, 270.0)];
     }
-    let mut start = -90.0_f32;
-    let mut segments = Vec::new();
-    for (provider, spend) in entries.iter().filter(|(_, spend)| *spend > 0) {
-        let end = start + *spend as f32 / total as f32 * 360.0;
-        if end - start >= 359.0 {
-            segments.push((Some(*provider), -90.0, 270.0));
-        } else {
-            segments.push((
-                Some(*provider),
-                start + GAP_DEGREES / 2.0,
-                end - GAP_DEGREES / 2.0,
-            ));
-        }
-        start = end;
-    }
-    segments
+    spend_spans(entries, total, false)
+        .into_iter()
+        .zip(entries)
+        .filter(|(_, (_, spend))| *spend > 0)
+        .map(|((provider, start, end), _)| {
+            let (start, end) = donut_arc(start, end);
+            (Some(provider), start, end)
+        })
+        .collect()
 }
 
 /// Widest total label that clears the donut's inner edge with some air.
