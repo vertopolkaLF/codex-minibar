@@ -2214,6 +2214,23 @@ pub(crate) fn dialog(
     buttons: Vec<AnyElement>,
     on_dismiss: Option<Handler<()>>,
 ) -> AnyElement {
+    dialog_sized(k, id, phase, width, None, body, buttons, on_dismiss)
+}
+
+/// [`dialog`] with a fixed `height` (still capped to the window). A sized
+/// body does not scroll as a whole: give one child `flex_1().min_h_0()` and
+/// let it scroll on its own.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn dialog_sized(
+    k: &Kit,
+    id: impl Into<SharedString>,
+    phase: OverlayPhase,
+    width: f32,
+    height: Option<f32>,
+    body: Vec<AnyElement>,
+    buttons: Vec<AnyElement>,
+    on_dismiss: Option<Handler<()>>,
+) -> AnyElement {
     let id: SharedString = id.into();
     let generation = phase.generation;
     let exit = phase.exit.map(fx::ease_out_cubic);
@@ -2226,6 +2243,7 @@ pub(crate) fn dialog(
         .flex()
         .flex_col()
         .w(px(width))
+        .when_some(height, |el, height| el.h(px(height)))
         .max_h(relative(0.92))
         .rounded(px(14.0))
         .bg(theme.dialog)
@@ -2241,7 +2259,10 @@ pub(crate) fn dialog(
                 .p(px(24.0))
                 .flex_shrink()
                 .min_h_0()
-                .overflow_y_scroll()
+                .map(|el| match height {
+                    Some(_) => el.flex_1().overflow_hidden(),
+                    None => el.overflow_y_scroll(),
+                })
                 .children(body),
         )
         .child(

@@ -85,30 +85,31 @@ pub(crate) fn popup_font_family(
     match theme {
         PopupTheme::Fluent => ui_font_family(custom, default),
         PopupTheme::Vercel => ui_font_family(custom, &SharedString::from(GEIST_FAMILY)),
-        // SF Pro is licensed for Apple platforms only; Segoe UI Variable is
-        // the closest system face on Windows.
-        PopupTheme::Apple => ui_font_family(custom, default),
         // VS Code themes carry colors only.
         PopupTheme::VsCode => ui_font_family(custom, default),
     }
 }
 
-/// The installed VS Code theme the popup paints with: only while it is the
-/// selected design and still installed.
-pub(crate) fn selected_vscode_theme(
+/// The design the popup paints with: a theme previewed from Settings wins
+/// over the saved choice; a saved VS Code theme applies only while it is
+/// still installed.
+pub(crate) fn popup_design(
     theme: PopupTheme,
     id: Option<&str>,
-) -> Option<Arc<VsCodeTheme>> {
-    if theme != PopupTheme::VsCode {
-        return None;
+) -> (PopupTheme, Option<Arc<VsCodeTheme>>) {
+    if let Some(preview) = crate::vscode_themes::preview() {
+        return (PopupTheme::VsCode, Some(preview));
     }
-    crate::vscode_themes::get(id?)
+    if theme != PopupTheme::VsCode {
+        return (theme, None);
+    }
+    (theme, id.and_then(crate::vscode_themes::get))
 }
 
 /// Light or dark for a palette: a VS Code theme has a fixed base, every
 /// built-in design follows the app theme.
 pub(crate) fn palette_dark(vscode: Option<&VsCodeTheme>, app_dark: bool) -> bool {
-    vscode.map_or(app_dark, |theme| theme.kind.is_dark())
+    vscode.map_or(app_dark, VsCodeTheme::is_dark)
 }
 
 /// The UI family to render with: the user's pick, or the system default.
@@ -167,6 +168,8 @@ pub(crate) struct Palette {
     pub(crate) chart_grid: Hsla,
     pub(crate) mono_provider_icon: Hsla,
     pub(crate) material: PopupBackgroundMaterial,
+    /// Card, control and window outlines are drawn.
+    pub(crate) borders: bool,
     /// The VS Code theme this palette was mapped from.
     pub(crate) vscode: Option<Arc<VsCodeTheme>>,
 }
@@ -200,7 +203,7 @@ impl Palette {
         self.solid_background.opacity(opacity)
     }
 
-    /// `vscode` is the theme from [`selected_vscode_theme`]; a VS Code
+    /// `vscode` is the theme from [`popup_design`]; a VS Code
     /// selection whose theme is gone renders as Fluent.
     pub(crate) fn new(
         theme: PopupTheme,
@@ -213,7 +216,6 @@ impl Palette {
         match theme {
             PopupTheme::Fluent => Self::fluent(dark, accent, material, font_family),
             PopupTheme::Vercel => Self::vercel(dark, material, font_family),
-            PopupTheme::Apple => Self::apple(dark, material, font_family),
             PopupTheme::VsCode => match vscode {
                 Some(vscode) => Self::vscode(vscode, material, font_family),
                 None => Self {
@@ -224,8 +226,17 @@ impl Palette {
         }
     }
 
-    /// Accent fill this theme paints with; Vercel is monochrome and Apple
-    /// always uses Action Blue.
+    /// Without borders every outline drawn with `card_stroke` disappears;
+    /// dividers between rows stay.
+    pub(crate) fn with_borders(mut self, borders: bool) -> Self {
+        if !borders {
+            self.card_stroke = gpui::transparent_black();
+        }
+        self.borders = borders;
+        self
+    }
+
+    /// Accent fill this theme paints with; Vercel is monochrome.
     pub(crate) fn accent_for(
         theme: PopupTheme,
         dark: bool,
@@ -234,7 +245,6 @@ impl Palette {
         match theme {
             PopupTheme::Fluent | PopupTheme::VsCode => rgb8(accent.fill(dark)),
             PopupTheme::Vercel => vercel_gray_1000(dark),
-            PopupTheme::Apple => apple_action_blue(dark),
         }
     }
 
@@ -365,6 +375,7 @@ impl Palette {
                 rgb8((96, 96, 96))
             },
             material,
+            borders: true,
             vscode: None,
         }
     }
@@ -422,67 +433,7 @@ impl Palette {
             chart_grid: gray_alpha(0.081, 0.09),
             mono_provider_icon: gray_900,
             material,
-            vscode: None,
-        }
-    }
-
-    /// Apple's web tokens: parchment canvas, white (or near-black tile) cards
-    /// on soft hairlines, near-black ink and a single Action Blue accent.
-    fn apple(dark: bool, material: PopupBackgroundMaterial, font_family: SharedString) -> Self {
-        let pick =
-            |light: (u8, u8, u8), dark_rgb: (u8, u8, u8)| rgb8(if dark { dark_rgb } else { light });
-        // {colors.ink} on light surfaces, {colors.body-on-dark} on tiles.
-        let ink_primary = pick((0x1D, 0x1D, 0x1F), (0xFF, 0xFF, 0xFF));
-        // {colors.ink-muted-80} / {colors.body-muted}.
-        let ink_secondary = pick((0x33, 0x33, 0x33), (0xCC, 0xCC, 0xCC));
-        // {colors.ink-muted-48}.
-        let ink_tertiary = rgb8((0x7A, 0x7A, 0x7A));
-        Self {
-            theme: PopupTheme::Apple,
-            dark,
-            // {rounded.lg} scaled to popup-size cards / {rounded.sm} / {spacing.sm}.
-            card_radius: 14.0,
-            control_radius: 8.0,
-            card_gap: 12.0,
-            font_family,
-            text_primary: ink_primary,
-            text_secondary: ink_secondary,
-            text_tertiary: ink_tertiary,
-            // {colors.on-primary}.
-            text_on_accent: rgb8((0xFF, 0xFF, 0xFF)),
-            accent: apple_action_blue(dark),
-            // {colors.canvas} utility cards / {colors.surface-tile-1}.
-            card_background: pick((0xFF, 0xFF, 0xFF), (0x27, 0x27, 0x29)),
-            // {colors.hairline} as a ring rather than a hard line.
-            card_stroke: ink(dark, if dark { 0x0F } else { 0x14 }),
-            // {colors.divider-soft}.
-            subtle_fill: ink(dark, if dark { 0x14 } else { 0x0A }),
-            control_fill: ink(dark, if dark { 0x1F } else { 0x14 }),
-            // {colors.hairline}.
-            divider: ink(dark, 0x1F),
-            // {colors.canvas-parchment} / {colors.surface-black}.
-            solid_background: pick((0xF5, 0xF5, 0xF7), (0x00, 0x00, 0x00)),
-            // {colors.surface-pearl} / {colors.surface-tile-2}.
-            tooltip_background: pick((0xFA, 0xFA, 0xFC), (0x2A, 0x2A, 0x2C)),
-            // Frosted sticky-bar band.
-            footer_background: if dark {
-                rgba8(255, 255, 255, 0x0A)
-            } else {
-                rgba8(255, 255, 255, 0x80)
-            },
-            // The design carries no state colors; use Apple's system red/orange.
-            critical: pick((0xD7, 0x00, 0x15), (0xFF, 0x45, 0x3A)),
-            critical_background: pick((0xFF, 0xF0, 0xF0), (0x3A, 0x1A, 0x1A)),
-            attention_background: ink(dark, if dark { 0x0D } else { 0x08 }),
-            caution: pick((0xC9, 0x34, 0x00), (0xFF, 0x9F, 0x0A)),
-            caution_background: pick((0xFF, 0xF5, 0xE5), (0x3A, 0x2A, 0x10)),
-            chrome_icon: ink_secondary,
-            chrome_icon_hover: ink_primary,
-            pace_marker: ink_primary,
-            interval_tick: ink(dark, if dark { 0x3D } else { 0x33 }),
-            chart_grid: ink(dark, if dark { 0x1A } else { 0x14 }),
-            mono_provider_icon: ink_secondary,
-            material,
+            borders: true,
             vscode: None,
         }
     }
@@ -496,7 +447,7 @@ impl Palette {
         material: PopupBackgroundMaterial,
         font_family: SharedString,
     ) -> Self {
-        let dark = theme.kind.is_dark();
+        let dark = theme.is_dark();
         let pick =
             |light: (u8, u8, u8), dark_rgb: (u8, u8, u8)| rgb8(if dark { dark_rgb } else { light });
         let color = |keys: &[&str]| {
@@ -661,6 +612,7 @@ impl Palette {
             chart_grid: tone(if dark { 0.12 } else { 0.10 }),
             mono_provider_icon: text_secondary,
             material,
+            borders: true,
             vscode: Some(theme),
         }
     }
@@ -778,15 +730,6 @@ fn vercel_gray_1000(dark: bool) -> Hsla {
         (0xED, 0xED, 0xED)
     } else {
         (0x17, 0x17, 0x17)
-    })
-}
-
-/// {colors.primary} on light surfaces, {colors.primary-on-dark} on dark.
-fn apple_action_blue(dark: bool) -> Hsla {
-    rgb8(if dark {
-        (0x29, 0x97, 0xFF)
-    } else {
-        (0x00, 0x66, 0xCC)
     })
 }
 

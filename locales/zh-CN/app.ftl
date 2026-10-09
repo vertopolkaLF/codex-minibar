@@ -499,7 +499,6 @@ popup-theme = 弹出窗口主题
 popup-theme-description = 仅更改弹出窗口。设置窗口保持 Windows 外观。
 popup-theme-fluent = Fluent
 popup-theme-vercel = Vercel
-popup-theme-apple = Apple
 popup-theme-built-in = 内置
 popup-theme-vscode = VS Code 主题
 vscode-themes = VS Code 主题
@@ -511,9 +510,16 @@ browse-open-vsx = 浏览 Open VSX
 browse-open-vsx-description = 从 open-vsx.org 查找并安装颜色主题
 search-color-themes = 搜索颜色主题
 open-vsx-search = 搜索
+open-vsx-browse = 浏览
 open-vsx-searching = 正在搜索…
 no-themes-found = 未找到颜色主题
+open-vsx-load-failed = 无法从 Open VSX 加载主题
+open-vsx-retry = 重试
+open-vsx-preview-loading = 正在加载预览…
+open-vsx-preview-hint = 点击主题即可在弹出窗口中预览。“安装”会保留整个主题包；主题的下载按钮只保留该主题。
+open-vsx-preview-empty = 此扩展不包含任何颜色主题
 open-vsx-install = 安装
+open-vsx-install-one = 仅安装此主题
 open-vsx-installed = 已安装
 open-vsx-installing = 正在安装…
 theme-installed = 主题已安装
@@ -533,6 +539,8 @@ comfortable = 宽松
 compact = 紧凑
 
 popup-corner-radius = 弹出窗口圆角半径
+popup-borders = 边框
+popup-borders-description = 为弹出窗口、卡片和控件绘制轮廓
 
 animation-effects = 动画效果
 

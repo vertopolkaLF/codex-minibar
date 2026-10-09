@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use gpui::{
     AnyElement, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px, relative,
+    StatefulInteractiveElement, Styled, div, prelude::FluentBuilder, px, relative,
 };
 
 use super::kit::{self, Button, ButtonSize, Kit, Row, SliderRange, eid};
@@ -17,7 +17,7 @@ use crate::settings::{
 use crate::vscode_themes::VsCodeTheme;
 
 /// Popup theme cards per row.
-const THEME_COLUMNS: usize = 3;
+const THEME_COLUMNS: u16 = 3;
 
 /// One card in the popup theme grid.
 enum ThemeChoice {
@@ -36,11 +36,91 @@ const ACCENTS: [AccentColor; 8] = [
     AccentColor::Teal,
 ];
 
+/// A miniature popup painted with `palette`: two usage cards and the footer.
+pub(super) fn popup_mock(k: &Kit, palette: &Palette) -> gpui::Div {
+    let line = |width: f32, color| div().h(px(4.0)).w(relative(width)).rounded_full().bg(color);
+    let mock_card = |fill: f32| {
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(5.0))
+            .p(px(6.0))
+            .rounded(px(palette.card_radius * 0.6))
+            .bg(palette.card_background)
+            .border_1()
+            .border_color(palette.card_stroke)
+            .child(line(0.45, palette.text_primary))
+            .child(
+                div()
+                    .h(px(4.0))
+                    .w_full()
+                    .rounded_full()
+                    .bg(palette.control_fill)
+                    .child(
+                        div()
+                            .h_full()
+                            .w(relative(fill))
+                            .rounded_full()
+                            .bg(palette.accent),
+                    ),
+            )
+            .child(line(0.3, palette.text_tertiary))
+    };
+    div()
+        .h(px(96.0))
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(5.0))
+        .p(px(8.0))
+        .rounded(px(6.0))
+        .overflow_hidden()
+        .bg(palette.solid_background)
+        .border_1()
+        .border_color(k.theme.divider)
+        .child(mock_card(0.62))
+        .child(mock_card(0.28))
+        .child(
+            div()
+                .mt_auto()
+                .flex()
+                .items_center()
+                .gap(px(5.0))
+                .child(div().size(px(6.0)).rounded_full().bg(palette.accent))
+                .child(div().size(px(6.0)).rounded_full().bg(palette.chrome_icon))
+                .child(div().size(px(6.0)).rounded_full().bg(palette.chrome_icon)),
+        )
+}
+
 impl SettingsWindow {
+    /// The palette a VS Code theme gives the popup, for previews. `accent`
+    /// comes from the caller: resolving the Windows accent goes through
+    /// WinRT, too slow to repeat for every card of a frame.
+    pub(super) fn vscode_palette(
+        &self,
+        vscode: Arc<VsCodeTheme>,
+        accent: crate::theme::AccentRamp,
+    ) -> Palette {
+        let font = popup_theme::popup_font_family(
+            PopupTheme::VsCode,
+            self.settings.font_family.as_deref(),
+            &self.fonts.text,
+        );
+        let dark = popup_theme::palette_dark(Some(&vscode), false);
+        Palette::new(
+            PopupTheme::VsCode,
+            Some(vscode),
+            dark,
+            accent,
+            PopupBackgroundMaterial::Solid,
+            font,
+        )
+        .with_borders(self.settings.popup_borders)
+    }
+
     pub(super) fn appearance_page(
         &mut self,
         k: &mut Kit,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let s = &self.settings;
@@ -48,6 +128,7 @@ impl SettingsWindow {
         let colored_sidebar = s.use_colored_sidebar_icons;
         let time_format = s.time_format;
         let material = s.popup_background_material;
+        let borders = s.popup_borders;
         let bar = s.bottom_bar_size;
         let radius = s.popup_corner_radius;
         let animations = s.animations_enabled;
@@ -117,6 +198,7 @@ impl SettingsWindow {
 
         let popup_theme_cards = self.popup_theme_grid(k, cx);
         let import_row = self.vscode_import_row(k, cx);
+        let open_vsx_row = self.open_vsx_entry_row(k, cx);
         let themes = kit::card_of(k, |k| {
             vec![
                 Row::new("appearance-popup-theme", crate::i18n::tr("popup-theme"))
@@ -129,9 +211,9 @@ impl SettingsWindow {
                     )
                     .render(k),
                 import_row,
+                open_vsx_row,
             ]
         });
-        let open_vsx = self.open_vsx_browser(k, window, cx);
 
         let radius_value = radius.dip();
         let popup = kit::card_of(k, |k| {
@@ -196,6 +278,16 @@ impl SettingsWindow {
                             .into_any_element(),
                     )
                     .render(k),
+                kit::toggle_row(
+                    k,
+                    "appearance-popup-borders",
+                    crate::i18n::tr("popup-borders"),
+                    Some(crate::i18n::tr("popup-borders-description").into()),
+                    borders,
+                    Self::h(cx, |this, value: bool, _, cx| {
+                        this.edit(cx, move |settings| settings.popup_borders = value)
+                    }),
+                ),
             ]
         });
 
@@ -222,7 +314,6 @@ impl SettingsWindow {
             look,
             kit::section_heading(k, crate::i18n::tr("popup")),
             themes,
-            open_vsx,
             popup,
             kit::section_heading(k, crate::i18n::tr("motion")),
             motion,
@@ -327,44 +418,38 @@ impl SettingsWindow {
         .into_any_element()
     }
 
-    /// Built-in designs followed by every installed VS Code theme, in rows.
+    /// Built-in designs followed by every installed VS Code theme, in a grid
+    /// of equal columns.
     fn popup_theme_grid(&self, k: &Kit, cx: &mut Context<Self>) -> AnyElement {
         let installed = crate::vscode_themes::installed();
         let choices = PopupTheme::ALL
             .into_iter()
             .map(ThemeChoice::Builtin)
             .chain(installed.iter().cloned().map(ThemeChoice::VsCode));
-        let mut rows = Vec::new();
-        let mut row = Vec::with_capacity(THEME_COLUMNS);
-        for choice in choices {
-            row.push(self.popup_theme_card(k, choice, cx));
-            if row.len() == THEME_COLUMNS {
-                rows.push(std::mem::take(&mut row));
-            }
-        }
-        if !row.is_empty() {
-            // Keep the last row's cards the same width as the ones above.
-            while row.len() < THEME_COLUMNS {
-                row.push(div().flex_1().into_any_element());
-            }
-            rows.push(row);
-        }
+        // Once per frame, not per card: see `vscode_palette`.
+        let accent = crate::theme::accent_ramp(self.settings.accent_color);
+        let cards = choices
+            .map(|choice| self.popup_theme_card(k, choice, accent, cx))
+            .collect::<Vec<_>>();
         div()
-            .flex()
-            .flex_col()
+            .grid()
+            .grid_cols(THEME_COLUMNS)
             .gap(px(12.0))
             .w_full()
-            .children(
-                rows.into_iter()
-                    .map(|cards| div().flex().gap(px(12.0)).w_full().children(cards)),
-            )
+            .children(cards)
             .into_any_element()
     }
 
     /// A miniature popup painted with one popup theme's own palette, in the
     /// light or dark mode Settings currently resolves to (VS Code themes
     /// always show their own base).
-    fn popup_theme_card(&self, k: &Kit, choice: ThemeChoice, cx: &mut Context<Self>) -> AnyElement {
+    fn popup_theme_card(
+        &self,
+        k: &Kit,
+        choice: ThemeChoice,
+        accent: crate::theme::AccentRamp,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = &k.theme;
         let (value, vscode) = match choice {
             ThemeChoice::Builtin(value) => (value, None),
@@ -377,7 +462,6 @@ impl SettingsWindow {
         let label: SharedString = match value {
             PopupTheme::Fluent => crate::i18n::tr("popup-theme-fluent").into(),
             PopupTheme::Vercel => crate::i18n::tr("popup-theme-vercel").into(),
-            PopupTheme::Apple => crate::i18n::tr("popup-theme-apple").into(),
             PopupTheme::VsCode => vscode.as_ref().map_or_else(
                 || crate::i18n::tr("popup-theme-vscode").into(),
                 |vscode| vscode.label.clone().into(),
@@ -395,69 +479,19 @@ impl SettingsWindow {
         let font = popup_theme::popup_font_family(
             value,
             self.settings.font_family.as_deref(),
-            &popup_theme::default_font_family(cx),
+            &self.fonts.text,
         );
         let palette = Palette::new(
             value,
             vscode.clone(),
             popup_theme::palette_dark(vscode.as_deref(), theme.dark),
-            crate::theme::accent_ramp(self.settings.accent_color),
+            accent,
             PopupBackgroundMaterial::Solid,
             font.clone(),
-        );
+        )
+        .with_borders(self.settings.popup_borders);
         let vscode_id = vscode.as_ref().map(|vscode| vscode.id.clone());
-        let line = |width: f32, color| div().h(px(4.0)).w(relative(width)).rounded_full().bg(color);
-        let mock_card = |fill: f32| {
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(5.0))
-                .p(px(6.0))
-                .rounded(px(palette.card_radius * 0.6))
-                .bg(palette.card_background)
-                .border_1()
-                .border_color(palette.card_stroke)
-                .child(line(0.45, palette.text_primary))
-                .child(
-                    div()
-                        .h(px(4.0))
-                        .w_full()
-                        .rounded_full()
-                        .bg(palette.control_fill)
-                        .child(
-                            div()
-                                .h_full()
-                                .w(relative(fill))
-                                .rounded_full()
-                                .bg(palette.accent),
-                        ),
-                )
-                .child(line(0.3, palette.text_tertiary))
-        };
-        let preview = div()
-            .h(px(96.0))
-            .w_full()
-            .flex()
-            .flex_col()
-            .gap(px(5.0))
-            .p(px(8.0))
-            .rounded(px(6.0))
-            .overflow_hidden()
-            .bg(palette.solid_background)
-            .border_1()
-            .border_color(theme.divider)
-            .child(mock_card(0.62))
-            .child(mock_card(0.28))
-            .child(
-                div()
-                    .mt_auto()
-                    .flex()
-                    .items_center()
-                    .gap(px(5.0))
-                    .child(div().size(px(6.0)).rounded_full().bg(palette.accent))
-                    .child(div().size(px(6.0)).rounded_full().bg(palette.chrome_icon))
-                    .child(div().size(px(6.0)).rounded_full().bg(palette.chrome_icon)),
-            );
+        let preview = popup_mock(k, &palette);
         let hover = theme.card_hover;
         let card_id = match &vscode_id {
             Some(id) => format!("popup-theme-card-vscode-{id}"),
@@ -535,11 +569,7 @@ impl SettingsWindow {
         .into_any_element();
         // Newly installed themes fade in rather than popping into the grid.
         match &vscode {
-            Some(_) => div()
-                .flex_1()
-                .min_w_0()
-                .child(kit::appear(k, card_id, card))
-                .into_any_element(),
+            Some(_) => kit::appear(k, card_id, card),
             None => card,
         }
     }

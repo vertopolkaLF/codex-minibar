@@ -17,7 +17,10 @@ fn main() {
 /// host import TaskDialogIndirect/SetWindowSubclass) and per-monitor v2 DPI
 /// awareness, which both GPUI windows rely on for crisp scaling.
 fn embed_application_manifest() {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/app.manifest");
+    // Read the directory at run time: `env!` bakes in the checkout the build
+    // script was compiled from, which goes stale when worktrees share `target`.
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+    let manifest = Path::new(&manifest_dir).join("assets/app.manifest");
     println!("cargo:rerun-if-changed={}", manifest.display());
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;

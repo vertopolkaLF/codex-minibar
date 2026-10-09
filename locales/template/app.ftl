@@ -1030,10 +1030,6 @@ popup-theme-fluent = { "" }
 popup-theme-vercel = { "" }
 
 # English source:
-# popup-theme-apple = Apple
-popup-theme-apple = { "" }
-
-# English source:
 # popup-theme-built-in = Built-in
 popup-theme-built-in = { "" }
 
@@ -1078,6 +1074,10 @@ search-color-themes = { "" }
 open-vsx-search = { "" }
 
 # English source:
+# open-vsx-browse = Browse
+open-vsx-browse = { "" }
+
+# English source:
 # open-vsx-searching = Searching…
 open-vsx-searching = { "" }
 
@@ -1086,8 +1086,32 @@ open-vsx-searching = { "" }
 no-themes-found = { "" }
 
 # English source:
+# open-vsx-load-failed = Couldn't load themes from Open VSX
+open-vsx-load-failed = { "" }
+
+# English source:
+# open-vsx-retry = Retry
+open-vsx-retry = { "" }
+
+# English source:
+# open-vsx-preview-loading = Loading preview…
+open-vsx-preview-loading = { "" }
+
+# English source:
+# open-vsx-preview-hint = Click a theme to preview it in the popup. Install keeps the whole pack; a theme's download button keeps just that one.
+open-vsx-preview-hint = { "" }
+
+# English source:
+# open-vsx-preview-empty = This extension does not contribute any color themes
+open-vsx-preview-empty = { "" }
+
+# English source:
 # open-vsx-install = Install
 open-vsx-install = { "" }
+
+# English source:
+# open-vsx-install-one = Install only this theme
+open-vsx-install-one = { "" }
 
 # English source:
 # open-vsx-installed = Installed
@@ -1136,6 +1160,14 @@ compact = { "" }
 # English source:
 # popup-corner-radius = Popup corner radius
 popup-corner-radius = { "" }
+
+# English source:
+# popup-borders = Borders
+popup-borders = { "" }
+
+# English source:
+# popup-borders-description = Outline the popup window, cards and controls
+popup-borders-description = { "" }
 
 # English source:
 # animation-effects = Animation effects

@@ -149,13 +149,17 @@ pub(crate) fn provider_mark(
     mark
 }
 
-/// Standard Fluent card surface.
+/// Standard Fluent card surface. Without borders the outline is left out
+/// entirely, so fills painted inside the card reach its edge.
 pub(crate) fn card(palette: &Palette) -> Div {
-    div()
+    let card = div()
         .rounded(px(palette.card_radius))
-        .bg(palette.card_background)
-        .border_1()
-        .border_color(palette.card_stroke)
+        .bg(palette.card_background);
+    if palette.borders {
+        card.border_1().border_color(palette.card_stroke)
+    } else {
+        card
+    }
 }
 
 /// Full-size hover tint drawn above a card's background and below content.

@@ -754,7 +754,6 @@ popup-theme = Тема всплывающего окна
 popup-theme-description = Меняет только всплывающее окно. Настройки сохраняют вид Windows.
 popup-theme-fluent = Fluent
 popup-theme-vercel = Vercel
-popup-theme-apple = Apple
 popup-theme-built-in = Встроенная
 popup-theme-vscode = Тема VS Code
 vscode-themes = Темы VS Code
@@ -766,9 +765,16 @@ browse-open-vsx = Каталог Open VSX
 browse-open-vsx-description = Поиск и установка цветовых тем из каталога open-vsx.org
 search-color-themes = Поиск цветовых тем
 open-vsx-search = Найти
+open-vsx-browse = Обзор
 open-vsx-searching = Поиск…
 no-themes-found = Цветовые темы не найдены
+open-vsx-load-failed = Не удалось загрузить темы из Open VSX
+open-vsx-retry = Повторить
+open-vsx-preview-loading = Загрузка предпросмотра…
+open-vsx-preview-hint = Нажмите на тему, чтобы посмотреть её во всплывающем окне. «Установить» сохранит весь набор, а кнопка загрузки у темы — только её.
+open-vsx-preview-empty = Это расширение не содержит цветовых тем
 open-vsx-install = Установить
+open-vsx-install-one = Установить только эту тему
 open-vsx-installed = Установлено
 open-vsx-installing = Установка…
 theme-installed = Тема установлена
@@ -795,6 +801,8 @@ compact = Компактный
 
 # src/settings_window/appearance.rs
 popup-corner-radius = Радиус углов всплывающего окна
+popup-borders = Границы
+popup-borders-description = Обводка всплывающего окна, карточек и элементов управления
 
 # src/settings_window/appearance.rs
 animation-effects = Эффекты анимации

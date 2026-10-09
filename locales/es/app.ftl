@@ -502,7 +502,6 @@ popup-theme = Tema de la ventana emergente
 popup-theme-description = Solo cambia la ventana emergente. La configuración mantiene el aspecto de Windows.
 popup-theme-fluent = Fluent
 popup-theme-vercel = Vercel
-popup-theme-apple = Apple
 popup-theme-built-in = Integrado
 popup-theme-vscode = Tema de VS Code
 vscode-themes = Temas de VS Code
@@ -514,9 +513,16 @@ browse-open-vsx = Explorar Open VSX
 browse-open-vsx-description = Busca e instala temas de color del registro open-vsx.org
 search-color-themes = Buscar temas de color
 open-vsx-search = Buscar
+open-vsx-browse = Explorar
 open-vsx-searching = Buscando…
 no-themes-found = No se encontraron temas de color
+open-vsx-load-failed = No se pudieron cargar los temas de Open VSX
+open-vsx-retry = Reintentar
+open-vsx-preview-loading = Cargando vista previa…
+open-vsx-preview-hint = Haz clic en un tema para previsualizarlo en la ventana emergente. Instalar conserva el paquete completo; el botón de descarga de un tema conserva solo ese.
+open-vsx-preview-empty = Esta extensión no incluye temas de color
 open-vsx-install = Instalar
+open-vsx-install-one = Instalar solo este tema
 open-vsx-installed = Instalado
 open-vsx-installing = Instalando…
 theme-installed = Tema instalado
@@ -536,6 +542,8 @@ comfortable = Cómodo
 compact = Compacto
 
 popup-corner-radius = Radio de las esquinas de la ventana emergente
+popup-borders = Bordes
+popup-borders-description = Contornear la ventana emergente, las tarjetas y los controles
 
 animation-effects = Efectos de animación
 

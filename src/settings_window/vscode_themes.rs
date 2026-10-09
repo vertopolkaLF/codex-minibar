@@ -1,24 +1,54 @@
 //! VS Code themes on the Appearance page: file import, the Open VSX browser
 //! and install / remove of library entries.
 
-use std::collections::HashSet;
-
-use gpui::{
-    AnyElement, Context, FontWeight, IntoElement, ParentElement, PathPromptOptions, SharedString,
-    Styled, Task, Window, div, prelude::FluentBuilder, px,
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
 };
 
-use super::kit::{self, Button, ButtonSize, Kit, Row};
+use gpui::{
+    Animation, AnimationExt, AnyElement, Context, FontWeight, ImageFormat, InteractiveElement,
+    IntoElement, ParentElement, PathPromptOptions, SharedString, StatefulInteractiveElement,
+    Styled, Task, Transformation, Window, div, img, prelude::FluentBuilder, px, radians,
+};
+
+use super::appearance::popup_mock;
+use super::kit::{self, Button, ButtonSize, Kit, Row, eid};
 use super::window::SettingsWindow;
+use crate::popup_window::ui::fx;
 use crate::settings::PopupTheme;
-use crate::vscode_themes::{self, ThemeSource, open_vsx};
+use crate::vscode_themes::{self, ThemeSource, VsCodeTheme, open_vsx};
 
 const SEARCH_INPUT: &str = "appearance-open-vsx-search";
 const BROWSER_ID: &str = "appearance-open-vsx";
+/// Parallel icon downloads after a search.
+const ICON_WORKERS: usize = 4;
+const ICON_SIZE: f32 = 40.0;
+/// Preview tiles per row, matching the popup theme grid.
+const PREVIEW_COLUMNS: u16 = 3;
+const DIALOG_WIDTH: f32 = 640.0;
+const DIALOG_HEIGHT: f32 = 690.0;
+
+enum Icon {
+    Loading,
+    Ready(Arc<gpui::Image>),
+    Missing,
+}
+
+/// A package downloaded for preview; installing reuses the parsed themes.
+enum Preview {
+    Loading,
+    Ready(Vec<Arc<VsCodeTheme>>),
+    Failed(SharedString),
+}
 
 /// Open VSX search state; lives as long as the Settings window.
 #[derive(Default)]
 pub(super) struct ThemeBrowser {
+    /// The browser dialog is showing.
+    open: bool,
+    scroll: gpui::ScrollHandle,
     query: String,
     results: Option<Vec<open_vsx::Extension>>,
     /// Bumped per finished search so the list replays its entrance.
@@ -29,6 +59,12 @@ pub(super) struct ThemeBrowser {
     installing: HashSet<String>,
     importing: bool,
     search_task: Option<Task<()>>,
+    /// Keyed by icon URL; kept across searches.
+    icons: HashMap<String, Icon>,
+    /// Keyed by `Extension::key`; kept across searches.
+    previews: HashMap<String, Preview>,
+    /// The result whose preview is open.
+    previewing: Option<String>,
 }
 
 impl SettingsWindow {
@@ -54,36 +90,110 @@ impl SettingsWindow {
             .render(k)
     }
 
-    /// Expandable Open VSX search card.
-    pub(super) fn open_vsx_browser(
+    /// "Browse Open VSX" row; the browser itself is a dialog.
+    pub(super) fn open_vsx_entry_row(&mut self, k: &mut Kit, cx: &mut Context<Self>) -> AnyElement {
+        Row::new(BROWSER_ID, crate::i18n::tr("browse-open-vsx"))
+            .description(k, crate::i18n::tr("browse-open-vsx-description"))
+            .trailing(
+                Button::new(
+                    "appearance-open-vsx-open",
+                    crate::i18n::tr("open-vsx-browse"),
+                )
+                .with_icon("magnifying-glass-bold")
+                .on_click(Self::h(cx, |this, (), _, cx| this.open_open_vsx(cx)))
+                .render(k),
+            )
+            .render(k)
+    }
+
+    fn open_open_vsx(&mut self, cx: &mut Context<Self>) {
+        self.theme_browser.open = true;
+        // The first open lists the most popular themes.
+        if self.theme_browser.results.is_none() && !self.theme_browser.searching {
+            let query = self.theme_browser.query.clone();
+            self.search_open_vsx(query, cx);
+        }
+        cx.notify();
+    }
+
+    /// Closes the browser dialog and drops its popup preview; false when it
+    /// was not open.
+    pub(super) fn close_open_vsx(&mut self, cx: &mut Context<Self>) -> bool {
+        if !std::mem::take(&mut self.theme_browser.open) {
+            return false;
+        }
+        end_theme_preview(cx);
+        cx.notify();
+        true
+    }
+
+    pub(super) fn open_vsx_overlay(
         &mut self,
         k: &mut Kit,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let expanded = self.is_expanded(BROWSER_ID);
-        let on_toggle = Self::h(cx, |this, open: bool, _, cx| {
-            this.set_expanded(BROWSER_ID, open);
-            // The first open lists the most popular themes.
-            if open && this.theme_browser.results.is_none() && !this.theme_browser.searching {
-                let query = this.theme_browser.query.clone();
-                this.search_open_vsx(query, cx);
-            }
-            cx.notify();
+    ) -> Option<AnyElement> {
+        let open = self.theme_browser.open.then_some(());
+        let ((), phase) = self.overlays.open_vsx.track(k, open)?;
+        let close = Self::h(cx, |this, (), _, cx| {
+            this.close_open_vsx(cx);
         });
-        let header = Row::new(BROWSER_ID, crate::i18n::tr("browse-open-vsx"))
-            .description(k, crate::i18n::tr("browse-open-vsx-description"));
-        // Built while collapsing too: the closing animation measures it.
-        let body = self.open_vsx_body(k, window, cx);
-        kit::expander(k, BROWSER_ID, header, expanded, on_toggle, move |_| body)
+        let (search_row, content) = self.open_vsx_body(k, window, cx);
+        // Only the result list scrolls; the dialog keeps a fixed height
+        // (capped to the window) so it stays still while results load.
+        let list = div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .child(
+                div()
+                    .id("open-vsx-list")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.theme_browser.scroll)
+                    // Room for the scrollbar beside the row buttons.
+                    .pr(px(12.0))
+                    .child(content),
+            )
+            .children(kit::scrollbar(k, &self.theme_browser.scroll))
+            .into_any_element();
+        Some(kit::dialog_sized(
+            k,
+            "open-vsx",
+            phase,
+            DIALOG_WIDTH,
+            Some(DIALOG_HEIGHT),
+            vec![
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(kit::dialog_title(k, crate::i18n::tr("browse-open-vsx")))
+                    .child(kit::caption(
+                        k,
+                        crate::i18n::tr("browse-open-vsx-description"),
+                    ))
+                    .into_any_element(),
+                search_row,
+                list,
+            ],
+            vec![
+                Button::new("open-vsx-done", crate::i18n::tr("done"))
+                    .full_width()
+                    .on_click(close.clone())
+                    .render(k),
+            ],
+            Some(close),
+        ))
     }
 
+    /// The search field, and the status or result list below it.
     fn open_vsx_body(
         &mut self,
         k: &mut Kit,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> (AnyElement, AnyElement) {
         let query = self.theme_browser.query.clone();
         let input = self.input(
             SEARCH_INPUT,
@@ -121,13 +231,52 @@ impl SettingsWindow {
 
         let browser = &self.theme_browser;
         let status = if let Some(error) = &browser.error {
+            let retry = Button::new(
+                "appearance-open-vsx-retry",
+                crate::i18n::tr("open-vsx-retry"),
+            )
+            .size(ButtonSize::Small)
+            .on_click(Self::h(cx, |this, (), _, cx| {
+                let query = this.theme_browser.query.clone();
+                this.search_open_vsx(query, cx);
+            }))
+            .render(k);
             Some(
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
-                    .child(kit::icon("warning-fill", 14.0, k.theme.caution))
-                    .child(kit::text(error.clone(), 13.0, k.theme.text_secondary))
+                    .gap(px(12.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .items_start()
+                            .gap(px(8.0))
+                            .child(div().pt(px(2.0)).child(kit::icon(
+                                "warning-fill",
+                                14.0,
+                                k.theme.caution,
+                            )))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.0))
+                                    .child(
+                                        kit::text(
+                                            crate::i18n::tr("open-vsx-load-failed"),
+                                            13.0,
+                                            k.theme.text,
+                                        )
+                                        .line_height(px(18.0)),
+                                    )
+                                    .child(kit::caption(k, error.clone())),
+                            ),
+                    )
+                    .child(retry)
                     .into_any_element(),
             )
         } else if browser.searching && browser.results.is_none() {
@@ -139,62 +288,78 @@ impl SettingsWindow {
         };
 
         let installed = vscode_themes::installed();
+        let searching = browser.searching;
+        let revision = browser.revision;
         let results = browser
             .results
-            .as_ref()
+            .clone()
             .filter(|results| !results.is_empty())
             .map(|results| {
-                let rows = results
-                    .iter()
-                    .enumerate()
-                    .map(|(index, extension)| {
-                        let installed_version =
-                            installed.iter().find_map(|theme| match &theme.source {
-                                ThemeSource::OpenVsx {
-                                    namespace,
-                                    name,
-                                    version,
-                                } if namespace.eq_ignore_ascii_case(&extension.namespace)
-                                    && name.eq_ignore_ascii_case(&extension.name) =>
-                                {
-                                    Some(version.clone())
-                                }
-                                _ => None,
-                            });
-                        let installing = browser.installing.contains(&extension.key());
-                        self.open_vsx_row(k, index, extension, installed_version, installing, cx)
-                    })
-                    .collect::<Vec<_>>();
+                let mut rows = Vec::with_capacity(results.len() * 2);
+                for (index, extension) in results.iter().enumerate() {
+                    let installed_version =
+                        installed.iter().find_map(|theme| match &theme.source {
+                            ThemeSource::OpenVsx {
+                                namespace,
+                                name,
+                                version,
+                            } if namespace.eq_ignore_ascii_case(&extension.namespace)
+                                && name.eq_ignore_ascii_case(&extension.name) =>
+                            {
+                                Some(version.clone())
+                            }
+                            _ => None,
+                        });
+                    let key = extension.key();
+                    let installing = self.theme_browser.installing.contains(&key);
+                    rows.push(self.open_vsx_row(
+                        k,
+                        index,
+                        extension,
+                        installed_version,
+                        installing,
+                        cx,
+                    ));
+                    let open = self.theme_browser.previewing.as_deref() == Some(key.as_str());
+                    let panel_key = fx::key(("open-vsx-preview", key.as_str()));
+                    rows.extend(kit::collapsible(k, panel_key, open, |k| {
+                        self.open_vsx_preview(k, extension, cx)
+                    }));
+                }
                 let list = div()
                     .flex()
                     .flex_col()
-                    .when(browser.searching, |el| el.opacity(0.5))
+                    .when(searching, |el| el.opacity(0.5))
                     .children(rows)
                     .into_any_element();
-                kit::appear(k, format!("open-vsx-results-{}", browser.revision), list)
+                kit::appear(k, format!("open-vsx-results-{revision}"), list)
             });
 
-        div()
+        let content = div()
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .child(search_row)
             .children(status)
             .children(results)
-            .into_any_element()
+            .into_any_element();
+        (search_row.into_any_element(), content)
     }
 
     fn open_vsx_row(
         &self,
-        k: &Kit,
+        k: &mut Kit,
         index: usize,
         extension: &open_vsx::Extension,
         installed_version: Option<String>,
         installing: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let key = extension.key();
+        let open = self.theme_browser.previewing.as_deref() == Some(key.as_str());
+        let turn =
+            k.fx.toggle(fx::key(("open-vsx-caret", key.as_str())), open, fx::NORMAL);
         let theme = &k.theme;
-        let id = format!("open-vsx-{}", extension.key());
+        let id = format!("open-vsx-{key}");
         let up_to_date = installed_version.as_deref() == Some(extension.version.as_str());
         let (label, accent) = match (&installed_version, installing) {
             (_, true) => (crate::i18n::tr("open-vsx-installing"), false),
@@ -223,12 +388,30 @@ impl SettingsWindow {
             compact_count(extension.download_count),
             extension.version
         );
+        let caret = div()
+            .size(px(28.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                kit::icon("caret-down-bold", 12.0, theme.text_secondary).with_transformation(
+                    Transformation::rotate(radians(std::f32::consts::PI * turn)),
+                ),
+            );
+        let target = extension.clone();
         div()
+            .id(eid(format!("{id}-row")))
             .flex()
             .items_center()
             .gap(px(12.0))
             .py(px(10.0))
+            .cursor_pointer()
             .when(index > 0, |el| el.border_t_1().border_color(theme.divider))
+            .on_click(
+                cx.listener(move |this, _, _, cx| this.toggle_open_vsx_preview(target.clone(), cx)),
+            )
+            .child(self.open_vsx_icon(k, extension))
             .child(
                 div()
                     .flex_1()
@@ -272,7 +455,315 @@ impl SettingsWindow {
                     }),
             )
             .child(button)
+            .child(caret)
             .into_any_element()
+    }
+
+    /// The extension logo, or its initial on a tile when there is none.
+    fn open_vsx_icon(&self, k: &Kit, extension: &open_vsx::Extension) -> AnyElement {
+        let theme = &k.theme;
+        let icon = extension
+            .icon_url
+            .as_ref()
+            .and_then(|url| self.theme_browser.icons.get(url));
+        if let (Some(Icon::Ready(image)), Some(url)) = (icon, &extension.icon_url) {
+            let logo = div()
+                .size(px(ICON_SIZE))
+                .flex_none()
+                .child(img(image.clone()).size(px(ICON_SIZE)).rounded(px(8.0)));
+            // Fade in place: `kit::appear` wraps in a full-width box, which
+            // would take the row's space from the text beside the logo.
+            if !k.animate() {
+                return logo.into_any_element();
+            }
+            return logo
+                .with_animation(
+                    eid(format!("open-vsx-icon-{url}")),
+                    Animation::new(Duration::from_millis(220)).with_easing(fx::ease_out_cubic),
+                    |el, delta| el.opacity(delta),
+                )
+                .into_any_element();
+        }
+        let initial = extension
+            .display_name
+            .chars()
+            .find(|c| c.is_alphanumeric())
+            .map(|c| c.to_uppercase().to_string())
+            .unwrap_or_default();
+        div()
+            .size(px(ICON_SIZE))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(8.0))
+            .bg(theme.card_hover)
+            .text_size(px(16.0))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(theme.text_tertiary)
+            // A blank tile while the logo loads avoids flashing the letter.
+            .when(!matches!(icon, Some(Icon::Loading)), |el| el.child(initial))
+            .into_any_element()
+    }
+
+    /// Mini popups for every theme in the package; clicking one previews it
+    /// in the popup without installing anything.
+    fn open_vsx_preview(
+        &self,
+        k: &mut Kit,
+        extension: &open_vsx::Extension,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let body = match self.theme_browser.previews.get(&extension.key()) {
+            None | Some(Preview::Loading) => {
+                kit::caption(k, crate::i18n::tr("open-vsx-preview-loading"))
+            }
+            Some(Preview::Failed(error)) => div()
+                .flex()
+                .items_start()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .pt(px(1.0))
+                        .child(kit::icon("warning-fill", 14.0, k.theme.caution)),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(kit::caption(k, error.clone())),
+                )
+                .into_any_element(),
+            Some(Preview::Ready(themes)) => {
+                let previewing = vscode_themes::preview();
+                let accent = crate::theme::accent_ramp(self.settings.accent_color);
+                let tiles = themes
+                    .iter()
+                    .map(|vscode| {
+                        let selected = previewing
+                            .as_ref()
+                            .is_some_and(|preview| Arc::ptr_eq(preview, vscode));
+                        self.open_vsx_preview_tile(k, vscode, selected, accent, cx)
+                    })
+                    .collect::<Vec<_>>();
+                let grid = div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(kit::caption(k, crate::i18n::tr("open-vsx-preview-hint")))
+                    .child(
+                        div()
+                            .grid()
+                            .grid_cols(PREVIEW_COLUMNS)
+                            .gap(px(12.0))
+                            .children(tiles),
+                    )
+                    .into_any_element();
+                kit::appear(k, format!("open-vsx-preview-{}", extension.key()), grid)
+            }
+        };
+        div().pb(px(14.0)).child(body).into_any_element()
+    }
+
+    fn open_vsx_preview_tile(
+        &self,
+        k: &Kit,
+        vscode: &Arc<VsCodeTheme>,
+        selected: bool,
+        accent: crate::theme::AccentRamp,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = &k.theme;
+        let palette = self.vscode_palette(vscode.clone(), accent);
+        let tile_id = format!("open-vsx-preview-{}", vscode.id);
+        let rest = if selected {
+            theme.accent_soft
+        } else {
+            theme.card
+        };
+        let target = vscode.clone();
+        kit::hover_bg(
+            k,
+            div().id(eid(tile_id.clone())),
+            kit::hover_key(&tile_id),
+            rest,
+            if selected { rest } else { theme.card_hover },
+        )
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+        .p(px(8.0))
+        .rounded(px(kit::CARD_RADIUS))
+        .shadow(kit::card_shadow(theme))
+        .cursor_pointer()
+        .on_click(cx.listener(move |this, _, _, cx| this.toggle_theme_preview(target.clone(), cx)))
+        .child(popup_mock(k, &palette))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(13.0))
+                        .when(selected, |el| el.font_weight(FontWeight::SEMIBOLD))
+                        .child(vscode.label.clone()),
+                )
+                .child(self.install_one_button(k, vscode, cx)),
+        )
+        .into_any_element()
+    }
+
+    /// Installs just this theme rather than the whole package.
+    fn install_one_button(
+        &self,
+        k: &Kit,
+        vscode: &Arc<VsCodeTheme>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let installed = vscode_themes::get(&vscode.id).is_some();
+        let installing = self
+            .theme_browser
+            .installing
+            .contains(&single_install_key(&vscode.id));
+        let (icon, tooltip) = if installed {
+            ("check-bold", crate::i18n::tr("open-vsx-installed"))
+        } else {
+            (
+                "download-simple-fill",
+                crate::i18n::tr("open-vsx-install-one"),
+            )
+        };
+        let target = vscode.clone();
+        Button::icon_only(format!("open-vsx-install-one-{}", vscode.id), icon)
+            .ghost()
+            .size(ButtonSize::Small)
+            .tooltip(tooltip)
+            .disabled(installed || installing)
+            .on_click(Self::h(cx, move |this, (), _, cx| {
+                this.install_one_theme(target.clone(), cx)
+            }))
+            .render(k)
+    }
+
+    fn install_one_theme(&mut self, theme: Arc<VsCodeTheme>, cx: &mut Context<Self>) {
+        let key = single_install_key(&theme.id);
+        if !self.theme_browser.installing.insert(key.clone()) {
+            return;
+        }
+        self.theme_browser.error = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { vscode_themes::install(vec![(*theme).clone()]) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.theme_browser.installing.remove(&key);
+                this.finish_theme_install(result, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn toggle_open_vsx_preview(&mut self, extension: open_vsx::Extension, cx: &mut Context<Self>) {
+        let key = extension.key();
+        let browser = &mut self.theme_browser;
+        if browser.previewing.as_deref() == Some(key.as_str()) {
+            browser.previewing = None;
+            cx.notify();
+            return;
+        }
+        browser.previewing = Some(key.clone());
+        // A ready or in-flight preview is reused; a failed one is retried.
+        let fetch = matches!(browser.previews.get(&key), None | Some(Preview::Failed(_)));
+        if fetch {
+            browser.previews.insert(key.clone(), Preview::Loading);
+        }
+        cx.notify();
+        if !fetch {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { open_vsx::download(&extension) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                let preview = match result {
+                    Ok(themes) if themes.is_empty() => {
+                        Preview::Failed(crate::i18n::tr("open-vsx-preview-empty").into())
+                    }
+                    Ok(themes) => Preview::Ready(themes.into_iter().map(Arc::new).collect()),
+                    Err(error) => {
+                        eprintln!("Open VSX preview failed: {error:#}");
+                        Preview::Failed(format!("{error:#}").into())
+                    }
+                };
+                this.theme_browser.previews.insert(key, preview);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Paint the popup with `theme` without installing it; clicking the
+    /// previewed theme again ends the preview.
+    fn toggle_theme_preview(&mut self, theme: Arc<VsCodeTheme>, cx: &mut Context<Self>) {
+        let active = vscode_themes::preview().is_some_and(|current| Arc::ptr_eq(&current, &theme));
+        vscode_themes::set_preview((!active).then_some(theme));
+        cx.refresh_windows();
+        cx.notify();
+    }
+
+    /// Fetch logos for search results that have not been requested yet.
+    fn load_open_vsx_icons(&mut self, cx: &mut Context<Self>) {
+        let browser = &mut self.theme_browser;
+        let urls = browser
+            .results
+            .iter()
+            .flatten()
+            .filter_map(|extension| extension.icon_url.clone())
+            .filter(|url| !browser.icons.contains_key(url))
+            .collect::<Vec<_>>();
+        let mut queues = vec![Vec::new(); ICON_WORKERS];
+        for (index, url) in urls.into_iter().enumerate() {
+            browser.icons.insert(url.clone(), Icon::Loading);
+            queues[index % ICON_WORKERS].push(url);
+        }
+        for queue in queues.into_iter().filter(|queue| !queue.is_empty()) {
+            cx.spawn(async move |this, cx| {
+                for url in queue {
+                    let fetched = cx
+                        .background_executor()
+                        .spawn({
+                            let url = url.clone();
+                            async move { open_vsx::fetch_icon(&url) }
+                        })
+                        .await;
+                    let image = fetched.ok().and_then(|bytes| {
+                        image_format(&bytes).map(|format| gpui::Image::from_bytes(format, bytes))
+                    });
+                    let icon = match image {
+                        Some(image) => Icon::Ready(Arc::new(image)),
+                        None => Icon::Missing,
+                    };
+                    let updated = this.update(cx, |this, cx| {
+                        this.theme_browser.icons.insert(url, icon);
+                        cx.notify();
+                    });
+                    if updated.is_err() {
+                        return;
+                    }
+                }
+            })
+            .detach();
+        }
     }
 
     fn inputs_text(&self, id: &str, cx: &Context<Self>) -> Option<String> {
@@ -298,6 +789,9 @@ impl SettingsWindow {
                     Ok(results) => {
                         browser.results = Some(results);
                         browser.revision += 1;
+                        // New results start from the top.
+                        browser.scroll.set_offset(gpui::Point::default());
+                        this.load_open_vsx_icons(cx);
                     }
                     Err(error) => {
                         eprintln!("Open VSX search failed: {error:#}");
@@ -316,11 +810,26 @@ impl SettingsWindow {
             return;
         }
         self.theme_browser.error = None;
+        // A package already downloaded for its preview is not fetched again.
+        let downloaded = match self.theme_browser.previews.get(&key) {
+            Some(Preview::Ready(themes)) => Some(
+                themes
+                    .iter()
+                    .map(|theme| (**theme).clone())
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        };
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { open_vsx::install(&extension) })
+                .spawn(async move {
+                    match downloaded {
+                        Some(themes) => vscode_themes::install(themes),
+                        None => open_vsx::install(&extension),
+                    }
+                })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.theme_browser.installing.remove(&key);
@@ -368,9 +877,15 @@ impl SettingsWindow {
     ) {
         match result {
             Ok(ids) => {
-                if let Some(id) = ids.into_iter().next() {
+                // Keep the theme being previewed when it is in the package;
+                // the saved choice takes over from the preview either way.
+                let previewed = vscode_themes::preview()
+                    .map(|theme| theme.id.clone())
+                    .filter(|id| ids.contains(id));
+                if let Some(id) = previewed.or_else(|| ids.into_iter().next()) {
                     self.select_vscode_theme(id, cx);
                 }
+                end_theme_preview(cx);
                 self.show_notice(crate::i18n::tr("theme-installed"), cx);
             }
             Err(error) => {
@@ -412,6 +927,40 @@ impl SettingsWindow {
         }
         cx.refresh_windows();
         cx.notify();
+    }
+}
+
+/// `ThemeBrowser::installing` entry of a single theme, apart from the
+/// `Extension::key`s of whole packages.
+fn single_install_key(theme_id: &str) -> String {
+    format!("theme:{theme_id}")
+}
+
+/// Drop a theme preview and repaint the popup with the saved design.
+pub(super) fn end_theme_preview(cx: &mut gpui::App) {
+    if vscode_themes::set_preview(None) {
+        cx.refresh_windows();
+    }
+}
+
+/// Marketplace icons should be PNG, but older packages ship JPEG or SVG;
+/// sniff the bytes rather than trust the file name.
+fn image_format(bytes: &[u8]) -> Option<ImageFormat> {
+    let head = &bytes[..bytes.len().min(512)];
+    if head.starts_with(b"\x89PNG") {
+        Some(ImageFormat::Png)
+    } else if head.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some(ImageFormat::Jpeg)
+    } else if head.starts_with(b"GIF8") {
+        Some(ImageFormat::Gif)
+    } else if head.starts_with(b"RIFF") && head.get(8..12) == Some(b"WEBP".as_slice()) {
+        Some(ImageFormat::Webp)
+    } else if head.starts_with(b"BM") {
+        Some(ImageFormat::Bmp)
+    } else if String::from_utf8_lossy(head).contains("<svg") {
+        Some(ImageFormat::Svg)
+    } else {
+        None
     }
 }
 

@@ -502,7 +502,6 @@ popup-theme = Tema do popup
 popup-theme-description = Altera apenas o popup. As configurações mantêm a aparência do Windows.
 popup-theme-fluent = Fluent
 popup-theme-vercel = Vercel
-popup-theme-apple = Apple
 popup-theme-built-in = Integrado
 popup-theme-vscode = Tema do VS Code
 vscode-themes = Temas do VS Code
@@ -514,9 +513,16 @@ browse-open-vsx = Explorar Open VSX
 browse-open-vsx-description = Encontre e instale temas de cores do registro open-vsx.org
 search-color-themes = Pesquisar temas de cores
 open-vsx-search = Pesquisar
+open-vsx-browse = Explorar
 open-vsx-searching = Pesquisando…
 no-themes-found = Nenhum tema de cores encontrado
+open-vsx-load-failed = Não foi possível carregar os temas do Open VSX
+open-vsx-retry = Tentar novamente
+open-vsx-preview-loading = Carregando prévia…
+open-vsx-preview-hint = Clique em um tema para visualizá-lo no pop-up. Instalar mantém o pacote inteiro; o botão de download de um tema mantém apenas ele.
+open-vsx-preview-empty = Esta extensão não inclui temas de cores
 open-vsx-install = Instalar
+open-vsx-install-one = Instalar apenas este tema
 open-vsx-installed = Instalado
 open-vsx-installing = Instalando…
 theme-installed = Tema instalado
@@ -536,6 +542,8 @@ comfortable = Confortável
 compact = Compacto
 
 popup-corner-radius = Raio dos cantos do popup
+popup-borders = Bordas
+popup-borders-description = Contornar a janela pop-up, os cartões e os controles
 
 animation-effects = Efeitos de animação
 

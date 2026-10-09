@@ -12,7 +12,10 @@ use std::{
     collections::{BTreeMap, HashMap},
     io::Read,
     path::{Path, PathBuf},
-    sync::{Arc, OnceLock, RwLock},
+    sync::{
+        Arc, Mutex, OnceLock, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use anyhow::{Context, Result, bail};
@@ -94,6 +97,13 @@ pub struct VsCodeTheme {
 }
 
 impl VsCodeTheme {
+    /// Dark when the theme's own background is dark. The declared kind is
+    /// only a fallback: some light themes ship as `hc-black` (Bearded Theme
+    /// Milkshake), which would pick dark-surface logos and glyphs.
+    pub fn is_dark(&self) -> bool {
+        background_is_dark(&self.colors).unwrap_or_else(|| self.kind.is_dark())
+    }
+
     /// A workbench color as RGBA bytes; `None` when missing or malformed.
     pub fn color(&self, key: &str) -> Option<[u8; 4]> {
         parse_hex_color(self.colors.get(key)?)
@@ -149,6 +159,38 @@ pub fn installed() -> Library {
 /// One installed theme by id.
 pub fn get(id: &str) -> Option<Arc<VsCodeTheme>> {
     installed().iter().find(|theme| theme.id == id).cloned()
+}
+
+static PREVIEW: Mutex<Option<Arc<VsCodeTheme>>> = Mutex::new(None);
+static PREVIEW_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// A theme the popup paints with temporarily, ahead of the saved choice; it
+/// need not be installed and never reaches the settings file.
+pub fn preview() -> Option<Arc<VsCodeTheme>> {
+    PREVIEW.lock().ok().and_then(|preview| preview.clone())
+}
+
+/// Replace the preview; returns whether it changed.
+pub fn set_preview(theme: Option<Arc<VsCodeTheme>>) -> bool {
+    let Ok(mut preview) = PREVIEW.lock() else {
+        return false;
+    };
+    let same = match (&*preview, &theme) {
+        (Some(current), Some(next)) => Arc::ptr_eq(current, next),
+        (None, None) => true,
+        _ => false,
+    };
+    if same {
+        return false;
+    }
+    *preview = theme;
+    PREVIEW_GENERATION.fetch_add(1, Ordering::SeqCst);
+    true
+}
+
+/// Bumped on every preview change, so windows can tell when to repaint.
+pub fn preview_generation() -> u64 {
+    PREVIEW_GENERATION.load(Ordering::SeqCst)
 }
 
 fn themes_dir() -> Result<PathBuf> {
@@ -483,20 +525,20 @@ fn resolve_theme(
 
 /// Dark when the editor background is dark; light otherwise.
 fn infer_kind(colors: &BTreeMap<String, String>) -> ThemeKind {
-    let background = ["editor.background", "sideBar.background"]
-        .into_iter()
-        .find_map(|key| parse_hex_color(colors.get(key)?));
-    match background {
-        Some([r, g, b, _]) => {
-            let luma = 0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b);
-            if luma < 128.0 {
-                ThemeKind::Dark
-            } else {
-                ThemeKind::Light
-            }
-        }
-        None => ThemeKind::Dark,
+    match background_is_dark(colors) {
+        Some(false) => ThemeKind::Light,
+        Some(true) | None => ThemeKind::Dark,
     }
+}
+
+/// Whether the editor (or side bar) background is dark; `None` when the
+/// theme sets neither.
+fn background_is_dark(colors: &BTreeMap<String, String>) -> Option<bool> {
+    let [r, g, b, _] = ["editor.background", "sideBar.background"]
+        .into_iter()
+        .find_map(|key| parse_hex_color(colors.get(key)?))?;
+    let luma = 0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b);
+    Some(luma < 128.0)
 }
 
 /// `%key%` placeholders resolve through `package.nls.json`.
@@ -635,6 +677,26 @@ fn strip_jsonc(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_overrides_a_mislabeled_kind() {
+        let theme = |kind, background: &str| VsCodeTheme {
+            id: "test".into(),
+            label: "Test".into(),
+            extension: None,
+            kind,
+            source: ThemeSource::File {
+                name: "test.json".into(),
+            },
+            colors: BTreeMap::from([("editor.background".into(), background.into())]),
+        };
+        // Bearded Theme Milkshake ships light colors as `hc-black`.
+        assert!(!theme(ThemeKind::HighContrastDark, "#f1e9f2").is_dark());
+        assert!(theme(ThemeKind::Light, "#1e1e1e").is_dark());
+        let mut bare = theme(ThemeKind::Dark, "#fff");
+        bare.colors.clear();
+        assert!(bare.is_dark());
+    }
 
     #[test]
     fn parses_hex_colors() {

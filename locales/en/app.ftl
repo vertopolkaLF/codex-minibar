@@ -753,7 +753,6 @@ popup-theme = Popup theme
 popup-theme-description = Changes only the popup. Settings keep the Windows look.
 popup-theme-fluent = Fluent
 popup-theme-vercel = Vercel
-popup-theme-apple = Apple
 popup-theme-built-in = Built-in
 popup-theme-vscode = VS Code theme
 vscode-themes = VS Code themes
@@ -765,9 +764,16 @@ browse-open-vsx = Browse Open VSX
 browse-open-vsx-description = Find and install color themes from the open-vsx.org registry
 search-color-themes = Search color themes
 open-vsx-search = Search
+open-vsx-browse = Browse
 open-vsx-searching = Searching…
 no-themes-found = No color themes found
+open-vsx-load-failed = Couldn't load themes from Open VSX
+open-vsx-retry = Retry
+open-vsx-preview-loading = Loading preview…
+open-vsx-preview-hint = Click a theme to preview it in the popup. Install keeps the whole pack; a theme's download button keeps just that one.
+open-vsx-preview-empty = This extension does not contribute any color themes
 open-vsx-install = Install
+open-vsx-install-one = Install only this theme
 open-vsx-installed = Installed
 open-vsx-installing = Installing…
 theme-installed = Theme installed
@@ -794,6 +800,8 @@ compact = Compact
 
 # src/settings_window/appearance.rs
 popup-corner-radius = Popup corner radius
+popup-borders = Borders
+popup-borders-description = Outline the popup window, cards and controls
 
 # src/settings_window/appearance.rs
 animation-effects = Animation effects

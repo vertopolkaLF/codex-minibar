@@ -222,6 +222,8 @@ pub(crate) struct PopupRoot {
     pub(super) accent: crate::theme::AccentRamp,
     /// Windows UI family used when no custom font is selected.
     pub(super) default_font: SharedString,
+    /// The `vscode_themes::preview_generation` the palette was built for.
+    pub(super) preview_generation: u64,
     pub(super) fx: Fx,
     pub(super) hover: HashSet<u64>,
     pub(super) host: Host,
@@ -277,19 +279,21 @@ impl PopupRoot {
     ) -> Self {
         let ui = initial_ui_state(&state);
         let accent = theme::accent_ramp(ui.accent_color);
-        let vscode = theme::selected_vscode_theme(ui.popup_theme, ui.popup_vscode_theme.as_deref());
+        let (popup_theme, vscode) =
+            theme::popup_design(ui.popup_theme, ui.popup_vscode_theme.as_deref());
         let dark = theme::palette_dark(
             vscode.as_deref(),
             theme::resolve_dark(ui.theme, system_dark(window)),
         );
         let palette = Palette::new(
-            ui.popup_theme,
+            popup_theme,
             vscode,
             dark,
             accent,
             crate::popup::background_material(),
-            theme::popup_font_family(ui.popup_theme, ui.font_family.as_deref(), &default_font),
-        );
+            theme::popup_font_family(popup_theme, ui.font_family.as_deref(), &default_font),
+        )
+        .with_borders(ui.popup_borders);
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             this.refresh_palette(window);
             cx.notify();
@@ -325,6 +329,7 @@ impl PopupRoot {
             palette,
             accent,
             default_font,
+            preview_generation: crate::vscode_themes::preview_generation(),
             fx: Fx::default(),
             hover: HashSet::new(),
             host: Host::new(),
@@ -393,10 +398,10 @@ impl PopupRoot {
     }
 
     pub(super) fn refresh_palette(&mut self, window: &Window) {
-        let popup_theme = self.ui.popup_theme;
+        self.preview_generation = crate::vscode_themes::preview_generation();
         // Looked up on every refresh: reinstalling a theme replaces its entry.
-        let vscode =
-            theme::selected_vscode_theme(popup_theme, self.ui.popup_vscode_theme.as_deref());
+        let (popup_theme, vscode) =
+            theme::popup_design(self.ui.popup_theme, self.ui.popup_vscode_theme.as_deref());
         let dark = theme::palette_dark(
             vscode.as_deref(),
             theme::resolve_dark(self.ui.theme, system_dark(window)),
@@ -417,6 +422,7 @@ impl PopupRoot {
             || self.palette.dark != dark
             || self.palette.font_family != font
             || self.palette.material != material
+            || self.palette.borders != self.ui.popup_borders
             || (vscode.is_none()
                 && self.palette.accent != Palette::accent_for(popup_theme, dark, self.accent))
         {
@@ -426,7 +432,8 @@ impl PopupRoot {
             {
                 backdrop.set_appearance(material, dark);
             }
-            self.palette = Palette::new(popup_theme, vscode, dark, self.accent, material, font);
+            self.palette = Palette::new(popup_theme, vscode, dark, self.accent, material, font)
+                .with_borders(self.ui.popup_borders);
         }
     }
 
@@ -1264,6 +1271,11 @@ impl Render for PopupRoot {
         if !self.host.visible() {
             return div().id("popup-root").size_full();
         }
+        // Settings previews a theme by swapping a shared slot, then
+        // refreshing every window.
+        if self.preview_generation != crate::vscode_themes::preview_generation() {
+            self.refresh_palette(window);
+        }
         let now = Instant::now();
         self.sync_key_pin();
         self.fx.begin_frame(super::animations_enabled(&self.ui));
@@ -1492,7 +1504,7 @@ impl Render for PopupRoot {
             )
             .child(shell)
             // A hairline keeps the capsule edge crisp against any wallpaper.
-            .child(
+            .children(palette.borders.then(|| {
                 div()
                     .absolute()
                     .inset_0()
@@ -1502,8 +1514,8 @@ impl Render for PopupRoot {
                         theme::rgba8(255, 255, 255, 0x14)
                     } else {
                         theme::rgba8(0, 0, 0, 0x12)
-                    }),
-            );
+                    })
+            }));
         // Paint tooltips after pages, pinned chrome and any other deferred UI.
         // Their coordinates are window-relative; render_tip still clamps them
         // to the capsule so the native region cannot cut off the bubble.

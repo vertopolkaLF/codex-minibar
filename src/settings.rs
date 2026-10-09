@@ -310,13 +310,13 @@ impl PopupBackgroundMaterial {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PopupTheme {
-    /// Windows 11 Fluent tokens with the configured accent.
+    /// Windows 11 Fluent tokens with the configured accent. Also reads the
+    /// retired Apple design.
     #[default]
+    #[serde(alias = "apple")]
     Fluent,
     /// Vercel's Geist system: monochrome, hairline borders, Geist type.
     Vercel,
-    /// Apple's web system: parchment canvas, soft cards, Action Blue accent.
-    Apple,
     /// An installed VS Code color theme, named by `popup_vscode_theme`.
     #[serde(rename = "vscode")]
     VsCode,
@@ -324,7 +324,7 @@ pub enum PopupTheme {
 
 impl PopupTheme {
     /// The built-in designs; VS Code themes are listed from the library.
-    pub const ALL: [Self; 3] = [Self::Fluent, Self::Vercel, Self::Apple];
+    pub const ALL: [Self; 2] = [Self::Fluent, Self::Vercel];
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1744,6 +1744,8 @@ pub struct Settings {
     /// Installed VS Code theme id used while `popup_theme` is `VsCode`. A
     /// theme that is no longer installed falls back to Fluent.
     pub popup_vscode_theme: Option<String>,
+    /// Outlines around popup cards, controls and the window.
+    pub popup_borders: bool,
     /// 12-hour or 24-hour clocks. Missing values follow the Windows locale.
     pub time_format: TimeFormat,
     /// Provider instances in the user's order for the Settings sidebar and
@@ -1820,6 +1822,7 @@ impl Default for Settings {
             popup_background_material: PopupBackgroundMaterial::default(),
             popup_theme: PopupTheme::default(),
             popup_vscode_theme: None,
+            popup_borders: true,
             time_format: TimeFormat::from_windows(),
             instances: ProviderKind::ALL
                 .into_iter()
@@ -3403,6 +3406,22 @@ mod tests {
         assert!(rewritten.contains("popup_background_material = \"acrylic\""));
         assert!(rewritten.contains("usage_refresh_interval = \"minutes15\""));
         assert!(rewritten.contains("usage_stats_enabled = true"));
+    }
+
+    #[test]
+    fn retired_apple_popup_theme_loads_as_fluent_with_borders() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(
+            &path,
+            format!("version = {SETTINGS_VERSION}\npopup_theme = \"apple\"\n"),
+        )
+        .unwrap();
+
+        let loaded = Settings::load_or_create(&path).unwrap();
+
+        assert_eq!(loaded.popup_theme, PopupTheme::Fluent);
+        assert!(loaded.popup_borders);
     }
 
     #[test]

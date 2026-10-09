@@ -54,7 +54,7 @@ pub(crate) struct SettingsWindow {
     pub(super) state: Arc<AppState>,
     pub(super) settings: Settings,
     pub(super) kit: Kit,
-    fonts: Fonts,
+    pub(super) fonts: Fonts,
     /// Installed families offered by the Appearance font picker.
     pub(super) font_families: Vec<SharedString>,
     backdrop: super::backdrop::Backdrop,
@@ -118,8 +118,12 @@ impl SettingsWindow {
         let fonts = Fonts::resolve(cx);
         let page = Page::Root(Tab::General);
         let mut subscriptions = vec![cx.observe_window_appearance(window, |_, _, cx| cx.notify())];
-        subscriptions.push(cx.on_release(|_, _| super::window_closed(false)));
-        window.on_window_should_close(cx, |_, _| {
+        subscriptions.push(cx.on_release(|_, cx| {
+            super::vscode_themes::end_theme_preview(cx);
+            super::window_closed(false)
+        }));
+        window.on_window_should_close(cx, |_, cx| {
+            super::vscode_themes::end_theme_preview(cx);
             super::window_closed(false);
             true
         });
@@ -396,6 +400,8 @@ impl SettingsWindow {
             return;
         }
         self.page = page;
+        // A theme preview belongs to the Appearance page it was started on.
+        super::vscode_themes::end_theme_preview(cx);
         self.nav_slide = self.pending_slide.take().unwrap_or(0.0);
         self.scroll = ScrollHandle::new();
         self.kit.menus.close_silently();
@@ -470,7 +476,7 @@ impl SettingsWindow {
         if self.detection_inputs.as_ref() == Some(&inputs) && self.detection_revision == revision {
             return;
         }
-        // Only a path edit resets rows to "Checking…". A credential change
+        // Only a path edit resets rows to "Checkingâ€¦". A credential change
         // re-detects quietly so saved keys do not flash the page.
         let previous = self.detection_inputs.replace(inputs.clone());
         self.detection_revision = revision;
@@ -542,6 +548,7 @@ impl SettingsWindow {
             self.troubleshoot = None;
         } else if self.tray_dialog.is_some() {
             self.tray_dialog = None;
+        } else if self.close_open_vsx(cx) {
         } else if self.confirm_reset {
             self.confirm_reset = false;
         } else if self.mode == NavMode::Providers {
@@ -1147,7 +1154,7 @@ impl SettingsWindow {
                     Tab::General => (crate::i18n::tr("general"), self.general_page(k, window, cx)),
                     Tab::Appearance => (
                         crate::i18n::tr("appearance"),
-                        self.appearance_page(k, window, cx),
+                        self.appearance_page(k, cx),
                     ),
                     Tab::Popup => (crate::i18n::tr("customize"), self.customize_page(k, cx)),
                     Tab::Schedule => (
@@ -1305,6 +1312,9 @@ impl Render for SettingsWindow {
         if let Some(overlay) = self.reset_confirm_overlay(&mut k, cx) {
             overlays.push(overlay);
         }
+        if let Some(overlay) = self.open_vsx_overlay(&mut k, window, cx) {
+            overlays.push(overlay);
+        }
         k.end_frame(window);
         let theme = k.theme.clone();
         self.kit = k;
@@ -1352,6 +1362,7 @@ pub(super) struct Overlays {
     pub(super) troubleshoot: kit::Presence<crate::troubleshoot::ToolPickerState>,
     pub(super) tray: kit::Presence<(super::tray::TrayDialog, usize, TrayWidget)>,
     pub(super) reset: kit::Presence<()>,
+    pub(super) open_vsx: kit::Presence<()>,
 }
 
 /// Drag payload for reordering providers in the sidebar.
