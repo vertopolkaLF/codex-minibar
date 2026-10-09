@@ -17,10 +17,7 @@ use super::persistence::{load_settings_for_window, replace_settings};
 use super::theme::{Fonts, Theme};
 use crate::popup_window::AppState;
 use crate::popup_window::ui::fx;
-use crate::settings::{
-    ProviderInstance, ProviderKind, Settings, TrayWidget,
-    UsageRefreshInterval,
-};
+use crate::settings::{ProviderInstance, ProviderKind, Settings, TrayWidget, UsageRefreshInterval};
 
 const DRIVERS: usize = ProviderKind::ALL.len();
 
