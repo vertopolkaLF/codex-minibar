@@ -954,6 +954,20 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
         work: impl FnOnce() -> anyhow::Result<DialogOutcome> + Send + 'static,
     ) {
+        self.run_dialog_then(cx, work, |this, outcome, cx| {
+            this.finish_dialog(outcome, cx)
+        });
+    }
+
+    /// Like [`Self::run_dialog_work`], but `then` decides what a success does
+    /// (reload, navigate, ...). Failures are shown in the dialog. `work` may
+    /// block on the serial settings writer because it runs off the UI thread.
+    fn run_dialog_then<T: Send + 'static>(
+        &mut self,
+        cx: &mut Context<Self>,
+        work: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
+        then: impl FnOnce(&mut Self, T, &mut Context<Self>) + 'static,
+    ) {
         let Some(dialog) = self.provider_dialog.as_mut() else {
             return;
         };
@@ -970,7 +984,7 @@ impl SettingsWindow {
                     return;
                 }
                 match result {
-                    Ok(outcome) => this.finish_dialog(outcome, cx),
+                    Ok(value) => then(this, value, cx),
                     Err(error) => {
                         eprintln!("provider credential dialog failed: {error:#}");
                         this.fail_dialog(format!("{error:#}"), cx);
@@ -1027,59 +1041,67 @@ impl SettingsWindow {
                     name
                 };
                 let badge_color = dialog.badge_color;
-                let mut added = None;
-                let result = try_persist_update_fallible(settings_tx, |settings| {
-                    let mut instance = settings.new_instance(driver, name.clone());
-                    instance.badge = badge.clone();
-                    instance.badge_color = badge_color;
-                    instance.enabled = true;
-                    // A second instance of a CLI driver gets its own managed
-                    // folder; reusing another login would double-count it.
-                    instance.normalize();
-                    added = Some(settings.add_instance(instance));
-                    Ok(())
-                });
-                match result {
-                    Ok(()) => {
-                        self.reload_settings();
-                        self.finish_dialog(
+                let notice_name = name.clone();
+                self.run_dialog_then(
+                    cx,
+                    move || {
+                        try_persist_update_fallible(settings_tx, move |settings| {
+                            let mut instance = settings.new_instance(driver, name);
+                            instance.badge = badge;
+                            instance.badge_color = badge_color;
+                            instance.enabled = true;
+                            // A second instance of a CLI driver gets its own
+                            // managed folder; reusing another login would
+                            // double-count it.
+                            instance.normalize();
+                            Ok(settings.add_instance(instance))
+                        })
+                        .map_err(|error| {
+                            anyhow::anyhow!(crate::i18n::format(
+                                "could-not-add-the-provider-error",
+                                &[("error", format!("{:#}", error))],
+                            ))
+                        })
+                    },
+                    move |this, provider, cx| {
+                        this.reload_settings();
+                        this.finish_dialog(
                             DialogOutcome {
                                 notice: crate::i18n::format(
                                     "added-name",
-                                    &[("name", name.to_string())],
+                                    &[("name", notice_name.to_string())],
                                 ),
                             },
                             cx,
                         );
-                        if let Some(provider) = added {
-                            self.select_provider(provider, cx);
-                        }
-                    }
-                    Err(error) => self.fail_dialog(
-                        crate::i18n::format(
-                            "could-not-add-the-provider-error",
-                            &[("error", format!("{:#}", error))],
-                        ),
-                        cx,
-                    ),
-                }
+                        this.select_provider(provider, cx);
+                    },
+                );
             }
             ProviderDialogKind::SignIn { provider } => {
                 let control = dialog.login_control.clone();
                 self.run_dialog_work(cx, move || sign_in(provider, control, settings_tx));
             }
             ProviderDialogKind::DeleteInstance { provider } => {
-                let mut removed = None;
-                let result = try_persist_update_fallible(settings_tx, |settings| {
-                    removed = settings.remove_instance(provider);
-                    anyhow::ensure!(
-                        removed.is_some(),
-                        crate::i18n::tr("this-provider-no-longer-exists")
-                    );
-                    Ok(())
-                });
-                match result {
-                    Ok(()) => {
+                self.run_dialog_then(
+                    cx,
+                    move || {
+                        try_persist_update_fallible(settings_tx, move |settings| {
+                            let removed = settings.remove_instance(provider);
+                            anyhow::ensure!(
+                                removed.is_some(),
+                                crate::i18n::tr("this-provider-no-longer-exists")
+                            );
+                            Ok(removed)
+                        })
+                        .map_err(|error| {
+                            anyhow::anyhow!(crate::i18n::format(
+                                "could-not-delete-the-provider-error",
+                                &[("error", format!("{:#}", error))],
+                            ))
+                        })
+                    },
+                    move |this, removed, cx| {
                         // The instance is gone either way; leftover secrets are unused.
                         if let Some(instance) = &removed {
                             forget_instance_secrets(instance);
@@ -1088,8 +1110,8 @@ impl SettingsWindow {
                             .as_ref()
                             .map(ProviderInstance::display_name)
                             .unwrap_or_default();
-                        self.reload_settings();
-                        self.finish_dialog(
+                        this.reload_settings();
+                        this.finish_dialog(
                             DialogOutcome {
                                 notice: crate::i18n::format(
                                     "name-deleted",
@@ -1098,17 +1120,10 @@ impl SettingsWindow {
                             },
                             cx,
                         );
-                        let page = super::super::nav::first_provider_page(&self.settings.instances);
-                        self.navigate(page, cx);
-                    }
-                    Err(error) => self.fail_dialog(
-                        crate::i18n::format(
-                            "could-not-delete-the-provider-error",
-                            &[("error", format!("{:#}", error))],
-                        ),
-                        cx,
-                    ),
-                }
+                        let page = super::super::nav::first_provider_page(&this.settings.instances);
+                        this.navigate(page, cx);
+                    },
+                );
             }
             ProviderDialogKind::ManualCredential { provider } => {
                 let credential = match dialog.claude_method {
@@ -1201,38 +1216,43 @@ impl SettingsWindow {
                 });
             }
             ProviderDialogKind::RenameOpenRouterApiKey { account_id, key_id } => {
-                if let Err(error) = persist_openrouter_account(
-                    settings_tx,
-                    account_id,
-                    false,
-                    None,
-                    move |account| {
-                        anyhow::ensure!(
-                            account.api_key_ids.contains(&key_id),
-                            crate::i18n::tr("openrouter-api-key-no-longer-exists")
-                        );
-                        if name.is_empty() {
-                            account.api_key_names.remove(&key_id);
-                        } else {
-                            account.api_key_names.insert(key_id, name);
-                        }
-                        Ok(())
-                    },
-                ) {
-                    return self.fail_dialog(
-                        crate::i18n::format(
-                            "could-not-rename-the-key-error",
-                            &[("error", format!("{:#}", error))],
-                        ),
-                        cx,
-                    );
-                }
-                self.reload_settings();
-                self.finish_dialog(
-                    DialogOutcome {
-                        notice: crate::i18n::tr("api-key-renamed").into(),
-                    },
+                self.run_dialog_then(
                     cx,
+                    move || {
+                        persist_openrouter_account(
+                            settings_tx,
+                            account_id,
+                            false,
+                            None,
+                            move |account| {
+                                anyhow::ensure!(
+                                    account.api_key_ids.contains(&key_id),
+                                    crate::i18n::tr("openrouter-api-key-no-longer-exists")
+                                );
+                                if name.is_empty() {
+                                    account.api_key_names.remove(&key_id);
+                                } else {
+                                    account.api_key_names.insert(key_id, name);
+                                }
+                                Ok(())
+                            },
+                        )
+                        .map_err(|error| {
+                            anyhow::anyhow!(crate::i18n::format(
+                                "could-not-rename-the-key-error",
+                                &[("error", format!("{:#}", error))],
+                            ))
+                        })
+                    },
+                    |this, (), cx| {
+                        this.reload_settings();
+                        this.finish_dialog(
+                            DialogOutcome {
+                                notice: crate::i18n::tr("api-key-renamed").into(),
+                            },
+                            cx,
+                        );
+                    },
                 );
             }
             ProviderDialogKind::RemoveOpenRouterApiKey { account_id, key_id } => {
@@ -1241,99 +1261,119 @@ impl SettingsWindow {
                     key_id.clone(),
                     None,
                 );
-                if let Err(error) = persist_openrouter_credentials(
-                    settings_tx,
-                    account_id,
-                    vec![change],
-                    move |account| {
-                        let before = account.api_key_ids.len();
-                        account.api_key_ids.retain(|id| id != &key_id);
-                        account.api_key_names.remove(&key_id);
-                        anyhow::ensure!(
-                            account.api_key_ids.len() != before,
-                            crate::i18n::tr("openrouter-api-key-no-longer-exists")
-                        );
-                        Ok(())
-                    },
-                ) {
-                    return self.fail_dialog(
-                        crate::i18n::format(
-                            "could-not-remove-the-key-error",
-                            &[("error", format!("{:#}", error))],
-                        ),
-                        cx,
-                    );
-                }
-                self.reload_settings();
-                self.finish_dialog(
-                    DialogOutcome {
-                        notice: crate::i18n::tr("api-key-removed").into(),
-                    },
+                self.run_dialog_then(
                     cx,
+                    move || {
+                        persist_openrouter_credentials(
+                            settings_tx,
+                            account_id,
+                            vec![change],
+                            move |account| {
+                                let before = account.api_key_ids.len();
+                                account.api_key_ids.retain(|id| id != &key_id);
+                                account.api_key_names.remove(&key_id);
+                                anyhow::ensure!(
+                                    account.api_key_ids.len() != before,
+                                    crate::i18n::tr("openrouter-api-key-no-longer-exists")
+                                );
+                                Ok(())
+                            },
+                        )
+                        .map_err(|error| {
+                            anyhow::anyhow!(crate::i18n::format(
+                                "could-not-remove-the-key-error",
+                                &[("error", format!("{:#}", error))],
+                            ))
+                        })
+                    },
+                    |this, (), cx| {
+                        this.reload_settings();
+                        this.finish_dialog(
+                            DialogOutcome {
+                                notice: crate::i18n::tr("api-key-removed").into(),
+                            },
+                            cx,
+                        );
+                    },
                 );
             }
             ProviderDialogKind::RemoveOpenRouterManagementKey { account_id } => {
-                if let Err(error) = persist_openrouter_credentials(
-                    settings_tx,
-                    account_id.clone(),
-                    vec![crate::openrouter::AccountSecretChange::management(
-                        account_id, None,
-                    )],
-                    |_| Ok(()),
-                ) {
-                    return self.fail_dialog(
-                        crate::i18n::format(
-                            "could-not-remove-the-key-error",
-                            &[("error", format!("{:#}", error))],
-                        ),
-                        cx,
-                    );
-                }
-                self.reload_settings();
-                self.finish_dialog(
-                    DialogOutcome {
-                        notice: crate::i18n::tr("management-key-removed").into(),
-                    },
+                self.run_dialog_then(
                     cx,
+                    move || {
+                        persist_openrouter_credentials(
+                            settings_tx,
+                            account_id.clone(),
+                            vec![crate::openrouter::AccountSecretChange::management(
+                                account_id, None,
+                            )],
+                            |_| Ok(()),
+                        )
+                        .map_err(|error| {
+                            anyhow::anyhow!(crate::i18n::format(
+                                "could-not-remove-the-key-error",
+                                &[("error", format!("{:#}", error))],
+                            ))
+                        })
+                    },
+                    |this, (), cx| {
+                        this.reload_settings();
+                        this.finish_dialog(
+                            DialogOutcome {
+                                notice: crate::i18n::tr("management-key-removed").into(),
+                            },
+                            cx,
+                        );
+                    },
                 );
             }
             ProviderDialogKind::OpenCodeKey { provider, .. } => {
                 if key.is_empty() {
                     return self.fail_dialog(crate::i18n::tr("paste-a-key-first"), cx);
                 }
-                if let Err(error) = persist_opencode_manual_key(settings_tx, provider, Some(key)) {
-                    return self.fail_dialog(
-                        crate::i18n::format(
-                            "could-not-save-the-key-error",
-                            &[("error", format!("{:#}", error))],
-                        ),
-                        cx,
-                    );
-                }
-                self.reload_settings();
-                self.finish_dialog(
-                    DialogOutcome {
-                        notice: crate::i18n::tr("api-key-saved").into(),
-                    },
+                self.run_dialog_then(
                     cx,
+                    move || {
+                        persist_opencode_manual_key(settings_tx, provider, Some(key)).map_err(
+                            |error| {
+                                anyhow::anyhow!(crate::i18n::format(
+                                    "could-not-save-the-key-error",
+                                    &[("error", format!("{:#}", error))],
+                                ))
+                            },
+                        )
+                    },
+                    |this, (), cx| {
+                        this.reload_settings();
+                        this.finish_dialog(
+                            DialogOutcome {
+                                notice: crate::i18n::tr("api-key-saved").into(),
+                            },
+                            cx,
+                        );
+                    },
                 );
             }
             ProviderDialogKind::RemoveOpenCodeKey { provider } => {
-                if let Err(error) = persist_opencode_manual_key(settings_tx, provider, None) {
-                    return self.fail_dialog(
-                        crate::i18n::format(
-                            "could-not-remove-the-key-error",
-                            &[("error", format!("{:#}", error))],
-                        ),
-                        cx,
-                    );
-                }
-                self.reload_settings();
-                self.finish_dialog(
-                    DialogOutcome {
-                        notice: crate::i18n::tr("api-key-removed").into(),
-                    },
+                self.run_dialog_then(
                     cx,
+                    move || {
+                        persist_opencode_manual_key(settings_tx, provider, None).map_err(|error| {
+                            anyhow::anyhow!(crate::i18n::format(
+                                "could-not-remove-the-key-error",
+                                &[("error", format!("{:#}", error))],
+                            ))
+                        })
+                    },
+                    |this, (), cx| {
+                        this.reload_settings();
+                        this.finish_dialog(
+                            DialogOutcome {
+                                notice: crate::i18n::tr("api-key-removed").into(),
+                            },
+                            cx,
+                        );
+                    },
                 );
             }
         }

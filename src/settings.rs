@@ -1917,6 +1917,27 @@ impl Settings {
         Ok(settings)
     }
 
+    /// Read-only decode of a user-chosen settings file for Import.
+    ///
+    /// Migrates, repairs and normalizes entirely in memory. It never writes,
+    /// backs up, or otherwise touches `path`, and an undecodable file is an
+    /// error instead of being replaced by salvaged defaults.
+    ///
+    /// `migration::finish_instance_migration` is deliberately NOT run: it
+    /// moves credentials between this machine's secret store and managed
+    /// folders based on the local install's state, not on the imported file,
+    /// so applying it to a foreign file would have side effects unrelated to
+    /// what is being imported. The live install already ran it at startup.
+    pub fn load_from_import(path: &Path) -> Result<Self> {
+        let raw = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        let (mut settings, _dirty) = Self::decode_raw(&raw)
+            .with_context(|| format!("{} is not a valid settings file", path.display()))?;
+        settings.repair_inplace();
+        settings.normalize_tray_widgets();
+        settings.normalize_popup_visibility();
+        Ok(settings)
+    }
+
     fn decode_raw(raw: &str) -> Result<(Self, bool)> {
         let mut document: toml::Value = toml::from_str(raw).context("parse settings TOML")?;
         let original_version = document
@@ -3332,6 +3353,27 @@ mod tests {
 
     fn id(kind: ProviderKind) -> ProviderId {
         ProviderId::primary(kind)
+    }
+
+    #[test]
+    fn import_never_touches_the_source_file() {
+        let dir = std::env::temp_dir().join(format!("minibar-import-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let old = dir.join("old.toml");
+        std::fs::write(&old, "version = 1\nhistory_retention_days = 9999\n").unwrap();
+        let bad = dir.join("bad.toml");
+        std::fs::write(&bad, "this is = = not toml").unwrap();
+        let old_bytes = std::fs::read(&old).unwrap();
+        let bad_bytes = std::fs::read(&bad).unwrap();
+
+        let imported = Settings::load_from_import(&old).unwrap();
+        assert!((1..=365).contains(&imported.history_retention_days));
+        assert!(Settings::load_from_import(&bad).is_err());
+
+        assert_eq!(std::fs::read(&old).unwrap(), old_bytes);
+        assert_eq!(std::fs::read(&bad).unwrap(), bad_bytes);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "no backups");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

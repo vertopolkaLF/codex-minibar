@@ -207,6 +207,9 @@ pub enum WorkerEvent {
     /// Cached diagnostics must not become a live provider error on startup.
     UsageLoadedFromCache(UsageStatistics),
     UsageDataCleared(u64),
+    /// Emitted by the bridge's clear executor once the single store wipe ran.
+    /// Carries the clear generation and the error text on failure.
+    UsageClearFinished(u64, Option<String>),
     UsageRefreshFailed(String),
     ActivationStarted,
     ActivationSucceeded,
@@ -652,6 +655,9 @@ fn run_usage_task_with_rate_limit(
         let _ = events.send(WorkerEvent::UsageLoadedFromCache(usage));
     }
     let mut next_refresh = Instant::now();
+    #[cfg(not(test))]
+    let mut healed_pricing = 0u64;
+    let mut paused_after_clear = None::<u64>;
     while !limits_ready.load(Ordering::Acquire) || !usage_collection_enabled {
         let command = if usage_collection_enabled {
             commands.recv_timeout(Duration::from_millis(100))
@@ -694,15 +700,18 @@ fn run_usage_task_with_rate_limit(
             | Ok(WorkerCommand::SetScheduledActivations(_))
             | Ok(WorkerCommand::SetAutoActivationPauses(_)) => {}
             Ok(WorkerCommand::ClearUsageData(generation)) => {
-                if let Err(error) = crate::store::with_store(|store| store.clear_usage_data()) {
-                    eprintln!("failed to clear usage data: {error:#}");
-                }
-                let _ = events.send(WorkerEvent::UsageUpdated(
-                    crate::usage::UsageStatistics::default(),
-                ));
+                // Barrier only: the bridge wipes the store exactly once after
+                // every worker has acknowledged, so this worker must not scan
+                // (and write fresh rows) until it is resumed.
+                paused_after_clear = Some(generation);
                 let _ = events.send(WorkerEvent::UsageDataCleared(generation));
             }
-            Ok(WorkerCommand::ResumeUsageRefresh(_)) => {}
+            Ok(WorkerCommand::ResumeUsageRefresh(generation)) => {
+                if paused_after_clear == Some(generation) {
+                    paused_after_clear = None;
+                    next_refresh = Instant::now();
+                }
+            }
             Err(RecvTimeoutError::Timeout) => {}
         }
     }
@@ -710,7 +719,6 @@ fn run_usage_task_with_rate_limit(
     // Preserve this deadline while processing commands that belong to the
     // limit task. Otherwise every settings update wakes this task and turns a
     // ten-minute maintenance scan into a tight loop.
-    let mut paused_after_clear = None::<u64>;
     let mut manual_refresh_requested = false;
     let mut usage_identity = provider.account_identity();
     loop {
@@ -752,13 +760,14 @@ fn run_usage_task_with_rate_limit(
                     usage_refresh_interval = interval.max(Duration::from_secs(60));
                 }
                 Ok(WorkerCommand::ClearUsageData(generation)) => {
-                    if let Err(error) = crate::store::with_store(|store| store.clear_usage_data()) {
-                        eprintln!("failed to clear usage data: {error:#}");
-                    }
-                    let _ = events.send(WorkerEvent::UsageUpdated(
-                        crate::usage::UsageStatistics::default(),
-                    ));
+                    paused_after_clear = Some(generation);
                     let _ = events.send(WorkerEvent::UsageDataCleared(generation));
+                }
+                Ok(WorkerCommand::ResumeUsageRefresh(generation)) => {
+                    if paused_after_clear == Some(generation) {
+                        paused_after_clear = None;
+                        next_refresh = Instant::now();
+                    }
                 }
                 Ok(_) => {}
             }
@@ -776,7 +785,17 @@ fn run_usage_task_with_rate_limit(
 
             let _ = events.send(WorkerEvent::RequestStarted(RequestKind::Usage));
             #[cfg(not(test))]
-            let _ = crate::pricing::refresh_if_stale();
+            {
+                let _ = crate::pricing::refresh_if_stale();
+                // A new catalog (or the startup one) may price rows scanned
+                // while their model was unknown. Heal them before this scan so
+                // its snapshot already carries the corrected costs.
+                if let Err(error) =
+                    crate::store::repricing::reprice_for_current_catalog(&mut healed_pricing)
+                {
+                    crate::logger::info(format!("failed to reprice usage: {error:#}"));
+                }
+            }
             let rate_limited = match provider.refresh_usage_statistics(history_retention_days) {
                 Ok(usage) => {
                     let rate_limited = usage_reports_rate_limit(&usage);
@@ -831,19 +850,13 @@ fn run_usage_task_with_rate_limit(
                 }
             }
             Ok(WorkerCommand::SetUsageCollectionEnabled(false)) => {
+                // Keep any clear barrier: only a matching resume may unpause.
                 usage_collection_enabled = false;
-                paused_after_clear = None;
                 next_refresh = Instant::now();
             }
             Err(RecvTimeoutError::Timeout) => {}
             Ok(WorkerCommand::Refresh) => manual_refresh_requested = true,
             Ok(WorkerCommand::ClearUsageData(generation)) => {
-                if let Err(error) = crate::store::with_store(|store| store.clear_usage_data()) {
-                    eprintln!("failed to clear usage data: {error:#}");
-                }
-                let _ = events.send(WorkerEvent::UsageUpdated(
-                    crate::usage::UsageStatistics::default(),
-                ));
                 let _ = events.send(WorkerEvent::UsageDataCleared(generation));
                 paused_after_clear = Some(generation);
             }
@@ -1638,6 +1651,102 @@ mod tests {
         assert!(recv_usage_update(&events_rx));
         assert_eq!(refreshes.load(Ordering::SeqCst), 2);
 
+        commands_tx.send(WorkerCommand::Shutdown).unwrap();
+        task.join().unwrap();
+    }
+
+    fn recv_cleared(events: &Receiver<WorkerEvent>, generation: u64) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if let Ok(WorkerEvent::UsageDataCleared(g)) =
+                events.recv_timeout(Duration::from_millis(50))
+            {
+                assert_eq!(g, generation);
+                return;
+            }
+        }
+        panic!("no clear acknowledgement");
+    }
+
+    #[test]
+    fn clear_pauses_pre_limits_worker_until_resume_then_rescans() {
+        let (commands_tx, commands_rx) = mpsc::channel();
+        let (events_tx, events_rx) = mpsc::channel();
+        let limits_ready = Arc::new(AtomicBool::new(false));
+        let refreshes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider = CountingUsageProvider {
+            refreshes: Arc::clone(&refreshes),
+            refresh_without_limits: false,
+        };
+        let ready = Arc::clone(&limits_ready);
+        let task = thread::spawn(move || {
+            run_usage_task(
+                provider,
+                30,
+                Duration::from_secs(3600),
+                true,
+                commands_rx,
+                events_tx,
+                ready,
+            );
+        });
+
+        // Ack without wiping; the worker is paused even before limits are ready.
+        commands_tx.send(WorkerCommand::ClearUsageData(7)).unwrap();
+        recv_cleared(&events_rx, 7);
+
+        limits_ready.store(true, Ordering::Release);
+        thread::sleep(Duration::from_millis(400));
+        assert_eq!(refreshes.load(Ordering::SeqCst), 0, "scanned while paused");
+
+        // A resume for another generation is ignored.
+        commands_tx
+            .send(WorkerCommand::ResumeUsageRefresh(6))
+            .unwrap();
+        thread::sleep(Duration::from_millis(200));
+        assert_eq!(refreshes.load(Ordering::SeqCst), 0);
+
+        commands_tx
+            .send(WorkerCommand::ResumeUsageRefresh(7))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while refreshes.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            refreshes.load(Ordering::SeqCst),
+            1,
+            "no rescan after resume"
+        );
+
+        commands_tx.send(WorkerCommand::Shutdown).unwrap();
+        task.join().unwrap();
+    }
+
+    #[test]
+    fn clear_does_not_wipe_store_in_worker() {
+        // The worker only acknowledges; the single wipe is owned by the bridge.
+        let (commands_tx, commands_rx) = mpsc::channel();
+        let (events_tx, events_rx) = mpsc::channel();
+        let provider = CountingUsageProvider {
+            refreshes: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            refresh_without_limits: false,
+        };
+        let task = thread::spawn(move || {
+            run_usage_task(
+                provider,
+                30,
+                Duration::from_secs(3600),
+                false,
+                commands_rx,
+                events_tx,
+                Arc::new(AtomicBool::new(true)),
+            );
+        });
+        commands_tx.send(WorkerCommand::ClearUsageData(1)).unwrap();
+        recv_cleared(&events_rx, 1);
+        // No UsageUpdated(default) is produced by the worker any more.
+        assert!(no_usage_update(&events_rx, Duration::from_millis(200)));
         commands_tx.send(WorkerCommand::Shutdown).unwrap();
         task.join().unwrap();
     }

@@ -11,7 +11,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
-use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Duration, Local, NaiveDate, SecondsFormat, TimeZone, Timelike, Utc};
 use directories::ProjectDirs;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -25,6 +25,7 @@ use crate::usage::{
 use crate::{instances::ProviderId, settings::ProviderKind};
 
 pub(crate) mod codex_accounts;
+pub(crate) mod repricing;
 
 const SCHEMA_VERSION: i64 = 1;
 const CODEX_CACHE_VERSION: u8 = crate::usage::CODEX_CACHE_VERSION;
@@ -67,11 +68,17 @@ impl ProviderStore {
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA synchronous=NORMAL;
-             PRAGMA foreign_keys=ON;",
+             PRAGMA foreign_keys=ON;
+             PRAGMA journal_size_limit=8388608;",
         )
         .context("configure sqlite")?;
         let store = Self { conn };
+        // Shrink a WAL left large by earlier sessions before anything else.
+        store.checkpoint_wal()?;
         store.migrate()?;
+        if let Err(error) = store.prune_hourly() {
+            eprintln!("failed to prune hourly usage: {error:#}");
+        }
         store.migrate_legacy_json_caches();
         store.initialize_codex_attribution()?;
         Ok(store)
@@ -216,6 +223,132 @@ impl ProviderStore {
             );
             ",
         )?;
+        self.migrate_hourly_to_utc()?;
+        self.conn.execute(
+            "DELETE FROM meta WHERE key IN ('openrouter.analytics.v1', 'openrouter.analytics.v2')",
+            [],
+        )?;
+        Ok(())
+    }
+
+    /// One-time rewrite of `usage_hourly.hour` from local-offset RFC3339 into
+    /// canonical UTC (`...Z`) so lexical range compares survive DST/timezone
+    /// changes. Rows that cannot be parsed are dropped.
+    fn migrate_hourly_to_utc(&self) -> Result<()> {
+        const KEY: &str = "usage_hourly.utc.v1";
+        let done: Option<String> = self
+            .conn
+            .query_row("SELECT value FROM meta WHERE key = ?1", params![KEY], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        if done.is_some() {
+            return Ok(());
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        let rows = {
+            let mut statement = tx.prepare("SELECT provider, hour FROM usage_hourly")?;
+            let rows = statement.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        for (provider, hour) in rows {
+            match DateTime::parse_from_rfc3339(&hour) {
+                Ok(parsed) => {
+                    let canonical = hour_key(parsed);
+                    if canonical != hour {
+                        tx.execute(
+                            "UPDATE OR REPLACE usage_hourly SET hour = ?1
+                             WHERE provider = ?2 AND hour = ?3",
+                            params![canonical, provider, hour],
+                        )?;
+                    }
+                }
+                Err(_) => {
+                    tx.execute(
+                        "DELETE FROM usage_hourly WHERE provider = ?1 AND hour = ?2",
+                        params![provider, hour],
+                    )?;
+                }
+            }
+        }
+        tx.execute(
+            "INSERT INTO meta(key, value) VALUES(?1, '1')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![KEY],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Deletes hourly rows older than the retention window for all providers.
+    fn prune_hourly(&self) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM usage_hourly WHERE hour < ?1",
+            params![hourly_cutoff()],
+        )?;
+        Ok(())
+    }
+
+    /// Passive WAL checkpoint; call after large scans. Failures are logged,
+    /// never fatal.
+    pub(crate) fn checkpoint_wal(&self) -> Result<()> {
+        if let Err(error) = self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+        {
+            eprintln!("provider store wal checkpoint failed: {error}");
+        }
+        Ok(())
+    }
+
+    /// Removes rows belonging to provider instances that are no longer
+    /// configured. `known` must list every configured instance, enabled or
+    /// not. An empty list skips pruning.
+    pub fn prune_unknown_providers(&self, known: &[ProviderId]) -> Result<()> {
+        if known.is_empty() {
+            return Ok(());
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "CREATE TEMP TABLE IF NOT EXISTS known_providers(id TEXT PRIMARY KEY NOT NULL);
+             DELETE FROM known_providers;",
+        )?;
+        {
+            let mut insert =
+                tx.prepare("INSERT OR IGNORE INTO temp.known_providers(id) VALUES(?1)")?;
+            for provider in known {
+                insert.execute(params![provider.id()])?;
+            }
+        }
+        for table in [
+            "limits",
+            "usage_daily",
+            "usage_hourly",
+            "usage_model_daily",
+            "usage_file_daily",
+            "usage_file_model_daily",
+            "usage_events",
+            "scan_files",
+            "provider_meta",
+        ] {
+            tx.execute(
+                &format!(
+                    "DELETE FROM {table} WHERE provider NOT IN (SELECT id FROM temp.known_providers)"
+                ),
+                [],
+            )?;
+        }
+        const PREFIX: &str = "openrouter.analytics.v3.";
+        tx.execute(
+            "DELETE FROM meta
+             WHERE substr(key, 1, ?1) = ?2
+               AND substr(key, ?1 + 1) NOT IN (SELECT id FROM temp.known_providers)",
+            params![PREFIX.len() as i64, PREFIX],
+        )?;
+        tx.execute("DELETE FROM temp.known_providers", [])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -337,12 +470,14 @@ impl ProviderStore {
         history_days: u16,
     ) -> Result<UsageStatistics> {
         if provider.kind() == ProviderKind::OpenRouter
-            && self.load_openrouter_analytics(provider)?.is_none()
+            && !self.has_openrouter_analytics(provider)?
         {
             return Ok(UsageStatistics::default());
         }
-        if provider == ProviderId::primary(ProviderKind::Codex) && self.use_codex_account_data()? {
-            return self.account_statistics_for(&codex_accounts::current_id(), history_days);
+        if provider == ProviderId::primary(ProviderKind::Codex)
+            && let Some(account) = self.codex_account_for_reads()?
+        {
+            return self.account_statistics_for(&account, history_days);
         }
         let mut statement = self.conn.prepare(
             "SELECT date, input_tokens, cached_input_tokens, output_tokens,
@@ -352,14 +487,18 @@ impl ProviderStore {
              ORDER BY date ASC",
         )?;
         let rows = statement.query_map(params![provider.id()], |row| {
-            Ok(DailyTokenUsage {
-                date: parse_date(&row.get::<_, String>(0)?),
-                usage: token_usage_from_row(row, 1)?,
-            })
+            let date_str = row.get::<_, String>(0)?;
+            let usage = token_usage_from_row(row, 1)?;
+            Ok((date_str, usage))
         })?;
         let mut daily = Vec::new();
         for row in rows {
-            daily.push(row?);
+            let (date_str, usage) = row?;
+            if let Some(date) = parse_date_option(&date_str) {
+                daily.push(DailyTokenUsage { date, usage });
+            } else {
+                eprintln!("Skipping usage_daily row with malformed date: {}", date_str);
+            }
         }
         Ok(statistics_from_daily(&daily, history_days))
     }
@@ -376,8 +515,9 @@ impl ProviderStore {
             "usage_file_model_daily",
             "usage_events",
             "scan_files",
-            "codex_account_events",
-            "codex_event_sources",
+            "codex_events",
+            "codex_event_links",
+            "codex_names",
             "codex_legacy_daily",
             "codex_legacy_model_daily",
             "codex_legacy_hourly",
@@ -411,8 +551,10 @@ impl ProviderStore {
         start: DateTime<Local>,
         end: DateTime<Local>,
     ) -> Result<BTreeMap<DateTime<Local>, TokenUsage>> {
-        if provider == ProviderId::primary(ProviderKind::Codex) && self.use_codex_account_data()? {
-            return self.account_hourly(start, end);
+        if provider == ProviderId::primary(ProviderKind::Codex)
+            && let Some(account) = self.codex_account_for_reads()?
+        {
+            return self.account_hourly_for(&account, start, end);
         }
         if provider.kind() == ProviderKind::OpenRouter {
             let mut hours = BTreeMap::<DateTime<Local>, TokenUsage>::new();
@@ -432,16 +574,28 @@ impl ProviderStore {
              WHERE provider = ?1 AND hour >= ?2 AND hour <= ?3
              ORDER BY hour ASC",
         )?;
-        let start_key = start.to_rfc3339();
-        let end_key = end.to_rfc3339();
+        let start_key = hour_key(start);
+        let end_key = hour_key(end);
         let rows = statement.query_map(params![provider.id(), start_key, end_key], |row| {
-            let hour = parse_datetime(&row.get::<_, String>(0)?).with_timezone(&Local);
-            Ok((truncate_local_hour(hour), token_usage_from_row(row, 1)?))
+            let hour_str = row.get::<_, String>(0)?;
+            let usage = token_usage_from_row(row, 1)?;
+            Ok((hour_str, usage))
         })?;
         let mut hourly = BTreeMap::<DateTime<Local>, TokenUsage>::new();
         for row in rows {
-            let (hour, usage) = row?;
-            hourly.entry(hour).or_default().add(&usage);
+            let (hour_str, usage) = row?;
+            if let Some(dt) = parse_datetime_option(&hour_str) {
+                let hour = dt.with_timezone(&Local);
+                hourly
+                    .entry(truncate_local_hour(hour))
+                    .or_default()
+                    .add(&usage);
+            } else {
+                eprintln!(
+                    "Skipping usage_hourly row with malformed hour: {}",
+                    hour_str
+                );
+            }
         }
         Ok(hourly)
     }
@@ -465,23 +619,29 @@ impl ProviderStore {
                 end.with_timezone(&Utc).to_rfc3339()
             ],
             |row| {
-                Ok((
-                    parse_datetime(&row.get::<_, String>(0)?),
-                    token_usage_from_row(row, 1)?,
-                ))
+                let ts_str = row.get::<_, String>(0)?;
+                let usage = token_usage_from_row(row, 1)?;
+                Ok((ts_str, usage))
             },
         )?;
         let mut hourly = BTreeMap::<DateTime<Local>, TokenUsage>::new();
         for row in rows {
-            let (timestamp, usage) = row?;
-            let local = timestamp.with_timezone(&Local);
-            if local < start || local > end {
-                continue;
+            let (ts_str, usage) = row?;
+            if let Some(timestamp) = parse_datetime_option(&ts_str) {
+                let local = timestamp.with_timezone(&Local);
+                if local < start || local > end {
+                    continue;
+                }
+                hourly
+                    .entry(truncate_local_hour(local))
+                    .or_default()
+                    .add(&usage);
+            } else {
+                eprintln!(
+                    "Skipping usage_events row with malformed timestamp: {}",
+                    ts_str
+                );
             }
-            hourly
-                .entry(truncate_local_hour(local))
-                .or_default()
-                .add(&usage);
         }
         Ok(hourly)
     }
@@ -492,11 +652,9 @@ impl ProviderStore {
         hours: &[(DateTime<Local>, TokenUsage)],
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
-        let cutoff = (Local::now() - chrono::Duration::days(8)).to_rfc3339();
-        tx.execute(
-            "DELETE FROM usage_hourly WHERE provider = ?1 AND hour < ?2",
-            params![provider.id(), cutoff],
-        )?;
+        let cutoff = hourly_cutoff();
+        // Retention applies to every provider, not just the one being written.
+        tx.execute("DELETE FROM usage_hourly WHERE hour < ?1", params![cutoff])?;
         {
             let mut insert = tx.prepare(
                 "INSERT INTO usage_hourly(
@@ -513,9 +671,13 @@ impl ProviderStore {
                     cache_savings_microusd=excluded.cache_savings_microusd",
             )?;
             for (hour, usage) in hours {
+                let hour_key = hour_key(*hour);
+                if hour_key < cutoff {
+                    continue;
+                }
                 insert.execute(params![
                     provider.id(),
-                    hour.to_rfc3339(),
+                    hour_key,
                     usage.input_tokens as i64,
                     usage.cached_input_tokens as i64,
                     usage.output_tokens as i64,
@@ -584,22 +746,24 @@ impl ProviderStore {
                 ])?;
             }
         }
-        let existing = {
-            let mut statement = self
+        self.conn.execute_batch(
+            "CREATE TEMP TABLE IF NOT EXISTS retained_daily(date TEXT PRIMARY KEY NOT NULL);
+             DELETE FROM retained_daily;",
+        )?;
+        {
+            let mut keep = self
                 .conn
-                .prepare("SELECT date FROM usage_daily WHERE provider = ?1")?;
-            let rows =
-                statement.query_map(params![provider.id()], |row| row.get::<_, String>(0))?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()?
-        };
-        for date in existing {
-            if !retained.contains(&date) {
-                self.conn.execute(
-                    "DELETE FROM usage_daily WHERE provider = ?1 AND date = ?2",
-                    params![provider.id(), date],
-                )?;
+                .prepare("INSERT OR IGNORE INTO temp.retained_daily(date) VALUES(?1)")?;
+            for date in &retained {
+                keep.execute(params![date])?;
             }
         }
+        self.conn.execute(
+            "DELETE FROM usage_daily
+             WHERE provider = ?1 AND date NOT IN (SELECT date FROM temp.retained_daily)",
+            params![provider.id()],
+        )?;
+        self.conn.execute("DELETE FROM temp.retained_daily", [])?;
         Ok(())
     }
 
@@ -681,6 +845,7 @@ impl ProviderStore {
                         suppressing_fork_copies: meta.suppressing_fork_copies,
                         fork_copy_anchor_ms: meta.fork_copy_anchor_ms,
                         session_id: meta.session_id,
+                        persisted: true,
                     },
                 );
             }
@@ -694,14 +859,21 @@ impl ProviderStore {
             let rows = statement.query_map(params![provider.id()], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
-                    parse_date(&row.get::<_, String>(1)?),
+                    row.get::<_, String>(1)?,
                     token_usage_from_row(row, 2)?,
                 ))
             })?;
             for row in rows {
-                let (path, date, usage) = row?;
-                let file = files.entry(path).or_default();
-                file.daily.push(DailyTokenUsage { date, usage });
+                let (path, date_str, usage) = row?;
+                if let Some(date) = parse_date_option(&date_str) {
+                    let file = files.entry(path).or_default();
+                    file.daily.push(DailyTokenUsage { date, usage });
+                } else {
+                    eprintln!(
+                        "Skipping usage_file_daily row with malformed date: {}",
+                        date_str
+                    );
+                }
             }
         }
         {
@@ -713,18 +885,25 @@ impl ProviderStore {
             let rows = statement.query_map(params![provider.id()], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
-                    parse_date(&row.get::<_, String>(1)?),
+                    row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     token_usage_from_row(row, 3)?,
                 ))
             })?;
             for row in rows {
-                let (path, date, model, usage) = row?;
-                let file = files.entry(path).or_default();
-                file.model_daily
-                    .entry(model)
-                    .or_default()
-                    .push(DailyTokenUsage { date, usage });
+                let (path, date_str, model, usage) = row?;
+                if let Some(date) = parse_date_option(&date_str) {
+                    let file = files.entry(path).or_default();
+                    file.model_daily
+                        .entry(model)
+                        .or_default()
+                        .push(DailyTokenUsage { date, usage });
+                } else {
+                    eprintln!(
+                        "Skipping usage_file_model_daily row with malformed date: {}",
+                        date_str
+                    );
+                }
             }
         }
         for file in files.values_mut() {
@@ -741,100 +920,56 @@ impl ProviderStore {
     }
 
     pub(crate) fn save_codex_cache(&self, provider: ProviderId, cache: &UsageCache) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
-        let mut retained_files = BTreeSet::new();
-        let mut retained_days = BTreeSet::new();
-        let mut retained_models = BTreeSet::new();
-        {
-            let mut scan = tx.prepare(
-                "INSERT INTO scan_files(provider, path, offset, meta_json)
-                 VALUES(?1, ?2, ?3, ?4)
-                 ON CONFLICT(provider, path) DO UPDATE SET
-                    offset=excluded.offset,
-                    meta_json=excluded.meta_json
-                 WHERE offset IS NOT excluded.offset OR meta_json IS NOT excluded.meta_json",
-            )?;
-            let mut daily = tx.prepare(
-                "INSERT INTO usage_file_daily(
-                    provider, path, date, input_tokens, cached_input_tokens, output_tokens,
-                    requests, estimated_cost_microusd, priced_requests, cache_savings_microusd
-                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-                 ON CONFLICT(provider, path, date) DO UPDATE SET
-                    input_tokens=excluded.input_tokens,
-                    cached_input_tokens=excluded.cached_input_tokens,
-                    output_tokens=excluded.output_tokens,
-                    requests=excluded.requests,
-                    estimated_cost_microusd=excluded.estimated_cost_microusd,
-                    priced_requests=excluded.priced_requests,
-                    cache_savings_microusd=excluded.cache_savings_microusd
-                 WHERE input_tokens IS NOT excluded.input_tokens
-                    OR cached_input_tokens IS NOT excluded.cached_input_tokens
-                    OR output_tokens IS NOT excluded.output_tokens
-                    OR requests IS NOT excluded.requests
-                    OR estimated_cost_microusd IS NOT excluded.estimated_cost_microusd
-                    OR priced_requests IS NOT excluded.priced_requests
-                    OR cache_savings_microusd IS NOT excluded.cache_savings_microusd",
-            )?;
-            let mut models = tx.prepare(
-                "INSERT INTO usage_file_model_daily(
-                    provider, path, date, model, input_tokens, cached_input_tokens, output_tokens,
-                    requests, estimated_cost_microusd, priced_requests, cache_savings_microusd
-                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-                 ON CONFLICT(provider, path, date, model) DO UPDATE SET
-                    input_tokens=excluded.input_tokens,
-                    cached_input_tokens=excluded.cached_input_tokens,
-                    output_tokens=excluded.output_tokens,
-                    requests=excluded.requests,
-                    estimated_cost_microusd=excluded.estimated_cost_microusd,
-                    priced_requests=excluded.priced_requests,
-                    cache_savings_microusd=excluded.cache_savings_microusd
-                 WHERE input_tokens IS NOT excluded.input_tokens
-                    OR cached_input_tokens IS NOT excluded.cached_input_tokens
-                    OR output_tokens IS NOT excluded.output_tokens
-                    OR requests IS NOT excluded.requests
-                    OR estimated_cost_microusd IS NOT excluded.estimated_cost_microusd
-                    OR priced_requests IS NOT excluded.priced_requests
-                    OR cache_savings_microusd IS NOT excluded.cache_savings_microusd",
-            )?;
-            for (path, file) in &cache.files {
-                retained_files.insert(path.clone());
-                let meta = serde_json::to_string(&CodexFileMeta {
-                    current_model: file.current_model.clone(),
-                    fast_service_tier: file.fast_service_tier,
-                    last_usage_signature: file.last_usage_signature.clone(),
-                    saw_session_meta: file.saw_session_meta,
-                    suppressing_fork_copies: file.suppressing_fork_copies,
-                    fork_copy_anchor_ms: file.fork_copy_anchor_ms,
-                    session_id: file.session_id.clone(),
-                })?;
-                scan.execute(params![provider.id(), path, file.offset as i64, meta])?;
-                for entry in &file.daily {
-                    retained_days.insert((path.clone(), entry.date.to_string()));
-                    daily.execute(params![
-                        provider.id(),
-                        path,
-                        entry.date.to_string(),
-                        entry.usage.input_tokens as i64,
-                        entry.usage.cached_input_tokens as i64,
-                        entry.usage.output_tokens as i64,
-                        entry.usage.requests as i64,
-                        entry.usage.estimated_cost_microusd as i64,
-                        entry.usage.priced_requests as i64,
-                        entry.usage.cache_savings_microusd as i64,
-                    ])?;
-                }
-                for (model, days) in &file.model_daily {
-                    for entry in days {
-                        retained_models.insert((
-                            path.clone(),
-                            entry.date.to_string(),
-                            model.clone(),
-                        ));
-                        models.execute(params![
+        // Files whose rows already equal the cache are never rewritten; only
+        // dirty files are replaced and files that left the cache are deleted.
+        let stale = self.stale_codex_paths(provider, cache)?;
+        let dirty = cache.files.values().filter(|file| !file.persisted).count();
+        if dirty > 0 || !stale.is_empty() {
+            let tx = self.conn.unchecked_transaction()?;
+            {
+                let mut scan = tx.prepare(
+                    "INSERT INTO scan_files(provider, path, offset, meta_json)
+                     VALUES(?1, ?2, ?3, ?4)
+                     ON CONFLICT(provider, path) DO UPDATE SET
+                        offset=excluded.offset,
+                        meta_json=excluded.meta_json",
+                )?;
+                let mut clear_daily =
+                    tx.prepare("DELETE FROM usage_file_daily WHERE provider = ?1 AND path = ?2")?;
+                let mut clear_models = tx.prepare(
+                    "DELETE FROM usage_file_model_daily WHERE provider = ?1 AND path = ?2",
+                )?;
+                let mut daily = tx.prepare(
+                    "INSERT INTO usage_file_daily(
+                        provider, path, date, input_tokens, cached_input_tokens, output_tokens,
+                        requests, estimated_cost_microusd, priced_requests, cache_savings_microusd
+                     ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                )?;
+                let mut models = tx.prepare(
+                    "INSERT INTO usage_file_model_daily(
+                        provider, path, date, model, input_tokens, cached_input_tokens,
+                        output_tokens, requests, estimated_cost_microusd, priced_requests,
+                        cache_savings_microusd
+                     ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                )?;
+                for (path, file) in cache.files.iter().filter(|(_, file)| !file.persisted) {
+                    let meta = serde_json::to_string(&CodexFileMeta {
+                        current_model: file.current_model.clone(),
+                        fast_service_tier: file.fast_service_tier,
+                        last_usage_signature: file.last_usage_signature.clone(),
+                        saw_session_meta: file.saw_session_meta,
+                        suppressing_fork_copies: file.suppressing_fork_copies,
+                        fork_copy_anchor_ms: file.fork_copy_anchor_ms,
+                        session_id: file.session_id.clone(),
+                    })?;
+                    scan.execute(params![provider.id(), path, file.offset as i64, meta])?;
+                    clear_daily.execute(params![provider.id(), path])?;
+                    clear_models.execute(params![provider.id(), path])?;
+                    for entry in &file.daily {
+                        daily.execute(params![
                             provider.id(),
                             path,
                             entry.date.to_string(),
-                            model,
                             entry.usage.input_tokens as i64,
                             entry.usage.cached_input_tokens as i64,
                             entry.usage.output_tokens as i64,
@@ -844,17 +979,31 @@ impl ProviderStore {
                             entry.usage.cache_savings_microusd as i64,
                         ])?;
                     }
+                    for (model, days) in &file.model_daily {
+                        for entry in days {
+                            models.execute(params![
+                                provider.id(),
+                                path,
+                                entry.date.to_string(),
+                                model,
+                                entry.usage.input_tokens as i64,
+                                entry.usage.cached_input_tokens as i64,
+                                entry.usage.output_tokens as i64,
+                                entry.usage.requests as i64,
+                                entry.usage.estimated_cost_microusd as i64,
+                                entry.usage.priced_requests as i64,
+                                entry.usage.cache_savings_microusd as i64,
+                            ])?;
+                        }
+                    }
                 }
             }
+            delete_stale_file_rows(&tx, provider, &stale)?;
+            tx.commit()?;
+            if dirty + stale.len() >= 100 {
+                self.checkpoint_wal()?;
+            }
         }
-        delete_stale_file_rows(
-            &tx,
-            provider,
-            &retained_files,
-            &retained_days,
-            &retained_models,
-        )?;
-        tx.commit()?;
 
         let flags = json!({
             "cache_version": cache.version,
@@ -872,6 +1021,24 @@ impl ProviderStore {
         )?;
         self.replace_usage_model_daily(provider, &aggregate_codex_model_daily(cache))?;
         Ok(())
+    }
+
+    /// Paths with stored per-file Codex rows that are no longer in `cache`.
+    fn stale_codex_paths(&self, provider: ProviderId, cache: &UsageCache) -> Result<Vec<String>> {
+        let mut statement = self.conn.prepare(
+            "SELECT path FROM scan_files WHERE provider = ?1
+             UNION SELECT path FROM usage_file_daily WHERE provider = ?1
+             UNION SELECT path FROM usage_file_model_daily WHERE provider = ?1",
+        )?;
+        let rows = statement.query_map(params![provider.id()], |row| row.get::<_, String>(0))?;
+        let mut stale = Vec::new();
+        for path in rows {
+            let path = path?;
+            if !cache.files.contains_key(&path) {
+                stale.push(path);
+            }
+        }
+        Ok(stale)
     }
 
     /// Scanned byte offset per Claude log, without loading any events. `None`
@@ -908,6 +1075,7 @@ impl ProviderStore {
         }
 
         let mut files = BTreeMap::new();
+        let mut scanned = BTreeSet::new();
         {
             let mut statement = self
                 .conn
@@ -917,11 +1085,13 @@ impl ProviderStore {
             })?;
             for row in rows {
                 let (path, offset) = row?;
+                scanned.insert(path.clone());
                 files.insert(
                     path,
                     CachedClaudeSessionFile {
                         offset,
                         entries: Vec::new(),
+                        persisted: None,
                     },
                 );
             }
@@ -939,20 +1109,50 @@ impl ProviderStore {
             let rows = statement.query_map(params![provider.id()], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
-                    CachedClaudeUsageEntry {
-                        timestamp: parse_datetime(&row.get::<_, String>(1)?),
-                        message_id: row.get(2)?,
-                        request_id: row.get(3)?,
-                        is_sidechain: row.get::<_, i64>(4)? != 0,
-                        has_speed: row.get::<_, i64>(5)? != 0,
-                        usage: token_usage_from_row(row, 6)?,
-                        model: row.get(13)?,
-                    },
+                    row.get::<_, String>(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    token_usage_from_row(row, 6)?,
+                    row.get(13)?,
                 ))
             })?;
             for row in rows {
-                let (path, entry) = row?;
-                files.entry(path).or_default().entries.push(entry);
+                let (
+                    path,
+                    ts_str,
+                    message_id,
+                    request_id,
+                    is_sidechain_i64,
+                    has_speed_i64,
+                    usage,
+                    model,
+                ) = row?;
+                if let Some(timestamp) = parse_datetime_option(&ts_str) {
+                    let entry = CachedClaudeUsageEntry {
+                        timestamp,
+                        message_id,
+                        request_id,
+                        is_sidechain: is_sidechain_i64 != 0,
+                        has_speed: has_speed_i64 != 0,
+                        usage,
+                        model,
+                    };
+                    files.entry(path).or_default().entries.push(entry);
+                } else {
+                    eprintln!(
+                        "Skipping usage_events row with malformed timestamp: {}",
+                        ts_str
+                    );
+                }
+            }
+        }
+        // Only files with a stored scan row are trusted to match the DB;
+        // anything else (orphan events) is rewritten in full on the next save.
+        for (path, file) in &mut files {
+            if scanned.contains(path) {
+                file.persisted = Some((file.offset, file.entries.len()));
             }
         }
         Ok(ClaudeUsageCache { version, files })
@@ -963,77 +1163,99 @@ impl ProviderStore {
         provider: ProviderId,
         cache: &ClaudeUsageCache,
     ) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
-        let mut retained_files = BTreeSet::new();
-        {
-            let mut scan = tx.prepare(
-                "INSERT INTO scan_files(provider, path, offset, meta_json)
-                 VALUES(?1, ?2, ?3, '{}')
-                 ON CONFLICT(provider, path) DO UPDATE SET offset=excluded.offset
-                 WHERE offset IS NOT excluded.offset",
-            )?;
-            let mut events = tx.prepare(
-                "INSERT INTO usage_events(
-                    provider, path, event_ord, ts, message_id, request_id,
-                    is_sidechain, has_speed, input_tokens, cached_input_tokens,
-                    output_tokens, requests, estimated_cost_microusd, priced_requests,
-                    cache_savings_microusd, model
-                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
-                 ON CONFLICT(provider, path, event_ord) DO UPDATE SET
-                    ts=excluded.ts,
-                    message_id=excluded.message_id,
-                    request_id=excluded.request_id,
-                    is_sidechain=excluded.is_sidechain,
-                    has_speed=excluded.has_speed,
-                    input_tokens=excluded.input_tokens,
-                    cached_input_tokens=excluded.cached_input_tokens,
-                    output_tokens=excluded.output_tokens,
-                    requests=excluded.requests,
-                    estimated_cost_microusd=excluded.estimated_cost_microusd,
-                    priced_requests=excluded.priced_requests,
-                    cache_savings_microusd=excluded.cache_savings_microusd,
-                    model=excluded.model
-                 WHERE ts IS NOT excluded.ts
-                    OR message_id IS NOT excluded.message_id
-                    OR request_id IS NOT excluded.request_id
-                    OR is_sidechain IS NOT excluded.is_sidechain
-                    OR has_speed IS NOT excluded.has_speed
-                    OR input_tokens IS NOT excluded.input_tokens
-                    OR cached_input_tokens IS NOT excluded.cached_input_tokens
-                    OR output_tokens IS NOT excluded.output_tokens
-                    OR requests IS NOT excluded.requests
-                    OR estimated_cost_microusd IS NOT excluded.estimated_cost_microusd
-                    OR priced_requests IS NOT excluded.priced_requests
-                    OR cache_savings_microusd IS NOT excluded.cache_savings_microusd
-                    OR model IS NOT excluded.model",
-            )?;
-            for (path, file) in &cache.files {
-                retained_files.insert(path.clone());
-                scan.execute(params![provider.id(), path, file.offset as i64])?;
-                for (event_ord, entry) in file.entries.iter().enumerate() {
-                    events.execute(params![
-                        provider.id(),
-                        path,
-                        event_ord as i64,
-                        entry.timestamp.to_rfc3339(),
-                        entry.message_id,
-                        entry.request_id,
-                        entry.is_sidechain as i64,
-                        entry.has_speed as i64,
-                        entry.usage.input_tokens as i64,
-                        entry.usage.cached_input_tokens as i64,
-                        entry.usage.output_tokens as i64,
-                        entry.usage.requests as i64,
-                        entry.usage.estimated_cost_microusd as i64,
-                        entry.usage.priced_requests as i64,
-                        entry.usage.cache_savings_microusd as i64,
-                        entry.model,
-                    ])?;
+        // A file is clean when its stored offset and event count match; then
+        // only events appended past the stored count are written. Anything
+        // else (new, rebuilt, pruned) is rewritten and its tail truncated.
+        let pending = |file: &CachedClaudeSessionFile| {
+            file.persisted != Some((file.offset, file.entries.len()))
+        };
+        let stale = self.stale_claude_paths(provider, cache)?;
+        if !stale.is_empty() || cache.files.values().any(pending) {
+            let tx = self.conn.unchecked_transaction()?;
+            {
+                let mut scan = tx.prepare(
+                    "INSERT INTO scan_files(provider, path, offset, meta_json)
+                     VALUES(?1, ?2, ?3, '{}')
+                     ON CONFLICT(provider, path) DO UPDATE SET offset=excluded.offset
+                     WHERE offset IS NOT excluded.offset",
+                )?;
+                let mut events = tx.prepare(
+                    "INSERT INTO usage_events(
+                        provider, path, event_ord, ts, message_id, request_id,
+                        is_sidechain, has_speed, input_tokens, cached_input_tokens,
+                        output_tokens, requests, estimated_cost_microusd, priced_requests,
+                        cache_savings_microusd, model
+                     ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                     ON CONFLICT(provider, path, event_ord) DO UPDATE SET
+                        ts=excluded.ts,
+                        message_id=excluded.message_id,
+                        request_id=excluded.request_id,
+                        is_sidechain=excluded.is_sidechain,
+                        has_speed=excluded.has_speed,
+                        input_tokens=excluded.input_tokens,
+                        cached_input_tokens=excluded.cached_input_tokens,
+                        output_tokens=excluded.output_tokens,
+                        requests=excluded.requests,
+                        estimated_cost_microusd=excluded.estimated_cost_microusd,
+                        priced_requests=excluded.priced_requests,
+                        cache_savings_microusd=excluded.cache_savings_microusd,
+                        model=excluded.model
+                     WHERE ts IS NOT excluded.ts
+                        OR message_id IS NOT excluded.message_id
+                        OR request_id IS NOT excluded.request_id
+                        OR is_sidechain IS NOT excluded.is_sidechain
+                        OR has_speed IS NOT excluded.has_speed
+                        OR input_tokens IS NOT excluded.input_tokens
+                        OR cached_input_tokens IS NOT excluded.cached_input_tokens
+                        OR output_tokens IS NOT excluded.output_tokens
+                        OR requests IS NOT excluded.requests
+                        OR estimated_cost_microusd IS NOT excluded.estimated_cost_microusd
+                        OR priced_requests IS NOT excluded.priced_requests
+                        OR cache_savings_microusd IS NOT excluded.cache_savings_microusd
+                        OR model IS NOT excluded.model",
+                )?;
+                for (path, file) in cache.files.iter().filter(|(_, file)| pending(file)) {
+                    scan.execute(params![provider.id(), path, file.offset as i64])?;
+                    let first_new = match file.persisted {
+                        Some((_, stored)) if stored <= file.entries.len() => stored,
+                        _ => 0,
+                    };
+                    for (event_ord, entry) in file.entries.iter().enumerate().skip(first_new) {
+                        events.execute(params![
+                            provider.id(),
+                            path,
+                            event_ord as i64,
+                            entry.timestamp.to_rfc3339(),
+                            entry.message_id,
+                            entry.request_id,
+                            entry.is_sidechain as i64,
+                            entry.has_speed as i64,
+                            entry.usage.input_tokens as i64,
+                            entry.usage.cached_input_tokens as i64,
+                            entry.usage.output_tokens as i64,
+                            entry.usage.requests as i64,
+                            entry.usage.estimated_cost_microusd as i64,
+                            entry.usage.priced_requests as i64,
+                            entry.usage.cache_savings_microusd as i64,
+                            entry.model,
+                        ])?;
+                    }
+                    if first_new == 0 {
+                        // Rebuilt or pruned: drop ordinals past the new end.
+                        tx.execute(
+                            "DELETE FROM usage_events
+                             WHERE provider = ?1 AND path = ?2 AND event_ord >= ?3",
+                            params![provider.id(), path, file.entries.len() as i64],
+                        )?;
+                    }
                 }
             }
+            delete_stale_event_rows(&tx, provider, &stale)?;
+            tx.commit()?;
+            if stale.len() + cache.files.values().filter(|file| pending(file)).count() >= 100 {
+                self.checkpoint_wal()?;
+            }
         }
-        delete_stale_event_rows(&tx, provider, cache, &retained_files)?;
-        tx.commit()?;
 
         let flags = json!({ "cache_version": cache.version });
         self.upsert_provider_meta(
@@ -1043,6 +1265,27 @@ impl ProviderStore {
             Some(flags.to_string()),
         )?;
         Ok(())
+    }
+
+    /// Paths with stored scan or event rows that are no longer in `cache`.
+    fn stale_claude_paths(
+        &self,
+        provider: ProviderId,
+        cache: &ClaudeUsageCache,
+    ) -> Result<Vec<String>> {
+        let mut statement = self.conn.prepare(
+            "SELECT path FROM scan_files WHERE provider = ?1
+             UNION SELECT DISTINCT path FROM usage_events WHERE provider = ?1",
+        )?;
+        let rows = statement.query_map(params![provider.id()], |row| row.get::<_, String>(0))?;
+        let mut stale = Vec::new();
+        for path in rows {
+            let path = path?;
+            if !cache.files.contains_key(&path) {
+                stale.push(path);
+            }
+        }
+        Ok(stale)
     }
 
     fn provider_flags(&self, provider: ProviderId) -> Result<serde_json::Value> {
@@ -1125,6 +1368,14 @@ impl ProviderStore {
             .optional()?)
     }
 
+    fn has_openrouter_analytics(&self, provider: ProviderId) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM meta WHERE key = ?1)",
+            params![openrouter_analytics_key(provider)],
+            |row| row.get(0),
+        )?)
+    }
+
     pub(crate) fn save_openrouter_analytics(
         &self,
         provider: ProviderId,
@@ -1173,8 +1424,10 @@ impl ProviderStore {
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<u64> {
-        if provider == ProviderId::primary(ProviderKind::Codex) && self.use_codex_account_data()? {
-            return self.account_sessions(start, end);
+        if provider == ProviderId::primary(ProviderKind::Codex)
+            && let Some(account) = self.codex_account_for_reads()?
+        {
+            return self.account_sessions_for(&account, start, end);
         }
         let from_files: i64 = self.conn.query_row(
             "SELECT COUNT(DISTINCT path) FROM usage_file_daily
@@ -1209,15 +1462,15 @@ impl ProviderStore {
         end: NaiveDate,
     ) -> Result<Vec<(String, TokenUsage)>> {
         if provider.kind() == ProviderKind::OpenRouter
-            && self.load_openrouter_analytics(provider)?.is_none()
+            && !self.has_openrouter_analytics(provider)?
         {
             return Ok(Vec::new());
         }
-        if provider == ProviderId::primary(ProviderKind::Codex) && self.use_codex_account_data()? {
+        if provider == ProviderId::primary(ProviderKind::Codex)
+            && let Some(account) = self.codex_account_for_reads()?
+        {
             let mut merged = BTreeMap::<String, TokenUsage>::new();
-            for (model, _, usage) in
-                self.account_daily_for(&codex_accounts::current_id(), start, end)?
-            {
+            for (model, _, usage) in self.account_daily_for(&account, start, end)? {
                 merged.entry(model).or_default().add(&usage);
             }
             return Ok(merged.into_iter().collect());
@@ -1252,12 +1505,14 @@ impl ProviderStore {
         end: NaiveDate,
     ) -> Result<Vec<(String, NaiveDate, TokenUsage)>> {
         if provider.kind() == ProviderKind::OpenRouter
-            && self.load_openrouter_analytics(provider)?.is_none()
+            && !self.has_openrouter_analytics(provider)?
         {
             return Ok(Vec::new());
         }
-        if provider == ProviderId::primary(ProviderKind::Codex) && self.use_codex_account_data()? {
-            return self.account_daily_for(&codex_accounts::current_id(), start, end);
+        if provider == ProviderId::primary(ProviderKind::Codex)
+            && let Some(account) = self.codex_account_for_reads()?
+        {
+            return self.account_daily_for(&account, start, end);
         }
         let mut statement = self.conn.prepare(
             "SELECT model, date, input_tokens, cached_input_tokens, output_tokens,
@@ -1336,23 +1591,30 @@ impl ProviderStore {
                 ])?;
             }
         }
-        let existing = {
-            let mut statement = self
-                .conn
-                .prepare("SELECT date, model FROM usage_model_daily WHERE provider = ?1")?;
-            let rows = statement.query_map(params![provider.id()], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()?
-        };
-        for (date, model) in existing {
-            if !retained.contains(&(date.clone(), model.clone())) {
-                self.conn.execute(
-                    "DELETE FROM usage_model_daily WHERE provider = ?1 AND date = ?2 AND model = ?3",
-                    params![provider.id(), date, model],
-                )?;
+        self.conn.execute_batch(
+            "CREATE TEMP TABLE IF NOT EXISTS retained_model_daily(
+                date TEXT NOT NULL, model TEXT NOT NULL, PRIMARY KEY (date, model)
+             );
+             DELETE FROM retained_model_daily;",
+        )?;
+        {
+            let mut keep = self.conn.prepare(
+                "INSERT OR IGNORE INTO temp.retained_model_daily(date, model) VALUES(?1, ?2)",
+            )?;
+            for (date, model) in &retained {
+                keep.execute(params![date, model])?;
             }
         }
+        self.conn.execute(
+            "DELETE FROM usage_model_daily
+             WHERE provider = ?1 AND NOT EXISTS (
+                SELECT 1 FROM temp.retained_model_daily r
+                WHERE r.date = usage_model_daily.date AND r.model = usage_model_daily.model
+             )",
+            params![provider.id()],
+        )?;
+        self.conn
+            .execute("DELETE FROM temp.retained_model_daily", [])?;
         Ok(())
     }
 
@@ -1469,6 +1731,18 @@ struct LegacyCursorUsageCache {
 }
 
 /// The primary instance keeps the original key so existing analytics survive.
+const HOURLY_RETENTION_DAYS: i64 = 8;
+
+/// Canonical UTC key for `usage_hourly.hour`; lexical order equals time order.
+fn hour_key<Tz: TimeZone>(at: DateTime<Tz>) -> String {
+    at.with_timezone(&Utc)
+        .to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+fn hourly_cutoff() -> String {
+    hour_key(Utc::now() - Duration::days(HOURLY_RETENTION_DAYS))
+}
+
 fn openrouter_analytics_key(provider: ProviderId) -> String {
     if provider.is_primary() {
         "openrouter.analytics.v3".into()
@@ -1480,102 +1754,35 @@ fn openrouter_analytics_key(provider: ProviderId) -> String {
 fn delete_stale_file_rows(
     tx: &rusqlite::Transaction<'_>,
     provider: ProviderId,
-    retained_files: &BTreeSet<String>,
-    retained_days: &BTreeSet<(String, String)>,
-    retained_models: &BTreeSet<(String, String, String)>,
+    stale: &[String],
 ) -> Result<()> {
     let provider = provider.id();
-    let existing_files = {
-        let mut statement = tx.prepare("SELECT path FROM scan_files WHERE provider = ?1")?;
-        let rows = statement.query_map(params![provider], |row| row.get::<_, String>(0))?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
-    };
-    for path in existing_files {
-        if !retained_files.contains(&path) {
-            tx.execute(
-                "DELETE FROM scan_files WHERE provider = ?1 AND path = ?2",
-                params![provider, path],
-            )?;
-        }
-    }
-
-    let existing_days = {
-        let mut statement =
-            tx.prepare("SELECT path, date FROM usage_file_daily WHERE provider = ?1")?;
-        let rows = statement.query_map(params![provider], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
-    };
-    for (path, date) in existing_days {
-        if !retained_days.contains(&(path.clone(), date.clone())) {
-            tx.execute(
-                "DELETE FROM usage_file_daily WHERE provider = ?1 AND path = ?2 AND date = ?3",
-                params![provider, path, date],
-            )?;
-        }
-    }
-
-    let existing_models = {
-        let mut statement =
-            tx.prepare("SELECT path, date, model FROM usage_file_model_daily WHERE provider = ?1")?;
-        let rows = statement.query_map(params![provider], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
-    };
-    for (path, date, model) in existing_models {
-        if !retained_models.contains(&(path.clone(), date.clone(), model.clone())) {
-            tx.execute(
-                "DELETE FROM usage_file_model_daily
-                 WHERE provider = ?1 AND path = ?2 AND date = ?3 AND model = ?4",
-                params![provider, path, date, model],
-            )?;
+    for table in ["scan_files", "usage_file_daily", "usage_file_model_daily"] {
+        let mut delete = tx.prepare(&format!(
+            "DELETE FROM {table} WHERE provider = ?1 AND path = ?2"
+        ))?;
+        for path in stale {
+            delete.execute(params![provider, path])?;
         }
     }
     Ok(())
 }
 
-/// Each file's events are stored at ordinals `0..entries.len()`, so only the
-/// tail past that length and files that left the cache are stale. This avoids
-/// loading every stored event key on each save.
+/// Files that left the cache lose their scan row and all stored events. Events
+/// of retained files are handled per file by `save_claude_cache`.
 fn delete_stale_event_rows(
     tx: &rusqlite::Transaction<'_>,
     provider: ProviderId,
-    cache: &ClaudeUsageCache,
-    retained_files: &BTreeSet<String>,
+    stale: &[String],
 ) -> Result<()> {
     let provider = provider.id();
-    let existing_files = {
-        let mut statement = tx.prepare(
-            "SELECT path FROM scan_files WHERE provider = ?1
-             UNION SELECT DISTINCT path FROM usage_events WHERE provider = ?1",
-        )?;
-        let rows = statement.query_map(params![provider], |row| row.get::<_, String>(0))?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
-    };
-    for path in existing_files {
-        if !retained_files.contains(&path) {
-            tx.execute(
-                "DELETE FROM scan_files WHERE provider = ?1 AND path = ?2",
-                params![provider, path],
-            )?;
-            tx.execute(
-                "DELETE FROM usage_events WHERE provider = ?1 AND path = ?2",
-                params![provider, path],
-            )?;
+    for table in ["scan_files", "usage_events"] {
+        let mut delete = tx.prepare(&format!(
+            "DELETE FROM {table} WHERE provider = ?1 AND path = ?2"
+        ))?;
+        for path in stale {
+            delete.execute(params![provider, path])?;
         }
-    }
-
-    let mut truncate = tx.prepare(
-        "DELETE FROM usage_events WHERE provider = ?1 AND path = ?2 AND event_ord >= ?3",
-    )?;
-    for (path, file) in &cache.files {
-        truncate.execute(params![provider, path, file.entries.len() as i64])?;
     }
     Ok(())
 }
@@ -1652,14 +1859,18 @@ fn start_of_local_day(date: NaiveDate) -> DateTime<Local> {
         .unwrap_or_else(Local::now)
 }
 
-fn parse_date(raw: &str) -> NaiveDate {
-    NaiveDate::parse_from_str(raw, "%Y-%m-%d").unwrap_or_else(|_| Local::now().date_naive())
+fn parse_date_option(raw: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(raw, "%Y-%m-%d").ok()
 }
 
-fn parse_datetime(raw: &str) -> DateTime<Utc> {
+fn parse_date(raw: &str) -> NaiveDate {
+    parse_date_option(raw).unwrap_or_else(|| Local::now().date_naive())
+}
+
+fn parse_datetime_option(raw: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(raw)
         .map(|dt| dt.with_timezone(&Utc))
-        .unwrap_or_else(|_| Utc::now())
+        .ok()
 }
 
 fn truncate_local_hour(timestamp: DateTime<Local>) -> DateTime<Local> {
@@ -1704,6 +1915,166 @@ mod tests {
         let store = ProviderStore { conn };
         store.migrate().unwrap();
         store
+    }
+
+    fn hour_usage(requests: u64) -> TokenUsage {
+        TokenUsage {
+            requests,
+            ..Default::default()
+        }
+    }
+
+    fn hourly_rows(store: &ProviderStore) -> Vec<(String, String)> {
+        let mut statement = store
+            .conn
+            .prepare("SELECT provider, hour FROM usage_hourly ORDER BY provider, hour")
+            .unwrap();
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn hourly_retention_skips_old_rows_and_prunes_all_providers() {
+        let dir = tempdir().unwrap();
+        let store = test_store(&dir.path().join("hourly.sqlite"));
+        let now = Local::now();
+        let old = now - Duration::days(20);
+        let recent = now - Duration::days(1);
+        // Stale row for another provider written directly.
+        store
+            .conn
+            .execute(
+                "INSERT INTO usage_hourly(provider, hour, input_tokens, cached_input_tokens,
+                    output_tokens, requests, estimated_cost_microusd, priced_requests)
+                 VALUES('codex', ?1, 0, 0, 0, 1, 0, 0)",
+                params![hour_key(old)],
+            )
+            .unwrap();
+        store
+            .replace_usage_hourly(
+                id(ProviderKind::Cursor),
+                &[(old, hour_usage(1)), (recent, hour_usage(2))],
+            )
+            .unwrap();
+        let rows = hourly_rows(&store);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].0, "cursor");
+        assert!(rows[0].1.ends_with('Z'));
+    }
+
+    #[test]
+    fn hourly_offset_rows_migrate_to_utc_and_range_is_offset_independent() {
+        let dir = tempdir().unwrap();
+        let store = test_store(&dir.path().join("migrate.sqlite"));
+        let at = Utc::now() - Duration::days(1);
+        let at = at
+            .with_timezone(&Local)
+            .with_minute(0)
+            .and_then(|t| t.with_second(0))
+            .and_then(|t| t.with_nanosecond(0))
+            .unwrap();
+        // Legacy format: arbitrary non-UTC offset text.
+        let legacy = at
+            .with_timezone(&chrono::FixedOffset::east_opt(3 * 3600).unwrap())
+            .to_rfc3339();
+        assert!(legacy.ends_with("+03:00"));
+        store
+            .conn
+            .execute(
+                "INSERT INTO usage_hourly(provider, hour, input_tokens, cached_input_tokens,
+                    output_tokens, requests, estimated_cost_microusd, priced_requests)
+                 VALUES('codex', ?1, 0, 0, 0, 5, 0, 0)",
+                params![legacy],
+            )
+            .unwrap();
+        store
+            .conn
+            .execute("DELETE FROM meta WHERE key='usage_hourly.utc.v1'", [])
+            .unwrap();
+        store.migrate_hourly_to_utc().unwrap();
+        let rows = hourly_rows(&store);
+        assert_eq!(rows, vec![("codex".into(), hour_key(at))]);
+
+        // The query window is expressed in a different offset than the stored
+        // text ever was; the instant comparison must still include the row.
+        let start = at - Duration::minutes(30);
+        let end = at + Duration::minutes(30);
+        let loaded = store
+            .load_usage_hourly(id(ProviderKind::Codex), start, end)
+            .unwrap();
+        assert_eq!(loaded.values().map(|u| u.requests).sum::<u64>(), 5);
+        let outside = store
+            .load_usage_hourly(
+                id(ProviderKind::Codex),
+                at + Duration::minutes(1),
+                at + Duration::hours(2),
+            )
+            .unwrap();
+        assert!(outside.is_empty());
+    }
+
+    #[test]
+    fn prune_unknown_providers_keeps_known_and_clears_legacy_meta() {
+        let dir = tempdir().unwrap();
+        let store = test_store(&dir.path().join("prune.sqlite"));
+        let keep = id(ProviderKind::Claude);
+        let gone = id(ProviderKind::Cursor);
+        let day = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
+        for provider in [keep, gone] {
+            store
+                .replace_usage_model_daily(provider, &[("m".into(), day, hour_usage(1))])
+                .unwrap();
+            store
+                .replace_usage_hourly(provider, &[(Local::now(), hour_usage(1))])
+                .unwrap();
+            store
+                .set_meta(&openrouter_analytics_key(provider), "{}")
+                .unwrap();
+        }
+        store.set_meta("openrouter.analytics.v1", "x").unwrap();
+        store.set_meta("openrouter.analytics.v2", "x").unwrap();
+        store
+            .set_meta("openrouter.analytics.v3.stale", "x")
+            .unwrap();
+        // Legacy keys are removed by migration.
+        store.migrate().unwrap();
+        let meta_keys = |store: &ProviderStore| -> Vec<String> {
+            let mut s = store
+                .conn
+                .prepare("SELECT key FROM meta WHERE key LIKE 'openrouter.analytics.%'")
+                .unwrap();
+            s.query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        assert!(
+            !meta_keys(&store)
+                .iter()
+                .any(|k| k.ends_with(".v1") || k.ends_with(".v2"))
+        );
+
+        store.prune_unknown_providers(&[]).unwrap();
+        assert_eq!(hourly_rows(&store).len(), 2, "empty list must not prune");
+
+        store.prune_unknown_providers(&[keep]).unwrap();
+        let rows = hourly_rows(&store);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, keep.id());
+        let models: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM usage_model_daily", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(models, 1);
+        let keys = meta_keys(&store);
+        assert!(keys.iter().all(|k| !k.ends_with(".stale")), "{keys:?}");
+        assert!(
+            keys.contains(&openrouter_analytics_key(keep))
+                || keep.kind() != ProviderKind::OpenRouter
+        );
     }
 
     #[test]
@@ -2014,21 +2385,137 @@ mod tests {
         );
     }
 
+    /// Counts writes to the per-file Codex tables, ignoring temp-table
+    /// bookkeeping that `total_changes()` would also include.
+    fn track_file_writes(store: &ProviderStore) {
+        let mut sql =
+            String::from("CREATE TEMP TABLE IF NOT EXISTS file_writes(n INTEGER NOT NULL);");
+        for table in ["scan_files", "usage_file_daily", "usage_file_model_daily"] {
+            for op in ["INSERT", "UPDATE", "DELETE"] {
+                sql.push_str(&format!(
+                    "CREATE TEMP TRIGGER IF NOT EXISTS count_{table}_{op} AFTER {op} ON main.{table}
+                     BEGIN INSERT INTO file_writes VALUES(1); END;"
+                ));
+            }
+        }
+        store.conn.execute_batch(&sql).unwrap();
+    }
+
+    fn file_writes(store: &ProviderStore) -> i64 {
+        store
+            .conn
+            .query_row("SELECT COUNT(*) FROM temp.file_writes", [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    }
+
     #[test]
     fn unchanged_codex_cache_does_not_rewrite_rows() {
         let dir = tempdir().unwrap();
         let store = test_store(&dir.path().join("test.sqlite"));
-        let cache = sample_codex_cache();
-
+        store
+            .save_codex_cache(id(ProviderKind::Codex), &sample_codex_cache())
+            .unwrap();
+        let cache = store.load_codex_cache(id(ProviderKind::Codex)).unwrap();
+        track_file_writes(&store);
         store
             .save_codex_cache(id(ProviderKind::Codex), &cache)
             .unwrap();
-        let changes_after_first_save = store.conn.total_changes();
-        store
-            .save_codex_cache(id(ProviderKind::Codex), &cache)
-            .unwrap();
 
-        assert_eq!(store.conn.total_changes(), changes_after_first_save);
+        assert_eq!(file_writes(&store), 0);
+    }
+
+    #[test]
+    fn codex_save_rewrites_only_dirty_and_removes_stale_files() {
+        let dir = tempdir().unwrap();
+        let store = test_store(&dir.path().join("test.sqlite"));
+        let codex = id(ProviderKind::Codex);
+        let mut cache = sample_codex_cache();
+        let other = cache.files["sessions/sample.jsonl"].clone();
+        cache.files.insert("sessions/other.jsonl".into(), other);
+        store.save_codex_cache(codex, &cache).unwrap();
+
+        let mut cache = store.load_codex_cache(codex).unwrap();
+        assert_eq!(cache.files.len(), 2);
+        track_file_writes(&store);
+        {
+            let file = cache.files.get_mut("sessions/other.jsonl").unwrap();
+            file.offset = 99;
+            file.persisted = false;
+        }
+        store.save_codex_cache(codex, &cache).unwrap();
+        // scan row + 1 daily delete/insert + 1 model delete/insert for one file.
+        assert!(file_writes(&store) <= 5);
+        let loaded = store.load_codex_cache(codex).unwrap();
+        assert_eq!(loaded.files["sessions/other.jsonl"].offset, 99);
+        assert_eq!(loaded.files["sessions/sample.jsonl"].offset, 42);
+        assert_eq!(loaded.files["sessions/other.jsonl"].daily.len(), 1);
+
+        let mut cache = loaded;
+        cache.files.remove("sessions/other.jsonl");
+        store.save_codex_cache(codex, &cache).unwrap();
+        let loaded = store.load_codex_cache(codex).unwrap();
+        assert_eq!(loaded.files.len(), 1);
+        assert!(loaded.files.contains_key("sessions/sample.jsonl"));
+    }
+
+    #[test]
+    fn claude_save_writes_only_new_tail_events() {
+        let dir = tempdir().unwrap();
+        let store = test_store(&dir.path().join("test.sqlite"));
+        let claude = id(ProviderKind::Claude);
+        let entry = |id: &str| CachedClaudeUsageEntry {
+            timestamp: Utc::now(),
+            message_id: Some(id.into()),
+            request_id: None,
+            is_sidechain: false,
+            has_speed: false,
+            usage: TokenUsage {
+                input_tokens: 1,
+                requests: 1,
+                ..Default::default()
+            },
+            model: Some("claude-sonnet-4-20250514".into()),
+        };
+        let cache = ClaudeUsageCache {
+            version: CLAUDE_CACHE_VERSION,
+            files: BTreeMap::from([(
+                "/p/a.jsonl".into(),
+                CachedClaudeSessionFile {
+                    offset: 10,
+                    entries: vec![entry("m1"), entry("m2")],
+                    persisted: None,
+                },
+            )]),
+        };
+        store.save_claude_cache(claude, &cache).unwrap();
+
+        let mut cache = store.load_claude_cache(claude).unwrap();
+        let before = store.conn.total_changes();
+        store.save_claude_cache(claude, &cache).unwrap();
+        assert_eq!(store.conn.total_changes(), before);
+
+        let file = cache.files.get_mut("/p/a.jsonl").unwrap();
+        file.entries.push(entry("m3"));
+        file.offset = 20;
+        let before = store.conn.total_changes();
+        store.save_claude_cache(claude, &cache).unwrap();
+        assert_eq!(store.conn.total_changes() - before, 2); // scan row + 1 event
+        let mut cache = store.load_claude_cache(claude).unwrap();
+        assert_eq!(cache.files["/p/a.jsonl"].entries.len(), 3);
+
+        // Rebuild with fewer events truncates the stored tail.
+        let file = cache.files.get_mut("/p/a.jsonl").unwrap();
+        file.entries.truncate(1);
+        file.persisted = None;
+        store.save_claude_cache(claude, &cache).unwrap();
+        let mut cache = store.load_claude_cache(claude).unwrap();
+        assert_eq!(cache.files["/p/a.jsonl"].entries.len(), 1);
+
+        cache.files.clear();
+        store.save_claude_cache(claude, &cache).unwrap();
+        assert!(store.load_claude_cache(claude).unwrap().files.is_empty());
     }
 
     #[test]
@@ -2089,6 +2576,7 @@ mod tests {
                         },
                         model: Some("claude-sonnet-4-20250514".into()),
                     }],
+                    persisted: None,
                 },
             )]),
         };

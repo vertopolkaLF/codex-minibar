@@ -394,10 +394,12 @@ fn find_account_instance<'a>(
 
 /// Applies a change to one instance against on-disk settings, never a stale
 /// UI snapshot. The open window picks the result up through the live sync.
+/// Blocks on the serial writer: call from worker threads only, never the
+/// GPUI thread.
 fn persist_instance(
     settings_tx: Sender<Settings>,
     provider: ProviderId,
-    mutate: impl FnOnce(&mut ProviderInstance) -> anyhow::Result<()>,
+    mutate: impl FnOnce(&mut ProviderInstance) -> anyhow::Result<()> + Send + 'static,
 ) -> anyhow::Result<()> {
     try_persist_update_fallible(settings_tx, move |settings| {
         let instance = settings
@@ -417,7 +419,7 @@ fn persist_openrouter_account(
     account_id: String,
     bump_credentials: bool,
     previous_availability: Option<bool>,
-    mutate: impl FnOnce(&mut OpenRouterAccount) -> anyhow::Result<()>,
+    mutate: impl FnOnce(&mut OpenRouterAccount) -> anyhow::Result<()> + Send + 'static,
 ) -> anyhow::Result<()> {
     try_persist_update_fallible(settings_tx, move |settings| {
         let provider = find_account_instance(&settings.instances, &account_id)
@@ -451,14 +453,11 @@ pub(crate) fn persist_openrouter_credentials(
     settings_tx: Sender<Settings>,
     account_id: String,
     changes: Vec<crate::openrouter::AccountSecretChange>,
-    mutate: impl FnOnce(&mut OpenRouterAccount) -> anyhow::Result<()>,
+    mutate: impl FnOnce(&mut OpenRouterAccount) -> anyhow::Result<()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    let current = Settings::load_or_create(&Settings::default_path()?)?;
-    let before = find_account_instance(&current.instances, &account_id)
-        .and_then(|instance| instance.openrouter.as_ref())
-        .is_some_and(|account| {
-            crate::openrouter::has_management_key(std::slice::from_ref(account))
-        });
+    // Availability depends only on the protected store, so no settings read
+    // (and no race with queued writes) is needed to know the previous state.
+    let before = crate::openrouter::management_key_is_configured(&account_id);
     let rollback = crate::openrouter::apply_account_secret_changes(&changes)?;
     if let Err(error) =
         persist_openrouter_account(settings_tx, account_id, true, Some(before), mutate)

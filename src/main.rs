@@ -57,10 +57,14 @@ fn run() -> Result<()> {
     );
     let hydrated_limits = store::shared()
         .and_then(|shared| {
-            shared
+            let store = shared
                 .lock()
-                .map_err(|_| anyhow!("provider store lock poisoned"))?
-                .hydrate_provider_limits(&settings.provider_ids(), settings.history_retention_days)
+                .map_err(|_| anyhow!("provider store lock poisoned"))?;
+            // Drop rows of removed instances; disabled instances keep their data.
+            if let Err(error) = store.prune_unknown_providers(&settings.provider_ids()) {
+                eprintln!("failed to prune unknown providers: {error:#}");
+            }
+            store.hydrate_provider_limits(&settings.provider_ids(), settings.history_retention_days)
         })
         .unwrap_or_else(|error| {
             eprintln!("failed to hydrate provider store: {error:#}");

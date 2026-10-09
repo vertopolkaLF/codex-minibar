@@ -149,6 +149,18 @@ pub(super) fn update_version_from_phase(phase: &UpdatePhase) -> Option<String> {
     }
 }
 
+/// A visible popup or open Settings window needs frame-rate polling (outside
+/// click / Escape dismissal, live preview, settings pushes).
+fn bridge_surface_active() -> bool {
+    popup::is_visible() || popup::is_closing() || crate::settings_window::is_open()
+}
+
+/// Idle tick is short enough for the 250 ms system-theme check, stream deck
+/// and update toasts; window messages (tray) wake the idle wait immediately.
+fn bridge_poll_interval(active: bool) -> Duration {
+    Duration::from_millis(if active { 16 } else { 100 })
+}
+
 pub(super) fn start_background_bridge(state: Arc<AppState>) {
     // Use the already hydrated persistent snapshot while the first network
     // refresh is in flight. Opening Settings never starts another poll.
@@ -396,19 +408,12 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                     ui.observe_usage_update();
                     publish_popup_ui(ui);
 
+                    // The wipe itself runs once, off this thread, after the
+                    // barrier completes (immediately when nobody can ack).
                     if targets.is_empty() {
-                        if let Err(error) =
-                            crate::store::with_store(|store| store.clear_usage_data())
-                        {
-                            ui.set_popup_error(crate::i18n::format(
-                                "could-not-clear-usage-data-error",
-                                &[("error", format!("{:#}", error))],
-                            ));
-                            publish_popup_ui(ui);
-                        }
-                    } else {
-                        *pending = Some((clear_generation, targets));
+                        spawn_usage_wipe(state.worker_events_tx.clone(), clear_generation);
                     }
+                    *pending = Some((clear_generation, targets));
                 }
             };
 
@@ -497,13 +502,15 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                 drain_updates(&mut ui, &mut tray, &mut update_phase, &mut widgets);
                 if pump_tray_and_dismiss(&tray, &settings_tx, &state, &mut ui) {
                     drop(tray);
+                    AppState::flush_limits_persistence();
                     state.shutdown_worker();
                     std::process::exit(0);
                 }
-                thread::sleep(Duration::from_millis(16));
+                popup::wait_for_messages(bridge_poll_interval(bridge_surface_active()));
             }
         };
 
+        let mut made_progress = false;
         loop {
             popup::pump_messages();
             drain_toast_update();
@@ -530,10 +537,32 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
             drain_updates(&mut ui, &mut tray, &mut update_phase, &mut widgets);
             if pump_tray_and_dismiss(&tray, &settings_tx, &state, &mut ui) {
                 drop(tray);
+                AppState::flush_limits_persistence();
                 state.shutdown_worker();
                 std::process::exit(0);
             }
-            match events.recv_timeout(Duration::from_millis(16)) {
+            // Active surfaces poll at frame rate and wake on worker events.
+            // Idle (popup hidden, Settings closed) the thread sleeps in the
+            // message wait, which tray and popup window messages interrupt,
+            // and only looks at the channels on a coarse tick. After an event
+            // the next iteration does not wait, so bursts drain at full speed.
+            let next_event = if made_progress {
+                events.try_recv().map_err(|error| match error {
+                    std::sync::mpsc::TryRecvError::Empty => {
+                        std::sync::mpsc::RecvTimeoutError::Timeout
+                    }
+                    std::sync::mpsc::TryRecvError::Disconnected => {
+                        std::sync::mpsc::RecvTimeoutError::Disconnected
+                    }
+                })
+            } else if bridge_surface_active() {
+                events.recv_timeout(bridge_poll_interval(true))
+            } else {
+                popup::wait_for_messages(bridge_poll_interval(false));
+                events.recv_timeout(Duration::ZERO)
+            };
+            made_progress = next_event.is_ok();
+            match next_event {
                 Ok(WorkerEvent::ForcedResetsUpdated(snapshot)) => {
                     forced_reset_notified_ids.extend(snapshot.notified_ids);
                     if notification_settings.forced_reset_feed_enabled {
@@ -714,15 +743,37 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                             if *pending_generation != generation {
                                 return false;
                             }
+                            let before = providers.len();
                             providers.retain(|pending_provider| *pending_provider != provider);
-                            providers.is_empty()
+                            before != providers.len() && providers.is_empty()
                         },
                     );
                     if completed {
+                        // Every worker is idle and acknowledged, so any stale
+                        // in-flight snapshot has already been delivered. Drop
+                        // it, then wipe the store exactly once off-thread.
+                        state.clear_usage_snapshot();
+                        ui.observe_usage_update();
+                        publish_popup_ui(&ui);
+                        spawn_usage_wipe(state.worker_events_tx.clone(), generation);
+                    }
+                }
+                Ok(WorkerEvent::UsageClearFinished(generation, error)) => {
+                    if pending_usage_clear
+                        .as_ref()
+                        .is_some_and(|(pending, _)| *pending == generation)
+                    {
+                        pending_usage_clear = None;
+                        if let Some(error) = error {
+                            ui.set_popup_error(crate::i18n::format(
+                                "could-not-clear-usage-data-error",
+                                &[("error", error)],
+                            ));
+                            publish_popup_ui(&ui);
+                        }
                         for (_, commands) in state.worker_commands() {
                             let _ = commands.send(WorkerCommand::ResumeUsageRefresh(generation));
                         }
-                        pending_usage_clear = None;
                     }
                 }
                 Ok(WorkerEvent::ProviderActivationStarted(provider, worker_revision)) => {
@@ -886,4 +937,25 @@ pub(super) fn pump_tray_and_dismiss(
     _ui: &mut UiState,
 ) -> bool {
     false
+}
+
+/// Runs the single usage-data wipe on a dedicated thread so the bridge never
+/// blocks on the store mutex, then reports back through the worker event
+/// channel so the bridge can surface errors and resume the workers.
+fn spawn_usage_wipe(events: std::sync::mpsc::Sender<WorkerEvent>, generation: u64) {
+    let fallback = events.clone();
+    let spawned = std::thread::Builder::new()
+        .name("usage-wipe".into())
+        .spawn(move || {
+            let error = crate::store::with_store(|store| store.clear_usage_data())
+                .err()
+                .map(|error| format!("{error:#}"));
+            let _ = events.send(WorkerEvent::UsageClearFinished(generation, error));
+        });
+    if let Err(error) = spawned {
+        let _ = fallback.send(WorkerEvent::UsageClearFinished(
+            generation,
+            Some(error.to_string()),
+        ));
+    }
 }

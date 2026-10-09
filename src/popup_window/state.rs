@@ -40,6 +40,23 @@ pub(super) fn usage_error_message(statistics: &crate::usage::UsageStatistics) ->
     (!errors.is_empty()).then(|| errors.join("; "))
 }
 
+fn limits_persister() -> &'static super::limits_persist::LimitsPersister {
+    static PERSISTER: std::sync::OnceLock<super::limits_persist::LimitsPersister> =
+        std::sync::OnceLock::new();
+    PERSISTER.get_or_init(|| {
+        super::limits_persist::LimitsPersister::spawn(|provider, limits| {
+            if let Err(error) =
+                crate::store::with_store(|store| store.save_limits(provider, limits))
+            {
+                eprintln!(
+                    "failed to persist {} limits: {error:#}",
+                    provider.display_name()
+                );
+            }
+        })
+    })
+}
+
 /// Shared startup state handed from `main` into the reactor render tree.
 pub struct AppState {
     pub settings: Settings,
@@ -102,26 +119,23 @@ impl AppState {
     }
 
     pub(super) fn replace_limits(&self, provider: ProviderId, mut limits: RateLimits) {
-        let persisted = if let Ok(mut current) = self.limits.lock() {
+        if let Ok(mut current) = self.limits.lock() {
             // Quota polling must not erase the independently refreshed usage
             // history between its ten-minute scans.
             limits.usage = current.get(provider).usage.clone();
             *current.get_mut(provider) = limits.clone();
-            Some(limits)
         } else {
-            None
-        };
-        // Never hold the live UI snapshot while waiting for storage. Usage
-        // refreshes can legitimately keep the SQLite writer busy briefly.
-        if let Some(limits) = persisted
-            && let Err(error) =
-                crate::store::with_store(|store| store.save_limits(provider, &limits))
-        {
-            eprintln!(
-                "failed to persist {} limits: {error:#}",
-                provider.display_name()
-            );
+            return;
         }
+        // Never wait for storage on the caller (the tray thread): usage scans
+        // hold the store for seconds. The persister coalesces to the latest
+        // snapshot per provider and writes in the background.
+        limits_persister().save(provider, limits);
+    }
+
+    /// Blocks (bounded) until queued limit snapshots reach storage.
+    pub fn flush_limits_persistence() {
+        limits_persister().flush(Duration::from_secs(3));
     }
 
     pub(super) fn replace_usage(&self, provider: ProviderId, usage: crate::usage::UsageStatistics) {

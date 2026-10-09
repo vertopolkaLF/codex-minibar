@@ -233,6 +233,31 @@ pub fn pump_messages() {
 #[cfg(not(windows))]
 pub fn pump_messages() {}
 
+/// Sleeps until a window message is queued for this thread or `timeout`
+/// elapses, whichever comes first. Tray clicks, menu input and popup window
+/// messages therefore wake the bridge immediately instead of on a poll tick.
+#[cfg(windows)]
+pub fn wait_for_messages(timeout: std::time::Duration) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, QS_ALLINPUT,
+    };
+    let millis = timeout.as_millis().min(u128::from(u32::MAX - 1)) as u32;
+    unsafe {
+        MsgWaitForMultipleObjectsEx(
+            0,
+            std::ptr::null(),
+            millis,
+            QS_ALLINPUT,
+            MWMO_INPUTAVAILABLE,
+        );
+    }
+}
+
+#[cfg(not(windows))]
+pub fn wait_for_messages(timeout: std::time::Duration) {
+    std::thread::sleep(timeout);
+}
+
 #[cfg(windows)]
 fn cursor_position() -> (i32, i32) {
     use windows_sys::Win32::{Foundation::POINT, UI::WindowsAndMessaging::GetCursorPos};
