@@ -8,9 +8,9 @@ use std::{
 };
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, Context, FontWeight, ImageFormat, InteractiveElement,
-    IntoElement, ParentElement, PathPromptOptions, SharedString, StatefulInteractiveElement,
-    Styled, Task, Transformation, Window, div, img, prelude::FluentBuilder, px, radians,
+    Animation, AnimationExt, AnyElement, Context, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, PathPromptOptions, SharedString, StatefulInteractiveElement, Styled, Task,
+    Transformation, Window, div, img, prelude::FluentBuilder, px, radians,
 };
 
 use super::appearance::popup_mock;
@@ -25,6 +25,8 @@ const BROWSER_ID: &str = "appearance-open-vsx";
 /// Parallel icon downloads after a search.
 const ICON_WORKERS: usize = 4;
 const ICON_SIZE: f32 = 40.0;
+/// Logo pixels kept: `ICON_SIZE` at 200% scale.
+const ICON_PIXELS: u32 = 80;
 /// Preview tiles per row, matching the popup theme grid.
 const PREVIEW_COLUMNS: u16 = 3;
 const DIALOG_WIDTH: f32 = 640.0;
@@ -32,7 +34,9 @@ const DIALOG_HEIGHT: f32 = 690.0;
 
 enum Icon {
     Loading,
-    Ready(Arc<gpui::Image>),
+    /// Already decoded and shrunk: GPUI caches an encoded `gpui::Image`
+    /// app-wide at full size (store logos run to 1024 px), for good.
+    Ready(Arc<gpui::RenderImage>),
     Missing,
 }
 
@@ -739,16 +743,13 @@ impl SettingsWindow {
         for queue in queues.into_iter().filter(|queue| !queue.is_empty()) {
             cx.spawn(async move |this, cx| {
                 for url in queue {
-                    let fetched = cx
+                    let image = cx
                         .background_executor()
                         .spawn({
                             let url = url.clone();
-                            async move { open_vsx::fetch_icon(&url) }
+                            async move { decode_icon(&open_vsx::fetch_icon(&url).ok()?) }
                         })
                         .await;
-                    let image = fetched.ok().and_then(|bytes| {
-                        image_format(&bytes).map(|format| gpui::Image::from_bytes(format, bytes))
-                    });
                     let icon = match image {
                         Some(image) => Icon::Ready(Arc::new(image)),
                         None => Icon::Missing,
@@ -945,23 +946,58 @@ pub(super) fn end_theme_preview(cx: &mut gpui::App) {
 
 /// Marketplace icons should be PNG, but older packages ship JPEG or SVG;
 /// sniff the bytes rather than trust the file name.
-fn image_format(bytes: &[u8]) -> Option<ImageFormat> {
-    let head = &bytes[..bytes.len().min(512)];
-    if head.starts_with(b"\x89PNG") {
-        Some(ImageFormat::Png)
-    } else if head.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        Some(ImageFormat::Jpeg)
-    } else if head.starts_with(b"GIF8") {
-        Some(ImageFormat::Gif)
-    } else if head.starts_with(b"RIFF") && head.get(8..12) == Some(b"WEBP".as_slice()) {
-        Some(ImageFormat::Webp)
-    } else if head.starts_with(b"BM") {
-        Some(ImageFormat::Bmp)
-    } else if String::from_utf8_lossy(head).contains("<svg") {
-        Some(ImageFormat::Svg)
+/// A logo as BGRA pixels at most `ICON_PIXELS` on a side. Only the first
+/// frame of an animated logo is kept.
+fn decode_icon(bytes: &[u8]) -> Option<gpui::RenderImage> {
+    let head = String::from_utf8_lossy(&bytes[..bytes.len().min(512)]);
+    let image = if head.contains("<svg") {
+        rasterize_svg(bytes)?
     } else {
-        None
+        image::load_from_memory(bytes).ok()?
+    };
+    let image = if image.width() > ICON_PIXELS || image.height() > ICON_PIXELS {
+        image.resize(
+            ICON_PIXELS,
+            ICON_PIXELS,
+            image::imageops::FilterType::Triangle,
+        )
+    } else {
+        image
+    };
+    let mut pixels = image.into_rgba8();
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
     }
+    Some(gpui::RenderImage::new(smallvec::smallvec![
+        image::Frame::new(pixels)
+    ]))
+}
+
+/// An SVG logo drawn straight at `ICON_PIXELS`.
+fn rasterize_svg(bytes: &[u8]) -> Option<image::DynamicImage> {
+    use resvg::{tiny_skia, usvg};
+    let tree = usvg::Tree::from_data(bytes, &usvg::Options::default()).ok()?;
+    let size = tree.size();
+    let scale = ICON_PIXELS as f32 / size.width().max(size.height());
+    let mut pixmap = tiny_skia::Pixmap::new(
+        ((size.width() * scale).ceil() as u32).max(1),
+        ((size.height() * scale).ceil() as u32).max(1),
+    )?;
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    let (width, height) = (pixmap.width(), pixmap.height());
+    let straight = pixmap
+        .pixels()
+        .iter()
+        .flat_map(|pixel| {
+            let color = pixel.demultiply();
+            [color.red(), color.green(), color.blue(), color.alpha()]
+        })
+        .collect();
+    image::RgbaImage::from_raw(width, height, straight).map(image::DynamicImage::ImageRgba8)
 }
 
 /// `1.2M`, `34K`, `512` downloads.

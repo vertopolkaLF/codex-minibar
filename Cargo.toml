@@ -19,6 +19,9 @@ csv = "1"
 directories = "6"
 font8x8 = "0.3"
 fontdue = "0.9"
+# Same versions GPUI uses: Open VSX logos are decoded and shrunk before
+# they reach GPUI, whose asset cache would keep them at full size.
+image = "0.25"
 png = "0.17"
 semver = "1"
 serde = { version = "1", features = ["derive"] }
@@ -36,6 +39,8 @@ windows-core = { git = "https://github.com/microsoft/windows-rs", rev = "07f344c
 gpui = { version = "0.2.2", default-features = false }
 futures = "0.3"
 raw-window-handle = "0.6"
+resvg = { version = "0.45", default-features = false }
+smallvec = "1"
 unicode-segmentation = "1"
 fluent-bundle = "0.16"
 unic-langid = "0.9"
