@@ -53,13 +53,21 @@ pub(super) fn format_token_count(tokens: u64) -> String {
 }
 
 pub(super) fn format_usd(value: f64) -> String {
-    if value >= 1_000_000.0 {
-        format!("${:.1}M", value / 1_000_000.0)
-    } else if value >= 1_000.0 {
-        format!("${:.1}K", value / 1_000.0)
-    } else {
-        format!("${value:.2}")
+    let amount = format!("{value:.2}");
+    let Some((dollars, cents)) = amount.split_once('.') else {
+        return format!("${amount}");
+    };
+    let (sign, digits) = dollars
+        .strip_prefix('-')
+        .map_or(("", dollars), |digits| ("-", digits));
+    let mut grouped = String::new();
+    for (index, ch) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(ch);
     }
+    format!("${sign}{grouped}.{cents}")
 }
 
 pub(super) fn credits_display_value(limits: &RateLimits) -> Option<String> {
@@ -145,4 +153,25 @@ pub(super) fn format_last_updated(sampled_at: DateTime<Utc>, _clock_tick: u64) -
         _ => crate::i18n::format("minutes-ago", &[("v0", (seconds / 60).to_string())]),
     };
     crate::i18n::format("updated-elapsed", &[("elapsed", elapsed.to_string())])
+}
+
+#[cfg(test)]
+mod money_tests {
+    use super::format_usd;
+
+    #[test]
+    fn full_dollar_amounts_remain_distinguishable_at_compact_boundaries() {
+        for (value, expected) in [
+            (0.0, "$0.00"),
+            (1.0, "$1.00"),
+            (999.99, "$999.99"),
+            (1000.01, "$1,000.01"),
+            (1284.0, "$1,284.00"),
+            (1299.0, "$1,299.00"),
+            (12345678.9, "$12,345,678.90"),
+            (-1284.5, "$-1,284.50"),
+        ] {
+            assert_eq!(format_usd(value), expected);
+        }
+    }
 }

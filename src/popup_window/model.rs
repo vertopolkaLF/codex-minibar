@@ -72,6 +72,7 @@ pub(crate) enum Card<'a> {
         delete: Option<(String, String)>,
     },
     AccountHeading {
+        id: &'a str,
         name: &'a str,
         balance_microusd: Option<u64>,
     },
@@ -217,6 +218,7 @@ pub(crate) fn provider_cards<'a>(
                     let mut strip = Vec::new();
                     if !single_openrouter_account {
                         strip.push(Card::AccountHeading {
+                            id: &account.id,
                             name: &account.name,
                             balance_microusd: account.balance_microusd,
                         });

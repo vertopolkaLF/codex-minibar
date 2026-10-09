@@ -19,7 +19,7 @@ use gpui::{
 use super::{
     components::{self, caption, card, nowrap},
     fx,
-    home::{format_spend_dollars, format_spend_full},
+    home::{format_spend_full, format_thousands},
     root::{PopupRoot, SnapshotSlot, eid},
     theme::Palette,
     tooltip::{ChartTip, TipContent},
@@ -305,7 +305,7 @@ impl PopupRoot {
         let chart_previous = cache.previous.clone();
         let header = self.usage_header(Some(&range_label), recalculating, window, cx);
         let hero = self.usage_hero(&snapshot, window, cx);
-        let chart = self.usage_chart_card(&snapshot, chart_data, chart_previous, cx);
+        let chart = self.usage_chart_card(&snapshot, chart_data, chart_previous, window, cx);
         let totals = usage_totals_card(Some(&snapshot.totals), &palette, palette.subtle_fill);
         let breakdown = self.usage_breakdown_card(&snapshot, window, cx);
         self.usage_layout(header, hero, chart, totals, breakdown)
@@ -786,6 +786,7 @@ impl PopupRoot {
         snapshot: &OverviewSnapshot,
         data: Arc<UsageChartData>,
         previous: Option<Arc<UsageChartData>>,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = self.palette.clone();
@@ -932,10 +933,23 @@ impl PopupRoot {
                 }
             }));
         let ticks = [max_value, max_value * 2 / 3, max_value / 3, 0];
+        let axis_width = ticks
+            .iter()
+            .map(|value| {
+                components::measure_text(
+                    window.text_system(),
+                    palette.font_family.clone(),
+                    12.0,
+                    FontWeight::NORMAL,
+                    &format_axis_value(*value, metric),
+                )
+            })
+            .fold(CHART_Y_AXIS_WIDTH, f32::max)
+            .ceil();
         let plot_h = CHART_PLOT_HEIGHT - CHART_PAD_TOP - CHART_PAD_BOTTOM;
         let mut y_axis = div()
             .relative()
-            .w(px(CHART_Y_AXIS_WIDTH))
+            .w(px(axis_width))
             .h(px(CHART_PLOT_HEIGHT))
             .flex_none();
         for (index, value) in ticks.into_iter().enumerate() {
@@ -989,7 +1003,7 @@ impl PopupRoot {
                         .child(y_axis)
                         .child(plot_area),
                 )
-                .child(div().pl(px(CHART_Y_AXIS_WIDTH + CHART_Y_GAP)).child(x_axis)),
+                .child(div().pl(px(axis_width + CHART_Y_GAP)).child(x_axis)),
         )
         .into_any_element()
     }
@@ -1018,7 +1032,7 @@ impl PopupRoot {
             let (amount, hidden) = match metric {
                 OverviewMetric::Cost => {
                     total_cents = total_cents.saturating_add(spend_display_cents(value));
-                    (format_spend_tenths(value), spend_display_tenths(value) == 0)
+                    (format_spend_full(value), spend_display_cents(value) == 0)
                 }
                 OverviewMetric::Tokens => {
                     total_tokens = total_tokens.saturating_add(value);
@@ -1036,7 +1050,7 @@ impl PopupRoot {
             ));
         }
         let total = match metric {
-            OverviewMetric::Cost => format_spend_tenths_from_cents(total_cents),
+            OverviewMetric::Cost => format_spend_from_cents(total_cents),
             OverviewMetric::Tokens => format_token_count(total_tokens),
         };
         ChartTip { title, rows, total }
@@ -1826,7 +1840,7 @@ fn format_axis_value(value: u64, metric: OverviewMetric) -> String {
 }
 
 fn format_spend(microusd: u64) -> String {
-    format_spend_dollars((microusd as f64 / 1_000_000.0).round() as u64)
+    format_spend_full(microusd)
 }
 
 fn format_total_cost(usage: &TokenUsage) -> String {
@@ -1862,44 +1876,15 @@ fn format_breakdown_cost(row: &BreakdownRow) -> String {
 }
 
 fn format_day_cost(microusd: u64) -> String {
-    let cents = spend_display_cents(microusd);
-    if cents == 0 {
-        return "$0".into();
-    }
-    if cents >= 100_000 {
-        return format_spend(microusd);
-    }
-    format!("${}.{:02}", cents / 100, cents % 100)
+    format_spend_full(microusd)
 }
 
 fn spend_display_cents(microusd: u64) -> u64 {
-    (microusd as f64 / 10_000.0)
-        .round()
-        .clamp(0.0, u64::MAX as f64) as u64
+    microusd / 10_000 + u64::from(microusd % 10_000 >= 5_000)
 }
 
-fn spend_display_tenths(microusd: u64) -> u64 {
-    (microusd as f64 / 100_000.0)
-        .round()
-        .clamp(0.0, u64::MAX as f64) as u64
-}
-
-fn format_spend_tenths(microusd: u64) -> String {
-    format_spend_tenths_value(spend_display_tenths(microusd), microusd)
-}
-
-fn format_spend_tenths_from_cents(cents: u64) -> String {
-    format_spend_tenths_value(
-        ((cents as f64) / 10.0).round().clamp(0.0, u64::MAX as f64) as u64,
-        cents.saturating_mul(10_000),
-    )
-}
-
-fn format_spend_tenths_value(tenths: u64, microusd: u64) -> String {
-    if tenths >= 10_000 {
-        return format_spend(microusd);
-    }
-    format!("${:.1}", tenths as f64 / 10.0)
+fn format_spend_from_cents(cents: u64) -> String {
+    format!("${}.{:02}", format_thousands(cents / 100), cents % 100)
 }
 
 #[cfg(test)]
@@ -1988,9 +1973,9 @@ mod tests {
     }
 
     #[test]
-    fn day_costs_keep_cents_until_a_thousand_dollars() {
-        assert_eq!(format_day_cost(0), "$0");
+    fn day_costs_keep_full_dollars_and_cents() {
+        assert_eq!(format_day_cost(0), "$0.00");
         assert_eq!(format_day_cost(1_234_567), "$1.23");
-        assert_eq!(format_day_cost(1_500_000_000), "$1.5K");
+        assert_eq!(format_day_cost(1_500_000_000), "$1,500.00");
     }
 }

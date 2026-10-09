@@ -44,7 +44,34 @@ const PREWARM_FRAMES: u32 = 3;
 /// slide clock cannot see.
 const PREWARM_EXPOSED_FRAMES: u32 = 6;
 /// Pinned profile switcher between the page and the footer.
-pub(super) const PROFILE_STRIP_HEIGHT: f32 = 46.0;
+const PROFILE_COLUMNS: usize = 4;
+const PROFILE_ROW_GAP: f32 = 6.0;
+const PROFILE_GRID_PADDING: f32 = 12.0;
+
+fn profile_grid_height(count: usize) -> f32 {
+    let rows = count.div_ceil(PROFILE_COLUMNS);
+    if rows == 0 {
+        return 0.0;
+    }
+    rows as f32 * super::controls::SEGMENT_HEIGHT
+        + rows.saturating_sub(1) as f32 * PROFILE_ROW_GAP
+        + PROFILE_GRID_PADDING
+}
+
+fn profile_rows<T: Copy + PartialEq>(
+    members: &[T],
+    selected: Option<T>,
+) -> Vec<(Vec<T>, Option<usize>)> {
+    members
+        .chunks(PROFILE_COLUMNS)
+        .map(|row| {
+            (
+                row.to_vec(),
+                row.iter().position(|member| Some(*member) == selected),
+            )
+        })
+        .collect()
+}
 /// Small inner inset keeps page/footer content clear of the capsule stroke.
 const CHROME_INSET: f32 = 1.0;
 const PAGE_PADDING: f32 = 16.0;
@@ -261,6 +288,10 @@ pub(crate) struct PopupRoot {
     pub(super) refresh_started: Option<Instant>,
     pub(super) profile_layout: String,
     pub(super) profile_fade_started: Option<Instant>,
+    profile_height: f32,
+    profile_scroll: gpui::ScrollHandle,
+    profile_members: Vec<ProviderId>,
+    profile_selected: Option<ProviderId>,
     /// Account bars per page, kept while they collapse after clearing.
     pub(super) account_bars: HashMap<(PopupView, ProviderId), AccountBar>,
     /// Body items that grow in and out, with how present each one is.
@@ -366,6 +397,10 @@ impl PopupRoot {
             refresh_started: None,
             profile_layout: String::new(),
             profile_fade_started: None,
+            profile_height: 0.0,
+            profile_scroll: gpui::ScrollHandle::new(),
+            profile_members: Vec::new(),
+            profile_selected: None,
             account_bars: HashMap::new(),
             body_presence: Vec::new(),
             capsule_origin: Point::default(),
@@ -856,16 +891,23 @@ impl PopupRoot {
     }
 
     pub(super) fn chrome_height(&self) -> f32 {
-        self.footer_height()
-            + if self.show_profile_strip() {
-                PROFILE_STRIP_HEIGHT
-            } else {
-                0.0
-            }
-            + CHROME_INSET * 2.0
+        self.footer_height() + self.profile_height + CHROME_INSET * 2.0
+    }
+
+    fn target_profile_strip_height(&self) -> f32 {
+        let PopupView::Group(driver) = self.pager.current else {
+            return 0.0;
+        };
+        if !self.show_profile_strip() {
+            return 0.0;
+        }
+        // Keep the account page usable; large grids scroll within the strip.
+        profile_grid_height(self.ui.enabled_instances_of(driver).len())
+            .min((self.host.max_height() * 0.5).max(profile_grid_height(1)))
     }
 
     fn target_height(&self, view: PopupView) -> f32 {
+        let chrome = self.footer_height() + self.target_profile_strip_height() + CHROME_INSET * 2.0;
         // Usage loads asynchronously and its content height swings with the
         // range and provider count; a fixed full-height shell never jumps.
         if view == PopupView::Usage {
@@ -876,8 +918,8 @@ impl PopupRoot {
             .get(&view)
             .map(|metrics| metrics.content_height.get())
             .filter(|height| *height > 1.0)
-            .unwrap_or(INITIAL_HEIGHT - self.chrome_height());
-        (content + self.chrome_height()).clamp(80.0, self.host.max_height())
+            .unwrap_or(INITIAL_HEIGHT - chrome);
+        (content + chrome).clamp(80.0, self.host.max_height())
     }
 
     /// Advance window motion for this frame. Returns `(width, height, offset)`.
@@ -1285,6 +1327,11 @@ impl Render for PopupRoot {
         let now = Instant::now();
         self.sync_key_pin();
         self.fx.begin_frame(super::animations_enabled(&self.ui));
+        self.profile_height = self.fx.value(
+            fx::key("profile-grid-height"),
+            self.target_profile_strip_height(),
+            fx::FAST,
+        );
         let kit_theme = crate::settings_window::theme::Theme::new(
             self.palette.dark,
             self.accent,
@@ -1455,7 +1502,7 @@ impl Render for PopupRoot {
             .h(px(self.footer_height()))
             .child(self.render_footer(capsule_w, window, cx));
         let mut chrome = vec![footer.into_any_element()];
-        if self.show_profile_strip() {
+        if self.profile_height > 0.001 {
             chrome.push(
                 div()
                     .id("popup-pinned-profiles")
@@ -1463,7 +1510,8 @@ impl Render for PopupRoot {
                     .right(px(chrome_right))
                     .bottom(px(CHROME_INSET + self.footer_height()))
                     .w(px(chrome_width))
-                    .h(px(PROFILE_STRIP_HEIGHT))
+                    .h(px(self.profile_height))
+                    .overflow_hidden()
                     .child(self.render_profile_strip(window, cx))
                     .into_any_element(),
             );
@@ -2070,41 +2118,44 @@ impl PopupRoot {
         };
         let members = self.ui.enabled_instances_of(driver);
         let selected_id = model::selected_group_member(&self.ui, driver);
-        let selected = members
-            .iter()
-            .position(|member| Some(*member) == selected_id)
-            .unwrap_or(0);
-        let segments = members
-            .iter()
-            .map(|member| (SharedString::from(member.display_name()), member.badge()))
-            .collect::<Vec<_>>();
-        // Membership is part of the key so a changed instance set never
-        // reuses another instance's segment state.
-        let key = fx::key((
-            "profiles",
-            driver.id(),
-            members.iter().map(|member| member.id()).collect::<Vec<_>>(),
-        ));
-        let control = self.segmented_control_badged(
-            key,
-            segments,
-            selected,
-            true,
-            move |this, index, cx| {
-                if let Some(member) = members.get(index).copied() {
-                    this.select_group_member(driver, member, cx);
-                }
-                cx.notify();
-            },
-            window,
-            cx,
-        );
+        let membership_changed = self.profile_members != members;
+        if membership_changed {
+            self.profile_members = members.clone();
+            self.profile_scroll.set_offset(point(px(0.0), px(0.0)));
+        }
+        if membership_changed || self.profile_selected != selected_id {
+            self.profile_selected = selected_id;
+            if let Some(index) = members
+                .iter()
+                .position(|member| Some(*member) == selected_id)
+            {
+                self.profile_scroll.scroll_to_item(index / PROFILE_COLUMNS);
+            }
+        }
+        let mut grid = div()
+            .id("profile-grid-scroll")
+            .h_full()
+            .w_full()
+            .overflow_y_scroll()
+            .track_scroll(&self.profile_scroll)
+            .flex()
+            .flex_col()
+            .gap(px(PROFILE_ROW_GAP));
+        for (row, selected) in profile_rows(&members, selected_id) {
+            let key = fx::key((
+                "profiles",
+                driver.id(),
+                row.iter().map(|member| member.id()).collect::<Vec<_>>(),
+            ));
+            grid = grid.child(self.profile_row_control(key, row, selected, driver, window, cx));
+        }
         div()
             .flex_none()
-            .h(px(PROFILE_STRIP_HEIGHT))
+            .h(px(self.profile_height))
             .px(px(16.0))
+            .pt(px(2.0))
             .pb(px(10.0))
-            .child(control)
+            .child(grid)
     }
 }
 
@@ -2116,6 +2167,39 @@ pub(super) fn eid(value: impl Into<String>) -> ElementId {
 #[cfg(test)]
 mod geometry_tests {
     use super::*;
+
+    #[test]
+    fn profile_rows_fill_each_row_and_select_only_the_matching_stable_id() {
+        for count in [0_usize, 1, 2, 3, 4, 5, 6, 7, 8, 9, 1_000] {
+            let members = (0..count).collect::<Vec<_>>();
+            let selected = count.checked_sub(1);
+            let rows = profile_rows(&members, selected);
+            assert_eq!(rows.len(), count.div_ceil(4));
+            assert_eq!(
+                rows.iter()
+                    .flat_map(|(row, _)| row)
+                    .copied()
+                    .collect::<Vec<_>>(),
+                members
+            );
+            for (row, active) in &rows {
+                assert!((1..=4).contains(&row.len()));
+                if let Some(index) = active {
+                    assert_eq!(Some(row[*index]), selected);
+                }
+            }
+            assert_eq!(
+                rows.iter().filter(|(_, active)| active.is_some()).count(),
+                usize::from(count > 0)
+            );
+        }
+        let rows = profile_rows(&[5, 4, 3, 2, 1], Some(1));
+        assert_eq!(rows[0].1, None);
+        assert_eq!(rows[1], (vec![1], Some(0)));
+        assert_eq!(profile_grid_height(4), 46.0);
+        assert_eq!(profile_grid_height(5), 86.0);
+        assert_eq!(profile_grid_height(9), 126.0);
+    }
 
     #[test]
     fn page_height_rounds_up_to_physical_pixels_without_layout_noise() {
