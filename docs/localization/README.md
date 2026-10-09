@@ -2,13 +2,17 @@
 
 Codex Minibar uses embedded Mozilla Fluent catalogs. English is the source
 language. Complete translations are available in Russian, Brazilian Portuguese,
-Spanish, and Simplified Chinese. Each catalog contains 757 messages.
+Spanish, Simplified Chinese, Japanese, German, and French. Each catalog contains
+867 messages.
 
 - `locales/en/app.ftl`: existing English copy and full-message templates.
 - `locales/ru/app.ftl`: Russian translations, including plural rules and dates.
 - `locales/pt-BR/app.ftl`: Brazilian Portuguese translations.
 - `locales/es/app.ftl`: Spanish translations.
 - `locales/zh-CN/app.ftl`: Simplified Chinese translations.
+- `locales/ja/app.ftl`: Japanese translations.
+- `locales/de/app.ftl`: German translations.
+- `locales/fr/app.ftl`: French translations.
 - `locales/template/app.ftl`: empty translator template with English examples.
 - `src/i18n.rs`: language selection, static labels, parameterized messages and fallback.
 - `docs/localization/string-inventory.tsv`: all 4,545 non-test Rust string occurrences
@@ -24,7 +28,8 @@ dialogs follow Windows' own language.
 ## Select a language
 
 Open Settings > General > Language (Настройки > Общие > Язык). The choices are
-Auto (Windows), English, Русский, Português (Brasil), Español, and 简体中文.
+Auto (Windows), English, Русский, Português (Brasil), Español, 简体中文, 日本語,
+Deutsch, and Français.
 Language names stay in their native spelling so they are recognizable in any
 selected language. Onboarding also offers this setting on its
 General page. Old settings files default to Auto. Auto uses the Windows display
@@ -32,10 +37,12 @@ language, independently of the keyboard layout or regional clock format, and
 uses English for unsupported languages. Portuguese display languages use the
 Brazilian catalog; Spanish regional variants use the Spanish catalog; Chinese
 display languages use the Simplified Chinese catalog. No Traditional Chinese
-catalog is included.
+catalog is included. Japanese, German, and French regional variants use their
+respective catalogs.
 
-Textual dates use day–month order in Russian, Portuguese, and Spanish, and
-year–month–day order in Chinese. Numeric clock/date preferences stay independent.
+Textual dates use day–month order in Russian, Portuguese, and Spanish,
+day–month–year order in German and French, and year–month–day order in Chinese
+and Japanese. Numeric clock/date preferences stay independent.
 
 Changes immediately refresh app windows. Settings edits use the existing serial
 writer and live synchronization. Tray menus/tooltips, provider error summaries,
@@ -79,11 +86,13 @@ storage keys and API field names separate from translated text. Static labels us
 Translate full sentences with named parameters; do not build sentences by
 concatenating fragments. Fluent selectors handle Russian one/few/many forms for
 requests, sessions, API keys, banked resets, and login-expiry days. Portuguese
-and Spanish use one/other forms, while Chinese uses invariant count phrases.
+and Spanish use one/other forms. German uses one/other forms; French also treats
+zero as singular and uses the many category for exact millions. Chinese and
+Japanese use invariant count phrases.
 Numeric selectors
 must receive numbers: the resolver recognizes these messages' count parameters.
 
-Add the English source first, update all four translation catalogs, then regenerate the
+Add the English source first, update all seven translation catalogs, then regenerate the
 translator template:
 
 ```powershell
@@ -115,7 +124,7 @@ cargo test --all-targets --all-features --locked
 ```
 
 Localization tests validate Fluent syntax, unique IDs, exact message and parameter
-parity across all five catalogs, template coverage, literal translation call sites,
+parity across all eight catalogs, template coverage, literal translation call sites,
 plural forms, per-message fallback in every translated language, settings
 round-trips, language-selection indices, display-language detection, textual dates,
 and preservation of parameter values. Every catalog is resolved directly for
@@ -124,7 +133,12 @@ counts 0, 1, 2, 5, 21, and 1,000,000 so English fallback cannot hide broken tran
 For manual QA, select each translated language and inspect every Settings tab, onboarding,
 provider pages and dialogs, popup Home/Usage/provider tabs, chart tooltips, tray
 menus and notifications. Switch back to English while the popup is open, check
-theme flips and provider combinations, and verify longer Portuguese/Spanish copy and Chinese glyphs fit.
-Also switch directly between Portuguese, Spanish, and Chinese while Home/Usage
+theme flips and provider combinations, and verify longer German/French/Portuguese/Spanish
+copy and Chinese/Japanese glyphs fit.
+Also switch directly between translated languages while Home/Usage
 charts and tray menus are visible to check their language-dependent caches. The
 implementation was checked without launching the application; visual QA is pending.
+
+The Japanese, German, and French catalogs started from machine translation, with
+reviewed corrections to UI terminology, full messages, plural forms, dates, and
+technical names. Native-speaker proofreading is still recommended.

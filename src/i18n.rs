@@ -20,6 +20,9 @@ const RU: &str = include_str!("../locales/ru/app.ftl");
 const PT_BR: &str = include_str!("../locales/pt-BR/app.ftl");
 const ES: &str = include_str!("../locales/es/app.ftl");
 const ZH_CN: &str = include_str!("../locales/zh-CN/app.ftl");
+const JA: &str = include_str!("../locales/ja/app.ftl");
+const DE: &str = include_str!("../locales/de/app.ftl");
+const FR: &str = include_str!("../locales/fr/app.ftl");
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -31,17 +34,23 @@ pub enum Language {
     BrazilianPortuguese,
     Spanish,
     SimplifiedChinese,
+    Japanese,
+    German,
+    French,
 }
 
 static CURRENT: AtomicU8 = AtomicU8::new(1);
 
 impl Language {
-    pub const SUPPORTED: [Self; 5] = [
+    pub const SUPPORTED: [Self; 8] = [
         Self::English,
         Self::Russian,
         Self::BrazilianPortuguese,
         Self::Spanish,
         Self::SimplifiedChinese,
+        Self::Japanese,
+        Self::German,
+        Self::French,
     ];
 
     pub fn apply(self) {
@@ -62,6 +71,9 @@ impl Language {
             Self::BrazilianPortuguese => 3,
             Self::Spanish => 4,
             Self::SimplifiedChinese => 5,
+            Self::Japanese => 6,
+            Self::German => 7,
+            Self::French => 8,
         }
     }
     pub fn from_index(index: usize) -> Self {
@@ -70,7 +82,7 @@ impl Language {
             .copied()
             .unwrap_or(Self::Auto)
     }
-    pub fn labels() -> [&'static str; 6] {
+    pub fn labels() -> [&'static str; 9] {
         [
             tr("auto-windows"),
             "English",
@@ -78,6 +90,9 @@ impl Language {
             "Português (Brasil)",
             "Español",
             "简体中文",
+            "日本語",
+            "Deutsch",
+            "Français",
         ]
     }
 }
@@ -98,6 +113,9 @@ fn language_from_tag(tag: &str) -> Language {
         "pt" => Language::BrazilianPortuguese,
         "es" => Language::Spanish,
         "zh" => Language::SimplifiedChinese,
+        "ja" => Language::Japanese,
+        "de" => Language::German,
+        "fr" => Language::French,
         _ => Language::English,
     }
 }
@@ -115,6 +133,9 @@ fn system_language() -> Language {
             0x16 => "pt",
             0x0a => "es",
             0x04 => "zh",
+            0x11 => "ja",
+            0x07 => "de",
+            0x0c => "fr",
             _ => "en",
         })
     }
@@ -183,6 +204,9 @@ struct Catalogs {
     pt_br: FluentBundle<FluentResource>,
     es: FluentBundle<FluentResource>,
     zh_cn: FluentBundle<FluentResource>,
+    ja: FluentBundle<FluentResource>,
+    de: FluentBundle<FluentResource>,
+    fr: FluentBundle<FluentResource>,
 }
 impl Catalogs {
     fn new() -> Self {
@@ -192,6 +216,9 @@ impl Catalogs {
             pt_br: bundle("pt-BR", PT_BR),
             es: bundle("es", ES),
             zh_cn: bundle("zh-CN", ZH_CN),
+            ja: bundle("ja", JA),
+            de: bundle("de", DE),
+            fr: bundle("fr", FR),
         }
     }
     fn for_language(&self, language: Language) -> &FluentBundle<FluentResource> {
@@ -200,6 +227,9 @@ impl Catalogs {
             Language::BrazilianPortuguese => &self.pt_br,
             Language::Spanish => &self.es,
             Language::SimplifiedChinese => &self.zh_cn,
+            Language::Japanese => &self.ja,
+            Language::German => &self.de,
+            Language::French => &self.fr,
             _ => &self.en,
         }
     }
@@ -219,7 +249,7 @@ impl Catalogs {
 
 thread_local! { static CATALOGS: RefCell<Catalogs> = RefCell::new(Catalogs::new()); }
 
-static LABELS: LazyLock<HashMap<String, [&'static str; 5]>> = LazyLock::new(|| {
+static LABELS: LazyLock<HashMap<String, [&'static str; 8]>> = LazyLock::new(|| {
     let catalogs = Catalogs::new();
     let mut labels = HashMap::new();
     for line in EN
@@ -291,9 +321,10 @@ fn month_day_in(language: Language, date: impl chrono::Datelike) -> String {
         ][(date.month() - 1) as usize],
     );
     match language {
-        Language::Russian => format!("{} {month}", date.day()),
+        Language::Russian | Language::French => format!("{} {month}", date.day()),
+        Language::German => format!("{}. {month}", date.day()),
         Language::BrazilianPortuguese | Language::Spanish => format!("{} de {month}", date.day()),
-        Language::SimplifiedChinese => format!("{month}{}日", date.day()),
+        Language::SimplifiedChinese | Language::Japanese => format!("{month}{}日", date.day()),
         _ => format!("{month} {}", date.day()),
     }
 }
@@ -308,7 +339,12 @@ pub fn date_with_year(date: impl chrono::Datelike + Copy) -> String {
 
 fn date_with_year_in(language: Language, date: impl chrono::Datelike + Copy) -> String {
     match language {
-        Language::SimplifiedChinese => format!("{}年{}", date.year(), month_day_in(language, date)),
+        Language::SimplifiedChinese | Language::Japanese => {
+            format!("{}年{}", date.year(), month_day_in(language, date))
+        }
+        Language::German | Language::French => {
+            format!("{} {}", month_day_in(language, date), date.year())
+        }
         Language::BrazilianPortuguese | Language::Spanish => {
             format!("{} de {}", month_day_in(language, date), date.year())
         }
@@ -418,6 +454,9 @@ mod tests {
             (Language::BrazilianPortuguese, PT_BR),
             (Language::Spanish, ES),
             (Language::SimplifiedChinese, ZH_CN),
+            (Language::Japanese, JA),
+            (Language::German, DE),
+            (Language::French, FR),
         ] {
             assert_eq!(
                 en,
@@ -555,6 +594,9 @@ mod tests {
             pt_br: bundle("pt-BR", "empty = { \"\" }\nbad = Hello { $unknown }\n"),
             es: bundle("es", "empty = { \"\" }\nbad = Hello { $unknown }\n"),
             zh_cn: bundle("zh-CN", "empty = { \"\" }\nbad = Hello { $unknown }\n"),
+            ja: bundle("ja", "empty = { \"\" }\nbad = Hello { $unknown }\n"),
+            de: bundle("de", "empty = { \"\" }\nbad = Hello { $unknown }\n"),
+            fr: bundle("fr", "empty = { \"\" }\nbad = Hello { $unknown }\n"),
         };
         let mut args = FluentArgs::new();
         args.set("name", "Ada");
@@ -588,7 +630,13 @@ mod tests {
             ("zh_CN.UTF-8", Language::SimplifiedChinese),
             ("zh-Hans", Language::SimplifiedChinese),
             ("ru_RU", Language::Russian),
-            ("de-DE", Language::English),
+            ("ja-JP", Language::Japanese),
+            ("ja_JP.UTF-8", Language::Japanese),
+            ("de-DE", Language::German),
+            ("de_AT.UTF-8", Language::German),
+            ("fr-FR", Language::French),
+            ("fr_CA.UTF-8", Language::French),
+            ("ko-KR", Language::English),
             ("C", Language::English),
             ("", Language::English),
         ] {
@@ -610,6 +658,17 @@ mod tests {
                 "Configuración de Codex Minibar",
             ),
             (Language::SimplifiedChinese, "设置", "Codex Minibar 设置"),
+            (Language::Japanese, "設定", "Codex Minibar の設定"),
+            (
+                Language::German,
+                "Einstellungen",
+                "Codex Minibar – Einstellungen",
+            ),
+            (
+                Language::French,
+                "Paramètres",
+                "Paramètres de Codex Minibar",
+            ),
         ] {
             assert_eq!(tr_in(language, "settings"), label);
             assert_eq!(tr_in(language, "codex-minibar-settings"), title);
@@ -639,6 +698,24 @@ mod tests {
                 "2 个 API 密钥",
                 "已删除 Settings。",
             ),
+            (
+                Language::Japanese,
+                "1 個の API キー",
+                "2 個の API キー",
+                "Settings を削除しました。",
+            ),
+            (
+                Language::German,
+                "1 API-Schlüssel",
+                "2 API-Schlüssel",
+                "Settings gelöscht.",
+            ),
+            (
+                Language::French,
+                "1 clé API",
+                "2 clés API",
+                "Settings supprimé.",
+            ),
         ] {
             assert_eq!(
                 format_in(language, "api-key-count", &[("v0", "1".into())]),
@@ -657,6 +734,9 @@ mod tests {
             (Language::BrazilianPortuguese, "0 solicitação"),
             (Language::Spanish, "0 solicitudes"),
             (Language::SimplifiedChinese, "0 次请求"),
+            (Language::Japanese, "0 件のリクエスト"),
+            (Language::German, "0 Anfragen"),
+            (Language::French, "0 requête"),
         ] {
             assert_eq!(format_in(language, "requests", &[("v0", "0".into())]), zero);
         }
@@ -671,8 +751,53 @@ mod tests {
             (Language::BrazilianPortuguese, "8 de out de 2026"),
             (Language::Spanish, "8 de oct de 2026"),
             (Language::SimplifiedChinese, "2026年10月8日"),
+            (Language::Japanese, "2026年10月8日"),
+            (Language::German, "8. Okt. 2026"),
+            (Language::French, "8 oct. 2026"),
         ] {
             assert_eq!(date_with_year_in(language, date), expected);
+        }
+    }
+
+    #[test]
+    fn japanese_german_and_french_counts_follow_their_plural_rules() {
+        for (number, german, french) in [
+            (0, "0 Anfragen", "0 requête"),
+            (1, "1 Anfrage", "1 requête"),
+            (2, "2 Anfragen", "2 requêtes"),
+            (1_000_000, "1000000 Anfragen", "1000000 requêtes"),
+        ] {
+            let values = [("v0", number.to_string())];
+            assert_eq!(format_in(Language::German, "requests", &values), german);
+            assert_eq!(format_in(Language::French, "requests", &values), french);
+            assert_eq!(
+                format_in(Language::Japanese, "requests", &values),
+                format!("{number} 件のリクエスト")
+            );
+        }
+        for (number, suffix) in [(0, "jour"), (1, "jour"), (2, "jours"), (1_000_000, "jours")] {
+            assert_eq!(
+                format_in(
+                    Language::French,
+                    "name-login-expires-in-days-left",
+                    &[
+                        ("name", "仕事 / Work".into()),
+                        ("days_left", number.to_string())
+                    ],
+                ),
+                format!("La connexion de 仕事 / Work expire dans {number} {suffix}")
+            );
+        }
+    }
+
+    #[test]
+    fn japanese_dates_use_numeric_months_throughout_the_year() {
+        for month in 1..=12 {
+            let date = chrono::NaiveDate::from_ymd_opt(2026, month, 8).unwrap();
+            assert_eq!(
+                date_with_year_in(Language::Japanese, date),
+                format!("2026年{month}月8日")
+            );
         }
     }
 }
