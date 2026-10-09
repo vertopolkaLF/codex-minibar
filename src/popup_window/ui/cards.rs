@@ -386,7 +386,11 @@ impl PopupRoot {
         if let Some(pace) = pace {
             details = details.child(nowrap(card_metadata(pace.summary(), &palette)));
         }
+        // Grows to fill its `flush_rings` cell so paired tiles share a height,
+        // with the gauge and details centered vertically.
         card(&palette)
+            .flex_1()
+            .min_w_0()
             .p(px(10.0))
             .flex()
             .flex_row()
@@ -1307,14 +1311,16 @@ impl PopupRoot {
     }
 }
 
-/// Ring tiles sit two to a row while the card is wide enough.
+/// Ring tiles sit two to a row while the card is wide enough. Cells stretch
+/// to the row's height and each tile stretches inside its cell, so paired
+/// tiles always match heights.
 fn flush_rings(out: &mut Vec<AnyElement>, rings: &mut Vec<AnyElement>, paired: bool) {
     let per_row = if paired { 2 } else { 1 };
     let mut tiles = std::mem::take(rings).into_iter().peekable();
     while tiles.peek().is_some() {
         let mut row = div().flex().flex_row().gap(px(6.0)).w_full();
         for tile in tiles.by_ref().take(per_row) {
-            row = row.child(div().flex_1().min_w_0().child(tile));
+            row = row.child(div().flex_1().min_w_0().flex().child(tile));
         }
         out.push(row.into_any_element());
     }
