@@ -1,6 +1,6 @@
 //! Cross-provider usage aggregation for the popup Usage tab.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone};
 
@@ -74,6 +74,9 @@ pub struct ProviderOverview {
     pub usage: TokenUsage,
     pub share_cost: f64,
     pub share_tokens: f64,
+    /// Toggled off on the Usage tab: the tile keeps its own numbers, but the
+    /// provider is left out of every total, share, chart and breakdown.
+    pub excluded: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -376,6 +379,7 @@ fn assemble_overview_snapshot(
             usage,
             share_cost: 0.0,
             share_tokens: 0.0,
+            excluded: false,
         });
     }
 
@@ -573,6 +577,87 @@ fn assemble_overview_snapshot(
     snapshot
 }
 
+/// Leaves `excluded` providers out of a built snapshot without touching the
+/// store: totals, shares, the chart series and both breakdowns are recomputed
+/// from the remaining providers. Excluded tiles keep their own usage.
+pub fn exclude_providers(
+    snapshot: &OverviewSnapshot,
+    excluded: &BTreeSet<ProviderId>,
+    metric: OverviewMetric,
+) -> OverviewSnapshot {
+    let mut snapshot = snapshot.clone();
+    if excluded.is_empty() {
+        return snapshot;
+    }
+    snapshot.totals = TokenUsage::default();
+    snapshot.total_sessions = 0;
+    for entry in &mut snapshot.providers {
+        entry.excluded = excluded.contains(&entry.provider);
+        if !entry.excluded {
+            snapshot.totals.add(&entry.usage);
+            snapshot.total_sessions = snapshot.total_sessions.saturating_add(entry.sessions);
+        }
+    }
+    let total_cost = snapshot.totals.estimated_cost_microusd.max(1);
+    let total_tokens = snapshot.totals.total_tokens().max(1);
+    for entry in &mut snapshot.providers {
+        (entry.share_cost, entry.share_tokens) = if entry.excluded {
+            (0.0, 0.0)
+        } else {
+            (
+                entry.usage.estimated_cost_microusd as f64 / total_cost as f64 * 100.0,
+                entry.usage.total_tokens() as f64 / total_tokens as f64 * 100.0,
+            )
+        };
+    }
+    let total_metric = match metric {
+        OverviewMetric::Cost => total_cost,
+        OverviewMetric::Tokens => total_tokens,
+    };
+    let share = |cost: u64, tokens: u64| {
+        let value = match metric {
+            OverviewMetric::Cost => cost,
+            OverviewMetric::Tokens => tokens,
+        };
+        value as f64 / total_metric as f64 * 100.0
+    };
+
+    for point in &mut snapshot.daily_series {
+        point
+            .by_provider
+            .retain(|provider, _| !excluded.contains(provider));
+        point.total = point
+            .by_provider
+            .values()
+            .fold(0_u64, |sum, value| sum.saturating_add(*value));
+    }
+    for row in &mut snapshot.day_rows {
+        row.by_provider
+            .retain(|provider, _| !excluded.contains(provider));
+        let usage = row
+            .by_provider
+            .values()
+            .fold(TokenUsage::default(), |mut total, usage| {
+                total.add(usage);
+                total
+            });
+        row.cost_microusd = usage.estimated_cost_microusd;
+        row.tokens = usage.total_tokens();
+        row.requests = usage.requests;
+        row.priced_requests = usage.priced_requests;
+        row.share = share(row.cost_microusd, row.tokens);
+    }
+    snapshot.day_rows.retain(|row| !row.by_provider.is_empty());
+    snapshot.model_rows.retain(|row| {
+        row.provider
+            .is_none_or(|provider| !excluded.contains(&provider))
+    });
+    for row in &mut snapshot.model_rows {
+        row.share = share(row.cost_microusd, row.tokens);
+    }
+    snapshot
+}
+
 fn weekday_short(date: NaiveDate) -> &'static str {
     crate::i18n::weekday(date.weekday())
 }
@@ -620,6 +705,80 @@ mod tests {
             dates_for_total_spend(TotalSpendPeriod::ThirtyDays),
             (today - thirty_days, today)
         );
+    }
+
+    #[test]
+    fn excluded_providers_leave_every_aggregate() {
+        let claude = crate::instances::ProviderId::from(ProviderKind::Claude);
+        let codex = crate::instances::ProviderId::from(ProviderKind::Codex);
+        let usage = |cost| TokenUsage {
+            estimated_cost_microusd: cost,
+            input_tokens: cost,
+            requests: 1,
+            ..Default::default()
+        };
+        let date = NaiveDate::from_ymd_opt(2026, 10, 6).unwrap();
+        let mut totals = usage(100);
+        totals.add(&usage(300));
+        let snapshot = OverviewSnapshot {
+            total_sessions: 5,
+            totals,
+            providers: vec![
+                ProviderOverview {
+                    provider: claude,
+                    sessions: 2,
+                    usage: usage(100),
+                    ..Default::default()
+                },
+                ProviderOverview {
+                    provider: codex,
+                    sessions: 3,
+                    usage: usage(300),
+                    ..Default::default()
+                },
+            ],
+            daily_series: vec![DailySeriesPoint {
+                at: start_of_local_day(date),
+                date,
+                by_provider: BTreeMap::from([(claude, 100), (codex, 300)]),
+                total: 400,
+            }],
+            day_rows: vec![
+                BreakdownRow {
+                    by_provider: BTreeMap::from([(claude, usage(100)), (codex, usage(300))]),
+                    ..Default::default()
+                },
+                BreakdownRow {
+                    by_provider: BTreeMap::from([(codex, usage(50))]),
+                    ..Default::default()
+                },
+            ],
+            model_rows: vec![
+                BreakdownRow {
+                    provider: Some(claude),
+                    cost_microusd: 100,
+                    ..Default::default()
+                },
+                BreakdownRow {
+                    provider: Some(codex),
+                    cost_microusd: 300,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let filtered = exclude_providers(&snapshot, &BTreeSet::from([codex]), OverviewMetric::Cost);
+        assert_eq!(filtered.totals.estimated_cost_microusd, 100);
+        assert_eq!(filtered.total_sessions, 2);
+        assert!(filtered.providers[1].excluded);
+        assert_eq!(filtered.providers[1].usage.estimated_cost_microusd, 300);
+        assert_eq!(filtered.providers[0].share_cost, 100.0);
+        assert_eq!(filtered.daily_series[0].total, 100);
+        assert_eq!(filtered.day_rows.len(), 1);
+        assert_eq!(filtered.day_rows[0].cost_microusd, 100);
+        assert_eq!(filtered.day_rows[0].share, 100.0);
+        assert_eq!(filtered.model_rows.len(), 1);
+        assert_eq!(filtered.model_rows[0].provider, Some(claude));
     }
 
     #[test]

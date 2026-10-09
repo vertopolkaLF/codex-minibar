@@ -1,19 +1,26 @@
 //! Usage tab: local API usage overview across providers.
 
-use std::{cell::Cell, collections::BTreeMap, f32::consts::PI, rc::Rc, sync::Arc, time::Instant};
+use std::{
+    cell::Cell,
+    collections::{BTreeMap, BTreeSet},
+    f32::consts::PI,
+    rc::Rc,
+    sync::Arc,
+    time::Instant,
+};
 
 use chrono::{DateTime, Duration, Local, NaiveDate};
 use gpui::{
-    AnyElement, AnyView, AppContext, Bounds, Context, FontWeight, Hsla, InteractiveElement,
-    IntoElement, MouseMoveEvent, ParentElement, PathBuilder, Pixels, Render, SharedString,
-    StatefulInteractiveElement, Styled, Window, canvas, div, point, px, relative,
+    AnyElement, AnyView, AppContext, Bounds, ClickEvent, Context, FontWeight, Hsla,
+    InteractiveElement, IntoElement, MouseMoveEvent, ParentElement, PathBuilder, Pixels, Render,
+    SharedString, StatefulInteractiveElement, Styled, Window, canvas, div, point, px, relative,
 };
 
 use super::{
     components::{self, caption, card, nowrap},
     fx,
-    home::{format_spend_dollars, format_spend_full, share_bar},
-    root::{PopupRoot, SnapshotSlot},
+    home::{format_spend_dollars, format_spend_full},
+    root::{PopupRoot, SnapshotSlot, eid},
     theme::Palette,
     tooltip::{ChartTip, TipContent},
 };
@@ -73,6 +80,15 @@ enum ChartMotion<'a> {
     },
 }
 
+/// The page snapshot with the Usage tab's provider toggles applied, kept
+/// until the source snapshot, the toggles or the metric change.
+pub(super) struct UsageFilterCache {
+    source: Arc<OverviewSnapshot>,
+    excluded: BTreeSet<ProviderId>,
+    metric: OverviewMetric,
+    value: Arc<OverviewSnapshot>,
+}
+
 pub(super) struct UsageChartCache {
     source: Arc<OverviewSnapshot>,
     metric: OverviewMetric,
@@ -92,6 +108,7 @@ impl UsageChartCache {
         let providers: Vec<_> = source
             .providers
             .iter()
+            .filter(|entry| !entry.excluded)
             .map(|entry| entry.provider)
             .collect();
         let raw_max = series
@@ -266,6 +283,7 @@ impl PopupRoot {
                 ))
                 .into_any_element();
         }
+        let snapshot = self.usage_filtered_snapshot(snapshot, metric);
         let range_label = range_label(&snapshot);
         if self
             .usage_chart_cache
@@ -291,6 +309,38 @@ impl PopupRoot {
         let totals = usage_totals_card(Some(&snapshot.totals), &palette, palette.subtle_fill);
         let breakdown = self.usage_breakdown_card(&snapshot, window, cx);
         self.usage_layout(header, hero, chart, totals, breakdown)
+    }
+
+    /// Applies the provider toggles synchronously so a click is instant; the
+    /// store-backed snapshot itself stays shared and unfiltered.
+    fn usage_filtered_snapshot(
+        &mut self,
+        source: Arc<OverviewSnapshot>,
+        metric: OverviewMetric,
+    ) -> Arc<OverviewSnapshot> {
+        if self.usage_excluded.is_empty() {
+            self.usage_filtered = None;
+            return source;
+        }
+        if let Some(cache) = self.usage_filtered.as_ref()
+            && Arc::ptr_eq(&cache.source, &source)
+            && cache.excluded == self.usage_excluded
+            && cache.metric == metric
+        {
+            return Arc::clone(&cache.value);
+        }
+        let value = Arc::new(crate::usage_overview::exclude_providers(
+            &source,
+            &self.usage_excluded,
+            metric,
+        ));
+        self.usage_filtered = Some(UsageFilterCache {
+            source,
+            excluded: self.usage_excluded.clone(),
+            metric,
+            value: Arc::clone(&value),
+        });
+        value
     }
 
     fn usage_layout(
@@ -622,29 +672,39 @@ impl PopupRoot {
             meta = format!("{meta} · {}", crate::i18n::tr("api-estimate"));
         }
         let metric_control = self.usage_metric_control(window, cx);
-        let mut entries: Vec<(ProviderId, u64)> = snapshot
+        // Excluded segments shrink away instead of vanishing.
+        let mut entries: Vec<(ProviderId, u64, f32)> = snapshot
             .providers
             .iter()
             .map(|entry| {
+                let shown = self.fx.toggle(
+                    fx::key(("usage-share-shown", entry.provider)),
+                    !entry.excluded,
+                    fx::NORMAL,
+                );
                 (
                     entry.provider,
                     match metric {
                         OverviewMetric::Cost => entry.usage.estimated_cost_microusd,
                         OverviewMetric::Tokens => entry.usage.total_tokens(),
                     },
+                    shown,
                 )
             })
             .collect();
-        entries.sort_by(|(_, a), (_, b)| b.cmp(a));
+        entries.sort_by(|(_, a, _), (_, b, _)| b.cmp(a));
         let colored = self.ui.use_colored_provider_icons;
-        let mut grid = div().flex().flex_row().flex_wrap().gap_y(px(16.0));
+        // Tiles carry 6px of hover padding; the grid bleeds it back out so
+        // the text stays aligned with the headline.
+        let mut grid = div()
+            .mx(px(-6.0))
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .gap_y(px(4.0));
         for entry in &snapshot.providers {
-            grid = grid.child(
-                div()
-                    .w(relative(0.5))
-                    .pr(px(8.0))
-                    .child(provider_tile(entry, metric, &palette, colored)),
-            );
+            let tile = self.usage_provider_tile(entry, metric, colored, cx);
+            grid = grid.child(div().w(relative(0.5)).pr(px(2.0)).child(tile));
         }
         usage_card(&palette)
             .gap(px(16.0))
@@ -664,11 +724,60 @@ impl PopupRoot {
                             ))
                             .child(caption(meta, palette.text_tertiary)),
                     )
-                    .child(share_bar(&entries, |provider| {
+                    .child(usage_share_bar(&entries, |provider| {
                         palette.spend_color(provider)
                     })),
             )
             .child(grid)
+            .into_any_element()
+    }
+
+    /// A provider tile doubles as its stats toggle: clicking it leaves the
+    /// provider out of every number on the page (or brings it back).
+    fn usage_provider_tile(
+        &mut self,
+        entry: &ProviderOverview,
+        metric: OverviewMetric,
+        colored: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let palette = self.palette.clone();
+        let provider = entry.provider;
+        let hover_id = fx::key(("usage-tile-hover", provider));
+        let shown = self.fx.toggle(
+            fx::key(("usage-tile-shown", provider)),
+            !entry.excluded,
+            fx::FAST,
+        );
+        let hover = self.fx.toggle(
+            fx::key(("usage-tile-hover-fx", provider)),
+            self.hovered(hover_id),
+            fx::FASTER,
+        );
+        let tip = SharedString::from(if entry.excluded {
+            crate::i18n::tr("include-in-usage-stats")
+        } else {
+            crate::i18n::tr("exclude-from-usage-stats")
+        });
+        let mut tile = div()
+            .id(eid(format!("usage-tile-{provider:?}")))
+            .relative()
+            .p(px(6.0))
+            .rounded(px(palette.control_radius))
+            .cursor_pointer()
+            .on_hover(self.hover_listener(hover_id, Some(tip), cx))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                if !this.usage_excluded.remove(&provider) {
+                    this.usage_excluded.insert(provider);
+                }
+                this.chart_hover = None;
+                this.tip = None;
+                cx.notify();
+            }));
+        if let Some(layer) = components::hover_layer(&palette, hover, palette.control_radius) {
+            tile = tile.child(layer);
+        }
+        tile.child(provider_tile(entry, metric, &palette, colored).opacity(0.4 + 0.6 * shown))
             .into_any_element()
     }
 
@@ -1037,21 +1146,25 @@ fn provider_tile(
         OverviewMetric::Cost => format_token_count(entry.usage.total_tokens()),
         OverviewMetric::Tokens => format_usage_cost(&entry.usage),
     };
-    let detail = crate::i18n::format(
-        "share-1-of-other",
-        &[
-            ("share", format!("{:.1}", share)),
-            (
-                "v0",
-                (match metric {
-                    OverviewMetric::Cost => crate::i18n::tr("cost-885dc4"),
-                    OverviewMetric::Tokens => crate::i18n::tr("tokens-339143"),
-                })
-                .to_string(),
-            ),
-            ("other", other.to_string()),
-        ],
-    );
+    let detail = if entry.excluded {
+        crate::i18n::format("excluded-other", &[("other", other.to_string())])
+    } else {
+        crate::i18n::format(
+            "share-1-of-other",
+            &[
+                ("share", format!("{:.1}", share)),
+                (
+                    "v0",
+                    (match metric {
+                        OverviewMetric::Cost => crate::i18n::tr("cost-885dc4"),
+                        OverviewMetric::Tokens => crate::i18n::tr("tokens-339143"),
+                    })
+                    .to_string(),
+                ),
+                ("other", other.to_string()),
+            ],
+        )
+    };
     div()
         .flex()
         .flex_col()
@@ -1159,6 +1272,40 @@ fn usage_totals_card(totals: Option<&TokenUsage>, palette: &Palette, bone: Hsla)
         .into_any_element()
 }
 
+/// The hero's share bar. `shown` (0-1) scales each segment and the gap
+/// before it, so toggled providers glide out of and back into the bar.
+fn usage_share_bar(
+    entries: &[(ProviderId, u64, f32)],
+    color: impl Fn(ProviderId) -> Hsla,
+) -> gpui::Div {
+    let total: u64 = entries
+        .iter()
+        .fold(0, |sum, (_, value, _)| sum.saturating_add(*value));
+    let mut bar = div().flex().flex_row().h(px(10.0)).w_full();
+    let mut before = 0.0_f32;
+    for (provider, value, shown) in entries {
+        if *shown <= 0.001 {
+            continue;
+        }
+        let weight = if total == 0 {
+            1.0
+        } else {
+            (*value).max(1) as f32
+        };
+        let mut segment = div()
+            .h_full()
+            .flex_basis(px(0.0))
+            .min_w(px(4.0 * shown))
+            .ml(px(4.0 * shown.min(before)))
+            .rounded(px(4.0))
+            .bg(color(*provider));
+        segment.style().flex_grow = Some(weight * shown);
+        bar = bar.child(segment);
+        before = before.max(*shown);
+    }
+    bar
+}
+
 fn cell(width: f32, content: impl IntoElement) -> gpui::Div {
     div()
         .w(px(width))
@@ -1251,6 +1398,7 @@ fn day_breakdown_table(
     let providers: Vec<ProviderId> = snapshot
         .providers
         .iter()
+        .filter(|entry| !entry.excluded)
         .map(|entry| entry.provider)
         .collect();
     let provider_col = match providers.len() {

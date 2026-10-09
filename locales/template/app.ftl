@@ -2930,6 +2930,18 @@ to = { "" }
 share-1-of-other = { "" }
 
 # English source:
+# excluded-other = Excluded · { $other }
+excluded-other = { "" }
+
+# English source:
+# exclude-from-usage-stats = Click to exclude from usage stats
+exclude-from-usage-stats = { "" }
+
+# English source:
+# include-in-usage-stats = Click to include in usage stats
+include-in-usage-stats = { "" }
+
+# English source:
 # cost-885dc4 = cost
 cost-885dc4 = { "" }
 

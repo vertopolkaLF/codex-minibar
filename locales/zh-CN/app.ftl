@@ -1418,6 +1418,15 @@ to = { $v0 } 至 { $v1 }
 
 share-1-of-other = 占 { $v0 } 的 { $share }% · { $other }
 
+# application
+excluded-other = 已排除 · { $other }
+
+# application
+exclude-from-usage-stats = 点击以从用量统计中排除
+
+# application
+include-in-usage-stats = 点击以计入用量统计
+
 cost-885dc4 = 费用
 
 tokens-339143 = token

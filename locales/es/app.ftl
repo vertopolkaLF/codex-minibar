@@ -1433,6 +1433,15 @@ to = { $v0 } a { $v1 }
 
 share-1-of-other = { $share }% de { $v0 } · { $other }
 
+# application
+excluded-other = Excluido · { $other }
+
+# application
+exclude-from-usage-stats = Haz clic para excluir de las estadísticas
+
+# application
+include-in-usage-stats = Haz clic para incluir en las estadísticas
+
 cost-885dc4 = coste
 
 tokens-339143 = tokens

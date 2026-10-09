@@ -232,6 +232,8 @@ pub(crate) struct PopupRoot {
     pub(super) overview_metric: OverviewMetric,
     pub(super) overview_range: OverviewRange,
     pub(super) overview_breakdown: BreakdownMode,
+    /// Providers toggled off on the Usage tab for this app session.
+    pub(super) usage_excluded: std::collections::BTreeSet<ProviderId>,
     pub(super) chart_hover: Option<usize>,
     pub(super) open_reset_card: Option<String>,
     /// OpenRouter key administration on the OpenRouter tab.
@@ -241,6 +243,7 @@ pub(crate) struct PopupRoot {
     kit_fonts: crate::settings_window::theme::Fonts,
     pub(super) tab_scroll: f32,
     pub(super) snapshots: HashMap<SnapshotSlot, SnapshotCache>,
+    pub(super) usage_filtered: Option<super::usage::UsageFilterCache>,
     pub(super) usage_chart_cache: Option<super::usage::UsageChartCache>,
     pub(super) usage_plot: Option<Entity<super::usage::UsagePlot>>,
     pub(super) charts: HashMap<String, super::activity::ChartState>,
@@ -338,6 +341,7 @@ impl PopupRoot {
             overview_metric: OverviewMetric::default(),
             overview_range: OverviewRange::default(),
             overview_breakdown: BreakdownMode::default(),
+            usage_excluded: Default::default(),
             chart_hover: None,
             open_reset_card: None,
             keys: Default::default(),
@@ -345,6 +349,7 @@ impl PopupRoot {
             kit_fonts: crate::settings_window::theme::Fonts::resolve(cx),
             tab_scroll: 0.0,
             snapshots: HashMap::new(),
+            usage_filtered: None,
             usage_chart_cache: None,
             usage_plot: None,
             charts: HashMap::new(),
@@ -762,6 +767,7 @@ impl PopupRoot {
             cache.pending = None;
             cache.task = None;
         }
+        self.usage_filtered = None;
         self.usage_chart_cache = None;
         self.usage_plot = None;
         for chart in self.charts.values_mut() {

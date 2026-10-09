@@ -2127,6 +2127,15 @@ to = { $v0 } to { $v1 }
 share-1-of-other = { $share }% of { $v0 } · { $other }
 
 # application
+excluded-other = Excluded · { $other }
+
+# application
+exclude-from-usage-stats = Click to exclude from usage stats
+
+# application
+include-in-usage-stats = Click to include in usage stats
+
+# application
 cost-885dc4 = cost
 
 # application

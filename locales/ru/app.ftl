@@ -2132,6 +2132,15 @@ to = { $v0 } — { $v1 }
 share-1-of-other = { $share }% от { $v0 } · { $other }
 
 # application
+excluded-other = Исключено · { $other }
+
+# application
+exclude-from-usage-stats = Нажмите, чтобы исключить из статистики
+
+# application
+include-in-usage-stats = Нажмите, чтобы включить в статистику
+
+# application
 cost-885dc4 = расхода
 
 # application
