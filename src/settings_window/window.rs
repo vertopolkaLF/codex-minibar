@@ -31,7 +31,12 @@ use crate::popup_window::ui::fx;
 use crate::settings::{ProviderId, ProviderInstance, ProviderKind, Settings, TrayWidget};
 use crate::updater::UpdatePhase;
 
-pub(crate) const SIDEBAR_WIDTH: f32 = 264.0;
+const SIDEBAR_WIDTH: f32 = 264.0;
+/// The sidebar narrows to this width in the minimum-size window.
+const SIDEBAR_MIN_WIDTH: f32 = 208.0;
+/// Window widths over which the sidebar narrows from full to minimum width.
+const SIDEBAR_SHRINK_FROM: f32 = 1000.0;
+const SIDEBAR_SHRINK_TO: f32 = super::WINDOW_MIN_SIZE.0;
 const TITLEBAR_HEIGHT: f32 = 44.0;
 const NAV_ITEM_HEIGHT: f32 = 36.0;
 const NAV_ITEM_GAP: f32 = 2.0;
@@ -1243,6 +1248,7 @@ impl Render for SettingsWindow {
         }
 
         let titlebar = self.titlebar(&k);
+        let sidebar_width = sidebar_width(f32::from(window.viewport_size().width));
         let sidebar_mode = self.mode;
         let sidebar = match sidebar_mode {
             NavMode::Root => self.root_sidebar(&mut k, cx),
@@ -1302,7 +1308,7 @@ impl Render for SettingsWindow {
                     .min_h_0()
                     .child(
                         div()
-                            .w(px(SIDEBAR_WIDTH))
+                            .w(px(sidebar_width))
                             .flex_none()
                             .h_full()
                             .overflow_hidden()
@@ -1313,6 +1319,14 @@ impl Render for SettingsWindow {
             )
             .children(overlays)
     }
+}
+
+/// Sidebar width for a window `width` wide. It follows the window edge
+/// continuously, so narrowing gives the page room without a layout jump.
+fn sidebar_width(width: f32) -> f32 {
+    let t =
+        ((width - SIDEBAR_SHRINK_TO) / (SIDEBAR_SHRINK_FROM - SIDEBAR_SHRINK_TO)).clamp(0.0, 1.0);
+    SIDEBAR_MIN_WIDTH + (SIDEBAR_WIDTH - SIDEBAR_MIN_WIDTH) * t
 }
 
 /// Last shown state of each dialog, kept while it fades out.

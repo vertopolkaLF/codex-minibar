@@ -57,6 +57,8 @@ const WINDOW_HEIGHT: f32 = 740.0;
 // The layouts are not built for full-screen widths, so the windows cannot be
 // maximized and stop growing at this size.
 const WINDOW_MAX_SIZE: (f32, f32) = (1240.0, 960.0);
+/// Smallest Settings window that keeps rows, descriptions and controls readable.
+const WINDOW_MIN_SIZE: (f32, f32) = (860.0, 560.0);
 const ONBOARDING_WIDTH: f32 = 780.0;
 const ONBOARDING_HEIGHT: f32 = 560.0;
 pub(crate) fn settings_window_title() -> &'static str {
@@ -320,7 +322,7 @@ fn open_settings_window(state: Arc<AppState>, cx: &mut AsyncApp) {
             settings_window_title(),
             WINDOW_WIDTH,
             WINDOW_HEIGHT,
-            (640.0, 460.0),
+            WINDOW_MIN_SIZE,
             WINDOW_MAX_SIZE,
             cx,
         );
