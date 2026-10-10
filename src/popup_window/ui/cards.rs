@@ -215,7 +215,6 @@ impl PopupRoot {
                 *provider,
                 limits,
                 expansion_key,
-                false,
                 self.card_inner_width(surface),
                 window,
                 cx,
@@ -310,7 +309,6 @@ impl PopupRoot {
                         *provider,
                         limits,
                         expansion_key,
-                        true,
                         self.card_inner_width(PopupSurface::HomeTab),
                         window,
                         cx,
@@ -1100,14 +1098,12 @@ impl PopupRoot {
             .into_any_element()
     }
 
-    /// Every layout shares the compact card size; `compact` (Lines and Rings)
-    /// only drops the expiry date from the header.
+    /// Every layout shows the reset count and countdown without an expiry date.
     fn render_banked_resets(
         &mut self,
         provider: ProviderId,
         limits: &RateLimits,
         expansion_key: &str,
-        compact: bool,
         available_width: f32,
         window: &Window,
         cx: &mut Context<Self>,
@@ -1115,7 +1111,6 @@ impl PopupRoot {
         let palette = self.palette.clone();
         let metrics = self.metrics(window);
         let pad_x = 12.0;
-        let date_status_width = |date: &str, status: f32| metrics.caption(date).max(status);
         let count = limits.available_reset_count();
         let count_label =
             crate::i18n::format("count-banked-resets", &[("count", count.to_string())]);
@@ -1128,9 +1123,6 @@ impl PopupRoot {
             )
         };
         let expiration = limits.next_reset_credit_expiration();
-        let expiration_date = expiration
-            .map(format_date)
-            .unwrap_or_else(|| crate::i18n::tr("available-to-use").into());
         let (expiration_status, expiration_status_width) = match expiration {
             Some(at) => {
                 let value = format_reset_in(Some(at));
@@ -1167,11 +1159,7 @@ impl PopupRoot {
         let header_fits = TextMetrics::fits_split(
             available_width,
             title_width,
-            if compact || expiration.is_none() {
-                expiration_status_width
-            } else {
-                metrics.caption(&expiration_date) + 6.0 + expiration_status_width
-            },
+            expiration_status_width,
         );
         let mut title =
             div()
@@ -1239,21 +1227,14 @@ impl PopupRoot {
                         cx.notify();
                     }));
             }
-            let meta_width = if compact || expiration.is_none() {
-                expiration_status_width
-            } else {
-                expiration_status_width + 6.0 + metrics.caption(&expiration_date)
-            };
-            let mut meta = div()
+            let meta_width = expiration_status_width;
+            let meta = div()
                 .flex()
                 .flex_row()
                 .flex_wrap()
                 .items_center()
                 .gap_x(px(6.0))
                 .child(expiration_status);
-            if !compact && expiration.is_some() {
-                meta = meta.child(card_metadata(expiration_date, &palette));
-            }
             // Both lines carry 20 DIP line boxes; pull the second one up so
             // the pair reads as one block instead of two loose rows.
             let leading = div()
@@ -1267,21 +1248,10 @@ impl PopupRoot {
                 metrics.strong(label) + 24.0,
             );
             components::adaptive_split(fits, leading, button)
-        } else if compact || expiration.is_none() {
+        } else if expiration.is_none() {
             components::adaptive_split(header_fits, title, expiration_status)
         } else {
-            // One line like the compact card: the date leads the countdown.
-            components::adaptive_split(
-                header_fits,
-                title,
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(card_metadata(expiration_date, &palette))
-                    .child(expiration_status),
-            )
+            components::adaptive_split(header_fits, title, expiration_status)
         };
         let hover_id = fx::key(("reset-card", expansion_key));
         let hover = self.fx.toggle(
@@ -1365,7 +1335,7 @@ impl PopupRoot {
                 let fits = TextMetrics::fits_split(
                     available_width,
                     name_width,
-                    date_status_width(&date, status_width),
+                    metrics.caption(&date).max(status_width),
                 );
                 if !fits {
                     stacked_rows += 1;
