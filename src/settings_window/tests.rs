@@ -11,22 +11,6 @@ fn tab_tags_are_unique() {
 }
 
 #[test]
-fn every_sidebar_icon_is_embedded() {
-    for tab in Tab::ALL {
-        assert!(
-            crate::popup_window::ui::assets::has_asset(tab.color_icon()),
-            "{}",
-            tab.color_icon()
-        );
-        assert!(
-            crate::popup_window::ui::assets::has_asset(&format!("icons/{}.svg", tab.mono_icon())),
-            "{}",
-            tab.mono_icon()
-        );
-    }
-}
-
-#[test]
 fn provider_pages_are_keyed_by_instance() {
     let work = crate::instances::ProviderId::new(ProviderKind::Claude, "claude-work");
     assert_eq!(

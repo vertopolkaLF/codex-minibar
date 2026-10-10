@@ -724,7 +724,6 @@ accent-color = アクセントカラー
 windows-follows-your-system-accent = Windows はシステム アクセントに従います。
 
 # src/settings_window/appearance.rs
-icons-style = アイコンのスタイル
 
 # src/settings_window/appearance.rs
 font = フォント
@@ -736,13 +735,10 @@ any-font-installed-on-this-pc = この PC にインストールされている�
 windows-default = Windowsのデフォルト
 
 # src/settings_window/appearance.rs
-glyph-style-in-the-settings-sidebar = 設定サイドバーのグリフ スタイル。
 
 # src/settings_window/appearance.rs
-colored = 色付き
 
 # src/settings_window/tray.rs
-monochrome = モノクロ
 
 # src/settings_window/appearance.rs
 time-format = 時刻形式

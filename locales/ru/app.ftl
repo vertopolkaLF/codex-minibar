@@ -744,7 +744,6 @@ accent-color = Акцентный цвет
 windows-follows-your-system-accent = Windows использует системный акцентный цвет.
 
 # src/settings_window/appearance.rs
-icons-style = Стиль значков
 
 # src/settings_window/appearance.rs
 font = Шрифт
@@ -756,13 +755,10 @@ any-font-installed-on-this-pc = Любой шрифт, установленны�
 windows-default = По умолчанию Windows
 
 # src/settings_window/appearance.rs
-glyph-style-in-the-settings-sidebar = Стиль значков в боковой панели настроек.
 
 # src/settings_window/appearance.rs
-colored = Цветные
 
 # src/settings_window/tray.rs
-monochrome = Монохромные
 
 # src/settings_window/appearance.rs
 time-format = Формат времени

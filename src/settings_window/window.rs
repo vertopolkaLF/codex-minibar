@@ -590,7 +590,7 @@ impl SettingsWindow {
         &self,
         k: &Kit,
         id: SharedString,
-        leading: AnyElement,
+        leading: Option<AnyElement>,
         label: SharedString,
         selected: bool,
         dimmed: bool,
@@ -615,7 +615,9 @@ impl SettingsWindow {
             .rounded(px(kit::CONTROL_RADIUS))
             .cursor_pointer()
             .on_click(move |_, window, cx| on_click((), window, cx))
-            .child(div().when(dimmed, |el| el.opacity(0.55)).child(leading))
+            .children(
+                leading.map(|leading| div().when(dimmed, |el| el.opacity(0.55)).child(leading)),
+            )
             .child(
                 div()
                     .flex_1()
@@ -653,16 +655,9 @@ impl SettingsWindow {
     }
 
     fn root_sidebar(&mut self, k: &mut Kit, cx: &mut Context<Self>) -> AnyElement {
-        let colored = self.settings.use_colored_sidebar_icons;
-        let glyph = k.theme.glyph();
         let selected_index = Tab::ALL.iter().position(|tab| *tab == self.root_tab);
         let mut list = div().relative().flex().flex_col().gap(px(NAV_ITEM_GAP));
         for tab in Tab::ALL {
-            let leading = if colored {
-                kit::image(tab.color_icon(), 18.0).into_any_element()
-            } else {
-                icon(tab.mono_icon(), 16.0, glyph).into_any_element()
-            };
             let trailing = if tab == Tab::Providers {
                 vec![icon("caret-right", 12.0, k.theme.text_secondary).into_any_element()]
             } else {
@@ -672,7 +667,7 @@ impl SettingsWindow {
             list = list.child(self.nav_item(
                 k,
                 format!("nav-{}", tab.tag()).into(),
-                leading,
+                None,
                 tab.label().into(),
                 self.root_tab == tab,
                 false,
@@ -984,13 +979,13 @@ impl SettingsWindow {
         let item = self.nav_item(
             k,
             format!("nav-provider-{}", instance.id).into(),
-            kit::provider_mark(
+            Some(kit::provider_mark(
                 k,
                 crate::provider_registry::icon(instance.driver),
                 16.0,
                 color,
                 badge.as_ref(),
-            ),
+            )),
             instance.display_name().into(),
             selected == Some(provider),
             !instance.enabled,

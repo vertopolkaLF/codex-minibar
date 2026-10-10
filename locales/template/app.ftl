@@ -982,8 +982,6 @@ accent-color = { "" }
 windows-follows-your-system-accent = { "" }
 
 # English source:
-# icons-style = Icons style
-icons-style = { "" }
 
 # English source:
 # font = Font
@@ -998,16 +996,10 @@ any-font-installed-on-this-pc = { "" }
 windows-default = { "" }
 
 # English source:
-# glyph-style-in-the-settings-sidebar = Glyph style in the Settings sidebar.
-glyph-style-in-the-settings-sidebar = { "" }
 
 # English source:
-# colored = Colored
-colored = { "" }
 
 # English source:
-# monochrome = Monochrome
-monochrome = { "" }
 
 # English source:
 # time-format = Time format

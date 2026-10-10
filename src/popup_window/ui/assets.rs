@@ -79,7 +79,6 @@ fn source(name: &str) -> Option<&'static str> {
         "arrow-square-out" => include_str!("../../../assets/icons/ph-arrow-square-out.svg"),
         "arrow-up-bold" => include_str!("../../../assets/icons/ph-arrow-up-bold.svg"),
         "at-fill" => include_str!("../../../assets/icons/ph-at-fill.svg"),
-        "bell-fill" => include_str!("../../../assets/icons/ph-bell-fill.svg"),
         "broom-fill" => include_str!("../../../assets/icons/ph-broom-fill.svg"),
         "caret-down" => include_str!("../../../assets/icons/ph-caret-down.svg"),
         "caret-down-bold" => include_str!("../../../assets/icons/ph-caret-down-bold.svg"),
@@ -106,24 +105,20 @@ fn source(name: &str) -> Option<&'static str> {
             include_str!("../../../assets/icons/ph-git-pull-request-fill.svg")
         }
         "github-logo-fill" => include_str!("../../../assets/icons/ph-github-logo-fill.svg"),
-        "house-fill" => include_str!("../../../assets/icons/ph-house-fill.svg"),
         "info-fill" => include_str!("../../../assets/icons/ph-info-fill.svg"),
         "key-fill" => include_str!("../../../assets/icons/ph-key-fill.svg"),
         "magnifying-glass-bold" => {
             include_str!("../../../assets/icons/ph-magnifying-glass-bold.svg")
         }
         "package-fill" => include_str!("../../../assets/icons/ph-package-fill.svg"),
-        "paint-brush-fill" => include_str!("../../../assets/icons/ph-paint-brush-fill.svg"),
         "pencil-simple-fill" => include_str!("../../../assets/icons/ph-pencil-simple-fill.svg"),
         "plugs-connected-fill" => include_str!("../../../assets/icons/ph-plugs-connected-fill.svg"),
         "plus-bold" => include_str!("../../../assets/icons/ph-plus-bold.svg"),
         "plus-fill" => include_str!("../../../assets/icons/ph-plus-fill.svg"),
         "puzzle-piece-fill" => include_str!("../../../assets/icons/ph-puzzle-piece-fill.svg"),
-        "scroll-fill" => include_str!("../../../assets/icons/ph-scroll-fill.svg"),
         "seal-check-fill" => include_str!("../../../assets/icons/ph-seal-check-fill.svg"),
         "sign-in-bold" => include_str!("../../../assets/icons/ph-sign-in-bold.svg"),
         "sparkle-fill" => include_str!("../../../assets/icons/ph-sparkle-fill.svg"),
-        "squares-four-fill" => include_str!("../../../assets/icons/ph-squares-four-fill.svg"),
         "terminal-window-fill" => include_str!("../../../assets/icons/ph-terminal-window-fill.svg"),
         "trash-fill" => include_str!("../../../assets/icons/ph-trash-fill.svg"),
         "upload-simple-fill" => include_str!("../../../assets/icons/ph-upload-simple-fill.svg"),
@@ -192,31 +187,10 @@ pub(crate) fn normalize_svg(svg: &str) -> String {
 /// Full-color assets painted with `img` (their own colors are kept).
 fn color_source(name: &str) -> Option<&'static [u8]> {
     Some(match name {
-        "alert-badge-24" => include_bytes!("../../../assets/icons/fluent-color-alert-badge-24.svg"),
-        "apps-24" => include_bytes!("../../../assets/icons/fluent-color-apps-24.svg"),
-        "apps-list-24" => include_bytes!("../../../assets/icons/fluent-color-apps-list-24.svg"),
-        "book-open-24" => include_bytes!("../../../assets/icons/fluent-color-book-open-24.svg"),
-        "calendar-clock-24" => {
-            include_bytes!("../../../assets/icons/fluent-color-calendar-clock-24.svg")
-        }
-        "chat-24" => include_bytes!("../../../assets/icons/fluent-color-chat-24.svg"),
-        "history-24" => include_bytes!("../../../assets/icons/fluent-color-history-24.svg"),
-        "home-24" => include_bytes!("../../../assets/icons/fluent-color-home-24.svg"),
-        "paint-brush-24" => include_bytes!("../../../assets/icons/fluent-color-paint-brush-24.svg"),
-        "puzzle-piece-24" => {
-            include_bytes!("../../../assets/icons/fluent-color-puzzle-piece-24.svg")
-        }
-        "settings-24" => include_bytes!("../../../assets/icons/fluent-color-settings-24.svg"),
         "app-icon" => include_bytes!("../../../assets/app-icon.png"),
         "app-icon-32" => include_bytes!("../../../assets/icons/app-icon-32.png"),
         _ => return None,
     })
-}
-
-/// Whether `path` resolves to an embedded asset.
-#[cfg(test)]
-pub(crate) fn has_asset(path: &str) -> bool {
-    PopupAssets.load(path).ok().flatten().is_some()
 }
 
 impl AssetSource for PopupAssets {

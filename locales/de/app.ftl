@@ -727,7 +727,6 @@ accent-color = Akzentfarbe
 windows-follows-your-system-accent = Windows folgt Ihrem Systemakzent.
 
 # src/settings_window/appearance.rs
-icons-style = Icons-Stil
 
 # src/settings_window/appearance.rs
 font = Schriftart
@@ -739,13 +738,10 @@ any-font-installed-on-this-pc = Jede auf diesem PC installierte Schriftart.
 windows-default = Windows-Standard
 
 # src/settings_window/appearance.rs
-glyph-style-in-the-settings-sidebar = Glyphenstil in der Seitenleiste „Einstellungen“.
 
 # src/settings_window/appearance.rs
-colored = Farbig
 
 # src/settings_window/tray.rs
-monochrome = Monochrom
 
 # src/settings_window/appearance.rs
 time-format = Zeitformat

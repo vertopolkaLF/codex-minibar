@@ -480,7 +480,6 @@ accent-color = 强调色
 
 windows-follows-your-system-accent = Windows 选项跟随系统强调色。
 
-icons-style = 图标样式
 
 font = 字体
 
@@ -488,11 +487,8 @@ any-font-installed-on-this-pc = 此电脑上安装的任意字体。
 
 windows-default = Windows 默认
 
-glyph-style-in-the-settings-sidebar = 设置侧栏中的图标样式。
 
-colored = 彩色
 
-monochrome = 单色
 
 time-format = 时间格式
 

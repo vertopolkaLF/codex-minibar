@@ -483,7 +483,6 @@ accent-color = Cor de destaque
 
 windows-follows-your-system-accent = Windows segue a cor de destaque do sistema.
 
-icons-style = Estilo dos ícones
 
 font = Fonte
 
@@ -491,11 +490,8 @@ any-font-installed-on-this-pc = Qualquer fonte instalada neste PC.
 
 windows-default = Padrão do Windows
 
-glyph-style-in-the-settings-sidebar = Estilo dos ícones na barra lateral das Configurações.
 
-colored = Colorido
 
-monochrome = Monocromático
 
 time-format = Formato de hora
 

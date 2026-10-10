@@ -743,7 +743,6 @@ accent-color = Accent color
 windows-follows-your-system-accent = Windows follows your system accent.
 
 # src/settings_window/appearance.rs
-icons-style = Icons style
 
 # src/settings_window/appearance.rs
 font = Font
@@ -755,13 +754,10 @@ any-font-installed-on-this-pc = Any font installed on this PC.
 windows-default = Windows default
 
 # src/settings_window/appearance.rs
-glyph-style-in-the-settings-sidebar = Glyph style in the Settings sidebar.
 
 # src/settings_window/appearance.rs
-colored = Colored
 
 # src/settings_window/tray.rs
-monochrome = Monochrome
 
 # src/settings_window/appearance.rs
 time-format = Time format

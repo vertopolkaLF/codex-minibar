@@ -1785,10 +1785,6 @@ pub struct Settings {
     /// Brand-colored provider glyphs in the popup. Settings expose the inverse
     /// as "Use monochrome icons".
     pub use_colored_provider_icons: bool,
-    /// Fluent Color glyphs in the Settings sidebar. When false, monochrome
-    /// Phosphor paths follow the resolved theme foreground instead. Settings
-    /// expose the inverse as "Use monochrome icons".
-    pub use_colored_sidebar_icons: bool,
     pub replace_chatgpt_logo_with_codex: bool,
     /// Weekly activations, each bound to exactly one provider instance.
     pub scheduled_activations: Vec<ScheduledActivation>,
@@ -1857,7 +1853,6 @@ impl Default for Settings {
             popup_home_right_column: None,
             popup_home_card_layouts: BTreeMap::new(),
             use_colored_provider_icons: true,
-            use_colored_sidebar_icons: true,
             replace_chatgpt_logo_with_codex: false,
             scheduled_activations: Vec::new(),
             auto_activation_pauses: Vec::new(),

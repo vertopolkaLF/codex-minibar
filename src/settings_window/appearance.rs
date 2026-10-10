@@ -461,7 +461,6 @@ impl SettingsWindow {
     ) -> Vec<AnyElement> {
         let s = &self.settings;
         let accent = s.accent_color;
-        let colored_sidebar = s.use_colored_sidebar_icons;
         let time_format = s.time_format;
         let material = s.popup_background_material;
         let borders = s.popup_borders;
@@ -489,21 +488,6 @@ impl SettingsWindow {
                 Row::new("appearance-font", crate::i18n::tr("font"))
                     .description(k, crate::i18n::tr("any-font-installed-on-this-pc"))
                     .trailing(font)
-                    .render(k),
-                Row::new("appearance-icon-style", crate::i18n::tr("icons-style"))
-                    .description(k, crate::i18n::tr("glyph-style-in-the-settings-sidebar"))
-                    .trailing(kit::segmented(
-                        k,
-                        "appearance-icon-style",
-                        &[crate::i18n::tr("colored"), crate::i18n::tr("monochrome")],
-                        if colored_sidebar { 0 } else { 1 },
-                        false,
-                        Self::h(cx, |this, index: usize, _, cx| {
-                            this.edit(cx, move |settings| {
-                                settings.use_colored_sidebar_icons = index == 0
-                            })
-                        }),
-                    ))
                     .render(k),
                 Row::new("appearance-time", crate::i18n::tr("time-format"))
                     .trailing(kit::segmented(
