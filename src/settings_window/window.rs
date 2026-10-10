@@ -11,8 +11,8 @@ use std::{
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, FocusHandle, Focusable, FontWeight,
     InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, ScrollHandle,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, Task, Window,
-    WindowControlArea, div, prelude::FluentBuilder, px,
+    ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Subscription, Task, Window,
+    WindowControlArea, div, point, prelude::FluentBuilder, px,
 };
 
 use super::{
@@ -41,6 +41,8 @@ const TITLEBAR_HEIGHT: f32 = 44.0;
 const NAV_ITEM_HEIGHT: f32 = 36.0;
 const NAV_ITEM_GAP: f32 = 2.0;
 const CONTENT_MAX_WIDTH: f32 = 1000.0;
+/// Smooth wheel scrolling: one notch glides over this duration.
+const SCROLL_GLIDE: Duration = Duration::from_millis(140);
 
 /// Instance fields that drive install detection; names, badges and toggles
 /// never re-run it.
@@ -72,6 +74,8 @@ pub(crate) struct SettingsWindow {
     pub(super) return_tab: Tab,
     pub(super) page: Page,
     scroll: ScrollHandle,
+    /// Page scroll position a wheel glide is heading to, while it runs.
+    scroll_glide: Option<f32>,
     // Text inputs keyed by field id.
     inputs: Inputs<SettingsWindow>,
     // Provider pages.
@@ -188,6 +192,7 @@ impl SettingsWindow {
             return_tab: Tab::General,
             page,
             scroll: ScrollHandle::new(),
+            scroll_glide: None,
             inputs: Inputs::default(),
             install_statuses: HashMap::new(),
             detection_inputs: None,
@@ -383,6 +388,7 @@ impl SettingsWindow {
         super::vscode_themes::end_theme_preview(cx);
         self.nav_slide = self.pending_slide.take().unwrap_or(0.0);
         self.scroll = ScrollHandle::new();
+        self.scroll_glide = None;
         self.kit.menus.close_silently();
         cx.notify();
     }
@@ -1152,7 +1158,52 @@ impl SettingsWindow {
         }
     }
 
+    /// Turns GPUI's instant wheel jump into a glide. GPUI's own scroll
+    /// listener on the same element runs first and has already moved the
+    /// offset by the wheel delta; take that back and glide there instead.
+    fn on_page_wheel(
+        &mut self,
+        event: &ScrollWheelEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let delta = f32::from(event.delta.pixel_delta(window.line_height()).y);
+        if delta == 0.0 {
+            return;
+        }
+        let offset = self.scroll.offset();
+        let current = -(f32::from(offset.y) - delta);
+        self.scroll.set_offset(point(offset.x, px(-current)));
+        let max = f32::from(self.scroll.max_offset().height).max(0.0);
+        let base = match self.scroll_glide {
+            Some(target) => target,
+            None => {
+                let current = current.clamp(0.0, max);
+                self.kit.fx.snap(fx::key("settings-page-scroll"), current);
+                current
+            }
+        };
+        self.scroll_glide = Some((base - delta).clamp(0.0, max));
+        cx.notify();
+    }
+
+    /// Advances a running wheel glide by one frame.
+    fn step_scroll_glide(&mut self, k: &mut Kit) {
+        let Some(target) = self.scroll_glide else {
+            return;
+        };
+        let target = target.min(f32::from(self.scroll.max_offset().height).max(0.0));
+        let y =
+            k.fx.value(fx::key("settings-page-scroll"), target, SCROLL_GLIDE);
+        self.scroll
+            .set_offset(point(self.scroll.offset().x, px(-y)));
+        if (y - target).abs() < 0.5 {
+            self.scroll_glide = None;
+        }
+    }
+
     fn content(&mut self, k: &mut Kit, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        self.step_scroll_glide(k);
         let page_key = self.page.key();
         let rows = self.page_body(k, window, cx);
         let body = div()
@@ -1174,6 +1225,7 @@ impl SettingsWindow {
             .size_full()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
+            .on_scroll_wheel(cx.listener(Self::on_page_wheel))
             .child(
                 div()
                     .flex()
