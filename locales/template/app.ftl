@@ -1004,6 +1004,8 @@ windows-default = { "" }
 # English source:
 
 # English source:
+# monochrome = Monochrome
+monochrome = { "" }
 
 # English source:
 # time-format = Time format

@@ -494,6 +494,8 @@ windows-default = Predeterminado de Windows
 
 
 
+monochrome = Monocromo
+
 time-format = Formato de hora
 
 msg-12-hour = 12 horas

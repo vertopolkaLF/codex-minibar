@@ -744,6 +744,7 @@ windows-default = Windows par défaut
 # src/settings_window/appearance.rs
 
 # src/settings_window/tray.rs
+monochrome = Monochromes
 
 # src/settings_window/appearance.rs
 time-format = Format de l'heure

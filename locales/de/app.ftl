@@ -743,6 +743,7 @@ windows-default = Windows-Standard
 # src/settings_window/appearance.rs
 
 # src/settings_window/tray.rs
+monochrome = Monochrom
 
 # src/settings_window/appearance.rs
 time-format = Zeitformat

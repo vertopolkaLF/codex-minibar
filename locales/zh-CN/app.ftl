@@ -491,6 +491,8 @@ windows-default = Windows 默认
 
 
 
+monochrome = 单色
+
 time-format = 时间格式
 
 msg-12-hour = 12 小时制

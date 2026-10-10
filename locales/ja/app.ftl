@@ -740,6 +740,7 @@ windows-default = Windowsのデフォルト
 # src/settings_window/appearance.rs
 
 # src/settings_window/tray.rs
+monochrome = モノクロ
 
 # src/settings_window/appearance.rs
 time-format = 時刻形式
