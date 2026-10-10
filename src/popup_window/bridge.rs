@@ -89,7 +89,8 @@ fn warn_login_expiry(provider: ProviderId, limits: &RateLimits) {
     warned.retain(|(warned, _)| *warned != provider);
     warned.push((provider, expires_at));
     let local = expires_at.with_timezone(&chrono::Local);
-    crate::notifications::show(
+    crate::notifications::show_kind(
+        crate::notifications::NotificationKind::Warning,
         &crate::i18n::format(
             "login-expires-soon",
             &[("v0", provider.qualified_name().to_string())],
@@ -437,15 +438,6 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
             publish_popup_ui(ui);
         };
 
-        let drain_toast_update = || {
-            if crate::notifications::take_toast_update_request()
-                && let Err(error) = crate::updater::apply_pending_update()
-            {
-                eprintln!("failed to apply update from toast: {error:#}");
-                notifications::show(crate::i18n::tr("update-failed"), &format!("{error:#}"));
-            }
-        };
-
         let drain_streamdeck = || {
             while let Ok(command) = streamdeck_rx.try_recv() {
                 match command {
@@ -478,7 +470,6 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
             publish_popup_ui(&ui);
             loop {
                 popup::pump_messages();
-                drain_toast_update();
                 drain_streamdeck();
                 drain_usage_actions(
                     &mut ui,
@@ -513,7 +504,6 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
         let mut made_progress = false;
         loop {
             popup::pump_messages();
-            drain_toast_update();
             drain_streamdeck();
             drain_usage_actions(
                 &mut ui,
@@ -901,7 +891,7 @@ pub(super) fn pump_tray_and_dismiss(
             TrayMenuAction::Update => {
                 if let Err(error) = crate::updater::apply_pending_update() {
                     eprintln!("failed to apply update: {error:#}");
-                    notifications::show(crate::i18n::tr("update-failed"), &format!("{error:#}"));
+                    notifications::show_error(crate::i18n::tr("update-failed"), &format!("{error:#}"));
                 }
             }
             TrayMenuAction::Settings => {

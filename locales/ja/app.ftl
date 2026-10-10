@@ -2531,3 +2531,9 @@ openrouter-keys-not-a-management-key = このキーは他のキーを管理で�
 
 
 openrouter-keys-key-not-found = このキーはもう存在しません。
+
+# src/settings_window/notifications.rs
+notification-sounds = 通知音
+
+# src/settings_window/notifications.rs
+plays-a-short-sound-with-each-notification = 通知ごとに短い音を再生します

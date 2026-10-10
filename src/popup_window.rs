@@ -83,6 +83,8 @@ pub(crate) enum PopupCommand {
     Raise,
     /// Settings/onboarding window requests, executed on the GPUI thread.
     Settings(crate::settings_window::Command),
+    /// An in-app notification for the toast host.
+    Toast(Box<crate::notifications::Notification>),
 }
 
 type CommandChannel = (

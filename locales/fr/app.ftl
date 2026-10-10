@@ -2559,3 +2559,9 @@ openrouter-keys-not-a-management-key = Cette clé ne peut pas gérer d'autres cl
 
 
 openrouter-keys-key-not-found = Cette clé n'existe plus.
+
+# src/settings_window/notifications.rs
+notification-sounds = Sons des notifications
+
+# src/settings_window/notifications.rs
+plays-a-short-sound-with-each-notification = Joue un son bref à chaque notification

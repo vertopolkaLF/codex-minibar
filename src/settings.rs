@@ -1692,9 +1692,11 @@ pub struct NotificationSettings {
     pub update_available: bool,
     /// Read the public GitHub feed containing announced Codex forced resets.
     pub forced_reset_feed_enabled: bool,
-    /// Show a Windows toast when new forced-reset information arrives. This is
+    /// Notify when new forced-reset information arrives. This is
     /// not the API-driven notification that confirms an actual reset.
     pub forced_reset_notifications: bool,
+    /// Play the kind's sound with each notification.
+    pub sound: bool,
 }
 
 impl Default for NotificationSettings {
@@ -1712,6 +1714,7 @@ impl Default for NotificationSettings {
             update_available: true,
             forced_reset_feed_enabled: true,
             forced_reset_notifications: true,
+            sound: true,
         }
     }
 }
@@ -2465,6 +2468,7 @@ impl Settings {
             self.language.apply();
         }
         crate::theme::set_animations_enabled(self.animations_enabled);
+        crate::notifications::set_sound_enabled(self.notifications.sound);
         crate::popup::apply_popup_appearance(
             self.bottom_bar_size,
             self.popup_corner_radius,

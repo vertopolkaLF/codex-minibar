@@ -21,6 +21,7 @@ mod backdrop;
 mod blur_effect;
 mod root;
 pub(crate) mod theme;
+mod toast;
 mod tooltip;
 mod usage;
 #[cfg(windows)]
@@ -256,6 +257,7 @@ fn handle_command(
             let _ = window.update(cx, |root, window, cx| root.appearance_changed(window, cx));
         }
         PopupCommand::Settings(_) => {}
+        PopupCommand::Toast(notification) => toast::post(*notification, window, cx),
         PopupCommand::Raise => {
             #[cfg(windows)]
             {

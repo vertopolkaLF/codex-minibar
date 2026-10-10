@@ -44,7 +44,7 @@ impl SettingsWindow {
                             .on_click(kit::handler(|(), _, _| {
                                 if let Err(error) = crate::logger::open() {
                                     eprintln!("failed to open log.txt: {error:#}");
-                                    crate::notifications::show(
+                                    crate::notifications::show_error(
                                         crate::i18n::tr("could-not-open-log-txt"),
                                         &error.to_string(),
                                     );
@@ -58,7 +58,7 @@ impl SettingsWindow {
                             .on_click(kit::handler(|(), _, _| {
                                 if let Err(error) = crate::logger::open_folder() {
                                     eprintln!("failed to open logs folder: {error:#}");
-                                    crate::notifications::show(
+                                    crate::notifications::show_error(
                                         crate::i18n::tr("could-not-open-logs-folder"),
                                         &error.to_string(),
                                     );
@@ -110,7 +110,8 @@ impl SettingsWindow {
             binary(ProviderKind::Claude).as_deref(),
         );
         if tools.is_empty() {
-            crate::notifications::show(
+            crate::notifications::show_kind(
+                crate::notifications::NotificationKind::Warning,
                 crate::i18n::tr("no-supported-ai-tool-found"),
                 crate::i18n::tr("install-codex-or-claude-code-and-make-it-available-to-minibar"),
             );

@@ -1639,3 +1639,9 @@ openrouter-keys-no-management-key = 此账户没有管理密钥。
 openrouter-keys-management-key-rejected = OpenRouter 拒绝了管理密钥。请在设置中替换它。
 openrouter-keys-not-a-management-key = 此密钥无法管理其他密钥。请使用管理密钥。
 openrouter-keys-key-not-found = 此密钥已不存在。
+
+# src/settings_window/notifications.rs
+notification-sounds = 通知声音
+
+# src/settings_window/notifications.rs
+plays-a-short-sound-with-each-notification = 每条通知播放一段简短提示音

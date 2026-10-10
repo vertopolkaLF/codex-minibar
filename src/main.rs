@@ -180,9 +180,6 @@ fn main() {
     if let Err(error) = codex_minibar::codex::cleanup_abandoned_logins() {
         eprintln!("could not clean abandoned Codex sign-in directories: {error:#}");
     }
-    if notifications::launched_via_toast_update() {
-        let _ = notifications::publish_toast_update_request();
-    }
     if let Err(error) = run() {
         show_error(&format!("Codex Minibar failed: {error:#}"));
     }

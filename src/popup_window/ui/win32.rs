@@ -26,13 +26,13 @@ use windows_sys::Win32::{
         Shell::{DefSubclassProc, SetWindowSubclass},
         WindowsAndMessaging::{
             EVENT_SYSTEM_FOREGROUND, GWL_EXSTYLE, GWL_STYLE, GetWindowLongPtrW, GetWindowRect,
-            HTCLIENT, HWND_TOPMOST, SW_HIDE, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-            SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow,
-            SetWindowLongPtrW, SetWindowPos, ShowWindow, WINEVENT_OUTOFCONTEXT,
-            WINEVENT_SKIPOWNPROCESS, WM_DISPLAYCHANGE, WM_NCCALCSIZE, WM_NCHITTEST,
-            WM_SETTINGCHANGE, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_LAYERED,
-            WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MAXIMIZEBOX,
-            WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+            HTCLIENT, HWND_TOPMOST, MA_NOACTIVATE, SW_HIDE, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED,
+            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER,
+            SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+            WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_DISPLAYCHANGE, WM_MOUSEACTIVATE,
+            WM_NCCALCSIZE, WM_NCHITTEST, WM_SETTINGCHANGE, WS_CAPTION, WS_EX_APPWINDOW,
+            WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
+            WS_EX_TOPMOST, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
         },
     },
 };
@@ -110,6 +110,57 @@ unsafe extern "system" fn popup_subclass_proc(
 pub(crate) fn configure(hwnd: HWND) {
     unsafe {
         SetWindowSubclass(hwnd, Some(popup_subclass_proc), SUBCLASS_ID, 0);
+    }
+    restyle(hwnd);
+    unsafe {
+        // The popup can stay open for a long time (e.g. as the live preview
+        // beside Settings). Another topmost window that takes the foreground
+        // lands above it, so re-raise whenever a foreign window activates.
+        // Out-of-context hooks run on this (GPUI) thread's message loop.
+        SetWinEventHook(
+            EVENT_SYSTEM_FOREGROUND,
+            EVENT_SYSTEM_FOREGROUND,
+            std::ptr::null_mut(),
+            Some(foreground_changed),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+        );
+    }
+}
+
+unsafe extern "system" fn toast_subclass_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    _data: usize,
+) -> LRESULT {
+    match message {
+        WM_NCCALCSIZE => 0,
+        WM_NCHITTEST => HTCLIENT as LRESULT,
+        // Clicking a notification never steals focus from the user's app.
+        WM_MOUSEACTIVATE => MA_NOACTIVATE as LRESULT,
+        _ => unsafe { DefSubclassProc(hwnd, message, wparam, lparam) },
+    }
+}
+
+/// One-time restyle of the notification host: the popup's borderless,
+/// topmost tool window, which additionally never activates.
+pub(crate) fn configure_toast(hwnd: HWND) {
+    unsafe {
+        SetWindowSubclass(hwnd, Some(toast_subclass_proc), SUBCLASS_ID, 0);
+        let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (ex_style | WS_EX_NOACTIVATE) as isize);
+    }
+    restyle(hwnd);
+}
+
+/// Borderless, topmost tool window that DWM neither rounds nor animates.
+/// Outside any GPUI borrow only (`SWP_FRAMECHANGED` reaches GPUI's WM_SIZE).
+fn restyle(hwnd: HWND) {
+    unsafe {
         let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
         let style = (style
             & !(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU))
@@ -145,20 +196,6 @@ pub(crate) fn configure(hwnd: HWND) {
             0,
             0,
             SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
-        );
-
-        // The popup can stay open for a long time (e.g. as the live preview
-        // beside Settings). Another topmost window that takes the foreground
-        // lands above it, so re-raise whenever a foreign window activates.
-        // Out-of-context hooks run on this (GPUI) thread's message loop.
-        SetWinEventHook(
-            EVENT_SYSTEM_FOREGROUND,
-            EVENT_SYSTEM_FOREGROUND,
-            std::ptr::null_mut(),
-            Some(foreground_changed),
-            0,
-            0,
-            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
         );
     }
 }

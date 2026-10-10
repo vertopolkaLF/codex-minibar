@@ -31,7 +31,7 @@ impl SettingsWindow {
                 && let Err(error) = crate::troubleshoot::launch_selected(tool)
             {
                 eprintln!("failed to start troubleshooting terminal: {error:#}");
-                crate::notifications::show(
+                crate::notifications::show_error(
                     crate::i18n::tr("troubleshooting-could-not-start"),
                     &error.to_string(),
                 );

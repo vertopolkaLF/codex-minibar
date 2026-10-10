@@ -52,7 +52,7 @@ pub fn install_latest_plugin_async(on_phase: impl Fn(InstallPhase) + Send + 'sta
             Ok(()) => on_phase(InstallPhase::Launched),
             Err(error) => {
                 let message = error.to_string();
-                crate::notifications::show("Stream Deck plugin", &message);
+                crate::notifications::show_error("Stream Deck plugin", &message);
                 on_phase(InstallPhase::Failed(message));
             }
         }

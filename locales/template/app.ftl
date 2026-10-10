@@ -3569,3 +3569,11 @@ openrouter-keys-not-a-management-key = { "" }
 # English source:
 # openrouter-keys-key-not-found = This key no longer exists.
 openrouter-keys-key-not-found = { "" }
+
+# English source:
+# notification-sounds = Notification sounds
+notification-sounds = { "" }
+
+# English source:
+# plays-a-short-sound-with-each-notification = Plays a short sound with each notification
+plays-a-short-sound-with-each-notification = { "" }

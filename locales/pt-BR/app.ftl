@@ -1660,3 +1660,9 @@ openrouter-keys-no-management-key = Esta conta não tem chave de gerenciamento.
 openrouter-keys-management-key-rejected = O OpenRouter rejeitou a chave de gerenciamento. Substitua-a nas Configurações.
 openrouter-keys-not-a-management-key = Esta chave não pode gerenciar outras chaves. Use uma chave de gerenciamento.
 openrouter-keys-key-not-found = Esta chave não existe mais.
+
+# src/settings_window/notifications.rs
+notification-sounds = Sons de notificação
+
+# src/settings_window/notifications.rs
+plays-a-short-sound-with-each-notification = Toca um som curto a cada notificação

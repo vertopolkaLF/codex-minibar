@@ -454,7 +454,7 @@ impl OnboardingWindow {
                     }
                     Err(error) => {
                         eprintln!("failed to complete onboarding: {error:#}");
-                        crate::notifications::show(
+                        crate::notifications::show_error(
                             crate::i18n::tr("setup-could-not-be-saved"),
                             &format!("{error:#}"),
                         );

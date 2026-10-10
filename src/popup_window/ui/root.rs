@@ -477,6 +477,38 @@ impl PopupRoot {
         }
     }
 
+    /// The popup's design for another surface (the notification host) with
+    /// its own system appearance, on an opaque background.
+    pub(super) fn palette_for(&self, system_dark: bool) -> Palette {
+        let (popup_theme, vscode) =
+            theme::popup_design(self.ui.popup_theme, self.ui.popup_vscode_theme.as_deref());
+        let dark = theme::palette_dark(
+            vscode.as_deref(),
+            theme::resolve_dark(self.ui.theme, system_dark),
+        );
+        Palette::new(
+            popup_theme,
+            vscode,
+            dark,
+            theme::accent_ramp(self.ui.accent_color),
+            crate::settings::PopupBackgroundMaterial::Solid,
+            theme::popup_font_family(
+                popup_theme,
+                self.ui.font_family.as_deref(),
+                &self.default_font,
+            ),
+        )
+        .with_borders(self.ui.popup_borders)
+    }
+
+    /// Screen x of the visible popup capsule's left edge, in pixels.
+    #[cfg(windows)]
+    pub(super) fn capsule_screen_left(&self) -> Option<i32> {
+        let hwnd = self.host.hwnd.filter(|_| self.host.visible())?;
+        let rect = super::win32::window_rect(hwnd);
+        Some(rect.left + (f32::from(self.capsule_origin.x) * self.host.scale).round() as i32)
+    }
+
     /// Gap between stacked cards; glides when the popup theme changes it.
     pub(super) fn card_gap(&mut self) -> f32 {
         self.fx.value(
@@ -1166,7 +1198,7 @@ impl PopupRoot {
         std::thread::spawn(|| {
             if let Err(error) = crate::updater::apply_pending_update() {
                 eprintln!("failed to apply update: {error:#}");
-                crate::notifications::show(crate::i18n::tr("update-failed"), &format!("{error:#}"));
+                crate::notifications::show_error(crate::i18n::tr("update-failed"), &format!("{error:#}"));
             }
         });
     }
@@ -1278,7 +1310,7 @@ fn closing_offset(started: Instant, from: f32, width: f32, margin: f32) -> f32 {
     from + (travel - from) * eased
 }
 
-fn system_dark(window: &Window) -> bool {
+pub(super) fn system_dark(window: &Window) -> bool {
     matches!(
         window.appearance(),
         gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark

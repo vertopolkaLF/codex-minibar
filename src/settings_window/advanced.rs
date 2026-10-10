@@ -66,7 +66,7 @@ impl SettingsWindow {
                                 this.state.usage_actions_tx.send(UsageAction::ClearData)
                             {
                                 eprintln!("failed to queue usage data clear: {error}");
-                                crate::notifications::show(
+                                crate::notifications::show_error(
                                     crate::i18n::tr("usage-data-clear-failed"),
                                     crate::i18n::tr("the-background-worker-is-unavailable"),
                                 );
@@ -116,7 +116,7 @@ impl SettingsWindow {
                 Ok(()) => this.show_notice(crate::i18n::tr("settings-exported"), cx),
                 Err(error) => {
                     eprintln!("failed to export settings: {error:#}");
-                    crate::notifications::show(
+                    crate::notifications::show_error(
                         crate::i18n::tr("settings-export-failed"),
                         &format!("{error:#}"),
                     );
@@ -160,7 +160,7 @@ impl SettingsWindow {
                 }
                 Err(error) => {
                     eprintln!("failed to import settings: {error:#}");
-                    crate::notifications::show(
+                    crate::notifications::show_error(
                         crate::i18n::tr("settings-import-failed"),
                         &format!("{error:#}"),
                     );
@@ -204,7 +204,7 @@ impl SettingsWindow {
                         }
                         Err(error) => {
                             eprintln!("failed to reset settings: {error:#}");
-                            crate::notifications::show(
+                            crate::notifications::show_error(
                                 crate::i18n::tr("settings-reset-failed"),
                                 &format!("{error:#}"),
                             );

@@ -2559,3 +2559,9 @@ openrouter-keys-not-a-management-key = Этот ключ не может упр�
 
 
 openrouter-keys-key-not-found = Этот ключ больше не существует.
+
+# src/settings_window/notifications.rs
+notification-sounds = Звуки уведомлений
+
+# src/settings_window/notifications.rs
+plays-a-short-sound-with-each-notification = Короткий звук при каждом уведомлении

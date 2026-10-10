@@ -979,7 +979,7 @@ pub(super) trait ThemeBrowserUi: ThemeHost {
             }
             Err(error) => {
                 eprintln!("failed to install a VS Code theme: {error:#}");
-                crate::notifications::show(
+                crate::notifications::show_error(
                     crate::i18n::tr("theme-install-failed"),
                     &format!("{error:#}"),
                 );
@@ -1002,7 +1002,7 @@ pub(super) trait ThemeBrowserUi: ThemeHost {
             && self.settings().popup_vscode_theme.as_deref() == Some(id.as_str());
         if let Err(error) = vscode_themes::remove(&id) {
             eprintln!("failed to remove VS Code theme {id}: {error:#}");
-            crate::notifications::show(
+            crate::notifications::show_error(
                 crate::i18n::tr("theme-remove-failed"),
                 &format!("{error:#}"),
             );

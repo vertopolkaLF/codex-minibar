@@ -14,7 +14,7 @@ pub(crate) fn remove_openrouter_api_key(
     let rollback = match crate::openrouter::apply_account_secret_changes(&[change]) {
         Ok(rollback) => rollback,
         Err(error) => {
-            notifications::show("OpenRouter key not removed", &format!("{error:#}"));
+            notifications::show_error("OpenRouter key not removed", &format!("{error:#}"));
             return;
         }
     };
@@ -50,6 +50,6 @@ pub(crate) fn remove_openrouter_api_key(
                 format!("{error:#}; restoring the protected key also failed: {rollback_error:#}")
             }
         };
-        notifications::show("OpenRouter key not removed", &message);
+        notifications::show_error("OpenRouter key not removed", &message);
     }
 }

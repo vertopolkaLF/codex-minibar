@@ -1,139 +1,260 @@
-//! Windows toast notifications for rate-limit events.
+//! In-app notifications for activations, rate-limit events and updates.
+//!
+//! Any thread can post a [`Notification`]. It travels to the GPUI thread,
+//! which shows it as an animated card in the toast host
+//! (`popup_window::ui::toast`) and plays the sound of its kind.
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::{DateTime, Duration, Timelike, Utc};
 
 use crate::limits::RateLimits;
 use crate::{instances::ProviderId, settings::NotificationSettings};
 
-/// App User Model ID used for Action Center toasts.
+/// App User Model ID of the process (taskbar identity of its windows).
 pub const AUMID: &str = "dev.CodexMinibar";
 
-/// Custom URL protocol used by the update toast action button.
-pub const TOAST_PROTOCOL_UPDATE: &str = "codex-minibar:update";
-
-const TOAST_ACTION_TRIGGER: &str = ".toast-action";
-const TOAST_ACTION_UPDATE_NOW: &str = "update_now";
 const NEW_WINDOW_MINIMUM_ADVANCE: Duration = Duration::minutes(5);
 
-/// Returns true when this process was spawned by the update toast protocol link.
-pub fn launched_via_toast_update() -> bool {
-    std::env::args().any(|arg| arg.to_ascii_lowercase().contains("codex-minibar:update"))
+static SOUND_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// What a notification is about; picks its icon, color, sound and lifetime.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NotificationKind {
+    Info,
+    Success,
+    /// A rate-limit window came back.
+    Reset,
+    Warning,
+    Error,
+    Update,
 }
 
-#[cfg(windows)]
-pub fn publish_toast_update_request() -> anyhow::Result<()> {
-    toast_activation::publish()
-}
+impl NotificationKind {
+    pub const ALL: [Self; 6] = [
+        Self::Info,
+        Self::Success,
+        Self::Reset,
+        Self::Warning,
+        Self::Error,
+        Self::Update,
+    ];
 
-#[cfg(not(windows))]
-pub fn publish_toast_update_request() -> anyhow::Result<()> {
-    Ok(())
-}
-
-/// Returns true once when the primary instance should apply a toast update request.
-#[cfg(windows)]
-pub fn take_toast_update_request() -> bool {
-    toast_activation::take()
-}
-
-#[cfg(not(windows))]
-pub fn take_toast_update_request() -> bool {
-    false
-}
-
-#[cfg(windows)]
-mod toast_activation {
-    use std::fs;
-    use std::path::{Path, PathBuf};
-
-    use anyhow::{Context, Result};
-
-    use super::{TOAST_ACTION_TRIGGER, TOAST_ACTION_UPDATE_NOW};
-
-    pub fn publish() -> Result<()> {
-        let path = trigger_path()?;
-        fs::write(&path, TOAST_ACTION_UPDATE_NOW)
-            .with_context(|| format!("write {}", path.display()))?;
-        Ok(())
+    /// How long the card stays before it leaves on its own. Hovering pauses it.
+    pub fn lifetime(self) -> std::time::Duration {
+        std::time::Duration::from_secs(match self {
+            Self::Info | Self::Success | Self::Reset => 6,
+            Self::Warning => 8,
+            Self::Error => 10,
+            Self::Update => 14,
+        })
     }
 
-    pub fn take() -> bool {
-        let Ok(path) = trigger_path() else {
-            return false;
-        };
-        if !path.exists() {
-            return false;
+    #[cfg_attr(not(windows), allow(dead_code))]
+    fn sound(self) -> &'static [u8] {
+        // Synthesized by tools/notification_sounds.py.
+        match self {
+            Self::Info => include_bytes!("../assets/sounds/info.wav"),
+            Self::Success => include_bytes!("../assets/sounds/success.wav"),
+            Self::Reset => include_bytes!("../assets/sounds/reset.wav"),
+            Self::Warning => include_bytes!("../assets/sounds/warning.wav"),
+            Self::Error => include_bytes!("../assets/sounds/error.wav"),
+            Self::Update => include_bytes!("../assets/sounds/update.wav"),
         }
-        let Ok(content) = fs::read_to_string(&path) else {
-            return false;
-        };
-        let _ = fs::remove_file(&path);
-        content.trim() == TOAST_ACTION_UPDATE_NOW
-    }
-
-    fn trigger_path() -> Result<PathBuf> {
-        Ok(install_dir()?.join(TOAST_ACTION_TRIGGER))
-    }
-
-    fn install_dir() -> Result<PathBuf> {
-        std::env::current_exe()
-            .context("resolve current executable")
-            .and_then(|path| {
-                path.parent()
-                    .map(Path::to_path_buf)
-                    .context("executable has no parent directory")
-            })
     }
 }
 
-/// Registers the process AUMID and notification identity so Windows can show
-/// toasts under "Codex Minibar" instead of a nameless host.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NotificationAction {
+    InstallUpdate,
+    OpenUrl(String),
+}
+
+impl NotificationAction {
+    /// Runs the action off the GPUI thread: installing exits the process.
+    pub fn run(&self) {
+        let action = self.clone();
+        std::thread::spawn(move || match action {
+            NotificationAction::InstallUpdate => {
+                if let Err(error) = crate::updater::apply_pending_update() {
+                    eprintln!("failed to apply update: {error:#}");
+                    show_error(crate::i18n::tr("update-failed"), &format!("{error:#}"));
+                }
+            }
+            NotificationAction::OpenUrl(url) => {
+                if let Err(error) = crate::updater::open_url(&url) {
+                    eprintln!("failed to open {url}: {error:#}");
+                }
+            }
+        });
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Notification {
+    pub kind: NotificationKind,
+    pub title: String,
+    pub body: String,
+    /// `(label, action)`; the first one is the primary button.
+    pub actions: Vec<(String, NotificationAction)>,
+    /// Plays the kind's sound even when Windows reports a busy state.
+    pub force_sound: bool,
+}
+
+impl Notification {
+    pub fn new(kind: NotificationKind, title: &str, body: &str) -> Self {
+        Self {
+            kind,
+            title: title.to_owned(),
+            body: body.to_owned(),
+            actions: Vec::new(),
+            force_sound: false,
+        }
+    }
+}
+
+/// Mirrors `notifications.sound` so the toast host never needs settings.
+pub fn set_sound_enabled(enabled: bool) {
+    SOUND_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// Registers the process AUMID so the taskbar and shell say "Codex Minibar".
 pub fn initialize() {
     #[cfg(windows)]
     if let Err(error) = windows_impl::initialize() {
-        eprintln!("failed to register Windows notification identity: {error:#}");
+        eprintln!("failed to register the app identity: {error:#}");
     }
 }
 
-/// Shows a Windows toast. Failures are logged; callers should not abort on them.
+/// Posts a notification to the toast host. Safe from any thread.
+pub fn notify(notification: Notification) {
+    crate::logger::info(format!(
+        "Notification shown: {} — {}",
+        notification.title, notification.body
+    ));
+    crate::popup_window::send_command(crate::popup_window::PopupCommand::Toast(Box::new(
+        notification,
+    )));
+}
+
+/// An informational notification.
 pub fn show(title: &str, body: &str) {
-    crate::logger::info(format!("Notification shown: {title} — {body}"));
-    #[cfg(windows)]
-    if let Err(error) = windows_impl::show(title, body, None) {
-        eprintln!("failed to show Windows notification: {error:#}");
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (title, body);
-    }
+    show_kind(NotificationKind::Info, title, body);
 }
 
-/// Toast for a discovered app update with action buttons.
+pub fn show_kind(kind: NotificationKind, title: &str, body: &str) {
+    notify(Notification::new(kind, title, body));
+}
+
+/// A failed operation the user should know about.
+pub fn show_error(title: &str, body: &str) {
+    show_kind(NotificationKind::Error, title, body);
+}
+
+/// A discovered app update with install and release-notes buttons.
 pub fn show_update_available(version: &str, release_url: &str) {
-    #[cfg(windows)]
-    if let Err(error) = windows_impl::show_update_available(version, release_url) {
-        eprintln!("failed to show update notification: {error:#}");
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (version, release_url);
-    }
+    notify(update_available(version, release_url));
 }
 
-/// Toast after a provider successfully starts a 5-hour limit.
+fn update_available(version: &str, release_url: &str) -> Notification {
+    let mut notification = Notification::new(
+        NotificationKind::Update,
+        crate::i18n::tr("update-available-67fd3a"),
+        &format!(
+            "Codex Minibar {version}. {}",
+            crate::i18n::tr("a-new-release-is-ready-to-install")
+        ),
+    );
+    notification.actions = vec![
+        (
+            crate::i18n::tr("update-now").to_owned(),
+            NotificationAction::InstallUpdate,
+        ),
+        (
+            crate::i18n::tr("what-s-new").to_owned(),
+            NotificationAction::OpenUrl(release_url.to_owned()),
+        ),
+    ];
+    notification
+}
+
+/// Notification after a provider successfully starts a 5-hour limit.
 pub fn show_activation_succeeded(provider: ProviderId) {
-    show(
+    show_kind(
+        NotificationKind::Success,
         crate::i18n::tr("msg-5-hour-limit-started"),
         &provider.qualified_name(),
     );
 }
 
-/// Toast after automatic activation follows a newly reset 5-hour window.
+/// Notification after automatic activation follows a newly reset 5-hour window.
 pub fn show_activation_succeeded_after_reset(provider: ProviderId) {
-    show(
+    show_kind(
+        NotificationKind::Reset,
         crate::i18n::tr("msg-5-hour-limit-reset-and-activated"),
         &provider.qualified_name(),
     );
+}
+
+/// Plays the sound of `notification` unless sounds are off or Windows says
+/// the user is presenting, gaming full screen or otherwise busy.
+pub(crate) fn play_sound(notification: &Notification) {
+    if !SOUND_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    #[cfg(windows)]
+    {
+        if !notification.force_sound && !windows_impl::accepts_notifications() {
+            return;
+        }
+        windows_impl::play(notification.kind.sound());
+    }
+    #[cfg(not(windows))]
+    let _ = notification;
+}
+
+/// TEMP: sample notifications for the Settings demo section.
+pub fn demo(kind: NotificationKind) {
+    let mut notification = match kind {
+        NotificationKind::Info => Notification::new(
+            kind,
+            "New Codex reset info",
+            "A forced reset is announced for Codex on Oct 12, 14:00 (in 2 days).",
+        ),
+        NotificationKind::Success => Notification::new(
+            kind,
+            crate::i18n::tr("msg-5-hour-limit-started"),
+            "Codex · work@example.com",
+        ),
+        NotificationKind::Reset => Notification::new(
+            kind,
+            crate::i18n::tr("weekly-limit-reset"),
+            "Claude · Max 20x",
+        ),
+        NotificationKind::Warning => Notification::new(
+            kind,
+            "Codex 5-hour limit is low",
+            "12% remaining. Resets at 17:40, so pace yourself or start a coffee break.",
+        ),
+        NotificationKind::Error => Notification::new(
+            kind,
+            crate::i18n::tr("update-failed"),
+            "The installer could not replace codex-minibar.exe: access is denied (os error 5).",
+        ),
+        NotificationKind::Update => update_available(
+            "9.9.9",
+            "https://github.com/vertopolkaLF/codex-minibar/releases",
+        ),
+    };
+    notification.force_sound = true;
+    notify(notification);
+}
+
+/// TEMP: every demo kind at once, to watch the stack.
+pub fn demo_all() {
+    for kind in NotificationKind::ALL {
+        demo(kind);
+    }
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -221,7 +342,11 @@ impl LimitNotificationTracker {
         if primary_reset {
             self.startup_low_usage_primary = None;
             if settings.limits_changed && !defer_primary_reset && notify_five_hour_reset {
-                show(crate::i18n::tr("msg-5-hour-limit-reset"), &name);
+                show_kind(
+                    NotificationKind::Reset,
+                    crate::i18n::tr("msg-5-hour-limit-reset"),
+                    &name,
+                );
             }
         }
         // Free plans have no weekly limit. Their single monthly quota may shift
@@ -229,7 +354,11 @@ impl LimitNotificationTracker {
         if secondary_reset && can_notify_weekly(limits) {
             self.startup_low_usage_secondary = None;
             if settings.limits_changed {
-                show(crate::i18n::tr("weekly-limit-reset"), &name);
+                show_kind(
+                    NotificationKind::Reset,
+                    crate::i18n::tr("weekly-limit-reset"),
+                    &name,
+                );
             }
         }
 
@@ -353,7 +482,8 @@ fn maybe_notify_low_usage(
         return;
     }
     let remaining = remaining.expect("notification requires a remaining percentage");
-    show(
+    show_kind(
+        NotificationKind::Warning,
         &crate::i18n::format("label-limit-is-low", &[("label", label.to_string())]),
         &crate::i18n::format(
             "remaining-remaining",
@@ -730,24 +860,23 @@ mod windows_impl {
     use std::path::PathBuf;
 
     use anyhow::{Context, Result};
-    use windows::{
-        Data::Xml::Dom::XmlDocument,
-        UI::Notifications::{ToastNotification, ToastNotificationManager},
-    };
     use windows_sys::Win32::{
         Foundation::ERROR_SUCCESS,
+        Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT},
         System::Registry::{
             HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
             RegCreateKeyExW, RegSetValueExW,
         },
-        UI::Shell::SetCurrentProcessExplicitAppUserModelID,
+        UI::Shell::{
+            QUNS_ACCEPTS_NOTIFICATIONS, QUNS_QUIET_TIME, SHQueryUserNotificationState,
+            SetCurrentProcessExplicitAppUserModelID,
+        },
     };
 
     use super::AUMID;
 
     pub(super) fn initialize() -> Result<()> {
-        register_aumid().context("register notification AUMID")?;
-        register_update_protocol().context("register update protocol")?;
+        register_aumid().context("register AUMID")?;
         let aumid: Vec<u16> = AUMID.encode_utf16().chain(std::iter::once(0)).collect();
         let status = unsafe { SetCurrentProcessExplicitAppUserModelID(aumid.as_ptr()) };
         anyhow::ensure!(
@@ -757,95 +886,36 @@ mod windows_impl {
         Ok(())
     }
 
-    pub(super) fn show(
-        title: &str,
-        body: &str,
-        actions: Option<&[(&str, &str, &str)]>,
-    ) -> Result<()> {
-        let logo = notification_icon_path()
-            .map(|path| {
-                format!(
-                    r#"<image placement="appLogoOverride" hint-crop="circle" src="{}"/>"#,
-                    escape_xml(&path_to_file_uri(&path))
-                )
-            })
-            .unwrap_or_default();
-        let action_xml = actions
-            .map(|items| {
-                let mut out = String::from("<actions>");
-                for (label, activation_type, arguments) in items {
-                    out.push_str(&format!(
-                        r#"<action content="{}" activationType="{}" arguments="{}"/>"#,
-                        escape_xml(label),
-                        escape_xml(activation_type),
-                        escape_xml(arguments),
-                    ));
-                }
-                out.push_str("</actions>");
-                out
-            })
-            .unwrap_or_default();
-        let xml = format!(
-            r#"<toast><visual><binding template="ToastGeneric"><text>{title}</text><text>{body}</text>{logo}</binding></visual>{actions}</toast>"#,
-            title = escape_xml(title),
-            body = escape_xml(body),
-            logo = logo,
-            actions = action_xml,
-        );
-        show_toast_xml(&xml)
+    /// False while presenting or running a full-screen game or app: the card
+    /// still shows, silently.
+    pub(super) fn accepts_notifications() -> bool {
+        let mut state = 0;
+        let status = unsafe { SHQueryUserNotificationState(&mut state) };
+        status != 0 || state == QUNS_ACCEPTS_NOTIFICATIONS || state == QUNS_QUIET_TIME
     }
 
-    pub(super) fn show_update_available(version: &str, release_url: &str) -> Result<()> {
-        let body = format!("Codex Minibar {version} is ready to install.");
-        let actions = [
-            ("Update Now", "protocol", super::TOAST_PROTOCOL_UPDATE),
-            ("What's New", "protocol", release_url),
-        ];
-        show("Update available", &body, Some(&actions))
-    }
-
-    fn show_toast_xml(xml: &str) -> Result<()> {
-        let document = XmlDocument::new()?;
-        document.LoadXml(&windows::core::HSTRING::from(xml))?;
-        let toast = ToastNotification::CreateToastNotification(&document)?;
-        let notifier = ToastNotificationManager::CreateToastNotifierWithId(
-            &windows::core::HSTRING::from(super::AUMID),
-        )?;
-        notifier.Show(&toast)?;
-        Ok(())
-    }
-
-    fn escape_xml(value: &str) -> String {
-        value
-            .replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('"', "&quot;")
-            .replace('\'', "&apos;")
+    /// Plays a WAV image asynchronously; a newer sound replaces the current one.
+    pub(super) fn play(wav: &'static [u8]) {
+        unsafe {
+            PlaySoundW(
+                wav.as_ptr().cast(),
+                std::ptr::null_mut(),
+                SND_MEMORY | SND_ASYNC | SND_NODEFAULT,
+            );
+        }
     }
 
     fn register_aumid() -> Result<()> {
         let key = format!(r"Software\Classes\AppUserModelId\{AUMID}");
         set_reg_sz(&key, "DisplayName", "Codex Minibar")?;
-        if let Some(icon) = notification_icon_path() {
+        if let Some(icon) = icon_path() {
             // Shell IconUri wants a normal Windows path with backslashes.
-            set_reg_sz(&key, "IconUri", &path_to_windows_path(&icon))?;
+            set_reg_sz(&key, "IconUri", &icon.to_string_lossy().replace('/', "\\"))?;
         }
         Ok(())
     }
 
-    fn register_update_protocol() -> Result<()> {
-        let exe =
-            std::env::current_exe().context("resolve executable for protocol registration")?;
-        let command = format!("\"{}\" \"%1\"", exe.display());
-        let root = r"Software\Classes\codex-minibar";
-        set_reg_sz(root, "", "URL:codex-minibar Protocol")?;
-        set_reg_sz(root, "URL Protocol", "")?;
-        set_reg_sz(&format!(r"{root}\shell\open\command"), "", &command)?;
-        Ok(())
-    }
-
-    fn notification_icon_path() -> Option<PathBuf> {
+    fn icon_path() -> Option<PathBuf> {
         let candidates = [
             std::env::current_exe().ok().and_then(|path| {
                 path.parent()
@@ -874,15 +944,6 @@ mod windows_impl {
         } else {
             path
         }
-    }
-
-    fn path_to_windows_path(path: &std::path::Path) -> String {
-        path.to_string_lossy().replace('/', "\\")
-    }
-
-    fn path_to_file_uri(path: &std::path::Path) -> String {
-        let windows = path_to_windows_path(path);
-        format!("file:///{}", windows.replace('\\', "/"))
     }
 
     fn set_reg_sz(subkey: &str, name: &str, value: &str) -> Result<()> {
