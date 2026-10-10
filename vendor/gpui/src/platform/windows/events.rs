@@ -153,16 +153,30 @@ impl WindowsWindowInner {
 
     fn handle_get_min_max_info_msg(&self, lparam: LPARAM) -> Option<isize> {
         let lock = self.state.borrow();
-        let min_size = lock.min_size?;
+        let min_size = lock.min_size;
+        // codex-minibar patch: also cap the tracking size so resizing and Aero
+        // Snap stop at the maximum size instead of stretching the layout.
+        let max_size = lock.max_size;
+        if min_size.is_none() && max_size.is_none() {
+            return None;
+        }
         let scale_factor = lock.scale_factor;
         let boarder_offset = lock.border_offset;
         drop(lock);
         unsafe {
             let minmax_info = &mut *(lparam.0 as *mut MINMAXINFO);
-            minmax_info.ptMinTrackSize.x =
-                min_size.width.scale(scale_factor).0 as i32 + boarder_offset.width_offset;
-            minmax_info.ptMinTrackSize.y =
-                min_size.height.scale(scale_factor).0 as i32 + boarder_offset.height_offset;
+            if let Some(min_size) = min_size {
+                minmax_info.ptMinTrackSize.x =
+                    min_size.width.scale(scale_factor).0 as i32 + boarder_offset.width_offset;
+                minmax_info.ptMinTrackSize.y =
+                    min_size.height.scale(scale_factor).0 as i32 + boarder_offset.height_offset;
+            }
+            if let Some(max_size) = max_size {
+                minmax_info.ptMaxTrackSize.x =
+                    max_size.width.scale(scale_factor).0 as i32 + boarder_offset.width_offset;
+                minmax_info.ptMaxTrackSize.y =
+                    max_size.height.scale(scale_factor).0 as i32 + boarder_offset.height_offset;
+            }
         }
         Some(0)
     }

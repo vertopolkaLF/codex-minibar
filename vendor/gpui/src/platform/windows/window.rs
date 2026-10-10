@@ -34,6 +34,7 @@ pub struct WindowsWindowState {
     pub origin: Point<Pixels>,
     pub logical_size: Size<Pixels>,
     pub min_size: Option<Size<Pixels>>,
+    pub max_size: Option<Size<Pixels>>,
     pub fullscreen_restore_bounds: Bounds<Pixels>,
     pub border_offset: WindowBorderOffset,
     pub appearance: WindowAppearance,
@@ -84,6 +85,7 @@ impl WindowsWindowState {
         current_cursor: Option<HCURSOR>,
         display: WindowsDisplay,
         min_size: Option<Size<Pixels>>,
+        max_size: Option<Size<Pixels>>,
         appearance: WindowAppearance,
         disable_direct_composition: bool,
     ) -> Result<Self> {
@@ -128,6 +130,7 @@ impl WindowsWindowState {
             scale_factor,
             restore_from_minimized,
             min_size,
+            max_size,
             callbacks,
             input_handler,
             pending_surrogate,
@@ -214,6 +217,7 @@ impl WindowsWindowInner {
             context.current_cursor,
             context.display,
             context.min_size,
+            context.max_size,
             context.appearance,
             context.disable_direct_composition,
         )?);
@@ -346,6 +350,7 @@ struct WindowCreateContext {
     display: WindowsDisplay,
     is_movable: bool,
     min_size: Option<Size<Pixels>>,
+    max_size: Option<Size<Pixels>>,
     executor: ForegroundExecutor,
     current_cursor: Option<HCURSOR>,
     windows_version: WindowsVersion,
@@ -397,7 +402,12 @@ impl WindowsWindow {
             let mut dwstyle = WS_SYSMENU;
 
             if params.is_resizable {
-                dwstyle |= WS_THICKFRAME | WS_MAXIMIZEBOX;
+                dwstyle |= WS_THICKFRAME;
+                // codex-minibar patch: a size-capped window cannot be maximized
+                // (caption double-click, Aero Snap to the top edge, Win+Up).
+                if params.window_max_size.is_none() {
+                    dwstyle |= WS_MAXIMIZEBOX;
+                }
             }
 
             if params.is_minimizable {
@@ -425,6 +435,7 @@ impl WindowsWindow {
             display,
             is_movable: params.is_movable,
             min_size: params.window_min_size,
+            max_size: params.window_max_size,
             executor,
             current_cursor,
             windows_version,

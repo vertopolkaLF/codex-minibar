@@ -1128,6 +1128,10 @@ pub struct WindowOptions {
     /// Window minimum size
     pub window_min_size: Option<Size<Pixels>>,
 
+    /// Window maximum size. A window with a maximum size cannot be maximized.
+    /// codex-minibar patch: honored on Windows only.
+    pub window_max_size: Option<Size<Pixels>>,
+
     /// Whether to use client or server side decorations. Wayland only
     /// Note that this may be ignored.
     pub window_decorations: Option<WindowDecorations>,
@@ -1181,6 +1185,8 @@ pub(crate) struct WindowParams {
     pub display_id: Option<DisplayId>,
 
     pub window_min_size: Option<Size<Pixels>>,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub window_max_size: Option<Size<Pixels>>,
     #[cfg(target_os = "macos")]
     pub tabbing_identifier: Option<String>,
 }
@@ -1239,6 +1245,7 @@ impl Default for WindowOptions {
             window_background: WindowBackgroundAppearance::default(),
             app_id: None,
             window_min_size: None,
+            window_max_size: None,
             window_decorations: None,
             tabbing_identifier: None,
         }

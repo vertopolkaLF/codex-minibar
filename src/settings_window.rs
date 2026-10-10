@@ -54,6 +54,9 @@ pub(crate) use providers::{OpenRouterSettingsSnapshot, persist_openrouter_creden
 
 const WINDOW_WIDTH: f32 = 1000.0;
 const WINDOW_HEIGHT: f32 = 740.0;
+// The layouts are not built for full-screen widths, so the windows cannot be
+// maximized and stop growing at this size.
+const WINDOW_MAX_SIZE: (f32, f32) = (1240.0, 960.0);
 const ONBOARDING_WIDTH: f32 = 780.0;
 const ONBOARDING_HEIGHT: f32 = 560.0;
 pub(crate) fn settings_window_title() -> &'static str {
@@ -284,6 +287,7 @@ fn window_options(
     width: f32,
     height: f32,
     min: (f32, f32),
+    max: (f32, f32),
     cx: &gpui::App,
 ) -> WindowOptions {
     let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
@@ -304,6 +308,7 @@ fn window_options(
         window_background: WindowBackgroundAppearance::Opaque,
         app_id: Some("CodexMinibar".into()),
         window_min_size: Some(size(px(min.0), px(min.1))),
+        window_max_size: Some(size(px(max.0), px(max.1))),
         window_decorations: None,
         tabbing_identifier: None,
     }
@@ -316,6 +321,7 @@ fn open_settings_window(state: Arc<AppState>, cx: &mut AsyncApp) {
             WINDOW_WIDTH,
             WINDOW_HEIGHT,
             (640.0, 460.0),
+            WINDOW_MAX_SIZE,
             cx,
         );
         cx.open_window(options, |window, cx| {
@@ -340,6 +346,7 @@ fn open_onboarding_window(state: Arc<AppState>, cx: &mut AsyncApp) {
             ONBOARDING_WIDTH,
             ONBOARDING_HEIGHT,
             (560.0, 420.0),
+            WINDOW_MAX_SIZE,
             cx,
         );
         cx.open_window(options, |window, cx| {

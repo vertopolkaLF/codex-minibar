@@ -536,14 +536,9 @@ impl SettingsWindow {
 
     // ----- shell ------------------------------------------------------------
 
-    fn titlebar(&self, k: &Kit, window: &Window) -> AnyElement {
+    fn titlebar(&self, k: &Kit) -> AnyElement {
         let theme = &k.theme;
         let caption = |id, glyph, area, close| kit::caption_button(k, id, glyph, area, close);
-        let maximize_glyph = if window.is_maximized() {
-            "\u{E923}"
-        } else {
-            "\u{E922}"
-        };
         div()
             .id("settings-titlebar")
             .flex()
@@ -569,12 +564,6 @@ impl SettingsWindow {
                 "caption-min",
                 "\u{E921}",
                 WindowControlArea::Min,
-                false,
-            ))
-            .child(caption(
-                "caption-max",
-                maximize_glyph,
-                WindowControlArea::Max,
                 false,
             ))
             .child(caption(
@@ -1253,7 +1242,7 @@ impl Render for SettingsWindow {
             self.page = first_provider_page(&self.settings.instances);
         }
 
-        let titlebar = self.titlebar(&k, window);
+        let titlebar = self.titlebar(&k);
         let sidebar_mode = self.mode;
         let sidebar = match sidebar_mode {
             NavMode::Root => self.root_sidebar(&mut k, cx),

@@ -158,6 +158,7 @@ fn run(
                 window_background: WindowBackgroundAppearance::Transparent,
                 app_id: None,
                 window_min_size: None,
+                window_max_size: None,
                 window_decorations: None,
                 tabbing_identifier: None,
             };
