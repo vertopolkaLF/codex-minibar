@@ -484,7 +484,7 @@ couldn-t-check-for-updates = Es konnte nicht nach Updates gesucht werden
 version = Version { $v0 }
 
 # src/settings_window/about.rs
-usage-limits-in-the-windows-tray = Nutzungslimits im Windows-Infobereich.
+about-tagline = Kostenloser Open-Source-Begleiter für Nutzungslimits, Resets und Ausgaben deiner KI-Abos – direkt im Windows-Infobereich.
 
 # src/settings_window/about.rs
 a-new-release-is-ready-to-install = Eine neue Version ist zur Installation bereit.

@@ -658,8 +658,8 @@ couldn-t-check-for-updates = { "" }
 version = { "" }
 
 # English source:
-# usage-limits-in-the-windows-tray = Usage limits in the Windows tray.
-usage-limits-in-the-windows-tray = { "" }
+# about-tagline = Free, open-source companion for AI subscription usage limits, resets and spend, right in the Windows tray.
+about-tagline = { "" }
 
 # English source:
 # a-new-release-is-ready-to-install = A new release is ready to install.

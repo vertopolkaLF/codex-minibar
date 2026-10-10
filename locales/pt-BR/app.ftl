@@ -321,7 +321,7 @@ couldn-t-check-for-updates = Não foi possível verificar atualizações
 
 version = Versão { $v0 }
 
-usage-limits-in-the-windows-tray = Limites de uso na bandeja do Windows.
+about-tagline = Companheiro gratuito e de código aberto para limites de uso, redefinições e gastos das suas assinaturas de IA, direto na bandeja do Windows.
 
 a-new-release-is-ready-to-install = Uma nova versão está pronta para instalar.
 

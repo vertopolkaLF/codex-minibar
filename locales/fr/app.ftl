@@ -485,7 +485,7 @@ couldn-t-check-for-updates = Impossible de vérifier les mises à jour
 version = Version { $v0 }
 
 # src/settings_window/about.rs
-usage-limits-in-the-windows-tray = Les limites d'utilisation dans la zone de notification Windows.
+about-tagline = Compagnon gratuit et open source pour suivre les limites d'utilisation, réinitialisations et dépenses de vos abonnements IA, depuis la zone de notification Windows.
 
 # src/settings_window/about.rs
 a-new-release-is-ready-to-install = Une nouvelle version est prête à être installée.

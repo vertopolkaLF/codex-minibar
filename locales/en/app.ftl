@@ -484,7 +484,7 @@ couldn-t-check-for-updates = Couldn't check for updates
 version = Version { $v0 }
 
 # src/settings_window/about.rs
-usage-limits-in-the-windows-tray = Usage limits in the Windows tray.
+about-tagline = Free, open-source companion for AI subscription usage limits, resets and spend, right in the Windows tray.
 
 # src/settings_window/about.rs
 a-new-release-is-ready-to-install = A new release is ready to install.

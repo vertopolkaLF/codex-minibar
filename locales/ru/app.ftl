@@ -485,7 +485,7 @@ couldn-t-check-for-updates = Не удалось проверить обновл
 version = Версия { $v0 }
 
 # src/settings_window/about.rs
-usage-limits-in-the-windows-tray = Лимиты использования в трее Windows.
+about-tagline = Бесплатный open-source помощник для отслеживания лимитов, сбросов и расходов AI-подписок прямо в трее Windows.
 
 # src/settings_window/about.rs
 a-new-release-is-ready-to-install = Новая версия готова к установке.

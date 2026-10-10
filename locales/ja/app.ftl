@@ -481,7 +481,7 @@ couldn-t-check-for-updates = アップデートを確認できませんでした
 version = バージョン { $v0 }
 
 # src/settings_window/about.rs
-usage-limits-in-the-windows-tray = Windows の通知領域で利用枠を確認。
+about-tagline = AI サブスクリプションの利用枠、リセット、支出を Windows の通知領域で確認できる無料のオープンソースツール。
 
 # src/settings_window/about.rs
 a-new-release-is-ready-to-install = 新しいリリースをインストールする準備ができました。

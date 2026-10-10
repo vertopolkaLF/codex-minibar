@@ -318,7 +318,7 @@ couldn-t-check-for-updates = 无法检查更新
 
 version = 版本 { $v0 }
 
-usage-limits-in-the-windows-tray = 在 Windows 托盘中查看用量额度。
+about-tagline = 免费开源的小工具，在 Windows 托盘中查看 AI 订阅的用量额度、重置和花费。
 
 a-new-release-is-ready-to-install = 新版本已准备好安装。
 

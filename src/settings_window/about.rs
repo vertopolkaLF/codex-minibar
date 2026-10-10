@@ -42,7 +42,17 @@ impl SettingsWindow {
             )
             .child(
                 div()
-                    .mt(px(6.0))
+                    .mt(px(8.0))
+                    .max_w(px(420.0))
+                    .text_center()
+                    .text_size(px(14.0))
+                    .line_height(px(20.0))
+                    .text_color(theme.text_secondary)
+                    .child(crate::i18n::tr("about-tagline")),
+            )
+            .child(
+                div()
+                    .mt(px(14.0))
                     .h(px(22.0))
                     .px(px(10.0))
                     .flex()
@@ -57,14 +67,6 @@ impl SettingsWindow {
                         "version",
                         &[("v0", current_version().to_string())],
                     )),
-            )
-            .child(
-                div()
-                    .mt(px(12.0))
-                    .text_size(px(14.0))
-                    .line_height(px(20.0))
-                    .text_color(theme.text_secondary)
-                    .child(crate::i18n::tr("usage-limits-in-the-windows-tray")),
             )
             .into_any_element();
 
