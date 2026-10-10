@@ -444,6 +444,12 @@ backup = 备份
 
 data = 数据
 
+rendering = 渲染
+
+software-rendering = 软件渲染
+
+software-rendering-description = 使用 CPU 而不是显卡绘制窗口。在游戏占满 GPU 时可能有帮助；动画可能不够流畅。
+
 settings-exported = 设置已导出。
 
 settings-export-failed = 导出设置失败

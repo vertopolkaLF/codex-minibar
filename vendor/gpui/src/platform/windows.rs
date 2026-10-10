@@ -20,6 +20,7 @@ pub(crate) use destination_list::*;
 pub(crate) use direct_write::*;
 pub(crate) use directx_atlas::*;
 pub(crate) use directx_devices::*;
+pub use directx_devices::set_software_rendering;
 pub(crate) use directx_renderer::*;
 pub(crate) use dispatcher::*;
 pub(crate) use display::*;

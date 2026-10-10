@@ -910,6 +910,18 @@ backup = { "" }
 data = { "" }
 
 # English source:
+# rendering = Rendering
+rendering = { "" }
+
+# English source:
+# software-rendering = Software rendering
+software-rendering = { "" }
+
+# English source:
+# software-rendering-description = Draw windows on the CPU instead of the graphics card. Can help when a game keeps the GPU busy; animations may be less smooth.
+software-rendering-description = { "" }
+
+# English source:
 # settings-exported = Settings exported.
 settings-exported = { "" }
 

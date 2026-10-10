@@ -247,11 +247,21 @@ impl WindowsPlatform {
             .name("VSyncProvider".to_owned())
             .spawn(move || {
                 let vsync_provider = VSyncProvider::new();
+                let mut software_rendering = directx_device.software;
                 loop {
                     vsync_provider.wait_for_vsync();
-                    if check_device_lost(&directx_device.device) {
+                    let device_lost = check_device_lost(&directx_device.device);
+                    // codex-minibar patch: a software rendering switch rebuilds
+                    // the devices like a device loss, without the settle delay.
+                    // Each request is attempted once, so a failing switch keeps
+                    // the current devices instead of retrying every frame.
+                    let requested = software_rendering_requested();
+                    let switch = requested != software_rendering;
+                    software_rendering = requested;
+                    if device_lost || switch {
                         handle_gpu_device_lost(
                             &mut directx_device,
+                            device_lost,
                             platform_window.as_raw(),
                             validation_number,
                             &all_windows,
@@ -1032,6 +1042,7 @@ fn check_device_lost(device: &ID3D11Device) -> bool {
 
 fn handle_gpu_device_lost(
     directx_devices: &mut DirectXDevices,
+    device_lost: bool,
     platform_window: HWND,
     validation_number: usize,
     all_windows: &std::sync::Weak<RwLock<SmallVec<[SafeHwnd; 4]>>>,
@@ -1039,7 +1050,9 @@ fn handle_gpu_device_lost(
 ) {
     // Here we wait a bit to ensure the system has time to recover from the device lost state.
     // If we don't wait, the final drawing result will be blank.
-    std::thread::sleep(std::time::Duration::from_millis(350));
+    if device_lost {
+        std::thread::sleep(std::time::Duration::from_millis(350));
+    }
 
     try_to_recover_from_device_lost(
         || {

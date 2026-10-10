@@ -1804,6 +1804,8 @@ pub struct Settings {
     pub notifications: NotificationSettings,
     pub history_retention_days: u16,
     pub check_for_updates: bool,
+    /// Draws every window on the CPU (WARP) instead of the GPU.
+    pub software_rendering: bool,
 }
 
 fn default_show_usage_values() -> bool {
@@ -1860,6 +1862,7 @@ impl Default for Settings {
             notifications: NotificationSettings::default(),
             history_retention_days: 30,
             check_for_updates: true,
+            software_rendering: false,
         }
     }
 }
@@ -2468,6 +2471,8 @@ impl Settings {
             self.language.apply();
         }
         crate::theme::set_animations_enabled(self.animations_enabled);
+        #[cfg(windows)]
+        gpui::set_software_rendering(self.software_rendering);
         crate::notifications::set_sound_enabled(self.notifications.sound);
         crate::popup::apply_popup_appearance(
             self.bottom_bar_size,

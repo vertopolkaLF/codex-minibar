@@ -106,6 +106,7 @@ impl DirectXRendererDevices {
             dxgi_factory,
             device,
             device_context,
+            ..
         } = directx_devices;
         let dxgi_device = if disable_direct_composition {
             None

@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use anyhow::{Context, Result};
 use util::ResultExt;
 use windows::Win32::{
@@ -40,12 +42,30 @@ pub(crate) fn try_to_recover_from_device_lost<T>(
     }
 }
 
+// codex-minibar patch: optional software rendering through WARP.
+static SOFTWARE_RENDERING: AtomicBool = AtomicBool::new(false);
+
+/// Render every window on the CPU through WARP instead of the GPU.
+///
+/// Set before the application starts to create the first devices on WARP.
+/// Later changes rebuild the devices of every open window on the next vsync,
+/// through the same path as a GPU device loss.
+pub fn set_software_rendering(enabled: bool) {
+    SOFTWARE_RENDERING.store(enabled, Ordering::Relaxed);
+}
+
+pub(crate) fn software_rendering_requested() -> bool {
+    SOFTWARE_RENDERING.load(Ordering::Relaxed)
+}
+
 #[derive(Clone)]
 pub(crate) struct DirectXDevices {
     pub(crate) adapter: IDXGIAdapter1,
     pub(crate) dxgi_factory: IDXGIFactory6,
     pub(crate) device: ID3D11Device,
     pub(crate) device_context: ID3D11DeviceContext,
+    /// Whether these devices run on WARP.
+    pub(crate) software: bool,
 }
 
 impl DirectXDevices {
@@ -53,8 +73,14 @@ impl DirectXDevices {
         let debug_layer_available = check_debug_layer_available();
         let dxgi_factory =
             get_dxgi_factory(debug_layer_available).context("Creating DXGI factory")?;
-        let adapter =
-            get_adapter(&dxgi_factory, debug_layer_available).context("Getting DXGI adapter")?;
+        let software = software_rendering_requested();
+        let adapter = if software {
+            log::info!("Using software rendering (WARP)");
+            unsafe { dxgi_factory.EnumWarpAdapter::<IDXGIAdapter1>() }
+                .context("Getting WARP adapter")?
+        } else {
+            get_adapter(&dxgi_factory, debug_layer_available).context("Getting DXGI adapter")?
+        };
         let (device, device_context) = {
             let mut context: Option<ID3D11DeviceContext> = None;
             let mut feature_level = D3D_FEATURE_LEVEL::default();
@@ -85,6 +111,7 @@ impl DirectXDevices {
             dxgi_factory,
             device,
             device_context,
+            software,
         })
     }
 }

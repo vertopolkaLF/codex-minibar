@@ -670,6 +670,15 @@ backup = バックアップ
 data = データ
 
 # src/settings_window/advanced.rs
+rendering = 描画
+
+# src/settings_window/advanced.rs
+software-rendering = ソフトウェア描画
+
+# src/settings_window/advanced.rs
+software-rendering-description = グラフィックス カードではなく CPU でウィンドウを描画します。ゲームが GPU を占有しているときに役立ちますが、アニメーションが滑らかでなくなる場合があります。
+
+# src/settings_window/advanced.rs
 settings-exported = 設定がエクスポートされました。
 
 # src/settings_window/advanced.rs

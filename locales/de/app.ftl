@@ -673,6 +673,15 @@ backup = Sicherung
 data = Daten
 
 # src/settings_window/advanced.rs
+rendering = Darstellung
+
+# src/settings_window/advanced.rs
+software-rendering = Software-Rendering
+
+# src/settings_window/advanced.rs
+software-rendering-description = Fenster mit dem Prozessor statt der Grafikkarte zeichnen. Kann helfen, wenn ein Spiel die GPU auslastet; Animationen laufen eventuell weniger flüssig.
+
+# src/settings_window/advanced.rs
 settings-exported = Einstellungen exportiert.
 
 # src/settings_window/advanced.rs

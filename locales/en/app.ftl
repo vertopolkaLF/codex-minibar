@@ -673,6 +673,15 @@ backup = Backup
 data = Data
 
 # src/settings_window/advanced.rs
+rendering = Rendering
+
+# src/settings_window/advanced.rs
+software-rendering = Software rendering
+
+# src/settings_window/advanced.rs
+software-rendering-description = Draw windows on the CPU instead of the graphics card. Can help when a game keeps the GPU busy; animations may be less smooth.
+
+# src/settings_window/advanced.rs
 settings-exported = Settings exported.
 
 # src/settings_window/advanced.rs

@@ -447,6 +447,12 @@ backup = Copia de seguridad
 
 data = Datos
 
+rendering = Renderizado
+
+software-rendering = Renderizado por software
+
+software-rendering-description = Dibuja las ventanas con el procesador en lugar de la tarjeta gráfica. Puede ayudar cuando un juego ocupa la GPU; las animaciones pueden ser menos fluidas.
+
 settings-exported = Configuración exportada.
 
 settings-export-failed = Error al exportar la configuración

@@ -1,4 +1,5 @@
-//! Advanced: settings import/export, clearing Usage data, factory reset.
+//! Advanced: rendering, settings import/export, clearing Usage data,
+//! factory reset.
 
 use gpui::{AnyElement, Context, PathPromptOptions};
 
@@ -91,7 +92,23 @@ impl SettingsWindow {
                 ),
             ]
         });
+        let software_rendering = self.settings.software_rendering;
+        let rendering = kit::card_of(k, |k| {
+            vec![kit::toggle_row(
+                k,
+                "advanced-software-rendering",
+                crate::i18n::tr("software-rendering"),
+                Some(crate::i18n::tr("software-rendering-description").into()),
+                software_rendering,
+                Self::h(cx, |this, value: bool, _, cx| {
+                    gpui::set_software_rendering(value);
+                    this.edit(cx, move |settings| settings.software_rendering = value)
+                }),
+            )]
+        });
         vec![
+            kit::section_heading(k, crate::i18n::tr("rendering")),
+            rendering,
             kit::section_heading(k, crate::i18n::tr("backup")),
             backup,
             kit::section_heading(k, crate::i18n::tr("data")),

@@ -674,6 +674,15 @@ backup = Резервная копия
 data = Данные
 
 # src/settings_window/advanced.rs
+rendering = Отрисовка
+
+# src/settings_window/advanced.rs
+software-rendering = Программная отрисовка
+
+# src/settings_window/advanced.rs
+software-rendering-description = Отрисовывать окна на процессоре, а не на видеокарте. Помогает, когда игра полностью загружает GPU; анимации могут стать менее плавными.
+
+# src/settings_window/advanced.rs
 settings-exported = Настройки экспортированы.
 
 # src/settings_window/advanced.rs
