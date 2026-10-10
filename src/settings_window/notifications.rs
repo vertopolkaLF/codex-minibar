@@ -2,9 +2,8 @@
 
 use gpui::{AnyElement, Context, IntoElement, ParentElement, Styled, div, px};
 
-use super::kit::{self, Button, Kit, Row, SliderRange};
+use super::kit::{self, Kit, Row, SliderRange};
 use super::window::SettingsWindow;
-use crate::notifications::NotificationKind;
 use crate::popup_window::ui::fx;
 use crate::settings::Settings;
 
@@ -87,15 +86,13 @@ impl SettingsWindow {
             |s, v| s.notifications.weekly_low_usage_enabled = v,
             |s, v| s.notifications.weekly_low_usage_threshold_percent = v,
         );
-        let mut page = vec![
+        vec![
             activity,
             sound,
             kit::section_heading(k, crate::i18n::tr("low-usage")),
             low,
             weekly,
-        ];
-        page.extend(demo_section(k));
-        page
+        ]
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -164,41 +161,4 @@ impl SettingsWindow {
             .child(kit::card_surface(k, std::iter::once(toggle).chain(reveal)))
             .into_any_element()
     }
-}
-
-/// TEMP: buttons that fire every notification kind, to review the cards and
-/// their sounds. Remove together with `notifications::demo`.
-fn demo_section(k: &mut Kit) -> Vec<AnyElement> {
-    let buttons = NotificationKind::ALL
-        .into_iter()
-        .map(|kind| {
-            Button::new(format!("notif-demo-{kind:?}"), format!("{kind:?}"))
-                .on_click(kit::handler(move |(), _, _| {
-                    crate::notifications::demo(kind)
-                }))
-                .render(k)
-        })
-        .chain(std::iter::once(
-            Button::new("notif-demo-all", "All at once")
-                .accent()
-                .on_click(kit::handler(|(), _, _| crate::notifications::demo_all()))
-                .render(k),
-        ));
-    vec![
-        kit::section_heading(k, "Demo (temporary)"),
-        kit::card_surface(
-            k,
-            std::iter::once(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .gap(px(8.0))
-                    .p(px(kit::ROW_PADDING_X))
-                    .children(buttons)
-                    .into_any_element(),
-            ),
-        )
-        .into_any_element(),
-    ]
 }

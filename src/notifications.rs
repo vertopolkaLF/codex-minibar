@@ -31,15 +31,6 @@ pub enum NotificationKind {
 }
 
 impl NotificationKind {
-    pub const ALL: [Self; 6] = [
-        Self::Info,
-        Self::Success,
-        Self::Reset,
-        Self::Warning,
-        Self::Error,
-        Self::Update,
-    ];
-
     /// How long the card stays before it leaves on its own. Hovering pauses it.
     pub fn lifetime(self) -> std::time::Duration {
         std::time::Duration::from_secs(match self {
@@ -122,8 +113,6 @@ pub struct Notification {
     /// `(label, action)`; the first one is the primary button.
     pub actions: Vec<(String, NotificationAction)>,
     pub limits: Option<Box<LimitAlert>>,
-    /// Plays the kind's sound even when Windows reports a busy state.
-    pub force_sound: bool,
 }
 
 impl Notification {
@@ -134,7 +123,6 @@ impl Notification {
             body: body.to_owned(),
             actions: Vec::new(),
             limits: None,
-            force_sound: false,
         }
     }
 
@@ -295,115 +283,13 @@ pub(crate) fn play_sound(notification: &Notification) {
     }
     #[cfg(windows)]
     {
-        if !notification.force_sound && !windows_impl::accepts_notifications() {
+        if !windows_impl::accepts_notifications() {
             return;
         }
         windows_impl::play(notification.kind.sound());
     }
     #[cfg(not(windows))]
     let _ = notification;
-}
-
-/// TEMP: sample notifications for the Settings demo section.
-pub fn demo(kind: NotificationKind) {
-    use crate::{limits::LimitWindow, settings::ProviderKind};
-
-    let window = |used: u8, minutes: i64, length: u32| LimitWindow {
-        used_percent: Some(used),
-        resets_at: Some(chrono::Utc::now() + Duration::minutes(minutes)),
-        duration_minutes: Some(length),
-    };
-    let sample = |kind: ProviderKind, plan: &str, account: &str, five, week| {
-        (
-            ProviderId::primary(kind),
-            RateLimits {
-                primary: five,
-                secondary: week,
-                plan_type: Some(plan.to_owned()),
-                account_name: Some(account.to_owned()),
-                ..Default::default()
-            },
-        )
-    };
-    let mut notification = match kind {
-        NotificationKind::Info => Notification::new(
-            kind,
-            "New Codex reset info",
-            "A forced reset is announced for Codex on Oct 12, 14:00 (in 2 days).",
-        ),
-        NotificationKind::Success => {
-            let (provider, limits) = sample(
-                ProviderKind::Codex,
-                "pro",
-                "work@example.com",
-                window(0, 299, 300),
-                window(37, 4 * 24 * 60, 10_080),
-            );
-            Notification::limit(
-                kind,
-                crate::i18n::tr("msg-5-hour-limit-started"),
-                "Codex",
-                provider,
-                &limits,
-                LimitFocus::Primary,
-            )
-        }
-        NotificationKind::Reset => {
-            let (provider, limits) = sample(
-                ProviderKind::Claude,
-                "max",
-                "me@example.com",
-                window(64, 132, 300),
-                window(0, 7 * 24 * 60 - 1, 10_080),
-            );
-            Notification::limit(
-                kind,
-                crate::i18n::tr("weekly-limit-reset"),
-                "Claude",
-                provider,
-                &limits,
-                LimitFocus::Secondary,
-            )
-        }
-        NotificationKind::Warning => {
-            let (provider, limits) = sample(
-                ProviderKind::Codex,
-                "plus",
-                "work@example.com",
-                window(88, 97, 300),
-                window(52, 3 * 24 * 60, 10_080),
-            );
-            Notification::limit(
-                kind,
-                &crate::i18n::format(
-                    "label-limit-is-low",
-                    &[("label", "Codex 5-hour".to_owned())],
-                ),
-                "Codex",
-                provider,
-                &limits,
-                LimitFocus::Primary,
-            )
-        }
-        NotificationKind::Error => Notification::new(
-            kind,
-            crate::i18n::tr("update-failed"),
-            "The installer could not replace codex-minibar.exe: access is denied (os error 5).",
-        ),
-        NotificationKind::Update => update_available(
-            "9.9.9",
-            "https://github.com/vertopolkaLF/codex-minibar/releases",
-        ),
-    };
-    notification.force_sound = true;
-    notify(notification);
-}
-
-/// TEMP: every demo kind at once, to watch the stack.
-pub fn demo_all() {
-    for kind in NotificationKind::ALL {
-        demo(kind);
-    }
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
