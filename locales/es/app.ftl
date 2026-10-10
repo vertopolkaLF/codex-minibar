@@ -193,6 +193,7 @@ home-card-layout = Diseño
 home-card-layout-cards = Tarjetas
 home-card-layout-lines = Líneas
 home-card-layout-rings = Anillos
+home-card-layout-tiles = Mosaicos
 drag-to-reorder = Arrastra para reordenar
 
 drop-here = Suelta aquí

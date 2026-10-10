@@ -1444,10 +1444,12 @@ pub enum HomeCardLayout {
     Lines,
     /// Ring gauges, two per row.
     Rings,
+    /// Compact tiles, two per row, with the progress filling the background.
+    Tiles,
 }
 
 impl HomeCardLayout {
-    pub const ALL: [Self; 3] = [Self::Cards, Self::Lines, Self::Rings];
+    pub const ALL: [Self; 4] = [Self::Cards, Self::Lines, Self::Rings, Self::Tiles];
 }
 
 /// Time range for the Usage Stats card on the popup Home tab.

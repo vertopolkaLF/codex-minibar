@@ -292,6 +292,7 @@ home-card-layout = Layout
 home-card-layout-cards = Cards
 home-card-layout-lines = Lines
 home-card-layout-rings = Rings
+home-card-layout-tiles = Tiles
 drag-to-reorder = Drag to reorder
 
 # src/popup_window/ui/home.rs

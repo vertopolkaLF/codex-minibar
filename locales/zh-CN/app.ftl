@@ -190,6 +190,7 @@ home-card-layout = 布局
 home-card-layout-cards = 卡片
 home-card-layout-lines = 行
 home-card-layout-rings = 圆环
+home-card-layout-tiles = 磁贴
 drag-to-reorder = 拖动以重新排序
 
 drop-here = 拖放到此处

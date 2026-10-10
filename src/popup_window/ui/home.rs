@@ -263,6 +263,7 @@ impl PopupRoot {
             "home-card-layout-cards",
             "home-card-layout-lines",
             "home-card-layout-rings",
+            "home-card-layout-tiles",
         ]
         .into_iter()
         .map(|key| SharedString::from(crate::i18n::tr(key)))

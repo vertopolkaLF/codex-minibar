@@ -289,6 +289,7 @@ home-card-layout = レイアウト
 home-card-layout-cards = カード
 home-card-layout-lines = ライン
 home-card-layout-rings = リング
+home-card-layout-tiles = タイル
 drag-to-reorder = ドラッグして並べ替えます
 
 # src/popup_window/ui/home.rs

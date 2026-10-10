@@ -293,6 +293,7 @@ home-card-layout = Disposition
 home-card-layout-cards = Cartes
 home-card-layout-lines = Lignes
 home-card-layout-rings = Anneaux
+home-card-layout-tiles = Tuiles
 drag-to-reorder = Faites glisser pour réorganiser
 
 # src/popup_window/ui/home.rs

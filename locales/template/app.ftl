@@ -402,6 +402,10 @@ home-card-layout-lines = { "" }
 home-card-layout-rings = { "" }
 
 # English source:
+# home-card-layout-tiles = Tiles
+home-card-layout-tiles = { "" }
+
+# English source:
 # drag-to-reorder = Drag to reorder
 drag-to-reorder = { "" }
 

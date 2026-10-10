@@ -288,6 +288,8 @@ impl PopupRoot {
                 } => {
                     if layout == HomeCardLayout::Rings {
                         rings.push(self.render_limit_ring(key, title, limit, *disabled, style));
+                    } else if layout == HomeCardLayout::Tiles {
+                        rings.push(self.render_limit_tile(key, title, limit, *disabled, style, cx));
                     } else {
                         out.push(self.render_limit_line(
                             key,
@@ -498,6 +500,107 @@ impl PopupRoot {
             .gap(px(10.0))
             .child(gauge)
             .child(details)
+            .into_any_element()
+    }
+
+    /// Tiles layout: the ring tile's two-per-row shape with the compact
+    /// full-card fill instead of a gauge. Title and pace sit on top, the
+    /// value and countdown below.
+    fn render_limit_tile(
+        &mut self,
+        key: &str,
+        title: &str,
+        limit: &LimitWindow,
+        disabled: bool,
+        style: CardStyle,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let palette = self.palette.clone();
+        let (_, progress, show_reset, exhausted) =
+            limit_card_presentation(limit, style.show_used_percentage, disabled);
+        let progress = self.fx.value(
+            fx::key(("limit-progress", key)),
+            progress as f32,
+            fx::NORMAL,
+        );
+        let pace = (style.show_usage_pace && !exhausted)
+            .then(|| limit.pace_tip(style.show_used_percentage, Utc::now()))
+            .flatten();
+        let percent = if disabled {
+            None
+        } else if style.show_used_percentage {
+            limit.used_percent
+        } else {
+            limit.remaining_percent()
+        };
+        let value = percent.map_or_else(|| "–".to_owned(), |value| format!("{value}%"));
+        let header = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(6.0))
+            .min_w_0()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(nowrap(caption(title.to_owned(), palette.text_secondary))),
+            )
+            .children(pace.map(|pace| components::pace_status(pace, &palette)));
+        // The countdown wraps below the value when the tile is too narrow.
+        let mut footer = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .justify_between()
+            .gap_x(px(8.0))
+            .child(nowrap(components::body_strong(value, palette.accent_text)));
+        if show_reset {
+            footer = footer.child(match limit.resets_at {
+                Some(at) => components::caption_icon_status(
+                    components::RESET_ICON,
+                    format_reset_in(Some(at)),
+                    &palette,
+                ),
+                None => card_metadata(crate::i18n::tr("session-not-started"), &palette),
+            });
+        } else if disabled {
+            footer = footer.child(nowrap(card_metadata(crate::i18n::tr("disabled"), &palette)));
+        }
+        let mut element = card(&palette)
+            .id(eid(format!("limit-tile-{key}")))
+            .relative()
+            .overflow_hidden()
+            .flex_1()
+            .min_w_0()
+            .children(components::compact_progress_layers(
+                progress,
+                pace.map(|pace| pace.percent as f32),
+                interval_tick_count(limit),
+                palette.accent,
+                &palette,
+            ));
+        if let Some(pace) = pace {
+            let hover_id = fx::key(("limit-tile-pace", key));
+            element =
+                element.on_hover(self.hover_listener(hover_id, Some(pace.summary().into()), cx));
+        }
+        // Grows to fill its `flush_rings` cell so paired tiles share a height.
+        element
+            .child(
+                div()
+                    .relative()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .justify_between()
+                    .gap(px(4.0))
+                    .px(px(12.0))
+                    .py(px(9.0))
+                    .child(header)
+                    .child(footer),
+            )
             .into_any_element()
     }
 
