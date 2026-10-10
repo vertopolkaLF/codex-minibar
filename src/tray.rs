@@ -4,15 +4,15 @@ use std::{fs, path::PathBuf, sync::OnceLock};
 use font8x8::{BASIC_FONTS, UnicodeFonts};
 use fontdue::{
     Font, FontSettings,
-    layout::{CoordinateSystem, HorizontalAlign, Layout, LayoutSettings, TextStyle, VerticalAlign},
+    layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle, VerticalAlign},
 };
 
 use crate::{
+    instances::ProviderId,
     limits::{LimitWindow, ProviderLimits, RateLimits},
     provider_registry,
     settings::{
-        LimitValue, ProviderKind, TimeFormat, TrayColorMode, TrayPresentation, TrayWidget,
-        TrayWidgetKind,
+        LimitValue, TimeFormat, TrayColorMode, TrayPresentation, TrayWidget, TrayWidgetKind,
     },
 };
 
@@ -20,7 +20,7 @@ const ICON_SIZE: usize = 32;
 
 pub fn tooltip(limits: &RateLimits) -> String {
     let five_hour = if limits.five_hour_disabled() {
-        "Disabled".to_string()
+        crate::i18n::tr("disabled").to_string()
     } else {
         format_remaining(&limits.primary)
     };
@@ -29,12 +29,14 @@ pub fn tooltip(limits: &RateLimits) -> String {
     } else {
         format_reset(limits.primary.resets_at)
     };
-    let mut rows = vec![format!(
-        "5h  |  {}  |  {}\n7d  |  {}  |  {}",
-        five_hour,
-        five_hour_reset,
-        format_remaining(&limits.secondary),
-        format_reset(limits.secondary.resets_at),
+    let mut rows = vec![crate::i18n::format(
+        "msg-5h-7d",
+        &[
+            ("v0", five_hour.to_string()),
+            ("v1", five_hour_reset.to_string()),
+            ("v2", (format_remaining(&limits.secondary)).to_string()),
+            ("v3", (format_reset(limits.secondary.resets_at)).to_string()),
+        ],
     )];
     rows.extend(limits.additional_limits.iter().map(|limit| {
         format!(
@@ -70,28 +72,31 @@ fn widget_tooltip(widget: &TrayWidget, limits: &ProviderLimits) -> String {
     if widget.kind == TrayWidgetKind::AppIcon {
         return "Codex Minibar".into();
     }
-    let mut rows = Vec::<(ProviderKind, Vec<String>)>::new();
+    let mut rows = Vec::<(String, String, Vec<String>)>::new();
     for indicator in &widget.indicators {
         let Some(provider) = indicator.provider() else {
             continue;
         };
-        let provider_limits = limits.get(provider);
-        let Some(metric) =
-            crate::widget_data::resolve_metric(provider, provider_limits, &indicator.metric_id)
-        else {
+        let Some(metric) = crate::widget_data::resolve_metric(
+            provider,
+            limits.get(provider),
+            &indicator.metric_id,
+        ) else {
             continue;
         };
         let value = percent(&metric.window, indicator.limit_value)
             .map(|value| format!("{value}%"))
             .unwrap_or_else(|| "?".into());
         let item = format!("{} {value}", metric.label);
-        if let Some((_, items)) = rows
+        let source_id = provider.id();
+        let title = provider.qualified_name();
+        if let Some((_, _, items)) = rows
             .iter_mut()
-            .find(|(row_provider, _)| *row_provider == provider)
+            .find(|(row_source, _, _)| *row_source == source_id)
         {
             items.push(item);
         } else {
-            rows.push((provider, vec![item]));
+            rows.push((source_id.to_owned(), title, vec![item]));
         }
     }
     if rows.is_empty() {
@@ -100,7 +105,7 @@ fn widget_tooltip(widget: &TrayWidget, limits: &ProviderLimits) -> String {
     truncate_tooltip(
         &rows
             .into_iter()
-            .map(|(provider, items)| format!("{}: {}", provider.display_name(), items.join(", ")))
+            .map(|(_, title, items)| format!("{title}: {}", items.join(", ")))
             .collect::<Vec<_>>()
             .join("\n"),
     )
@@ -244,7 +249,7 @@ struct ResolvedIndicator {
 
 fn indicator_color(
     indicator: &crate::settings::TrayIndicator,
-    provider: ProviderKind,
+    provider: ProviderId,
     remaining: Option<u8>,
     accent: [u8; 3],
 ) -> [u8; 3] {
@@ -261,7 +266,7 @@ fn indicator_color(
             indicator.fixed_color.blue,
         ],
         TrayColorMode::Provider => {
-            let (red, green, blue) = provider_registry::descriptor(provider).brand_rgb;
+            let (red, green, blue) = provider_registry::descriptor(provider.kind()).brand_rgb;
             [red, green, blue]
         }
         TrayColorMode::Accent => accent,
@@ -284,11 +289,12 @@ fn resolve_indicators(
                 provider,
                 limits.get(provider),
                 &indicator.metric_id,
-            )?;
-            let remaining = metric.window.remaining_percent();
+            );
+            let window = metric.map(|metric| metric.window).unwrap_or_default();
+            let remaining = window.remaining_percent();
             Some(ResolvedIndicator {
-                displayed_percent: percent(&metric.window, indicator.limit_value),
-                reset: metric.window.resets_at,
+                displayed_percent: percent(&window, indicator.limit_value),
+                reset: window.resets_at,
                 color: indicator_color(indicator, provider, remaining, accent),
             })
         })
@@ -308,7 +314,10 @@ pub fn render_widget_with_accent(
         return app_icon_pixels().to_vec();
     }
     let indicators = resolve_indicators(widget, limits, accent);
-    if indicators.is_empty() {
+    if indicators
+        .iter()
+        .all(|indicator| indicator.displayed_percent.is_none() && indicator.reset.is_none())
+    {
         return app_icon_pixels().to_vec();
     }
     match widget.presentation.canonical_percentage() {
@@ -324,7 +333,7 @@ pub fn render_widget_with_accent(
                     .lines()
                     .map(|line| (line.to_owned(), indicator.color))
                     .collect::<Vec<_>>();
-                render_text_lines(&lines)
+                render_text_lines(&lines, false)
             } else {
                 render_text_lines(
                     &indicators
@@ -336,6 +345,7 @@ pub fn render_widget_with_accent(
                             )
                         })
                         .collect::<Vec<_>>(),
+                    false,
                 )
             }
         }
@@ -351,13 +361,17 @@ pub fn render_widget_with_accent(
                     )
                 })
                 .collect::<Vec<_>>(),
+            true,
         ),
     }
 }
 
-fn render_text_lines(lines: &[(String, [u8; 3])]) -> Vec<u8> {
+/// Draws one line per indicator. Lines share one column centered in the icon,
+/// on whole pixels, so stacked values line up; `right_align` aligns them by
+/// their last digit like a table, otherwise each line centers in the column.
+fn render_text_lines(lines: &[(String, [u8; 3])], right_align: bool) -> Vec<u8> {
     let Some(font) = system_font() else {
-        return render_fallback_lines(lines);
+        return render_fallback_lines(lines, right_align);
     };
     let line_refs = lines
         .iter()
@@ -367,13 +381,31 @@ fn render_text_lines(lines: &[(String, [u8; 3])]) -> Vec<u8> {
     let fonts = [font.clone()];
     let mut pixels = vec![0; ICON_SIZE * ICON_SIZE * 4];
     let line_height = ICON_SIZE as f32 / lines.len().max(1) as f32;
-    for (line_index, (line, rgb)) in lines.iter().enumerate() {
+    // Advance widths, not ink bounds: those differ per glyph ("3" vs "8") and
+    // would shift every line by its own amount.
+    let widths = lines
+        .iter()
+        .map(|(line, _)| {
+            line.chars()
+                .map(|character| font.metrics(character, font_size).advance_width)
+                .sum::<f32>()
+        })
+        .collect::<Vec<_>>();
+    let column = widths.iter().copied().fold(0.0_f32, f32::max);
+    let left = ((ICON_SIZE as f32 - column) / 2.0).round();
+    for (line_index, ((line, rgb), width)) in lines.iter().zip(&widths).enumerate() {
+        let slack = column - width;
+        let x = left
+            + if right_align {
+                slack
+            } else {
+                (slack / 2.0).round()
+            };
         let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
         layout.reset(&LayoutSettings {
+            x,
             y: line_index as f32 * line_height,
-            max_width: Some(ICON_SIZE as f32),
             max_height: Some(line_height),
-            horizontal_align: HorizontalAlign::Center,
             vertical_align: VerticalAlign::Middle,
             ..LayoutSettings::default()
         });
@@ -514,9 +546,14 @@ fn font_candidates() -> Vec<PathBuf> {
     candidates
 }
 
-fn render_fallback_lines(lines: &[(String, [u8; 3])]) -> Vec<u8> {
+fn render_fallback_lines(lines: &[(String, [u8; 3])], right_align: bool) -> Vec<u8> {
     let mut pixels = vec![0; ICON_SIZE * ICON_SIZE * 4];
     let line_height = ICON_SIZE / lines.len().max(1);
+    let column = lines
+        .iter()
+        .map(|(text, _)| text.chars().count())
+        .max()
+        .unwrap_or(0);
     for (line_index, (text, rgb)) in lines.iter().enumerate() {
         let scale = if lines.len() == 1 && text.chars().count() <= 2 {
             3
@@ -524,8 +561,12 @@ fn render_fallback_lines(lines: &[(String, [u8; 3])]) -> Vec<u8> {
             1
         };
         let glyph_width = 8 * scale;
-        let total_width = glyph_width * text.chars().count();
-        let start_x = ICON_SIZE.saturating_sub(total_width) / 2;
+        let count = text.chars().count();
+        let start_x = if right_align && scale == 1 {
+            ICON_SIZE.saturating_sub(glyph_width * column) / 2 + glyph_width * (column - count)
+        } else {
+            ICON_SIZE.saturating_sub(glyph_width * count) / 2
+        };
         let start_y = line_index * line_height + line_height.saturating_sub(8 * scale) / 2;
         for (index, character) in text.chars().enumerate() {
             let Some(glyph) = BASIC_FONTS.get(character) else {
@@ -572,6 +613,7 @@ mod platform {
         last_pixels: Vec<Vec<u8>>,
         last_tooltips: Vec<String>,
         update_available: bool,
+        language: crate::i18n::Language,
         uses_light_theme: bool,
         next_theme_check: Instant,
     }
@@ -590,6 +632,7 @@ mod platform {
                 last_pixels: Vec::new(),
                 last_tooltips: Vec::new(),
                 update_available: false,
+                language: crate::i18n::current_language(),
                 uses_light_theme: system_uses_light_theme(),
                 next_theme_check: Instant::now(),
             }
@@ -603,7 +646,10 @@ mod platform {
         ) -> Result<()> {
             self.uses_light_theme = system_uses_light_theme();
             self.next_theme_check = Instant::now() + Duration::from_millis(250);
-            let menu_changed = self.update_available != update_available;
+            let language = crate::i18n::current_language();
+            let menu_changed =
+                self.update_available != update_available || self.language != language;
+            self.language = language;
             self.update_available = update_available;
             // No configured widgets is a deliberate state: retain one ordinary app icon.
             let icon_count = widgets.len().max(1);
@@ -748,10 +794,15 @@ mod platform {
             None,
             None,
         );
-        let settings = MenuItem::with_id("settings", "Settings", true, None);
-        let exit = MenuItem::with_id("exit", "Exit", true, None);
+        let settings = MenuItem::with_id("settings", crate::i18n::tr("settings"), true, None);
+        let exit = MenuItem::with_id("exit", crate::i18n::tr("exit"), true, None);
         if update_available {
-            let update = MenuItem::with_id("update", "Update Available", true, None);
+            let update = MenuItem::with_id(
+                "update",
+                crate::i18n::tr("update-available-67fd3a"),
+                true,
+                None,
+            );
             return Menu::with_items(&[
                 &header,
                 &PredefinedMenuItem::separator(),
@@ -832,6 +883,41 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
+    use crate::settings::ProviderKind;
+
+    #[test]
+    fn tray_instances_resolve_independently_and_missing_instances_keep_their_slot() {
+        use crate::instances::ProviderId;
+        let primary = ProviderId::primary(ProviderKind::Claude);
+        let work = ProviderId::new(ProviderKind::Claude, "claude-tray-work");
+        let mut limits = ProviderLimits::default();
+        limits.get_mut(primary).primary.used_percent = Some(7);
+        limits.get_mut(work).primary.used_percent = Some(80);
+        let mut widget = TrayWidget::custom_for_provider(primary);
+        let default = crate::settings::TrayIndicator::new(primary, "claude.session");
+        let mut second = default.clone();
+        second.provider_id = work.id().into();
+        widget.indicators = vec![default, second];
+        let resolved = resolve_indicators(&widget, &limits, [0, 120, 212]);
+        assert_eq!(resolved[0].displayed_percent, Some(93));
+        assert_eq!(resolved[1].displayed_percent, Some(20));
+        assert_eq!(widget_tooltip(&widget, &limits).lines().count(), 2);
+        let settings = crate::settings::Settings {
+            tray_widgets: vec![widget.clone()],
+            ..Default::default()
+        };
+        let decoded: crate::settings::Settings =
+            toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(
+            decoded.tray_widgets[0].indicators[1].provider_id,
+            "claude-tray-work"
+        );
+        widget.indicators[0].provider_id = "claude-removed".into();
+        let missing = resolve_indicators(&widget, &limits, [0, 120, 212]);
+        assert_eq!(missing.len(), 2);
+        assert_eq!(missing[0].displayed_percent, None);
+        assert_eq!(missing[1].displayed_percent, Some(20));
+    }
 
     fn limits() -> RateLimits {
         RateLimits {
@@ -851,12 +937,14 @@ mod tests {
     }
 
     fn provider_limits() -> ProviderLimits {
-        ProviderLimits::from_entries([(ProviderKind::Codex, limits())])
+        ProviderLimits::from_entries([(ProviderKind::Codex.into(), limits())])
     }
 
     #[test]
     fn renders_rgba_icon_with_visible_pixels() {
-        let mut widget = TrayWidget::custom_for_provider(ProviderKind::Codex);
+        let mut widget = TrayWidget::custom_for_provider(crate::instances::ProviderId::from(
+            ProviderKind::Codex,
+        ));
         widget.presentation = TrayPresentation::Number;
         let pixels = render_widget(&widget, &provider_limits());
         assert_eq!(pixels.len(), ICON_SIZE * ICON_SIZE * 4);
@@ -924,9 +1012,11 @@ mod tests {
             ..RateLimits::default()
         };
         assert_eq!(limits.effective_primary().remaining_percent(), Some(60));
-        let mut widget = TrayWidget::custom_for_provider(ProviderKind::Codex);
+        let mut widget = TrayWidget::custom_for_provider(crate::instances::ProviderId::from(
+            ProviderKind::Codex,
+        ));
         widget.presentation = TrayPresentation::Number;
-        let limits = ProviderLimits::from_entries([(ProviderKind::Codex, limits)]);
+        let limits = ProviderLimits::from_entries([(ProviderKind::Codex.into(), limits)]);
         let pixels = render_widget(&widget, &limits);
         assert_eq!(pixels.len(), ICON_SIZE * ICON_SIZE * 4);
         assert!(pixels.chunks_exact(4).any(|pixel| pixel[3] != 0));
@@ -949,7 +1039,9 @@ mod tests {
 
     #[test]
     fn uses_app_icon_until_rate_limit_data_arrives() {
-        let mut widget = TrayWidget::custom_for_provider(ProviderKind::Codex);
+        let mut widget = TrayWidget::custom_for_provider(crate::instances::ProviderId::from(
+            ProviderKind::Codex,
+        ));
         widget.presentation = TrayPresentation::Number;
         let pixels = render_widget(&widget, &ProviderLimits::default());
         assert_eq!(pixels.len(), ICON_SIZE * ICON_SIZE * 4);
@@ -961,7 +1053,7 @@ mod tests {
     fn renders_three_indicators_with_independent_status_colors() {
         let limits = ProviderLimits::from_entries([
             (
-                ProviderKind::Codex,
+                ProviderKind::Codex.into(),
                 RateLimits {
                     primary: LimitWindow {
                         used_percent: Some(38),
@@ -971,7 +1063,7 @@ mod tests {
                 },
             ),
             (
-                ProviderKind::Claude,
+                ProviderKind::Claude.into(),
                 RateLimits {
                     primary: LimitWindow {
                         used_percent: Some(55),
@@ -981,7 +1073,7 @@ mod tests {
                 },
             ),
             (
-                ProviderKind::Cursor,
+                ProviderKind::Cursor.into(),
                 RateLimits {
                     secondary: LimitWindow {
                         used_percent: Some(88),
@@ -991,11 +1083,22 @@ mod tests {
                 },
             ),
         ]);
-        let mut widget = TrayWidget::custom_for_provider(ProviderKind::Codex);
+        let mut widget = TrayWidget::custom_for_provider(crate::instances::ProviderId::from(
+            ProviderKind::Codex,
+        ));
         widget.indicators = vec![
-            crate::settings::TrayIndicator::new(ProviderKind::Codex, "codex.session"),
-            crate::settings::TrayIndicator::new(ProviderKind::Claude, "claude.session"),
-            crate::settings::TrayIndicator::new(ProviderKind::Cursor, "cursor.auto"),
+            crate::settings::TrayIndicator::new(
+                crate::instances::ProviderId::from(ProviderKind::Codex),
+                "codex.session",
+            ),
+            crate::settings::TrayIndicator::new(
+                crate::instances::ProviderId::from(ProviderKind::Claude),
+                "claude.session",
+            ),
+            crate::settings::TrayIndicator::new(
+                crate::instances::ProviderId::from(ProviderKind::Cursor),
+                "cursor.auto",
+            ),
         ];
         widget.presentation = TrayPresentation::StackedBars;
 

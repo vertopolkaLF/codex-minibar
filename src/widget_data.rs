@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::{
+    instances::ProviderId,
     limits::{LimitWindow, ProviderLimits, RateLimits},
     provider_registry,
     settings::ProviderKind,
@@ -16,6 +17,8 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct WidgetMetric {
+    /// Globally unique instance/metric identity.
+    pub source_id: String,
     /// The configured metric id. Keeping this stable lets a widget recover
     /// without rewriting its settings when a provider temporarily falls back.
     pub id: String,
@@ -28,6 +31,7 @@ pub struct WidgetMetric {
 /// Sanitized metric data sent to widget clients such as Stream Deck.
 #[derive(Clone, Debug, Serialize)]
 pub struct MetricSnapshot {
+    pub source_id: String,
     pub id: String,
     pub label: String,
     pub window: WindowSnapshot,
@@ -49,12 +53,20 @@ pub struct AdditionalSnapshot {
     pub window: WindowSnapshot,
 }
 
-/// Complete sanitized snapshot for one provider. The legacy raw windows are
-/// retained for protocol compatibility; new widgets should consume `metrics`.
+/// Complete sanitized snapshot for one provider instance. The legacy raw
+/// windows are retained for protocol compatibility; new widgets should
+/// consume `metrics`.
 #[derive(Clone, Debug, Serialize)]
 pub struct ProviderSnapshot {
+    /// Provider instance id; the primary instance keeps the driver id.
     pub id: String,
+    /// Driver id, e.g. `claude`, shared by every instance of a driver.
+    pub kind: String,
+    pub source_id: String,
     pub name: String,
+    /// Instance badge, present while a driver has several enabled instances.
+    pub badge: Option<String>,
+    pub badge_rgb: Option<[u8; 3]>,
     pub icon: String,
     pub brand_rgb: [u8; 3],
     pub account_name: Option<String>,
@@ -68,28 +80,35 @@ pub struct ProviderSnapshot {
     pub metrics: Vec<MetricSnapshot>,
 }
 
+/// Globally unique identity of one instance's metric.
+pub fn metric_source_id(provider: ProviderId, metric_id: &str) -> String {
+    format!("{}:metric:{metric_id}", provider.id())
+}
+
 /// Resolve a configured widget metric from the shared source.
 pub fn resolve_metric(
-    provider: ProviderKind,
+    provider: ProviderId,
     limits: &RateLimits,
     configured_id: &str,
 ) -> Option<WidgetMetric> {
+    let kind = provider.kind();
     let (resolved_id, label, raw_window) =
-        provider_registry::resolve_metric(provider, limits, configured_id)?;
+        provider_registry::resolve_metric(kind, limits, configured_id)?;
     let metric_ids = [configured_id, resolved_id.as_str()];
-    let five_hour_reserve = codex_five_hour_reserve_override(provider, limits, &metric_ids);
+    let five_hour_reserve = codex_five_hour_reserve_override(kind, limits, &metric_ids);
     let (label, window) = if let Some(reserve_window) = five_hour_reserve {
         let mut window = reserve_window.clone();
         window.resets_at = limits.primary.resets_at;
         window.duration_minutes = limits.primary.duration_minutes;
-        (crate::limits::LUNA_RESERVE_TITLE.to_owned(), window)
+        (crate::i18n::tr("luna-reserve").to_owned(), window)
     } else {
         (
             label,
-            canonical_widget_window(provider, limits, &metric_ids, raw_window),
+            canonical_widget_window(kind, limits, &metric_ids, raw_window),
         )
     };
     Some(WidgetMetric {
+        source_id: metric_source_id(provider, configured_id),
         id: configured_id.to_owned(),
         resolved_id,
         label,
@@ -119,16 +138,17 @@ fn codex_five_hour_reserve_override<'a>(
 }
 
 /// Build the shared sanitized snapshot consumed by external widget clients.
-pub fn snapshot(provider: ProviderKind, limits: &ProviderLimits) -> ProviderSnapshot {
-    let descriptor = provider_registry::descriptor(provider);
+pub fn snapshot(provider: ProviderId, limits: &ProviderLimits) -> ProviderSnapshot {
+    let kind = provider.kind();
     let provider_limits = limits.get(provider);
+    let descriptor = provider_registry::descriptor(kind);
     let mut metrics = descriptor
         .metrics
         .iter()
         .filter_map(|metric| metric_snapshot(provider, provider_limits, metric.id))
         .collect::<Vec<_>>();
     for additional in provider_limits.additional_limits.iter() {
-        let metric_id = provider_registry::additional_limit_brick_id(provider, &additional.id);
+        let metric_id = provider_registry::additional_limit_brick_id(kind, &additional.id);
         if metrics.iter().all(|metric| metric.id != metric_id)
             && let Some(metric) = metric_snapshot(provider, provider_limits, &metric_id)
         {
@@ -140,7 +160,7 @@ pub fn snapshot(provider: ProviderKind, limits: &ProviderLimits) -> ProviderSnap
         .additional_limits
         .iter()
         .map(|additional| {
-            let metric_id = provider_registry::additional_limit_brick_id(provider, &additional.id);
+            let metric_id = provider_registry::additional_limit_brick_id(kind, &additional.id);
             let window = resolve_metric(provider, provider_limits, &metric_id)
                 .map(|metric| metric.window)
                 .unwrap_or_else(|| additional.window.clone());
@@ -153,10 +173,18 @@ pub fn snapshot(provider: ProviderKind, limits: &ProviderLimits) -> ProviderSnap
         })
         .collect();
 
+    let badge = provider.badge();
     ProviderSnapshot {
-        id: descriptor.id.into(),
-        name: descriptor.display_name.into(),
-        icon: provider_registry::icon(provider).into(),
+        id: provider.id().into(),
+        kind: descriptor.id.into(),
+        source_id: provider.id().into(),
+        name: provider.qualified_name(),
+        badge_rgb: badge
+            .as_ref()
+            .and_then(|badge| badge.color.rgb())
+            .map(|(red, green, blue)| [red, green, blue]),
+        badge: badge.map(|badge| badge.text),
+        icon: provider_registry::icon(kind).into(),
         brand_rgb: [
             descriptor.brand_rgb.0,
             descriptor.brand_rgb.1,
@@ -173,12 +201,13 @@ pub fn snapshot(provider: ProviderKind, limits: &ProviderLimits) -> ProviderSnap
 }
 
 fn metric_snapshot(
-    provider: ProviderKind,
+    provider: ProviderId,
     limits: &RateLimits,
     metric_id: &str,
 ) -> Option<MetricSnapshot> {
     let metric = resolve_metric(provider, limits, metric_id)?;
     Some(MetricSnapshot {
+        source_id: metric.source_id,
         id: metric.id,
         label: metric.label,
         window: window_snapshot(&metric.window),
@@ -251,6 +280,27 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
 
+    const CODEX: ProviderId = ProviderId::primary(ProviderKind::Codex);
+
+    #[test]
+    fn instances_have_independent_metric_identities() {
+        let work = ProviderId::new(ProviderKind::Claude, "claude-work");
+        let primary = ProviderId::primary(ProviderKind::Claude);
+        let mut limits = ProviderLimits::default();
+        limits.get_mut(primary).primary.used_percent = Some(7);
+        limits.get_mut(work).primary.used_percent = Some(80);
+        let metric_id = provider_registry::descriptor(ProviderKind::Claude).default_tray_metrics[0];
+        let first = resolve_metric(primary, limits.get(primary), metric_id).unwrap();
+        let second = resolve_metric(work, limits.get(work), metric_id).unwrap();
+        assert_eq!(first.window.used_percent, Some(7));
+        assert_eq!(second.window.used_percent, Some(80));
+        assert_ne!(first.source_id, second.source_id);
+        let exported = snapshot(work, &limits);
+        assert_eq!(exported.id, "claude-work");
+        assert_eq!(exported.kind, "claude");
+        assert_eq!(exported.primary.used_percent, Some(80));
+    }
+
     #[test]
     fn luna_reserve_uses_weekly_reset_but_keeps_reserve_usage() {
         let weekly_reset = Utc.timestamp_opt(1_700_475_600, 0).unwrap();
@@ -273,7 +323,7 @@ mod tests {
             ..RateLimits::default()
         };
 
-        let metric = resolve_metric(ProviderKind::Codex, &limits, "codex.lunaReserve").unwrap();
+        let metric = resolve_metric(CODEX, &limits, "codex.lunaReserve").unwrap();
         assert_eq!(metric.window.used_percent, Some(12));
         assert_eq!(metric.window.resets_at, Some(weekly_reset));
         assert_eq!(metric.window.duration_minutes, Some(10_080));
@@ -305,8 +355,8 @@ mod tests {
             ..RateLimits::default()
         };
 
-        let session = resolve_metric(ProviderKind::Codex, &limits, "codex.session").unwrap();
-        let weekly = resolve_metric(ProviderKind::Codex, &limits, "codex.weekly").unwrap();
+        let session = resolve_metric(CODEX, &limits, "codex.session").unwrap();
+        let weekly = resolve_metric(CODEX, &limits, "codex.weekly").unwrap();
         assert_eq!(session.window, weekly.window);
         assert_eq!(session.window.resets_at, Some(weekly_reset));
     }
@@ -315,7 +365,7 @@ mod tests {
     fn snapshot_exposes_the_same_luna_policy_to_external_widgets() {
         let weekly_reset = Utc.timestamp_opt(1_700_475_600, 0).unwrap();
         let limits = ProviderLimits::from_entries([(
-            ProviderKind::Codex,
+            CODEX,
             RateLimits {
                 primary: LimitWindow {
                     used_percent: Some(7),
@@ -340,7 +390,7 @@ mod tests {
             },
         )]);
 
-        let snapshot = snapshot(ProviderKind::Codex, &limits);
+        let snapshot = snapshot(CODEX, &limits);
         let reserve = snapshot
             .metrics
             .iter()

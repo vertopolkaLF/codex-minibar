@@ -1,18 +1,55 @@
-Always check docs and examples before doing UI work. LLM doesn't have great knowledge of WinUI 3. especially windows-rs.
+Always check docs and examples before doing UI work. LLM doesn't have great knowledge of GPUI; read the vendored `gpui` crate sources and its `examples/` in the cargo registry.
 
 Always run `cargo check` after changes related to the app to ensure the code is correct. No need to run it after changes related to the website.
 
 Never launch the app itself.
 
+## Worktree builds
+
+Use `cargo-worktree.ps1` for local Cargo checks and builds so worktrees reuse the
+main checkout's warm `target` directory instead of rebuilding all dependencies:
+
+```powershell
+.\cargo-worktree.ps1 check --locked
+.\cargo-worktree.ps1 build --locked
+.\cargo-worktree.ps1 test --all-targets --all-features --locked
+.\cargo-worktree.ps1 clippy --all-targets --all-features --locked '--' -D warnings
+```
+
+The wrapper resolves the main checkout through `git --git-common-dir`, runs Cargo
+in the current worktree, forwards arguments and exit codes, and restores the
+caller's environment. It honors an explicit `CARGO_TARGET_DIR` override. In older
+worktrees without the script, invoke the main checkout's script by absolute path
+while keeping the current directory inside the worktree being checked (on this
+machine: `& C:\Dev\codex-minibar\cargo-worktree.ps1 check --locked`).
+
+Quote the `'--'` argument separator when forwarding flags to rustc, Clippy or
+rustfmt; PowerShell otherwise consumes an unquoted separator before the script
+receives it.
+
+Shared-target Cargo commands wait for Cargo's build lock; do not bypass the lock
+or treat the wait as a failed build. Keep toolchain, features, profiles and
+RUSTFLAGS consistent for reuse. The app and vendored path dependencies may still
+rebuild when switching worktrees. Never run `cargo clean` against the shared cache
+as routine cleanup, and never delete it when removing a worktree.
+
+The shared EXE belongs to the last build, not necessarily the main checkout's
+branch. Do not infer its source worktree from its path. If a branch-specific
+artifact or truly parallel build is required, explicitly use a separate
+`CARGO_TARGET_DIR`. Never launch the app for verification. The wrapper does not
+support `run` or `clean`. Release packaging continues to use `build.ps1`.
+
 All settings must take effect immediately in the running application. The user must never need to relaunch the app for a setting change to be applied. Keep every open UI surface and affected background component synchronized with the updated settings.
 
 ## Appearance initialization guardrails
 
-Theme and accent settings must be applied during application startup, before any window is shown. Do not rely on opening the Settings window, mounting an Appearance page, or a later rerender to initialize global appearance resources.
-
-WinUI accent brushes are application-global but their role mapping depends on the root element's resolved `ActualTheme`. If appearance is requested before a root exists, retain the requested palette without mutating brushes. After `SetContent`, install the requested theme on the root first, then resolve `ActualTheme` and apply the complete accent palette before activation or native popup display. Repeat the role mapping on every `ActualThemeChanged` event.
+Theme and accent settings must be applied during application startup, before any window is shown. Every GPUI window (popup, Settings, onboarding) resolves its palette from the current settings and `window.appearance()` on every frame; never cache a palette across appearance changes, and observe `observe_window_appearance` so Auto follows the system theme. `crate::theme::apply_appearance` only records the accent for the tray glyphs.
 
 Before finishing appearance work, review both cold-start paths (popup first and Settings first) for Auto, Light, and Dark themes. Opening or closing another window must never be required to correct colors. Always run `cargo check`; never launch the app for this verification.
+
+## Settings window
+
+The Settings and onboarding windows are GPUI windows in the same application as the popup (`src/settings_window`). Build UI from `kit.rs` components; every edit goes through `SettingsWindow::edit`, which updates the local snapshot immediately and queues the write on the serial settings writer. Committed changes from any surface flow back through `sync_open_window`.
 
 ## Provider UI guardrails
 

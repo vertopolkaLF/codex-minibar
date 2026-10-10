@@ -1,124 +1,89 @@
-use super::*;
+//! "Run Troubleshoot with AI" tool picker.
 
-const DIALOG_WIDTH: f64 = 440.0;
-const DIALOG_SCRIM: Color = Color {
-    a: 102,
-    r: 0,
-    g: 0,
-    b: 0,
-};
+use gpui::{AnyElement, Context, SharedString};
 
-pub(super) fn picker_overlay(
-    picker: &crate::troubleshoot::ToolPickerState,
-    set_picker: AsyncSetState<Option<crate::troubleshoot::ToolPickerState>>,
-) -> Element {
-    let labels = picker
-        .tools
-        .iter()
-        .map(|tool| tool.tool.label())
-        .collect::<Vec<_>>();
-    let set_for_selection = set_picker.clone();
-    let picker_for_selection = picker.clone();
-    let combo = ComboBox::new(labels)
-        .selected_index(picker.selected_index)
-        .header("AI tool")
-        .on_selection_changed(move |selected_index| {
-            let mut next = picker_for_selection.clone();
-            next.selected_index = selected_index;
-            set_for_selection.call(Some(next));
+use super::kit::{self, Button, Kit};
+use super::window::SettingsWindow;
+
+impl SettingsWindow {
+    pub(super) fn troubleshoot_overlay(
+        &mut self,
+        k: &mut Kit,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let (picker, phase) = self
+            .overlays
+            .troubleshoot
+            .track(k, self.troubleshoot.clone())?;
+        let labels = picker
+            .tools
+            .iter()
+            .map(|tool| SharedString::from(tool.tool.label()))
+            .collect::<Vec<_>>();
+        let selected = usize::try_from(picker.selected_index).ok();
+        let tool = selected.and_then(|index| picker.tools.get(index)).cloned();
+        let dismiss = Self::h(cx, |this, (), _, cx| {
+            this.troubleshoot = None;
+            cx.notify();
         });
-
-    let selected = usize::try_from(picker.selected_index)
-        .ok()
-        .and_then(|index| picker.tools.get(index))
-        .cloned();
-    let set_for_run = set_picker.clone();
-    let run = Button::new("Open terminal")
-        .accent()
-        .enabled(selected.is_some())
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .on_click(move || {
-            if let Some(tool) = selected.clone()
-                && let Err(error) = crate::troubleshoot::launch_selected(&tool)
+        let run = Self::h(cx, move |this, (), _, cx| {
+            if let Some(tool) = &tool
+                && let Err(error) = crate::troubleshoot::launch_selected(tool)
             {
                 eprintln!("failed to start troubleshooting terminal: {error:#}");
-                crate::notifications::show("Troubleshooting could not start", &error.to_string());
+                crate::notifications::show_error(
+                    crate::i18n::tr("troubleshooting-could-not-start"),
+                    &error.to_string(),
+                );
             }
-            set_for_run.call(None);
-        })
-        .grid_column(0);
-    let set_for_cancel = set_picker.clone();
-    let cancel = Button::new("Cancel")
-        .horizontal_alignment(HorizontalAlignment::Stretch)
-        .on_click(move || set_for_cancel.call(None))
-        .grid_column(1);
-
-    let card = border(
-        vstack((
-            vstack((
-                text_block("Run Troubleshoot with AI")
-                    .font_size(20.0)
-                    .semibold(),
-                text_block("Choose which installed AI tool should investigate the problem.")
-                    .font_size(12.0)
-                    .opacity(0.72)
-                    .wrap(),
-                combo,
-            ))
-            .spacing(14.0)
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .padding(Thickness::uniform(24.0)),
-            border(
-                grid((run, cancel))
-                    .columns([GridLength::Star(1.0), GridLength::Star(1.0)])
-                    .column_spacing(8.0)
-                    .horizontal_alignment(HorizontalAlignment::Stretch),
-            )
-            .padding(Thickness::uniform(24.0))
-            .background(ThemeRef::LayerFill)
-            .border_thickness(Thickness {
-                left: 0.0,
-                top: 1.0,
-                right: 0.0,
-                bottom: 0.0,
-            })
-            .border_brush(ThemeRef::CardStroke),
+            this.troubleshoot = None;
+            cx.notify();
+        });
+        Some(kit::dialog(
+            k,
+            "troubleshoot",
+            phase,
+            440.0,
+            vec![
+                kit::dialog_title(k, crate::i18n::tr("run-troubleshoot-with-ai")),
+                kit::caption(
+                    k,
+                    crate::i18n::tr(
+                        "choose-which-installed-ai-tool-should-investigate-the-problem",
+                    ),
+                ),
+                kit::field(
+                    k,
+                    crate::i18n::tr("ai-tool"),
+                    kit::dropdown(
+                        k,
+                        "troubleshoot-tool",
+                        labels,
+                        selected,
+                        false,
+                        0.0,
+                        Self::h(cx, |this, index: usize, _, cx| {
+                            if let Some(picker) = this.troubleshoot.as_mut() {
+                                picker.selected_index = index as i32;
+                            }
+                            cx.notify();
+                        }),
+                    ),
+                ),
+            ],
+            vec![
+                Button::new("troubleshoot-cancel", crate::i18n::tr("cancel"))
+                    .full_width()
+                    .on_click(dismiss.clone())
+                    .render(k),
+                Button::new("troubleshoot-run", crate::i18n::tr("open-terminal"))
+                    .accent()
+                    .full_width()
+                    .disabled(selected.is_none())
+                    .on_click(run)
+                    .render(k),
+            ],
+            Some(dismiss),
         ))
-        .horizontal_alignment(HorizontalAlignment::Stretch),
-    )
-    .background(ThemeRef::SolidBackground)
-    .corner_radius(8.0)
-    .border_thickness(Thickness::uniform(1.0))
-    .border_brush(ThemeRef::CardStroke)
-    .width(DIALOG_WIDTH)
-    .horizontal_alignment(HorizontalAlignment::Center)
-    .vertical_alignment(VerticalAlignment::Center)
-    .on_tapped(|| {});
-
-    let dismiss = set_picker.clone();
-    let dismiss_escape = set_picker;
-    relative_panel::<Vec<Element>>(vec![
-        border(Element::Empty)
-            .background(DIALOG_SCRIM)
-            .relative_align_left()
-            .relative_align_right()
-            .relative_align_top()
-            .relative_align_bottom()
-            .on_tapped(move || dismiss.call(None))
-            .into(),
-        card.relative_align_left()
-            .relative_align_right()
-            .relative_align_top()
-            .relative_align_bottom()
-            .into(),
-    ])
-    .horizontal_alignment(HorizontalAlignment::Stretch)
-    .vertical_alignment(VerticalAlignment::Stretch)
-    .keyboard_accelerator(KeyboardAccelerator::new(
-        VirtualKey::Escape,
-        VirtualKeyModifiers::None,
-        move || dismiss_escape.call(None),
-    ))
-    .with_key("troubleshoot-picker-overlay")
-    .into()
+    }
 }

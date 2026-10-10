@@ -6,11 +6,13 @@
 
 #[cfg(not(test))]
 use std::sync::Mutex;
-#[cfg(not(test))]
 use std::time::Duration as StdDuration;
 use std::{
     collections::HashMap,
-    sync::{OnceLock, RwLock},
+    sync::{
+        OnceLock, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 #[cfg(not(test))]
@@ -30,9 +32,44 @@ const RATES_SOURCE: &str = "litellm";
 #[cfg(not(test))]
 const RATES_TTL: Duration = Duration::hours(24);
 
+/// First retry after a failed download; doubles per consecutive failure.
+const RETRY_BASE: StdDuration = StdDuration::from_secs(15 * 60);
+/// Upper bound of the failure backoff.
+const RETRY_MAX: StdDuration = StdDuration::from_secs(4 * 60 * 60);
+
 static CATALOG: OnceLock<RwLock<Option<PricingCatalog>>> = OnceLock::new();
+/// Bumped whenever a different catalog is installed. Repricing compares it
+/// with the generation it last healed, so it only reruns for a new catalog.
+static CATALOG_GENERATION: AtomicU64 = AtomicU64::new(0);
 #[cfg(not(test))]
 static REFRESH_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+/// `(consecutive failures, no attempt before)` of the catalog download.
+#[cfg(not(test))]
+static REFRESH_BACKOFF: Mutex<(u32, Option<std::time::Instant>)> = Mutex::new((0, None));
+
+/// Delay before the next download attempt after `failures` consecutive
+/// failures: 15 min, 30 min, 1 h, 2 h, then 4 h.
+fn retry_delay(failures: u32) -> StdDuration {
+    let shift = failures.saturating_sub(1).min(16);
+    RETRY_BASE
+        .checked_mul(1u32 << shift)
+        .unwrap_or(RETRY_MAX)
+        .min(RETRY_MAX)
+}
+
+/// Identifies the installed catalog; `0` while none is loaded.
+// Only the non-test worker loop reprices.
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn catalog_generation() -> u64 {
+    CATALOG_GENERATION.load(Ordering::Acquire)
+}
+
+fn install_catalog(catalog: PricingCatalog) {
+    *catalog_slot()
+        .write()
+        .expect("pricing catalog lock poisoned") = Some(catalog);
+    CATALOG_GENERATION.fetch_add(1, Ordering::AcqRel);
+}
 
 #[derive(Clone, Debug)]
 struct PricingCatalog {
@@ -67,15 +104,18 @@ pub fn initialize() -> Result<()> {
         serde_json::from_str(&payload).context("parse cached LiteLLM pricing document")?;
     let rates = parse_rate_table(&document);
     if !rates.is_empty() {
-        *catalog_slot()
-            .write()
-            .expect("pricing catalog lock poisoned") = Some(PricingCatalog { fetched_at, rates });
+        install_catalog(PricingCatalog { fetched_at, rates });
     }
     Ok(())
 }
 
 /// Refreshes the shared table at most once per day. Network access is kept out
 /// of tests; a missing table then produces explicit unpriced usage.
+///
+/// Returns `Ok(true)` when a new catalog was installed. A failed download backs
+/// off (15 min doubling up to 4 h) so an offline machine does not retry a slow
+/// request on every usage refresh, and a worker that finds another provider's
+/// download in flight skips instead of queueing behind it.
 #[allow(dead_code)]
 pub(crate) fn refresh_if_stale() -> Result<bool> {
     #[cfg(test)]
@@ -85,10 +125,9 @@ pub(crate) fn refresh_if_stale() -> Result<bool> {
 
     #[cfg(not(test))]
     {
-        let _refresh_guard = REFRESH_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("pricing refresh lock poisoned");
+        let Ok(_refresh_guard) = REFRESH_LOCK.get_or_init(|| Mutex::new(())).try_lock() else {
+            return Ok(false);
+        };
         let stale = catalog_slot()
             .read()
             .expect("pricing catalog lock poisoned")
@@ -97,33 +136,57 @@ pub(crate) fn refresh_if_stale() -> Result<bool> {
         if !stale {
             return Ok(false);
         }
-
-        let tls = ureq::native_tls::TlsConnector::new()
-            .context("create TLS connector for LiteLLM pricing")?;
-        let agent = ureq::AgentBuilder::new()
-            .timeout(StdDuration::from_secs(10))
-            .tls_connector(std::sync::Arc::new(tls))
-            .build();
-        let payload = agent
-            .get(LITELLM_RATES_URL)
-            .set("Accept", "application/json")
-            .call()
-            .context("request LiteLLM pricing table")?
-            .into_string()
-            .context("read LiteLLM pricing table")?;
-        let document: Value =
-            serde_json::from_str(&payload).context("parse LiteLLM pricing table")?;
-        let rates = parse_rate_table(&document);
-        if rates.is_empty() {
-            bail!("LiteLLM pricing table contains no complete model rates");
+        if REFRESH_BACKOFF
+            .lock()
+            .expect("pricing backoff lock poisoned")
+            .1
+            .is_some_and(|not_before| std::time::Instant::now() < not_before)
+        {
+            return Ok(false);
         }
-        let fetched_at = Utc::now();
-        store::with_store(|store| store.save_pricing_catalog(RATES_SOURCE, fetched_at, &payload))?;
-        *catalog_slot()
-            .write()
-            .expect("pricing catalog lock poisoned") = Some(PricingCatalog { fetched_at, rates });
-        Ok(true)
+
+        let result = download_catalog();
+        let mut backoff = REFRESH_BACKOFF
+            .lock()
+            .expect("pricing backoff lock poisoned");
+        match &result {
+            Ok(()) => *backoff = (0, None),
+            Err(_) => {
+                let failures = backoff.0.saturating_add(1);
+                *backoff = (
+                    failures,
+                    Some(std::time::Instant::now() + retry_delay(failures)),
+                );
+            }
+        }
+        result.map(|()| true)
     }
+}
+
+#[cfg(not(test))]
+fn download_catalog() -> Result<()> {
+    let tls = ureq::native_tls::TlsConnector::new()
+        .context("create TLS connector for LiteLLM pricing")?;
+    let agent = ureq::AgentBuilder::new()
+        .timeout(StdDuration::from_secs(10))
+        .tls_connector(std::sync::Arc::new(tls))
+        .build();
+    let payload = agent
+        .get(LITELLM_RATES_URL)
+        .set("Accept", "application/json")
+        .call()
+        .context("request LiteLLM pricing table")?
+        .into_string()
+        .context("read LiteLLM pricing table")?;
+    let document: Value = serde_json::from_str(&payload).context("parse LiteLLM pricing table")?;
+    let rates = parse_rate_table(&document);
+    if rates.is_empty() {
+        bail!("LiteLLM pricing table contains no complete model rates");
+    }
+    let fetched_at = Utc::now();
+    store::with_store(|store| store.save_pricing_catalog(RATES_SOURCE, fetched_at, &payload))?;
+    install_catalog(PricingCatalog { fetched_at, rates });
+    Ok(())
 }
 
 pub(crate) fn request_cost_microusd(
@@ -313,10 +376,53 @@ fn is_unpriceable_model(model: &str) -> bool {
     )
 }
 
+/// Test-only pricer over a private catalog, so repricing tests never touch
+/// the process-wide catalog other tests rely on being empty.
+/// Maps `(provider, model, cache creation, uncached input, cached input, output)` to
+/// `(cost, cache savings)`.
+#[cfg(test)]
+pub(crate) fn test_pricer(
+    document: &Value,
+) -> impl Fn(ProviderKind, &str, u64, u64, u64, u64) -> Option<(u64, u64)> + use<> {
+    let catalog = PricingCatalog {
+        fetched_at: Utc::now(),
+        rates: parse_rate_table(document),
+    };
+    move |provider, model, creation, uncached, cached, output| {
+        let cost = cost_for_catalog(
+            &catalog,
+            provider,
+            Some(model),
+            creation,
+            uncached,
+            cached,
+            output,
+        )?;
+        let savings = lookup_rate(&catalog, provider, model)
+            .map(|rate| {
+                (cached as f64 * (rate.input_per_token - rate.cache_read_per_token) * 1_000_000.0)
+                    .round()
+                    .clamp(0.0, u64::MAX as f64) as u64
+            })
+            .unwrap_or(0);
+        Some((cost, savings))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn retry_delay_doubles_up_to_the_cap() {
+        let minutes = |failures| retry_delay(failures).as_secs() / 60;
+        assert_eq!(minutes(1), 15);
+        assert_eq!(minutes(2), 30);
+        assert_eq!(minutes(3), 60);
+        assert_eq!(minutes(5), 240);
+        assert_eq!(minutes(40), 240);
+    }
 
     fn catalog(document: Value) -> PricingCatalog {
         PricingCatalog {

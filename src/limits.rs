@@ -1,7 +1,7 @@
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::settings::ProviderKind;
+use crate::instances::ProviderId;
 use crate::usage::UsageStatistics;
 
 /// Windows longer than this are treated as weekly (or similar), not the 5h session.
@@ -119,18 +119,13 @@ pub struct OpenRouterAccountSnapshot {
     pub total_credits_microusd: Option<u64>,
 }
 
-/// One provider account's quota. `limits` keeps the last successful read, so a
-/// failing profile still shows its previous numbers next to `error`.
+/// A per-account sample cached before accounts became provider instances.
+/// Only read, so startup can seed each migrated instance with its last quota.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct AccountProfileSnapshot {
+pub struct LegacyAccountSnapshot {
     pub id: String,
-    pub name: String,
     pub limits: RateLimits,
-    pub error: Option<String>,
 }
-
-pub type ClaudeProfileSnapshot = AccountProfileSnapshot;
-pub type CodexProfileSnapshot = AccountProfileSnapshot;
 
 /// Pace tip on a usage progress bar (even-burn marker position).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -141,19 +136,40 @@ pub struct PaceTip {
     pub delta_percent: f64,
 }
 
+/// Direction of usage relative to an even burn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaceTrend {
+    OnPace,
+    /// Used more than an even burn would have by now.
+    Deficit,
+    /// Used less than an even burn would have by now.
+    Reserve,
+}
+
 impl PaceTip {
-    /// Compact CodexBar-style description for the usage-card header.
-    pub fn summary(self) -> String {
+    pub fn trend(self) -> PaceTrend {
         const ON_PACE_TOLERANCE: f64 = 2.0;
         if self.delta_percent.abs() <= ON_PACE_TOLERANCE {
-            return "On pace".into();
-        }
-
-        let delta = self.delta_percent.abs().round() as u32;
-        if self.delta_percent > 0.0 {
-            format!("{delta}% in deficit")
+            PaceTrend::OnPace
+        } else if self.delta_percent > 0.0 {
+            PaceTrend::Deficit
         } else {
-            format!("{delta}% in reserve")
+            PaceTrend::Reserve
+        }
+    }
+
+    /// Rounded absolute deviation from an even burn, e.g. `"21%"`.
+    pub fn delta_label(self) -> String {
+        format!("{}%", self.delta_percent.abs().round() as u32)
+    }
+
+    /// Full CodexBar-style description, used for tooltips.
+    pub fn summary(self) -> String {
+        let delta = (self.delta_percent.abs().round() as u32).to_string();
+        match self.trend() {
+            PaceTrend::OnPace => crate::i18n::tr("on-pace").into(),
+            PaceTrend::Deficit => crate::i18n::format("delta-in-deficit", &[("delta", delta)]),
+            PaceTrend::Reserve => crate::i18n::format("delta-in-reserve", &[("delta", delta)]),
         }
     }
 }
@@ -250,6 +266,9 @@ pub struct RateLimits {
     pub primary_window_is_unactivated: bool,
     /// Human-readable account identity supplied by the provider, when available.
     pub account_name: Option<String>,
+    /// When the login itself stops renewing and needs a new sign-in.
+    #[serde(default)]
+    pub login_expires_at: Option<DateTime<Utc>>,
     pub plan_type: Option<String>,
     pub limit_name: Option<String>,
     /// Provider-defined name for the secondary quota when it is not a
@@ -270,14 +289,14 @@ pub struct RateLimits {
     /// configured. Other providers leave this empty.
     #[serde(default)]
     pub openrouter_accounts: Vec<OpenRouterAccountSnapshot>,
-    /// Every enabled Claude profile when more than one is tracked. The fields
-    /// above then describe the first profile. Other providers leave this empty.
-    #[serde(default)]
-    pub claude_profiles: Vec<ClaudeProfileSnapshot>,
-    /// Independent enabled Codex accounts. Provider-level fields hold the
-    /// primary account sample used by tray widgets and activation guards.
-    #[serde(default)]
-    pub codex_profiles: Vec<CodexProfileSnapshot>,
+    /// Per-account samples written before provider instances existed.
+    #[serde(
+        default,
+        rename = "claude_profiles",
+        alias = "codex_profiles",
+        skip_serializing
+    )]
+    pub legacy_accounts: Vec<LegacyAccountSnapshot>,
     /// Token statistics computed from local Codex session logs.
     pub usage: UsageStatistics,
 }
@@ -286,28 +305,36 @@ pub struct RateLimits {
 /// merged: a Claude weekly limit must not overwrite Codex's five-hour window.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ProviderLimits {
-    values: std::collections::HashMap<ProviderKind, RateLimits>,
+    values: std::collections::HashMap<ProviderId, RateLimits>,
 }
 
 impl ProviderLimits {
-    pub fn get(&self, provider: ProviderKind) -> &RateLimits {
+    pub fn get(&self, provider: ProviderId) -> &RateLimits {
         static EMPTY: std::sync::OnceLock<RateLimits> = std::sync::OnceLock::new();
         self.values
             .get(&provider)
             .unwrap_or_else(|| EMPTY.get_or_init(RateLimits::default))
     }
 
-    pub fn get_mut(&mut self, provider: ProviderKind) -> &mut RateLimits {
+    pub fn get_mut(&mut self, provider: ProviderId) -> &mut RateLimits {
         self.values.entry(provider).or_default()
     }
 
-    pub fn from_entries(entries: impl IntoIterator<Item = (ProviderKind, RateLimits)>) -> Self {
+    pub fn remove(&mut self, provider: ProviderId) {
+        self.values.remove(&provider);
+    }
+
+    pub fn retain(&mut self, mut keep: impl FnMut(ProviderId) -> bool) {
+        self.values.retain(|provider, _| keep(*provider));
+    }
+
+    pub fn from_entries(entries: impl IntoIterator<Item = (ProviderId, RateLimits)>) -> Self {
         Self {
             values: entries.into_iter().collect(),
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (ProviderKind, &RateLimits)> {
+    pub fn iter(&self) -> impl Iterator<Item = (ProviderId, &RateLimits)> {
         self.values
             .iter()
             .map(|(provider, limits)| (*provider, limits))
@@ -315,32 +342,6 @@ impl ProviderLimits {
 }
 
 impl RateLimits {
-    /// The Claude profile a single-profile view shows: the selected one, or
-    /// the first when nothing valid is selected.
-    pub fn claude_profile(&self, selected: Option<&str>) -> Option<&ClaudeProfileSnapshot> {
-        self.claude_profiles
-            .iter()
-            .find(|profile| selected == Some(profile.id.as_str()))
-            .or(self.claude_profiles.first())
-    }
-
-    /// The Codex profile a single-profile view shows: the selected one, or
-    /// the first when nothing valid is selected.
-    pub fn codex_profile(&self, selected: Option<&str>) -> Option<&CodexProfileSnapshot> {
-        self.codex_profiles
-            .iter()
-            .find(|profile| selected == Some(profile.id.as_str()))
-            .or(self.codex_profiles.first())
-    }
-
-    pub fn account_profiles(&self, provider: ProviderKind) -> &[AccountProfileSnapshot] {
-        match provider {
-            ProviderKind::Codex => &self.codex_profiles,
-            ProviderKind::Claude => &self.claude_profiles,
-            _ => &[],
-        }
-    }
-
     /// OpenAI sometimes drops the 5h window and leaves weekly data in `primary`.
     /// Remap that so the UI/tray keep treating primary as the short session.
     pub fn normalized(mut self, now: DateTime<Utc>) -> Self {
@@ -427,6 +428,9 @@ pub struct Credits {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RateLimitResetCreditsSummary {
+    /// Claude chooses the claimable grant; never guess from inventory order.
+    #[serde(default)]
+    pub next_credit_id: Option<String>,
     pub available_count: u32,
     pub credits: Vec<RateLimitResetCredit>,
 }

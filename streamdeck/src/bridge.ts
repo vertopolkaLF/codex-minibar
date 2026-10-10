@@ -16,9 +16,13 @@ export interface MetricInfo {
   label: string;
 }
 
+/** One provider instance. The primary instance keeps the driver id. */
 export interface ProviderInfo {
   id: string;
+  kind: string;
   name: string;
+  badge: string | null;
+  enabled: boolean;
   icon: string;
   metrics: MetricInfo[];
 }
@@ -38,14 +42,22 @@ export interface AdditionalSnapshot {
 }
 
 export interface MetricSnapshot {
+  source_id?: string;
   id: string;
   label: string;
   window: WindowSnapshot;
 }
 
 export interface ProviderSnapshot {
+  /** Provider instance id; the primary instance keeps the driver id. */
   id: string;
+  /** Driver id shared by every instance of a driver, e.g. `claude`. */
+  kind: string;
+  source_id?: string;
   name: string;
+  /** Present while a driver has several enabled instances. */
+  badge: string | null;
+  badge_rgb: [number, number, number] | null;
   icon: string;
   brand_rgb: [number, number, number];
   account_name: string | null;

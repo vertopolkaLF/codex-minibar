@@ -384,7 +384,6 @@ pub(crate) fn is_valid_source_url(url: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::settings::ResetAnnouncementRefreshInterval;
     use chrono::TimeZone;
 
     use super::*;
@@ -467,31 +466,6 @@ mod tests {
         assert_eq!(
             resets[2].source_url.as_deref(),
             Some("https://example.com/status")
-        );
-    }
-
-    #[test]
-    fn accepts_a_legacy_entry_without_a_source_url() {
-        let resets = parse_feed(
-            r#"{
-                "schema_version": 1,
-                "resets": [
-                    {"id":"legacy","type":"forced","reset_at":"2026-09-13T12:00:00Z"}
-                ]
-            }"#,
-            now(),
-        )
-        .unwrap();
-
-        assert_eq!(resets.len(), 1);
-        assert_eq!(resets[0].source_url, None);
-    }
-
-    #[test]
-    fn refresh_interval_has_a_one_hour_default() {
-        assert_eq!(
-            ResetAnnouncementRefreshInterval::default().seconds(),
-            60 * 60
         );
     }
 

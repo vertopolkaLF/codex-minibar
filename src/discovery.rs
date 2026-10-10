@@ -4,6 +4,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod desktop_cache;
+pub use desktop_cache::cleanup;
+pub(crate) use desktop_cache::prepare;
+pub(crate) use desktop_cache::protect_configured_paths;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodexCandidate {
     pub path: PathBuf,
@@ -73,36 +78,39 @@ pub fn discover(explicit: Option<&Path>) -> Vec<CodexCandidate> {
 
 #[cfg(windows)]
 fn desktop_app_locations() -> Vec<PathBuf> {
-    let paths = desktop_app_locations_from_registry();
-    if !paths.is_empty() {
-        return paths;
-    }
+    let mut paths = desktop_app_locations_from_registry();
 
     let Some(program_files) = env::var_os("ProgramFiles") else {
         return paths;
     };
-    let packages = PathBuf::from(program_files).join("WindowsApps");
-    let Ok(entries) = std::fs::read_dir(packages) else {
-        return paths;
-    };
+    paths.extend(desktop_paths_from_packages(
+        &PathBuf::from(program_files).join("WindowsApps"),
+    ));
+    sort_desktop_paths(&mut paths);
+    paths.dedup();
+    paths
+}
 
-    // Package versions are embedded in the directory name. Newer versions sort
-    // after older ones, so prefer them when an update leaves both installed.
+#[cfg(any(windows, test))]
+fn desktop_paths_from_packages(packages: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(packages) else {
+        return Vec::new();
+    };
     let mut paths: Vec<_> = entries
         .filter_map(Result::ok)
         .filter(|entry| {
             entry
                 .file_name()
-                .to_string_lossy()
-                .starts_with("OpenAI.Codex_")
+                .to_str()
+                .and_then(desktop_cache::package_version)
+                .is_some()
         })
         .filter_map(|entry| {
-            let package_name = entry.file_name();
             let source = entry.path().join("app/resources/codex.exe");
-            cache_desktop_cli(&source, &package_name.to_string_lossy())
+            source.is_file().then_some(source)
         })
         .collect();
-    paths.sort_by(|left, right| right.cmp(left));
+    sort_desktop_paths(&mut paths);
     paths.dedup();
     paths
 }
@@ -154,7 +162,11 @@ fn desktop_app_locations_from_registry() -> Vec<PathBuf> {
         }
         index += 1;
         let package_name = OsString::from_wide(&name[..name_len as usize]);
-        if !package_name.to_string_lossy().starts_with("OpenAI.Codex_") {
+        if package_name
+            .to_str()
+            .and_then(desktop_cache::package_version)
+            .is_none()
+        {
             continue;
         }
 
@@ -197,37 +209,21 @@ fn desktop_app_locations_from_registry() -> Vec<PathBuf> {
                 .unwrap_or(root.len());
             let source =
                 PathBuf::from(OsString::from_wide(&root[..len])).join("app/resources/codex.exe");
-            if let Some(cached) = cache_desktop_cli(&source, &package_name.to_string_lossy()) {
-                paths.push(cached);
+            if source.is_file() {
+                paths.push(source);
             }
         }
     }
     unsafe { RegCloseKey(key) };
+    sort_desktop_paths(&mut paths);
     paths
 }
 
-#[cfg(windows)]
-fn cache_desktop_cli(source: &Path, package_name: &str) -> Option<PathBuf> {
-    let local = PathBuf::from(env::var_os("LOCALAPPDATA")?);
-    let directory = local
-        .join("Codex Minibar")
-        .join("desktop-cli")
-        .join(package_name);
-    let destination = directory.join("codex.exe");
-    let source_len = std::fs::metadata(source).ok()?.len();
-    if std::fs::metadata(&destination).is_ok_and(|metadata| metadata.len() == source_len) {
-        return Some(destination);
-    }
-
-    std::fs::create_dir_all(&directory).ok()?;
-    let temporary = directory.join("codex.exe.tmp");
-    let _ = std::fs::remove_file(&temporary);
-    std::fs::copy(source, &temporary).ok()?;
-    if std::fs::rename(&temporary, &destination).is_err() {
-        let _ = std::fs::remove_file(&destination);
-        std::fs::rename(&temporary, &destination).ok()?;
-    }
-    Some(destination)
+#[cfg(any(windows, test))]
+fn sort_desktop_paths(paths: &mut [PathBuf]) {
+    paths.sort_by_cached_key(|path| {
+        std::cmp::Reverse(desktop_cache::package_for_source(path).map(|(_, version)| version))
+    });
 }
 
 #[cfg(not(windows))]

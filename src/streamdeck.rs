@@ -6,10 +6,14 @@
 
 use std::{
     fs,
-    io::{self, BufRead, BufReader, Write},
+    io::{self, BufRead, BufReader, Read, Write},
     net::{TcpListener, TcpStream},
     path::PathBuf,
-    sync::{Arc, mpsc},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -18,9 +22,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    instances::ProviderId,
     popup_window::AppState,
     provider_registry,
-    settings::{ProviderKind, Settings},
+    settings::Settings,
     widget_data::{self, ProviderSnapshot},
 };
 
@@ -51,7 +56,7 @@ pub fn install_latest_plugin_async(on_phase: impl Fn(InstallPhase) + Send + 'sta
             Ok(()) => on_phase(InstallPhase::Launched),
             Err(error) => {
                 let message = error.to_string();
-                crate::notifications::show("Stream Deck plugin", &message);
+                crate::notifications::show_error("Stream Deck plugin", &message);
                 on_phase(InstallPhase::Failed(message));
             }
         }
@@ -76,11 +81,15 @@ fn download_latest_plugin() -> anyhow::Result<PathBuf> {
 pub const PROTOCOL_VERSION: u32 = 1;
 const ENDPOINT_FILE_NAME: &str = "streamdeck-bridge.json";
 const LOOPBACK_HOST: &str = "127.0.0.1";
+/// Requests are one small JSON line; anything longer is hostile or broken.
+const MAX_REQUEST_BYTES: u64 = 16 * 1024;
+const MAX_CONCURRENT_CONNECTIONS: usize = 8;
+const IO_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Commands that must be executed by the existing tray/UI bridge thread.
 #[derive(Clone, Debug)]
 pub enum Command {
-    OpenPopup { provider: Option<ProviderKind> },
+    OpenPopup { provider: Option<ProviderId> },
     RefreshData,
 }
 
@@ -135,10 +144,15 @@ enum Response {
     },
 }
 
+/// One provider instance. `id` is the instance id (the primary instance
+/// keeps the driver id) and `kind` the driver id shared by its instances.
 #[derive(Debug, Serialize)]
 struct ProviderInfo {
     id: String,
+    kind: String,
     name: String,
+    badge: Option<String>,
+    enabled: bool,
     icon: String,
     metrics: Vec<MetricInfo>,
 }
@@ -176,11 +190,7 @@ fn run_server(
 ) -> io::Result<()> {
     let listener = TcpListener::bind((LOOPBACK_HOST, 0))?;
     let address = listener.local_addr()?;
-    let token = format!(
-        "{:x}-{:x}",
-        std::process::id(),
-        Utc::now().timestamp_nanos_opt().unwrap_or_default()
-    );
+    let token = generate_token()?;
     let executable = std::env::current_exe()
         .ok()
         .map(|path| path.to_string_lossy().into_owned())
@@ -200,18 +210,61 @@ fn run_server(
         .map_err(|error| io::Error::other(format!("serialize endpoint: {error}")))?;
     fs::write(&endpoint_path, endpoint_json)?;
 
+    let active = Arc::new(AtomicUsize::new(0));
     for incoming in listener.incoming() {
         match incoming {
             Ok(stream) => {
+                if active.fetch_add(1, Ordering::AcqRel) >= MAX_CONCURRENT_CONNECTIONS {
+                    active.fetch_sub(1, Ordering::AcqRel);
+                    continue;
+                }
                 let state = Arc::clone(&state);
                 let commands_tx = commands_tx.clone();
                 let token = token.clone();
-                thread::spawn(move || serve_connection(stream, state, commands_tx, &token));
+                let slot = ConnectionSlot(Arc::clone(&active));
+                // A failed spawn drops the closure, and with it the slot.
+                let _ = thread::Builder::new().spawn(move || {
+                    let _slot = slot;
+                    serve_connection(stream, state, commands_tx, &token);
+                });
             }
             Err(error) => eprintln!("Stream Deck bridge connection failed: {error}"),
         }
     }
     Ok(())
+}
+
+/// Releases a connection-handler slot even if the handler panics.
+struct ConnectionSlot(Arc<AtomicUsize>);
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// 128 bits from the OS CSPRNG, hex encoded.
+fn generate_token() -> io::Result<String> {
+    use windows_sys::Win32::Security::Cryptography::{
+        BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom,
+    };
+    let mut bytes = [0u8; 16];
+    // SAFETY: the buffer is valid for `bytes.len()` writable bytes and a null
+    // algorithm handle is allowed with the system-preferred RNG flag.
+    let status = unsafe {
+        BCryptGenRandom(
+            std::ptr::null_mut(),
+            bytes.as_mut_ptr(),
+            bytes.len() as u32,
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        )
+    };
+    if status != 0 {
+        return Err(io::Error::other(format!(
+            "BCryptGenRandom failed: {status:#x}"
+        )));
+    }
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 fn serve_connection(
@@ -220,9 +273,23 @@ fn serve_connection(
     commands_tx: mpsc::Sender<Command>,
     expected_token: &str,
 ) {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+    let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
     let mut line = String::new();
-    let read_result = BufReader::new(&mut stream).read_line(&mut line);
+    let read_result = match stream.try_clone() {
+        Ok(reader) => BufReader::new(reader.take(MAX_REQUEST_BYTES)).read_line(&mut line),
+        Err(error) => Err(error),
+    };
+    if read_result.is_ok() && !line.ends_with('\n') && line.len() as u64 >= MAX_REQUEST_BYTES {
+        let _ = write_response(
+            &mut stream,
+            &Response::Error {
+                ok: false,
+                error: "request too large".into(),
+            },
+        );
+        return;
+    }
     let response = match read_result {
         Ok(0) => Response::Error {
             ok: false,
@@ -278,7 +345,7 @@ fn handle_request(
         },
         Request::OpenPopup { provider, .. } => {
             let provider = match provider {
-                Some(id) => match ProviderKind::from_id(&id) {
+                Some(id) => match ProviderId::lookup(&id) {
                     Some(provider) => Some(provider),
                     None => {
                         return Response::Error {
@@ -305,10 +372,12 @@ fn build_catalog(state: &AppState) -> Vec<ProviderInfo> {
         .limits
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    ProviderKind::ALL
+    let enabled = crate::instances::published_enabled_providers();
+    crate::instances::published_providers()
         .into_iter()
         .map(|provider| {
-            let descriptor = provider_registry::descriptor(provider);
+            let kind = provider.kind();
+            let descriptor = provider_registry::descriptor(kind);
             let live_limits = limits.get(provider);
             let mut metrics = descriptor
                 .metrics
@@ -319,8 +388,7 @@ fn build_catalog(state: &AppState) -> Vec<ProviderInfo> {
                 })
                 .collect::<Vec<_>>();
             for additional in &live_limits.additional_limits {
-                let metric_id =
-                    provider_registry::additional_limit_brick_id(provider, &additional.id);
+                let metric_id = provider_registry::additional_limit_brick_id(kind, &additional.id);
                 if metrics.iter().all(|metric| metric.id != metric_id) {
                     metrics.push(MetricInfo {
                         id: metric_id,
@@ -329,9 +397,12 @@ fn build_catalog(state: &AppState) -> Vec<ProviderInfo> {
                 }
             }
             ProviderInfo {
-                id: descriptor.id.into(),
-                name: descriptor.display_name.into(),
-                icon: provider_registry::icon(provider).into(),
+                id: provider.id().into(),
+                kind: descriptor.id.into(),
+                name: provider.qualified_name(),
+                badge: provider.badge().map(|badge| badge.text),
+                enabled: enabled.contains(&provider),
+                icon: provider_registry::icon(kind).into(),
                 metrics,
             }
         })
@@ -351,7 +422,7 @@ fn build_snapshot(state: &AppState) -> Response {
             .ok()
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_default(),
-        providers: ProviderKind::ALL
+        providers: crate::instances::published_providers()
             .into_iter()
             .map(|provider| widget_data::snapshot(provider, &limits))
             .collect(),
@@ -363,32 +434,4 @@ fn write_response(stream: &mut TcpStream, response: &Response) -> io::Result<()>
         .map_err(|error| io::Error::other(format!("serialize response: {error}")))?;
     stream.write_all(b"\n")?;
     stream.flush()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::limits::LimitWindow;
-
-    #[test]
-    fn window_snapshot_exposes_remaining_without_provider_credentials() {
-        let window = LimitWindow {
-            used_percent: Some(25),
-            resets_at: None,
-            duration_minutes: Some(300),
-        };
-        let snapshot = widget_data::window_snapshot(&window);
-        assert_eq!(snapshot.used_percent, Some(25));
-        assert_eq!(snapshot.remaining_percent, Some(75));
-    }
-
-    #[test]
-    fn catalog_uses_provider_metric_ids() {
-        let provider = provider_registry::descriptor(ProviderKind::Codex);
-        assert_eq!(
-            provider.metrics[0].source,
-            provider_registry::MetricSource::Primary
-        );
-        assert_eq!(provider.metrics[0].id, "codex.session");
-    }
 }

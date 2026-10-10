@@ -5,6 +5,7 @@ import streamDeck, {
   KeyAction,
   KeyUpEvent,
   SingletonAction,
+  SendToPluginEvent,
   Target,
   WillAppearEvent,
   WillDisappearEvent,
@@ -14,8 +15,10 @@ import { BridgeUnavailableError, MinibarBridge, type SnapshotResponse } from "./
 import {
   activeProvider,
   DEFAULT_SETTINGS,
+  needsMigration,
   normalizeSettings,
   renderIndicator,
+  selectedProvider,
   watchedWindows,
   type ActionSettings,
 } from "./render";
@@ -47,7 +50,7 @@ let refreshInFlight = false;
 let refreshTimer: NodeJS.Timeout | undefined;
 
 function providerFor(settings: ActionSettings): SnapshotResponse["providers"][number] | null {
-  return latestSnapshot?.providers.find(item => item.id === activeProvider(settings)) ?? null;
+  return selectedProvider(latestSnapshot, settings);
 }
 
 function stopBurst(id: string): void {
@@ -178,11 +181,24 @@ async function runClickAction(action: KeyAction<ActionSettings>, settings: Actio
 
 @action({ UUID: "com.vertopolkalf.codex-minibar.quota-indicator" })
 export class QuotaIndicator extends SingletonAction<ActionSettings> {
+  override async onSendToPlugin(ev: SendToPluginEvent<import("@elgato/utils").JsonValue, ActionSettings>): Promise<void> {
+    if (!ev.payload || typeof ev.payload !== "object" || !("op" in ev.payload) || ev.payload.op !== "catalog") return;
+    try {
+      const catalog = await bridge.catalog();
+      await streamDeck.ui.sendToPropertyInspector(JSON.parse(JSON.stringify(catalog)));
+    } catch {
+      await streamDeck.ui.sendToPropertyInspector({ type: "catalog", ok: false, providers: [] });
+    }
+  }
+
   override onWillAppear(ev: WillAppearEvent<ActionSettings>): void {
     if (!ev.action.isKey()) return;
     streamDeck.logger.info(`Quota Indicator appeared: ${ev.action.id}`);
     const settings = startSettings(ev.payload.settings);
     bindings.set(ev.action.id, { action: ev.action, settings });
+    // Persist the account → instance migration so the inspector and later
+    // sessions read the instance id directly.
+    if (needsMigration(ev.payload.settings)) void ev.action.setSettings(settings);
     ensureRefreshLoop();
     void paint({ action: ev.action, settings }, latestSnapshot !== null);
     void refresh();

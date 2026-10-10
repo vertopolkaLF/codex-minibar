@@ -14,6 +14,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
+    instances::ProviderId,
     limits::{AdditionalLimit, LimitWindow, RateLimits},
     secrets,
     settings::ProviderKind,
@@ -36,13 +37,6 @@ enum Catalog {
 }
 
 impl Catalog {
-    const fn provider(self) -> ProviderKind {
-        match self {
-            Self::Zen => ProviderKind::OpenCodeZen,
-            Self::Go => ProviderKind::OpenCodeGo,
-        }
-    }
-
     const fn provider_id(self) -> &'static str {
         match self {
             Self::Zen => "opencode",
@@ -62,36 +56,49 @@ pub fn is_installed(provider: ProviderKind) -> bool {
     let Some(catalog) = catalog(provider) else {
         return false;
     };
-    resolve_api_key(catalog).ok().flatten().is_some()
+    resolve_api_key(catalog, ProviderId::primary(provider))
+        .ok()
+        .flatten()
+        .is_some()
         || database_has_provider(catalog).unwrap_or(false)
 }
 
-pub fn manual_key(provider: ProviderKind) -> Result<Option<String>> {
-    catalog(provider)
-        .map(|catalog| secrets::load(catalog.secret_name()))
+/// The primary instance keeps the original slot; others are named by id.
+fn secret_name(provider: ProviderId) -> Option<String> {
+    let catalog = catalog(provider.kind())?;
+    Some(if provider.is_primary() {
+        catalog.secret_name().to_owned()
+    } else {
+        format!("{}.{}", catalog.secret_name(), provider.id())
+    })
+}
+
+pub fn manual_key(provider: ProviderId) -> Result<Option<String>> {
+    secret_name(provider)
+        .map(|name| secrets::load(&name))
         .unwrap_or_else(|| Ok(None))
 }
 
-pub fn save_manual_key(provider: ProviderKind, value: Option<&str>) -> Result<()> {
-    let catalog = catalog(provider).context("provider is not an OpenCode catalog")?;
-    secrets::save(catalog.secret_name(), value)
+pub fn save_manual_key(provider: ProviderId, value: Option<&str>) -> Result<()> {
+    let name = secret_name(provider).context("provider is not an OpenCode catalog")?;
+    secrets::save(&name, value)
 }
 
 /// Replaces the key and captures its prior ciphertext in one transaction, so
 /// even a corrupt key can be restored if the following settings commit fails.
 pub(crate) fn apply_manual_key(
-    provider: ProviderKind,
+    provider: ProviderId,
     value: Option<&str>,
 ) -> Result<secrets::EncodedRollback> {
-    let catalog = catalog(provider).context("provider is not an OpenCode catalog")?;
-    secrets::apply_with_rollback(&[(catalog.secret_name().into(), value.map(str::to_owned))])
+    let name = secret_name(provider).context("provider is not an OpenCode catalog")?;
+    secrets::apply_with_rollback(&[(name, value.map(str::to_owned))])
 }
 
 pub(crate) fn restore_manual_key(rollback: secrets::EncodedRollback) -> Result<()> {
     rollback.restore()
 }
 
-pub fn key_is_configured(provider: ProviderKind) -> bool {
+pub fn key_is_configured(provider: ProviderId) -> bool {
     manual_key(provider)
         .ok()
         .flatten()
@@ -100,14 +107,16 @@ pub fn key_is_configured(provider: ProviderKind) -> bool {
 
 pub struct OpenCodeClient {
     catalog: Catalog,
+    provider: ProviderId,
     agent: ureq::Agent,
 }
 
 impl OpenCodeClient {
-    pub fn new(provider: ProviderKind) -> Result<Self> {
-        let catalog = catalog(provider).context("provider is not an OpenCode catalog")?;
+    pub fn new(provider: ProviderId) -> Result<Self> {
+        let catalog = catalog(provider.kind()).context("provider is not an OpenCode catalog")?;
         Ok(Self {
             catalog,
+            provider,
             agent: ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build(),
         })
     }
@@ -120,7 +129,7 @@ impl OpenCodeClient {
     }
 
     fn read_zen_limits(&self) -> Result<RateLimits> {
-        let key = resolve_api_key(self.catalog)?.context(
+        let key = resolve_api_key(self.catalog, self.provider)?.context(
             "OpenCode Zen API key not found; set OPENCODE_API_KEY, ZEN_API_KEY, use auth.json, or save a manual key",
         )?;
         let response = self
@@ -147,7 +156,7 @@ impl OpenCodeClient {
     }
 
     fn read_go_limits(&self) -> Result<RateLimits> {
-        let key = resolve_api_key(self.catalog)?.context(
+        let key = resolve_api_key(self.catalog, self.provider)?.context(
             "OpenCode Go API key not found; set OPENCODE_GO_API_KEY, OPENCODE_API_KEY, use auth.json, or save a manual key",
         )?;
         let response = self
@@ -249,9 +258,7 @@ impl OpenCodeClient {
             }
         }
         let hourly_rows = hourly.into_iter().collect::<Vec<_>>();
-        let _ = store::with_store(|store| {
-            store.replace_usage_hourly(self.catalog.provider(), &hourly_rows)
-        });
+        let _ = store::with_store(|store| store.replace_usage_hourly(self.provider, &hourly_rows));
         let days = daily
             .into_iter()
             .map(|(date, usage)| DailyTokenUsage { date, usage })
@@ -268,7 +275,7 @@ impl LimitProvider for OpenCodeClient {
 
 impl UsageProvider for OpenCodeClient {
     fn load_cached_usage_statistics(&mut self, history_days: u16) -> Result<UsageStatistics> {
-        store::with_store(|store| store.load_usage_daily(self.catalog.provider(), history_days))
+        store::with_store(|store| store.load_usage_daily(self.provider, history_days))
             .or_else(|_| Ok(UsageStatistics::default()))
     }
 
@@ -276,15 +283,15 @@ impl UsageProvider for OpenCodeClient {
         match self.read_local_usage(history_days) {
             Ok(statistics) => {
                 store::with_store(|store| {
-                    store.replace_usage_daily(self.catalog.provider(), &statistics.daily)
+                    store.replace_usage_daily(self.provider, &statistics.daily)
                 })?;
                 Ok(statistics)
             }
-            Err(error) => store::with_store(|store| {
-                store.load_usage_daily(self.catalog.provider(), history_days)
-            })
-            .context("refresh OpenCode local usage")
-            .or(Err(error)),
+            Err(error) => {
+                store::with_store(|store| store.load_usage_daily(self.provider, history_days))
+                    .context("refresh OpenCode local usage")
+                    .or(Err(error))
+            }
         }
     }
 
@@ -307,8 +314,13 @@ fn catalog(provider: ProviderKind) -> Option<Catalog> {
     }
 }
 
-fn resolve_api_key(catalog: Catalog) -> Result<Option<String>> {
-    let manual = secrets::load(catalog.secret_name())?;
+/// Additional instances only use their own saved key; environment variables
+/// and OpenCode's auth file describe this PC's primary login.
+fn resolve_api_key(catalog: Catalog, provider: ProviderId) -> Result<Option<String>> {
+    let manual = manual_key(provider)?;
+    if !provider.is_primary() {
+        return Ok(manual.filter(|key| !key.trim().is_empty()));
+    }
     let provider_env_names: &[&str] = match catalog {
         Catalog::Zen => &["OPENCODE_ZEN_API_KEY", "ZEN_API_KEY"],
         Catalog::Go => &["OPENCODE_GO_API_KEY"],
@@ -686,7 +698,10 @@ mod tests {
         insert("malformed", today_ms, "not-json");
         drop(connection);
 
-        let zen = OpenCodeClient::new(ProviderKind::OpenCodeZen).unwrap();
+        let zen = OpenCodeClient::new(crate::instances::ProviderId::from(
+            ProviderKind::OpenCodeZen,
+        ))
+        .unwrap();
         let zen_stats = zen.read_local_usage_from_path(&path, 30).unwrap();
         assert_eq!(zen_stats.history.requests, 1);
         assert_eq!(zen_stats.today.estimated_cost_microusd, 1_250_000);
@@ -694,7 +709,8 @@ mod tests {
         assert_eq!(zen_stats.today.output_tokens, 7);
         assert_eq!(zen_stats.today.cached_input_tokens, 2);
 
-        let go = OpenCodeClient::new(ProviderKind::OpenCodeGo).unwrap();
+        let go = OpenCodeClient::new(crate::instances::ProviderId::from(ProviderKind::OpenCodeGo))
+            .unwrap();
         let go_stats = go.read_local_usage_from_path(&path, 30).unwrap();
         assert_eq!(go_stats.history.requests, 1);
         assert_eq!(go_stats.history.estimated_cost_microusd, 0);

@@ -1,25 +1,26 @@
 use std::{collections::HashMap, path::PathBuf, sync::mpsc::Sender, thread, time::Duration};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 
 use crate::{
     claude::{ClaudeActivator, ClaudeClient},
     codex::{CodexActivator, CodexClient, first_available},
     cursor::{CursorActivator, CursorClient},
+    instances::{Capabilities, ProviderId, ProviderInstance},
     openrouter::OpenRouterClient,
     settings::{ProviderKind, Settings},
     worker::{self, WorkerEvent, WorkerHandle},
 };
 
-pub type ProviderWorkers = HashMap<ProviderKind, WorkerHandle>;
+pub type ProviderWorkers = HashMap<ProviderId, WorkerHandle>;
 
-/// Starts every enabled provider independently. Each worker has its own poll
-/// loop, then forwards into the shared UI stream with a provider identity.
+/// Starts every enabled instance independently. Each worker has its own poll
+/// loop, then forwards into the shared UI stream with the instance identity.
 pub fn start_enabled_workers(
     settings: &Settings,
     activation_path: PathBuf,
     events: Sender<WorkerEvent>,
-) -> (ProviderWorkers, Vec<(ProviderKind, String)>) {
+) -> (ProviderWorkers, Vec<(ProviderId, String)>) {
     start_enabled_workers_with_limits(
         settings,
         activation_path,
@@ -33,16 +34,10 @@ pub fn start_enabled_workers_with_limits(
     activation_path: PathBuf,
     events: Sender<WorkerEvent>,
     cached_limits: &crate::limits::ProviderLimits,
-) -> (ProviderWorkers, Vec<(ProviderKind, String)>) {
+) -> (ProviderWorkers, Vec<(ProviderId, String)>) {
     let mut workers = ProviderWorkers::new();
     let mut errors = Vec::new();
-    for provider in crate::provider_registry::PROVIDERS
-        .iter()
-        .map(|descriptor| descriptor.kind)
-    {
-        if !settings.providers.is_enabled(provider) {
-            continue;
-        }
+    for provider in settings.enabled_providers() {
         match start_provider_worker_with_limits(
             provider,
             settings,
@@ -66,7 +61,7 @@ pub fn start_enabled_workers_with_limits(
 }
 
 pub fn start_provider_worker(
-    provider: ProviderKind,
+    provider: ProviderId,
     settings: &Settings,
     activation_path: PathBuf,
     events: Sender<WorkerEvent>,
@@ -74,180 +69,65 @@ pub fn start_provider_worker(
     start_provider_worker_with_limits(provider, settings, activation_path, events, None)
 }
 
+/// Settings shared by every worker regardless of driver.
+struct WorkerOptions {
+    activation_path: PathBuf,
+    automatic_activation: bool,
+    schedules: Vec<crate::settings::ScheduledActivation>,
+    pauses: Vec<crate::settings::AutoActivationPause>,
+    history_retention_days: u16,
+    usage_refresh_interval: Duration,
+    usage_collection_enabled: bool,
+    limit_refresh_interval: Duration,
+}
+
 pub(crate) fn start_provider_worker_with_limits(
-    provider: ProviderKind,
+    provider: ProviderId,
     settings: &Settings,
     activation_path: PathBuf,
     events: Sender<WorkerEvent>,
-    cached_limits: Option<&crate::limits::RateLimits>,
+    _cached_limits: Option<&crate::limits::RateLimits>,
 ) -> Result<WorkerHandle> {
-    let activation_path = provider_activation_path(provider, activation_path);
-    // The OpenRouter worker is replaced whenever this revision changes. Tag
-    // every forwarded event so queued output from the old worker can never
-    // overwrite the replacement worker's state.
-    let worker_revision = match provider {
-        ProviderKind::OpenRouter => settings.openrouter_credentials_revision,
-        ProviderKind::Claude => settings.claude_credentials_revision,
-        ProviderKind::Codex => settings.codex_credentials_revision,
-        _ => 0,
+    let instance = settings
+        .instance(provider)
+        .with_context(|| format!("{} is not configured", provider.display_name()))?;
+    let activates = crate::provider_registry::descriptor(provider.kind()).supports_activation;
+    let options = WorkerOptions {
+        activation_path: provider_activation_path(provider, activation_path),
+        automatic_activation: automatic_activation(provider, settings),
+        schedules: if activates {
+            schedules_for(provider, settings)
+        } else {
+            Vec::new()
+        },
+        pauses: if activates {
+            auto_activation_pauses_for(provider, settings)
+        } else {
+            Vec::new()
+        },
+        history_retention_days: settings.history_retention_days,
+        usage_refresh_interval: Duration::from_secs(settings.usage_refresh_interval.seconds()),
+        usage_collection_enabled: settings.usage_stats_collection_enabled(provider),
+        limit_refresh_interval: Duration::from_secs(instance.refresh_interval().seconds()),
     };
-    let automatic_activation = automatic_activation(provider, settings);
-    let mut worker = match provider {
-        ProviderKind::Codex => {
-            let executable = first_available(settings.codex_path.as_deref())
-                .unwrap_or_else(|_| PathBuf::from("codex"));
-            crate::logger::info(format!("Codex executable: {}", executable.display()));
-            worker::start_worker(
-                CodexClient::new(&executable)
-                    .with_profiles(crate::codex::profiles_for_settings(settings))
-                    .with_cached_limits(
-                        cached_limits.unwrap_or(&crate::limits::RateLimits::default()),
-                    ),
-                CodexClient::new(&executable),
-                CodexActivator::new(executable),
-                activation_path,
-                automatic_activation,
-                schedules_for(provider, settings),
-                auto_activation_pauses_for(provider, settings),
-                settings.history_retention_days,
-                Duration::from_secs(settings.usage_refresh_interval.seconds()),
-                settings.usage_stats_collection_enabled(provider),
-                Duration::from_secs(settings.limit_refresh_interval.seconds()),
-            )
-        }
-        ProviderKind::Claude => {
-            let mut client =
-                ClaudeClient::with_profiles(crate::claude::profiles_for_settings(settings));
-            if let Some(limits) = cached_limits {
-                client = client.with_cached_limits(limits);
-            }
-            let executable = crate::claude::first_available(settings.claude_path.as_deref())
-                .unwrap_or_else(|| PathBuf::from("claude"));
-            crate::logger::info(format!("Claude executable: {}", executable.display()));
-            worker::start_worker(
-                client,
-                ClaudeClient::new(),
-                ClaudeActivator::new(Some(executable)),
-                activation_path,
-                automatic_activation,
-                schedules_for(provider, settings),
-                auto_activation_pauses_for(provider, settings),
-                settings.history_retention_days,
-                Duration::from_secs(settings.usage_refresh_interval.seconds()),
-                settings.usage_stats_collection_enabled(provider),
-                Duration::from_secs(settings.limit_refresh_interval.seconds()),
-            )
-        }
-        ProviderKind::Cursor => {
-            let executable = crate::cursor::installation_path(settings.cursor_path.as_deref())
-                .unwrap_or_else(|| PathBuf::from("Cursor.exe"));
-            crate::logger::info(format!("Cursor executable: {}", executable.display()));
-            worker::start_worker(
-                CursorClient::new(),
-                CursorClient::new(),
-                CursorActivator,
-                activation_path,
-                false,
-                Vec::new(),
-                Vec::new(),
-                settings.history_retention_days,
-                Duration::from_secs(settings.usage_refresh_interval.seconds()),
-                settings.usage_stats_collection_enabled(provider),
-                Duration::from_secs(settings.limit_refresh_interval.seconds()),
-            )
-        }
-        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => worker::start_worker(
-            crate::opencode::OpenCodeClient::new(provider)?,
-            crate::opencode::OpenCodeClient::new(provider)?,
-            crate::opencode::OpenCodeClient::new(provider)?,
-            activation_path,
-            false,
-            Vec::new(),
-            Vec::new(),
-            settings.history_retention_days,
-            Duration::from_secs(settings.usage_refresh_interval.seconds()),
-            settings.usage_stats_collection_enabled(provider),
-            Duration::from_secs(settings.limit_refresh_interval.seconds()),
-        ),
-        ProviderKind::OpenRouter => worker::start_worker(
-            OpenRouterClient::new(settings)?,
-            OpenRouterClient::new(settings)?,
-            crate::openrouter::OpenRouterActivator,
-            activation_path,
-            false,
-            Vec::new(),
-            Vec::new(),
-            settings.history_retention_days,
-            Duration::from_secs(settings.usage_refresh_interval.seconds()),
-            settings.usage_stats_collection_enabled(provider),
-            Duration::from_secs(settings.limit_refresh_interval.seconds()),
-        ),
-        ProviderKind::Antigravity => {
-            let executable =
-                crate::antigravity::cli_available(settings.antigravity_path.as_deref());
-            if let Some(executable) = &executable {
-                crate::logger::info(format!("Antigravity executable: {}", executable.display()));
-            }
-            worker::start_worker(
-                crate::antigravity::AntigravityClient::new(settings.antigravity_path.clone()),
-                crate::antigravity::AntigravityClient::new(settings.antigravity_path.clone()),
-                crate::antigravity::AntigravityActivator,
-                activation_path,
-                false,
-                Vec::new(),
-                Vec::new(),
-                settings.history_retention_days,
-                Duration::from_secs(settings.usage_refresh_interval.seconds()),
-                false,
-                Duration::from_secs(settings.limit_refresh_interval.seconds()),
-            )
-        }
-        ProviderKind::Grok => {
-            let executable = crate::grok::cli_available(settings.grok_path.as_deref());
-            if let Some(executable) = &executable {
-                crate::logger::info(format!("Grok executable: {}", executable.display()));
-            }
-            worker::start_worker(
-                crate::grok::GrokClient::new(settings.grok_path.clone()),
-                crate::grok::GrokClient::new(settings.grok_path.clone()),
-                crate::grok::GrokActivator,
-                activation_path,
-                false,
-                Vec::new(),
-                Vec::new(),
-                settings.history_retention_days,
-                Duration::from_secs(settings.usage_refresh_interval.seconds()),
-                false,
-                Duration::from_secs(settings.limit_refresh_interval.seconds()),
-            )
-        }
-        ProviderKind::Kiro => worker::start_worker(
-            crate::kiro::KiroClient::with_paths(
-                settings.kiro_path.as_deref(),
-                settings.kiro_crew_path.as_deref(),
-                settings.kiro_cli_path.as_deref(),
-            ),
-            crate::kiro::KiroClient::with_paths(
-                settings.kiro_path.as_deref(),
-                settings.kiro_crew_path.as_deref(),
-                settings.kiro_cli_path.as_deref(),
-            ),
-            crate::kiro::KiroActivator,
-            activation_path,
-            false,
-            Vec::new(),
-            Vec::new(),
-            settings.history_retention_days,
-            Duration::from_secs(settings.usage_refresh_interval.seconds()),
-            false,
-            Duration::from_secs(settings.limit_refresh_interval.seconds()),
-        ),
-    };
+    // A replaced worker can still have queued output. Tag every forwarded
+    // event so the bridge rejects anything from an older credential.
+    let worker_revision = instance.credentials_revision;
+    let mut worker = start_driver_worker(instance, options)?;
     let source_events = worker
         .take_events()
         .ok_or_else(|| anyhow!("provider worker did not expose an event stream"))?;
+    let retired = worker.retired_flag();
     thread::spawn(move || {
         while let Ok(event) = source_events.recv() {
+            // A shut-down worker may still finish a long scan or request.
+            // Its output belongs to a replaced or disabled instance; only the
+            // clear-barrier ack must survive so a pending clear can finish.
+            if retired.load(std::sync::atomic::Ordering::Acquire)
+                && !matches!(event, WorkerEvent::UsageDataCleared(_))
+            {
+                continue;
+            }
             let mapped =
                 match event {
                     WorkerEvent::RequestStarted(kind) => Some(WorkerEvent::ProviderRequestStarted(
@@ -311,57 +191,184 @@ pub(crate) fn start_provider_worker_with_limits(
     Ok(worker)
 }
 
-/// Whether a provider's worker may start sessions on its own. Shared by
-/// worker start-up and live settings changes so the two cannot disagree.
-pub fn automatic_activation(provider: ProviderKind, settings: &Settings) -> bool {
-    // Activation starts a session with the local login, so it only
-    // applies while the default profile is being read.
-    let local_login_tracked = match provider {
-        ProviderKind::Claude => crate::claude::profiles_for_settings(settings)
-            .iter()
-            .any(|p| p.is_default() && p.enabled),
-        ProviderKind::Codex => crate::codex::profiles_for_settings(settings)
-            .iter()
-            .any(|p| p.is_default() && p.enabled),
-        _ => true,
-    };
-    settings.automatic_activation
-        && crate::provider_registry::descriptor(provider).supports_activation
-        && local_login_tracked
+fn start_driver_worker(
+    instance: &ProviderInstance,
+    options: WorkerOptions,
+) -> Result<WorkerHandle> {
+    let provider = instance.provider_id();
+    macro_rules! start_worker {
+        ($limits:expr, $usage:expr, $activator:expr, $activation:expr) => {
+            worker::start_worker(
+                $limits,
+                $usage,
+                $activator,
+                options.activation_path,
+                $activation && options.automatic_activation,
+                options.schedules,
+                options.pauses,
+                options.history_retention_days,
+                options.usage_refresh_interval,
+                options.usage_collection_enabled,
+                options.limit_refresh_interval,
+            )
+        };
+    }
+    Ok(match instance.driver {
+        ProviderKind::Codex => {
+            let executable = first_available(instance.binary_path.as_deref())
+                .unwrap_or_else(|_| PathBuf::from("codex"));
+            crate::logger::info(format!(
+                "{} executable: {}",
+                provider.display_name(),
+                executable.display()
+            ));
+            start_worker!(
+                CodexClient::for_instance(&executable, instance),
+                CodexClient::for_instance(&executable, instance),
+                CodexActivator::new(executable).with_home(instance.config_folder()),
+                true
+            )
+        }
+        ProviderKind::Claude => {
+            let folder = instance.config_folder();
+            let executable =
+                crate::claude::executable_for(instance.binary_path.as_deref(), folder.as_deref());
+            crate::logger::info(format!(
+                "{} executable: {}",
+                provider.display_name(),
+                executable
+                    .as_deref()
+                    .map_or("none".into(), |path| path.display().to_string())
+            ));
+            start_worker!(
+                ClaudeClient::for_instance(instance),
+                ClaudeClient::for_instance(instance),
+                ClaudeActivator::new(executable).with_config_folder(folder),
+                true
+            )
+        }
+        ProviderKind::Cursor => {
+            let executable = crate::cursor::installation_path(instance.binary_path.as_deref())
+                .unwrap_or_else(|| PathBuf::from("Cursor.exe"));
+            crate::logger::info(format!("Cursor executable: {}", executable.display()));
+            start_worker!(
+                CursorClient::new(),
+                CursorClient::new(),
+                CursorActivator,
+                false
+            )
+        }
+        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => start_worker!(
+            crate::opencode::OpenCodeClient::new(provider)?,
+            crate::opencode::OpenCodeClient::new(provider)?,
+            crate::opencode::OpenCodeClient::new(provider)?,
+            false
+        ),
+        ProviderKind::OpenRouter => start_worker!(
+            OpenRouterClient::new(instance)?,
+            OpenRouterClient::new(instance)?,
+            crate::openrouter::OpenRouterActivator,
+            false
+        ),
+        ProviderKind::Antigravity => {
+            let path = instance.binary_path.clone();
+            if let Some(executable) = crate::antigravity::cli_available(path.as_deref()) {
+                crate::logger::info(format!("Antigravity executable: {}", executable.display()));
+            }
+            start_worker!(
+                crate::antigravity::AntigravityClient::new(path.clone()),
+                crate::antigravity::AntigravityClient::new(path),
+                crate::antigravity::AntigravityActivator,
+                false
+            )
+        }
+        ProviderKind::Grok => {
+            let path = instance.binary_path.clone();
+            if let Some(executable) = crate::grok::cli_available(path.as_deref()) {
+                crate::logger::info(format!("Grok executable: {}", executable.display()));
+            }
+            start_worker!(
+                crate::grok::GrokClient::new(path.clone()),
+                crate::grok::GrokClient::new(path),
+                crate::grok::GrokActivator,
+                false
+            )
+        }
+        ProviderKind::Kiro => {
+            let client = || {
+                crate::kiro::KiroClient::with_paths(
+                    instance.binary_path.as_deref(),
+                    instance.kiro_crew_path.as_deref(),
+                    instance.kiro_cli_path.as_deref(),
+                )
+            };
+            start_worker!(client(), client(), crate::kiro::KiroActivator, false)
+        }
+    })
 }
 
-fn schedules_for(
-    provider: ProviderKind,
+/// Whether an instance's worker may start sessions on its own. Shared by
+/// worker start-up and live settings changes so the two cannot disagree.
+pub fn automatic_activation(provider: ProviderId, settings: &Settings) -> bool {
+    settings.instance(provider).is_some_and(|instance| {
+        instance.auto_activation && Capabilities::of(instance).auto_activation
+    })
+}
+
+pub(crate) fn schedules_for(
+    provider: ProviderId,
     settings: &Settings,
 ) -> Vec<crate::settings::ScheduledActivation> {
-    if !crate::provider_registry::descriptor(provider).supports_activation {
+    if !settings
+        .instance(provider)
+        .is_some_and(|instance| Capabilities::of(instance).auto_activation)
+    {
         return Vec::new();
     }
     settings
         .scheduled_activations
         .iter()
-        .filter(|rule| rule.provider() == Some(provider))
+        .filter(|rule| rule.targets(provider))
         .cloned()
         .collect()
 }
 
-fn auto_activation_pauses_for(
-    provider: ProviderKind,
+pub(crate) fn auto_activation_pauses_for(
+    provider: ProviderId,
     settings: &Settings,
 ) -> Vec<crate::settings::AutoActivationPause> {
-    if !crate::provider_registry::descriptor(provider).supports_activation {
+    if !settings
+        .instance(provider)
+        .is_some_and(|instance| Capabilities::of(instance).auto_activation)
+    {
         return Vec::new();
     }
     settings
         .auto_activation_pauses
         .iter()
-        .filter(|pause| pause.provider() == Some(provider))
+        .filter(|pause| pause.targets(provider))
         .cloned()
         .collect()
 }
 
-fn provider_activation_path(provider: ProviderKind, base_path: PathBuf) -> PathBuf {
-    match provider {
+/// Every instance has an independent five-hour clock. Primary instances keep
+/// the files they used before instances existed.
+fn provider_activation_path(provider: ProviderId, base_path: PathBuf) -> PathBuf {
+    if !provider.is_primary() {
+        let id = provider
+            .id()
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || ch == '-' {
+                    ch
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>();
+        return base_path.with_file_name(format!("activation-{id}.toml"));
+    }
+    match provider.kind() {
         // Preserve the existing Codex state file so current users retain their
         // established activation baseline after updating.
         ProviderKind::Codex => base_path,
@@ -381,42 +388,45 @@ fn provider_activation_path(provider: ProviderKind, base_path: PathBuf) -> PathB
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::ClaudeProfile;
+    use crate::instances::InstanceSource;
 
     #[test]
-    fn codex_activation_requires_enabled_default_regardless_of_account_order() {
-        let mut settings = Settings {
-            automatic_activation: true,
-            ..Settings::default()
-        };
-        assert!(automatic_activation(ProviderKind::Codex, &settings));
-        settings.codex_profiles = crate::codex::profiles_for_settings(&settings);
-        settings.codex_profiles[0].enabled = false;
-        settings
-            .codex_profiles
-            .push(crate::settings::CodexProfile::new("Work"));
-        assert!(!automatic_activation(ProviderKind::Codex, &settings));
-        assert!(automatic_activation(ProviderKind::Claude, &settings));
-        settings.codex_profiles[0].enabled = true;
-        settings.codex_profiles.swap(0, 1);
-        assert!(automatic_activation(ProviderKind::Codex, &settings));
+    fn activation_is_a_per_instance_setting() {
+        let mut settings = Settings::default();
+        let codex = ProviderId::primary(ProviderKind::Codex);
+        assert!(!automatic_activation(codex, &settings));
+        settings.instance_mut(codex).unwrap().auto_activation = true;
+        assert!(automatic_activation(codex, &settings));
+        let mut work = ProviderInstance::new(ProviderKind::Claude, "Work");
+        work.auto_activation = true;
+        let work = settings.add_instance(work);
+        assert!(automatic_activation(work, &settings));
+        assert!(!automatic_activation(
+            ProviderId::primary(ProviderKind::Claude),
+            &settings
+        ));
+        // A pasted credential has no CLI login to start a session with.
+        settings.instance_mut(work).unwrap().source = InstanceSource::Manual;
+        assert!(!automatic_activation(work, &settings));
     }
 
     #[test]
-    fn claude_activation_needs_the_default_profile() {
-        let mut settings = Settings {
-            automatic_activation: true,
-            ..Settings::default()
-        };
-        assert!(automatic_activation(ProviderKind::Claude, &settings));
-
-        settings.claude_profiles = vec![ClaudeProfile {
-            id: ClaudeProfile::DEFAULT_ID.into(),
-            name: "Default".into(),
-            enabled: false,
-        }];
-        assert!(!automatic_activation(ProviderKind::Claude, &settings));
-        // Other providers do not depend on Claude profiles.
-        assert!(automatic_activation(ProviderKind::Codex, &settings));
+    fn every_instance_has_its_own_activation_state() {
+        let base = PathBuf::from("state").join("activation.toml");
+        assert_eq!(
+            provider_activation_path(ProviderId::primary(ProviderKind::Codex), base.clone()),
+            base
+        );
+        assert_eq!(
+            provider_activation_path(ProviderId::primary(ProviderKind::Claude), base.clone()),
+            base.with_file_name("activation-claude.toml")
+        );
+        assert_eq!(
+            provider_activation_path(
+                ProviderId::new(ProviderKind::Claude, "claude-work"),
+                base.clone()
+            ),
+            base.with_file_name("activation-claude-work.toml")
+        );
     }
 }

@@ -18,7 +18,6 @@ mod platform {
 
     const MUTEX_NAME: &str = "Local\\CodexMinibar.9F89F5E9-770D-41AA-879F-9B15C12A2E6A";
     const POPUP_TITLE: &str = "Codex Minibar";
-    const SETTINGS_TITLE: &str = "Codex Minibar Settings";
     const EDGE_MARGIN: i32 = 20;
 
     static HOLDER: OnceLock<Mutex<Option<isize>>> = OnceLock::new();
@@ -35,9 +34,6 @@ mod platform {
                     .context("create single-instance mutex");
             }
             if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-                if crate::notifications::launched_via_toast_update() {
-                    let _ = crate::notifications::publish_toast_update_request();
-                }
                 focus_existing_window();
                 unsafe { CloseHandle(handle) };
                 return Ok(None);
@@ -75,7 +71,12 @@ mod platform {
 
     fn focus_existing_window() {
         // Prefer Settings: it is already an independently focusable surface.
-        let hwnd = find_window(SETTINGS_TITLE).or_else(|| find_window(POPUP_TITLE));
+        let hwnd = crate::i18n::Language::SUPPORTED
+            .into_iter()
+            .find_map(|language| {
+                find_window(crate::i18n::tr_in(language, "codex-minibar-settings"))
+            })
+            .or_else(|| find_window(POPUP_TITLE));
         let Some(hwnd) = hwnd else { return };
 
         unsafe {

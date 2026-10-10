@@ -1,13 +1,13 @@
 [package]
 name = "codex-minibar"
-version = "0.7.0"
+version = "1.0.0"
 edition = "2024"
 description = "Windows tray companion for monitoring AI tools usage"
 license = "Apache-2.0"
 repository = "https://github.com/vertopolkaLF/codex-minibar"
 homepage = "https://github.com/vertopolkaLF/codex-minibar"
 readme = "README.md"
-keywords = ["codex", "windows", "tray", "usage", "winui"]
+keywords = ["codex", "windows", "tray", "usage", "gpui"]
 categories = ["command-line-utilities", "gui"]
 
 [dependencies]
@@ -19,6 +19,9 @@ csv = "1"
 directories = "6"
 font8x8 = "0.3"
 fontdue = "0.9"
+# Same versions GPUI uses: Open VSX logos are decoded and shrunk before
+# they reach GPUI, whose asset cache would keep them at full size.
+image = "0.25"
 png = "0.17"
 semver = "1"
 serde = { version = "1", features = ["derive"] }
@@ -29,33 +32,66 @@ tempfile = "3"
 ureq = { version = "2", default-features = false, features = ["tls", "native-tls"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 zip = "2"
-# Pin to the last hooks-era windows-rs commit. Tag 74 rewrites windows-reactor
-# to the Component/View API and ships windows-core 0.100; both would require
-# rewriting the UI and regenerating `.vendor`.
-windows-collections = { git = "https://github.com/microsoft/windows-rs", rev = "07f344c019b8fdae4d398d4c2591596044cb416a", features = ["std"] }
+zeroize = "1"
+# windows-rs is pinned to one commit so windows-core, windows and
+# windows-numerics always resolve to matching versions.
 windows-core = { git = "https://github.com/microsoft/windows-rs", rev = "07f344c019b8fdae4d398d4c2591596044cb416a" }
-windows-reactor = { path = ".vendor" }
+gpui = { version = "0.2.2", default-features = false }
+futures = "0.3"
+raw-window-handle = "0.6"
+resvg = { version = "0.45", default-features = false }
+smallvec = "1"
+unicode-segmentation = "1"
+fluent-bundle = "0.16"
+unic-langid = "0.9"
 
 [target.'cfg(windows)'.dependencies]
+windows-numerics = { git = "https://github.com/microsoft/windows-rs", rev = "07f344c019b8fdae4d398d4c2591596044cb416a" }
 tray-icon = { version = "0.24", default-features = false }
 windows = { git = "https://github.com/microsoft/windows-rs", rev = "07f344c019b8fdae4d398d4c2591596044cb416a", default-features = false, features = [
-    "Data_Xml_Dom",
+    "std",
     "Foundation",
-    "UI_Notifications",
+    "Graphics_Effects",
+    "System",
+    "UI_Composition",
+    "UI_Composition_Desktop",
     "UI_ViewManagement",
+    "Win32_Foundation",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Composition",
+    "Win32_System_WinRT_Graphics_Direct2D",
 ] }
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_System_DataExchange", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Controls", "Win32_UI_Controls_Dialogs", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Media_Audio", "Win32_Security", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_System_DataExchange", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Accessibility", "Win32_UI_Controls", "Win32_UI_Controls_Dialogs", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
+
+[dev-dependencies]
+fluent-syntax = "0.12"
 
 [build-dependencies]
-windows-reactor-setup = { path = ".vendor-setup" }
 winresource = "0.1"
 
 [lints.clippy]
-# WinUI builders thread many callbacks and snapshot fields; packing them into
-# structs would be a rewrite, not a lint fix.
+# GPUI builders thread many callbacks and snapshot fields through one call.
 too_many_arguments = "allow"
 
 [profile.release]
 lto = "thin"
 strip = true
 panic = "abort"
+
+# GPUI rebuilds and lays out the popup during animation. Keep application
+# code debuggable while optimizing the renderer and its hot dependencies
+# for the normal `cargo run` / `cargo watch -x run` development workflow.
+[profile.dev.package]
+gpui = { opt-level = 3 }
+taffy = { opt-level = 3 }
+resvg = { opt-level = 3 }
+rustybuzz = { opt-level = 3 }
+ttf-parser = { opt-level = 3 }
+
+# GPUI 0.2.2 with its Windows blend state fixed to composite alpha (see the
+# `codex-minibar patch` note in vendor/gpui's directx_renderer.rs).
+# Translucent windows otherwise draw anti-aliased edges as gray hairlines.
+[patch.crates-io]
+gpui = { path = "vendor/gpui" }

@@ -1,385 +1,312 @@
-use super::persistence::{persist_bool, persist_update};
-use super::shared::settings_section_heading;
-use super::*;
+//! Customize: popup layout, tabs, card presentation and the Usage widget,
+//! plus the per-instance popup card table shown on provider pages.
 
-fn persist_popup_brick(
-    current: &PopupVisibility,
-    set_popup_visibility: SetState<PopupVisibility>,
-    settings_tx: Sender<Settings>,
-    brick_id: String,
-    all_tab: bool,
-    provider_tab: bool,
-) {
-    let mut next = current.clone();
-    next.set_brick(brick_id.clone(), all_tab, provider_tab);
-    set_popup_visibility.call(next);
-    persist_update(settings_tx, move |settings| {
-        settings
-            .popup_visibility
-            .set_brick(brick_id, all_tab, provider_tab);
-    });
+use gpui::{
+    AnyElement, Context, FontWeight, IntoElement, ParentElement, SharedString, Styled, div, px,
+};
+
+use super::kit::{self, Kit, Row};
+use super::window::SettingsWindow;
+use crate::settings::{PopupTabMode, ProviderInstance, Settings, TotalSpendPresentation};
+
+fn bool_row(
+    this: &SettingsWindow,
+    k: &mut Kit,
+    cx: &mut Context<SettingsWindow>,
+    id: &'static str,
+    title: &'static str,
+    description: Option<&'static str>,
+    read: fn(&Settings) -> bool,
+    write: fn(&mut Settings, bool),
+) -> AnyElement {
+    kit::toggle_row(
+        k,
+        id,
+        title,
+        description.map(SharedString::from),
+        read(&this.settings),
+        SettingsWindow::h(cx, move |this, value: bool, _, cx| {
+            this.edit(cx, move |settings| write(settings, value))
+        }),
+    )
 }
 
-fn persist_popup_provider_all(
-    current: &PopupVisibility,
-    set_popup_visibility: SetState<PopupVisibility>,
-    settings_tx: Sender<Settings>,
-    provider: ProviderKind,
-    show_on_all: bool,
-) {
-    let mut next = current.clone();
-    next.set_provider_all_tab(provider, show_on_all);
-    set_popup_visibility.call(next);
-    persist_update(settings_tx, move |settings| {
-        settings
-            .popup_visibility
-            .set_provider_all_tab(provider, show_on_all);
-    });
-}
-
-pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Element>) {
-    let use_colored_provider_icons = ctx.use_colored_provider_icons;
-    let show_used_percentage = ctx.show_used_percentage;
-    let show_usage_values = ctx.show_usage_values;
-    let show_usage_pace = ctx.show_usage_pace;
-    let compact_usage_cards = ctx.compact_usage_cards;
-    let show_account_name = ctx.show_account_name;
-    let set_use_colored_provider_icons = ctx.set_use_colored_provider_icons.clone();
-    let set_show_used_percentage = ctx.set_show_used_percentage.clone();
-    let set_show_usage_values = ctx.set_show_usage_values.clone();
-    let set_show_usage_pace = ctx.set_show_usage_pace.clone();
-    let set_compact_usage_cards = ctx.set_compact_usage_cards.clone();
-    let set_show_account_name = ctx.set_show_account_name.clone();
-    let hovered_card_id = ctx.hovered_card_id;
-    let set_hovered_card_id = ctx.set_hovered_card_id.clone();
-    let settings_tx = ctx.settings_tx.clone();
-    let apply_use_colored_provider_icons = settings_tx.clone();
-    let apply_show_used_percentage = settings_tx.clone();
-    let apply_show_usage_values = settings_tx.clone();
-    let apply_show_usage_pace = settings_tx.clone();
-    let apply_compact_usage_cards = settings_tx.clone();
-    let apply_show_account_name = settings_tx.clone();
-    let mut rows = vec![
-        settings_section_heading("Layout").with_key("customize-layout-heading"),
-        settings_toggle_card_with_description(
-            "Use two columns",
-            Some("Widen Home and Usage. Drag Home blocks between columns; provider tabs stay compact."),
-            ctx.popup_two_columns,
-            {
-                let set_value = ctx.set_popup_two_columns.clone();
-                let settings_tx = settings_tx.clone();
-                move |value| persist_bool(set_value.clone(), settings_tx.clone(), value,
-                    |settings, value| settings.popup_two_columns = value)
-            },
-            "customize-two-columns", hovered_card_id, set_hovered_card_id.clone(),
-        ).with_key("customize-two-columns"),
-        settings_section_heading("Tabs").with_key("customize-tabs-heading"),
-        settings_toggle_card_with_description(
-            "Show accounts as separate tabs",
-            Some("Give each enabled Codex or Claude account its own icon with a numbered badge. Replaces the profile switcher."),
-            ctx.show_accounts_as_tabs,
-            {
-                let set_value = ctx.set_show_accounts_as_tabs.clone();
-                let settings_tx = settings_tx.clone();
-                move |value| persist_bool(set_value.clone(), settings_tx.clone(), value,
-                    |settings, value| settings.show_accounts_as_tabs = value)
-            },
-            "customize-account-tabs", hovered_card_id, set_hovered_card_id.clone(),
-        ).with_key("customize-account-tabs"),
-        settings_toggle_card(
-            "Use monochrome icons",
-            !use_colored_provider_icons,
-            {
-                let set_use_colored_provider_icons = set_use_colored_provider_icons.clone();
-                let apply_use_colored_provider_icons = apply_use_colored_provider_icons.clone();
-                move |value: bool| {
-                    persist_bool(
-                        set_use_colored_provider_icons.clone(),
-                        apply_use_colored_provider_icons.clone(),
-                        !value,
-                        |settings, value| {
-                            settings.use_colored_provider_icons = value;
-                        },
-                    );
-                }
-            },
-            "customize-monochrome-icons",
-            hovered_card_id,
-            set_hovered_card_id.clone(),
-        )
-        .with_key("customize-monochrome-icons"),
-    ];
-    rows.extend([
-        settings_section_heading("Cards").with_key("customize-cards-heading"),
-        settings_toggle_card(
-            "Show used instead of remaining",
-            show_used_percentage,
-            {
-                let set_show_used_percentage = set_show_used_percentage.clone();
-                let apply_show_used_percentage = apply_show_used_percentage.clone();
-                move |value| {
-                    persist_bool(
-                        set_show_used_percentage.clone(),
-                        apply_show_used_percentage.clone(),
-                        value,
-                        |settings, value| {
-                            settings.show_used_percentage = value;
-                        },
-                    );
-                }
-            },
-            "customize-show-used",
-            hovered_card_id,
-            set_hovered_card_id.clone(),
-        )
-        .with_key("customize-show-used"),
-        settings_toggle_card_with_description(
-            "Show usage in values (when possible)",
-            Some("Adds exact used/limit amounts next to percentages when a provider reports them."),
-            show_usage_values,
-            {
-                let set_show_usage_values = set_show_usage_values.clone();
-                let apply_show_usage_values = apply_show_usage_values.clone();
-                move |value| {
-                    persist_bool(
-                        set_show_usage_values.clone(),
-                        apply_show_usage_values.clone(),
-                        value,
-                        |settings, value| {
-                            settings.show_usage_values = value;
-                        },
-                    );
-                }
-            },
-            "customize-show-usage-values",
-            hovered_card_id,
-            set_hovered_card_id.clone(),
-        )
-        .with_key("customize-show-usage-values"),
-        settings_toggle_card_with_description(
-            "Show usage pace",
-            Some("Marks whether you're burning quota faster or slower than an even pace."),
-            show_usage_pace,
-            {
-                let set_show_usage_pace = set_show_usage_pace.clone();
-                let apply_show_usage_pace = apply_show_usage_pace.clone();
-                move |value| {
-                    persist_bool(
-                        set_show_usage_pace.clone(),
-                        apply_show_usage_pace.clone(),
-                        value,
-                        |settings, value| {
-                            settings.show_usage_pace = value;
-                        },
-                    );
-                }
-            },
-            "customize-show-usage-pace",
-            hovered_card_id,
-            set_hovered_card_id.clone(),
-        )
-        .with_key("customize-show-usage-pace"),
-        settings_toggle_card_with_description(
-            "Use compact usage cards",
-            Some("Use the alternative full-card progress layout while keeping the standard element positions."),
-            compact_usage_cards,
-            {
-                let set_compact_usage_cards = set_compact_usage_cards.clone();
-                let apply_compact_usage_cards = apply_compact_usage_cards.clone();
-                move |value| {
-                    persist_bool(
-                        set_compact_usage_cards.clone(),
-                        apply_compact_usage_cards.clone(),
-                        value,
-                        |settings, value| {
-                            settings.compact_usage_cards = value;
-                        },
-                    );
-                }
-            },
-            "customize-compact-usage-cards",
-            hovered_card_id,
-            set_hovered_card_id.clone(),
-        )
-        .with_key("customize-compact-usage-cards"),
-        settings_toggle_card(
-            "Show account name",
-            show_account_name,
-            {
-                let set_show_account_name = set_show_account_name.clone();
-                let apply_show_account_name = apply_show_account_name.clone();
-                move |value| {
-                    persist_bool(
-                        set_show_account_name.clone(),
-                        apply_show_account_name.clone(),
-                        value,
-                        |settings, value| {
-                            settings.show_account_name = value;
-                        },
-                    );
-                }
-            },
-            "customize-show-account-name",
-            hovered_card_id,
-            set_hovered_card_id.clone(),
-        )
-        .with_key("customize-show-account-name"),
-    ]);
-    rows.extend(home_settings_cards(ctx));
-    ("Customize", rows)
-}
-
-pub(super) fn home_settings_cards(ctx: &SettingsPageContext<'_>) -> Vec<Element> {
-    let show_total_spend_on_all_tab = ctx.show_total_spend_on_all_tab;
-    let total_spend_presentation = ctx.total_spend_presentation;
-    let set_show_total_spend_on_all_tab = ctx.set_show_total_spend_on_all_tab.clone();
-    let set_total_spend_presentation = ctx.set_total_spend_presentation.clone();
-    let hovered_card_id = ctx.hovered_card_id;
-    let set_hovered_card_id = ctx.set_hovered_card_id.clone();
-    let settings_tx = ctx.settings_tx.clone();
-    let apply_show_total_spend = settings_tx.clone();
-    let apply_total_spend_presentation = settings_tx.clone();
-    let rows = vec![
-        settings_section_heading("Usage Widget").with_key("popup-home-tab-heading"),
-        settings_toggle_card(
-            "Show on Home tab",
-            show_total_spend_on_all_tab,
-            move |value| {
-                persist_bool(
-                    set_show_total_spend_on_all_tab.clone(),
-                    apply_show_total_spend.clone(),
-                    value,
-                    |settings, value| {
-                        settings.show_total_spend_on_all_tab = value;
-                    },
-                );
-            },
-            "popup-show-total-spend",
-            hovered_card_id,
-            set_hovered_card_id.clone(),
-        )
-        .with_key("popup-show-total-spend"),
-        settings_control_card(
-            "Layout",
-            None,
-            ComboBox::new(["Donut", "Cards"])
-                .selected_index(total_spend_presentation.index())
-                .on_selection_changed({
-                    let apply_total_spend_presentation = apply_total_spend_presentation.clone();
-                    move |choice| {
-                        let value = TotalSpendPresentation::from_index(choice);
-                        set_total_spend_presentation.call(value);
-                        persist_update(apply_total_spend_presentation.clone(), move |settings| {
-                            settings.total_spend_presentation = value;
-                        });
-                    }
-                }),
-            "popup-total-spend-layout",
-            hovered_card_id,
-            set_hovered_card_id.clone(),
-        )
-        .with_key("popup-total-spend-layout"),
-    ];
-
-    rows
-}
-
-pub(super) fn provider_settings_cards(
-    provider: ProviderKind,
-    ctx: &SettingsPageContext<'_>,
-) -> Vec<Element> {
-    let popup_visibility = ctx.popup_visibility;
-    let discovered_popup_bricks = ctx.discovered_popup_bricks;
-    let set_popup_visibility = ctx.set_popup_visibility.clone();
-    let settings_tx = ctx.settings_tx.clone();
-    let section_all = popup_visibility.provider_shown_on_all(provider);
-    let mut brick_rows = vec![settings_brick_table_header(provider.id())];
-
-    let extra_ids = popup_visibility
-        .bricks
-        .keys()
-        .chain(discovered_popup_bricks.keys())
-        .cloned()
-        .collect::<Vec<_>>();
-    for brick_id in crate::provider_registry::settings_brick_ids(provider, &extra_ids) {
-        let snapshot_all = popup_visibility.clone();
-        let snapshot_tab = popup_visibility.clone();
-        let visibility = snapshot_all.visibility_for(&brick_id);
-        let label = crate::provider_registry::settings_brick_label(
-            provider,
-            &brick_id,
-            discovered_popup_bricks,
-        );
-        let brick_id_for_all = brick_id.clone();
-        let brick_id_for_tab = brick_id.clone();
-        let set_visibility_all = set_popup_visibility.clone();
-        let set_visibility_tab = set_popup_visibility.clone();
-        let settings_tx_all = settings_tx.clone();
-        let settings_tx_tab = settings_tx.clone();
-        brick_rows.push(settings_brick_row(
-            label,
-            visibility.all_tab,
-            visibility.provider_tab,
-            section_all,
-            move |all_tab| {
-                let provider_tab = snapshot_all.visibility_for(&brick_id_for_all).provider_tab;
-                persist_popup_brick(
-                    &snapshot_all,
-                    set_visibility_all.clone(),
-                    settings_tx_all.clone(),
-                    brick_id_for_all.clone(),
-                    all_tab,
-                    provider_tab,
-                );
-            },
-            move |provider_tab| {
-                let all_tab = snapshot_tab.visibility_for(&brick_id_for_tab).all_tab;
-                persist_popup_brick(
-                    &snapshot_tab,
-                    set_visibility_tab.clone(),
-                    settings_tx_tab.clone(),
-                    brick_id_for_tab.clone(),
-                    all_tab,
-                    provider_tab,
-                );
-            },
-            &format!("{}-{}", provider.id(), brick_id),
-        ));
+impl SettingsWindow {
+    pub(super) fn customize_page(
+        &mut self,
+        k: &mut Kit,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let layout = kit::card_of(k, |k| {
+            vec![bool_row(
+                self,
+                k,
+                cx,
+                "customize-two-columns",
+                crate::i18n::tr("use-two-columns"),
+                Some(crate::i18n::tr(
+                    "widen-home-and-usage-drag-home-blocks-between-columns-provider-ta",
+                )),
+                |s| s.popup_two_columns,
+                |s, v| s.popup_two_columns = v,
+            )]
+        });
+        let tab_mode = self.settings.popup_tab_mode;
+        let tabs = kit::card_of(k, |k| {
+            vec![
+                kit::dropdown_row(
+                    k,
+                    "customize-tab-mode",
+                    crate::i18n::tr("several-accounts-of-one-provider"),
+                    Some(crate::i18n::tr(
+                        "separate-tabs-gives-every-instance-its-own-tab-grouped-shows-one",
+                    )),
+                    PopupTabMode::ALL
+                        .iter()
+                        .map(|mode| SharedString::from(mode.label()))
+                        .collect(),
+                    tab_mode.index(),
+                    false,
+                    Self::h(cx, |this, index: usize, _, cx| {
+                        let mode = PopupTabMode::from_index(index as i32);
+                        this.edit(cx, move |settings| settings.popup_tab_mode = mode)
+                    }),
+                ),
+                bool_row(
+                    self,
+                    k,
+                    cx,
+                    "customize-mono-icons",
+                    crate::i18n::tr("use-monochrome-icons"),
+                    Some(crate::i18n::tr(
+                        "draw-provider-marks-in-the-popup-without-brand-colors",
+                    )),
+                    |s| !s.use_colored_provider_icons,
+                    |s, v| s.use_colored_provider_icons = !v,
+                ),
+            ]
+        });
+        let cards = kit::card_of(k, |k| {
+            vec![
+                bool_row(
+                    self,
+                    k,
+                    cx,
+                    "customize-show-used",
+                    crate::i18n::tr("show-used-instead-of-remaining"),
+                    None,
+                    |s| s.show_used_percentage,
+                    |s, v| s.show_used_percentage = v,
+                ),
+                bool_row(
+                    self,
+                    k,
+                    cx,
+                    "customize-usage-values",
+                    crate::i18n::tr("show-usage-in-values-when-possible"),
+                    Some(crate::i18n::tr(
+                        "adds-exact-used-limit-amounts-next-to-percentages-when-a-provider",
+                    )),
+                    |s| s.show_usage_values,
+                    |s, v| s.show_usage_values = v,
+                ),
+                bool_row(
+                    self,
+                    k,
+                    cx,
+                    "customize-usage-pace",
+                    crate::i18n::tr("show-usage-pace"),
+                    Some(crate::i18n::tr(
+                        "marks-whether-you-re-burning-quota-faster-or-slower-than-an-even",
+                    )),
+                    |s| s.show_usage_pace,
+                    |s, v| s.show_usage_pace = v,
+                ),
+                bool_row(
+                    self,
+                    k,
+                    cx,
+                    "customize-legacy-cards",
+                    crate::i18n::tr("use-legacy-usage-cards"),
+                    Some(crate::i18n::tr(
+                        "show-the-older-layout-with-a-header-a-thin-bar-and-a-footer",
+                    )),
+                    |s| !s.compact_usage_cards,
+                    |s, v| s.compact_usage_cards = !v,
+                ),
+                bool_row(
+                    self,
+                    k,
+                    cx,
+                    "customize-account-name",
+                    crate::i18n::tr("show-account-name"),
+                    None,
+                    |s| s.show_account_name,
+                    |s, v| s.show_account_name = v,
+                ),
+            ]
+        });
+        let presentation = self.settings.total_spend_presentation;
+        let widget = kit::card_of(k, |k| {
+            vec![
+                bool_row(
+                    self,
+                    k,
+                    cx,
+                    "customize-spend-home",
+                    crate::i18n::tr("show-on-home-tab"),
+                    None,
+                    |s| s.show_total_spend_on_all_tab,
+                    |s, v| s.show_total_spend_on_all_tab = v,
+                ),
+                Row::new("customize-spend-layout", crate::i18n::tr("layout"))
+                    .trailing(kit::segmented(
+                        k,
+                        "customize-spend-layout",
+                        &[crate::i18n::tr("donut"), crate::i18n::tr("cards")],
+                        presentation.index().max(0) as usize,
+                        !self.settings.show_total_spend_on_all_tab,
+                        Self::h(cx, |this, index: usize, _, cx| {
+                            let value = TotalSpendPresentation::from_index(index as i32);
+                            this.edit(cx, move |settings| {
+                                settings.total_spend_presentation = value
+                            })
+                        }),
+                    ))
+                    .render(k),
+            ]
+        });
+        vec![
+            kit::section_heading(k, crate::i18n::tr("layout")),
+            layout,
+            kit::section_heading(k, crate::i18n::tr("tabs")),
+            tabs,
+            kit::section_heading(k, crate::i18n::tr("cards")),
+            cards,
+            kit::section_heading(k, crate::i18n::tr("usage-widget")),
+            widget,
+        ]
     }
 
-    let section_snapshot = popup_visibility.clone();
-    let set_section = set_popup_visibility.clone();
-    let section_tx = settings_tx.clone();
-    let expanded = ctx.collapsed_popup_provider.as_deref() != Some(provider.id());
-    let set_collapsed = ctx.set_collapsed_popup_provider.clone();
-    let body_height = Some(settings_brick_body_height(brick_rows.len()));
-    vec![
-        settings_checkbox_expander(
-            "Popup cards",
-            section_all,
-            move |show_on_all| {
-                persist_popup_provider_all(
-                    &section_snapshot,
-                    set_section.clone(),
-                    section_tx.clone(),
-                    provider,
-                    show_on_all,
+    /// Popup card visibility for one instance's page. Card visibility is
+    /// per instance; the Home column follows the General "Show on Home".
+    pub(super) fn popup_cards_section(
+        &mut self,
+        instance: &ProviderInstance,
+        k: &mut Kit,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let provider = instance.driver;
+        let instance_id = instance.provider_id();
+        let show_on_home = instance.show_on_home;
+        let visibility = self.settings.popup_visibility.clone();
+        let extra_ids = visibility
+            .bricks
+            .keys()
+            .chain(self.discovered_bricks.keys())
+            .cloned()
+            .collect::<Vec<_>>();
+        let theme = k.theme.clone();
+        let header_cell = |label: &'static str| {
+            div()
+                .w(px(56.0))
+                .flex()
+                .justify_center()
+                .text_size(px(12.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.text_secondary)
+                .child(label)
+        };
+        let mut table = div().flex().flex_col().w_full().child(
+            div()
+                .flex()
+                .items_center()
+                .h(px(28.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(12.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.text_secondary)
+                        .child(crate::i18n::tr("card")),
                 )
-            },
-            expanded,
-            move |expanded| {
-                set_collapsed.call(if expanded {
-                    None
-                } else {
-                    Some(provider.id().to_string())
+                .child(header_cell(crate::i18n::tr("home")))
+                .child(header_cell(crate::i18n::tr("tab"))),
+        );
+        for brick_id in crate::provider_registry::settings_brick_ids(provider, &extra_ids) {
+            let current = visibility.instance_visibility_for(instance_id.id(), &brick_id);
+            let label = crate::provider_registry::settings_brick_label(
+                provider,
+                &brick_id,
+                &self.discovered_bricks,
+            );
+            let make = |all_tab: Option<bool>| {
+                let brick_id = brick_id.clone();
+                Self::h(cx, move |this, checked: bool, _, cx| {
+                    let id = instance_id.id().to_owned();
+                    let brick = brick_id.clone();
+                    let now = this
+                        .settings
+                        .popup_visibility
+                        .instance_visibility_for(&id, &brick);
+                    let (all, tab) = match all_tab {
+                        Some(_) => (checked, now.provider_tab),
+                        None => (now.all_tab, checked),
+                    };
+                    this.edit(cx, move |settings| {
+                        settings.popup_visibility.set_instance_brick(
+                            id.clone(),
+                            brick.clone(),
+                            all,
+                            tab,
+                        )
+                    })
                 })
+            };
+            let home = kit::checkbox(
+                k,
+                format!("brick-home-{}-{brick_id}", instance_id.id()),
+                current.all_tab,
+                !show_on_home,
+                None,
+                make(Some(true)),
+            );
+            let tab = kit::checkbox(
+                k,
+                format!("brick-tab-{}-{brick_id}", instance_id.id()),
+                current.provider_tab,
+                false,
+                None,
+                make(None),
+            );
+            table = table.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .h(px(34.0))
+                    .border_t_1()
+                    .border_color(theme.divider)
+                    .child(div().flex_1().text_size(px(14.0)).child(label))
+                    .child(div().w(px(56.0)).flex().justify_center().child(home))
+                    .child(div().w(px(56.0)).flex().justify_center().child(tab)),
+            );
+        }
+        let card_id = format!("popup-cards-{}", instance_id.id());
+        let expanded = !self.is_expanded(&format!("{card_id}-collapsed"));
+        let collapse_id = format!("{card_id}-collapsed");
+        let on_toggle = Self::h(cx, move |this, open: bool, _, cx| {
+            this.set_expanded(collapse_id.clone(), !open);
+            cx.notify();
+        });
+        let header = Row::new(card_id.clone(), crate::i18n::tr("popup-cards")).description(
+            k,
+            if show_on_home {
+                crate::i18n::tr("choose-which-cards-this-account-shows-on-home-and-on-its-own-tab")
+            } else {
+                crate::i18n::tr("choose-which-cards-this-account-shows-on-its-own-tab-turn-on-show")
             },
-            body_height,
-            format!("popup-provider-{}", provider.id()),
-            ctx.hovered_card_id,
-            ctx.set_hovered_card_id.clone(),
-            vstack(brick_rows).spacing(0.0),
-        )
-        .with_key(format!("popup-provider-{}", provider.id())),
-    ]
+        );
+        let table = table.into_any_element();
+        kit::expander(k, card_id, header, expanded, on_toggle, move |_| table)
+    }
 }

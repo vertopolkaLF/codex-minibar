@@ -192,7 +192,7 @@ fn combine_accounts(cache: &mut Cache) {
 }
 
 fn cache(client: &OpenRouterClient) -> Result<Cache> {
-    let raw = store::with_store(|s| s.load_openrouter_analytics())?;
+    let raw = store::with_store(|s| s.load_openrouter_analytics(client.provider))?;
     let mut cached: Cache = raw
         .map(|s| serde_json::from_str(&s))
         .transpose()?
@@ -235,7 +235,7 @@ fn statistics(cache: &Cache, history_days: u16) -> UsageStatistics {
     }
     combined
 }
-fn persist(cache: &Cache, at: DateTime<Utc>) -> Result<()> {
+fn persist(client: &OpenRouterClient, cache: &Cache, at: DateTime<Utc>) -> Result<()> {
     let models: Vec<_> = cache
         .days
         .iter()
@@ -246,7 +246,9 @@ fn persist(cache: &Cache, at: DateTime<Utc>) -> Result<()> {
         })
         .collect();
     let encoded = serde_json::to_string(cache)?;
-    store::with_store(|s| s.save_openrouter_analytics(&encoded, &daily(cache), &models, at))
+    store::with_store(|s| {
+        s.save_openrouter_analytics(client.provider, &encoded, &daily(cache), &models, at)
+    })
 }
 
 pub(crate) fn cached_account_models(
@@ -272,7 +274,7 @@ pub(crate) fn cached_account_models(
 pub(super) fn load(client: &OpenRouterClient, history_days: u16) -> Result<UsageStatistics> {
     let cached = cache(client)?;
     // Keep overview totals consistent with account removal/key replacement too.
-    persist(&cached, Utc::now())?;
+    persist(client, &cached, Utc::now())?;
     Ok(statistics(&cached, history_days))
 }
 fn boundaries(date: NaiveDate) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
@@ -383,6 +385,13 @@ fn query(
             Err(ureq::Error::Status(401 | 403, _)) => anyhow::bail!(
                 "OpenRouter usage stats: save a valid management key in Providers / OpenRouter"
             ),
+            // A dropped connection or slow response is usually momentary.
+            // Retry it instead of abandoning a long history recovery.
+            Err(error @ ureq::Error::Transport(_)) if attempt < 2 => {
+                crate::logger::info(format!(
+                    "OpenRouter analytics request failed, retrying: {error}"
+                ));
+            }
             Err(error) => {
                 return Err(anyhow::anyhow!(
                     "OpenRouter analytics request failed: {error}"
@@ -401,6 +410,47 @@ fn first_fetch_day(today: NaiveDate, history_days: u16) -> NaiveDate {
     today - Duration::days(i64::from(days - 1))
 }
 
+/// Most local days one analytics request may cover. A first recovery fetches
+/// months of history; one request per day burns the analytics rate limit.
+const DAYS_PER_REQUEST: usize = 14;
+
+// Unbucketed queries use coarse UTC rollups. A local day crossing UTC midnight
+// can include the same rollup in neighboring days. Hour/minute queries use
+// explicit timestamps; each day aggregates only the buckets inside its exact,
+// non-overlapping local interval.
+fn day_granularity(start: DateTime<Utc>, end: DateTime<Utc>) -> &'static str {
+    if start.timestamp().rem_euclid(3600) == 0 && end.timestamp().rem_euclid(3600) == 0 {
+        "hour"
+    } else {
+        "minute"
+    }
+}
+
+/// A local day that needs fetching: its date and exact UTC interval.
+type StaleDay = (NaiveDate, DateTime<Utc>, DateTime<Utc>);
+
+/// Group newest-first stale days into runs of adjacent days that one request
+/// can cover. Minute buckets are dense, so those days are still fetched alone.
+fn stale_chunks(stale: &[StaleDay]) -> Vec<&[StaleDay]> {
+    let hourly = |&(_, start, end): &StaleDay| day_granularity(start, end) == "hour";
+    let mut chunks = Vec::new();
+    let mut begin = 0;
+    for index in 1..=stale.len() {
+        let joins = stale.get(index).is_some_and(|older| {
+            let (_, newer_start, _) = stale[index - 1];
+            older.2 == newer_start
+                && index - begin < DAYS_PER_REQUEST
+                && hourly(&stale[begin])
+                && hourly(older)
+        });
+        if !joins {
+            chunks.push(&stale[begin..index]);
+            begin = index;
+        }
+    }
+    chunks
+}
+
 fn refresh_account(
     account: &mut AccountCache,
     history_days: u16,
@@ -410,49 +460,42 @@ fn refresh_account(
     let today = now.with_timezone(&Local).date_naive();
     let first = first_fetch_day(today, history_days);
     // Newest days first: any saved progress contains the useful current usage.
-    let dates: Vec<_> = first
-        .iter_days()
-        .take_while(|date| *date <= today)
-        .collect();
-    for date in dates.into_iter().rev() {
+    let mut stale = Vec::new();
+    for date in first.iter_days().take_while(|date| *date <= today) {
         let (start, end) = boundaries(date)?;
-        if account
+        if !account
             .days
             .get(&date)
             .is_some_and(|day| fresh(day, start, end, now))
         {
-            continue;
+            stale.push((date, start, end));
         }
-        let models = if start < now {
-            // Unbucketed queries use coarse UTC rollups. A local day crossing
-            // UTC midnight can include the same rollup in neighboring days.
-            // Hour/minute queries use explicit timestamps; only aggregate the
-            // buckets inside this exact, non-overlapping local-day interval.
-            let granularity = if start.timestamp().rem_euclid(3600) == 0
-                && end.timestamp().rem_euclid(3600) == 0
-            {
-                "hour"
-            } else {
-                "minute"
-            };
-            let query_end = end.min(now);
-            let mut models = BTreeMap::<String, TokenUsage>::new();
-            for row in complete_bucket_rows(start, query_end, granularity, &mut fetch)? {
-                models.entry(row.model).or_default().add(&row.usage);
-            }
-            models
+    }
+    stale.reverse();
+    for chunk in stale_chunks(&stale) {
+        let (_, start, _) = *chunk.last().context("empty OpenRouter analytics chunk")?;
+        let (_, _, end) = chunk[0];
+        let rows = if start < now {
+            complete_bucket_rows(start, end.min(now), day_granularity(start, end), &mut fetch)?
         } else {
-            BTreeMap::new()
+            Vec::new()
         };
-        account.days.insert(
-            date,
-            CachedDay {
-                start,
-                end,
-                fetched_at: now,
-                models,
-            },
-        );
+        // Commit the chunk's days only once every one of its requests succeeded.
+        for &(date, start, end) in chunk {
+            let mut models = BTreeMap::<String, TokenUsage>::new();
+            for row in rows.iter().filter(|row| row.at >= start && row.at < end) {
+                models.entry(row.model.clone()).or_default().add(&row.usage);
+            }
+            account.days.insert(
+                date,
+                CachedDay {
+                    start,
+                    end,
+                    fetched_at: now,
+                    models,
+                },
+            );
+        }
     }
     let current_hour = hour_start(now.with_timezone(&Local));
     let start = (current_hour - Duration::hours(47)).with_timezone(&Utc);
@@ -505,7 +548,7 @@ pub(super) fn refresh(client: &OpenRouterClient, history_days: u16) -> Result<Us
             );
             if client.cancelled.load(Ordering::Acquire) {
                 combine_accounts(&mut cache);
-                persist(&cache, Utc::now())?;
+                persist(client, &cache, Utc::now())?;
                 anyhow::bail!("OpenRouter analytics refresh cancelled");
             }
             account.error = result.err().map(|error| error.to_string());
@@ -515,7 +558,7 @@ pub(super) fn refresh(client: &OpenRouterClient, history_days: u16) -> Result<Us
         // from that point instead of repeating the entire 90-day recovery.
         wait_for_request(&client.cancelled, StdDuration::ZERO)?;
         combine_accounts(&mut cache);
-        persist(&cache, Utc::now())?;
+        persist(client, &cache, Utc::now())?;
     }
     Ok(statistics(&cache, history_days))
 }
@@ -741,13 +784,12 @@ mod tests {
     fn daily_history_requires_time_buckets_instead_of_overlapping_rollup_totals() {
         let now = boundaries(Local::now().date_naive()).unwrap().0 + Duration::hours(12);
         let mut account = AccountCache::default();
-        refresh_account(&mut account, 30, now, |start, _, granularity| {
+        refresh_account(&mut account, 30, now, |start, end, granularity| {
             assert!(
                 granularity.is_some(),
                 "Unbucketed daily queries can count neighboring UTC days twice"
             );
-            let field = format!("date__{}", granularity.unwrap());
-            Ok(envelope(vec![fixture(&start.to_rfc3339(), &field)]))
+            Ok(morning_rows(start, end, granularity.unwrap()))
         })
         .unwrap();
         assert_eq!(account.days.len(), 90);
@@ -772,6 +814,16 @@ mod tests {
         let mut row = json!({"model":"test/model","request_count":"2","credits_usage":"0.123456","tokens_prompt":"100","tokens_completion":20,"cached_tokens":40});
         row[field] = json!(at);
         row
+    }
+    /// One usage row at 06:00 local time of every day inside `[start, end)`.
+    fn morning_rows(start: DateTime<Utc>, end: DateTime<Utc>, granularity: &str) -> String {
+        let field = format!("date__{granularity}");
+        let rows = std::iter::successors(Some(start), |at| Some(*at + Duration::hours(1)))
+            .take_while(|at| *at < end)
+            .filter(|at| at.with_timezone(&Local).hour() == 6)
+            .map(|at| fixture(&at.to_rfc3339(), &field))
+            .collect();
+        envelope(rows)
     }
     fn envelope(rows: Vec<Value>) -> String {
         json!({"data":{"metadata":{"truncated":false},"data":rows}}).to_string()
@@ -1155,27 +1207,38 @@ mod tests {
         let now = boundaries(Local::now().date_naive()).unwrap().0 + Duration::hours(12);
         let mut account = AccountCache::default();
         let mut requests = 0;
-        let result = refresh_account(&mut account, 30, now, |start, _, granularity| {
+        let hourly = (0..90).all(|days| {
+            let (start, end) = boundaries(now.date_naive() - Duration::days(days)).unwrap();
+            day_granularity(start, end) == "hour"
+        });
+        let result = refresh_account(&mut account, 30, now, |start, end, granularity| {
             requests += 1;
             if requests == 3 {
                 anyhow::bail!("429");
             }
-            let field = format!("date__{}", granularity.unwrap());
-            Ok(envelope(vec![fixture(&start.to_rfc3339(), &field)]))
+            Ok(morning_rows(start, end, granularity.unwrap()))
         });
         assert!(result.is_err());
-        assert_eq!(account.days.len(), 2);
+        let saved = if hourly { 2 * DAYS_PER_REQUEST } else { 2 };
+        assert_eq!(account.days.len(), saved);
         let encoded = serde_json::to_string(&account).unwrap();
         let mut restored: AccountCache = serde_json::from_str(&encoded).unwrap();
         let mut resumed = 0;
-        refresh_account(&mut restored, 30, now, |start, _, granularity| {
+        refresh_account(&mut restored, 30, now, |start, end, granularity| {
             resumed += 1;
-            let field = format!("date__{}", granularity.unwrap());
-            Ok(envelope(vec![fixture(&start.to_rfc3339(), &field)]))
+            Ok(morning_rows(start, end, granularity.unwrap()))
         })
         .unwrap();
-        assert_eq!(resumed, 89); // 88 remaining daily queries + hourly snapshot.
+        // Remaining history requests plus the hourly snapshot.
+        let remaining = (90 - saved).div_ceil(if hourly { DAYS_PER_REQUEST } else { 1 });
+        assert_eq!(resumed, remaining + 1);
         assert_eq!(restored.days.len(), 90);
+        assert!(
+            restored
+                .days
+                .values()
+                .all(|day| day.models["test/model"].requests == 2)
+        );
         refresh_account(&mut restored, 30, now, |_, _, _| {
             panic!("fresh account must reuse its cache")
         })
@@ -1191,6 +1254,27 @@ mod tests {
             Some("Add a management key to load usage statistics.".into());
         sync_accounts(&mut cache, 1, &[("api-only".into(), String::new())]);
         assert!(statistics(&cache, 30).accounts["api-only"].error.is_none());
+    }
+
+    #[test]
+    fn stale_days_batch_only_adjacent_hour_aligned_runs() {
+        let day = |offset: i64| {
+            let start =
+                Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap() - Duration::days(offset);
+            let date = start.date_naive();
+            (date, start, start + Duration::days(1))
+        };
+        // Newest first: 20 adjacent days, a gap, then two more.
+        let mut stale: Vec<_> = (0..20).map(day).collect();
+        stale.extend([day(25), day(26)]);
+        let sizes: Vec<_> = stale_chunks(&stale).iter().map(|c| c.len()).collect();
+        assert_eq!(sizes, vec![DAYS_PER_REQUEST, 20 - DAYS_PER_REQUEST, 2]);
+        // A day that is not hour-aligned is fetched with minute buckets, alone.
+        let mut odd = day(30);
+        odd.1 += Duration::minutes(30);
+        let mixed = [day(28), day(29), odd];
+        let sizes: Vec<_> = stale_chunks(&mixed).iter().map(|c| c.len()).collect();
+        assert_eq!(sizes, vec![2, 1]);
     }
 
     #[test]

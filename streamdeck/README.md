@@ -4,6 +4,21 @@ This is a thin Stream Deck plugin. It stores each key's configuration in the
 Stream Deck Property Inspector and reads sanitized quota snapshots from the
 running Codex Minibar process over loopback.
 
+Each key selects one provider instance. The Property Inspector lists the
+enabled instances reported by Minibar (plus any instance a key already
+references, marked disabled or unavailable); while Minibar is not running it
+falls back to the built-in providers. A removed or disabled instance stays
+unavailable instead of showing another instance's quota. When a driver has
+several enabled instances, logo watermarks carry the instance badge.
+
+Keys saved before provider instances migrate automatically: a Claude/Codex
+key on the Default account selects the primary instance (the driver id) and
+any other account selects the instance that kept its profile id.
+
+The bridge reports instance ids in `id`, the driver in `kind`, and the
+instance `badge`. Snapshots contain quota data and display names, never
+authentication credentials.
+
 ## Development
 
 From this directory:
@@ -11,6 +26,7 @@ From this directory:
 ```powershell
 npm install
 npm run build
+npm test
 npx streamdeck dev
 ```
 

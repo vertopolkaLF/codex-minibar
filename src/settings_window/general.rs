@@ -1,317 +1,249 @@
-use super::persistence::{persist_bool, persist_update};
-use super::shared::settings_section_heading;
-use super::*;
+//! General: startup, Usage Stats and the reset feed.
 
-pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Element>) {
-    let start_at_login = ctx.start_at_login;
-    let limit_refresh_interval = ctx.limit_refresh_interval;
-    let usage_stats_enabled = ctx.usage_stats_enabled;
-    let usage_stats_excluded_providers = ctx.usage_stats_excluded_providers;
-    let available_usage_providers = crate::provider_registry::PROVIDERS
-        .iter()
-        .filter(|descriptor| match descriptor.kind {
-            ProviderKind::Codex => ctx.codex_enabled,
-            ProviderKind::Claude => ctx.claude_enabled,
-            ProviderKind::Cursor => ctx.cursor_enabled,
-            ProviderKind::OpenCodeZen => ctx.opencode_zen_enabled,
-            ProviderKind::OpenCodeGo => ctx.opencode_go_enabled,
-            ProviderKind::OpenRouter => ctx.openrouter_enabled,
-            ProviderKind::Antigravity | ProviderKind::Grok | ProviderKind::Kiro => false,
-        })
-        .map(|descriptor| descriptor.kind)
-        .collect::<Vec<_>>();
-    let usage_refresh_interval = ctx.usage_refresh_interval;
-    let forced_reset_feed_enabled = ctx.forced_reset_feed_enabled;
-    let forced_reset_notifications = ctx.forced_reset_notifications;
-    let reset_announcement_refresh_interval = ctx.reset_announcement_refresh_interval;
-    let set_start_at_login = ctx.set_start_at_login.clone();
-    let set_usage_stats_enabled = ctx.set_usage_stats_enabled.clone();
-    let set_usage_stats_excluded_providers = ctx.set_usage_stats_excluded_providers.clone();
-    let set_limit_refresh_interval = ctx.set_limit_refresh_interval.clone();
-    let set_usage_refresh_interval = ctx.set_usage_refresh_interval.clone();
-    let set_forced_reset_feed_enabled = ctx.set_forced_reset_feed_enabled.clone();
-    let set_forced_reset_notifications = ctx.set_forced_reset_notifications.clone();
-    let set_reset_announcement_refresh_interval =
-        ctx.set_reset_announcement_refresh_interval.clone();
-    let hovered_card_id = ctx.hovered_card_id;
-    let set_hovered_card_id = ctx.set_hovered_card_id.clone();
-    let settings_tx = ctx.settings_tx.clone();
-    let apply_start_at_login = settings_tx.clone();
-    let apply_usage_stats_enabled = settings_tx.clone();
-    let apply_limit_refresh_interval = settings_tx.clone();
-    let apply_usage_refresh_interval = settings_tx.clone();
-    let apply_forced_reset_feed_enabled = settings_tx.clone();
-    let apply_forced_reset_notifications = settings_tx.clone();
-    let apply_reset_announcement_refresh_interval = settings_tx.clone();
-    (
-        "General",
-        vec![
-            settings_toggle_card(
-                "Start with Windows",
-                start_at_login,
-                move |value| {
-                    persist_bool(
-                        set_start_at_login.clone(),
-                        apply_start_at_login.clone(),
-                        value,
-                        |settings, value| {
-                            settings.start_at_login = value;
-                        },
-                    );
-                },
-                "general-startup",
-                hovered_card_id,
-                set_hovered_card_id.clone(),
-            )
-            .with_key("general-startup"),
-            settings_control_card(
-                "Refresh limits",
-                None,
-                ComboBox::new([
-                    "30 seconds",
-                    "1 minute",
-                    "5 minutes",
-                    "10 minutes",
-                    "15 minutes",
-                ])
-                .selected_index(limit_refresh_interval.index())
-                .on_selection_changed(move |choice: i32| {
-                    let value = LimitRefreshInterval::from_index(choice);
-                    set_limit_refresh_interval.call(value);
-                    persist_update(apply_limit_refresh_interval.clone(), move |settings| {
-                        settings.limit_refresh_interval = value;
-                    });
-                }),
-                "general-limit-refresh-interval",
-                hovered_card_id,
-                set_hovered_card_id.clone(),
-            )
-            .with_key("general-limit-refresh-interval"),
-            settings_section_heading("Usage Stats").with_key("general-usage-stats-heading"),
-            settings_toggle_card(
-                "Enable Usage Stats",
-                usage_stats_enabled,
-                move |value| {
-                    persist_bool(
-                        set_usage_stats_enabled.clone(),
-                        apply_usage_stats_enabled.clone(),
-                        value,
-                        |settings, value| {
-                            settings.usage_stats_enabled = value;
-                        },
-                    );
-                },
-                "general-usage-stats-enabled",
-                hovered_card_id,
-                set_hovered_card_id.clone(),
-            )
-            .with_key("general-usage-stats-enabled"),
-            usage_stats_provider_selection_card(
-                &available_usage_providers,
-                usage_stats_excluded_providers,
-                usage_stats_enabled,
-                crate::openrouter::has_management_key(ctx.openrouter_accounts),
-                set_usage_stats_excluded_providers,
-                settings_tx.clone(),
-            )
-            .with_key("general-usage-stats-providers"),
-            settings_control_card(
-                "Collection period",
-                Some("How often local provider history is scanned."),
-                ComboBox::new([
-                    "1 minute",
-                    "5 minutes",
-                    "10 minutes",
-                    "15 minutes",
-                    "30 minutes",
-                    "45 minutes",
-                    "60 minutes",
-                ])
-                .selected_index(usage_refresh_interval.index())
-                .enabled(usage_stats_enabled)
-                .on_selection_changed(move |choice: i32| {
-                    let value = UsageRefreshInterval::from_index(choice);
-                    set_usage_refresh_interval.call(value);
-                    persist_update(apply_usage_refresh_interval.clone(), move |settings| {
-                        settings.usage_refresh_interval = value;
-                    });
-                }),
-                "general-usage-refresh-interval",
-                hovered_card_id,
-                set_hovered_card_id.clone(),
-            )
-            .with_key("general-usage-refresh-interval"),
-            settings_section_heading("Tibo Resets™").with_key("general-tibo-resets-heading"),
-            settings_toggle_card_with_description(
-                "Check for confirmed Tibo resets",
-                Some("Reads the app's public GitHub feed and keeps the latest announcement cached."),
-                forced_reset_feed_enabled,
-                move |value| {
-                    persist_bool(
-                        set_forced_reset_feed_enabled.clone(),
-                        apply_forced_reset_feed_enabled.clone(),
-                        value,
-                        |settings, value| {
-                            settings.notifications.forced_reset_feed_enabled = value;
-                        },
-                    );
-                },
-                "general-tibo-reset-feed",
-                hovered_card_id,
-                set_hovered_card_id.clone(),
-            )
-            .with_key("general-tibo-reset-feed"),
-            settings_toggle_card_with_description(
-                "Notify when new reset info arrives",
-                Some("Shows a notification when the feed reports a possible reset, never at the reset time."),
-                forced_reset_notifications,
-                move |value| {
-                    persist_bool(
-                        set_forced_reset_notifications.clone(),
-                        apply_forced_reset_notifications.clone(),
-                        value,
-                        |settings, value| {
-                            settings.notifications.forced_reset_notifications = value;
-                        },
-                    );
-                },
-                "general-tibo-reset-toast",
-                hovered_card_id,
-                set_hovered_card_id.clone(),
-            )
-            .with_key("general-tibo-reset-toast"),
-            settings_control_card(
-                "Check every",
-                Some("The feed is also checked immediately when the app starts or this option is enabled."),
-                ComboBox::new([
-                    "15 minutes",
-                    "30 minutes",
-                    "1 hour",
-                    "3 hours",
-                    "6 hours",
-                    "12 hours",
-                    "24 hours",
-                ])
-                .selected_index(reset_announcement_refresh_interval.index())
-                .enabled(forced_reset_feed_enabled)
-                .on_selection_changed(move |choice: i32| {
-                    let value = ResetAnnouncementRefreshInterval::from_index(choice);
-                    set_reset_announcement_refresh_interval.call(value);
-                    persist_update(
-                        apply_reset_announcement_refresh_interval.clone(),
-                        move |settings| {
-                            settings.reset_announcement_refresh_interval = value;
-                        },
-                    );
-                }),
-                "general-tibo-reset-interval",
-                hovered_card_id,
-                set_hovered_card_id.clone(),
-            )
-            .with_key("general-tibo-reset-interval"),
-        ],
-    )
+use gpui::{AnyElement, Context, IntoElement, ParentElement, Styled, Window, div, px, relative};
+
+use super::kit::{self, Kit, Row};
+use super::window::SettingsWindow;
+use crate::settings::{ProviderKind, ResetAnnouncementRefreshInterval, UsageRefreshInterval};
+
+pub(super) fn usage_refresh_labels() -> [&'static str; 7] {
+    [
+        crate::i18n::tr("msg-1-minute"),
+        crate::i18n::tr("msg-5-minutes"),
+        crate::i18n::tr("msg-10-minutes"),
+        crate::i18n::tr("msg-15-minutes"),
+        crate::i18n::tr("msg-30-minutes"),
+        crate::i18n::tr("msg-45-minutes"),
+        crate::i18n::tr("msg-60-minutes"),
+    ]
 }
 
-fn usage_stats_provider_selection_card(
-    available_providers: &[ProviderKind],
-    excluded_providers: &[String],
-    usage_stats_enabled: bool,
-    openrouter_usage_available: bool,
-    set_excluded_providers: SetState<Vec<String>>,
-    settings_tx: Sender<Settings>,
-) -> Element {
-    const PROVIDER_COLUMNS: usize = 3;
-    let mut provider_checks = Vec::with_capacity(available_providers.len());
-    for (index, provider) in available_providers.iter().copied().enumerate() {
-        let row = (index / PROVIDER_COLUMNS) as i32;
-        let column = (index % PROVIDER_COLUMNS) as i32;
-        let descriptor = crate::provider_registry::descriptor(provider);
-        let available = provider != ProviderKind::OpenRouter || openrouter_usage_available;
-        let checked = available && !excluded_providers.iter().any(|id| id == provider.id());
-        let current = excluded_providers.to_vec();
-        let set_excluded_providers = set_excluded_providers.clone();
-        let settings_tx = settings_tx.clone();
-        let checkbox: Element = settings_labeled_checkbox(
-            checked,
-            descriptor.display_name,
-            usage_stats_enabled && available,
-            move |checked| {
-                if !available {
-                    return;
-                }
-                let mut optimistic = current.clone();
-                if checked {
-                    optimistic.retain(|id| id != provider.id());
-                } else if !optimistic.iter().any(|id| id == provider.id()) {
-                    optimistic.push(provider.id().into());
-                }
-                set_excluded_providers.call(optimistic);
-                persist_update(settings_tx.clone(), move |settings| {
-                    settings.set_usage_stats_provider_enabled(provider, checked);
-                });
-            },
-        )
-        .into();
-        // Keep the tooltip host enabled and hit-testable even though the
-        // checkbox itself is disabled. Disabled WinUI controls do not receive
-        // the ordinary tooltip pointer events.
-        let checkbox = if !available {
-            border(checkbox)
-                .background(Color::transparent())
-                .horizontal_alignment(HorizontalAlignment::Left)
-                .tooltip("Add a management key")
-                .into()
-        } else {
-            checkbox
-        };
-        provider_checks.push(
-            checkbox
-                .with_key(format!("general-usage-provider-{}", provider.id()))
-                .grid_row(row)
-                .grid_column(column),
-        );
+impl SettingsWindow {
+    pub(super) fn general_page(
+        &mut self,
+        k: &mut Kit,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let s = &self.settings;
+        let start_at_login = s.start_at_login;
+        let (usage_enabled, usage_interval) = (s.usage_stats_enabled, s.usage_refresh_interval);
+        let feed = s.notifications.forced_reset_feed_enabled;
+        let feed_toasts = s.notifications.forced_reset_notifications;
+        let feed_interval = s.reset_announcement_refresh_interval;
+
+        let language = kit::card_of(k, |k| {
+            vec![kit::dropdown_row(
+                k,
+                "general-language",
+                crate::i18n::tr("language"),
+                Some(crate::i18n::tr(
+                    "applies-immediately-to-every-app-window-and-notification-auto-fol",
+                )),
+                kit::options(&crate::i18n::Language::labels()),
+                s.language.index() as i32,
+                false,
+                Self::h(cx, |this, index: usize, _, cx| {
+                    let language = crate::i18n::Language::from_index(index);
+                    this.edit(cx, move |settings| settings.language = language);
+                }),
+            )]
+        });
+
+        let startup = kit::card_of(k, |k| {
+            vec![kit::toggle_row(
+                k,
+                "general-startup",
+                crate::i18n::tr("start-with-windows"),
+                Some(crate::i18n::tr("open-codex-minibar-in-the-tray-when-you-sign-in").into()),
+                start_at_login,
+                Self::h(cx, |this, value: bool, _, cx| {
+                    this.edit(cx, move |settings| settings.start_at_login = value)
+                }),
+            )]
+        });
+
+        let usage = kit::card_of(k, |k| {
+            vec![
+                kit::toggle_row(
+                    k,
+                    "general-usage-stats",
+                    crate::i18n::tr("enable-usage-stats"),
+                    Some(
+                        crate::i18n::tr(
+                            "scan-local-provider-history-for-the-usage-tab-and-cost-totals",
+                        )
+                        .into(),
+                    ),
+                    usage_enabled,
+                    Self::h(cx, |this, value: bool, _, cx| {
+                        this.edit(cx, move |settings| settings.usage_stats_enabled = value)
+                    }),
+                ),
+                self.usage_providers(k, usage_enabled, cx),
+                kit::dropdown_row(
+                    k,
+                    "general-usage-refresh",
+                    crate::i18n::tr("collection-period"),
+                    Some(crate::i18n::tr(
+                        "how-often-local-provider-history-is-scanned",
+                    )),
+                    kit::options(&usage_refresh_labels()),
+                    usage_interval.index(),
+                    !usage_enabled,
+                    Self::h(cx, |this, index: usize, _, cx| {
+                        let value = UsageRefreshInterval::from_index(index as i32);
+                        this.edit(cx, move |settings| settings.usage_refresh_interval = value)
+                    }),
+                ),
+            ]
+        });
+
+        let resets = kit::card_of(k, |k| {
+            vec![
+                kit::toggle_row(
+                    k,
+                    "general-tibo-feed",
+                    crate::i18n::tr("check-for-confirmed-tibo-resets"),
+                    Some(
+                        crate::i18n::tr(
+                            "reads-the-app-s-public-github-feed-and-keeps-the-latest-announcem",
+                        )
+                        .into(),
+                    ),
+                    feed,
+                    Self::h(cx, |this, value: bool, _, cx| {
+                        this.edit(cx, move |settings| {
+                            settings.notifications.forced_reset_feed_enabled = value
+                        })
+                    }),
+                ),
+                kit::toggle_row(
+                    k,
+                    "general-tibo-toast",
+                    crate::i18n::tr("notify-when-new-reset-info-arrives"),
+                    Some(
+                        crate::i18n::tr(
+                            "shows-a-notification-when-the-feed-reports-a-possible-reset-never",
+                        )
+                        .into(),
+                    ),
+                    feed_toasts,
+                    Self::h(cx, |this, value: bool, _, cx| {
+                        this.edit(cx, move |settings| {
+                            settings.notifications.forced_reset_notifications = value
+                        })
+                    }),
+                ),
+                kit::dropdown_row(
+                    k,
+                    "general-tibo-interval",
+                    crate::i18n::tr("check-every"),
+                    Some(crate::i18n::tr(
+                        "the-feed-is-also-checked-immediately-when-the-app-starts-or-this",
+                    )),
+                    kit::options(&[
+                        crate::i18n::tr("msg-15-minutes"),
+                        crate::i18n::tr("msg-30-minutes"),
+                        crate::i18n::tr("msg-1-hour"),
+                        crate::i18n::tr("msg-3-hours"),
+                        crate::i18n::tr("msg-6-hours"),
+                        crate::i18n::tr("msg-12-hours"),
+                        crate::i18n::tr("msg-24-hours"),
+                    ]),
+                    feed_interval.index(),
+                    !feed,
+                    Self::h(cx, |this, index: usize, _, cx| {
+                        let value = ResetAnnouncementRefreshInterval::from_index(index as i32);
+                        this.edit(cx, move |settings| {
+                            settings.reset_announcement_refresh_interval = value
+                        })
+                    }),
+                ),
+            ]
+        });
+
+        vec![
+            language,
+            startup,
+            kit::section_heading(k, crate::i18n::tr("usage-stats")),
+            usage,
+            kit::section_heading(k, crate::i18n::tr("tibo-resets")),
+            resets,
+        ]
     }
 
-    let provider_grid: Element = if provider_checks.is_empty() {
-        text_block("Enable a provider in the Providers tab to include it here.")
-            .font_size(12.0)
-            .opacity(0.72)
-            .wrap()
-            .into()
-    } else {
-        grid(provider_checks)
-            .columns(vec![GridLength::Star(1.0); PROVIDER_COLUMNS])
-            .rows(vec![
-                GridLength::Auto;
-                available_providers.len().div_ceil(PROVIDER_COLUMNS)
-            ])
-            .column_spacing(12.0)
-            .row_spacing(4.0)
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .vertical_alignment(VerticalAlignment::Center)
-            .into()
-    };
-
-    border(
-        vstack((
-            text_block("Included providers").font_size(14.0).wrap(),
-            text_block(
-                "Choose which providers contribute to the Usage tab and Home card. Provider pages keep their usage card, and existing data is never deleted.",
+    /// Per-instance Usage Stats switches for enabled instances whose driver
+    /// has local history. Unavailable instances stay listed, disabled, with why.
+    fn usage_providers(
+        &self,
+        k: &mut Kit,
+        usage_enabled: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let available = self
+            .settings
+            .instances
+            .iter()
+            .filter(|instance| {
+                instance.enabled && crate::provider_registry::supports_usage_stats(instance.driver)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut grid = div().flex().flex_wrap().w_full().gap_y(px(10.0));
+        if available.is_empty() {
+            grid = grid.child(kit::caption(
+                k,
+                crate::i18n::tr("enable-a-provider-in-the-providers-tab-to-include-it-here"),
+            ));
+        }
+        for instance in &available {
+            let provider = instance.provider_id();
+            let reason = crate::instances::Capabilities::reason(
+                instance,
+                crate::instances::Capability::UsageStats,
             )
-            .font_size(12.0)
-            .opacity(0.72)
-            .wrap(),
-            provider_grid,
-        ))
-        .spacing(8.0)
-        .horizontal_alignment(HorizontalAlignment::Stretch),
-    )
-    .padding(settings_card_padding())
-    .background(ThemeRef::CardBackground)
-    .corner_radius(8.0)
-    .border_thickness(Thickness::uniform(1.0))
-    .border_brush(ThemeRef::CardStroke)
-    .horizontal_alignment(HorizontalAlignment::Stretch)
-    .into()
+            .or_else(|| {
+                (instance.driver == ProviderKind::OpenRouter
+                    && !crate::openrouter::has_management_key(instance.openrouter.as_slice()))
+                .then_some(crate::i18n::tr("add-a-management-key"))
+            })
+            .or_else(|| {
+                (!instance.usage_stats).then_some(crate::i18n::tr(
+                    "usage-statistics-are-off-on-this-provider-s-page",
+                ))
+            });
+            let checked = reason.is_none() && instance.in_usage_overview;
+            let check = kit::checkbox(
+                k,
+                format!("usage-provider-{}", provider.id()),
+                checked,
+                !usage_enabled || reason.is_some(),
+                Some(provider.qualified_name().into()),
+                Self::h(cx, move |this, checked: bool, _, cx| {
+                    this.edit(cx, move |settings| {
+                        settings.set_usage_overview_included(provider, checked)
+                    })
+                }),
+            );
+            let check = match reason {
+                Some(reason) => {
+                    kit::tooltip_host(k, format!("usage-tip-{}", provider.id()), reason, check)
+                }
+                None => check,
+            };
+            grid = grid.child(div().w(relative(1.0 / 3.0)).pr(px(12.0)).child(check));
+        }
+        Row::new(
+            "general-usage-providers",
+            crate::i18n::tr("included-providers"),
+        )
+        .description(
+            k,
+            crate::i18n::tr("choose-which-accounts-count-toward-this-machine-s-usage-tab-and-h"),
+        )
+        .detail(div().pt(px(10.0)).child(grid).into_any_element())
+        .disabled(!usage_enabled)
+        .render(k)
+    }
 }

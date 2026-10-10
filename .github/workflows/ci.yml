@@ -15,6 +15,13 @@ jobs:
     env:
       # Large git dep (windows-rs); CLI fetch is less likely to sit silent for minutes.
       CARGO_NET_GIT_FETCH_WITH_CLI: true
+      # Full debuginfo makes Windows codegen/linking slow and bloats the cache;
+      # line tables still give file:line in test panics.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      # Vendored gpui is a path dependency, so its mtime-based fingerprint is
+      # stale after every checkout and it always rebuilds. Cargo.toml builds it
+      # at opt-level 3 for local animation smoothness; CI only needs it to compile.
+      CI_CARGO_CONFIG: profile.dev.package.gpui.opt-level=0
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
@@ -26,12 +33,11 @@ jobs:
           # Previous runs failed and skipped cache, so every CI recloned windows-rs.
           cache-on-failure: true
       - name: Check formatting
-        # Skip path crates `.vendor` and `.vendor-setup`. `--all` formats local path deps.
         run: cargo fmt --package codex-minibar --check
       - name: Fetch dependencies
         run: cargo fetch --locked
       - name: Lint
-        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+        run: cargo clippy --config "$env:CI_CARGO_CONFIG" --all-targets --all-features --locked -- -D warnings
       - name: Test
-        run: cargo test --all-targets --all-features --locked
+        run: cargo test --config "$env:CI_CARGO_CONFIG" --all-targets --all-features --locked
 

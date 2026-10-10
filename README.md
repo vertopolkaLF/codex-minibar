@@ -20,14 +20,14 @@
   <img src="https://img.shields.io/github/downloads/vertopolkalf/codex-minibar/total?style=flat-square" alt="Downloads">
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-blue?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/Rust-2024-orange?style=flat-square" alt="Rust edition">
-  <img src="https://img.shields.io/badge/UI-WinUI%203-green?style=flat-square" alt="UI framework">
+  <img src="https://img.shields.io/badge/UI-GPUI-green?style=flat-square" alt="UI framework">
 </p>
 
 ---
 
 ## Overview
 
-Codex Minibar reads quota data from locally authenticated provider sessions and keeps subscription limits and reset times visible in the notification area. It is a native WinUI 3 application written in Rust.
+Codex Minibar reads quota data from locally authenticated provider sessions and keeps subscription limits and reset times visible in the notification area. It is a native Windows application written in Rust, with the tray popup and Settings both rendered by GPUI.
 
 > Codex Minibar is an independent project. It is not affiliated with, endorsed by, or sponsored by OpenAI.
 
@@ -182,10 +182,19 @@ portable package in place. You can disable update checks in Settings at any time
 Install the Rust toolchain pinned in [`rust-toolchain.toml`](rust-toolchain.toml), then run:
 
 ```powershell
-cargo check --locked
-cargo test --all-targets --all-features --locked
-cargo clippy --all-targets --all-features --locked -- -D warnings
+.\cargo-worktree.ps1 check --locked
+.\cargo-worktree.ps1 test --all-targets --all-features --locked
+.\cargo-worktree.ps1 clippy --all-targets --all-features --locked '--' -D warnings
 ```
+
+The wrapper runs Cargo in the current Git worktree and shares the main checkout's
+existing `target` directory. Dependencies can be reused across worktrees with
+matching build settings; simultaneous builds wait for Cargo's lock. The shared
+binary belongs to the last build. Set `CARGO_TARGET_DIR` explicitly when you need
+isolated build output. From an older worktree, invoke the main checkout's
+`cargo-worktree.ps1` by absolute path. Plain Cargo commands remain suitable for CI.
+Quote the `'--'` separator when passing compiler, Clippy or rustfmt flags through
+the PowerShell wrapper.
 
 To build distributable Windows packages, run:
 
@@ -197,8 +206,11 @@ This produces architecture-specific portable ZIP files and NSIS installers under
 
 ## Development
 
-The UI uses [windows-reactor](https://github.com/microsoft/windows-rs/pull/4479) with WinUI 3;
-the Windows App SDK 2.4.0 runtime is bundled through `windows-reactor-setup` self-contained deployment.
+Every window is rendered with [GPUI](https://gpui.rs) on one dedicated UI thread: the tray
+popup, the Settings window and the first-launch onboarding. Settings controls (toggles,
+dropdowns, sliders, text inputs, dialogs) live in `src/settings_window/kit.rs` and
+`src/settings_window/input.rs`. No UI framework runtime is redistributed; the release
+package is the executable plus its `assets` folder.
 CI checks formatting, lints, and tests on Windows.
 
 ### Stream Deck companion

@@ -1,232 +1,264 @@
-use super::onboarding::restart_onboarding_after_reset;
-use super::persistence::{export_settings, import_settings, replace_settings};
-use super::platform::confirm_settings_reset;
-use super::*;
+//! Advanced: rendering, settings import/export, clearing Usage data,
+//! factory reset.
 
-pub(super) fn render(ctx: &SettingsPageContext<'_>) -> (&'static str, Vec<Element>) {
-    let set_codex_enabled = ctx.set_codex_enabled.clone();
-    let set_theme = ctx.set_theme.clone();
-    let set_accent_color = ctx.set_accent_color.clone();
-    let set_animations_enabled = ctx.set_animations_enabled.clone();
-    let set_bottom_bar_size = ctx.set_bottom_bar_size.clone();
-    let set_popup_corner_radius = ctx.set_popup_corner_radius.clone();
-    let set_popup_background_material = ctx.set_popup_background_material.clone();
-    let set_time_format = ctx.set_time_format.clone();
-    let set_claude_enabled = ctx.set_claude_enabled.clone();
-    let set_cursor_enabled = ctx.set_cursor_enabled.clone();
-    let set_opencode_zen_enabled = ctx.set_opencode_zen_enabled.clone();
-    let set_opencode_go_enabled = ctx.set_opencode_go_enabled.clone();
-    let set_openrouter_enabled = ctx.set_openrouter_enabled.clone();
-    let set_antigravity_enabled = ctx.set_antigravity_enabled.clone();
-    let set_grok_enabled = ctx.set_grok_enabled.clone();
-    let set_kiro_enabled = ctx.set_kiro_enabled.clone();
-    let set_openrouter_accounts = ctx.set_openrouter_accounts.clone();
-    let set_codex_profiles = ctx.set_codex_profiles.clone();
-    let set_claude_profiles = ctx.set_claude_profiles.clone();
-    let set_codex_home_excluded_profiles = ctx.set_codex_home_excluded_profiles.clone();
-    let set_claude_home_excluded_profiles = ctx.set_claude_home_excluded_profiles.clone();
-    let set_codex_path = ctx.set_codex_path.clone();
-    let set_claude_path = ctx.set_claude_path.clone();
-    let set_cursor_path = ctx.set_cursor_path.clone();
-    let set_antigravity_path = ctx.set_antigravity_path.clone();
-    let set_grok_path = ctx.set_grok_path.clone();
-    let set_kiro_path = ctx.set_kiro_path.clone();
-    let set_kiro_crew_path = ctx.set_kiro_crew_path.clone();
-    let set_kiro_cli_path = ctx.set_kiro_cli_path.clone();
-    let set_popup_order = ctx.set_popup_order.clone();
-    let set_use_colored_provider_icons = ctx.set_use_colored_provider_icons.clone();
-    let set_show_accounts_as_tabs = ctx.set_show_accounts_as_tabs.clone();
-    let set_use_colored_sidebar_icons = ctx.set_use_colored_sidebar_icons.clone();
-    let set_replace_chatgpt_logo_with_codex = ctx.set_replace_chatgpt_logo_with_codex.clone();
-    let set_automatic_activation = ctx.set_automatic_activation.clone();
-    let set_scheduled_activations = ctx.set_scheduled_activations.clone();
-    let set_auto_activation_pauses = ctx.set_auto_activation_pauses.clone();
-    let set_usage_stats_enabled = ctx.set_usage_stats_enabled.clone();
-    let set_usage_stats_excluded_providers = ctx.set_usage_stats_excluded_providers.clone();
-    let set_limit_refresh_interval = ctx.set_limit_refresh_interval.clone();
-    let set_usage_refresh_interval = ctx.set_usage_refresh_interval.clone();
-    let set_reset_announcement_refresh_interval =
-        ctx.set_reset_announcement_refresh_interval.clone();
-    let set_start_at_login = ctx.set_start_at_login.clone();
-    let set_show_used_percentage = ctx.set_show_used_percentage.clone();
-    let set_show_usage_values = ctx.set_show_usage_values.clone();
-    let set_show_usage_pace = ctx.set_show_usage_pace.clone();
-    let set_compact_usage_cards = ctx.set_compact_usage_cards.clone();
-    let set_popup_visibility = ctx.set_popup_visibility.clone();
-    let set_discovered_popup_bricks = ctx.set_discovered_popup_bricks.clone();
-    let set_show_total_spend_on_all_tab = ctx.set_show_total_spend_on_all_tab.clone();
-    let set_total_spend_presentation = ctx.set_total_spend_presentation.clone();
-    let set_show_account_name = ctx.set_show_account_name.clone();
-    let set_activation_success = ctx.set_activation_success.clone();
-    let set_activation_failure = ctx.set_activation_failure.clone();
-    let set_limits_reset = ctx.set_limits_reset.clone();
-    let set_low_usage_enabled = ctx.set_low_usage_enabled.clone();
-    let set_low_usage_threshold = ctx.set_low_usage_threshold.clone();
-    let set_weekly_low_usage_enabled = ctx.set_weekly_low_usage_enabled.clone();
-    let set_weekly_low_usage_threshold = ctx.set_weekly_low_usage_threshold.clone();
-    let set_tray_widgets = ctx.set_tray_widgets.clone();
-    let set_check_for_updates = ctx.set_check_for_updates.clone();
-    let set_notify_on_update = ctx.set_notify_on_update.clone();
-    let set_forced_reset_feed_enabled = ctx.set_forced_reset_feed_enabled.clone();
-    let set_forced_reset_notifications = ctx.set_forced_reset_notifications.clone();
-    let hovered_card_id = ctx.hovered_card_id;
-    let set_hovered_card_id = ctx.set_hovered_card_id.clone();
-    let settings_tx = ctx.settings_tx.clone();
-    let usage_actions_tx = ctx.usage_actions_tx.clone();
-    let ui_dispatcher = ctx.ui_dispatcher.clone();
-    let apply_settings_import = settings_tx.clone();
-    let apply_settings_reset = settings_tx.clone();
-    let import_state = SettingsWindowState {
-        theme: set_theme,
-        accent_color: set_accent_color,
-        animations_enabled: set_animations_enabled,
-        bottom_bar_size: set_bottom_bar_size,
-        popup_corner_radius: set_popup_corner_radius,
-        popup_background_material: set_popup_background_material,
-        time_format: set_time_format,
-        codex_enabled: set_codex_enabled,
-        claude_enabled: set_claude_enabled,
-        cursor_enabled: set_cursor_enabled,
-        opencode_zen_enabled: set_opencode_zen_enabled,
-        opencode_go_enabled: set_opencode_go_enabled,
-        openrouter_enabled: set_openrouter_enabled,
-        antigravity_enabled: set_antigravity_enabled,
-        grok_enabled: set_grok_enabled,
-        kiro_enabled: set_kiro_enabled,
-        openrouter_accounts: set_openrouter_accounts,
-        codex_profiles: set_codex_profiles,
-        claude_profiles: set_claude_profiles,
-        codex_home_excluded_profiles: set_codex_home_excluded_profiles,
-        claude_home_excluded_profiles: set_claude_home_excluded_profiles,
-        codex_path: set_codex_path,
-        claude_path: set_claude_path,
-        cursor_path: set_cursor_path,
-        antigravity_path: set_antigravity_path,
-        grok_path: set_grok_path,
-        kiro_path: set_kiro_path,
-        kiro_crew_path: set_kiro_crew_path,
-        kiro_cli_path: set_kiro_cli_path,
-        popup_order: set_popup_order,
-        use_colored_provider_icons: set_use_colored_provider_icons,
-        show_accounts_as_tabs: set_show_accounts_as_tabs,
-        use_colored_sidebar_icons: set_use_colored_sidebar_icons,
-        replace_chatgpt_logo_with_codex: set_replace_chatgpt_logo_with_codex,
-        automatic_activation: set_automatic_activation,
-        scheduled_activations: set_scheduled_activations.clone(),
-        auto_activation_pauses: set_auto_activation_pauses.clone(),
-        usage_stats_enabled: set_usage_stats_enabled,
-        usage_stats_excluded_providers: set_usage_stats_excluded_providers,
-        limit_refresh_interval: set_limit_refresh_interval,
-        usage_refresh_interval: set_usage_refresh_interval,
-        reset_announcement_refresh_interval: set_reset_announcement_refresh_interval,
-        start_at_login: set_start_at_login,
-        show_used_percentage: set_show_used_percentage,
-        show_usage_values: set_show_usage_values,
-        show_usage_pace: set_show_usage_pace,
-        compact_usage_cards: set_compact_usage_cards,
-        popup_two_columns: ctx.set_popup_two_columns.clone(),
-        popup_visibility: set_popup_visibility,
-        discovered_popup_bricks: set_discovered_popup_bricks,
-        show_total_spend_on_all_tab: set_show_total_spend_on_all_tab,
-        total_spend_presentation: set_total_spend_presentation,
-        show_account_name: set_show_account_name,
-        activation_success: set_activation_success,
-        activation_failure: set_activation_failure,
-        limits_reset: set_limits_reset,
-        low_usage_enabled: set_low_usage_enabled,
-        low_usage_threshold: set_low_usage_threshold,
-        weekly_low_usage_enabled: set_weekly_low_usage_enabled,
-        weekly_low_usage_threshold: set_weekly_low_usage_threshold,
-        tray_widgets: set_tray_widgets,
-        check_for_updates: set_check_for_updates,
-        notify_on_update: set_notify_on_update,
-        forced_reset_feed_enabled: set_forced_reset_feed_enabled,
-        forced_reset_notifications: set_forced_reset_notifications,
-    };
-    let reset_state = import_state.clone();
-    let reset_dispatcher = ui_dispatcher.clone();
-    (
-        "Advanced",
+use gpui::{AnyElement, Context, PathPromptOptions};
+
+use super::kit::{self, Button, Kit, Row};
+use super::persistence;
+use super::window::SettingsWindow;
+use crate::settings::Settings;
+use crate::worker::UsageAction;
+
+fn action_row(
+    k: &Kit,
+    id: &str,
+    icon: &str,
+    title: &str,
+    description: &str,
+    button: Button,
+) -> AnyElement {
+    Row::new(format!("row-{id}"), title.to_owned())
+        .icon(kit::row_icon(k, icon))
+        .description(k, description.to_owned())
+        .trailing(button.render(k))
+        .render(k)
+}
+
+impl SettingsWindow {
+    pub(super) fn advanced_page(&mut self, k: &mut Kit, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let backup = kit::card_of(k, |k| {
+            vec![
+                action_row(
+                    k,
+                    "advanced-export",
+                    "upload-simple-fill",
+                    crate::i18n::tr("export-settings"),
+                    crate::i18n::tr(
+                        "save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user",
+                    ),
+                    Button::new("advanced-export", crate::i18n::tr("export"))
+                        .on_click(Self::h(cx, |this, (), _, cx| this.export_settings(cx))),
+                ),
+                action_row(
+                    k,
+                    "advanced-import",
+                    "download-simple-fill",
+                    crate::i18n::tr("import-settings"),
+                    crate::i18n::tr("replace-the-current-settings-with-a-previously-exported-file"),
+                    Button::new("advanced-import", crate::i18n::tr("import"))
+                        .on_click(Self::h(cx, |this, (), _, cx| this.import_settings(cx))),
+                ),
+            ]
+        });
+        let data = kit::card_of(k, |k| {
+            vec![
+                action_row(
+                    k,
+                    "advanced-clear",
+                    "broom-fill",
+                    crate::i18n::tr("clear-usage-data"),
+                    crate::i18n::tr(
+                        "delete-the-collected-usage-history-it-is-rebuilt-from-local-provi",
+                    ),
+                    Button::new("advanced-clear", crate::i18n::tr("clear")).on_click(Self::h(
+                        cx,
+                        |this, (), _, cx| {
+                            if let Err(error) =
+                                this.state.usage_actions_tx.send(UsageAction::ClearData)
+                            {
+                                eprintln!("failed to queue usage data clear: {error}");
+                                crate::notifications::show_error(
+                                    crate::i18n::tr("usage-data-clear-failed"),
+                                    crate::i18n::tr("the-background-worker-is-unavailable"),
+                                );
+                            } else {
+                                this.show_notice(crate::i18n::tr("usage-data-cleared"), cx);
+                            }
+                        },
+                    )),
+                ),
+                action_row(
+                    k,
+                    "advanced-reset",
+                    "arrow-counter-clockwise-bold",
+                    crate::i18n::tr("reset-all-settings"),
+                    crate::i18n::tr("restore-every-default-and-start-the-welcome-flow-again"),
+                    Button::new("advanced-reset", crate::i18n::tr("reset"))
+                        .danger()
+                        .on_click(Self::h(cx, |this, (), _, cx| {
+                            this.confirm_reset = true;
+                            cx.notify();
+                        })),
+                ),
+            ]
+        });
+        let software_rendering = self.settings.software_rendering;
+        let rendering = kit::card_of(k, |k| {
+            vec![kit::toggle_row(
+                k,
+                "advanced-software-rendering",
+                crate::i18n::tr("software-rendering"),
+                Some(crate::i18n::tr("software-rendering-description").into()),
+                software_rendering,
+                Self::h(cx, |this, value: bool, _, cx| {
+                    gpui::set_software_rendering(value);
+                    this.edit(cx, move |settings| settings.software_rendering = value)
+                }),
+            )]
+        });
         vec![
-            settings_action_card(
-                "Export settings",
-                "Export",
-                || {
-                    if let Err(error) = export_settings() {
-                        eprintln!("failed to export settings: {error:#}");
-                        crate::notifications::show("Settings export failed", &format!("{error:#}"));
-                    }
-                },
-                "advanced-export",
-                hovered_card_id,
-                set_hovered_card_id.clone(),
-            )
-            .with_key("advanced-export"),
-            settings_action_card(
-                "Import settings",
-                "Import",
-                move || {
-                    let result = import_settings().and_then(|settings| match settings {
-                        Some(settings) => {
-                            replace_settings(apply_settings_import.clone(), settings.clone())?;
-                            import_state.apply(&settings);
-                            Ok(())
+            kit::section_heading(k, crate::i18n::tr("rendering")),
+            rendering,
+            kit::section_heading(k, crate::i18n::tr("backup")),
+            backup,
+            kit::section_heading(k, crate::i18n::tr("data")),
+            data,
+        ]
+    }
+
+    fn export_settings(&mut self, cx: &mut Context<Self>) {
+        let directory = directories::UserDirs::new()
+            .and_then(|dirs| dirs.document_dir().map(|dir| dir.to_path_buf()))
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default();
+        let prompt = cx.prompt_for_new_path(&directory, Some("codex-minibar-settings.toml"));
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(path))) = prompt.await else {
+                return;
+            };
+            let result = Settings::default_path()
+                .and_then(|current| Settings::load_or_create(&current))
+                .and_then(|settings| settings.save(&path));
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(()) => this.show_notice(crate::i18n::tr("settings-exported"), cx),
+                Err(error) => {
+                    eprintln!("failed to export settings: {error:#}");
+                    crate::notifications::show_error(
+                        crate::i18n::tr("settings-export-failed"),
+                        &format!("{error:#}"),
+                    );
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn import_settings(&mut self, cx: &mut Context<Self>) {
+        let prompt = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(crate::i18n::tr("import").into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = prompt.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let Ok(settings_tx) = this.update(cx, |this, _| this.settings_tx()) else {
+                return;
+            };
+            // Read-only decode of the chosen file, then commit through the
+            // serial writer; neither step runs on the UI thread.
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let settings = Settings::load_from_import(&path)?;
+                    persistence::wait(persistence::queue_replace(settings_tx, settings.clone()))?;
+                    anyhow::Ok(settings)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(settings) => {
+                    this.settings = settings;
+                    this.show_notice(crate::i18n::tr("settings-imported"), cx);
+                }
+                Err(error) => {
+                    eprintln!("failed to import settings: {error:#}");
+                    crate::notifications::show_error(
+                        crate::i18n::tr("settings-import-failed"),
+                        &format!("{error:#}"),
+                    );
+                }
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn reset_confirm_overlay(
+        &mut self,
+        k: &mut Kit,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let ((), phase) = self
+            .overlays
+            .reset
+            .track(k, self.confirm_reset.then_some(()))?;
+        let cancel = Self::h(cx, |this, (), _, cx| {
+            this.confirm_reset = false;
+            cx.notify();
+        });
+        let reset = Self::h(cx, |this, (), window, cx| {
+            this.confirm_reset = false;
+            let settings = Settings::default();
+            let outcome = persistence::queue_replace(this.settings_tx(), settings.clone());
+            cx.spawn_in(window, async move |this, cx| {
+                let result = cx
+                    .background_executor()
+                    .spawn(async move { persistence::wait(outcome) })
+                    .await;
+                let _ = this.update_in(cx, |this, window, cx| {
+                    match result {
+                        Ok(()) => {
+                            this.settings = settings;
+                            // Resetting returns to the same first-launch path as a
+                            // new install; onboarding replaces this window.
+                            window.remove_window();
+                            super::window_closed(false);
+                            super::open_onboarding();
                         }
-                        None => Ok(()),
-                    });
-                    if let Err(error) = result {
-                        eprintln!("failed to import settings: {error:#}");
-                        crate::notifications::show("Settings import failed", &format!("{error:#}"));
+                        Err(error) => {
+                            eprintln!("failed to reset settings: {error:#}");
+                            crate::notifications::show_error(
+                                crate::i18n::tr("settings-reset-failed"),
+                                &format!("{error:#}"),
+                            );
+                        }
                     }
-                },
-                "advanced-import",
-                hovered_card_id,
-                set_hovered_card_id.clone(),
-            )
-            .with_key("advanced-import"),
-            settings_action_card(
-                "Clear Usage data",
-                "Clear",
-                move || {
-                    if let Err(error) = usage_actions_tx.send(UsageAction::ClearData) {
-                        eprintln!("failed to queue usage data clear: {error}");
-                        crate::notifications::show(
-                            "Usage data clear failed",
-                            "The background worker is unavailable.",
-                        );
-                    }
-                },
-                "advanced-clear-usage",
-                hovered_card_id,
-                set_hovered_card_id.clone(),
-            )
-            .with_key("advanced-clear-usage"),
-            settings_action_card(
-                "Reset all settings",
-                "Reset",
-                move || {
-                    if !confirm_settings_reset() {
-                        return;
-                    }
-                    let settings = Settings::default();
-                    if let Err(error) =
-                        replace_settings(apply_settings_reset.clone(), settings.clone())
-                    {
-                        eprintln!("failed to reset settings: {error:#}");
-                        crate::notifications::show("Settings reset failed", &format!("{error:#}"));
-                    } else {
-                        reset_state.apply(&settings);
-                        restart_onboarding_after_reset(
-                            apply_settings_reset.clone(),
-                            reset_dispatcher.clone(),
-                        );
-                    }
-                },
-                "advanced-reset",
-                hovered_card_id,
-                set_hovered_card_id.clone(),
-            )
-            .with_key("advanced-reset"),
-        ],
-    )
+                    cx.notify();
+                });
+            })
+            .detach();
+            cx.notify();
+        });
+        Some(kit::dialog(
+            k,
+            "reset",
+            phase,
+            420.0,
+            vec![
+                kit::dialog_title(k, crate::i18n::tr("reset-all-settings-bbfe66")),
+                kit::caption(
+                    k,
+                    crate::i18n::tr(
+                        "every-setting-returns-to-its-default-and-the-welcome-flow-opens-a",
+                    ),
+                ),
+            ],
+            vec![
+                Button::new("reset-cancel", crate::i18n::tr("cancel"))
+                    .full_width()
+                    .on_click(cancel.clone())
+                    .render(k),
+                Button::new("reset-confirm", crate::i18n::tr("reset"))
+                    .accent()
+                    .full_width()
+                    .on_click(reset)
+                    .render(k),
+            ],
+            Some(cancel),
+        ))
+    }
 }

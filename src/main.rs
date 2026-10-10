@@ -1,16 +1,12 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
-use std::{
-    rc::Rc,
-    sync::{Arc, Mutex, mpsc},
-};
+use std::sync::{Arc, Mutex, mpsc};
 
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use codex_minibar::{
-    app::{AppState, app},
+    app::AppState,
     notifications,
-    popup::{self, FALLBACK_CLIENT_HEIGHT_LIMIT, POPUP_WIDTH},
     provider::start_enabled_workers_with_limits,
     reset_feed,
     scheduler::ActivationState,
@@ -22,24 +18,31 @@ use codex_minibar::{
     },
     worker::WorkerEvent,
 };
-use windows_reactor::*;
 
 fn run() -> Result<()> {
     notifications::initialize();
     sync_installed_display_version();
-    show_post_update_success_if_needed();
     let path = Settings::default_path()?;
     codex_minibar::logger::initialize(&path)?;
     if let Err(error) = codex_minibar::pricing::initialize() {
         eprintln!("failed to hydrate pricing catalog: {error:#}");
     }
     let mut settings = Settings::load_or_create(&path)?;
+    settings.language.apply();
+    show_post_update_success_if_needed();
     if let Err(error) = settings.reconcile_startup_from_registry(&path) {
         eprintln!("failed to reconcile startup setting: {error:#}");
     }
     if let Err(error) = settings.apply_runtime_effects() {
         eprintln!("failed to apply startup registration: {error:#}");
     }
+    std::thread::spawn(|| {
+        if let Err(error) = codex_minibar::discovery::cleanup() {
+            codex_minibar::logger::info(format!(
+                "Codex CLI startup cache cleanup deferred: {error:#}"
+            ));
+        }
+    });
     let activation_path = path.with_file_name("activation.toml");
     let last_activation_at: Option<DateTime<Utc>> =
         ActivationState::load_or_default(&activation_path)
@@ -52,21 +55,21 @@ fn run() -> Result<()> {
         reset_feed::cache_path(&path),
         worker_events_tx.clone(),
     );
-    let mut hydrated_limits = store::shared()
+    let hydrated_limits = store::shared()
         .and_then(|shared| {
-            shared
+            let store = shared
                 .lock()
-                .map_err(|_| anyhow!("provider store lock poisoned"))?
-                .hydrate_provider_limits(settings.history_retention_days)
+                .map_err(|_| anyhow!("provider store lock poisoned"))?;
+            // Drop rows of removed instances; disabled instances keep their data.
+            if let Err(error) = store.prune_unknown_providers(&settings.provider_ids()) {
+                eprintln!("failed to prune unknown providers: {error:#}");
+            }
+            store.hydrate_provider_limits(&settings.provider_ids(), settings.history_retention_days)
         })
         .unwrap_or_else(|error| {
             eprintln!("failed to hydrate provider store: {error:#}");
             Default::default()
         });
-    let codex = codex_minibar::settings::ProviderKind::Codex;
-    let retained =
-        codex_minibar::codex::prepare_startup_limits(hydrated_limits.get(codex), &settings);
-    *hydrated_limits.get_mut(codex) = retained;
     let (workers, startup_provider_errors) = start_enabled_workers_with_limits(
         &settings,
         activation_path.clone(),
@@ -84,11 +87,6 @@ fn run() -> Result<()> {
         updates.check_async(true, settings.notifications.update_available);
     }
     let onboarding_needed = !settings.onboarding_completed;
-    // The host stays parked until Auto content reports its natural size. Never
-    // expose an intentionally oversized first client area: that was the black
-    // strip visible below the top-aligned XAML chrome.
-    let initial_height = popup::height_for(None).min(FALLBACK_CLIENT_HEIGHT_LIMIT);
-    popup::set_client_height_dip(initial_height);
     let state = Arc::new(AppState {
         settings,
         limits: Mutex::new(hydrated_limits),
@@ -112,45 +110,17 @@ fn run() -> Result<()> {
         move || state.shutdown_worker()
     });
 
-    App::new()
-        .run_custom(move |_| {
-            codex_minibar::theme::apply_appearance(
-                state.settings.theme,
-                state.settings.accent_color,
-            );
-            // Unlike `App::render`, this builds the WinUI host without calling
-            // `Window::Activate`. The tray popup is the sole code path that
-            // makes its HWND visible.
-            let render_state = Arc::clone(&state);
-            let host = Rc::new(ReactorHost::new_with_window_options(
-                "Codex Minibar",
-                Some(WindowSize {
-                    width: f64::from(POPUP_WIDTH),
-                    height: f64::from(initial_height),
-                }),
-                InnerConstraints {
-                    min_width: Some(f64::from(POPUP_WIDTH)),
-                    // Keep min tiny — OverlappedPresenter preferred-min was blocking shrink.
-                    min_height: Some(80.0),
-                    max_width: Some(f64::from(popup::POPUP_WIDE_WIDTH)),
-                    // The actual 80% cap is selected from the monitor at
-                    // popup-show time. A fixed 640 DIP creation constraint
-                    // cannot be raised reliably by AppWindow later.
-                    max_height: Some(f64::from(FALLBACK_CLIENT_HEIGHT_LIMIT)),
-                },
-                Box::new(move |_: &(), cx: &mut RenderCx| app(cx, Arc::clone(&render_state))),
-                |_| {},
-            )?);
-            popup::register_host(Rc::clone(&host));
-            if onboarding_needed {
-                // First launch configures providers before any worker has a
-                // chance to poll. The regular popup stays parked until Done.
-                codex_minibar::settings_window::open_onboarding(state.settings_tx.clone())?;
-            }
-            let _host = Box::leak(Box::new(host));
-            Ok(())
-        })
-        .map_err(|error| anyhow!("windows-reactor failed: {error:?}"))
+    // Initializes the tray accent before any popup can be shown.
+    codex_minibar::theme::apply_appearance(state.settings.theme, state.settings.accent_color);
+    codex_minibar::popup_window::start(Arc::clone(&state));
+    if onboarding_needed {
+        codex_minibar::settings_window::open_onboarding();
+    }
+    // The GPUI thread owns every window and the bridge thread owns the tray;
+    // both exit the process directly, so the main thread only stays alive.
+    loop {
+        std::thread::park();
+    }
 }
 
 fn show_error(message: &str) {
@@ -209,9 +179,6 @@ fn main() {
     }
     if let Err(error) = codex_minibar::codex::cleanup_abandoned_logins() {
         eprintln!("could not clean abandoned Codex sign-in directories: {error:#}");
-    }
-    if notifications::launched_via_toast_update() {
-        let _ = notifications::publish_toast_update_request();
     }
     if let Err(error) = run() {
         show_error(&format!("Codex Minibar failed: {error:#}"));

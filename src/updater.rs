@@ -2,7 +2,7 @@
 
 use std::{
     fs,
-    io::copy,
+    io::{Read, Write, copy},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{Arc, Mutex, OnceLock},
@@ -12,6 +12,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use semver::Version;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use ureq::Agent;
 use zip::ZipArchive;
 
@@ -88,9 +89,11 @@ pub fn open_release_notes() -> Result<()> {
 /// Shows a one-shot success toast after an in-place update relaunch.
 pub fn show_post_update_success_if_needed() {
     match take_post_update_success_marker() {
-        Ok(Some(version)) => {
-            notifications::show("Update complete", &format!("Now running {version}."))
-        }
+        Ok(Some(version)) => notifications::show_kind(
+            notifications::NotificationKind::Success,
+            crate::i18n::tr("update-complete"),
+            &crate::i18n::format("now-running-version", &[("version", version.to_string())]),
+        ),
         Ok(None) => {}
         Err(error) => eprintln!("failed to read post-update marker: {error:#}"),
     }
@@ -177,6 +180,10 @@ pub struct AvailableUpdate {
     pub version: String,
     pub asset_url: String,
     pub html_url: String,
+    /// Asset size reported by the GitHub API, if any.
+    pub size: Option<u64>,
+    /// Expected lowercase hex SHA-256 reported by the GitHub API, if any.
+    pub sha256: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -271,8 +278,13 @@ impl UpdateController {
     pub fn apply(&self) -> Result<()> {
         let update = self.available_update().context("no update is available")?;
         self.set_phase(UpdatePhase::Applying);
-        apply_update(&update)?;
-        Ok(())
+        let result = apply_update(&update);
+        if result.is_err() {
+            // Restore the previous phase so the update stays retryable and the
+            // About page's check button is not blocked.
+            self.set_phase(UpdatePhase::Available(update));
+        }
+        result
     }
 }
 
@@ -287,6 +299,22 @@ struct GhRelease {
 struct GhAsset {
     name: String,
     browser_download_url: String,
+    #[serde(default)]
+    size: Option<u64>,
+    #[serde(default)]
+    digest: Option<String>,
+}
+
+/// Hard upper bound for a downloaded release package.
+const MAX_UPDATE_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
+/// Upper bound for auxiliary downloads (e.g. the Stream Deck plugin).
+const MAX_AUX_DOWNLOAD_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Extracts the lowercase hex SHA-256 from a GitHub `digest` field.
+fn parse_sha256_digest(digest: &str) -> Option<String> {
+    let hex = digest.trim().strip_prefix("sha256:")?;
+    (hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| hex.to_ascii_lowercase())
 }
 
 pub fn current_version() -> Version {
@@ -341,6 +369,8 @@ fn check_for_update() -> Result<Option<AvailableUpdate>> {
         version: remote.to_string(),
         asset_url: asset.browser_download_url.clone(),
         html_url: release.html_url,
+        size: asset.size,
+        sha256: asset.digest.as_deref().and_then(parse_sha256_digest),
     }))
 }
 
@@ -415,7 +445,16 @@ fn apply_update(update: &AvailableUpdate) -> Result<()> {
         .with_context(|| format!("create update staging at {}", run_dir.display()))?;
 
     let zip_path = run_dir.join("package.zip");
-    download_file(&update.asset_url, &zip_path)?;
+    let limit = update.size.map_or(MAX_UPDATE_DOWNLOAD_BYTES, |size| {
+        size.min(MAX_UPDATE_DOWNLOAD_BYTES)
+    });
+    let digest = download_file_limited(&update.asset_url, &zip_path, limit)?;
+    if let Some(expected) = &update.sha256
+        && !digest.eq_ignore_ascii_case(expected)
+    {
+        let _ = fs::remove_file(&zip_path);
+        bail!("update package checksum mismatch (expected {expected}, got {digest})");
+    }
     let extracted = run_dir.join("extracted");
     fs::create_dir_all(&extracted).context("create extraction directory")?;
     let payload_root = extract_portable_zip(&zip_path, &extracted)?;
@@ -504,6 +543,12 @@ fn escape_ps_single_quoted_str(value: &str) -> String {
 }
 
 pub(crate) fn download_file(url: &str, destination: &Path) -> Result<()> {
+    download_file_limited(url, destination, MAX_AUX_DOWNLOAD_BYTES).map(|_| ())
+}
+
+/// Downloads `url` to `destination`, failing if more than `max_bytes` arrive.
+/// Returns the lowercase hex SHA-256 of the written bytes.
+fn download_file_limited(url: &str, destination: &Path, max_bytes: u64) -> Result<String> {
     let response = http_agent()
         .get(url)
         .set("User-Agent", USER_AGENT)
@@ -513,11 +558,45 @@ pub(crate) fn download_file(url: &str, destination: &Path) -> Result<()> {
     if status / 100 != 2 {
         bail!("download failed with status {status}");
     }
-    let mut reader = response.into_reader();
+    let reader = response.into_reader();
     let mut file = fs::File::create(destination)
         .with_context(|| format!("create {}", destination.display()))?;
-    copy(&mut reader, &mut file).context("write downloaded update package")?;
-    Ok(())
+    let result = copy_limited(reader, &mut file, max_bytes);
+    drop(file);
+    if result.is_err() {
+        let _ = fs::remove_file(destination);
+    }
+    result
+}
+
+/// Copies at most `max_bytes` from `reader`, erroring if more are available.
+/// Returns the hex SHA-256 of the copied bytes.
+fn copy_limited(reader: impl Read, writer: &mut impl Write, max_bytes: u64) -> Result<String> {
+    let mut limited = reader.take(max_bytes.saturating_add(1));
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    let mut total: u64 = 0;
+    loop {
+        let read = limited
+            .read(&mut buf)
+            .context("read downloaded update package")?;
+        if read == 0 {
+            break;
+        }
+        total += read as u64;
+        if total > max_bytes {
+            bail!("download exceeds the {max_bytes} byte limit");
+        }
+        hasher.update(&buf[..read]);
+        writer
+            .write_all(&buf[..read])
+            .context("write downloaded update package")?;
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 fn extract_portable_zip(archive_path: &Path, destination: &Path) -> Result<PathBuf> {
@@ -607,6 +686,30 @@ fn open_shell_target(target: &std::ffi::OsStr, description: &str) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copy_limited_enforces_cap_and_hashes() {
+        let mut out = Vec::new();
+        let digest = copy_limited(&b"abc"[..], &mut out, 3).unwrap();
+        assert_eq!(out, b"abc");
+        assert_eq!(
+            digest,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        let mut out = Vec::new();
+        assert!(copy_limited(&b"abcd"[..], &mut out, 3).is_err());
+    }
+
+    #[test]
+    fn parses_sha256_digest() {
+        let hex = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        assert_eq!(
+            parse_sha256_digest(&format!("sha256:{hex}")).as_deref(),
+            Some(hex)
+        );
+        assert_eq!(parse_sha256_digest("sha1:abc"), None);
+        assert_eq!(parse_sha256_digest("sha256:zz"), None);
+    }
 
     #[test]
     fn parses_release_tags() {

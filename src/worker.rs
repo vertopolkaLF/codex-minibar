@@ -207,6 +207,9 @@ pub enum WorkerEvent {
     /// Cached diagnostics must not become a live provider error on startup.
     UsageLoadedFromCache(UsageStatistics),
     UsageDataCleared(u64),
+    /// Emitted by the bridge's clear executor once the single store wipe ran.
+    /// Carries the clear generation and the error text on failure.
+    UsageClearFinished(u64, Option<String>),
     UsageRefreshFailed(String),
     ActivationStarted,
     ActivationSucceeded,
@@ -216,20 +219,20 @@ pub enum WorkerEvent {
     /// A provider-scoped event emitted by the multi-provider coordinator.
     /// The `u64` after the provider is the credential revision captured when
     /// that worker started, allowing the UI to reject queued stale output.
-    ProviderRequestStarted(crate::settings::ProviderKind, u64, RequestKind),
-    ProviderRequestFinished(crate::settings::ProviderKind, u64, RequestKind),
-    ProviderLimitsUpdated(crate::settings::ProviderKind, u64, RateLimits),
-    ProviderUsageUpdated(crate::settings::ProviderKind, u64, UsageStatistics),
-    ProviderUsageLoadedFromCache(crate::settings::ProviderKind, u64, UsageStatistics),
+    ProviderRequestStarted(crate::instances::ProviderId, u64, RequestKind),
+    ProviderRequestFinished(crate::instances::ProviderId, u64, RequestKind),
+    ProviderLimitsUpdated(crate::instances::ProviderId, u64, RateLimits),
+    ProviderUsageUpdated(crate::instances::ProviderId, u64, UsageStatistics),
+    ProviderUsageLoadedFromCache(crate::instances::ProviderId, u64, UsageStatistics),
     /// Barrier acknowledgement for `ClearUsageData`; the `u64` is the clear
     /// generation, not a credential revision. It remains valid when the
     /// acknowledged worker is replaced while that clear is in flight.
-    ProviderUsageDataCleared(crate::settings::ProviderKind, u64),
-    ProviderUsageRefreshFailed(crate::settings::ProviderKind, u64, String),
-    ProviderActivationStarted(crate::settings::ProviderKind, u64),
-    ProviderActivationSucceeded(crate::settings::ProviderKind, u64),
-    ProviderActivationFailed(crate::settings::ProviderKind, u64, String),
-    ProviderPollFailed(crate::settings::ProviderKind, u64, String),
+    ProviderUsageDataCleared(crate::instances::ProviderId, u64),
+    ProviderUsageRefreshFailed(crate::instances::ProviderId, u64, String),
+    ProviderActivationStarted(crate::instances::ProviderId, u64),
+    ProviderActivationSucceeded(crate::instances::ProviderId, u64),
+    ProviderActivationFailed(crate::instances::ProviderId, u64, String),
+    ProviderPollFailed(crate::instances::ProviderId, u64, String),
     /// Snapshot from the public Codex forced-reset announcement feed.
     ForcedResetsUpdated(crate::reset_feed::ResetFeedSnapshot),
     /// The feed refresh failed; cached forced resets remain usable.
@@ -240,6 +243,9 @@ pub struct WorkerHandle {
     pub commands: Sender<WorkerCommand>,
     events: Option<Receiver<WorkerEvent>>,
     join: Option<JoinHandle<()>>,
+    /// Set once the worker is being shut down so event forwarders can drop
+    /// whatever a still-running scan or request emits afterwards.
+    retired: Arc<AtomicBool>,
 }
 
 impl WorkerHandle {
@@ -247,11 +253,27 @@ impl WorkerHandle {
         let _ = self.commands.send(WorkerCommand::Refresh);
     }
 
+    /// Flag that turns true as soon as this worker is told to shut down.
+    pub fn retired_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.retired)
+    }
+
+    /// Signals shutdown and returns immediately. Scans and HTTP requests can
+    /// run for a long time, so the join happens on a background thread instead
+    /// of blocking the bridge/UI thread that disables or restarts a provider.
+    /// Output from the retiring worker is discarded through `retired_flag`.
     pub fn shutdown(mut self) {
-        self.stop();
+        self.retired.store(true, Ordering::Release);
+        let _ = self.commands.send(WorkerCommand::Shutdown);
+        if let Some(join) = self.join.take() {
+            thread::spawn(move || {
+                let _ = join.join();
+            });
+        }
     }
 
     fn stop(&mut self) {
+        self.retired.store(true, Ordering::Release);
         let _ = self.commands.send(WorkerCommand::Shutdown);
         if let Some(join) = self.join.take() {
             let _ = join.join();
@@ -472,6 +494,7 @@ fn start_worker_with_channels(
         commands: command_sender,
         events: None,
         join: Some(join),
+        retired: Arc::new(AtomicBool::new(false)),
     }
 }
 
@@ -508,6 +531,9 @@ fn run_limit_task(
     // This worker belongs to one provider, so its deadline and any retry stay
     // provider-local. A failing provider cannot wake another provider's loop.
     let mut next_poll = Instant::now();
+    // The regular deadline is measured from here, so an interval change can
+    // reschedule without waiting a whole new interval.
+    let mut last_poll: Option<Instant> = None;
     let mut manual_refresh_requested = false;
     loop {
         let now = Instant::now();
@@ -565,6 +591,7 @@ fn run_limit_task(
             // probe must not clear or restart the existing cooldown. A new
             // 429 response can still escalate it through record_429 above.
             if !(manual_refresh && pause_before_request.is_some() && !rate_limited) {
+                last_poll = Some(completed_at);
                 next_poll = completed_at
                     + effective_limit_poll_interval(poll_interval, automatic_activation, &state);
             }
@@ -597,10 +624,23 @@ fn run_limit_task(
                 next_poll = Instant::now();
             }
             Ok(WorkerCommand::SetLimitRefreshInterval(interval)) => {
+                // Every settings change resends the interval. Only a real
+                // change may move the deadline, or unrelated edits would keep
+                // postponing the next poll.
+                if poll_interval == interval {
+                    continue;
+                }
                 poll_interval = interval;
-                // Apply the setting immediately without an extra request.
-                next_poll = Instant::now()
-                    + effective_limit_poll_interval(poll_interval, automatic_activation, &state);
+                // Apply the setting immediately: a shorter interval that has
+                // already elapsed polls now, a longer one extends the wait.
+                if let Some(last_poll) = last_poll {
+                    next_poll = last_poll
+                        + effective_limit_poll_interval(
+                            poll_interval,
+                            automatic_activation,
+                            &state,
+                        );
+                }
             }
             Ok(WorkerCommand::Refresh) => manual_refresh_requested = true,
             Ok(WorkerCommand::RateLimitPauseChanged) => {}
@@ -635,6 +675,9 @@ fn run_usage_task_with_rate_limit(
         let _ = events.send(WorkerEvent::UsageLoadedFromCache(usage));
     }
     let mut next_refresh = Instant::now();
+    #[cfg(not(test))]
+    let mut healed_pricing = 0u64;
+    let mut paused_after_clear = None::<u64>;
     while !limits_ready.load(Ordering::Acquire) || !usage_collection_enabled {
         let command = if usage_collection_enabled {
             commands.recv_timeout(Duration::from_millis(100))
@@ -677,15 +720,18 @@ fn run_usage_task_with_rate_limit(
             | Ok(WorkerCommand::SetScheduledActivations(_))
             | Ok(WorkerCommand::SetAutoActivationPauses(_)) => {}
             Ok(WorkerCommand::ClearUsageData(generation)) => {
-                if let Err(error) = crate::store::with_store(|store| store.clear_usage_data()) {
-                    eprintln!("failed to clear usage data: {error:#}");
-                }
-                let _ = events.send(WorkerEvent::UsageUpdated(
-                    crate::usage::UsageStatistics::default(),
-                ));
+                // Barrier only: the bridge wipes the store exactly once after
+                // every worker has acknowledged, so this worker must not scan
+                // (and write fresh rows) until it is resumed.
+                paused_after_clear = Some(generation);
                 let _ = events.send(WorkerEvent::UsageDataCleared(generation));
             }
-            Ok(WorkerCommand::ResumeUsageRefresh(_)) => {}
+            Ok(WorkerCommand::ResumeUsageRefresh(generation)) => {
+                if paused_after_clear == Some(generation) {
+                    paused_after_clear = None;
+                    next_refresh = Instant::now();
+                }
+            }
             Err(RecvTimeoutError::Timeout) => {}
         }
     }
@@ -693,8 +739,8 @@ fn run_usage_task_with_rate_limit(
     // Preserve this deadline while processing commands that belong to the
     // limit task. Otherwise every settings update wakes this task and turns a
     // ten-minute maintenance scan into a tight loop.
-    let mut paused_after_clear = None::<u64>;
     let mut manual_refresh_requested = false;
+    let mut last_refresh = None::<Instant>;
     let mut usage_identity = provider.account_identity();
     loop {
         // `None` is an unreadable identity sample, not a logout. Ignore it so a
@@ -735,13 +781,14 @@ fn run_usage_task_with_rate_limit(
                     usage_refresh_interval = interval.max(Duration::from_secs(60));
                 }
                 Ok(WorkerCommand::ClearUsageData(generation)) => {
-                    if let Err(error) = crate::store::with_store(|store| store.clear_usage_data()) {
-                        eprintln!("failed to clear usage data: {error:#}");
-                    }
-                    let _ = events.send(WorkerEvent::UsageUpdated(
-                        crate::usage::UsageStatistics::default(),
-                    ));
+                    paused_after_clear = Some(generation);
                     let _ = events.send(WorkerEvent::UsageDataCleared(generation));
+                }
+                Ok(WorkerCommand::ResumeUsageRefresh(generation)) => {
+                    if paused_after_clear == Some(generation) {
+                        paused_after_clear = None;
+                        next_refresh = Instant::now();
+                    }
                 }
                 Ok(_) => {}
             }
@@ -759,7 +806,17 @@ fn run_usage_task_with_rate_limit(
 
             let _ = events.send(WorkerEvent::RequestStarted(RequestKind::Usage));
             #[cfg(not(test))]
-            let _ = crate::pricing::refresh_if_stale();
+            {
+                let _ = crate::pricing::refresh_if_stale();
+                // A new catalog (or the startup one) may price rows scanned
+                // while their model was unknown. Heal them before this scan so
+                // its snapshot already carries the corrected costs.
+                if let Err(error) =
+                    crate::store::repricing::reprice_for_current_catalog(&mut healed_pricing)
+                {
+                    crate::logger::info(format!("failed to reprice usage: {error:#}"));
+                }
+            }
             let rate_limited = match provider.refresh_usage_statistics(history_retention_days) {
                 Ok(usage) => {
                     let rate_limited = usage_reports_rate_limit(&usage);
@@ -784,6 +841,7 @@ fn run_usage_task_with_rate_limit(
             }
             if !(manual_refresh && pause_before_request.is_some() && !rate_limited) {
                 next_refresh = completed_at + usage_refresh_interval;
+                last_refresh = Some(completed_at);
             }
             continue;
         }
@@ -808,25 +866,28 @@ fn run_usage_task_with_rate_limit(
                 }
             }
             Ok(WorkerCommand::SetUsageRefreshInterval(interval)) => {
-                usage_refresh_interval = interval.max(Duration::from_secs(60));
-                if paused_after_clear.is_none() {
-                    next_refresh = Instant::now() + usage_refresh_interval;
+                // Every settings commit resends the interval. Only a real
+                // change may move the deadline, and it is anchored to the last
+                // scan so repeated edits can never postpone stats forever.
+                let interval = interval.max(Duration::from_secs(60));
+                if interval == usage_refresh_interval {
+                    continue;
+                }
+                usage_refresh_interval = interval;
+                if paused_after_clear.is_none()
+                    && let Some(last_refresh) = last_refresh
+                {
+                    next_refresh = last_refresh + usage_refresh_interval;
                 }
             }
             Ok(WorkerCommand::SetUsageCollectionEnabled(false)) => {
+                // Keep any clear barrier: only a matching resume may unpause.
                 usage_collection_enabled = false;
-                paused_after_clear = None;
                 next_refresh = Instant::now();
             }
             Err(RecvTimeoutError::Timeout) => {}
             Ok(WorkerCommand::Refresh) => manual_refresh_requested = true,
             Ok(WorkerCommand::ClearUsageData(generation)) => {
-                if let Err(error) = crate::store::with_store(|store| store.clear_usage_data()) {
-                    eprintln!("failed to clear usage data: {error:#}");
-                }
-                let _ = events.send(WorkerEvent::UsageUpdated(
-                    crate::usage::UsageStatistics::default(),
-                ));
                 let _ = events.send(WorkerEvent::UsageDataCleared(generation));
                 paused_after_clear = Some(generation);
             }
@@ -871,21 +932,10 @@ fn run_usage_task(
     );
 }
 
-/// Session activation always uses the ambient Default account, independent of
-/// the account order and the provider-level sample used for presentation.
+/// Each instance reads exactly one login, so its sample is also the one that
+/// decides activation.
 fn activation_limits(limits: &RateLimits) -> Option<&RateLimits> {
-    let profiles = if !limits.codex_profiles.is_empty() {
-        &limits.codex_profiles
-    } else {
-        &limits.claude_profiles
-    };
-    if profiles.is_empty() {
-        return Some(limits);
-    }
-    profiles
-        .iter()
-        .find(|p| p.id == "default" && p.error.is_none())
-        .map(|p| &p.limits)
+    Some(limits)
 }
 
 fn tick(
@@ -1045,99 +1095,6 @@ mod tests {
         index: usize,
     }
 
-    fn reordered_codex_limits(default: RateLimits, saved: RateLimits) -> RateLimits {
-        let mut top = saved.clone();
-        top.codex_profiles = vec![
-            crate::limits::CodexProfileSnapshot {
-                id: "work".into(),
-                name: "Work".into(),
-                limits: saved,
-                error: None,
-            },
-            crate::limits::CodexProfileSnapshot {
-                id: "default".into(),
-                name: "Default".into(),
-                limits: default,
-                error: None,
-            },
-        ];
-        top
-    }
-
-    #[test]
-    fn automatic_activation_observes_default_even_after_a_saved_account() {
-        let mut saved = limits_at(22, 0);
-        saved.primary_window_is_unactivated = true;
-        let first = reordered_codex_limits(limits_at(10, 0), saved.clone());
-        let reset = reordered_codex_limits(limits_at(15, 0), saved);
-        let mut provider = ScriptedProvider::new(vec![first, reset.clone(), reset]);
-        let mut activator = CountingActivator(0);
-        let mut state = ActivationState::default();
-        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
-        assert_eq!(activator.0, 0);
-        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
-        assert_eq!(activator.0, 1);
-        assert_eq!(
-            state.last_seen_resets_at,
-            limits_at(15, 0).primary.resets_at
-        );
-    }
-
-    #[test]
-    fn scheduled_activation_uses_default_without_replacing_displayed_account() {
-        let local = Local::now();
-        let schedule = ScheduledActivation {
-            id: "due-now".into(),
-            provider_id: "codex".into(),
-            weekday: local.weekday().num_days_from_monday() as u8,
-            weekdays: vec![local.weekday().num_days_from_monday() as u8],
-            time_minutes: (local.hour() * 60 + local.minute()) as u16,
-            enabled: true,
-        };
-        let sample = reordered_codex_limits(limits_at(10, 0), limits_at(22, 0));
-        let mut provider = ScriptedProvider::new(vec![sample.clone(), sample]);
-        let mut activator = CountingActivator(0);
-        let mut state = ActivationState::default();
-        let events = tick(
-            &mut provider,
-            &mut activator,
-            &mut state,
-            false,
-            &[schedule],
-            &[],
-        )
-        .unwrap();
-        assert_eq!(activator.0, 1);
-        assert_eq!(
-            state.last_seen_resets_at,
-            limits_at(10, 0).primary.resets_at
-        );
-        let displayed = events
-            .iter()
-            .find_map(|event| match event {
-                WorkerEvent::LimitsUpdated(limits) => Some(limits),
-                _ => None,
-            })
-            .unwrap();
-        assert_eq!(
-            displayed.primary.resets_at,
-            limits_at(22, 0).primary.resets_at
-        );
-    }
-
-    #[test]
-    fn activation_confirmation_compares_defaults_not_saved_account_deadlines() {
-        let mut default = limits_at(10, 0);
-        default.primary_window_is_unactivated = true;
-        let mut first = reordered_codex_limits(default.clone(), limits_at(22, 0));
-        let second = reordered_codex_limits(default, limits_at(23, 0));
-        assert!(confirm_unactivated_session(
-            &mut ScriptedProvider::new(vec![second]),
-            &mut first
-        ));
-        assert_eq!(first.primary.resets_at, limits_at(23, 0).primary.resets_at);
-    }
-
     #[test]
     fn successful_partial_result_still_pauses_worker_after_429() {
         struct PartialProvider;
@@ -1185,6 +1142,54 @@ mod tests {
         );
         commands_tx.send(WorkerCommand::Shutdown).unwrap();
         task.join().unwrap();
+    }
+
+    #[test]
+    fn shutdown_returns_while_a_scan_is_still_running() {
+        struct BlockedScan(Arc<AtomicBool>);
+        impl UsageProvider for BlockedScan {
+            fn load_cached_usage_statistics(&mut self, _: u16) -> Result<UsageStatistics> {
+                Ok(UsageStatistics::default())
+            }
+            fn refresh_usage_statistics(&mut self, _: u16) -> Result<UsageStatistics> {
+                while !self.0.load(Ordering::Acquire) {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Ok(UsageStatistics::default())
+            }
+            fn refresh_without_limits(&self) -> bool {
+                true
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let release = Arc::new(AtomicBool::new(false));
+        let (events_tx, events_rx) = mpsc::channel();
+        let worker = start_worker_with_event_sender(
+            ScriptedProvider::new(vec![limits_at(15, 0)]),
+            BlockedScan(Arc::clone(&release)),
+            CountingActivator(0),
+            directory.path().join("activation.toml"),
+            false,
+            Vec::new(),
+            Vec::new(),
+            30,
+            Duration::from_secs(300),
+            true,
+            Duration::from_secs(300),
+            events_tx,
+        );
+        let retired = worker.retired_flag();
+        loop {
+            match events_rx.recv_timeout(Duration::from_secs(5)).unwrap() {
+                WorkerEvent::RequestStarted(RequestKind::Usage) => break,
+                _ => continue,
+            }
+        }
+        let started = Instant::now();
+        worker.shutdown();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(retired.load(Ordering::Acquire));
+        release.store(true, Ordering::Release);
     }
 
     impl ScriptedProvider {
@@ -1604,135 +1609,6 @@ mod tests {
     }
 
     #[test]
-    fn cached_failed_profile_sample_does_not_trigger_scheduled_activation() {
-        let local_now = Local::now();
-        let schedule = ScheduledActivation {
-            id: "due-now".into(),
-            provider_id: crate::settings::ProviderKind::Claude.id().into(),
-            weekday: local_now.weekday().num_days_from_monday() as u8,
-            weekdays: vec![local_now.weekday().num_days_from_monday() as u8],
-            time_minutes: (local_now.hour() * 60 + local_now.minute()) as u16,
-            enabled: true,
-        };
-        let mut limits = limits_at(15, 0);
-        limits
-            .claude_profiles
-            .push(crate::limits::ClaudeProfileSnapshot {
-                id: "default".into(),
-                name: "Default".into(),
-                limits: limits.clone(),
-                error: Some("fixture 429".into()),
-            });
-        let mut activator = CountingActivator(0);
-        let events = tick(
-            &mut ScriptedProvider::new(vec![limits]),
-            &mut activator,
-            &mut ActivationState::default(),
-            true,
-            &[schedule],
-            &[],
-        )
-        .unwrap();
-        assert_eq!(activator.0, 0);
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, WorkerEvent::LimitsUpdated(_)))
-        );
-        assert!(
-            !events
-                .iter()
-                .any(|event| matches!(event, WorkerEvent::ActivationStarted))
-        );
-    }
-
-    #[test]
-    fn cached_failed_codex_profile_sample_does_not_trigger_scheduled_activation() {
-        let local_now = Local::now();
-        let schedule = ScheduledActivation {
-            id: "due-now".into(),
-            provider_id: crate::settings::ProviderKind::Codex.id().into(),
-            weekday: local_now.weekday().num_days_from_monday() as u8,
-            weekdays: vec![local_now.weekday().num_days_from_monday() as u8],
-            time_minutes: (local_now.hour() * 60 + local_now.minute()) as u16,
-            enabled: true,
-        };
-        let mut limits = limits_at(15, 0);
-        limits
-            .codex_profiles
-            .push(crate::limits::CodexProfileSnapshot {
-                id: "default".into(),
-                name: "Default".into(),
-                limits: limits.clone(),
-                error: Some("fixture 429".into()),
-            });
-        let mut activator = CountingActivator(0);
-        let events = tick(
-            &mut ScriptedProvider::new(vec![limits]),
-            &mut activator,
-            &mut ActivationState::default(),
-            true,
-            &[schedule],
-            &[],
-        )
-        .unwrap();
-        assert_eq!(activator.0, 0);
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, WorkerEvent::LimitsUpdated(_)))
-        );
-        assert!(
-            !events
-                .iter()
-                .any(|event| matches!(event, WorkerEvent::ActivationStarted))
-        );
-    }
-
-    #[test]
-    fn saved_codex_account_never_triggers_ambient_scheduled_activation() {
-        let local_now = Local::now();
-        let schedule = ScheduledActivation {
-            id: "due-now".into(),
-            provider_id: crate::settings::ProviderKind::Codex.id().into(),
-            weekday: local_now.weekday().num_days_from_monday() as u8,
-            weekdays: vec![local_now.weekday().num_days_from_monday() as u8],
-            time_minutes: (local_now.hour() * 60 + local_now.minute()) as u16,
-            enabled: true,
-        };
-        let mut limits = limits_at(15, 0);
-        limits
-            .codex_profiles
-            .push(crate::limits::CodexProfileSnapshot {
-                id: "work".into(),
-                name: "Default".into(),
-                limits: limits.clone(),
-                error: None,
-            });
-        let mut activator = CountingActivator(0);
-        let events = tick(
-            &mut ScriptedProvider::new(vec![limits]),
-            &mut activator,
-            &mut ActivationState::default(),
-            true,
-            &[schedule],
-            &[],
-        )
-        .unwrap();
-        assert_eq!(activator.0, 0);
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, WorkerEvent::LimitsUpdated(_)))
-        );
-        assert!(
-            !events
-                .iter()
-                .any(|event| matches!(event, WorkerEvent::ActivationStarted))
-        );
-    }
-
-    #[test]
     fn absent_session_window_blocks_automatic_and_scheduled_activation() {
         let local_now = Local::now();
         let schedule = ScheduledActivation {
@@ -1854,6 +1730,102 @@ mod tests {
         assert!(recv_usage_update(&events_rx));
         assert_eq!(refreshes.load(Ordering::SeqCst), 2);
 
+        commands_tx.send(WorkerCommand::Shutdown).unwrap();
+        task.join().unwrap();
+    }
+
+    fn recv_cleared(events: &Receiver<WorkerEvent>, generation: u64) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if let Ok(WorkerEvent::UsageDataCleared(g)) =
+                events.recv_timeout(Duration::from_millis(50))
+            {
+                assert_eq!(g, generation);
+                return;
+            }
+        }
+        panic!("no clear acknowledgement");
+    }
+
+    #[test]
+    fn clear_pauses_pre_limits_worker_until_resume_then_rescans() {
+        let (commands_tx, commands_rx) = mpsc::channel();
+        let (events_tx, events_rx) = mpsc::channel();
+        let limits_ready = Arc::new(AtomicBool::new(false));
+        let refreshes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider = CountingUsageProvider {
+            refreshes: Arc::clone(&refreshes),
+            refresh_without_limits: false,
+        };
+        let ready = Arc::clone(&limits_ready);
+        let task = thread::spawn(move || {
+            run_usage_task(
+                provider,
+                30,
+                Duration::from_secs(3600),
+                true,
+                commands_rx,
+                events_tx,
+                ready,
+            );
+        });
+
+        // Ack without wiping; the worker is paused even before limits are ready.
+        commands_tx.send(WorkerCommand::ClearUsageData(7)).unwrap();
+        recv_cleared(&events_rx, 7);
+
+        limits_ready.store(true, Ordering::Release);
+        thread::sleep(Duration::from_millis(400));
+        assert_eq!(refreshes.load(Ordering::SeqCst), 0, "scanned while paused");
+
+        // A resume for another generation is ignored.
+        commands_tx
+            .send(WorkerCommand::ResumeUsageRefresh(6))
+            .unwrap();
+        thread::sleep(Duration::from_millis(200));
+        assert_eq!(refreshes.load(Ordering::SeqCst), 0);
+
+        commands_tx
+            .send(WorkerCommand::ResumeUsageRefresh(7))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while refreshes.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            refreshes.load(Ordering::SeqCst),
+            1,
+            "no rescan after resume"
+        );
+
+        commands_tx.send(WorkerCommand::Shutdown).unwrap();
+        task.join().unwrap();
+    }
+
+    #[test]
+    fn clear_does_not_wipe_store_in_worker() {
+        // The worker only acknowledges; the single wipe is owned by the bridge.
+        let (commands_tx, commands_rx) = mpsc::channel();
+        let (events_tx, events_rx) = mpsc::channel();
+        let provider = CountingUsageProvider {
+            refreshes: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            refresh_without_limits: false,
+        };
+        let task = thread::spawn(move || {
+            run_usage_task(
+                provider,
+                30,
+                Duration::from_secs(3600),
+                false,
+                commands_rx,
+                events_tx,
+                Arc::new(AtomicBool::new(true)),
+            );
+        });
+        commands_tx.send(WorkerCommand::ClearUsageData(1)).unwrap();
+        recv_cleared(&events_rx, 1);
+        // No UsageUpdated(default) is produced by the worker any more.
+        assert!(no_usage_update(&events_rx, Duration::from_millis(200)));
         commands_tx.send(WorkerCommand::Shutdown).unwrap();
         task.join().unwrap();
     }

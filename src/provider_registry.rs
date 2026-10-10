@@ -21,7 +21,14 @@ pub enum MetricSource {
 pub struct MetricDescriptor {
     pub id: &'static str,
     pub label: &'static str,
+    pub label_key: &'static str,
     pub source: MetricSource,
+}
+
+impl MetricDescriptor {
+    pub fn localized_label(&self) -> &'static str {
+        crate::i18n::tr(self.label_key)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,6 +43,9 @@ pub struct ProviderDescriptor {
     pub supports_activation: bool,
     /// Whether the provider contributes date-scoped token history to Usage Stats.
     pub include_in_total_spend: bool,
+    /// Whether more than one instance can be configured. Only drivers with an
+    /// isolating parameter (config folder or API key) qualify.
+    pub supports_multiple_instances: bool,
     /// Stable metrics shown before runtime-discovered provider-specific lanes.
     pub metrics: &'static [MetricDescriptor],
     /// Ordered metrics used by onboarding and the provider preset.
@@ -46,16 +56,19 @@ const CODEX_METRICS: &[MetricDescriptor] = &[
     MetricDescriptor {
         id: "codex.session",
         label: "5h session",
+        label_key: "msg-5h-session",
         source: MetricSource::Primary,
     },
     MetricDescriptor {
         id: "codex.weekly",
         label: "Weekly",
+        label_key: "weekly",
         source: MetricSource::Secondary,
     },
     MetricDescriptor {
         id: "codex.lunaReserve",
         label: "Luna Reserve",
+        label_key: "luna-reserve",
         source: MetricSource::Additional("gpt-reserve"),
     },
 ];
@@ -64,11 +77,13 @@ const CLAUDE_METRICS: &[MetricDescriptor] = &[
     MetricDescriptor {
         id: "claude.session",
         label: "5h session",
+        label_key: "msg-5h-session",
         source: MetricSource::Primary,
     },
     MetricDescriptor {
         id: "claude.weekly",
         label: "Weekly",
+        label_key: "weekly",
         source: MetricSource::Secondary,
     },
 ];
@@ -77,21 +92,25 @@ const CURSOR_METRICS: &[MetricDescriptor] = &[
     MetricDescriptor {
         id: "cursor.auto",
         label: "Cursor Models",
+        label_key: "cursor-models",
         source: MetricSource::Secondary,
     },
     MetricDescriptor {
         id: "cursor.api",
         label: "Other Models",
+        label_key: "other-models",
         source: MetricSource::Additional("cursor-api"),
     },
     MetricDescriptor {
         id: "cursor.allModels",
         label: "All Models",
+        label_key: "all-models",
         source: MetricSource::Additional("cursor-all-models"),
     },
     MetricDescriptor {
         id: "cursor.grokBot",
         label: "Grok Bot",
+        label_key: "grok-bot",
         source: MetricSource::Additional("cursor-grok-bot"),
     },
 ];
@@ -105,16 +124,19 @@ const OPENCODE_GO_METRICS: &[MetricDescriptor] = &[
     MetricDescriptor {
         id: "opencode-go.session",
         label: "5h session",
+        label_key: "msg-5h-session",
         source: MetricSource::Primary,
     },
     MetricDescriptor {
         id: "opencode-go.weekly",
         label: "Weekly",
+        label_key: "weekly",
         source: MetricSource::Secondary,
     },
     MetricDescriptor {
         id: "opencode-go.monthly",
         label: "Monthly",
+        label_key: "monthly",
         source: MetricSource::Additional("monthly"),
     },
 ];
@@ -122,6 +144,7 @@ const OPENCODE_GO_METRICS: &[MetricDescriptor] = &[
 const OPENROUTER_METRICS: &[MetricDescriptor] = &[MetricDescriptor {
     id: "openrouter.limit",
     label: "Spending limit",
+    label_key: "spending-limit",
     source: MetricSource::Primary,
 }];
 
@@ -129,11 +152,13 @@ const ANTIGRAVITY_METRICS: &[MetricDescriptor] = &[
     MetricDescriptor {
         id: "antigravity.gemini",
         label: "Gemini",
+        label_key: "gemini",
         source: MetricSource::Primary,
     },
     MetricDescriptor {
         id: "antigravity.thirdParty",
         label: "Claude + GPT",
+        label_key: "claude-gpt",
         source: MetricSource::Secondary,
     },
 ];
@@ -141,6 +166,7 @@ const ANTIGRAVITY_METRICS: &[MetricDescriptor] = &[
 const GROK_METRICS: &[MetricDescriptor] = &[MetricDescriptor {
     id: "grok.credits",
     label: "Credits",
+    label_key: "credits",
     source: MetricSource::Primary,
 }];
 
@@ -149,6 +175,7 @@ const KIRO_METRICS: &[MetricDescriptor] = &[MetricDescriptor {
     // settings survive the switch from an extra lane to the primary monthly quota.
     id: "kiro.additional.credits",
     label: "Monthly credits",
+    label_key: "monthly-credits",
     source: MetricSource::Secondary,
 }];
 
@@ -161,6 +188,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         brand_rgb: (128, 159, 255),
         supports_activation: true,
         include_in_total_spend: true,
+        supports_multiple_instances: true,
         metrics: CODEX_METRICS,
         default_tray_metrics: &["codex.session", "codex.weekly"],
     },
@@ -172,6 +200,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         brand_rgb: (217, 119, 87),
         supports_activation: true,
         include_in_total_spend: true,
+        supports_multiple_instances: true,
         metrics: CLAUDE_METRICS,
         default_tray_metrics: &["claude.session", "claude.weekly"],
     },
@@ -183,6 +212,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         brand_rgb: (145, 151, 164),
         supports_activation: false,
         include_in_total_spend: true,
+        supports_multiple_instances: false,
         metrics: CURSOR_METRICS,
         default_tray_metrics: &["cursor.auto", "cursor.api"],
     },
@@ -194,6 +224,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         brand_rgb: (128, 128, 128),
         supports_activation: false,
         include_in_total_spend: true,
+        supports_multiple_instances: true,
         metrics: OPENCODE_ZEN_METRICS,
         default_tray_metrics: &[],
     },
@@ -205,6 +236,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         brand_rgb: (128, 128, 128),
         supports_activation: false,
         include_in_total_spend: true,
+        supports_multiple_instances: true,
         metrics: OPENCODE_GO_METRICS,
         default_tray_metrics: &[
             "opencode-go.session",
@@ -220,6 +252,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         brand_rgb: (200, 255, 0),
         supports_activation: false,
         include_in_total_spend: true,
+        supports_multiple_instances: true,
         metrics: OPENROUTER_METRICS,
         default_tray_metrics: &["openrouter.limit"],
     },
@@ -231,6 +264,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         brand_rgb: (66, 133, 244),
         supports_activation: false,
         include_in_total_spend: false,
+        supports_multiple_instances: false,
         metrics: ANTIGRAVITY_METRICS,
         default_tray_metrics: &["antigravity.gemini", "antigravity.thirdParty"],
     },
@@ -242,6 +276,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         brand_rgb: (92, 92, 92),
         supports_activation: false,
         include_in_total_spend: false,
+        supports_multiple_instances: false,
         metrics: GROK_METRICS,
         default_tray_metrics: &["grok.credits"],
     },
@@ -253,6 +288,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         brand_rgb: (151, 125, 255),
         supports_activation: false,
         include_in_total_spend: false,
+        supports_multiple_instances: false,
         metrics: KIRO_METRICS,
         default_tray_metrics: &["kiro.additional.credits"],
     },
@@ -414,20 +450,20 @@ pub fn catalog_brick_ids(provider: ProviderKind) -> Vec<String> {
 /// Human label for a popup brick id shown in Settings.
 pub fn brick_label(provider: ProviderKind, brick_id: &str) -> String {
     if let Some(metric) = metric(provider, brick_id) {
-        return metric.label.into();
+        return metric.localized_label().into();
     }
     let provider_id = descriptor(provider).id;
     if brick_id == resets_brick_id(provider) {
-        return "Banked resets".into();
+        return crate::i18n::tr("banked-resets").into();
     }
     if brick_id == credits_brick_id(provider) {
-        return "Credits".into();
+        return crate::i18n::tr("credits").into();
     }
     if brick_id == usage_brick_id(provider) {
-        return "Usage stats".into();
+        return crate::i18n::tr("usage-stats-7b9e1a").into();
     }
     if brick_id == spending_brick_id(provider) {
-        return "Spending".into();
+        return crate::i18n::tr("spending").into();
     }
     if let Some(source_id) = brick_id.strip_prefix(&format!("{provider_id}.additional.")) {
         return source_id.replace(['-', '_'], " ");
@@ -463,7 +499,7 @@ pub fn tray_metric_options(
     let mut options = descriptor(provider)
         .metrics
         .iter()
-        .map(|metric| (metric.id.to_string(), metric.label.to_string()))
+        .map(|metric| (metric.id.to_string(), metric.localized_label().to_string()))
         .collect::<Vec<_>>();
     let prefix = format!("{}.additional.", descriptor(provider).id);
     for (id, label) in discovered_labels {
@@ -547,17 +583,27 @@ pub enum LimitSectionKind {
 
 pub fn metric_label(provider: ProviderKind, limits: &RateLimits, id: &str) -> String {
     if uses_codex_luna_reserve_override(provider, limits, id) {
-        return crate::limits::LUNA_RESERVE_TITLE.into();
+        return crate::i18n::tr("luna-reserve").into();
     }
     if let Some(metric) = metric(provider, id) {
-        return metric.label.into();
+        return metric.localized_label().into();
     }
     limits
         .additional_limits
         .iter()
         .find(|limit| dynamic_metric_id(provider, &limit.id) == id)
-        .map(|limit| limit.title.clone())
+        .map(additional_label)
         .unwrap_or_else(|| id.rsplit('.').next().unwrap_or(id).replace('-', " "))
+}
+
+/// Localize application-owned lane names by their stable API identity. Model
+/// names and unknown provider-supplied titles remain provider data.
+pub fn additional_label(limit: &crate::limits::AdditionalLimit) -> String {
+    if limit.id == crate::limits::GPT_RESERVE_LIMIT_ID {
+        crate::i18n::tr("luna-reserve").into()
+    } else {
+        limit.title.clone()
+    }
 }
 
 pub fn metric_window<'a>(
@@ -631,7 +677,7 @@ pub fn resolve_metric<'a>(
         (!limit.window.is_empty()).then(|| {
             (
                 dynamic_metric_id(provider, &limit.id),
-                limit.title.clone(),
+                additional_label(limit),
                 &limit.window,
             )
         })
@@ -689,7 +735,9 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.toml");
         let mut settings = crate::settings::Settings::default();
-        let mut widget = crate::settings::TrayWidget::custom_for_provider(ProviderKind::Claude);
+        let mut widget = crate::settings::TrayWidget::custom_for_provider(
+            crate::instances::ProviderId::from(ProviderKind::Claude),
+        );
         widget.indicators[0].metric_id = id.clone();
         settings.tray_widgets = vec![widget];
         settings.save(&path).unwrap();
@@ -788,23 +836,6 @@ mod tests {
                 assert!(ids.insert(metric.id));
             }
         }
-    }
-
-    #[test]
-    fn only_providers_with_real_session_windows_support_activation() {
-        assert!(descriptor(ProviderKind::Codex).supports_activation);
-        assert!(descriptor(ProviderKind::Claude).supports_activation);
-        assert!(!descriptor(ProviderKind::Cursor).supports_activation);
-        assert!(!descriptor(ProviderKind::OpenCodeZen).supports_activation);
-        assert!(!descriptor(ProviderKind::OpenCodeGo).supports_activation);
-        assert!(!descriptor(ProviderKind::OpenRouter).supports_activation);
-        assert!(descriptor(ProviderKind::OpenRouter).include_in_total_spend);
-        assert!(!descriptor(ProviderKind::Antigravity).supports_activation);
-        assert!(!descriptor(ProviderKind::Grok).supports_activation);
-        assert!(!descriptor(ProviderKind::Antigravity).include_in_total_spend);
-        assert!(!descriptor(ProviderKind::Grok).include_in_total_spend);
-        assert!(!supports_usage_stats(ProviderKind::Antigravity));
-        assert!(!supports_usage_stats(ProviderKind::Grok));
     }
 
     #[test]
