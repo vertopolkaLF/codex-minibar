@@ -1405,7 +1405,7 @@ impl PopupRoot {
                         palette.subtle_fill.opacity(hover),
                         palette.card_radius,
                     ))
-                    .child(div().relative().child(caption(label, palette.accent))),
+                    .child(div().relative().child(caption(label, palette.accent_text))),
             );
         }
         Some(section.child(list).into_any_element())
@@ -1493,7 +1493,7 @@ impl PopupRoot {
                 if key.disabled || expired {
                     palette.text_tertiary
                 } else {
-                    palette.accent
+                    palette.accent_text
                 },
             )))
             .child(

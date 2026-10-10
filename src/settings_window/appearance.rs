@@ -10,10 +10,11 @@ use gpui::{
 use super::kit::{self, Button, ButtonSize, Kit, Row, SliderRange, eid};
 use super::vscode_themes::{ThemeBrowserUi, ThemeHost};
 use super::window::SettingsWindow;
+use crate::popup_window::ui::fx;
 use crate::popup_window::ui::theme::{self as popup_theme, Palette, rgb8};
 use crate::settings::{
-    AccentColor, AppTheme, BottomBarSize, PopupBackgroundMaterial, PopupCornerRadius, PopupTheme,
-    TimeFormat,
+    AccentColor, AppTheme, BottomBarSize, POPUP_VSCODE_CONTRAST_DEFAULT, POPUP_VSCODE_CONTRAST_MAX,
+    POPUP_VSCODE_CONTRAST_MIN, PopupBackgroundMaterial, PopupCornerRadius, PopupTheme, TimeFormat,
 };
 use crate::vscode_themes::VsCodeTheme;
 
@@ -118,6 +119,7 @@ pub(super) trait ThemePicker: ThemeHost {
             PopupBackgroundMaterial::Solid,
             font,
         )
+        .with_contrast(self.settings().popup_vscode_contrast)
         .with_borders(self.settings().popup_borders)
     }
 
@@ -290,6 +292,7 @@ pub(super) trait ThemePicker: ThemeHost {
             PopupBackgroundMaterial::Solid,
             font.clone(),
         )
+        .with_contrast(self.settings().popup_vscode_contrast)
         .with_borders(self.settings().popup_borders);
         let vscode_id = vscode.as_ref().map(|vscode| vscode.id.clone());
         let preview = popup_mock(k, &palette);
@@ -463,6 +466,7 @@ impl SettingsWindow {
         let bar = s.bottom_bar_size;
         let radius = s.popup_corner_radius;
         let animations = s.animations_enabled;
+        let vscode_selected = s.popup_theme == PopupTheme::VsCode;
 
         let theme_cards = self.theme_cards(k, cx);
         let colors = self.accent_swatches(k, accent, cx);
@@ -520,23 +524,46 @@ impl SettingsWindow {
         });
 
         let popup_theme_cards = self.popup_theme_grid(k, cx);
-        let import_row = self.vscode_import_row(k, cx);
-        let open_vsx_row = self.open_vsx_entry_row(k, cx);
-        let themes = kit::card_of(k, |k| {
-            vec![
-                Row::new("appearance-popup-theme", crate::i18n::tr("popup-theme"))
-                    .description(k, crate::i18n::tr("popup-theme-description"))
-                    .detail(
-                        div()
-                            .pt(px(12.0))
-                            .child(popup_theme_cards)
-                            .into_any_element(),
-                    )
-                    .render(k),
-                import_row,
-                open_vsx_row,
-            ]
-        });
+        let vscode_row = self.vscode_themes_row(k, cx);
+        let theme_row = Row::new("appearance-popup-theme", crate::i18n::tr("popup-theme"))
+            .description(k, crate::i18n::tr("popup-theme-description"))
+            .detail(
+                div()
+                    .pt(px(12.0))
+                    .child(popup_theme_cards)
+                    .into_any_element(),
+            )
+            .render(k);
+        // Contrast only tunes VS Code themes, so it glides in with one.
+        let contrast_row = self.vscode_contrast_row(k, cx);
+        let row_divider = || {
+            div()
+                .px(px(kit::ROW_PADDING_X))
+                .child(kit::divider(k))
+                .into_any_element()
+        };
+        let contrast_divider = row_divider();
+        let vscode_divider = row_divider();
+        let contrast = kit::collapsible(
+            k,
+            fx::key("appearance-vscode-contrast"),
+            vscode_selected,
+            move |_| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(contrast_divider)
+                    .child(contrast_row)
+                    .into_any_element()
+            },
+        );
+        let themes = kit::card_surface(
+            k,
+            std::iter::once(theme_row)
+                .chain(contrast)
+                .chain([vscode_divider, vscode_row]),
+        )
+        .into_any_element();
 
         let radius_value = radius.dip();
         let popup = kit::card_of(k, |k| {
@@ -641,6 +668,55 @@ impl SettingsWindow {
             kit::section_heading(k, crate::i18n::tr("motion")),
             motion,
         ]
+    }
+
+    /// Contrast slider for VS Code popup themes, with a reset to 100 %.
+    fn vscode_contrast_row(&self, k: &mut Kit, cx: &mut Context<Self>) -> AnyElement {
+        let contrast = self.settings.popup_vscode_contrast;
+        let reset = Button::icon_only(
+            "appearance-vscode-contrast-reset",
+            "arrow-counter-clockwise-bold",
+        )
+        .ghost()
+        .size(ButtonSize::Small)
+        .tooltip(crate::i18n::tr("reset"))
+        .disabled(contrast == POPUP_VSCODE_CONTRAST_DEFAULT)
+        .on_click(Self::h(cx, |this, (), _, cx| {
+            this.edit(cx, |settings| {
+                settings.popup_vscode_contrast = POPUP_VSCODE_CONTRAST_DEFAULT
+            })
+        }))
+        .render(k);
+        let slider = kit::slider(
+            k,
+            "appearance-vscode-contrast",
+            f32::from(contrast),
+            SliderRange {
+                min: f32::from(POPUP_VSCODE_CONTRAST_MIN),
+                max: f32::from(POPUP_VSCODE_CONTRAST_MAX),
+                step: 5.0,
+            },
+            160.0,
+            Self::h(cx, |this, value: f32, _, cx| {
+                let value = value.round() as u16;
+                if this.settings.popup_vscode_contrast != value {
+                    this.edit(cx, move |settings| settings.popup_vscode_contrast = value)
+                }
+            }),
+        );
+        let value_label = kit::text(format!("{contrast}%"), 13.0, k.theme.text_secondary)
+            .w(px(40.0))
+            .text_right()
+            .into_any_element();
+        Row::new(
+            "appearance-vscode-contrast",
+            crate::i18n::tr("popup-theme-contrast"),
+        )
+        .description(k, crate::i18n::tr("popup-theme-contrast-description"))
+        .trailing(reset)
+        .trailing(slider)
+        .trailing(value_label)
+        .render(k)
     }
 
     /// Installed font families, led by the Windows default.

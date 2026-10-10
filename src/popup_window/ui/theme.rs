@@ -9,7 +9,10 @@ use std::sync::Arc;
 
 use gpui::{Hsla, Rgba, SharedString};
 
-use crate::settings::{AccentColor, AppTheme, PopupBackgroundMaterial, PopupTheme, ProviderKind};
+use crate::settings::{
+    AccentColor, AppTheme, POPUP_VSCODE_CONTRAST_DEFAULT, PopupBackgroundMaterial, PopupTheme,
+    ProviderKind,
+};
 use crate::vscode_themes::VsCodeTheme;
 
 /// Family name of the bundled Geist faces used by the Vercel popup theme.
@@ -148,6 +151,9 @@ pub(crate) struct Palette {
     pub(crate) text_tertiary: Hsla,
     pub(crate) text_on_accent: Hsla,
     pub(crate) accent: Hsla,
+    /// The accent where it colors text; [`Palette::with_contrast`] brightens
+    /// it without touching accent fills.
+    pub(crate) accent_text: Hsla,
     pub(crate) card_background: Hsla,
     pub(crate) card_stroke: Hsla,
     pub(crate) subtle_fill: Hsla,
@@ -170,6 +176,8 @@ pub(crate) struct Palette {
     pub(crate) material: PopupBackgroundMaterial,
     /// Card, control and window outlines are drawn.
     pub(crate) borders: bool,
+    /// Contrast percent applied by [`Palette::with_contrast`].
+    pub(crate) contrast: u16,
     /// The VS Code theme this palette was mapped from.
     pub(crate) vscode: Option<Arc<VsCodeTheme>>,
 }
@@ -224,6 +232,51 @@ impl Palette {
                 },
             },
         }
+    }
+
+    /// Scales how far a VS Code palette's text, glyphs and outlines stand
+    /// out: above 100 % they blend toward pure white (dark) or black
+    /// (light), below it they fade into the surface. Built-in designs keep
+    /// their tuned tokens. Apply before [`Palette::with_borders`].
+    pub(crate) fn with_contrast(mut self, percent: u16) -> Self {
+        self.contrast = percent;
+        if self.vscode.is_none() || percent == POPUP_VSCODE_CONTRAST_DEFAULT {
+            return self;
+        }
+        let amount = (f32::from(percent) / 100.0 - 1.0).clamp(-0.5, 1.0);
+        let ink = if self.dark {
+            gpui::white()
+        } else {
+            gpui::black()
+        };
+        // Text keeps part of its hue and hierarchy even at the maximum;
+        // hairlines move less so cards don't turn into boxes.
+        let adjust = |color: Hsla, weight: f32| {
+            if color.a <= 0.0 {
+                color
+            } else if amount >= 0.0 {
+                color.mix(ink, amount * weight)
+            } else {
+                color.alpha(1.0 + amount * weight)
+            }
+        };
+        for (color, weight) in [
+            (&mut self.text_primary, 0.7),
+            (&mut self.accent_text, 0.5),
+            (&mut self.text_secondary, 0.6),
+            (&mut self.text_tertiary, 0.5),
+            (&mut self.chrome_icon, 0.6),
+            (&mut self.chrome_icon_hover, 0.7),
+            (&mut self.mono_provider_icon, 0.6),
+            (&mut self.pace_marker, 0.7),
+            (&mut self.card_stroke, 0.25),
+            (&mut self.divider, 0.25),
+            (&mut self.chart_grid, 0.2),
+            (&mut self.control_fill, 0.15),
+        ] {
+            *color = adjust(*color, weight);
+        }
+        self
     }
 
     /// Without borders every outline drawn with `card_stroke` disappears;
@@ -286,6 +339,7 @@ impl Palette {
                 rgba8(255, 255, 255, 0xFF)
             },
             accent: accent_fill,
+            accent_text: accent_fill,
             // CardBackgroundFillColorDefault / CardStrokeColorDefault.
             card_background: if dark {
                 rgba8(255, 255, 255, 0x0D)
@@ -376,6 +430,7 @@ impl Palette {
             },
             material,
             borders: true,
+            contrast: POPUP_VSCODE_CONTRAST_DEFAULT,
             vscode: None,
         }
     }
@@ -407,6 +462,7 @@ impl Palette {
             // --vbg-background-100 on a gray-1000 fill.
             text_on_accent: pick((0xFF, 0xFF, 0xFF), (0x00, 0x00, 0x00)),
             accent: gray_1000,
+            accent_text: gray_1000,
             // --vbg-surface-primary cards over the background-200 canvas.
             card_background: pick((0xFF, 0xFF, 0xFF), (0x0A, 0x0A, 0x0A)),
             // --vbg-border-default.
@@ -434,6 +490,7 @@ impl Palette {
             mono_provider_icon: gray_900,
             material,
             borders: true,
+            contrast: POPUP_VSCODE_CONTRAST_DEFAULT,
             vscode: None,
         }
     }
@@ -554,6 +611,7 @@ impl Palette {
             text_tertiary: tone(0.58),
             text_on_accent,
             accent,
+            accent_text: accent,
             card_background,
             card_stroke: color(&[
                 "widget.border",
@@ -613,6 +671,7 @@ impl Palette {
             mono_provider_icon: text_secondary,
             material,
             borders: true,
+            contrast: POPUP_VSCODE_CONTRAST_DEFAULT,
             vscode: Some(theme),
         }
     }

@@ -253,7 +253,7 @@ impl PopupRoot {
                             .child(dot(color))
                             .child(caption(label, palette.text_secondary)),
                         amount,
-                        palette.accent,
+                        palette.accent_text,
                     ));
                 }
                 bubble
@@ -306,8 +306,13 @@ impl PopupRoot {
                                                 palette.text_secondary,
                                             ))
                                             .child(
-                                                components::text(cost, 16.0, 22.0, palette.accent)
-                                                    .font_weight(FontWeight::SEMIBOLD),
+                                                components::text(
+                                                    cost,
+                                                    16.0,
+                                                    22.0,
+                                                    palette.accent_text,
+                                                )
+                                                .font_weight(FontWeight::SEMIBOLD),
                                             ),
                                     ),
                             )
@@ -339,7 +344,7 @@ impl PopupRoot {
                             .child(dot(color))
                             .child(nowrap(caption(name, palette.text_secondary))),
                         amount,
-                        palette.accent,
+                        palette.accent_text,
                     ));
                 }
                 let mut body = div()
@@ -373,13 +378,13 @@ impl PopupRoot {
                             .child(components::icon(icon, 14.0, color))
                             .child(caption(label, palette.text_secondary)),
                         amount,
-                        palette.accent,
+                        palette.accent_text,
                     ));
                 }
                 list = list.child(components::rule(&palette)).child(row(
                     caption(crate::i18n::tr("total"), palette.text_secondary),
                     chart.total,
-                    palette.accent,
+                    palette.accent_text,
                 ));
                 bubble
                     .w(px(width))

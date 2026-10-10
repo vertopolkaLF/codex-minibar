@@ -629,7 +629,7 @@ impl PopupRoot {
             ))
             .child(nowrap(components::body_strong(
                 crate::i18n::tr("home-usage-title"),
-                palette.text_secondary.mix(palette.accent, title_hover),
+                palette.text_secondary.mix(palette.accent_text, title_hover),
             )));
         let periods = [
             TotalSpendPeriod::Today,

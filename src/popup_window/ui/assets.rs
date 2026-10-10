@@ -48,7 +48,7 @@ fn source(name: &str) -> Option<&'static str> {
         "fluent-arrow-clockwise-dashes" => {
             include_str!("../../../assets/icons/fluent-arrow-clockwise-dashes-16-regular.svg")
         }
-        "fluent-clock" =>include_str!("../../../assets/icons/fluent-clock-16-regular.svg"),
+        "fluent-clock" => include_str!("../../../assets/icons/fluent-clock-16-regular.svg"),
         "fluent-copy" => include_str!("../../../assets/icons/fluent-copy-16-regular.svg"),
         "fluent-checkmark-circle" => {
             include_str!("../../../assets/icons/fluent-checkmark-circle-16-filled.svg")

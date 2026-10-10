@@ -782,7 +782,7 @@ popup-theme-vercel = Vercel
 popup-theme-built-in = Встроенная
 popup-theme-vscode = Тема VS Code
 vscode-themes = Темы VS Code
-vscode-themes-description = Импортируйте пакет .vsix или файл цветовой темы .json. Темы меняют цвета только во всплывающем окне.
+vscode-themes-description = Цветовые темы Visual Studio Code для всплывающего окна: найдите тему в Open VSX или импортируйте файл .vsix или .json.
 import-theme = Импортировать тему
 importing-theme = Импорт…
 remove-theme = Удалить тему
@@ -828,6 +828,8 @@ compact = Компактный
 popup-corner-radius = Радиус углов всплывающего окна
 popup-borders = Границы
 popup-borders-description = Обводка всплывающего окна, карточек и элементов управления
+popup-theme-contrast = Контраст
+popup-theme-contrast-description = Усиливает или ослабляет текст и обводки тем VS Code
 
 # src/settings_window/appearance.rs
 animation-effects = Эффекты анимации

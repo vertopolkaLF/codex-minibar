@@ -511,7 +511,7 @@ popup-theme-vercel = Vercel
 popup-theme-built-in = Integrado
 popup-theme-vscode = Tema de VS Code
 vscode-themes = Temas de VS Code
-vscode-themes-description = Importa un paquete .vsix o un archivo .json de tema de color. Los temas solo cambian los colores de la ventana emergente.
+vscode-themes-description = Usa temas de color de Visual Studio Code en la ventana emergente: explora Open VSX o importa un archivo de tema .vsix o .json.
 import-theme = Importar tema
 importing-theme = Importando…
 remove-theme = Quitar tema
@@ -550,6 +550,8 @@ compact = Compacto
 popup-corner-radius = Radio de las esquinas de la ventana emergente
 popup-borders = Bordes
 popup-borders-description = Contornear la ventana emergente, las tarjetas y los controles
+popup-theme-contrast = Contraste
+popup-theme-contrast-description = Resalta más o menos el texto y los contornos de los temas de VS Code
 
 animation-effects = Efectos de animación
 

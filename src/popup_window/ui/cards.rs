@@ -185,7 +185,7 @@ impl PopupRoot {
                         name,
                         components::body_strong(
                             format_usd(*balance as f64 / 1_000_000.0),
-                            palette.accent,
+                            palette.accent_text,
                         ),
                     ),
                     None => div().child(name),
@@ -247,7 +247,7 @@ impl PopupRoot {
                                 crate::i18n::tr("available-balance"),
                                 palette.text_tertiary,
                             )),
-                        components::body_strong(value.clone(), palette.accent),
+                        components::body_strong(value.clone(), palette.accent_text),
                     ))
                     .into_any_element()
             }
@@ -520,7 +520,7 @@ impl PopupRoot {
         }
         title = title.child(nowrap(components::body_strong(
             driver.display_name(),
-            palette.text_secondary.mix(palette.accent, link_hover),
+            palette.text_secondary.mix(palette.accent_text, link_hover),
         )));
         if let Some(plan) = heading.plan.as_ref() {
             title = title.child(nowrap(components::body(
@@ -568,7 +568,7 @@ impl PopupRoot {
         if let Some(balance) = heading.balance_microusd {
             trailing = trailing.child(components::body_strong(
                 format_usd(balance as f64 / 1_000_000.0),
-                palette.accent,
+                palette.accent_text,
             ));
         }
         if heading.drag_handle {
@@ -631,7 +631,7 @@ impl PopupRoot {
             .items_center()
             .gap(px(5.0))
             .whitespace_nowrap()
-            .child(components::body_strong(label, palette.accent));
+            .child(components::body_strong(label, palette.accent_text));
         if let Some(value) = usage_amount_label(usage_amount, show_values) {
             row = row.child(caption(value, palette.text_tertiary));
         }
@@ -810,7 +810,7 @@ impl PopupRoot {
         let title_width = metrics.caption(title);
         let label_width = metrics.strong(&label);
         let fits = |width: f32| TextMetrics::fits_split(available_width, width, metadata_width);
-        let label_el = nowrap(components::body_strong(label, palette.accent));
+        let label_el = nowrap(components::body_strong(label, palette.accent_text));
         // Long copy moves to its own rows instead of being clipped.
         let content = if fits(title_width.max(label_width)) {
             components::split_row(
@@ -932,7 +932,7 @@ impl PopupRoot {
                         crate::i18n::tr("usage"),
                         palette.text_tertiary,
                     ))
-                    .child(components::body_strong(amount, palette.accent)),
+                    .child(components::body_strong(amount, palette.accent_text)),
             );
             let expires_soon = expires_at.filter(|at| *at > Utc::now());
             show_masked_key = !(spending.resets_at.is_some() && expires_soon.is_some());
@@ -1164,7 +1164,7 @@ impl PopupRoot {
                 .gap(px(8.0))
                 .child(components::fit_text(
                     title_width <= available_width,
-                    components::body_strong(count_label, palette.accent),
+                    components::body_strong(count_label, palette.accent_text),
                 ));
         if let Some(value) = expiration {
             title = title.child(
@@ -1227,7 +1227,7 @@ impl PopupRoot {
                 }))
                 .child(components::nowrap(components::body_strong(
                     label,
-                    palette.accent,
+                    palette.accent_text,
                 )));
             if busy {
                 button = button.opacity(0.6);
@@ -1543,7 +1543,7 @@ impl PopupRoot {
                             .flex_col()
                             .gap(px(1.0))
                             .child(caption(kind, palette.text_secondary))
-                            .child(components::body_strong(label, palette.accent)),
+                            .child(components::body_strong(label, palette.accent_text)),
                         div()
                             .flex()
                             .flex_col()

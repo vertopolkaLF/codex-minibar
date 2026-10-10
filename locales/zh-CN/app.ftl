@@ -508,7 +508,7 @@ popup-theme-vercel = Vercel
 popup-theme-built-in = 内置
 popup-theme-vscode = VS Code 主题
 vscode-themes = VS Code 主题
-vscode-themes-description = 导入 .vsix 扩展包或颜色主题 .json 文件。主题只会改变弹出窗口的配色。
+vscode-themes-description = 在弹出窗口中使用 Visual Studio Code 颜色主题：浏览 Open VSX，或导入 .vsix 或 .json 主题文件。
 import-theme = 导入主题
 importing-theme = 正在导入…
 remove-theme = 删除主题
@@ -547,6 +547,8 @@ compact = 紧凑
 popup-corner-radius = 弹出窗口圆角半径
 popup-borders = 边框
 popup-borders-description = 为弹出窗口、卡片和控件绘制轮廓
+popup-theme-contrast = 对比度
+popup-theme-contrast-description = 增强或减弱 VS Code 主题中文字和轮廓的对比
 
 animation-effects = 动画效果
 

@@ -857,15 +857,13 @@ fn limit_card(
     let color = if focused && kind == NotificationKind::Warning {
         palette.caution
     } else {
-        palette.accent
+        palette.accent_text
     };
     let usage = nowrap(components::body_strong(label, color));
     let reset = show_reset.then(|| match window.resets_at {
-        Some(at) => components::icon_status(
-            components::RESET_ICON,
-            format_reset_in(Some(at)),
-            palette,
-        ),
+        Some(at) => {
+            components::icon_status(components::RESET_ICON, format_reset_in(Some(at)), palette)
+        }
         None => components::card_metadata(crate::i18n::tr("session-not-started"), palette),
     });
     let title = nowrap(caption(title, palette.text_secondary));

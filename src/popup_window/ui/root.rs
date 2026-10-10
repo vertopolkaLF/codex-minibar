@@ -330,6 +330,7 @@ impl PopupRoot {
             crate::popup::background_material(),
             theme::popup_font_family(popup_theme, ui.font_family.as_deref(), &default_font),
         )
+        .with_contrast(ui.popup_vscode_contrast)
         .with_borders(ui.popup_borders);
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             this.refresh_palette(window);
@@ -482,6 +483,7 @@ impl PopupRoot {
             || self.palette.font_family != font
             || self.palette.material != material
             || self.palette.borders != self.ui.popup_borders
+            || self.palette.contrast != self.ui.popup_vscode_contrast
             || (vscode.is_none()
                 && self.palette.accent != Palette::accent_for(popup_theme, dark, self.accent))
         {
@@ -492,6 +494,7 @@ impl PopupRoot {
                 backdrop.set_appearance(material, dark);
             }
             self.palette = Palette::new(popup_theme, vscode, dark, self.accent, material, font)
+                .with_contrast(self.ui.popup_vscode_contrast)
                 .with_borders(self.ui.popup_borders);
         }
     }
@@ -517,6 +520,7 @@ impl PopupRoot {
                 &self.default_font,
             ),
         )
+        .with_contrast(self.ui.popup_vscode_contrast)
         .with_borders(self.ui.popup_borders)
     }
 

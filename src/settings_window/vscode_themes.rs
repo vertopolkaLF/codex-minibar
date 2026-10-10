@@ -2,15 +2,17 @@
 //! and install / remove of library entries.
 
 use std::{
+    cell::Cell,
     collections::{HashMap, HashSet},
+    rc::Rc,
     sync::Arc,
     time::Duration,
 };
 
 use gpui::{
     Animation, AnimationExt, AnyElement, Context, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, PathPromptOptions, SharedString, StatefulInteractiveElement, Styled, Task,
-    Transformation, Window, div, img, prelude::FluentBuilder, px, radians,
+    ParentElement, PathPromptOptions, Pixels, SharedString, StatefulInteractiveElement, Styled,
+    Task, Transformation, Window, div, img, prelude::FluentBuilder, px, radians,
 };
 
 use super::appearance::{ThemePicker, popup_mock};
@@ -23,7 +25,6 @@ use crate::settings::{PopupTheme, Settings};
 use crate::vscode_themes::{self, ThemeSource, VsCodeTheme, open_vsx};
 
 const SEARCH_INPUT: &str = "appearance-open-vsx-search";
-const BROWSER_ID: &str = "appearance-open-vsx";
 /// Parallel icon downloads after a search.
 const ICON_WORKERS: usize = 4;
 const ICON_SIZE: f32 = 40.0;
@@ -51,6 +52,24 @@ enum Preview {
     Failed(SharedString),
 }
 
+/// Scroll follow for a just-opened result: its row stays where it was
+/// clicked while a preview above collapses, then its preview scrolls into
+/// view as it grows. Any scroll by the user ends it.
+#[derive(Clone)]
+struct Reveal {
+    key: String,
+    state: Rc<Cell<RevealState>>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct RevealState {
+    /// Row top relative to the viewport top that the follow holds.
+    anchor: Option<Pixels>,
+    /// Scroll offset left by the previous frame, to detect user scrolling.
+    offset: Option<Pixels>,
+    cancelled: bool,
+}
+
 /// Open VSX search state; lives as long as the Settings window.
 #[derive(Default)]
 pub(super) struct ThemeBrowser {
@@ -73,6 +92,8 @@ pub(super) struct ThemeBrowser {
     previews: HashMap<String, Preview>,
     /// The result whose preview is open.
     previewing: Option<String>,
+    /// The just-opened result kept in view while it settles.
+    revealing: Option<Reveal>,
 }
 
 /// A window that hosts the theme pickers: the Settings Appearance page and
@@ -134,10 +155,11 @@ impl ThemeHost for SettingsWindow {
 }
 
 impl SettingsWindow {
-    /// "Browse Open VSX" row; the browser itself is a dialog.
-    pub(super) fn open_vsx_entry_row(&mut self, k: &mut Kit, cx: &mut Context<Self>) -> AnyElement {
-        Row::new(BROWSER_ID, crate::i18n::tr("browse-open-vsx"))
-            .description(k, crate::i18n::tr("browse-open-vsx-description"))
+    /// VS Code themes for the popup: browse Open VSX, or import a file.
+    pub(super) fn vscode_themes_row(&mut self, k: &mut Kit, cx: &mut Context<Self>) -> AnyElement {
+        let importing = self.theme_browser().importing;
+        Row::new("appearance-vscode-themes", crate::i18n::tr("vscode-themes"))
+            .description(k, crate::i18n::tr("vscode-themes-description"))
             .trailing(
                 Button::new(
                     "appearance-open-vsx-open",
@@ -147,9 +169,21 @@ impl SettingsWindow {
                 .on_click(Self::h(cx, |this, (), _, cx| this.open_open_vsx(cx)))
                 .render(k),
             )
+            .trailing(
+                Button::icon_only("appearance-vscode-import", "folder-open-fill")
+                    .tooltip(if importing {
+                        crate::i18n::tr("importing-theme")
+                    } else {
+                        crate::i18n::tr("import-theme")
+                    })
+                    .disabled(importing)
+                    .on_click(Self::h(cx, |this, (), _, cx| this.import_vscode_theme(cx)))
+                    .render(k),
+            )
             .render(k)
     }
 
+    /// "Browse Open VSX" row; the browser itself is a dialog.
     fn open_open_vsx(&mut self, cx: &mut Context<Self>) {
         self.theme_browser.open = true;
         self.ensure_open_vsx_results(cx);
@@ -256,28 +290,6 @@ pub(super) trait ThemeBrowserUi: ThemeHost {
             .child(search_row)
             .child(content)
             .into_any_element()
-    }
-
-    /// "VS Code themes" row with the file import button.
-    fn vscode_import_row(&mut self, k: &mut Kit, cx: &mut Context<Self>) -> AnyElement {
-        let importing = self.theme_browser().importing;
-        Row::new("appearance-vscode-themes", crate::i18n::tr("vscode-themes"))
-            .description(k, crate::i18n::tr("vscode-themes-description"))
-            .trailing(
-                Button::new(
-                    "appearance-vscode-import",
-                    if importing {
-                        crate::i18n::tr("importing-theme")
-                    } else {
-                        crate::i18n::tr("import-theme")
-                    },
-                )
-                .with_icon("download-simple-fill")
-                .disabled(importing)
-                .on_click(Self::h(cx, |this, (), _, cx| this.import_vscode_theme(cx)))
-                .render(k),
-            )
-            .render(k)
     }
 
     /// The search field, and the status or result list below it.
@@ -406,19 +418,31 @@ pub(super) trait ThemeBrowserUi: ThemeHost {
                         });
                     let key = extension.key();
                     let installing = self.theme_browser().installing.contains(&key);
-                    rows.push(self.open_vsx_row(
-                        k,
-                        index,
-                        extension,
-                        installed_version,
-                        installing,
-                        cx,
-                    ));
+                    let row =
+                        self.open_vsx_row(k, index, extension, installed_version, installing, cx);
                     let open = self.theme_browser().previewing.as_deref() == Some(key.as_str());
                     let panel_key = fx::key(("open-vsx-preview", key.as_str()));
-                    rows.extend(kit::collapsible(k, panel_key, open, |k| {
+                    let panel = kit::collapsible(k, panel_key, open, |k| {
                         self.open_vsx_preview(k, extension, cx)
-                    }));
+                    });
+                    match self.open_vsx_reveal(k, &key, open, panel_key) {
+                        // A preview collapsing above moves the row up while
+                        // this one opens; keep both in view until they settle.
+                        Some(reveal) => rows.push(
+                            div()
+                                .relative()
+                                .flex()
+                                .flex_col()
+                                .child(row)
+                                .children(panel)
+                                .child(reveal)
+                                .into_any_element(),
+                        ),
+                        None => {
+                            rows.push(row);
+                            rows.extend(panel);
+                        }
+                    }
                 }
                 let list = div()
                     .flex()
@@ -600,6 +624,38 @@ pub(super) trait ThemeBrowserUi: ThemeHost {
             .into_any_element()
     }
 
+    /// Scroll follow overlay for the just-opened result, kept until its
+    /// open animation settles and its preview has loaded.
+    fn open_vsx_reveal(
+        &mut self,
+        k: &mut Kit,
+        key: &str,
+        open: bool,
+        panel_key: u64,
+    ) -> Option<AnyElement> {
+        let browser = self.theme_browser();
+        let reveal = browser
+            .revealing
+            .clone()
+            .filter(|reveal| reveal.key == key)?;
+        if !open {
+            return None;
+        }
+        // The dialog scrolls its own list; the inline browser rides the page.
+        let scroll = if browser.open {
+            browser.scroll.clone()
+        } else {
+            k.page_scroll.clone()?
+        };
+        let loading = matches!(browser.previews.get(key), None | Some(Preview::Loading));
+        let settled =
+            k.fx.toggle(fx::key(("collapse", panel_key)), true, fx::NORMAL) >= 0.999;
+        if reveal.state.get().cancelled || (settled && !loading) {
+            self.theme_browser_mut().revealing = None;
+        }
+        Some(follow_into_view(scroll, reveal.state))
+    }
+
     /// Mini popups for every theme in the package; clicking one previews it
     /// in the popup without installing anything.
     fn open_vsx_preview(
@@ -770,10 +826,15 @@ pub(super) trait ThemeBrowserUi: ThemeHost {
         let browser = self.theme_browser_mut();
         if browser.previewing.as_deref() == Some(key.as_str()) {
             browser.previewing = None;
+            browser.revealing = None;
             cx.notify();
             return;
         }
         browser.previewing = Some(key.clone());
+        browser.revealing = Some(Reveal {
+            key: key.clone(),
+            state: Rc::default(),
+        });
         // A ready or in-flight preview is reused; a failed one is retried.
         let fetch = matches!(browser.previews.get(&key), None | Some(Preview::Failed(_)));
         if fetch {
@@ -1114,4 +1175,56 @@ fn compact_count(count: u64) -> String {
         1_000..=999_999 => format!("{arrow} {:.0}K", count as f64 / 1_000.0),
         _ => format!("{arrow} {:.1}M", count as f64 / 1_000_000.0),
     }
+}
+
+/// Invisible overlay over a result and its preview that keeps the row at its
+/// clicked position and scrolls the least amount needed to show the preview,
+/// never pushing the row's top out of view.
+fn follow_into_view(scroll: gpui::ScrollHandle, state: Rc<Cell<RevealState>>) -> AnyElement {
+    const MARGIN: f32 = 12.0;
+    gpui::canvas(
+        move |bounds, window, _| {
+            let mut current = state.get();
+            if current.cancelled {
+                return;
+            }
+            let offset = scroll.offset();
+            let max = scroll.max_offset().height;
+            // GPUI clamps the offset to the content, which shrinks while a
+            // preview above collapses; only a move elsewhere is the user's.
+            let at_edge = offset.y >= px(-0.5) || offset.y <= -max + px(0.5);
+            if !at_edge
+                && current
+                    .offset
+                    .is_some_and(|last| (last - offset.y).abs() > px(0.5))
+            {
+                current.cancelled = true;
+                state.set(current);
+                return;
+            }
+            let viewport = scroll.bounds();
+            let top = bounds.top() - viewport.top();
+            let anchor = *current.anchor.get_or_insert(top.max(px(0.0)));
+            // Hold the row where it was clicked, then reveal what grows below.
+            let hold = top - anchor;
+            let below = bounds.bottom() + px(MARGIN) - viewport.bottom();
+            let room_above = top - px(MARGIN);
+            let shift = hold.max(below.min(room_above));
+            let mut next = offset.y;
+            if shift.abs() > px(0.5) {
+                next = (offset.y - shift).clamp(-max, px(0.0));
+                scroll.set_offset(gpui::point(offset.x, next));
+                current.anchor = Some(top - (offset.y - next));
+                window.refresh();
+            }
+            current.offset = Some(next);
+            state.set(current);
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+    .into_any_element()
 }

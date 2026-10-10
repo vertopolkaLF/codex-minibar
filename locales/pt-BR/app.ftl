@@ -511,7 +511,7 @@ popup-theme-vercel = Vercel
 popup-theme-built-in = Integrado
 popup-theme-vscode = Tema do VS Code
 vscode-themes = Temas do VS Code
-vscode-themes-description = Importe um pacote .vsix ou um arquivo .json de tema de cores. Os temas mudam apenas as cores da janela pop-up.
+vscode-themes-description = Use temas de cores do Visual Studio Code na janela pop-up: explore o Open VSX ou importe um arquivo de tema .vsix ou .json.
 import-theme = Importar tema
 importing-theme = Importando…
 remove-theme = Remover tema
@@ -550,6 +550,8 @@ compact = Compacto
 popup-corner-radius = Raio dos cantos do popup
 popup-borders = Bordas
 popup-borders-description = Contornar a janela pop-up, os cartões e os controles
+popup-theme-contrast = Contraste
+popup-theme-contrast-description = Destacar mais ou menos o texto e os contornos dos temas do VS Code
 
 animation-effects = Efeitos de animação
 

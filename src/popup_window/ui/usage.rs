@@ -1506,7 +1506,7 @@ fn day_breakdown_table(
             date = date.child(caption(
                 weekday.clone(),
                 if weekend {
-                    palette.accent
+                    palette.accent_text
                 } else {
                     palette.text_tertiary
                 },

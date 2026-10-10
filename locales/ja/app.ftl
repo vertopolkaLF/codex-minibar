@@ -762,7 +762,7 @@ popup-theme-vercel = Vercel
 popup-theme-built-in = 組み込み
 popup-theme-vscode = VS Code テーマ
 vscode-themes = VS Code テーマ
-vscode-themes-description = .vsix パッケージまたはカラーテーマの .json ファイルをインポートします。テーマはポップアップのみの色を変更します。
+vscode-themes-description = Visual Studio Code のカラーテーマをポップアップで使用します。Open VSX を閲覧するか、.vsix または .json のテーマファイルをインポートします。
 import-theme = テーマのインポート
 importing-theme = インポート中…
 remove-theme = テーマを削除する
@@ -808,6 +808,8 @@ compact = コンパクト
 popup-corner-radius = ポップアップコーナー半径
 popup-borders = 枠線
 popup-borders-description = ポップアップ、カード、コントロールに枠線を表示します
+popup-theme-contrast = コントラスト
+popup-theme-contrast-description = VS Code テーマの文字と枠線の強さを調整します
 
 # src/settings_window/appearance.rs
 animation-effects = アニメーション効果

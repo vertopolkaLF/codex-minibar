@@ -1054,7 +1054,7 @@ popup-theme-vscode = { "" }
 vscode-themes = { "" }
 
 # English source:
-# vscode-themes-description = Import a .vsix package or a color theme .json file. Themes recolor the popup only.
+# vscode-themes-description = Use Visual Studio Code color themes in the popup: browse Open VSX or import a .vsix or .json theme file.
 vscode-themes-description = { "" }
 
 # English source:
@@ -1180,6 +1180,14 @@ popup-borders = { "" }
 # English source:
 # popup-borders-description = Outline the popup window, cards and controls
 popup-borders-description = { "" }
+
+# English source:
+# popup-theme-contrast = Contrast
+popup-theme-contrast = { "" }
+
+# English source:
+# popup-theme-contrast-description = Make text and outlines of VS Code themes stand out more or less
+popup-theme-contrast-description = { "" }
 
 # English source:
 # animation-effects = Animation effects

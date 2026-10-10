@@ -312,6 +312,7 @@ pub(crate) struct UiState {
     pub(super) popup_background_material: PopupBackgroundMaterial,
     pub(super) popup_theme: PopupTheme,
     pub(super) popup_vscode_theme: Option<String>,
+    pub(super) popup_vscode_contrast: u16,
     pub(super) popup_borders: bool,
     pub(super) time_format: TimeFormat,
     pub(super) last_activation: String,
@@ -370,6 +371,7 @@ impl Default for UiState {
             popup_background_material: PopupBackgroundMaterial::Mica,
             popup_theme: PopupTheme::Fluent,
             popup_vscode_theme: None,
+            popup_vscode_contrast: crate::settings::POPUP_VSCODE_CONTRAST_DEFAULT,
             popup_borders: true,
             time_format: TimeFormat::from_windows(),
             last_activation: crate::i18n::tr("never").into(),
@@ -435,6 +437,7 @@ impl UiState {
         self.popup_background_material = settings.popup_background_material;
         self.popup_theme = settings.popup_theme;
         self.popup_vscode_theme = settings.popup_vscode_theme.clone();
+        self.popup_vscode_contrast = settings.popup_vscode_contrast;
         self.popup_borders = settings.popup_borders;
         self.time_format = settings.time_format;
         self.show_used_percentage = settings.show_used_percentage;

@@ -766,7 +766,7 @@ popup-theme-vercel = Vercel
 popup-theme-built-in = Intégré
 popup-theme-vscode = Thèmes VS Code
 vscode-themes = Thèmes VS Code
-vscode-themes-description = Importez un package .vsix ou un fichier .json de thème de couleur. Les thèmes recolorent uniquement la fenêtre contextuelle.
+vscode-themes-description = Utilisez des thèmes de couleur Visual Studio Code dans la fenêtre contextuelle : parcourez Open VSX ou importez un fichier de thème .vsix ou .json.
 import-theme = Importer un thème
 importing-theme = Importation…
 remove-theme = Supprimer le thème
@@ -812,6 +812,8 @@ compact = Compacte
 popup-corner-radius = Rayon du coin contextuel
 popup-borders = Bordures
 popup-borders-description = Afficher les contours de la fenêtre popup, des cartes et des contrôles
+popup-theme-contrast = Contraste
+popup-theme-contrast-description = Faire ressortir plus ou moins le texte et les contours des thèmes VS Code
 
 # src/settings_window/appearance.rs
 animation-effects = Effets d'animation

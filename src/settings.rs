@@ -305,6 +305,11 @@ impl PopupBackgroundMaterial {
     }
 }
 
+/// Range and default of [`Settings::popup_vscode_contrast`], in percent.
+pub const POPUP_VSCODE_CONTRAST_MIN: u16 = 50;
+pub const POPUP_VSCODE_CONTRAST_MAX: u16 = 200;
+pub const POPUP_VSCODE_CONTRAST_DEFAULT: u16 = 100;
+
 /// Visual design language of the popup. Settings and onboarding always keep
 /// the Fluent look; only the popup switches themes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1747,6 +1752,9 @@ pub struct Settings {
     /// Installed VS Code theme id used while `popup_theme` is `VsCode`. A
     /// theme that is no longer installed falls back to Fluent.
     pub popup_vscode_theme: Option<String>,
+    /// Text and outline contrast of VS Code popup themes in percent; 100
+    /// keeps the theme's own colors.
+    pub popup_vscode_contrast: u16,
     /// Outlines around popup cards, controls and the window.
     pub popup_borders: bool,
     /// 12-hour or 24-hour clocks. Missing values follow the Windows locale.
@@ -1827,6 +1835,7 @@ impl Default for Settings {
             popup_background_material: PopupBackgroundMaterial::default(),
             popup_theme: PopupTheme::default(),
             popup_vscode_theme: None,
+            popup_vscode_contrast: POPUP_VSCODE_CONTRAST_DEFAULT,
             popup_borders: true,
             time_format: TimeFormat::from_windows(),
             instances: ProviderKind::ALL
@@ -2032,6 +2041,13 @@ impl Settings {
         let retention = self.history_retention_days.clamp(1, 365);
         if retention != self.history_retention_days {
             self.history_retention_days = retention;
+            changed = true;
+        }
+        let contrast = self
+            .popup_vscode_contrast
+            .clamp(POPUP_VSCODE_CONTRAST_MIN, POPUP_VSCODE_CONTRAST_MAX);
+        if contrast != self.popup_vscode_contrast {
+            self.popup_vscode_contrast = contrast;
             changed = true;
         }
         let low = self.notifications.low_usage_threshold_percent.clamp(1, 99);

@@ -153,6 +153,7 @@ fn copy_choices(from: &Settings, to: &mut Settings) {
     to.accent_color = from.accent_color;
     to.popup_theme = from.popup_theme;
     to.popup_vscode_theme = from.popup_vscode_theme.clone();
+    to.popup_vscode_contrast = from.popup_vscode_contrast;
 }
 
 /// A tray widget for every enabled provider that has default tray metrics.
