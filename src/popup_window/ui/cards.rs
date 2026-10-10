@@ -208,9 +208,11 @@ impl PopupRoot {
                 window,
             ),
             Card::BankedResets {
+                provider,
                 limits,
                 expansion_key,
             } => self.render_banked_resets(
+                *provider,
                 limits,
                 expansion_key,
                 false,
@@ -299,11 +301,13 @@ impl PopupRoot {
                     }
                 }
                 Card::BankedResets {
+                    provider,
                     limits,
                     expansion_key,
                 } => {
                     flush_rings(&mut out, &mut rings, paired);
                     out.push(self.render_banked_resets(
+                        *provider,
                         limits,
                         expansion_key,
                         true,
@@ -1096,10 +1100,11 @@ impl PopupRoot {
             .into_any_element()
     }
 
-    /// `compact` is the one-line header of the Lines and Rings layouts: the
-    /// count and the next expiry countdown, without the date.
+    /// Every layout shares the compact card size; `compact` (Lines and Rings)
+    /// only drops the expiry date from the header.
     fn render_banked_resets(
         &mut self,
+        provider: ProviderId,
         limits: &RateLimits,
         expansion_key: &str,
         compact: bool,
@@ -1109,9 +1114,7 @@ impl PopupRoot {
     ) -> AnyElement {
         let palette = self.palette.clone();
         let metrics = self.metrics(window);
-        // Full rows use 16 DIP side padding instead of the usual 12.
-        let pad_x = if compact { 12.0 } else { 16.0 };
-        let available_width = available_width - (pad_x - 12.0) * 2.0;
+        let pad_x = 12.0;
         let date_status_width = |date: &str, status: f32| metrics.caption(date).max(status);
         let count = limits.available_reset_count();
         let count_label =
@@ -1164,10 +1167,10 @@ impl PopupRoot {
         let header_fits = TextMetrics::fits_split(
             available_width,
             title_width,
-            if compact {
+            if compact || expiration.is_none() {
                 expiration_status_width
             } else {
-                date_status_width(&expiration_date, expiration_status_width)
+                metrics.caption(&expiration_date) + 6.0 + expiration_status_width
             },
         );
         let mut title =
@@ -1187,17 +1190,95 @@ impl PopupRoot {
                 ),
             );
         }
-        let header_content = if compact {
+        // Claude redemption re-reads the inventory for the server-selected
+        // grant, so a cached snapshot without `next_credit_id` still qualifies.
+        let busy = self.reset_busy.contains(&provider);
+        let confirming = self.reset_confirm == Some(provider);
+        let can_use = count > 0
+            && self.ui.instance(provider).is_some_and(|instance| {
+                !instance.uses_manual_credential()
+                    && (provider.kind() == ProviderKind::Codex || !available.is_empty())
+            });
+        let header_content = if can_use || busy {
+            // The action sits on the trailing edge; expiry moves under the title.
+            let label = crate::i18n::tr(if busy { "reset-using" } else { "use-reset" });
+            let button_id = fx::key(("use-reset", expansion_key));
+            let button_hover = self.fx.toggle(
+                fx::key(("use-reset-hover", button_id)),
+                can_use && !busy && self.hovered(button_id),
+                fx::FASTER,
+            );
+            let mut button = div()
+                .id(eid(format!("use-reset-{expansion_key}")))
+                .flex_none()
+                .px(px(12.0))
+                .py(px(5.0))
+                .rounded(px(palette.control_radius))
+                .bg(palette.accent.opacity(if confirming {
+                    0.26
+                } else {
+                    0.14 + 0.1 * button_hover
+                }))
+                .child(components::nowrap(components::body_strong(
+                    label,
+                    palette.accent,
+                )));
+            if busy {
+                button = button.opacity(0.6);
+            } else if can_use {
+                button = button
+                    .cursor_pointer()
+                    .on_hover(self.hover_listener(button_id, None, cx))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        this.reset_confirm = if this.reset_confirm == Some(provider) {
+                            None
+                        } else {
+                            Some(provider)
+                        };
+                        cx.notify();
+                    }));
+            }
+            let meta_width = if compact || expiration.is_none() {
+                expiration_status_width
+            } else {
+                expiration_status_width + 6.0 + metrics.caption(&expiration_date)
+            };
+            let mut meta = div()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .gap_x(px(6.0))
+                .child(expiration_status);
+            if !compact && expiration.is_some() {
+                meta = meta.child(card_metadata(expiration_date, &palette));
+            }
+            // Both lines carry 20 DIP line boxes; pull the second one up so
+            // the pair reads as one block instead of two loose rows.
+            let leading = div()
+                .flex()
+                .flex_col()
+                .child(title)
+                .child(meta.mt(px(-3.0)));
+            let fits = TextMetrics::fits_split(
+                available_width,
+                title_width.max(meta_width),
+                metrics.strong(label) + 24.0,
+            );
+            components::adaptive_split(fits, leading, button)
+        } else if compact || expiration.is_none() {
             components::adaptive_split(header_fits, title, expiration_status)
         } else {
+            // One line like the compact card: the date leads the countdown.
             components::adaptive_split(
                 header_fits,
                 title,
                 div()
                     .flex()
-                    .flex_col()
-                    .items_end()
-                    .gap(px(1.0))
+                    .flex_row()
+                    .items_center()
+                    .gap(px(6.0))
                     .child(card_metadata(expiration_date, &palette))
                     .child(expiration_status),
             )
@@ -1212,7 +1293,7 @@ impl PopupRoot {
             .id(eid(format!("reset-card-{expansion_key}")))
             .relative()
             .px(px(pad_x))
-            .py(px(if compact { 9.0 } else { 12.0 }));
+            .py(px(9.0));
         if expandable {
             let key = expansion_key.to_owned();
             header = header
@@ -1314,6 +1395,117 @@ impl PopupRoot {
                     .max_h(px(cap))
                     .opacity(reveal)
                     .child(div().px(px(pad_x)).pb(px(12.0)).child(rows)),
+            );
+        }
+        let confirm_reveal = self.fx.toggle(
+            fx::key(("reset-confirm", expansion_key)),
+            confirming,
+            fx::NORMAL,
+        );
+        if confirm_reveal > 0.001 {
+            let message = crate::i18n::tr("reset-confirm-message");
+            let height = (metrics.body(message) / available_width.max(1.0)).ceil() * 22.0 + 72.0;
+            let confirm_id = fx::key(("confirm-reset", expansion_key));
+            let confirm_hover = self.fx.toggle(
+                fx::key(("confirm-reset-hover", confirm_id)),
+                self.hovered(confirm_id),
+                fx::FASTER,
+            );
+            let cancel_id = fx::key(("cancel-reset", expansion_key));
+            let cancel_hover = self.fx.toggle(
+                fx::key(("cancel-reset-hover", cancel_id)),
+                self.hovered(cancel_id),
+                fx::FASTER,
+            );
+            let actions = div()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .justify_end()
+                .gap(px(6.0))
+                .child(
+                    div()
+                        .id(eid(format!("cancel-reset-{expansion_key}")))
+                        .cursor_pointer()
+                        .px(px(12.0))
+                        .py(px(5.0))
+                        .rounded(px(palette.control_radius))
+                        .bg(palette.subtle_fill.opacity(cancel_hover))
+                        .child(components::nowrap(components::body(
+                            crate::i18n::tr("cancel"),
+                            palette.text_secondary,
+                        )))
+                        .on_hover(self.hover_listener(cancel_id, None, cx))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.reset_confirm = None;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    div()
+                        .id(eid(format!("confirm-reset-{expansion_key}")))
+                        .cursor_pointer()
+                        .px(px(12.0))
+                        .py(px(5.0))
+                        .rounded(px(palette.control_radius))
+                        .bg(palette.accent.opacity(0.85 + 0.15 * confirm_hover))
+                        .child(components::nowrap(components::body_strong(
+                            crate::i18n::tr("use-reset"),
+                            palette.text_on_accent,
+                        )))
+                        .on_hover(self.hover_listener(confirm_id, None, cx))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            if this.reset_confirm == Some(provider) {
+                                this.use_reset(provider, cx);
+                            }
+                        })),
+                );
+            element = element.child(
+                div()
+                    .overflow_hidden()
+                    .max_h(px(height * confirm_reveal))
+                    .opacity(confirm_reveal)
+                    .child(
+                        div()
+                            .px(px(pad_x))
+                            .pb(px(9.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.0))
+                            .child(components::rule(&palette))
+                            .child(components::body(message, palette.text_secondary))
+                            .child(actions),
+                    ),
+            );
+        }
+        let status = self
+            .reset_status
+            .get(&provider)
+            .map(crate::banked_reset::Status::message);
+        let status_reveal = self.fx.toggle(
+            fx::key(("reset-status", expansion_key)),
+            status.is_some() && !busy,
+            fx::NORMAL,
+        );
+        if let Some(status) = status {
+            let height = (metrics.body(&status) / available_width.max(1.0)).ceil() * 24.0 + 64.0;
+            element = element.child(
+                div()
+                    .overflow_hidden()
+                    .max_h(px(height * status_reveal))
+                    .opacity(status_reveal)
+                    .child(
+                        div()
+                            .px(px(pad_x))
+                            .pb(px(9.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.0))
+                            .child(components::rule(&palette))
+                            .child(components::body(status, palette.text_secondary)),
+                    ),
             );
         }
         element.into_any_element()

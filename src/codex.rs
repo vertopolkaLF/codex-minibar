@@ -302,6 +302,7 @@ impl CodexClient {
             &self.executable,
             &["-s", "read-only", "-a", "never", "app-server"],
             self.home.as_deref(),
+            Stdio::piped(),
         )?;
         let stderr = child.stderr.take();
         let result = self.exchange(&mut child);
@@ -320,6 +321,47 @@ impl CodexClient {
     }
 
     fn exchange(&self, child: &mut Child) -> Result<RateLimits> {
+        let response = self.exchange_request(child, "account/rateLimits/read", Value::Null)?;
+        parse_rate_limits(&response, Utc::now())
+    }
+
+    /// The same account-level app-server method used by T3 Code. No model
+    /// request is sent and CODEX_HOME stays scoped to this instance.
+    pub(crate) fn consume_reset(&self) -> Result<crate::banked_reset::Outcome> {
+        let credentials = load_oauth_credentials(&auth_json_path(self.home.as_deref()))?;
+        let account = credentials
+            .account_id
+            .context("Codex login has no account id")?;
+        let auth = auth_json_path(self.home.as_deref());
+        let account = crate::banked_reset::account_key(
+            "codex",
+            auth.parent().context("locate Codex login directory")?,
+            &account,
+        );
+        crate::banked_reset::redeem(account, String::new(), |key, _| {
+            let mut child = spawn_codex(
+                &self.executable,
+                &["-s", "read-only", "-a", "never", "app-server"],
+                self.home.as_deref(),
+                Stdio::null(),
+            )?;
+            let result = self.exchange_request(
+                &mut child,
+                "account/rateLimitResetCredit/consume",
+                json!({"idempotencyKey": key}),
+            );
+            terminate(&mut child);
+            let response = result?;
+            crate::banked_reset::Outcome::parse(
+                response
+                    .pointer("/result/outcome")
+                    .and_then(Value::as_str)
+                    .unwrap_or(""),
+            )
+        })
+    }
+
+    fn exchange_request(&self, child: &mut Child, method: &str, params: Value) -> Result<Value> {
         let mut stdin = child
             .stdin
             .take()
@@ -346,15 +388,14 @@ impl CodexClient {
             &mut stdin,
             1,
             "initialize",
-            json!({"clientInfo": {"name": "Codex Minibar", "version": env!("CARGO_PKG_VERSION")}}),
+            json!({"clientInfo": {"name": "Codex Minibar", "version": env!("CARGO_PKG_VERSION")}, "capabilities": {"experimentalApi": true}}),
         )?;
         wait_for_response(&receiver, 1, self.timeout)?;
         // Complete the JSON-RPC initialize handshake required by current
         // Codex app-server builds before any other method is accepted.
         send_notification(&mut stdin, "initialized", json!({}))?;
-        send_request(&mut stdin, 2, "account/rateLimits/read", Value::Null)?;
-        let response = wait_for_response(&receiver, 2, self.timeout)?;
-        parse_rate_limits(&response, Utc::now())
+        send_request(&mut stdin, 2, method, params)?;
+        wait_for_response(&receiver, 2, self.timeout)
     }
 }
 
@@ -589,6 +630,7 @@ fn parse_wham_reset_credits(value: Option<&Value>) -> Option<RateLimitResetCredi
         })
         .collect();
     Some(RateLimitResetCreditsSummary {
+        next_credit_id: None,
         available_count,
         credits,
     })
@@ -830,6 +872,7 @@ fn parse_reset_credits(value: Option<&Value>) -> Option<RateLimitResetCreditsSum
         })
         .collect();
     Some(RateLimitResetCreditsSummary {
+        next_credit_id: None,
         available_count,
         credits,
     })
@@ -906,14 +949,19 @@ fn activation_args(workspace: &Path, last_message: &Path) -> Vec<String> {
     args
 }
 
-fn spawn_codex(executable: &Path, args: &[&str], home: Option<&Path>) -> Result<Child> {
+fn spawn_codex(
+    executable: &Path,
+    args: &[&str],
+    home: Option<&Path>,
+    stderr: Stdio,
+) -> Result<Child> {
     let prepared = crate::discovery::prepare(executable)?;
     // The lease covers the preparation-to-spawn gap. Windows protects the
     // executable mapping from deletion for the child's lifetime afterwards.
     command_for_codex(&prepared.path, args, home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(stderr)
         .spawn()
         .with_context(|| format!("launch {}", executable.display()))
 }

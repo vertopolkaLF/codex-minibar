@@ -2562,3 +2562,19 @@ notification-sounds = Sons des notifications
 
 # src/settings_window/notifications.rs
 plays-a-short-sound-with-each-notification = Joue un son bref à chaque notification
+
+use-reset = Utiliser une réinitialisation
+reset-using = Application…
+reset-confirm-message = Utiliser une réinitialisation cumulée pour ce compte ? Les limites éligibles seront effacées. Cette action est irréversible.
+reset-applied = Réinitialisation appliquée. Les limites éligibles ont été effacées.
+reset-nothing-to-reset = Rien à réinitialiser pour le moment.
+reset-no-credit = Aucune réinitialisation utilisable restante.
+reset-already-redeemed = Cette réinitialisation a déjà été utilisée.
+reset-unconfirmed = La réinitialisation n’a pas pu être confirmée. Réessayez pour vérifier la même demande.
+reset-applied-refresh-failed = Réinitialisation appliquée, mais les nouvelles limites n’ont pas pu être chargées. Actualisez pour vérifier.
+reset-in-progress = Une réinitialisation est déjà en cours pour ce compte.
+reset-cooldown = Les réinitialisations sont temporairement bloquées. Réessayez plus tard.
+reset-rate-limited = Trop de demandes de réinitialisation. Réessayez plus tard.
+reset-sign-in-again = Reconnectez-vous à Claude pour utiliser les réinitialisations.
+reset-cli-login-required = Utilisez la connexion Claude CLI du même compte pour réinitialiser les limites.
+reset-invalid-grant = Claude a renvoyé une réinitialisation invalide.

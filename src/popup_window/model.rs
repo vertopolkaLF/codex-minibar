@@ -28,6 +28,9 @@ pub(crate) struct CardOptions<'a> {
     /// OpenRouter expired keys expose a remove action.
     pub(crate) openrouter_actions: bool,
     pub(crate) provider_error: Option<&'a str>,
+    /// Retain the card to report an in-flight/finished redemption, including
+    /// after its last credit has been spent.
+    pub(crate) keep_reset_card: bool,
     pub(crate) now: DateTime<Utc>,
 }
 
@@ -85,6 +88,7 @@ pub(crate) enum Card<'a> {
         credits: Option<&'a crate::limits::CloudSessionCredits>,
     },
     BankedResets {
+        provider: ProviderId,
         limits: &'a RateLimits,
         expansion_key: String,
     },
@@ -351,9 +355,12 @@ pub(crate) fn provider_cards<'a>(
             cards.push(Card::ForcedResets(upcoming));
         }
     }
-    if visible(&resets_brick_id(kind)) && limits.available_reset_count() > 0 {
+    if visible(&resets_brick_id(kind))
+        && (limits.available_reset_count() > 0 || options.keep_reset_card)
+    {
         // Use instance identity rather than a mutable, potentially shared name.
         cards.push(Card::BankedResets {
+            provider,
             limits,
             expansion_key: format!(
                 "{}-{:?}",

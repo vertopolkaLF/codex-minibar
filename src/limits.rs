@@ -407,6 +407,9 @@ pub struct Credits {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RateLimitResetCreditsSummary {
+    /// Claude chooses the claimable grant; never guess from inventory order.
+    #[serde(default)]
+    pub next_credit_id: Option<String>,
     pub available_count: u32,
     pub credits: Vec<RateLimitResetCredit>,
 }

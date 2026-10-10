@@ -51,6 +51,7 @@ fn test_cards<'a>(
         limits,
         &[],
         &CardOptions {
+            keep_reset_card: false,
             popup_visibility: visibility,
             surface,
             show_provider_tabs,
@@ -288,6 +289,39 @@ fn popup_visibility_hides_codex_resets_on_all_but_shows_on_provider_tab() {
     );
     assert_eq!(all_cards.len(), 3);
     assert_eq!(tab_cards.len(), 4);
+}
+
+#[test]
+fn reset_card_keeps_instance_identity_and_last_credit_result_surface() {
+    let mut limits = plan_limits("plus");
+    limits.reset_credits = Some(Default::default());
+    for kind in [ProviderKind::Codex, ProviderKind::Claude] {
+        for surface in [PopupSurface::HomeTab, PopupSurface::ProviderTab] {
+            let visibility = all_visible();
+            let cards = provider_cards(
+                id(kind),
+                true,
+                false,
+                &limits,
+                &[],
+                &CardOptions {
+                    popup_visibility: &visibility,
+                    surface,
+                    show_provider_tabs: true,
+                    include_usage_stats: true,
+                    show_account_name: false,
+                    drag_handle: false,
+                    openrouter_actions: false,
+                    provider_error: None,
+                    keep_reset_card: true,
+                    now: Utc::now(),
+                },
+            );
+            assert!(cards.iter().any(
+                |card| matches!(card, Card::BankedResets { provider, .. } if *provider == id(kind))
+            ));
+        }
+    }
 }
 
 #[test]

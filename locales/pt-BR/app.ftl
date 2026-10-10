@@ -1664,3 +1664,19 @@ notification-sounds = Sons de notificação
 
 # src/settings_window/notifications.rs
 plays-a-short-sound-with-each-notification = Toca um som curto a cada notificação
+
+use-reset = Usar redefinição
+reset-using = Aplicando…
+reset-confirm-message = Usar uma redefinição acumulada nesta conta? Isso limpa os limites elegíveis e não pode ser desfeito.
+reset-applied = Redefinição aplicada. Os limites elegíveis foram limpos.
+reset-nothing-to-reset = Nada para redefinir agora.
+reset-no-credit = Não há mais redefinições disponíveis.
+reset-already-redeemed = Esta redefinição já foi usada.
+reset-unconfirmed = Não foi possível confirmar a redefinição. Tente novamente para verificar a mesma solicitação.
+reset-applied-refresh-failed = Redefinição aplicada, mas os novos limites não foram carregados. Atualize para verificar.
+reset-in-progress = Uma redefinição já está em andamento nesta conta.
+reset-cooldown = As redefinições estão em espera. Tente mais tarde.
+reset-rate-limited = Muitas solicitações de redefinição. Tente mais tarde.
+reset-sign-in-again = Entre novamente no Claude para usar redefinições.
+reset-cli-login-required = Use o login do Claude CLI da mesma conta para aplicar redefinições.
+reset-invalid-grant = O Claude retornou uma redefinição inválida.

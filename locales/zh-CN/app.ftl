@@ -1643,3 +1643,19 @@ notification-sounds = 通知声音
 
 # src/settings_window/notifications.rs
 plays-a-short-sound-with-each-notification = 每条通知播放一段简短提示音
+
+use-reset = 使用重置
+reset-using = 正在应用…
+reset-confirm-message = 为此账户使用一次累积重置？这将清除符合条件的速率限制，且无法撤销。
+reset-applied = 重置已应用。符合条件的限制已清除。
+reset-nothing-to-reset = 目前没有需要重置的限制。
+reset-no-credit = 没有可用的重置次数。
+reset-already-redeemed = 此重置已使用。
+reset-unconfirmed = 无法确认重置。请重试以检查同一请求。
+reset-applied-refresh-failed = 重置已应用，但无法加载新限制。请刷新以检查。
+reset-in-progress = 此账户已有重置正在进行。
+reset-cooldown = 重置处于冷却期。请稍后重试。
+reset-rate-limited = 重置请求过多。请稍后重试。
+reset-sign-in-again = 请重新登录 Claude 以使用重置。
+reset-cli-login-required = 请使用同一账户的 Claude CLI 登录来重置。
+reset-invalid-grant = Claude 返回了无效的重置额度。

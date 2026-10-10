@@ -696,6 +696,21 @@ every-setting-returns-to-its-default-and-the-welcome-flow-opens-a = Все на�
 
 # src/settings_window/troubleshoot.rs
 cancel = Отмена
+use-reset = Использовать сброс
+reset-using = Применение…
+reset-confirm-message = Использовать один накопленный сброс для этого аккаунта? Доступные лимиты будут сброшены. Это действие нельзя отменить.
+reset-applied = Сброс применён. Доступные лимиты обнулены.
+reset-nothing-to-reset = Сейчас нечего сбрасывать.
+reset-no-credit = Доступных сбросов не осталось.
+reset-already-redeemed = Этот сброс уже использован.
+reset-unconfirmed = Не удалось подтвердить сброс. Повторите попытку, чтобы проверить тот же запрос.
+reset-applied-refresh-failed = Сброс применён, но новые лимиты не удалось загрузить. Нажмите «Обновить» для проверки.
+reset-in-progress = Сброс для этого аккаунта уже выполняется.
+reset-cooldown = Сбросы временно недоступны. Попробуйте позже.
+reset-rate-limited = Слишком много запросов сброса. Попробуйте позже.
+reset-sign-in-again = Войдите в Claude заново, чтобы использовать сбросы.
+reset-cli-login-required = Для сброса используйте вход в Claude CLI для этого же аккаунта.
+reset-invalid-grant = Claude вернул некорректный накопленный сброс.
 
 # src/settings_window/appearance.rs
 windows = Windows

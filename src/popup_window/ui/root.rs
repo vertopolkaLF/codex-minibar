@@ -263,6 +263,9 @@ pub(crate) struct PopupRoot {
     pub(super) usage_excluded: std::collections::BTreeSet<ProviderId>,
     pub(super) chart_hover: Option<usize>,
     pub(super) open_reset_card: Option<String>,
+    pub(super) reset_confirm: Option<ProviderId>,
+    pub(super) reset_busy: HashSet<ProviderId>,
+    pub(super) reset_status: HashMap<ProviderId, crate::banked_reset::Status>,
     /// OpenRouter key administration on the OpenRouter tab.
     pub(super) keys: super::keys::KeyAdmin,
     /// Settings-window controls (dropdowns) reused by popup forms.
@@ -375,6 +378,9 @@ impl PopupRoot {
             usage_excluded: Default::default(),
             chart_hover: None,
             open_reset_card: None,
+            reset_confirm: None,
+            reset_busy: HashSet::new(),
+            reset_status: HashMap::new(),
             keys: Default::default(),
             kit: crate::settings_window::kit::Kit::with_caret("fluent-chevron-down"),
             kit_fonts: crate::settings_window::theme::Fonts::resolve(cx),
@@ -415,6 +421,19 @@ impl PopupRoot {
 
     pub(crate) fn apply_ui(&mut self, ui: UiState, window: &mut Window, cx: &mut Context<Self>) {
         let accent_changed = ui.accent_color != self.ui.accent_color;
+        let same_account = |provider| {
+            ui.instance(provider)
+                .zip(self.ui.instance(provider))
+                .is_some_and(|(new, old)| new.enabled && new.runtime_key() == old.runtime_key())
+        };
+        self.reset_status
+            .retain(|provider, _| same_account(*provider));
+        if self
+            .reset_confirm
+            .is_some_and(|provider| !same_account(provider))
+        {
+            self.reset_confirm = None;
+        }
         // Rate-limit data lives only in AppState; re-read it with every
         // published UiState so the popup renders the tray's exact snapshot.
         self.limits = Rc::new(self.state.current_limits());
@@ -818,6 +837,7 @@ impl PopupRoot {
         }
         self.host.offset = 0.0;
         self.keys.on_hidden();
+        self.reset_confirm = None;
         self.kit.menus.close_silently();
         self.hover.clear();
         self.tip = None;
@@ -1176,6 +1196,57 @@ impl PopupRoot {
     }
 
     // ----- actions ------------------------------------------------------------
+
+    pub(super) fn use_reset(&mut self, provider: ProviderId, cx: &mut Context<Self>) {
+        let Some(instance) = self.ui.instance(provider).filter(|i| i.enabled).cloned() else {
+            return;
+        };
+        if !self.reset_busy.insert(provider) {
+            return;
+        }
+        self.reset_confirm = None;
+        let revision = instance.credentials_revision;
+        let runtime_key = instance.runtime_key();
+        let events = self.state.worker_events_tx.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { crate::banked_reset::consume(&instance) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.reset_busy.remove(&provider);
+                // A credential edit/removal while the request ran must not
+                // attach the previous account's result to the new profile.
+                if this
+                    .ui
+                    .instance(provider)
+                    .is_some_and(|i| i.runtime_key() == runtime_key && i.enabled)
+                {
+                    if let Ok((_, Ok(limits))) = &result {
+                        let _ = events.send(WorkerEvent::ProviderLimitsUpdated(
+                            provider,
+                            revision,
+                            limits.clone(),
+                        ));
+                    }
+                    let message = match result {
+                        Ok((crate::banked_reset::Outcome::Reset, Err(_))) => {
+                            crate::banked_reset::Status::RefreshFailed
+                        }
+                        Ok((outcome, _)) => crate::banked_reset::Status::Outcome(outcome),
+                        Err(error) => crate::banked_reset::Status::from_error(error),
+                    };
+                    this.reset_status.insert(provider, message);
+                    // Include sibling instances sharing the account. Normal
+                    // worker publication updates tray, Home and provider tabs.
+                    this.refresh(cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
 
     pub(super) fn refresh(&mut self, cx: &mut Context<Self>) {
         self.keys.mark_stale();
@@ -2092,6 +2163,8 @@ impl PopupRoot {
             // section's heading carries its own error marker.
             let error_message = ui.provider_error(provider).map(str::to_owned);
             let options = CardOptions {
+                keep_reset_card: self.reset_busy.contains(&provider)
+                    || self.reset_status.contains_key(&provider),
                 popup_visibility: &ui.popup_visibility,
                 surface: PopupSurface::ProviderTab,
                 show_provider_tabs: show_tabs,

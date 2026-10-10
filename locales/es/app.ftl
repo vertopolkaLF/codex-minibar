@@ -1664,3 +1664,19 @@ notification-sounds = Sonidos de notificación
 
 # src/settings_window/notifications.rs
 plays-a-short-sound-with-each-notification = Reproduce un sonido breve con cada notificación
+
+use-reset = Usar reinicio
+reset-using = Aplicando…
+reset-confirm-message = ¿Usar un reinicio acumulado en esta cuenta? Esto borra los límites elegibles y no se puede deshacer.
+reset-applied = Reinicio aplicado. Se han borrado los límites elegibles.
+reset-nothing-to-reset = No hay nada que reiniciar ahora.
+reset-no-credit = No quedan reinicios disponibles.
+reset-already-redeemed = Este reinicio ya se ha usado.
+reset-unconfirmed = No se pudo confirmar el reinicio. Reintenta para comprobar la misma solicitud.
+reset-applied-refresh-failed = Reinicio aplicado, pero no se pudieron cargar los nuevos límites. Actualiza para comprobarlos.
+reset-in-progress = Ya hay un reinicio en curso para esta cuenta.
+reset-cooldown = Los reinicios están en espera. Inténtalo más tarde.
+reset-rate-limited = Demasiadas solicitudes de reinicio. Inténtalo más tarde.
+reset-sign-in-again = Vuelve a iniciar sesión en Claude para usar reinicios.
+reset-cli-login-required = Usa el inicio de sesión de Claude CLI de la misma cuenta para aplicar reinicios.
+reset-invalid-grant = Claude devolvió un reinicio inválido.

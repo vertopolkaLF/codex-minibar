@@ -3573,3 +3573,64 @@ notification-sounds = { "" }
 # English source:
 # plays-a-short-sound-with-each-notification = Plays a short sound with each notification
 plays-a-short-sound-with-each-notification = { "" }
+
+
+# English source:
+# use-reset = Use reset
+use-reset = { "" }
+
+# English source:
+# reset-using = Using…
+reset-using = { "" }
+
+# English source:
+# reset-confirm-message = Use one banked reset for this account? This clears eligible rate-limit windows and cannot be undone.
+reset-confirm-message = { "" }
+
+# English source:
+# reset-applied = Reset applied. Your eligible limits have been cleared.
+reset-applied = { "" }
+
+# English source:
+# reset-nothing-to-reset = Nothing to reset right now.
+reset-nothing-to-reset = { "" }
+
+# English source:
+# reset-no-credit = No usable reset credit left.
+reset-no-credit = { "" }
+
+# English source:
+# reset-already-redeemed = This reset was already used.
+reset-already-redeemed = { "" }
+
+# English source:
+# reset-unconfirmed = The reset could not be confirmed. Retry to check the same request.
+reset-unconfirmed = { "" }
+
+# English source:
+# reset-applied-refresh-failed = Reset applied, but the new limits could not be loaded. Refresh to check.
+reset-applied-refresh-failed = { "" }
+
+# English source:
+# reset-in-progress = A reset is already in progress for this account.
+reset-in-progress = { "" }
+
+# English source:
+# reset-cooldown = Resets are cooling down. Try again later.
+reset-cooldown = { "" }
+
+# English source:
+# reset-rate-limited = Too many reset requests. Try again later.
+reset-rate-limited = { "" }
+
+# English source:
+# reset-sign-in-again = Sign in to Claude again to use resets.
+reset-sign-in-again = { "" }
+
+# English source:
+# reset-cli-login-required = Use the matching Claude CLI login to redeem resets.
+reset-cli-login-required = { "" }
+
+# English source:
+# reset-invalid-grant = Claude returned an invalid reset credit.
+reset-invalid-grant = { "" }
