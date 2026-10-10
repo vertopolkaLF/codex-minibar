@@ -749,6 +749,7 @@ font = Font
 
 # src/settings_window/appearance.rs
 any-font-installed-on-this-pc = Any font installed on this PC.
+no-matching-fonts = No matching fonts
 
 # src/settings_window/appearance.rs
 windows-default = Windows default

@@ -750,6 +750,7 @@ font = Шрифт
 
 # src/settings_window/appearance.rs
 any-font-installed-on-this-pc = Любой шрифт, установленный на этом компьютере.
+no-matching-fonts = Нет подходящих шрифтов
 
 # src/settings_window/appearance.rs
 windows-default = По умолчанию Windows

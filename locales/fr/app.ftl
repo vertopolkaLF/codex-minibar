@@ -734,6 +734,7 @@ font = Police
 
 # src/settings_window/appearance.rs
 any-font-installed-on-this-pc = Toute police installée sur ce PC.
+no-matching-fonts = Aucune police correspondante
 
 # src/settings_window/appearance.rs
 windows-default = Windows par défaut

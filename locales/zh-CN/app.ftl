@@ -484,6 +484,7 @@ windows-follows-your-system-accent = Windows 选项跟随系统强调色。
 font = 字体
 
 any-font-installed-on-this-pc = 此电脑上安装的任意字体。
+no-matching-fonts = 没有匹配的字体
 
 windows-default = Windows 默认
 

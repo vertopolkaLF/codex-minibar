@@ -733,6 +733,7 @@ font = Schriftart
 
 # src/settings_window/appearance.rs
 any-font-installed-on-this-pc = Jede auf diesem PC installierte Schriftart.
+no-matching-fonts = Keine passenden Schriftarten
 
 # src/settings_window/appearance.rs
 windows-default = Windows-Standard

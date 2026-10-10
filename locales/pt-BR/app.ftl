@@ -487,6 +487,7 @@ windows-follows-your-system-accent = Windows segue a cor de destaque do sistema.
 font = Fonte
 
 any-font-installed-on-this-pc = Qualquer fonte instalada neste PC.
+no-matching-fonts = Nenhuma fonte correspondente
 
 windows-default = Padrão do Windows
 

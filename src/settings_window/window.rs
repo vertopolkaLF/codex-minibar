@@ -61,6 +61,7 @@ pub(crate) struct SettingsWindow {
     pub(super) fonts: Fonts,
     /// Installed families offered by the Appearance font picker.
     pub(super) font_families: Vec<SharedString>,
+    pub(super) font_picker: super::appearance::FontPicker,
     backdrop: super::backdrop::Backdrop,
     focus: FocusHandle,
     // Navigation.
@@ -134,10 +135,12 @@ impl SettingsWindow {
         let mut subscriptions = vec![cx.observe_window_appearance(window, |_, _, cx| cx.notify())];
         subscriptions.push(cx.on_release(|_, cx| {
             super::vscode_themes::end_theme_preview(cx);
+            super::appearance::end_font_preview(cx);
             super::window_closed(false)
         }));
         window.on_window_should_close(cx, |_, cx| {
             super::vscode_themes::end_theme_preview(cx);
+            super::appearance::end_font_preview(cx);
             super::window_closed(false);
             true
         });
@@ -184,6 +187,7 @@ impl SettingsWindow {
             kit: Kit::default(),
             fonts,
             font_families: crate::popup_window::ui::theme::installed_font_families(cx),
+            font_picker: Default::default(),
             focus,
             mode: NavMode::Root,
             pending_slide: None,
@@ -386,6 +390,8 @@ impl SettingsWindow {
         self.page = page;
         // A theme preview belongs to the Appearance page it was started on.
         super::vscode_themes::end_theme_preview(cx);
+        self.font_picker.cancel_preview();
+        super::appearance::end_font_preview(cx);
         self.nav_slide = self.pending_slide.take().unwrap_or(0.0);
         self.scroll = ScrollHandle::new();
         self.scroll_glide = None;
@@ -1121,7 +1127,10 @@ impl SettingsWindow {
             Page::Root(tab) => {
                 let (title, mut rows) = match tab {
                     Tab::General => (crate::i18n::tr("general"), self.general_page(k, window, cx)),
-                    Tab::Appearance => (crate::i18n::tr("appearance"), self.appearance_page(k, cx)),
+                    Tab::Appearance => (
+                        crate::i18n::tr("appearance"),
+                        self.appearance_page(k, window, cx),
+                    ),
                     Tab::Popup => (crate::i18n::tr("customize"), self.customize_page(k, cx)),
                     Tab::Schedule => (
                         crate::i18n::tr("limit-activation"),

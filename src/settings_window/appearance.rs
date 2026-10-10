@@ -1,12 +1,14 @@
 //! Appearance: theme, accent, font, icons, time format, popup material and motion.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use gpui::{
-    AnyElement, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, div, prelude::FluentBuilder, px, relative,
+    AnyElement, App, AppContext, Context, Entity, Focusable, FontWeight, InteractiveElement,
+    IntoElement, KeyDownEvent, ParentElement, SharedString, StatefulInteractiveElement, Styled,
+    Subscription, Task, Window, div, prelude::FluentBuilder, px, relative,
 };
 
+use super::input::{InputEvent, TextInput};
 use super::kit::{self, Button, ButtonSize, Kit, Row, SliderRange, eid};
 use super::vscode_themes::{ThemeBrowserUi, ThemeHost};
 use super::window::SettingsWindow;
@@ -22,6 +24,44 @@ use crate::vscode_themes::VsCodeTheme;
 
 /// Popup theme cards per row.
 const THEME_COLUMNS: u16 = 3;
+
+const FONT_PICKER: &str = "appearance-font";
+const FONT_PICKER_WIDTH: f32 = 220.0;
+/// Families listed above the rest of the font picker.
+const RECENT_FONTS: usize = 5;
+/// How long the pointer rests on a family before the popup previews it.
+const FONT_PREVIEW_DELAY: Duration = Duration::from_millis(200);
+
+/// One font picker entry; `None` is the Windows default.
+type FontChoice = Option<SharedString>;
+
+/// Transient state of the Appearance font picker.
+#[derive(Default)]
+pub(super) struct FontPicker {
+    input: Option<Entity<TextInput>>,
+    _subscription: Option<Subscription>,
+    /// The list was open last frame.
+    open: bool,
+    /// Entries as last rendered, for keyboard navigation.
+    choices: Vec<FontChoice>,
+    selected: Option<usize>,
+    highlighted: Option<usize>,
+    /// Entry to scroll into view on the next frame.
+    reveal: Option<usize>,
+    /// The list was opened since the last frame.
+    fresh: bool,
+    /// Entry under the pointer (or keyboard), waiting to be previewed.
+    hovered: Option<FontChoice>,
+    preview_task: Option<Task<()>>,
+}
+
+impl FontPicker {
+    /// Forget a pending preview, e.g. when its page goes away.
+    pub(super) fn cancel_preview(&mut self) {
+        self.hovered = None;
+        self.preview_task = None;
+    }
+}
 
 /// One card in the popup theme grid.
 pub(super) enum ThemeChoice {
@@ -457,6 +497,7 @@ impl SettingsWindow {
     pub(super) fn appearance_page(
         &mut self,
         k: &mut Kit,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let s = &self.settings;
@@ -471,7 +512,7 @@ impl SettingsWindow {
 
         let theme_cards = self.theme_cards(k, cx);
         let colors = self.accent_swatches(k, accent, cx);
-        let font = self.font_picker(k, cx);
+        let font = self.font_picker(k, window, cx);
         let look = kit::card_of(k, |k| {
             vec![
                 Row::new("appearance-theme", crate::i18n::tr("color-theme"))
@@ -750,9 +791,31 @@ impl SettingsWindow {
             .render(k)
     }
 
-    /// Installed font families, led by the Windows default.
-    fn font_picker(&self, k: &Kit, cx: &mut Context<Self>) -> AnyElement {
+    /// Searchable font ComboBox: recently picked families, the Windows
+    /// default, then every installed family. Hovering a family for a moment
+    /// previews it in the popup.
+    fn font_picker(
+        &mut self,
+        k: &mut Kit,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let input = self.font_search_input(window, cx);
+        let open = k.menus.is_open(FONT_PICKER);
+        // The list closes from many places (a pick, Escape, a click outside,
+        // another menu); settle the preview and the focus whichever it was.
+        if self.font_picker.open && !open {
+            self.font_picker.open = false;
+            self.font_picker.hovered = None;
+            self.font_picker.preview_task = None;
+            cx.defer(end_font_preview);
+            if input.read(cx).is_focused(window) {
+                window.focus(&self.focus_handle(cx));
+            }
+        }
+        let query = input.read(cx).text().trim().to_lowercase();
         let current = self.settings.font_family.clone();
+        let default_label = SharedString::from(crate::i18n::tr("windows-default"));
         let mut families = self.font_families.clone();
         // A font removed since it was chosen stays visible as the selection.
         if let Some(name) = &current
@@ -760,33 +823,230 @@ impl SettingsWindow {
         {
             families.push(name.clone().into());
         }
-        let selected = match &current {
-            None => 0,
-            Some(name) => {
-                1 + families
-                    .iter()
-                    .position(|family| family.as_ref() == name)
-                    .unwrap_or_default()
+        let mut choices: Vec<FontChoice> = Vec::new();
+        let mut recent_count = 0;
+        if query.is_empty() {
+            let recent = self
+                .settings
+                .recent_font_families
+                .iter()
+                .filter_map(|name| families.iter().find(|family| family.as_ref() == name))
+                .take(RECENT_FONTS)
+                .cloned()
+                .map(Some)
+                .collect::<Vec<_>>();
+            recent_count = recent.len();
+            choices.extend(recent);
+            choices.push(None);
+            choices.extend(families.iter().cloned().map(Some));
+        } else {
+            if default_label.to_lowercase().contains(&query) {
+                choices.push(None);
             }
+            choices.extend(
+                families
+                    .iter()
+                    .filter(|family| family.to_lowercase().contains(&query))
+                    .cloned()
+                    .map(Some),
+            );
+        }
+        let selected = choices
+            .iter()
+            .position(|choice| choice.as_ref().map(|name| name.as_ref()) == current.as_deref());
+        let picker = &mut self.font_picker;
+        picker.highlighted = picker
+            .highlighted
+            .filter(|index| *index < choices.len())
+            .or_else(|| (!query.is_empty() && !choices.is_empty()).then_some(0));
+        picker.selected = selected;
+        picker.choices = choices.clone();
+        let highlighted = picker.highlighted;
+        let reveal = picker.reveal.take();
+        let fresh = std::mem::take(&mut picker.fresh);
+
+        let items = if choices.is_empty() {
+            vec![kit::MenuItem::new(crate::i18n::tr("no-matching-fonts")).disabled()]
+        } else {
+            choices
+                .iter()
+                .enumerate()
+                .map(|(index, choice)| {
+                    let item =
+                        kit::MenuItem::new(choice.clone().unwrap_or_else(|| default_label.clone()));
+                    if index + 1 == recent_count {
+                        item.separator()
+                    } else {
+                        item
+                    }
+                })
+                .collect()
         };
-        let mut options = vec![SharedString::from(crate::i18n::tr("windows-default"))];
-        options.extend(families.iter().cloned());
-        kit::dropdown(
-            k,
-            "appearance-font",
-            options,
-            Some(selected),
-            false,
-            200.0,
+        let label = current.map_or(default_label, SharedString::from);
+        let on_select = {
+            let choices = choices.clone();
             Self::h(cx, move |this, index: usize, _, cx| {
-                let next = index
-                    .checked_sub(1)
-                    .and_then(|index| families.get(index))
-                    .map(ToString::to_string);
-                if this.settings.font_family != next {
-                    this.edit(cx, move |settings| settings.font_family = next.clone());
+                if let Some(choice) = choices.get(index).cloned() {
+                    this.choose_font(choice, cx);
                 }
-            }),
-        )
+            })
+        };
+        let on_hover = Self::h(cx, move |this, (index, hovered): (usize, bool), _, cx| {
+            let Some(choice) = choices.get(index).cloned() else {
+                return;
+            };
+            if hovered {
+                this.hover_font(Some(choice), cx);
+            } else if this.font_picker.hovered.as_ref() == Some(&choice) {
+                this.hover_font(None, cx);
+            }
+        });
+        let on_open = {
+            let input = input.clone();
+            Self::h(cx, move |this, (), window, cx| {
+                let picker = &mut this.font_picker;
+                picker.open = true;
+                picker.fresh = true;
+                picker.highlighted = None;
+                picker.reveal = None;
+                input.update(cx, |input, cx| input.set_text("", cx));
+                window.focus(&input.focus_handle(cx));
+                cx.notify();
+            })
+        };
+        let combo = kit::SearchDropdown {
+            id: FONT_PICKER.into(),
+            label,
+            input,
+            items,
+            selected,
+            highlighted,
+            reveal,
+            fresh,
+            width: FONT_PICKER_WIDTH,
+            on_open,
+            on_select,
+            on_hover,
+        }
+        .render(k, window, cx);
+        div()
+            .on_key_down(cx.listener(Self::font_picker_key))
+            .child(combo)
+            .into_any_element()
+    }
+
+    /// The picker's search field, created on first use.
+    fn font_search_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<TextInput> {
+        if let Some(input) = &self.font_picker.input {
+            return input.clone();
+        }
+        let input = cx.new(|cx| TextInput::new(window, cx));
+        let subscription = cx.subscribe_in(
+            &input,
+            window,
+            |this: &mut Self, _, event: &InputEvent, window, cx| match event {
+                InputEvent::Changed => {
+                    // A new query starts from its best match at the top.
+                    this.font_picker.highlighted = None;
+                    this.font_picker.reveal = Some(0);
+                    cx.notify();
+                }
+                InputEvent::Submit => {
+                    let choice = this
+                        .font_picker
+                        .highlighted
+                        .and_then(|index| this.font_picker.choices.get(index).cloned());
+                    this.kit.menus.close(window);
+                    if let Some(choice) = choice {
+                        this.choose_font(choice, cx);
+                    }
+                    cx.notify();
+                }
+                InputEvent::Blur => {}
+            },
+        );
+        self.font_picker.input = Some(input.clone());
+        self.font_picker._subscription = Some(subscription);
+        input
+    }
+
+    /// Up and Down walk the list while its field has focus.
+    fn font_picker_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.font_picker.open {
+            return;
+        }
+        let picker = &mut self.font_picker;
+        let Some(last) = picker.choices.len().checked_sub(1) else {
+            return;
+        };
+        let from = picker.highlighted.or(picker.selected);
+        let next = match event.keystroke.key.as_str() {
+            "down" => from.map_or(0, |index| (index + 1).min(last)),
+            "up" => from.map_or(0, |index| index.saturating_sub(1)),
+            "pagedown" => from.map_or(0, |index| (index + 8).min(last)),
+            "pageup" => from.map_or(0, |index| index.saturating_sub(8)),
+            _ => return,
+        };
+        picker.highlighted = Some(next);
+        picker.reveal = Some(next);
+        let choice = picker.choices[next].clone();
+        self.hover_font(Some(choice), cx);
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    /// Point the popup preview at `target` once it has stayed put for
+    /// [`FONT_PREVIEW_DELAY`]; `None` returns the popup to the saved font.
+    fn hover_font(&mut self, target: Option<FontChoice>, cx: &mut Context<Self>) {
+        if self.font_picker.hovered == target {
+            return;
+        }
+        self.font_picker.hovered = target.clone();
+        self.font_picker.preview_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(FONT_PREVIEW_DELAY).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.font_picker.hovered != target || !this.font_picker.open {
+                    return;
+                }
+                let preview = target.map(|choice| choice.map(|name| name.to_string()));
+                if popup_theme::set_font_preview(preview) {
+                    cx.refresh_windows();
+                }
+            });
+        }));
+    }
+
+    /// Save `choice` and move it to the front of the recent families.
+    fn choose_font(&mut self, choice: FontChoice, cx: &mut Context<Self>) {
+        self.font_picker.hovered = None;
+        self.font_picker.preview_task = None;
+        end_font_preview(cx);
+        let next = choice.map(|name| name.to_string());
+        let recent_first =
+            next.is_none() || self.settings.recent_font_families.first() == next.as_ref();
+        if self.settings.font_family == next && recent_first {
+            return;
+        }
+        self.edit(cx, move |settings| {
+            settings.font_family = next.clone();
+            if let Some(name) = &next {
+                settings
+                    .recent_font_families
+                    .retain(|recent| recent != name);
+                settings.recent_font_families.insert(0, name.clone());
+                settings.recent_font_families.truncate(RECENT_FONTS);
+            }
+        });
+    }
+}
+
+/// Drop a font preview and repaint the popup with the saved font.
+pub(super) fn end_font_preview(cx: &mut App) {
+    if popup_theme::set_font_preview(None) {
+        cx.refresh_windows();
     }
 }

@@ -730,6 +730,7 @@ font = フォント
 
 # src/settings_window/appearance.rs
 any-font-installed-on-this-pc = この PC にインストールされているフォント。
+no-matching-fonts = 一致するフォントはありません
 
 # src/settings_window/appearance.rs
 windows-default = Windowsのデフォルト

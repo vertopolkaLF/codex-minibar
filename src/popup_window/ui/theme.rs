@@ -5,7 +5,10 @@
 //! accent roles follow the Fluent mapping shared with the
 //! Settings window (fill = Light2/Dark1, text = Light3/Dark2).
 
-use std::sync::Arc;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 
 use gpui::{Hsla, Rgba, SharedString};
 
@@ -79,12 +82,47 @@ pub(crate) fn installed_font_families(cx: &gpui::App) -> Vec<SharedString> {
     names.into_iter().map(SharedString::from).collect()
 }
 
-/// The popup's family: the user's pick, else the theme's own typeface.
+/// A family the popup paints with temporarily while Settings hovers it in the
+/// font picker: `Some(None)` previews the Windows default. Never saved.
+static FONT_PREVIEW: Mutex<Option<Option<String>>> = Mutex::new(None);
+static FONT_PREVIEW_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Replace the font preview; returns whether it changed.
+pub(crate) fn set_font_preview(preview: Option<Option<String>>) -> bool {
+    let Ok(mut current) = FONT_PREVIEW.lock() else {
+        return false;
+    };
+    if *current == preview {
+        return false;
+    }
+    *current = preview;
+    FONT_PREVIEW_GENERATION.fetch_add(1, Ordering::SeqCst);
+    true
+}
+
+fn font_preview() -> Option<Option<String>> {
+    FONT_PREVIEW.lock().ok().and_then(|preview| preview.clone())
+}
+
+/// Changes whenever a theme or font preview starts or ends, so the popup
+/// knows to rebuild its palette.
+pub(crate) fn preview_generation() -> u64 {
+    crate::vscode_themes::preview_generation()
+        .wrapping_add(FONT_PREVIEW_GENERATION.load(Ordering::SeqCst))
+}
+
+/// The popup's family: a family previewed from Settings, else the user's
+/// pick, else the theme's own typeface.
 pub(crate) fn popup_font_family(
     theme: PopupTheme,
     custom: Option<&str>,
     default: &SharedString,
 ) -> SharedString {
+    let preview = font_preview();
+    let custom = match &preview {
+        Some(preview) => preview.as_deref(),
+        None => custom,
+    };
     match theme {
         PopupTheme::Fluent => ui_font_family(custom, default),
         PopupTheme::Vercel => ui_font_family(custom, &SharedString::from(GEIST_FAMILY)),

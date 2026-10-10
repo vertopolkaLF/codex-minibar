@@ -350,6 +350,7 @@ fn row_hover_fill(k: &Kit, t: f32) -> AnyElement {
 }
 
 const MENU_FADE: Duration = Duration::from_millis(167);
+const MENU_MAX_HEIGHT: f32 = 340.0;
 
 /// The one open popover menu of a window.
 #[derive(Clone, Default)]
@@ -1585,6 +1586,8 @@ pub(crate) struct MenuItem {
     pub(crate) icon: Option<&'static str>,
     pub(crate) disabled: bool,
     pub(crate) danger: bool,
+    /// A divider follows this item, closing its section.
+    pub(crate) separator: bool,
 }
 
 impl MenuItem {
@@ -1594,7 +1597,18 @@ impl MenuItem {
             icon: None,
             disabled: false,
             danger: false,
+            separator: false,
         }
+    }
+
+    pub(crate) fn disabled(mut self) -> Self {
+        self.disabled = true;
+        self
+    }
+
+    pub(crate) fn separator(mut self) -> Self {
+        self.separator = true;
+        self
     }
 
     pub(crate) fn icon(mut self, icon: &'static str) -> Self {
@@ -1608,6 +1622,24 @@ impl MenuItem {
     }
 }
 
+/// Optional behavior of a menu list beyond picking an item.
+#[derive(Default)]
+struct MenuExtras {
+    /// Item marked by the keyboard, painted like a hovered one.
+    highlighted: Option<usize>,
+    /// Item to scroll into view this frame.
+    reveal: Option<usize>,
+    /// Fixed list height, for lists that glide between lengths.
+    height: Option<f32>,
+    /// Open at exactly the minimum width, truncating long labels.
+    exact_width: bool,
+    /// Called with `(index, hovered)` as the pointer enters and leaves items.
+    on_hover: Option<Handler<(usize, bool)>>,
+    /// Presses inside these bounds (the control that opened the menu) do not
+    /// dismiss it.
+    anchor: Option<Rc<Cell<Option<Bounds<Pixels>>>>>,
+}
+
 fn menu_panel(
     k: &Kit,
     id: &SharedString,
@@ -1617,21 +1649,60 @@ fn menu_panel(
     on_select: Handler<usize>,
     leaving: Option<f32>,
 ) -> AnyElement {
+    menu_panel_with(
+        k,
+        id,
+        items,
+        selected,
+        min_width,
+        on_select,
+        leaving,
+        MenuExtras::default(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn menu_panel_with(
+    k: &Kit,
+    id: &SharedString,
+    items: Vec<MenuItem>,
+    selected: Option<usize>,
+    min_width: f32,
+    on_select: Handler<usize>,
+    leaving: Option<f32>,
+    extras: MenuExtras,
+) -> AnyElement {
     let theme = &k.theme;
     let menus = k.menus.clone();
+    // Dividers are list children too; scroll targets count them.
+    let child_index = |item: usize| {
+        item + items
+            .iter()
+            .take(item)
+            .filter(|item| item.separator)
+            .count()
+    };
+    let scroll = menus.list_scroll(id, selected.map(child_index));
+    if let Some(index) = extras.reveal {
+        scroll.scroll_to_item(child_index(index));
+    }
     let mut list = div()
         .id(eid(format!("menu-list-{id}")))
         .flex()
         .flex_col()
         .p(px(4.0))
         .gap(px(2.0))
-        .max_h(px(340.0))
+        .map(|el| match extras.height {
+            Some(height) => el.h(px(height)),
+            None => el.max_h(px(MENU_MAX_HEIGHT)),
+        })
         .overflow_y_scroll()
-        .track_scroll(&menus.list_scroll(id, selected));
+        .track_scroll(&scroll);
     for (index, item) in items.into_iter().enumerate() {
         let on_select = Rc::clone(&on_select);
         let menus = menus.clone();
         let is_selected = selected == Some(index);
+        let is_highlighted = extras.highlighted == Some(index) && !item.disabled;
         let color = if item.disabled {
             theme.text_disabled
         } else if item.danger {
@@ -1642,10 +1713,13 @@ fn menu_panel(
         let hover = theme.subtle_hover;
         let rest = if is_selected {
             theme.nav_selected
+        } else if is_highlighted {
+            hover
         } else {
             gpui::transparent_black()
         };
         let accent = theme.accent;
+        let separator = item.separator;
         let mut entry = div()
             .id(eid(format!("menu-{id}-{index}")))
             .relative()
@@ -1671,7 +1745,11 @@ fn menu_panel(
                 )
             })
             .when_some(item.icon, |el, name| el.child(icon(name, 14.0, color)))
-            .child(div().whitespace_nowrap().child(item.label));
+            .child(if extras.exact_width {
+                div().flex_1().min_w_0().truncate().child(item.label)
+            } else {
+                div().whitespace_nowrap().child(item.label)
+            });
         // A closing menu only fades; it no longer reacts to the pointer.
         if !item.disabled && leaving.is_none() {
             let key = hover_key(&format!("menu-{id}-{index}"));
@@ -1682,20 +1760,37 @@ fn menu_panel(
                     menus.close(window);
                     on_select(index, window, cx);
                 });
+            if let Some(on_hover) = extras.on_hover.clone() {
+                entry = entry
+                    .on_hover(move |hovered, window, cx| on_hover((index, *hovered), window, cx));
+            }
         }
         list = list.child(entry);
+        if separator {
+            list = list.child(div().mx(px(-4.0)).my(px(3.0)).h(px(1.0)).bg(theme.divider));
+        }
     }
     let menus = k.menus.clone();
+    let anchor = extras.anchor;
     let panel = div()
         .id(eid(format!("menu-panel-{id}")))
         .when(leaving.is_none(), |el| el.occlude())
         .mt(px(4.0))
         .min_w(px(min_width))
+        .when(extras.exact_width, |el| el.w(px(min_width)))
         .rounded(px(10.0))
         .bg(theme.popover)
         .shadow(float_shadow(theme, 8.0))
         .when(leaving.is_none(), |el| {
-            el.on_mouse_down_out(move |_, window, _| menus.close(window))
+            el.on_mouse_down_out(move |event, window, _| {
+                let inside_anchor = anchor
+                    .as_ref()
+                    .and_then(|anchor| anchor.get())
+                    .is_some_and(|bounds| bounds.contains(&event.position));
+                if !inside_anchor {
+                    menus.close(window);
+                }
+            })
         })
         .child(list);
     let panel: AnyElement = if let Some(opacity) = leaving {
@@ -1856,6 +1951,194 @@ pub(crate) fn dropdown_with_placeholder(
         ));
     }
     wrapper.into_any_element()
+}
+
+/// Editable ComboBox: closed it reads like [`dropdown`]; open, its face
+/// becomes a search field whose text the owner filters `items` with.
+pub(crate) struct SearchDropdown {
+    pub(crate) id: SharedString,
+    /// The current choice, shown while closed and as the open field's
+    /// placeholder.
+    pub(crate) label: SharedString,
+    pub(crate) input: Entity<TextInput>,
+    pub(crate) items: Vec<MenuItem>,
+    pub(crate) selected: Option<usize>,
+    pub(crate) highlighted: Option<usize>,
+    pub(crate) reveal: Option<usize>,
+    /// The list opened this frame: it starts at its full height instead of
+    /// gliding from its last one.
+    pub(crate) fresh: bool,
+    pub(crate) width: f32,
+    /// Runs right after the list opens, to reset and focus the field.
+    pub(crate) on_open: Handler<()>,
+    pub(crate) on_select: Handler<usize>,
+    pub(crate) on_hover: Handler<(usize, bool)>,
+}
+
+impl SearchDropdown {
+    pub(crate) fn render(self, k: &mut Kit, window: &Window, cx: &mut App) -> AnyElement {
+        let Self {
+            id,
+            label,
+            input,
+            items,
+            selected,
+            highlighted,
+            reveal,
+            fresh,
+            width,
+            on_open,
+            on_select,
+            on_hover,
+        } = self;
+        let theme = &k.theme;
+        let open = k.menus.is_open(&id);
+        let leaving = (!open && k.animate())
+            .then(|| k.menus.leaving(&id))
+            .flatten();
+        let caret = match k.caret {
+            Some(caret) => icon(caret, 14.0, theme.text_secondary),
+            None => icon("caret-down-bold", 10.0, theme.text_secondary),
+        };
+        let turn = |progress: f32| Transformation::rotate(radians(std::f32::consts::PI * progress));
+        let caret: AnyElement = if let Some(opacity) = leaving {
+            caret.with_transformation(turn(opacity)).into_any_element()
+        } else if open && k.animate() {
+            caret
+                .with_animation(
+                    eid(format!("dropdown-caret-{id}")),
+                    Animation::new(MENU_FADE).with_easing(fx::ease_out_cubic),
+                    move |el, delta| el.with_transformation(turn(delta)),
+                )
+                .into_any_element()
+        } else if open {
+            caret.with_transformation(turn(1.0)).into_any_element()
+        } else {
+            caret.into_any_element()
+        };
+        let menus = k.menus.clone();
+        let face = (if open {
+            let colors = super::input::InputColors {
+                text: theme.text,
+                placeholder: theme.text_secondary,
+                caret: theme.text,
+                selection: theme.selection,
+            };
+            let focused = input.update(cx, |input, _| {
+                input.colors = colors;
+                input.placeholder = label.clone();
+                input.is_focused(window)
+            });
+            let close_id = format!("dropdown-close-{id}");
+            div()
+                .id(eid(format!("dropdown-{id}")))
+                .relative()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .h(px(CONTROL_HEIGHT))
+                .pl(px(12.0))
+                .pr(px(12.0))
+                .rounded(px(CONTROL_RADIUS))
+                .bg(theme.input_focus_bg)
+                .text_size(px(13.0))
+                .line_height(px(20.0))
+                .overflow_hidden()
+                .child(icon("magnifying-glass-bold", 12.0, theme.text_secondary))
+                .child(div().flex_1().min_w_0().child(input))
+                .child(
+                    div()
+                        .id(eid(close_id))
+                        .cursor_pointer()
+                        .on_click(move |_, window, _| menus.close(window))
+                        .child(caret),
+                )
+                .when(focused, |el| {
+                    el.child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .bottom_0()
+                            .h(px(2.0))
+                            .bg(theme.accent),
+                    )
+                })
+        } else {
+            let toggle_id = id.clone();
+            let hover = theme.control_hover;
+            let key = hover_key(&format!("dropdown-{id}"));
+            hover_bg(
+                k,
+                div()
+                    .id(eid(format!("dropdown-{id}")))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(8.0))
+                    .h(px(CONTROL_HEIGHT))
+                    .px(px(12.0))
+                    .rounded(px(CONTROL_RADIUS))
+                    .text_size(px(13.0))
+                    .text_color(theme.text)
+                    .child(div().flex_1().min_w_0().truncate().child(label))
+                    .child(caret),
+                key,
+                theme.control,
+                hover,
+            )
+            .cursor_pointer()
+            .on_click(move |_, window, cx| {
+                menus.toggle(toggle_id.clone(), window);
+                on_open((), window, cx);
+            })
+        })
+        .w(px(width));
+        // The field counts as part of the open list: pressing in it to move
+        // the caret must not dismiss the list.
+        let anchor = Rc::new(Cell::new(None));
+        let measured = Rc::clone(&anchor);
+        let measure = canvas(
+            |_, _, _| {},
+            move |bounds, (), _, _| measured.set(Some(bounds)),
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
+        // The list grows and shrinks with the matches instead of jumping.
+        let separators = items.iter().filter(|item| item.separator).count() as f32;
+        let rows = items.len() as f32;
+        let content = 8.0 + rows * 32.0 + (rows - 1.0).max(0.0) * 2.0 + separators * 9.0;
+        let target = content.min(MENU_MAX_HEIGHT);
+        let height_key = fx::key(("search-dropdown-height", id.as_ref()));
+        if fresh {
+            k.fx.snap(height_key, target);
+        }
+        let height = k.fx.value(height_key, target, MENU_FADE);
+        let k = &*k;
+        let mut wrapper = div().relative().flex_none().child(face).child(measure);
+        if open || leaving.is_some() {
+            wrapper = wrapper.child(menu_panel_with(
+                k,
+                &id,
+                items,
+                selected,
+                width,
+                on_select,
+                leaving,
+                MenuExtras {
+                    highlighted,
+                    reveal,
+                    height: Some(height),
+                    exact_width: true,
+                    on_hover: Some(on_hover),
+                    anchor: Some(anchor),
+                },
+            ));
+        }
+        wrapper.into_any_element()
+    }
 }
 
 pub(crate) fn options(labels: &[&str]) -> Vec<SharedString> {

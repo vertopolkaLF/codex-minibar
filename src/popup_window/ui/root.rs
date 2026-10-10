@@ -368,7 +368,7 @@ impl PopupRoot {
             palette,
             accent,
             default_font,
-            preview_generation: crate::vscode_themes::preview_generation(),
+            preview_generation: theme::preview_generation(),
             fx: Fx::default(),
             hover: HashSet::new(),
             host: Host::new(),
@@ -459,7 +459,7 @@ impl PopupRoot {
     }
 
     pub(super) fn refresh_palette(&mut self, window: &Window) {
-        self.preview_generation = crate::vscode_themes::preview_generation();
+        self.preview_generation = theme::preview_generation();
         // Looked up on every refresh: reinstalling a theme replaces its entry.
         let (popup_theme, vscode) =
             theme::popup_design(self.ui.popup_theme, self.ui.popup_vscode_theme.as_deref());
@@ -1441,7 +1441,7 @@ impl Render for PopupRoot {
         }
         // Settings previews a theme by swapping a shared slot, then
         // refreshing every window.
-        if self.preview_generation != crate::vscode_themes::preview_generation() {
+        if self.preview_generation != theme::preview_generation() {
             self.refresh_palette(window);
         }
         let now = Instant::now();

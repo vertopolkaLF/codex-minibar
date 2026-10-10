@@ -1742,6 +1742,9 @@ pub struct Settings {
     /// Installed font family for every window. None follows the Windows UI
     /// font (Segoe UI Variable, or Segoe UI on older systems).
     pub font_family: Option<String>,
+    /// Families picked most recently, newest first, offered at the top of
+    /// the font picker.
+    pub recent_font_families: Vec<String>,
     /// App-level accessibility override. The Windows animation preference is
     /// still honored when this remains enabled.
     pub animations_enabled: bool,
@@ -1832,6 +1835,7 @@ impl Default for Settings {
             language: crate::i18n::Language::Auto,
             accent_color: AccentColor::Windows,
             font_family: None,
+            recent_font_families: Vec::new(),
             animations_enabled: true,
             bottom_bar_size: BottomBarSize::default(),
             popup_corner_radius: PopupCornerRadius::default(),

@@ -992,6 +992,10 @@ font = { "" }
 any-font-installed-on-this-pc = { "" }
 
 # English source:
+# no-matching-fonts = No matching fonts
+no-matching-fonts = { "" }
+
+# English source:
 # windows-default = Windows default
 windows-default = { "" }
 
