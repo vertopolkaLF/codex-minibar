@@ -320,8 +320,8 @@ msg-1-banked-reset = { "" }
 
 # English source:
 # count-banked-resets = { $count ->
-#     [one] { $count } Banked Reset
-#    *[other] { $count } Banked Resets
+#     [one] { $count } Reset
+#    *[other] { $count } Resets
 #     }
 count-banked-resets = { "" }
 
@@ -3590,6 +3590,10 @@ plays-a-short-sound-with-each-notification = { "" }
 # English source:
 # use-reset = Use reset
 use-reset = { "" }
+
+# English source:
+# use-reset-short = Use
+use-reset-short = { "" }
 
 # English source:
 # reset-using = Using…

@@ -156,8 +156,8 @@ remove-key = Eliminar clave
 msg-1-banked-reset = 1 restablecimiento acumulado
 
 count-banked-resets = { $count ->
-    [one] { $count } restablecimiento acumulado
-   *[other] { $count } restablecimientos acumulados
+    [one] { $count } restablecimiento
+   *[other] { $count } restablecimientos
     }
 
 available-to-use = Disponible para usar
@@ -1672,6 +1672,7 @@ notification-sounds = Sonidos de notificación
 plays-a-short-sound-with-each-notification = Reproduce un sonido breve con cada notificación
 
 use-reset = Usar reinicio
+use-reset-short = Usar
 reset-using = Aplicando…
 reset-confirm-message = ¿Usar un reinicio acumulado en esta cuenta? Esto borra los límites elegibles y no se puede deshacer.
 reset-applied = Reinicio aplicado. Se han borrado los límites elegibles.

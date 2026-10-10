@@ -1122,21 +1122,18 @@ impl PopupRoot {
                 TimeFormat::current().format_hm(local)
             )
         };
-        let expiration = limits.next_reset_credit_expiration();
-        let (expiration_status, expiration_status_width) = match expiration {
-            Some(at) => {
-                let value = format_reset_in(Some(at));
-                let width = metrics.status_row(crate::i18n::tr("expires-in"), &value);
-                (
-                    status_row(crate::i18n::tr("expires-in"), value, &palette),
-                    width,
-                )
-            }
-            None => {
-                let label = crate::i18n::tr("no-expiration-date");
-                (card_metadata(label, &palette), metrics.caption(label))
-            }
-        };
+        // The nearest expiry sits inline after the count as a clock and
+        // countdown; hovering it shows the full expiry date and time.
+        let expiration_at = limits.next_reset_credit_expiration();
+        let expiration = expiration_at.map(|at| format_reset_in(Some(at)));
+        let expiration_tip = expiration_at.map(|at| {
+            let local = at.with_timezone(&Local);
+            SharedString::from(format!(
+                "{}, {}",
+                crate::i18n::date_with_year(local),
+                TimeFormat::current().format_hm(local)
+            ))
+        });
         let available = limits
             .reset_credits
             .as_ref()
@@ -1154,10 +1151,13 @@ impl PopupRoot {
             .fx
             .toggle(fx::key(("reset-reveal", expansion_key)), open, fx::NORMAL);
 
-        // Count label plus the 8 DIP gap and 16 DIP chevron.
-        let title_width = metrics.strong(&count_label) + if expandable { 24.0 } else { 0.0 };
-        let header_fits =
-            TextMetrics::fits_split(available_width, title_width, expiration_status_width);
+        // Count label, then the 8 DIP gap with a 14 DIP clock, 4 DIP gap and
+        // countdown, then the 8 DIP gap and 16 DIP chevron.
+        let title_width = metrics.strong(&count_label)
+            + expiration
+                .as_deref()
+                .map_or(0.0, |value| 26.0 + metrics.body(value))
+            + if expandable { 24.0 } else { 0.0 };
         let mut title =
             div()
                 .flex()
@@ -1168,6 +1168,24 @@ impl PopupRoot {
                     title_width <= available_width,
                     components::body_strong(count_label, palette.accent),
                 ));
+        if let Some(value) = expiration {
+            title = title.child(
+                div()
+                    .id(eid(format!("reset-expiry-{expansion_key}")))
+                    .flex()
+                    .flex_row()
+                    .flex_none()
+                    .items_center()
+                    .gap(px(4.0))
+                    .on_hover(self.hover_listener(
+                        fx::key(("reset-expiry", expansion_key)),
+                        expiration_tip,
+                        cx,
+                    ))
+                    .child(icon("fluent-clock", 14.0, palette.text_tertiary))
+                    .child(nowrap(components::body(value, palette.text_primary))),
+            );
+        }
         if expandable {
             title = title.child(
                 icon("fluent-chevron-down", 16.0, theme_gray()).with_transformation(
@@ -1185,8 +1203,20 @@ impl PopupRoot {
                     && (provider.kind() == ProviderKind::Codex || !available.is_empty())
             });
         let header_content = if can_use || busy {
-            // The action sits on the trailing edge; expiry moves under the title.
-            let label = crate::i18n::tr(if busy { "reset-using" } else { "use-reset" });
+            // The action sits on the trailing edge. When the full label does
+            // not fit beside the title (long translations), it shortens to
+            // just "Use" before the button wraps onto its own row.
+            let button_width = |label: &str| metrics.strong(label) + 24.0;
+            let label = if busy {
+                crate::i18n::tr("reset-using")
+            } else {
+                let full = crate::i18n::tr("use-reset");
+                if TextMetrics::fits_split(available_width, title_width, button_width(full)) {
+                    full
+                } else {
+                    crate::i18n::tr("use-reset-short")
+                }
+            };
             let button_id = fx::key(("use-reset", expansion_key));
             let button_hover = self.fx.toggle(
                 fx::key(("use-reset-hover", button_id)),
@@ -1224,29 +1254,12 @@ impl PopupRoot {
                         cx.notify();
                     }));
             }
-            let meta_width = expiration_status_width;
-            let meta = div()
-                .flex()
-                .flex_row()
-                .flex_wrap()
-                .items_center()
-                .gap_x(px(6.0))
-                .child(expiration_status);
-            // Both lines carry 20 DIP line boxes; pull the second one up so
-            // the pair reads as one block instead of two loose rows.
-            let leading = div()
-                .flex()
-                .flex_col()
-                .child(title)
-                .child(meta.mt(px(-3.0)));
-            let fits = TextMetrics::fits_split(
-                available_width,
-                title_width.max(meta_width),
-                metrics.strong(label) + 24.0,
-            );
-            components::adaptive_split(fits, leading, button)
+            let fits = TextMetrics::fits_split(available_width, title_width, button_width(label));
+            // Keep the height of the former two-line block (two 20 DIP line
+            // boxes pulled 3 DIP together) so the card does not shrink.
+            components::adaptive_split(fits, title, button).min_h(px(37.0))
         } else {
-            components::adaptive_split(header_fits, title, expiration_status)
+            title
         };
         let hover_id = fx::key(("reset-card", expansion_key));
         let hover = self.fx.toggle(

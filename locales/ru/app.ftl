@@ -234,9 +234,9 @@ msg-1-banked-reset = 1 запасной сброс
 
 # src/popup_window/ui/cards.rs
 count-banked-resets = { $count ->
-    [one] { $count } запасной сброс
-    [few] { $count } запасных сброса
-   *[many] { $count } запасных сбросов
+    [one] { $count } сброс
+    [few] { $count } сброса
+   *[many] { $count } сбросов
     }
 
 # src/popup_window/ui/cards.rs
@@ -706,6 +706,7 @@ every-setting-returns-to-its-default-and-the-welcome-flow-opens-a = Все на�
 # src/settings_window/troubleshoot.rs
 cancel = Отмена
 use-reset = Использовать сброс
+use-reset-short = Использовать
 reset-using = Применение…
 reset-confirm-message = Использовать один накопленный сброс для этого аккаунта? Доступные лимиты будут сброшены. Это действие нельзя отменить.
 reset-applied = Сброс применён. Доступные лимиты обнулены.

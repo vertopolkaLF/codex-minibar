@@ -240,8 +240,8 @@ msg-1-banked-reset = 1 gespeicherter Reset
 
 # src/popup_window/ui/cards.rs
 count-banked-resets = { $count ->
-    [one] { $count } gespeicherter Reset
-   *[other] { $count } gespeicherte Resets
+    [one] { $count } Reset
+   *[other] { $count } Resets
     }
 
 # src/popup_window/ui/cards.rs
@@ -2566,6 +2566,7 @@ notification-sounds = Benachrichtigungstöne
 plays-a-short-sound-with-each-notification = Spielt bei jeder Benachrichtigung einen kurzen Ton ab
 
 use-reset = Zurücksetzung nutzen
+use-reset-short = Nutzen
 reset-using = Wird angewendet…
 reset-confirm-message = Eine angesparte Zurücksetzung für dieses Konto nutzen? Berechtigte Limits werden zurückgesetzt. Dies kann nicht rückgängig gemacht werden.
 reset-applied = Zurücksetzung angewendet. Berechtigte Limits wurden zurückgesetzt.

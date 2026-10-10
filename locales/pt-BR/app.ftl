@@ -156,8 +156,8 @@ remove-key = Remover chave
 msg-1-banked-reset = 1 redefinição acumulada
 
 count-banked-resets = { $count ->
-    [one] { $count } redefinição acumulada
-   *[other] { $count } redefinições acumuladas
+    [one] { $count } redefinição
+   *[other] { $count } redefinições
     }
 
 available-to-use = Disponível para uso
@@ -1672,6 +1672,7 @@ notification-sounds = Sons de notificação
 plays-a-short-sound-with-each-notification = Toca um som curto a cada notificação
 
 use-reset = Usar redefinição
+use-reset-short = Usar
 reset-using = Aplicando…
 reset-confirm-message = Usar uma redefinição acumulada nesta conta? Isso limpa os limites elegíveis e não pode ser desfeito.
 reset-applied = Redefinição aplicada. Os limites elegíveis foram limpos.

@@ -240,8 +240,8 @@ msg-1-banked-reset = 1 Banked Reset
 
 # src/popup_window/ui/cards.rs
 count-banked-resets = { $count ->
-    [one] { $count } Banked Reset
-   *[other] { $count } Banked Resets
+    [one] { $count } Reset
+   *[other] { $count } Resets
     }
 
 # src/popup_window/ui/cards.rs
@@ -705,6 +705,7 @@ every-setting-returns-to-its-default-and-the-welcome-flow-opens-a = Every settin
 # src/settings_window/troubleshoot.rs
 cancel = Cancel
 use-reset = Use reset
+use-reset-short = Use
 reset-using = Using…
 reset-confirm-message = Use one banked reset for this account? This clears eligible rate-limit windows and cannot be undone.
 reset-applied = Reset applied. Your eligible limits have been cleared.

@@ -155,7 +155,7 @@ remove-key = 移除密钥
 
 msg-1-banked-reset = 1 次已储备重置
 
-count-banked-resets = { $count } 次已储备重置
+count-banked-resets = { $count } 次重置
 
 available-to-use = 可用
 
@@ -1651,6 +1651,7 @@ notification-sounds = 通知声音
 plays-a-short-sound-with-each-notification = 每条通知播放一段简短提示音
 
 use-reset = 使用重置
+use-reset-short = 使用
 reset-using = 正在应用…
 reset-confirm-message = 为此账户使用一次累积重置？这将清除符合条件的速率限制，且无法撤销。
 reset-applied = 重置已应用。符合条件的限制已清除。

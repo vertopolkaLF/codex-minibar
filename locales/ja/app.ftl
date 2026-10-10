@@ -239,7 +239,7 @@ remove-key = キーを削除
 msg-1-banked-reset = 保存済みリセット 1 回
 
 # src/popup_window/ui/cards.rs
-count-banked-resets = { $count } 回の保存済みリセット
+count-banked-resets = { $count } 回のリセット
 
 # src/popup_window/ui/cards.rs
 available-to-use = 使用可能
@@ -2545,6 +2545,7 @@ notification-sounds = 通知音
 plays-a-short-sound-with-each-notification = 通知ごとに短い音を再生します
 
 use-reset = リセットを使用
+use-reset-short = 使用
 reset-using = 適用中…
 reset-confirm-message = このアカウントの蓄積されたリセットを1回使用しますか？対象の利用制限が解除されます。この操作は取り消せません。
 reset-applied = リセットを適用しました。対象の利用制限が解除されました。

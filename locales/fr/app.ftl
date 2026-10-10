@@ -240,9 +240,9 @@ msg-1-banked-reset = 1 réinitialisation en réserve
 
 # src/popup_window/ui/cards.rs
 count-banked-resets = { $count ->
-    [one] { $count } réinitialisation en réserve
-    [many] { $count } réinitialisations en réserve
-   *[other] { $count } réinitialisations en réserve
+    [one] { $count } réinitialisation
+    [many] { $count } réinitialisations
+   *[other] { $count } réinitialisations
     }
 
 # src/popup_window/ui/cards.rs
@@ -2573,6 +2573,7 @@ notification-sounds = Sons des notifications
 plays-a-short-sound-with-each-notification = Joue un son bref à chaque notification
 
 use-reset = Utiliser une réinitialisation
+use-reset-short = Utiliser
 reset-using = Application…
 reset-confirm-message = Utiliser une réinitialisation cumulée pour ce compte ? Les limites éligibles seront effacées. Cette action est irréversible.
 reset-applied = Réinitialisation appliquée. Les limites éligibles ont été effacées.
