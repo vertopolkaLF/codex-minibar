@@ -182,10 +182,19 @@ portable package in place. You can disable update checks in Settings at any time
 Install the Rust toolchain pinned in [`rust-toolchain.toml`](rust-toolchain.toml), then run:
 
 ```powershell
-cargo check --locked
-cargo test --all-targets --all-features --locked
-cargo clippy --all-targets --all-features --locked -- -D warnings
+.\cargo-worktree.ps1 check --locked
+.\cargo-worktree.ps1 test --all-targets --all-features --locked
+.\cargo-worktree.ps1 clippy --all-targets --all-features --locked '--' -D warnings
 ```
+
+The wrapper runs Cargo in the current Git worktree and shares the main checkout's
+existing `target` directory. Dependencies can be reused across worktrees with
+matching build settings; simultaneous builds wait for Cargo's lock. The shared
+binary belongs to the last build. Set `CARGO_TARGET_DIR` explicitly when you need
+isolated build output. From an older worktree, invoke the main checkout's
+`cargo-worktree.ps1` by absolute path. Plain Cargo commands remain suitable for CI.
+Quote the `'--'` separator when passing compiler, Clippy or rustfmt flags through
+the PowerShell wrapper.
 
 To build distributable Windows packages, run:
 

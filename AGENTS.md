@@ -4,6 +4,41 @@ Always run `cargo check` after changes related to the app to ensure the code is 
 
 Never launch the app itself.
 
+## Worktree builds
+
+Use `cargo-worktree.ps1` for local Cargo checks and builds so worktrees reuse the
+main checkout's warm `target` directory instead of rebuilding all dependencies:
+
+```powershell
+.\cargo-worktree.ps1 check --locked
+.\cargo-worktree.ps1 build --locked
+.\cargo-worktree.ps1 test --all-targets --all-features --locked
+.\cargo-worktree.ps1 clippy --all-targets --all-features --locked '--' -D warnings
+```
+
+The wrapper resolves the main checkout through `git --git-common-dir`, runs Cargo
+in the current worktree, forwards arguments and exit codes, and restores the
+caller's environment. It honors an explicit `CARGO_TARGET_DIR` override. In older
+worktrees without the script, invoke the main checkout's script by absolute path
+while keeping the current directory inside the worktree being checked (on this
+machine: `& C:\Dev\codex-minibar\cargo-worktree.ps1 check --locked`).
+
+Quote the `'--'` argument separator when forwarding flags to rustc, Clippy or
+rustfmt; PowerShell otherwise consumes an unquoted separator before the script
+receives it.
+
+Shared-target Cargo commands wait for Cargo's build lock; do not bypass the lock
+or treat the wait as a failed build. Keep toolchain, features, profiles and
+RUSTFLAGS consistent for reuse. The app and vendored path dependencies may still
+rebuild when switching worktrees. Never run `cargo clean` against the shared cache
+as routine cleanup, and never delete it when removing a worktree.
+
+The shared EXE belongs to the last build, not necessarily the main checkout's
+branch. Do not infer its source worktree from its path. If a branch-specific
+artifact or truly parallel build is required, explicitly use a separate
+`CARGO_TARGET_DIR`. Never launch the app for verification. The wrapper does not
+support `run` or `clean`. Release packaging continues to use `build.ps1`.
+
 All settings must take effect immediately in the running application. The user must never need to relaunch the app for a setting change to be applied. Keep every open UI surface and affected background component synchronized with the updated settings.
 
 ## Appearance initialization guardrails
