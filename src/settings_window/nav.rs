@@ -65,6 +65,23 @@ impl Tab {
             Self::About => crate::i18n::tr("about-updates"),
         }
     }
+
+    /// Fluent Color sidebar icon (`assets/icons/fluent-color-*.svg`).
+    pub(crate) fn color_icon(self) -> &'static str {
+        match self {
+            Self::General => "color/home-24.svg",
+            Self::Providers => "color/apps-list-24.svg",
+            Self::Popup => "color/apps-24.svg",
+            Self::Schedule => "color/calendar-clock-24.svg",
+            Self::Tray => "color/chat-24.svg",
+            Self::Notifications => "color/alert-badge-24.svg",
+            Self::Appearance => "color/paint-brush-24.svg",
+            Self::Advanced => "color/settings-24.svg",
+            Self::Log => "color/history-24.svg",
+            Self::Integrations => "color/puzzle-piece-24.svg",
+            Self::About => "color/book-open-24.svg",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

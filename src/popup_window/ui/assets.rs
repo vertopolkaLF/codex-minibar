@@ -187,10 +187,31 @@ pub(crate) fn normalize_svg(svg: &str) -> String {
 /// Full-color assets painted with `img` (their own colors are kept).
 fn color_source(name: &str) -> Option<&'static [u8]> {
     Some(match name {
+        "alert-badge-24" => include_bytes!("../../../assets/icons/fluent-color-alert-badge-24.svg"),
+        "apps-24" => include_bytes!("../../../assets/icons/fluent-color-apps-24.svg"),
+        "apps-list-24" => include_bytes!("../../../assets/icons/fluent-color-apps-list-24.svg"),
+        "book-open-24" => include_bytes!("../../../assets/icons/fluent-color-book-open-24.svg"),
+        "calendar-clock-24" => {
+            include_bytes!("../../../assets/icons/fluent-color-calendar-clock-24.svg")
+        }
+        "chat-24" => include_bytes!("../../../assets/icons/fluent-color-chat-24.svg"),
+        "history-24" => include_bytes!("../../../assets/icons/fluent-color-history-24.svg"),
+        "home-24" => include_bytes!("../../../assets/icons/fluent-color-home-24.svg"),
+        "paint-brush-24" => include_bytes!("../../../assets/icons/fluent-color-paint-brush-24.svg"),
+        "puzzle-piece-24" => {
+            include_bytes!("../../../assets/icons/fluent-color-puzzle-piece-24.svg")
+        }
+        "settings-24" => include_bytes!("../../../assets/icons/fluent-color-settings-24.svg"),
         "app-icon" => include_bytes!("../../../assets/app-icon.png"),
         "app-icon-32" => include_bytes!("../../../assets/icons/app-icon-32.png"),
         _ => return None,
     })
+}
+
+/// Whether `path` resolves to an embedded asset.
+#[cfg(test)]
+pub(crate) fn has_asset(path: &str) -> bool {
+    PopupAssets.load(path).ok().flatten().is_some()
 }
 
 impl AssetSource for PopupAssets {

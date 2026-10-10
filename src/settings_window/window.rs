@@ -667,7 +667,7 @@ impl SettingsWindow {
             list = list.child(self.nav_item(
                 k,
                 format!("nav-{}", tab.tag()).into(),
-                None,
+                Some(kit::image(tab.color_icon(), 18.0).into_any_element()),
                 tab.label().into(),
                 self.root_tab == tab,
                 false,
