@@ -224,7 +224,7 @@ available-balance = Available balance
 resets-in = Resets in
 
 # src/popup_window/ui/cards.rs
-session-not-started = Session not started
+session-not-started = Not started
 
 # src/popup_window/ui/cards.rs
 expires-in = Expires in

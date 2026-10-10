@@ -1823,7 +1823,7 @@ src/popup_window/ui/cards.rs	121	Available balance
 src/popup_window/ui/cards.rs	177	heading-error
 src/popup_window/ui/cards.rs	181	heading-error-{}-{}
 src/popup_window/ui/cards.rs	215	Resets in
-src/popup_window/ui/cards.rs	216	Session not started
+src/popup_window/ui/cards.rs	216	Not started
 src/popup_window/ui/cards.rs	254	limit-progress
 src/popup_window/ui/cards.rs	349	limit-progress
 src/popup_window/ui/cards.rs	359	{}, {}

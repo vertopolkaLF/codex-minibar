@@ -22,6 +22,7 @@ const RESET_ROW_HEIGHT: f32 = 58.0;
 const STACKED_ROW_EXTRA: f32 = 24.0;
 /// Ring gauge diameter and stroke of the Rings layout.
 const RING_SIZE: f32 = 46.0;
+const RING_PACE_GAP: f32 = 8.0;
 const RING_STROKE: f32 = 5.0;
 /// Narrower cards stack ring tiles one per row.
 const RING_PAIR_MIN_WIDTH: f32 = 260.0;
@@ -324,8 +325,8 @@ impl PopupRoot {
         out
     }
 
-    /// Lines layout: title, value and countdown on one row over the compact
-    /// full-card fill. The pace summary moves to a tooltip.
+    /// Lines layout: title, pace, value and countdown on one row over the
+    /// compact full-card fill. The full pace summary stays in a tooltip.
     #[allow(clippy::too_many_arguments)]
     fn render_limit_line(
         &mut self,
@@ -360,12 +361,25 @@ impl PopupRoot {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .child(nowrap(caption(title.to_owned(), palette.text_secondary))),
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .child(nowrap(caption(title.to_owned(), palette.text_secondary))),
+                    )
+                    .children(pace.map(|pace| components::pace_status(pace, &palette))),
             )
             .child(self.usage_label(label, usage_amount, style.show_usage_values));
         if show_reset {
             row = row.child(match limit.resets_at {
-                Some(at) => nowrap(caption(format_reset_in(Some(at)), palette.text_primary)),
+                Some(at) => components::caption_icon_status(
+                    components::RESET_ICON,
+                    format_reset_in(Some(at)),
+                    &palette,
+                ),
                 None => card_metadata(crate::i18n::tr("session-not-started"), &palette),
             });
         }
@@ -447,20 +461,30 @@ impl PopupRoot {
             .child(nowrap(caption(title.to_owned(), palette.text_secondary)));
         if show_reset {
             details = details.child(match limit.resets_at {
-                Some(at) => nowrap(components::body_strong(
-                    format_reset_in(Some(at)),
-                    palette.text_primary,
-                )),
-                None => nowrap(card_metadata(
+                // Pace follows the countdown and wraps below it when the
+                // tile is too narrow for both.
+                Some(at) => div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_x(px(RING_PACE_GAP))
+                    .child(nowrap(components::body_strong(
+                        format_reset_in(Some(at)),
+                        palette.text_primary,
+                    )))
+                    .children(pace.map(|pace| components::pace_status(pace, &palette))),
+                // Wraps rather than clipping longer translations in a narrow tile.
+                None => caption(
                     crate::i18n::tr("session-not-started"),
-                    &palette,
-                )),
+                    palette.text_tertiary,
+                ),
             });
         } else if disabled {
             details = details.child(nowrap(card_metadata(crate::i18n::tr("disabled"), &palette)));
         }
-        if let Some(pace) = pace {
-            details = details.child(nowrap(card_metadata(pace.summary(), &palette)));
+        if !show_reset && let Some(pace) = pace {
+            details = details.child(components::pace_status(pace, &palette));
         }
         // Grows to fill its `flush_rings` cell so paired tiles share a height,
         // with the gauge and details centered vertically.
@@ -694,14 +718,17 @@ impl PopupRoot {
             components::fit_text(title_alone_fits, caption(title.to_owned(), secondary));
         let header = match pace {
             Some(pace) => {
-                let summary = pace.summary();
                 let fits = title_alone_fits
                     && TextMetrics::fits_split(
                         available_width,
                         title_width,
-                        metrics.caption(&summary),
+                        metrics.pace_status(pace),
                     );
-                components::adaptive_split(fits, title_block, card_metadata(summary, &palette))
+                components::adaptive_split(
+                    fits,
+                    title_block,
+                    components::pace_status(pace, &palette),
+                )
             }
             None => div().child(title_block),
         };

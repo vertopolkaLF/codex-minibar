@@ -224,7 +224,7 @@ available-balance = 利用可能残高
 resets-in = リセットまで
 
 # src/popup_window/ui/cards.rs
-session-not-started = セッションが開始されていません
+session-not-started = 未開始
 
 # src/popup_window/ui/cards.rs
 expires-in = 有効期限まで

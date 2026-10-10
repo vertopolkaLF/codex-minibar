@@ -299,7 +299,7 @@ available-balance = { "" }
 resets-in = { "" }
 
 # English source:
-# session-not-started = Session not started
+# session-not-started = Not started
 session-not-started = { "" }
 
 # English source:

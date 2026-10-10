@@ -376,7 +376,7 @@
       : "";
     const reset = limit.reset
       ? `<span class="demo-reset"><em>Resets in</em> ${esc(limit.reset)}</span>`
-      : '<span class="demo-reset"><em>Session not started</em></span>';
+      : '<span class="demo-reset"><em>Not started</em></span>';
 
     if (!limit.pace) {
       return `<div class="demo-limit single" style="--fill:${limit.fill}%">

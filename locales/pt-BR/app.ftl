@@ -145,7 +145,7 @@ available-balance = Saldo disponível
 
 resets-in = Redefine em
 
-session-not-started = Sessão não iniciada
+session-not-started = Não iniciada
 
 expires-in = Expira em
 

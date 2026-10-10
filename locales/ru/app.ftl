@@ -218,7 +218,7 @@ available-balance = Доступный баланс
 resets-in = До сброса
 
 # src/popup_window/ui/cards.rs
-session-not-started = Сессия не начата
+session-not-started = Не начата
 
 # src/popup_window/ui/cards.rs
 expires-in = До истечения

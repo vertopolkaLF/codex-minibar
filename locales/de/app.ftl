@@ -224,7 +224,7 @@ available-balance = Verfügbares Guthaben
 resets-in = Zurücksetzung in
 
 # src/popup_window/ui/cards.rs
-session-not-started = Sitzung nicht gestartet
+session-not-started = Nicht gestartet
 
 # src/popup_window/ui/cards.rs
 expires-in = Läuft ab in

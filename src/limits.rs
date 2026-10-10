@@ -136,19 +136,40 @@ pub struct PaceTip {
     pub delta_percent: f64,
 }
 
+/// Direction of usage relative to an even burn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaceTrend {
+    OnPace,
+    /// Used more than an even burn would have by now.
+    Deficit,
+    /// Used less than an even burn would have by now.
+    Reserve,
+}
+
 impl PaceTip {
-    /// Compact CodexBar-style description for the usage-card header.
-    pub fn summary(self) -> String {
+    pub fn trend(self) -> PaceTrend {
         const ON_PACE_TOLERANCE: f64 = 2.0;
         if self.delta_percent.abs() <= ON_PACE_TOLERANCE {
-            return crate::i18n::tr("on-pace").into();
-        }
-
-        let delta = self.delta_percent.abs().round() as u32;
-        if self.delta_percent > 0.0 {
-            crate::i18n::format("delta-in-deficit", &[("delta", delta.to_string())])
+            PaceTrend::OnPace
+        } else if self.delta_percent > 0.0 {
+            PaceTrend::Deficit
         } else {
-            crate::i18n::format("delta-in-reserve", &[("delta", delta.to_string())])
+            PaceTrend::Reserve
+        }
+    }
+
+    /// Rounded absolute deviation from an even burn, e.g. `"21%"`.
+    pub fn delta_label(self) -> String {
+        format!("{}%", self.delta_percent.abs().round() as u32)
+    }
+
+    /// Full CodexBar-style description, used for tooltips.
+    pub fn summary(self) -> String {
+        let delta = (self.delta_percent.abs().round() as u32).to_string();
+        match self.trend() {
+            PaceTrend::OnPace => crate::i18n::tr("on-pace").into(),
+            PaceTrend::Deficit => crate::i18n::format("delta-in-deficit", &[("delta", delta)]),
+            PaceTrend::Reserve => crate::i18n::format("delta-in-reserve", &[("delta", delta)]),
         }
     }
 }

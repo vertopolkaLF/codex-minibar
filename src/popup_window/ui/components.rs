@@ -494,6 +494,11 @@ impl<'a> TextMetrics<'a> {
         ICON_STATUS_GLYPH + ICON_STATUS_GAP + self.body(value)
     }
 
+    /// [`pace_status`].
+    pub(crate) fn pace_status(&self, pace: crate::limits::PaceTip) -> f32 {
+        self.caption(&pace_status_label(pace)) + PACE_GAP + PACE_GLYPH
+    }
+
     /// Two groups separated by [`SPLIT_GAP`].
     pub(crate) fn fits_split(available: f32, leading: f32, trailing: f32) -> bool {
         leading + SPLIT_GAP + trailing <= available
@@ -504,12 +509,43 @@ pub(crate) fn card_metadata(value: impl Into<SharedString>, palette: &Palette) -
     nowrap(caption(value, palette.text_tertiary))
 }
 
+const PACE_GLYPH: f32 = 12.0;
+const PACE_GAP: f32 = 2.0;
+
+/// "21% ↑" — deviation from an even burn with a colored direction arrow;
+/// "On pace ✓" when usage tracks an even burn.
+pub(crate) fn pace_status(pace: crate::limits::PaceTip, palette: &Palette) -> Div {
+    use crate::limits::PaceTrend;
+    let (glyph, color) = match pace.trend() {
+        PaceTrend::OnPace => ("fluent-checkmark", palette.text_tertiary),
+        PaceTrend::Deficit => ("fluent-arrow-up", palette.critical),
+        PaceTrend::Reserve => ("fluent-arrow-down", palette.positive),
+    };
+    div()
+        .flex()
+        .flex_row()
+        .flex_none()
+        .items_center()
+        .gap(px(PACE_GAP))
+        .whitespace_nowrap()
+        .child(caption(pace_status_label(pace), palette.text_tertiary))
+        .child(icon(glyph, PACE_GLYPH, color))
+}
+
+fn pace_status_label(pace: crate::limits::PaceTip) -> String {
+    match pace.trend() {
+        crate::limits::PaceTrend::OnPace => crate::i18n::tr("on-pace").into(),
+        _ => pace.delta_label(),
+    }
+}
+
 /// "Resets in 4h 13m" — tertiary label, primary value.
 const STATUS_GAP: f32 = 6.0;
 
 /// "⟳ 4h 13m" — tertiary glyph in place of a text label, primary value.
 const ICON_STATUS_GLYPH: f32 = 14.0;
 const ICON_STATUS_GAP: f32 = 4.0;
+const CAPTION_ICON_STATUS_GLYPH: f32 = 12.0;
 
 /// Glyph for a quota's countdown to its next refill.
 pub(crate) const RESET_ICON: &str = "fluent-arrow-clockwise-dashes";
@@ -528,6 +564,27 @@ pub(crate) fn icon_status(
         .whitespace_nowrap()
         .child(icon(icon_name, ICON_STATUS_GLYPH, palette.text_tertiary))
         .child(body(value, palette.text_primary))
+}
+
+/// [`icon_status`] at caption size, for single-row compact cards.
+pub(crate) fn caption_icon_status(
+    icon_name: &str,
+    value: impl Into<SharedString>,
+    palette: &Palette,
+) -> Div {
+    div()
+        .flex()
+        .flex_row()
+        .flex_none()
+        .items_center()
+        .gap(px(ICON_STATUS_GAP))
+        .whitespace_nowrap()
+        .child(icon(
+            icon_name,
+            CAPTION_ICON_STATUS_GLYPH,
+            palette.text_tertiary,
+        ))
+        .child(caption(value, palette.text_primary))
 }
 
 pub(crate) fn status_row(

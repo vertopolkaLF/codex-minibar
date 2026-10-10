@@ -167,6 +167,8 @@ pub(crate) struct Palette {
     pub(crate) attention_background: Hsla,
     pub(crate) caution: Hsla,
     pub(crate) caution_background: Hsla,
+    /// Favorable status ink, e.g. a usage pace in reserve.
+    pub(crate) positive: Hsla,
     pub(crate) chrome_icon: Hsla,
     pub(crate) chrome_icon_hover: Hsla,
     pub(crate) pace_marker: Hsla,
@@ -426,6 +428,12 @@ impl Palette {
             } else {
                 rgba8(0xFF, 0xF4, 0xCE, 0xFF)
             },
+            // SystemFillColorSuccess.
+            positive: if dark {
+                rgba8(0x6C, 0xCB, 0x5F, 0xFF)
+            } else {
+                rgba8(0x0F, 0x7B, 0x0F, 0xFF)
+            },
             chrome_icon: if dark {
                 rgb8((190, 190, 190))
             } else {
@@ -508,6 +516,8 @@ impl Palette {
             // --vbg-amber-900 / amber-100.
             caution: pick((0xAA, 0x4D, 0x00), (0xFF, 0x93, 0x00)),
             caution_background: pick((0xFF, 0xF6, 0xDE), (0x2A, 0x17, 0x00)),
+            // --vbg-green-900.
+            positive: pick((0x10, 0x7D, 0x32), (0x62, 0xC0, 0x73)),
             chrome_icon: gray_900,
             chrome_icon_hover: gray_1000,
             pace_marker: gray_1000,
@@ -617,6 +627,13 @@ impl Palette {
         let caution = color(&["editorWarning.foreground", "list.warningForeground"])
             .map(|ink| flatten(ink, card_background))
             .unwrap_or_else(|| pick((0xBF, 0x88, 0x03), (0xCC, 0xA7, 0x00)));
+        let positive = color(&[
+            "testing.iconPassed",
+            "gitDecoration.addedResourceForeground",
+            "editorGutter.addedBackground",
+        ])
+        .map(|ink| flatten(ink, card_background))
+        .unwrap_or_else(|| pick((0x38, 0x8A, 0x34), (0x89, 0xD1, 0x85)));
         // Secondary text has to sit visibly below the titles.
         let primary_contrast = contrast(foreground, card_background);
         let text_secondary = color(&["descriptionForeground", "foreground"])
@@ -684,6 +701,7 @@ impl Palette {
             caution_background: color(&["inputValidation.warningBackground"])
                 .map(|fill| flatten(fill, card_background))
                 .unwrap_or_else(|| card_background.mix(caution, 0.16)),
+            positive,
             chrome_icon: color(&["activityBar.inactiveForeground"])
                 .map(|ink| flatten(ink, canvas))
                 .filter(|ink| contrast(*ink, canvas) >= 2.0)

@@ -145,7 +145,7 @@ available-balance = 可用余额
 
 resets-in = 距重置还有
 
-session-not-started = 会话尚未开始
+session-not-started = 尚未开始
 
 expires-in = 距到期还有
 

@@ -224,7 +224,7 @@ available-balance = Solde disponible
 resets-in = Réinitialisation dans
 
 # src/popup_window/ui/cards.rs
-session-not-started = Session non démarrée
+session-not-started = Non démarrée
 
 # src/popup_window/ui/cards.rs
 expires-in = Expiration dans
