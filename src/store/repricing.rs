@@ -313,11 +313,12 @@ impl ProviderStore {
                     }
                 }
                 for row in rows {
-                    // The stored input is `input + cache creation`.
-                    let Some(&(input, creation, cache_read)) = lines
-                        .get(&row.key)
-                        .and_then(|c| c.iter().find(|t| t.0 + t.1 == row.input))
-                    else {
+                    // The stored input is `input + cache creation + cache read`
+                    // (older rows omit the cache read).
+                    let Some(&(input, creation, cache_read)) = lines.get(&row.key).and_then(|c| {
+                        c.iter()
+                            .find(|t| t.0 + t.1 + t.2 == row.input || t.0 + t.1 == row.input)
+                    }) else {
                         continue;
                     };
                     let Some((cost, savings)) = pricer(

@@ -348,17 +348,8 @@ fn assemble_overview_snapshot(
                     usage.add(hour_usage);
                 }
             }
-            // Cursor (and anyone else without timestamps) still has daily rows.
-            if usage.requests == 0
-                && provider.kind() != ProviderKind::OpenRouter
-                && let Some(days) = provider_daily.get(provider)
-            {
-                for entry in days {
-                    if entry.date >= start_date && entry.date <= end_date {
-                        usage.add(&entry.usage);
-                    }
-                }
-            }
+            // No daily fallback: calendar days would pull in activity older
+            // than 24 hours. Providers without hourly rows show zero here.
         } else if let Some(days) = provider_daily.get(provider) {
             for entry in days {
                 if entry.date >= start_date && entry.date <= end_date {

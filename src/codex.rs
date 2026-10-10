@@ -975,30 +975,28 @@ fn command_for_codex(
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or_default();
-    let mut command =
-        if cfg!(windows) && matches!(extension.to_ascii_lowercase().as_str(), "cmd" | "bat") {
-            let mut command = Command::new("cmd.exe");
-            command.args(["/D", "/C"]).arg(executable).args(args);
-            command
-        } else if cfg!(windows) && extension.eq_ignore_ascii_case("ps1") {
-            let mut command = Command::new("powershell.exe");
-            command
-                .args([
-                    "-NoLogo",
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                ])
-                .arg(executable)
-                .args(args);
-            command
-        } else {
-            let mut command = Command::new(executable);
-            command.args(args);
-            command
-        };
+    // `.cmd`/`.bat` shims are spawned directly: std routes them through
+    // cmd.exe with its own escaping and refuses arguments it cannot quote
+    // safely, so `&`, `|`, `^`, `%` and quotes never become shell syntax.
+    let mut command = if cfg!(windows) && extension.eq_ignore_ascii_case("ps1") {
+        let mut command = Command::new("powershell.exe");
+        command
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+            ])
+            .arg(executable)
+            .args(args);
+        command
+    } else {
+        let mut command = Command::new(executable);
+        command.args(args);
+        command
+    };
     if let Some(home) = home {
         command.env("CODEX_HOME", home);
         command.env_remove("OPENAI_API_KEY");
@@ -1034,6 +1032,13 @@ pub fn is_installed(explicit: Option<&Path>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cmd_shims_are_spawned_directly_without_a_shell_string() {
+        let shim = Path::new(r"C:\Tools &b\codex.cmd");
+        let command = command_for_codex(shim, ["--x&calc"], None);
+        assert_eq!(command.get_program(), shim.as_os_str());
+    }
 
     #[test]
     fn parses_present_and_missing_windows() {

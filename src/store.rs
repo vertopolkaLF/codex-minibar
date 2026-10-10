@@ -29,7 +29,7 @@ pub(crate) mod repricing;
 
 const SCHEMA_VERSION: i64 = 1;
 const CODEX_CACHE_VERSION: u8 = crate::usage::CODEX_CACHE_VERSION;
-const CLAUDE_CACHE_VERSION: u8 = 4;
+const CLAUDE_CACHE_VERSION: u8 = crate::usage::CLAUDE_CACHE_VERSION;
 const CURSOR_USAGE_VERSION: u8 = 8;
 const CACHE_RETENTION_DAYS: i64 = 365;
 
@@ -606,42 +606,69 @@ impl ProviderStore {
         start: DateTime<Local>,
         end: DateTime<Local>,
     ) -> Result<BTreeMap<DateTime<Local>, TokenUsage>> {
+        // `end` names the last hour; its events run until the next hour starts.
+        let end_exclusive = end + Duration::hours(1);
         let mut statement = self.conn.prepare(
             "SELECT ts, input_tokens, cached_input_tokens, output_tokens,
-                    requests, estimated_cost_microusd, priced_requests, cache_savings_microusd
+                    requests, estimated_cost_microusd, priced_requests, cache_savings_microusd,
+                    message_id, request_id, is_sidechain, has_speed
              FROM usage_events
-             WHERE provider = ?1 AND ts >= ?2 AND ts <= ?3",
+             WHERE provider = ?1 AND ts >= ?2 AND ts < ?3
+             ORDER BY path ASC, event_ord ASC",
         )?;
         let rows = statement.query_map(
             params![
                 provider.id(),
                 start.with_timezone(&Utc).to_rfc3339(),
-                end.with_timezone(&Utc).to_rfc3339()
+                end_exclusive.with_timezone(&Utc).to_rfc3339()
             ],
             |row| {
                 let ts_str = row.get::<_, String>(0)?;
                 let usage = token_usage_from_row(row, 1)?;
-                Ok((ts_str, usage))
+                Ok((
+                    ts_str,
+                    usage,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, i64>(10)? != 0,
+                    row.get::<_, i64>(11)? != 0,
+                ))
             },
         )?;
-        let mut hourly = BTreeMap::<DateTime<Local>, TokenUsage>::new();
+        // Resumed sessions copy earlier assistant lines into new JSONL files;
+        // dedupe by message/request id like the daily rollup does.
+        let mut window = CachedClaudeSessionFile::default();
         for row in rows {
-            let (ts_str, usage) = row?;
+            let (ts_str, usage, message_id, request_id, is_sidechain, has_speed) = row?;
             if let Some(timestamp) = parse_datetime_option(&ts_str) {
-                let local = timestamp.with_timezone(&Local);
-                if local < start || local > end {
-                    continue;
-                }
-                hourly
-                    .entry(truncate_local_hour(local))
-                    .or_default()
-                    .add(&usage);
+                window.entries.push(CachedClaudeUsageEntry {
+                    timestamp,
+                    message_id,
+                    request_id,
+                    is_sidechain,
+                    has_speed,
+                    usage,
+                    model: None,
+                });
             } else {
                 eprintln!(
                     "Skipping usage_events row with malformed timestamp: {}",
                     ts_str
                 );
             }
+        }
+        let mut cache = ClaudeUsageCache::default();
+        cache.files.insert(String::new(), window);
+        let mut hourly = BTreeMap::<DateTime<Local>, TokenUsage>::new();
+        for entry in crate::usage::deduplicate_claude_entries(&cache) {
+            let local = entry.timestamp.with_timezone(&Local);
+            if local < start || local >= end_exclusive {
+                continue;
+            }
+            hourly
+                .entry(truncate_local_hour(local))
+                .or_default()
+                .add(&entry.usage);
         }
         Ok(hourly)
     }
@@ -703,10 +730,34 @@ impl ProviderStore {
         Ok(())
     }
 
+    /// Like `replace_usage_daily`, but only rows dated `since` or later are
+    /// pruned. For sources that report a limited window, so older accumulated
+    /// history survives a refresh.
+    pub fn replace_usage_daily_since(
+        &self,
+        provider: ProviderId,
+        days: &[DailyTokenUsage],
+        since: NaiveDate,
+    ) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        self.replace_usage_daily_bounded(provider, days, Some(since))?;
+        tx.commit()?;
+        Ok(())
+    }
+
     fn replace_usage_daily_in_transaction(
         &self,
         provider: ProviderId,
         days: &[DailyTokenUsage],
+    ) -> Result<()> {
+        self.replace_usage_daily_bounded(provider, days, None)
+    }
+
+    fn replace_usage_daily_bounded(
+        &self,
+        provider: ProviderId,
+        days: &[DailyTokenUsage],
+        since: Option<NaiveDate>,
     ) -> Result<()> {
         let mut retained = BTreeSet::new();
         {
@@ -760,8 +811,12 @@ impl ProviderStore {
         }
         self.conn.execute(
             "DELETE FROM usage_daily
-             WHERE provider = ?1 AND date NOT IN (SELECT date FROM temp.retained_daily)",
-            params![provider.id()],
+             WHERE provider = ?1 AND date >= ?2
+               AND date NOT IN (SELECT date FROM temp.retained_daily)",
+            params![
+                provider.id(),
+                since.map(|date| date.to_string()).unwrap_or_default()
+            ],
         )?;
         self.conn.execute("DELETE FROM temp.retained_daily", [])?;
         Ok(())
@@ -2547,6 +2602,89 @@ mod tests {
                 .history
                 .requests,
             1
+        );
+    }
+
+    #[test]
+    fn claude_hourly_dedupes_copied_messages_and_includes_the_end_hour() {
+        let dir = tempdir().unwrap();
+        let store = test_store(&dir.path().join("test.sqlite"));
+        let hour = truncate_local_hour(Local::now());
+        let at = hour + Duration::minutes(30);
+        let entry = |message: &str| CachedClaudeUsageEntry {
+            timestamp: at.with_timezone(&Utc),
+            message_id: Some(message.into()),
+            request_id: Some("r1".into()),
+            is_sidechain: false,
+            has_speed: false,
+            usage: TokenUsage {
+                input_tokens: 10,
+                requests: 1,
+                ..Default::default()
+            },
+            model: Some("claude-sonnet-4-20250514".into()),
+        };
+        let file = |entries| CachedClaudeSessionFile {
+            offset: 10,
+            entries,
+            persisted: None,
+        };
+        let cache = ClaudeUsageCache {
+            version: CLAUDE_CACHE_VERSION,
+            files: BTreeMap::from([
+                ("/p/a.jsonl".into(), file(vec![entry("m1")])),
+                // A resumed session copies the earlier assistant line.
+                ("/p/b.jsonl".into(), file(vec![entry("m1"), entry("m2")])),
+            ]),
+        };
+        let claude = id(ProviderKind::Claude);
+        store.save_claude_cache(claude, &cache).unwrap();
+        let hourly = store
+            .load_usage_hourly(claude, hour - Duration::hours(23), hour)
+            .unwrap();
+        assert_eq!(hourly[&hour].requests, 2);
+        assert_eq!(hourly[&hour].input_tokens, 20);
+    }
+
+    #[test]
+    fn daily_replace_since_keeps_older_history() {
+        let dir = tempdir().unwrap();
+        let store = test_store(&dir.path().join("test.sqlite"));
+        let cursor = id(ProviderKind::Cursor);
+        let day = |date: &str, requests| DailyTokenUsage {
+            date: date.parse().unwrap(),
+            usage: TokenUsage {
+                requests,
+                ..Default::default()
+            },
+        };
+        store
+            .replace_usage_daily(
+                cursor,
+                &[
+                    day("2026-01-01", 1),
+                    day("2026-03-01", 2),
+                    day("2026-03-02", 3),
+                ],
+            )
+            .unwrap();
+        store
+            .replace_usage_daily_since(
+                cursor,
+                &[day("2026-03-02", 4)],
+                "2026-03-01".parse().unwrap(),
+            )
+            .unwrap();
+        let dates: Vec<_> = store
+            .load_usage_daily(cursor, 20_000)
+            .unwrap()
+            .daily
+            .into_iter()
+            .map(|entry| (entry.date.to_string(), entry.usage.requests))
+            .collect();
+        assert_eq!(
+            dates,
+            vec![("2026-01-01".to_owned(), 1), ("2026-03-02".to_owned(), 4)]
         );
     }
 

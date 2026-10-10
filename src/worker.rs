@@ -243,6 +243,9 @@ pub struct WorkerHandle {
     pub commands: Sender<WorkerCommand>,
     events: Option<Receiver<WorkerEvent>>,
     join: Option<JoinHandle<()>>,
+    /// Set once the worker is being shut down so event forwarders can drop
+    /// whatever a still-running scan or request emits afterwards.
+    retired: Arc<AtomicBool>,
 }
 
 impl WorkerHandle {
@@ -250,11 +253,27 @@ impl WorkerHandle {
         let _ = self.commands.send(WorkerCommand::Refresh);
     }
 
+    /// Flag that turns true as soon as this worker is told to shut down.
+    pub fn retired_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.retired)
+    }
+
+    /// Signals shutdown and returns immediately. Scans and HTTP requests can
+    /// run for a long time, so the join happens on a background thread instead
+    /// of blocking the bridge/UI thread that disables or restarts a provider.
+    /// Output from the retiring worker is discarded through `retired_flag`.
     pub fn shutdown(mut self) {
-        self.stop();
+        self.retired.store(true, Ordering::Release);
+        let _ = self.commands.send(WorkerCommand::Shutdown);
+        if let Some(join) = self.join.take() {
+            thread::spawn(move || {
+                let _ = join.join();
+            });
+        }
     }
 
     fn stop(&mut self) {
+        self.retired.store(true, Ordering::Release);
         let _ = self.commands.send(WorkerCommand::Shutdown);
         if let Some(join) = self.join.take() {
             let _ = join.join();
@@ -475,6 +494,7 @@ fn start_worker_with_channels(
         commands: command_sender,
         events: None,
         join: Some(join),
+        retired: Arc::new(AtomicBool::new(false)),
     }
 }
 
@@ -720,6 +740,7 @@ fn run_usage_task_with_rate_limit(
     // limit task. Otherwise every settings update wakes this task and turns a
     // ten-minute maintenance scan into a tight loop.
     let mut manual_refresh_requested = false;
+    let mut last_refresh = None::<Instant>;
     let mut usage_identity = provider.account_identity();
     loop {
         // `None` is an unreadable identity sample, not a logout. Ignore it so a
@@ -820,6 +841,7 @@ fn run_usage_task_with_rate_limit(
             }
             if !(manual_refresh && pause_before_request.is_some() && !rate_limited) {
                 next_refresh = completed_at + usage_refresh_interval;
+                last_refresh = Some(completed_at);
             }
             continue;
         }
@@ -844,9 +866,18 @@ fn run_usage_task_with_rate_limit(
                 }
             }
             Ok(WorkerCommand::SetUsageRefreshInterval(interval)) => {
-                usage_refresh_interval = interval.max(Duration::from_secs(60));
-                if paused_after_clear.is_none() {
-                    next_refresh = Instant::now() + usage_refresh_interval;
+                // Every settings commit resends the interval. Only a real
+                // change may move the deadline, and it is anchored to the last
+                // scan so repeated edits can never postpone stats forever.
+                let interval = interval.max(Duration::from_secs(60));
+                if interval == usage_refresh_interval {
+                    continue;
+                }
+                usage_refresh_interval = interval;
+                if paused_after_clear.is_none()
+                    && let Some(last_refresh) = last_refresh
+                {
+                    next_refresh = last_refresh + usage_refresh_interval;
                 }
             }
             Ok(WorkerCommand::SetUsageCollectionEnabled(false)) => {
@@ -1111,6 +1142,54 @@ mod tests {
         );
         commands_tx.send(WorkerCommand::Shutdown).unwrap();
         task.join().unwrap();
+    }
+
+    #[test]
+    fn shutdown_returns_while_a_scan_is_still_running() {
+        struct BlockedScan(Arc<AtomicBool>);
+        impl UsageProvider for BlockedScan {
+            fn load_cached_usage_statistics(&mut self, _: u16) -> Result<UsageStatistics> {
+                Ok(UsageStatistics::default())
+            }
+            fn refresh_usage_statistics(&mut self, _: u16) -> Result<UsageStatistics> {
+                while !self.0.load(Ordering::Acquire) {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Ok(UsageStatistics::default())
+            }
+            fn refresh_without_limits(&self) -> bool {
+                true
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let release = Arc::new(AtomicBool::new(false));
+        let (events_tx, events_rx) = mpsc::channel();
+        let worker = start_worker_with_event_sender(
+            ScriptedProvider::new(vec![limits_at(15, 0)]),
+            BlockedScan(Arc::clone(&release)),
+            CountingActivator(0),
+            directory.path().join("activation.toml"),
+            false,
+            Vec::new(),
+            Vec::new(),
+            30,
+            Duration::from_secs(300),
+            true,
+            Duration::from_secs(300),
+            events_tx,
+        );
+        let retired = worker.retired_flag();
+        loop {
+            match events_rx.recv_timeout(Duration::from_secs(5)).unwrap() {
+                WorkerEvent::RequestStarted(RequestKind::Usage) => break,
+                _ => continue,
+            }
+        }
+        let started = Instant::now();
+        worker.shutdown();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(retired.load(Ordering::Acquire));
+        release.store(true, Ordering::Release);
     }
 
     impl ScriptedProvider {

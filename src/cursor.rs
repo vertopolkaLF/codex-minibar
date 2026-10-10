@@ -247,12 +247,14 @@ impl CursorClient {
         }
 
         match self.download_usage_statistics(history_days) {
-            Ok(statistics) => {
+            Ok((statistics, fetched_since)) => {
                 store::with_store(|store| {
-                    store.replace_usage_daily(CURSOR, &statistics.daily)?;
-                    store.set_usage_fetched_at(CURSOR, Utc::now())
-                })?;
-                Ok(statistics)
+                    // Only the fetched window is authoritative; older stored
+                    // days are accumulated history and must survive.
+                    store.replace_usage_daily_since(CURSOR, &statistics.daily, fetched_since)?;
+                    store.set_usage_fetched_at(CURSOR, Utc::now())?;
+                    store.load_usage_daily(CURSOR, history_days)
+                })
             }
             // An export can be delayed or intermittently rejected by Cursor.
             // Keep showing the last verified activity rather than making a
@@ -277,12 +279,19 @@ impl CursorClient {
         }
     }
 
-    fn download_usage_statistics(&self, history_days: u16) -> Result<UsageStatistics> {
+    /// Returns the statistics and the first local date the export covered.
+    fn download_usage_statistics(&self, history_days: u16) -> Result<(UsageStatistics, NaiveDate)> {
         let auth = CursorAuth::load()?;
         let token = self.access_token(&auth)?;
         let user_id = cursor_user_id(&token).context("Cursor token has no user identity")?;
         let now = Utc::now();
-        let start = now - ChronoDuration::days(29);
+        // Start at a local midnight so the oldest fetched day is complete and
+        // can safely overwrite the stored total for that date.
+        let first_day = Local::now().date_naive() - ChronoDuration::days(29);
+        let start = first_day
+            .and_hms_opt(0, 0, 0)
+            .and_then(|midnight| midnight.and_local_timezone(Local).earliest())
+            .map_or(now - ChronoDuration::days(29), |at| at.with_timezone(&Utc));
         let csv = self
             .agent
             .get(&format!("{CURSOR_BASE}{USAGE_EXPORT_PATH}"))
@@ -298,7 +307,8 @@ impl CursorClient {
             .context("request Cursor usage export")?
             .into_string()
             .context("read Cursor usage export")?;
-        usage_statistics_from_csv(&csv, history_days)
+        let statistics = usage_statistics_from_csv(&csv, history_days)?;
+        Ok((statistics, start.with_timezone(&Local).date_naive()))
     }
 }
 

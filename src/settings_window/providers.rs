@@ -596,6 +596,7 @@ impl PathField {
     }
 
     fn write(self, instance: &mut ProviderInstance, folder: Option<PathBuf>) {
+        let before = self.read(instance);
         match self {
             Self::Binary => instance.binary_path = folder,
             Self::KiroCrew => instance.kiro_crew_path = folder,
@@ -603,6 +604,12 @@ impl PathField {
             Self::ConfigFolder => {
                 instance.source = InstanceSource::ConfigFolder { path: folder };
             }
+        }
+        if self.read(instance) != before {
+            // Another folder or binary can mean another account. The new
+            // revision makes the popup reject output the replaced worker
+            // already queued.
+            instance.credentials_revision = instance.credentials_revision.wrapping_add(1);
         }
     }
 }

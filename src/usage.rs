@@ -20,7 +20,9 @@ use crate::{instances::ProviderId, pricing, settings::ProviderKind, store};
 // re-emits are ignored. Older daily totals must be rebuilt from the logs.
 pub(crate) const CODEX_CACHE_VERSION: u8 = 9;
 // Version 4 only accepts Claude `assistant` usage lines, matching T3 and the
-// current model pricing table.
+// current model pricing table. Cache reads are folded into input tokens for
+// newly scanned lines only; bumping the version would rebuild from logs Claude
+// Code may already have deleted.
 pub(crate) const CLAUDE_CACHE_VERSION: u8 = 4;
 const CACHE_RETENTION_DAYS: i64 = 365;
 
@@ -320,6 +322,9 @@ fn refresh_instance_usage_statistics(
     let known_paths: BTreeSet<String> = files.iter().map(|(_, key)| key.clone()).collect();
     cache.files.retain(|path, _| known_paths.contains(path));
     let oldest = Local::now().date_naive() - Duration::days(CACHE_RETENTION_DAYS - 1);
+    let hourly_from = truncate_local_hour(Local::now() - Duration::hours(47));
+    let recent_since = std::time::SystemTime::now() - std::time::Duration::from_secs(49 * 3600);
+    let mut hourly = BTreeMap::<DateTime<Local>, TokenUsage>::new();
     for (path, key) in files {
         let cached = cache.files.entry(key.clone()).or_default();
         if cached.model_daily.is_empty() && !cached.daily.is_empty() {
@@ -327,8 +332,32 @@ fn refresh_instance_usage_statistics(
         }
         scan_file_delta(&path, &key, cached)?;
         cached.prune_before(oldest);
+        // The daily cache is incremental, so recent hours are rebuilt from a
+        // throwaway scan of logs touched in the window (Past 24h view).
+        if fs::metadata(&path)
+            .and_then(|meta| meta.modified())
+            .is_ok_and(|modified| modified >= recent_since)
+        {
+            let delta = scan_file_delta(&path, &key, &mut CachedSessionFile::default())?;
+            for event in delta.events {
+                let at = event.timestamp.with_timezone(&Local);
+                if at >= hourly_from {
+                    hourly
+                        .entry(truncate_local_hour(at))
+                        .or_default()
+                        .add(&event.usage);
+                }
+            }
+        }
     }
-    store::with_store(|store| store.save_codex_cache(provider, &cache))?;
+    store::with_store(|store| {
+        store.save_codex_cache(provider, &cache)?;
+        if !hourly.is_empty() {
+            let rows = hourly.into_iter().collect::<Vec<_>>();
+            store.replace_usage_hourly(provider, &rows)?;
+        }
+        Ok(())
+    })?;
     load_cached_usage_statistics(provider, history_days)
 }
 
@@ -713,6 +742,12 @@ pub fn refresh_claude_usage_statistics(
     config_folder: Option<&Path>,
     history_days: u16,
 ) -> Result<UsageStatistics> {
+    // A retiring worker's scan can still be running when its replacement
+    // starts; serialize them so the incremental offsets are not applied twice.
+    static SCAN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _scan = SCAN
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Claude scan lock poisoned"))?;
     let roots = claude_projects_roots(config_folder);
     let files = collect_claude_session_files(&roots);
     // Idle refreshes usually find every log exactly where the last scan left
@@ -1026,8 +1061,13 @@ fn claude_usage_from_line(line: &[u8]) -> Option<CachedClaudeUsageEntry> {
     let cache_savings_microusd =
         pricing::cache_savings_microusd(ProviderKind::Claude, Some(model), cache_read);
     let usage = TokenUsage {
-        input_tokens: input_tokens.saturating_add(cache_creation_tokens),
-        cached_input_tokens: cache_read.min(input_tokens),
+        // Claude's `input_tokens` excludes cache traffic, whereas
+        // `cached_input_tokens` is a subset of `input_tokens` everywhere else
+        // (Codex, charts, totals). Fold cache reads/writes into the input.
+        input_tokens: input_tokens
+            .saturating_add(cache_creation_tokens)
+            .saturating_add(cache_read),
+        cached_input_tokens: cache_read,
         output_tokens,
         requests: 1,
         estimated_cost_microusd: estimated_cost_microusd.unwrap_or_default(),
@@ -1126,10 +1166,19 @@ mod tests {
     fn reads_claude_usage_and_uses_its_recorded_cost() {
         let line = r#"{"type":"assistant","timestamp":"2026-07-14T10:00:00Z","requestId":"request-1","message":{"id":"message-1","model":"claude-sonnet-4-20250514","usage":{"input_tokens":100,"cache_read_input_tokens":40,"output_tokens":25,"speed":"standard"}},"costUSD":0.0125}"#;
         let entry = claude_usage_from_line(line.as_bytes()).unwrap();
-        assert_eq!(entry.usage.total_tokens(), 125);
+        assert_eq!(entry.usage.input_tokens, 140);
+        assert_eq!(entry.usage.total_tokens(), 165);
         assert_eq!(entry.usage.cached_input_tokens, 40);
         assert_eq!(entry.usage.estimated_api_value_usd(), Some(0.0125));
         assert!(entry.has_speed);
+    }
+
+    #[test]
+    fn claude_cache_reads_are_a_subset_of_input_even_when_larger_than_raw_input() {
+        let line = r#"{"type":"assistant","timestamp":"2026-07-14T10:00:00Z","message":{"id":"m","model":"claude-sonnet-4-20250514","usage":{"input_tokens":3,"cache_read_input_tokens":40000,"cache_creation_input_tokens":10,"output_tokens":5}}}"#;
+        let usage = claude_usage_from_line(line.as_bytes()).unwrap().usage;
+        assert_eq!(usage.cached_input_tokens, 40_000);
+        assert_eq!(usage.input_tokens, 40_013);
     }
 
     #[test]

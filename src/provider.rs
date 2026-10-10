@@ -117,8 +117,17 @@ pub(crate) fn start_provider_worker_with_limits(
     let source_events = worker
         .take_events()
         .ok_or_else(|| anyhow!("provider worker did not expose an event stream"))?;
+    let retired = worker.retired_flag();
     thread::spawn(move || {
         while let Ok(event) = source_events.recv() {
+            // A shut-down worker may still finish a long scan or request.
+            // Its output belongs to a replaced or disabled instance; only the
+            // clear-barrier ack must survive so a pending clear can finish.
+            if retired.load(std::sync::atomic::Ordering::Acquire)
+                && !matches!(event, WorkerEvent::UsageDataCleared(_))
+            {
+                continue;
+            }
             let mapped =
                 match event {
                     WorkerEvent::RequestStarted(kind) => Some(WorkerEvent::ProviderRequestStarted(

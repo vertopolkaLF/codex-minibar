@@ -1156,11 +1156,8 @@ impl PopupRoot {
 
         // Count label plus the 8 DIP gap and 16 DIP chevron.
         let title_width = metrics.strong(&count_label) + if expandable { 24.0 } else { 0.0 };
-        let header_fits = TextMetrics::fits_split(
-            available_width,
-            title_width,
-            expiration_status_width,
-        );
+        let header_fits =
+            TextMetrics::fits_split(available_width, title_width, expiration_status_width);
         let mut title =
             div()
                 .flex()
@@ -1248,8 +1245,6 @@ impl PopupRoot {
                 metrics.strong(label) + 24.0,
             );
             components::adaptive_split(fits, leading, button)
-        } else if expiration.is_none() {
-            components::adaptive_split(header_fits, title, expiration_status)
         } else {
             components::adaptive_split(header_fits, title, expiration_status)
         };

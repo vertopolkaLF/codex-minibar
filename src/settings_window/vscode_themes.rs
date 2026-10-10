@@ -29,6 +29,8 @@ const ICON_WORKERS: usize = 4;
 const ICON_SIZE: f32 = 40.0;
 /// Logo pixels kept: `ICON_SIZE` at 200% scale.
 const ICON_PIXELS: u32 = 80;
+/// Largest raster logo edge we are willing to decode before downscaling.
+const MAX_ICON_SOURCE_PIXELS: u32 = 2048;
 /// Preview tiles per row, matching the popup theme grid.
 const PREVIEW_COLUMNS: u16 = 3;
 const DIALOG_WIDTH: f32 = 640.0;
@@ -1034,6 +1036,20 @@ pub(super) fn end_theme_preview(cx: &mut gpui::App) {
     }
 }
 
+/// Decodes a raster logo while refusing absurd dimensions or allocations, so
+/// a small compressed file cannot expand into hundreds of megabytes.
+fn decode_bounded_raster(bytes: &[u8]) -> Option<image::DynamicImage> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_ICON_SOURCE_PIXELS);
+    limits.max_image_height = Some(MAX_ICON_SOURCE_PIXELS);
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    reader.limits(limits);
+    reader.decode().ok()
+}
+
 /// Marketplace icons should be PNG, but older packages ship JPEG or SVG;
 /// sniff the bytes rather than trust the file name.
 /// A logo as BGRA pixels at most `ICON_PIXELS` on a side. Only the first
@@ -1043,7 +1059,7 @@ fn decode_icon(bytes: &[u8]) -> Option<gpui::RenderImage> {
     let image = if head.contains("<svg") {
         rasterize_svg(bytes)?
     } else {
-        image::load_from_memory(bytes).ok()?
+        decode_bounded_raster(bytes)?
     };
     let image = if image.width() > ICON_PIXELS || image.height() > ICON_PIXELS {
         image.resize(

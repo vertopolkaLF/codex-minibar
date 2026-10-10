@@ -1327,6 +1327,10 @@ struct OAuthLimitScopeModel {
     display_name: Option<String>,
 }
 
+fn is_final_client_error(status: u16) -> bool {
+    (400..500).contains(&status) && status != 408
+}
+
 /// Kept separate so request headers, payload and outcome handling can be
 /// checked against an isolated local HTTP peer without spending credits.
 fn claim_reset(
@@ -1350,6 +1354,12 @@ fn claim_reset(
         }
         Err(ureq::Error::Status(429, _)) => {
             return Err(crate::banked_reset::settled("reset-rate-limited"));
+        }
+        // Definitive client rejections: the grant is dead, so retrying the same
+        // key forever would trap the button. 408 and 5xx stay pending because
+        // the server may still have applied the reset (idempotent retry).
+        Err(ureq::Error::Status(status, _)) if is_final_client_error(status) => {
+            return Err(crate::banked_reset::settled("reset-invalid-grant"));
         }
         result => result.context(crate::i18n::tr("reset-unconfirmed"))?,
     };
@@ -2185,6 +2195,16 @@ mod tests {
             body,
             serde_json::json!({"program":"cedar_ember","grant_id":"test-grant","request_id":"stable-request"})
         );
+    }
+
+    #[test]
+    fn reset_client_errors_are_final_but_timeouts_and_server_errors_stay_pending() {
+        for status in [400, 404, 409, 410, 422] {
+            assert!(is_final_client_error(status), "{status}");
+        }
+        for status in [200, 408, 500, 502, 503] {
+            assert!(!is_final_client_error(status), "{status}");
+        }
     }
 
     #[test]

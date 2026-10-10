@@ -550,6 +550,10 @@ fn take_low_usage_notification(
         return false;
     };
     if remaining > threshold {
+        // Usage only climbs back above the threshold when the window was reset
+        // (for example by a banked reset), so the next low period is a new
+        // window even though the old deadline has not passed yet.
+        *already_notified_for = None;
         return false;
     }
 
@@ -714,13 +718,6 @@ mod tests {
             first_reset - chrono::Duration::minutes(30),
         ));
         assert!(!take_low_usage_notification(
-            Some(75),
-            Some(first_reset),
-            20,
-            &mut notified_for,
-            first_reset - chrono::Duration::minutes(30),
-        ));
-        assert!(!take_low_usage_notification(
             Some(20),
             Some(first_reset),
             20,
@@ -742,6 +739,37 @@ mod tests {
             20,
             &mut notified_for,
             first_reset + chrono::Duration::minutes(1),
+        ));
+    }
+
+    #[test]
+    fn low_usage_notification_rearms_after_window_is_reset_early() {
+        let old_reset = Utc.with_ymd_and_hms(2026, 7, 14, 12, 0, 0).unwrap();
+        let new_reset = Utc.with_ymd_and_hms(2026, 7, 14, 16, 0, 0).unwrap();
+        let now = old_reset - chrono::Duration::hours(1);
+        let mut notified_for = None;
+
+        assert!(take_low_usage_notification(
+            Some(10),
+            Some(old_reset),
+            20,
+            &mut notified_for,
+            now,
+        ));
+        // Banked reset: usage recovered and a new window deadline appeared.
+        assert!(!take_low_usage_notification(
+            Some(100),
+            Some(new_reset),
+            20,
+            &mut notified_for,
+            now,
+        ));
+        assert!(take_low_usage_notification(
+            Some(15),
+            Some(new_reset),
+            20,
+            &mut notified_for,
+            now,
         ));
     }
 
