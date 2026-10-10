@@ -45,7 +45,10 @@ fn source(name: &str) -> Option<&'static str> {
         "fluent-arrow-left" => {
             include_str!("../../../assets/icons/fluent-arrow-left-16-regular.svg")
         }
-        "fluent-clock" => include_str!("../../../assets/icons/fluent-clock-16-regular.svg"),
+        "fluent-arrow-clockwise-dashes" => {
+            include_str!("../../../assets/icons/fluent-arrow-clockwise-dashes-16-regular.svg")
+        }
+        "fluent-clock" =>include_str!("../../../assets/icons/fluent-clock-16-regular.svg"),
         "fluent-copy" => include_str!("../../../assets/icons/fluent-copy-16-regular.svg"),
         "fluent-checkmark-circle" => {
             include_str!("../../../assets/icons/fluent-checkmark-circle-16-filled.svg")
@@ -268,6 +271,7 @@ mod tests {
             "fluent-info",
             "fluent-checkmark-circle",
             "fluent-clock",
+            "fluent-arrow-clockwise-dashes",
         ] {
             assert!(source(name).is_some(), "{name}");
         }

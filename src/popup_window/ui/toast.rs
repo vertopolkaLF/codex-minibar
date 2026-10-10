@@ -861,8 +861,8 @@ fn limit_card(
     };
     let usage = nowrap(components::body_strong(label, color));
     let reset = show_reset.then(|| match window.resets_at {
-        Some(at) => components::status_row(
-            crate::i18n::tr("resets-in"),
+        Some(at) => components::icon_status(
+            components::RESET_ICON,
             format_reset_in(Some(at)),
             palette,
         ),

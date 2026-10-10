@@ -489,6 +489,11 @@ impl<'a> TextMetrics<'a> {
         self.body(label) + STATUS_GAP + self.body(value)
     }
 
+    /// [`icon_status`].
+    pub(crate) fn icon_status(&self, value: &str) -> f32 {
+        ICON_STATUS_GLYPH + ICON_STATUS_GAP + self.body(value)
+    }
+
     /// Two groups separated by [`SPLIT_GAP`].
     pub(crate) fn fits_split(available: f32, leading: f32, trailing: f32) -> bool {
         leading + SPLIT_GAP + trailing <= available
@@ -501,6 +506,29 @@ pub(crate) fn card_metadata(value: impl Into<SharedString>, palette: &Palette) -
 
 /// "Resets in 4h 13m" — tertiary label, primary value.
 const STATUS_GAP: f32 = 6.0;
+
+/// "⟳ 4h 13m" — tertiary glyph in place of a text label, primary value.
+const ICON_STATUS_GLYPH: f32 = 14.0;
+const ICON_STATUS_GAP: f32 = 4.0;
+
+/// Glyph for a quota's countdown to its next refill.
+pub(crate) const RESET_ICON: &str = "fluent-arrow-clockwise-dashes";
+
+pub(crate) fn icon_status(
+    icon_name: &str,
+    value: impl Into<SharedString>,
+    palette: &Palette,
+) -> Div {
+    div()
+        .flex()
+        .flex_row()
+        .flex_none()
+        .items_center()
+        .gap(px(ICON_STATUS_GAP))
+        .whitespace_nowrap()
+        .child(icon(icon_name, ICON_STATUS_GLYPH, palette.text_tertiary))
+        .child(body(value, palette.text_primary))
+}
 
 pub(crate) fn status_row(
     label: impl Into<SharedString>,

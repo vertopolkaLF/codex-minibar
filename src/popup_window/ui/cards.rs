@@ -609,8 +609,8 @@ impl PopupRoot {
 
     fn reset_status(&self, limit: &LimitWindow) -> Div {
         match limit.resets_at {
-            Some(at) => status_row(
-                crate::i18n::tr("resets-in"),
+            Some(at) => components::icon_status(
+                components::RESET_ICON,
                 format_reset_in(Some(at)),
                 &self.palette,
             ),
@@ -669,9 +669,7 @@ impl PopupRoot {
             usage_width += 5.0 + metrics.caption(&value);
         }
         let reset_width = match limit.resets_at {
-            Some(at) => {
-                metrics.status_row(crate::i18n::tr("resets-in"), &format_reset_in(Some(at)))
-            }
+            Some(at) => metrics.icon_status(&format_reset_in(Some(at))),
             None => metrics.caption(crate::i18n::tr("session-not-started")),
         };
         let single_line = !title.contains(['\n', '\r']);
@@ -1151,12 +1149,12 @@ impl PopupRoot {
             .fx
             .toggle(fx::key(("reset-reveal", expansion_key)), open, fx::NORMAL);
 
-        // Count label, then the 8 DIP gap with a 14 DIP clock, 4 DIP gap and
-        // countdown, then the 8 DIP gap and 16 DIP chevron.
+        // Count label, then the 8 DIP gap and clock countdown, then the 8 DIP
+        // gap and 16 DIP chevron.
         let title_width = metrics.strong(&count_label)
             + expiration
                 .as_deref()
-                .map_or(0.0, |value| 26.0 + metrics.body(value))
+                .map_or(0.0, |value| 8.0 + metrics.icon_status(value))
             + if expandable { 24.0 } else { 0.0 };
         let mut title =
             div()
@@ -1170,20 +1168,13 @@ impl PopupRoot {
                 ));
         if let Some(value) = expiration {
             title = title.child(
-                div()
+                components::icon_status("fluent-clock", value, &palette)
                     .id(eid(format!("reset-expiry-{expansion_key}")))
-                    .flex()
-                    .flex_row()
-                    .flex_none()
-                    .items_center()
-                    .gap(px(4.0))
                     .on_hover(self.hover_listener(
                         fx::key(("reset-expiry", expansion_key)),
                         expiration_tip,
                         cx,
-                    ))
-                    .child(icon("fluent-clock", 14.0, palette.text_tertiary))
-                    .child(nowrap(components::body(value, palette.text_primary))),
+                    )),
             );
         }
         if expandable {
