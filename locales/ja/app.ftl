@@ -2531,3 +2531,19 @@ openrouter-keys-not-a-management-key = このキーは他のキーを管理で�
 
 
 openrouter-keys-key-not-found = このキーはもう存在しません。
+
+use-reset = リセットを使用
+reset-using = 適用中…
+reset-confirm-message = このアカウントの蓄積されたリセットを1回使用しますか？対象の利用制限が解除されます。この操作は取り消せません。
+reset-applied = リセットを適用しました。対象の利用制限が解除されました。
+reset-nothing-to-reset = 現在リセットする制限はありません。
+reset-no-credit = 使用できるリセットは残っていません。
+reset-already-redeemed = このリセットは使用済みです。
+reset-unconfirmed = リセットを確認できませんでした。再試行して同じリクエストを確認してください。
+reset-applied-refresh-failed = リセットを適用しましたが、新しい制限を読み込めませんでした。更新して確認してください。
+reset-in-progress = このアカウントではリセットが進行中です。
+reset-cooldown = リセットは待機期間中です。後でもう一度お試しください。
+reset-rate-limited = リセットのリクエストが多すぎます。後でもう一度お試しください。
+reset-sign-in-again = リセットを使用するには Claude に再度ログインしてください。
+reset-cli-login-required = 同じアカウントの Claude CLI ログインを使用してリセットしてください。
+reset-invalid-grant = Claude が無効なリセット権を返しました。

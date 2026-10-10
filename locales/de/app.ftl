@@ -2552,3 +2552,19 @@ openrouter-keys-not-a-management-key = Dieser Schlüssel kann keine anderen Schl
 
 
 openrouter-keys-key-not-found = Dieser Schlüssel existiert nicht mehr.
+
+use-reset = Zurücksetzung nutzen
+reset-using = Wird angewendet…
+reset-confirm-message = Eine angesparte Zurücksetzung für dieses Konto nutzen? Berechtigte Limits werden zurückgesetzt. Dies kann nicht rückgängig gemacht werden.
+reset-applied = Zurücksetzung angewendet. Berechtigte Limits wurden zurückgesetzt.
+reset-nothing-to-reset = Derzeit gibt es nichts zurückzusetzen.
+reset-no-credit = Keine nutzbaren Zurücksetzungen mehr verfügbar.
+reset-already-redeemed = Diese Zurücksetzung wurde bereits genutzt.
+reset-unconfirmed = Die Zurücksetzung konnte nicht bestätigt werden. Erneut versuchen, um dieselbe Anfrage zu prüfen.
+reset-applied-refresh-failed = Zurücksetzung angewendet, aber die neuen Limits konnten nicht geladen werden. Zum Prüfen aktualisieren.
+reset-in-progress = Für dieses Konto läuft bereits eine Zurücksetzung.
+reset-cooldown = Zurücksetzungen sind vorübergehend gesperrt. Später erneut versuchen.
+reset-rate-limited = Zu viele Anfragen zur Zurücksetzung. Später erneut versuchen.
+reset-sign-in-again = Erneut bei Claude anmelden, um Zurücksetzungen zu nutzen.
+reset-cli-login-required = Zum Zurücksetzen die Claude-CLI-Anmeldung desselben Kontos verwenden.
+reset-invalid-grant = Claude hat eine ungültige Zurücksetzung zurückgegeben.

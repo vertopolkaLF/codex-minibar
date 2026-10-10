@@ -475,6 +475,7 @@ mod tests {
             for enabled in [true, false] {
                 let visibility = PopupVisibility::build_defaults();
                 let options = CardOptions {
+                    keep_reset_card: false,
                     popup_visibility: &visibility,
                     surface: PopupSurface::HomeTab,
                     show_provider_tabs: true,

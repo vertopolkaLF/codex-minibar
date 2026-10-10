@@ -695,6 +695,21 @@ every-setting-returns-to-its-default-and-the-welcome-flow-opens-a = Every settin
 
 # src/settings_window/troubleshoot.rs
 cancel = Cancel
+use-reset = Use reset
+reset-using = Using…
+reset-confirm-message = Use one banked reset for this account? This clears eligible rate-limit windows and cannot be undone.
+reset-applied = Reset applied. Your eligible limits have been cleared.
+reset-nothing-to-reset = Nothing to reset right now.
+reset-no-credit = No usable reset credit left.
+reset-already-redeemed = This reset was already used.
+reset-unconfirmed = The reset could not be confirmed. Retry to check the same request.
+reset-applied-refresh-failed = Reset applied, but the new limits could not be loaded. Refresh to check.
+reset-in-progress = A reset is already in progress for this account.
+reset-cooldown = Resets are cooling down. Try again later.
+reset-rate-limited = Too many reset requests. Try again later.
+reset-sign-in-again = Sign in to Claude again to use resets.
+reset-cli-login-required = Use the matching Claude CLI login to redeem resets.
+reset-invalid-grant = Claude returned an invalid reset credit.
 
 # src/settings_window/appearance.rs
 windows = Windows

@@ -152,6 +152,8 @@ impl PopupRoot {
             } else {
                 model::home_widget_provider(&ui, &widget).map(|provider| {
                     let options = CardOptions {
+                        keep_reset_card: self.reset_busy.contains(&provider)
+                            || self.reset_status.contains_key(&provider),
                         popup_visibility: &ui.popup_visibility,
                         surface: PopupSurface::HomeTab,
                         show_provider_tabs: show_tabs,

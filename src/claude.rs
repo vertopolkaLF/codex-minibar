@@ -444,6 +444,72 @@ impl ClaudeClient {
         self
     }
 
+    pub(crate) fn consume_reset(&mut self) -> Result<crate::banked_reset::Outcome> {
+        let folder = match &self.login {
+            ClaudeLogin::Folder(folder) => folder.clone(),
+            ClaudeLogin::Ambient => credentials_path()
+                .and_then(|path| path.parent().map(Path::to_path_buf))
+                .context("locate Claude CLI credentials")?,
+            ClaudeLogin::Manual(_) => bail!("{}", crate::i18n::tr("reset-cli-login-required")),
+        };
+        let agent = self.agent()?;
+        let file = folder.join(".credentials.json");
+        let credentials =
+            self.with_refresh(&agent, Some(&folder), || load_cli_credentials_at(&file))?;
+        // Ambient quota may belong to Claude Desktop. Its CLI account must
+        // never be redeemed on behalf of a different displayed login.
+        if matches!(self.login, ClaudeLogin::Ambient)
+            && load_credentials()?.access_token != credentials.access_token
+        {
+            bail!("{}", crate::i18n::tr("reset-cli-login-required"));
+        }
+        let config = if matches!(self.login, ClaudeLogin::Ambient) {
+            BaseDirs::new()
+                .context("locate home directory")?
+                .home_dir()
+                .join(".claude.json")
+        } else {
+            folder.join(".claude.json")
+        };
+        let config: Value = serde_json::from_slice(
+            &fs::read(config).context("read Claude account configuration")?,
+        )?;
+        let organization = config
+            .pointer("/oauthAccount/organizationUuid")
+            .and_then(Value::as_str)
+            .filter(|id| {
+                !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            })
+            .context("Claude account has no organization UUID")?;
+        let limits =
+            self.read_oauth(&agent, &credentials.access_token, FOLDER_SIGN_IN_HINT, None)?;
+        let grant = limits
+            .reset_credits
+            .and_then(|summary| summary.next_credit_id)
+            .unwrap_or_default();
+        let account = crate::banked_reset::account_key("claude", &folder, organization);
+        crate::banked_reset::redeem(account, grant, |key, grant| {
+            if grant.is_empty() {
+                return Ok(crate::banked_reset::Outcome::NoCredit);
+            }
+            if grant.len() > 40
+                || !grant
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+            {
+                return Err(crate::banked_reset::settled("reset-invalid-grant"));
+            }
+            claim_reset(
+                agent.post(&format!(
+                    "https://api.anthropic.com/api/organizations/{organization}/reset_rate_limits"
+                )),
+                &credentials.access_token,
+                grant,
+                key,
+            )
+        })
+    }
+
     pub fn read_rate_limits(&mut self) -> Result<RateLimits> {
         let agent = self.agent()?;
         match self.login.clone() {
@@ -1261,8 +1327,43 @@ struct OAuthLimitScopeModel {
     display_name: Option<String>,
 }
 
+/// Kept separate so request headers, payload and outcome handling can be
+/// checked against an isolated local HTTP peer without spending credits.
+fn claim_reset(
+    request: ureq::Request,
+    access_token: &str,
+    grant: &str,
+    key: &str,
+) -> Result<crate::banked_reset::Outcome> {
+    let response = request
+        .set("Authorization", &format!("Bearer {}", access_token))
+        .set("anthropic-beta", OAUTH_BETA)
+        .set("User-Agent", &cli_user_agent())
+        .set("Content-Type", "application/json")
+        .send_string(
+            &serde_json::json!({"program":"cedar_ember", "grant_id":grant, "request_id":key})
+                .to_string(),
+        );
+    let response = match response {
+        Err(ureq::Error::Status(401 | 403, _)) => {
+            return Err(crate::banked_reset::settled("reset-sign-in-again"));
+        }
+        Err(ureq::Error::Status(429, _)) => {
+            return Err(crate::banked_reset::settled("reset-rate-limited"));
+        }
+        result => result.context(crate::i18n::tr("reset-unconfirmed"))?,
+    };
+    let value: Value = serde_json::from_str(&response.into_string()?)?;
+    let outcome = value["result"].as_str().unwrap_or("");
+    if outcome == "cooldown" {
+        return Err(crate::banked_reset::settled("reset-cooldown"));
+    }
+    crate::banked_reset::Outcome::parse(outcome)
+}
+
 #[derive(Deserialize)]
 struct OAuthBankedResets {
+    next_grant_id: Option<String>,
     #[serde(default)]
     eligible: bool,
     #[serde(default)]
@@ -1281,6 +1382,8 @@ struct OAuthResetGrant {
     clears: Vec<String>,
     #[serde(default)]
     paused: bool,
+    #[serde(default)]
+    usable_now: bool,
 }
 
 #[derive(Clone, Deserialize)]
@@ -1359,12 +1462,16 @@ fn banked_resets(
     if !banked.eligible {
         return None;
     }
+    let next_grant_id = banked.next_grant_id;
     let credits = banked
         .grants
         .into_iter()
         .filter(|grant| grant.resets_left > 0)
         .filter_map(|grant| {
             let expires_at = parse_timestamp(grant.ends_at.as_deref());
+            if grant.ends_at.is_some() && expires_at.is_none() {
+                return None;
+            }
             if expires_at.is_some_and(|expires_at| expires_at <= now) {
                 return None;
             }
@@ -1372,7 +1479,15 @@ fn banked_resets(
                 grant.resets_left,
                 RateLimitResetCredit {
                     reset_type: (!grant.clears.is_empty()).then(|| grant.clears.join(",")),
-                    status: if grant.paused { "paused" } else { "available" }.to_owned(),
+                    status: if grant.paused
+                        || !grant.usable_now
+                        || parse_timestamp(grant.starts_at.as_deref()).is_some_and(|at| at > now)
+                    {
+                        "paused"
+                    } else {
+                        "available"
+                    }
+                    .to_owned(),
                     granted_at: parse_timestamp(grant.starts_at.as_deref()),
                     expires_at,
                     title: non_empty(grant.label),
@@ -1382,6 +1497,11 @@ fn banked_resets(
         })
         .collect::<Vec<_>>();
     Some(RateLimitResetCreditsSummary {
+        next_credit_id: next_grant_id.filter(|id| {
+            credits.iter().any(|(_, credit)| {
+                credit.status == "available" && credit.description.as_ref() == Some(id)
+            })
+        }),
         available_count: credits.iter().map(|(count, _)| count).sum(),
         credits: credits.into_iter().map(|(_, credit)| credit).collect(),
     })
@@ -1970,6 +2090,101 @@ mod tests {
         .unwrap();
         assert!(limits.reset_credits.is_none());
         assert_eq!(limits.available_reset_count(), 0);
+    }
+
+    #[test]
+    fn reset_redemption_uses_only_server_selected_usable_grant() {
+        let now = Utc.with_ymd_and_hms(2026, 10, 10, 12, 0, 0).unwrap();
+        for (next, selected) in [
+            ("ready", Some("ready")),
+            ("paused", None),
+            ("unusable", None),
+            ("expired", None),
+            ("invalid-date", None),
+            ("future", None),
+            ("spent", None),
+            ("missing", None),
+        ] {
+            let response = serde_json::json!({"five_hour":{"utilization":0},"cedar_ember":{"eligible":true,"next_grant_id":next,"grants":[
+                {"id":"ready","resets_left":2,"usable_now":true},
+                {"id":"paused","resets_left":1,"paused":true,"usable_now":true},
+                {"id":"unusable","resets_left":1,"usable_now":false},
+                {"id":"expired","resets_left":1,"usable_now":true,"ends_at":"2026-10-09T00:00:00Z"},
+                {"id":"invalid-date","resets_left":1,"usable_now":true,"ends_at":"2026-02-30T00:00:00Z"},
+                {"id":"future","resets_left":1,"usable_now":true,"starts_at":"2026-10-11T00:00:00Z"},
+                {"id":"spent","resets_left":0,"usable_now":true}
+            ]}});
+            let limits = parse_usage_response(&response.to_string(), now).unwrap();
+            assert_eq!(
+                limits.reset_credits.unwrap().next_credit_id.as_deref(),
+                selected,
+                "{next}"
+            );
+        }
+    }
+
+    #[test]
+    fn reset_claim_sends_cli_headers_and_idempotent_payload() {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let peer = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut headers = String::new();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+                headers.push_str(&line);
+            }
+            let length: usize = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")
+                        .map(|value| value.parse().unwrap())
+                })
+                .unwrap();
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            let response = r#"{"result":"reset"}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+                response.len()
+            )
+            .unwrap();
+            (headers, serde_json::from_slice::<Value>(&body).unwrap())
+        });
+        let agent = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(5))
+            .build();
+        let result = claim_reset(
+            agent.post(&format!(
+                "http://{address}/api/organizations/test-org/reset_rate_limits"
+            )),
+            "fake-token",
+            "test-grant",
+            "stable-request",
+        )
+        .unwrap();
+        assert_eq!(result, crate::banked_reset::Outcome::Reset);
+        let (headers, body) = peer.join().unwrap();
+        let headers = headers.to_ascii_lowercase();
+        assert!(headers.starts_with("post /api/organizations/test-org/reset_rate_limits "));
+        assert!(headers.contains("authorization: bearer fake-token"));
+        assert!(headers.contains("anthropic-beta: oauth-2025-04-20"));
+        assert!(headers.contains("user-agent: claude-cli/"));
+        assert_eq!(
+            body,
+            serde_json::json!({"program":"cedar_ember","grant_id":"test-grant","request_id":"stable-request"})
+        );
     }
 
     #[test]
