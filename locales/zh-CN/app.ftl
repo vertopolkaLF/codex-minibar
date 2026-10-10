@@ -1394,8 +1394,6 @@ msg-5h-session-de7ce8 = 5 小时会话
 
 name-weekly = { $name } 每周
 
-remaining-remaining = 剩余 { $remaining }%
-
 tokens-94e0b9 = { $v0 }：{ $v1 } 个 token
 
 requests-priced = { $v0 } 次请求 · { $v1 } 次已计价

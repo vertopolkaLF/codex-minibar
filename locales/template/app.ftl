@@ -2874,10 +2874,6 @@ msg-5h-session-de7ce8 = { "" }
 name-weekly = { "" }
 
 # English source:
-# remaining-remaining = { $remaining }% remaining
-remaining-remaining = { "" }
-
-# English source:
 # tokens-94e0b9 = { $v0 }: { $v1 } tokens
 tokens-94e0b9 = { "" }
 

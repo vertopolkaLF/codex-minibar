@@ -2075,9 +2075,6 @@ msg-5h-session-de7ce8 = 5時間セッション
 name-weekly = 毎週 { $name }
 
 # application
-remaining-remaining = 残り { $remaining }%
-
-# application
 tokens-94e0b9 = { $v0 }: { $v1 } トークン
 
 # application

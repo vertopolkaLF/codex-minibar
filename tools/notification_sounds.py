@@ -13,7 +13,7 @@ import wave
 import numpy as np
 
 RATE = 44_100
-PEAK_DBFS = -20.0
+PEAK_DBFS = -25.0
 OUT = pathlib.Path(__file__).resolve().parent.parent / "assets" / "sounds"
 
 

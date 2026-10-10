@@ -1397,8 +1397,6 @@ msg-5h-session-de7ce8 = Sesión de 5h
 
 name-weekly = { $name } semanal
 
-remaining-remaining = { $remaining }% restante
-
 tokens-94e0b9 = { $v0 }: { $v1 } tokens
 
 requests-priced = { $v0 ->

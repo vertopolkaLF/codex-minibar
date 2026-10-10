@@ -93,7 +93,7 @@ pub(super) fn credits_display_value(limits: &RateLimits) -> Option<String> {
     }
 }
 
-pub(super) fn capitalize_plan_name(plan: &str) -> String {
+pub(crate) fn capitalize_plan_name(plan: &str) -> String {
     let plan = plan.trim();
     let mut characters = plan.chars();
     let Some(first) = characters.next() else {

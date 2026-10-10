@@ -2079,9 +2079,6 @@ msg-5h-session-de7ce8 = Сессия 5 ч
 name-weekly = { $name }: неделя
 
 # application
-remaining-remaining = Осталось { $remaining }%
-
-# application
 tokens-94e0b9 = { $v0 }: { $v1 } токенов
 
 # application

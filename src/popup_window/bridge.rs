@@ -642,9 +642,15 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                     };
                     if combine_activation_notification {
                         if notification_result.primary_reset {
-                            notifications::show_activation_succeeded_after_reset(provider);
+                            notifications::show_activation_succeeded_after_reset(
+                                provider,
+                                limits.get(provider),
+                            );
                         } else if notification_settings.activation_success {
-                            notifications::show_activation_succeeded(provider);
+                            notifications::show_activation_succeeded(
+                                provider,
+                                Some(limits.get(provider)),
+                            );
                         }
                     }
                     if let Err(error) = tray.sync(
@@ -794,7 +800,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                     if combine_activation_notification {
                         pending_auto_activation_successes.insert(provider);
                     } else if notification_settings.activation_success {
-                        notifications::show_activation_succeeded(provider);
+                        notifications::show_activation_succeeded(provider, None);
                     }
                     publish_popup_ui(&ui);
                 }
@@ -891,7 +897,10 @@ pub(super) fn pump_tray_and_dismiss(
             TrayMenuAction::Update => {
                 if let Err(error) = crate::updater::apply_pending_update() {
                     eprintln!("failed to apply update: {error:#}");
-                    notifications::show_error(crate::i18n::tr("update-failed"), &format!("{error:#}"));
+                    notifications::show_error(
+                        crate::i18n::tr("update-failed"),
+                        &format!("{error:#}"),
+                    );
                 }
             }
             TrayMenuAction::Settings => {

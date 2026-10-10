@@ -71,6 +71,12 @@ pub enum NotificationAction {
 }
 
 impl NotificationAction {
+    /// Whether the card should stay after this button: release notes are
+    /// read beside it, so it waits to be closed by hand.
+    pub fn pins_card(&self) -> bool {
+        matches!(self, Self::OpenUrl(_))
+    }
+
     /// Runs the action off the GPUI thread: installing exits the process.
     pub fn run(&self) {
         let action = self.clone();
@@ -90,6 +96,24 @@ impl NotificationAction {
     }
 }
 
+/// The quota window a limit notification is about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LimitFocus {
+    /// The 5-hour session.
+    Primary,
+    /// The weekly (or monthly, on free plans) window.
+    Secondary,
+}
+
+/// Provider quotas drawn under a limit notification, so the card answers
+/// "how much do I have now" without opening the popup.
+#[derive(Clone, Debug)]
+pub struct LimitAlert {
+    pub provider: ProviderId,
+    pub limits: RateLimits,
+    pub focus: LimitFocus,
+}
+
 #[derive(Clone, Debug)]
 pub struct Notification {
     pub kind: NotificationKind,
@@ -97,6 +121,7 @@ pub struct Notification {
     pub body: String,
     /// `(label, action)`; the first one is the primary button.
     pub actions: Vec<(String, NotificationAction)>,
+    pub limits: Option<Box<LimitAlert>>,
     /// Plays the kind's sound even when Windows reports a busy state.
     pub force_sound: bool,
 }
@@ -108,9 +133,57 @@ impl Notification {
             title: title.to_owned(),
             body: body.to_owned(),
             actions: Vec::new(),
+            limits: None,
             force_sound: false,
         }
     }
+
+    /// A notification about one quota window of `provider`. The body names
+    /// the account; the card draws the quotas themselves.
+    pub fn limit(
+        kind: NotificationKind,
+        title: &str,
+        name: &str,
+        provider: ProviderId,
+        limits: &RateLimits,
+        focus: LimitFocus,
+    ) -> Self {
+        let mut notification = Self::new(kind, title, &limit_identity(name, limits));
+        notification.limits = Some(Box::new(LimitAlert {
+            provider,
+            limits: limits.clone(),
+            focus,
+        }));
+        notification
+    }
+
+    /// How long the card stays before it leaves on its own. Cards with
+    /// quotas get a little longer to be read.
+    pub fn lifetime(&self) -> std::time::Duration {
+        let extra = if self.limits.is_some() { 3 } else { 0 };
+        self.kind.lifetime() + std::time::Duration::from_secs(extra)
+    }
+}
+
+/// `Codex · Pro · work@example.com`: instance, plan and account.
+fn limit_identity(name: &str, limits: &RateLimits) -> String {
+    let mut parts = vec![name.to_owned()];
+    if let Some(plan) = limits
+        .plan_type
+        .as_deref()
+        .filter(|plan| !plan.trim().is_empty())
+    {
+        parts.push(crate::popup_window::capitalize_plan_name(plan));
+    }
+    if let Some(account) = limits
+        .account_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|account| !account.is_empty() && *account != name)
+    {
+        parts.push(account.to_owned());
+    }
+    parts.join(" \u{00b7} ")
 }
 
 /// Mirrors `notifications.sound` so the toast host never needs settings.
@@ -178,22 +251,40 @@ fn update_available(version: &str, release_url: &str) -> Notification {
     notification
 }
 
-/// Notification after a provider successfully starts a 5-hour limit.
-pub fn show_activation_succeeded(provider: ProviderId) {
-    show_kind(
+/// Notification after a provider successfully starts a 5-hour limit, with
+/// its quotas when they are known.
+pub fn show_activation_succeeded(provider: ProviderId, limits: Option<&RateLimits>) {
+    show_activation(
         NotificationKind::Success,
         crate::i18n::tr("msg-5-hour-limit-started"),
-        &provider.qualified_name(),
+        provider,
+        limits,
     );
 }
 
 /// Notification after automatic activation follows a newly reset 5-hour window.
-pub fn show_activation_succeeded_after_reset(provider: ProviderId) {
-    show_kind(
+pub fn show_activation_succeeded_after_reset(provider: ProviderId, limits: &RateLimits) {
+    show_activation(
         NotificationKind::Reset,
         crate::i18n::tr("msg-5-hour-limit-reset-and-activated"),
-        &provider.qualified_name(),
+        provider,
+        Some(limits),
     );
+}
+
+fn show_activation(
+    kind: NotificationKind,
+    title: &str,
+    provider: ProviderId,
+    limits: Option<&RateLimits>,
+) {
+    let name = provider.qualified_name();
+    notify(match limits {
+        Some(limits) => {
+            Notification::limit(kind, title, &name, provider, limits, LimitFocus::Primary)
+        }
+        None => Notification::new(kind, title, &name),
+    });
 }
 
 /// Plays the sound of `notification` unless sounds are off or Windows says
@@ -215,27 +306,85 @@ pub(crate) fn play_sound(notification: &Notification) {
 
 /// TEMP: sample notifications for the Settings demo section.
 pub fn demo(kind: NotificationKind) {
+    use crate::{limits::LimitWindow, settings::ProviderKind};
+
+    let window = |used: u8, minutes: i64, length: u32| LimitWindow {
+        used_percent: Some(used),
+        resets_at: Some(chrono::Utc::now() + Duration::minutes(minutes)),
+        duration_minutes: Some(length),
+    };
+    let sample = |kind: ProviderKind, plan: &str, account: &str, five, week| {
+        (
+            ProviderId::primary(kind),
+            RateLimits {
+                primary: five,
+                secondary: week,
+                plan_type: Some(plan.to_owned()),
+                account_name: Some(account.to_owned()),
+                ..Default::default()
+            },
+        )
+    };
     let mut notification = match kind {
         NotificationKind::Info => Notification::new(
             kind,
             "New Codex reset info",
             "A forced reset is announced for Codex on Oct 12, 14:00 (in 2 days).",
         ),
-        NotificationKind::Success => Notification::new(
-            kind,
-            crate::i18n::tr("msg-5-hour-limit-started"),
-            "Codex · work@example.com",
-        ),
-        NotificationKind::Reset => Notification::new(
-            kind,
-            crate::i18n::tr("weekly-limit-reset"),
-            "Claude · Max 20x",
-        ),
-        NotificationKind::Warning => Notification::new(
-            kind,
-            "Codex 5-hour limit is low",
-            "12% remaining. Resets at 17:40, so pace yourself or start a coffee break.",
-        ),
+        NotificationKind::Success => {
+            let (provider, limits) = sample(
+                ProviderKind::Codex,
+                "pro",
+                "work@example.com",
+                window(0, 299, 300),
+                window(37, 4 * 24 * 60, 10_080),
+            );
+            Notification::limit(
+                kind,
+                crate::i18n::tr("msg-5-hour-limit-started"),
+                "Codex",
+                provider,
+                &limits,
+                LimitFocus::Primary,
+            )
+        }
+        NotificationKind::Reset => {
+            let (provider, limits) = sample(
+                ProviderKind::Claude,
+                "max",
+                "me@example.com",
+                window(64, 132, 300),
+                window(0, 7 * 24 * 60 - 1, 10_080),
+            );
+            Notification::limit(
+                kind,
+                crate::i18n::tr("weekly-limit-reset"),
+                "Claude",
+                provider,
+                &limits,
+                LimitFocus::Secondary,
+            )
+        }
+        NotificationKind::Warning => {
+            let (provider, limits) = sample(
+                ProviderKind::Codex,
+                "plus",
+                "work@example.com",
+                window(88, 97, 300),
+                window(52, 3 * 24 * 60, 10_080),
+            );
+            Notification::limit(
+                kind,
+                &crate::i18n::format(
+                    "label-limit-is-low",
+                    &[("label", "Codex 5-hour".to_owned())],
+                ),
+                "Codex",
+                provider,
+                &limits,
+                LimitFocus::Primary,
+            )
+        }
         NotificationKind::Error => Notification::new(
             kind,
             crate::i18n::tr("update-failed"),
@@ -342,11 +491,14 @@ impl LimitNotificationTracker {
         if primary_reset {
             self.startup_low_usage_primary = None;
             if settings.limits_changed && !defer_primary_reset && notify_five_hour_reset {
-                show_kind(
+                notify(Notification::limit(
                     NotificationKind::Reset,
                     crate::i18n::tr("msg-5-hour-limit-reset"),
                     &name,
-                );
+                    provider,
+                    limits,
+                    LimitFocus::Primary,
+                ));
             }
         }
         // Free plans have no weekly limit. Their single monthly quota may shift
@@ -354,11 +506,14 @@ impl LimitNotificationTracker {
         if secondary_reset && can_notify_weekly(limits) {
             self.startup_low_usage_secondary = None;
             if settings.limits_changed {
-                show_kind(
+                notify(Notification::limit(
                     NotificationKind::Reset,
                     crate::i18n::tr("weekly-limit-reset"),
                     &name,
-                );
+                    provider,
+                    limits,
+                    LimitFocus::Secondary,
+                ));
             }
         }
 
@@ -366,6 +521,7 @@ impl LimitNotificationTracker {
             let threshold = settings.low_usage_threshold_percent;
             maybe_notify_low_usage(
                 &crate::i18n::format("name-5-hour", &[("name", name.to_string())]),
+                (&name, provider, limits, LimitFocus::Primary),
                 limits.primary.remaining_percent(),
                 limits.primary.resets_at,
                 threshold,
@@ -383,6 +539,7 @@ impl LimitNotificationTracker {
             let label = secondary_limit_label(limits, &name);
             maybe_notify_low_usage(
                 &label,
+                (&name, provider, limits, LimitFocus::Secondary),
                 limits.secondary.remaining_percent(),
                 limits.secondary.resets_at,
                 threshold,
@@ -468,6 +625,7 @@ fn secondary_limit_label(limits: &RateLimits, name: &str) -> String {
 
 fn maybe_notify_low_usage(
     label: &str,
+    (name, provider, limits, focus): (&str, ProviderId, &RateLimits, LimitFocus),
     remaining: Option<u8>,
     resets_at: Option<DateTime<Utc>>,
     threshold: u8,
@@ -481,15 +639,14 @@ fn maybe_notify_low_usage(
     if !take_low_usage_notification(remaining, resets_at, threshold, already_notified_for, now) {
         return;
     }
-    let remaining = remaining.expect("notification requires a remaining percentage");
-    show_kind(
+    notify(Notification::limit(
         NotificationKind::Warning,
         &crate::i18n::format("label-limit-is-low", &[("label", label.to_string())]),
-        &crate::i18n::format(
-            "remaining-remaining",
-            &[("remaining", remaining.to_string())],
-        ),
-    );
+        name,
+        provider,
+        limits,
+        focus,
+    ));
 }
 
 /// Claims the one low-usage notification allowed for a rate-limit window.

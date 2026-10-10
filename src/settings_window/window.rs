@@ -1370,7 +1370,10 @@ pub(super) fn install_update() {
     std::thread::spawn(|| {
         if let Err(error) = crate::updater::apply_pending_update() {
             eprintln!("failed to apply update: {error:#}");
-            crate::notifications::show_error(crate::i18n::tr("update-failed"), &format!("{error:#}"));
+            crate::notifications::show_error(
+                crate::i18n::tr("update-failed"),
+                &format!("{error:#}"),
+            );
         }
     });
 }

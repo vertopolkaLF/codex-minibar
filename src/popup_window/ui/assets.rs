@@ -59,6 +59,8 @@ fn source(name: &str) -> Option<&'static str> {
         "kiro" => include_str!("../../../assets/icons/kiro-iconify.svg"),
         "chatgpt" => include_str!("../../../assets/icons/chatgpt-iconify.svg"),
         "fluent-folder" => include_str!("../../../assets/icons/fluent-folder-16-filled.svg"),
+        "fluent-dismiss" => include_str!("../../../assets/icons/fluent-dismiss-16-regular.svg"),
+        "fluent-info" => include_str!("../../../assets/icons/fluent-info-16-filled.svg"),
         "github" => include_str!("../../../assets/icons/github-iconify.svg"),
         // Phosphor glyphs used by the Settings window, keyed by file stem.
         "arrow-clockwise-bold" => include_str!("../../../assets/icons/ph-arrow-clockwise-bold.svg"),
@@ -119,7 +121,6 @@ fn source(name: &str) -> Option<&'static str> {
         "upload-simple-fill" => include_str!("../../../assets/icons/ph-upload-simple-fill.svg"),
         "user-fill" => include_str!("../../../assets/icons/ph-user-fill.svg"),
         "warning-fill" => include_str!("../../../assets/icons/ph-warning-fill.svg"),
-        "x-bold" => include_str!("../../../assets/icons/ph-x-bold.svg"),
         "x-circle-fill" => include_str!("../../../assets/icons/ph-x-circle-fill.svg"),
         _ => return None,
     })
@@ -262,6 +263,9 @@ mod tests {
             "fluent-home",
             "fluent-error-circle",
             "fluent-warning",
+            "fluent-dismiss",
+            "fluent-info",
+            "fluent-checkmark-circle",
         ] {
             assert!(source(name).is_some(), "{name}");
         }

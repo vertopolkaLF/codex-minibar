@@ -2078,9 +2078,6 @@ msg-5h-session-de7ce8 = 5h Session
 name-weekly = { $name } weekly
 
 # application
-remaining-remaining = { $remaining }% remaining
-
-# application
 tokens-94e0b9 = { $v0 }: { $v1 } tokens
 
 # application

@@ -2078,9 +2078,6 @@ msg-5h-session-de7ce8 = 5-Stunden-Sitzung
 name-weekly = { $name } wöchentlich
 
 # application
-remaining-remaining = { $remaining }% verbleibend
-
-# application
 tokens-94e0b9 = { $v0 }: { $v1 } Token
 
 # application

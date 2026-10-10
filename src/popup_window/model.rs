@@ -128,16 +128,9 @@ impl Card<'_> {
     }
 }
 
-pub(crate) fn provider_cards<'a>(
-    provider: ProviderId,
-    is_first: bool,
-    show_icon: bool,
-    limits: &'a RateLimits,
-    forced_resets: &'a [crate::reset_feed::ForcedReset],
-    options: &CardOptions<'_>,
-) -> Vec<Card<'a>> {
-    let kind = provider.kind();
-    let (monthly_label, primary_label, secondary_label) = match kind {
+/// Titles of the monthly, 5-hour and secondary quota windows of a driver.
+pub(crate) fn limit_labels(kind: ProviderKind) -> (&'static str, &'static str, &'static str) {
+    match kind {
         ProviderKind::Cursor => (
             crate::i18n::tr("cursor-models"),
             crate::i18n::tr("cursor-models"),
@@ -168,7 +161,19 @@ pub(crate) fn provider_cards<'a>(
             crate::i18n::tr("msg-5h-session-de7ce8"),
             crate::i18n::tr("weekly"),
         ),
-    };
+    }
+}
+
+pub(crate) fn provider_cards<'a>(
+    provider: ProviderId,
+    is_first: bool,
+    show_icon: bool,
+    limits: &'a RateLimits,
+    forced_resets: &'a [crate::reset_feed::ForcedReset],
+    options: &CardOptions<'_>,
+) -> Vec<Card<'a>> {
+    let kind = provider.kind();
+    let (monthly_label, primary_label, secondary_label) = limit_labels(kind);
     let single_openrouter_account =
         kind == ProviderKind::OpenRouter && limits.openrouter_accounts.len() == 1;
     let heading = HeadingCard {
