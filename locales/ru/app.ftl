@@ -830,6 +830,8 @@ popup-borders = Границы
 popup-borders-description = Обводка всплывающего окна, карточек и элементов управления
 popup-theme-contrast = Контраст
 popup-theme-contrast-description = Усиливает или ослабляет текст и обводки тем VS Code
+popup-theme-tint = Тонировка
+popup-theme-tint-description = Насколько фон темы перекрывает стекло Mica или Acrylic
 
 # src/settings_window/appearance.rs
 animation-effects = Эффекты анимации

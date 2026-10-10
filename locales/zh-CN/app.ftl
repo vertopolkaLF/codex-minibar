@@ -549,6 +549,8 @@ popup-borders = 边框
 popup-borders-description = 为弹出窗口、卡片和控件绘制轮廓
 popup-theme-contrast = 对比度
 popup-theme-contrast-description = 增强或减弱 VS Code 主题中文字和轮廓的对比
+popup-theme-tint = 着色
+popup-theme-tint-description = 主题背景覆盖 Mica 或 Acrylic 玻璃的程度
 
 animation-effects = 动画效果
 

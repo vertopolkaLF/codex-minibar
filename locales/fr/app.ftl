@@ -814,6 +814,8 @@ popup-borders = Bordures
 popup-borders-description = Afficher les contours de la fenêtre popup, des cartes et des contrôles
 popup-theme-contrast = Contraste
 popup-theme-contrast-description = Faire ressortir plus ou moins le texte et les contours des thèmes VS Code
+popup-theme-tint = Teinte
+popup-theme-tint-description = Dans quelle mesure l'arrière-plan du thème recouvre le verre Mica ou Acrylic
 
 # src/settings_window/appearance.rs
 animation-effects = Effets d'animation

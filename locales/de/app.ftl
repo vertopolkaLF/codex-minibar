@@ -813,6 +813,8 @@ popup-borders = Rahmen
 popup-borders-description = Rahmen um Popup-Fenster, Karten und Steuerelemente anzeigen
 popup-theme-contrast = Kontrast
 popup-theme-contrast-description = Text und Umrisse von VS Code-Designs stärker oder schwächer hervorheben
+popup-theme-tint = Tönung
+popup-theme-tint-description = Wie stark der Hintergrund des Designs das Mica- oder Acrylic-Glas überdeckt
 
 # src/settings_window/appearance.rs
 animation-effects = Animationseffekte

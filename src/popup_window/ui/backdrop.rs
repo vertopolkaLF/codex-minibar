@@ -84,7 +84,7 @@ impl Backdrop {
     pub(super) fn new(
         hwnd: windows_sys::Win32::Foundation::HWND,
         material: PopupBackgroundMaterial,
-        dark: bool,
+        luminosity: (u8, u8, u8),
     ) -> Result<Self> {
         let queue = QueueOwner::new().context("creating backdrop dispatcher queue")?;
         let compositor = Compositor::new().context("creating backdrop compositor")?;
@@ -121,7 +121,7 @@ impl Backdrop {
             .context("creating capsule blur and luminosity effect")?;
         let brush = factory.CreateBrush()?;
         brush.SetSourceParameter(&source_name, &desktop)?;
-        let luminosity = compositor.CreateColorBrushWithColor(luminosity_color(dark))?;
+        let luminosity = compositor.CreateColorBrushWithColor(luminosity_color(luminosity))?;
         brush.SetSourceParameter(&luminosity_name, &luminosity)?;
         let acrylic: CompositionBrush = brush.cast()?;
         let mica = match mica_brush(&compositor, &luminosity) {
@@ -177,8 +177,14 @@ impl Backdrop {
             }
     }
 
-    pub(super) fn set_appearance(&mut self, material: PopupBackgroundMaterial, dark: bool) {
-        if let Err(error) = self.luminosity.SetColor(luminosity_color(dark)) {
+    /// `luminosity` is the color whose lightness the blurred backdrop takes;
+    /// its hue and saturation still come from the desktop.
+    pub(super) fn set_appearance(
+        &mut self,
+        material: PopupBackgroundMaterial,
+        luminosity: (u8, u8, u8),
+    ) {
+        if let Err(error) = self.luminosity.SetColor(luminosity_color(luminosity)) {
             self.failed = true;
             eprintln!("could not change capsule backdrop luminosity: {error}");
         }
@@ -282,14 +288,12 @@ fn mica_brush(
     Ok(brush.cast()?)
 }
 
-fn luminosity_color(dark: bool) -> Color {
-    // Match the dark theme's #202020 base while retaining backdrop chroma.
-    let level = if dark { 32 } else { 245 };
+fn luminosity_color((r, g, b): (u8, u8, u8)) -> Color {
     Color {
         A: 255,
-        R: level,
-        G: level,
-        B: level,
+        R: r,
+        G: g,
+        B: b,
     }
 }
 

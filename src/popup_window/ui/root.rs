@@ -331,6 +331,7 @@ impl PopupRoot {
             theme::popup_font_family(popup_theme, ui.font_family.as_deref(), &default_font),
         )
         .with_contrast(ui.popup_vscode_contrast)
+        .with_tint(ui.popup_vscode_tint)
         .with_borders(ui.popup_borders);
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             this.refresh_palette(window);
@@ -484,18 +485,22 @@ impl PopupRoot {
             || self.palette.material != material
             || self.palette.borders != self.ui.popup_borders
             || self.palette.contrast != self.ui.popup_vscode_contrast
+            || self.palette.tint != self.ui.popup_vscode_tint
             || (vscode.is_none()
                 && self.palette.accent != Palette::accent_for(popup_theme, dark, self.accent))
         {
+            let palette = Palette::new(popup_theme, vscode, dark, self.accent, material, font)
+                .with_contrast(self.ui.popup_vscode_contrast)
+                .with_tint(self.ui.popup_vscode_tint)
+                .with_borders(self.ui.popup_borders);
             #[cfg(windows)]
-            if (self.palette.material != material || self.palette.dark != dark)
+            if (self.palette.material != material
+                || self.palette.backdrop_luminosity() != palette.backdrop_luminosity())
                 && let Some(backdrop) = &mut self.host.backdrop
             {
-                backdrop.set_appearance(material, dark);
+                backdrop.set_appearance(material, palette.backdrop_luminosity());
             }
-            self.palette = Palette::new(popup_theme, vscode, dark, self.accent, material, font)
-                .with_contrast(self.ui.popup_vscode_contrast)
-                .with_borders(self.ui.popup_borders);
+            self.palette = palette;
         }
     }
 
@@ -521,6 +526,7 @@ impl PopupRoot {
             ),
         )
         .with_contrast(self.ui.popup_vscode_contrast)
+        .with_tint(self.ui.popup_vscode_tint)
         .with_borders(self.ui.popup_borders)
     }
 
@@ -659,16 +665,19 @@ impl PopupRoot {
     #[cfg(windows)]
     pub(crate) fn attach_native_host(&mut self, hwnd: windows_sys::Win32::Foundation::HWND) {
         self.host.hwnd = Some(hwnd);
-        self.host.backdrop =
-            match super::backdrop::Backdrop::new(hwnd, self.palette.material, self.palette.dark) {
-                Ok(backdrop) => Some(backdrop),
-                Err(error) => {
-                    // Keep plain transparency if this system cannot host a clipped
-                    // backdrop. Never fall back to blur across the whole HWND.
-                    eprintln!("could not create capsule backdrop: {error:#}");
-                    None
-                }
-            };
+        self.host.backdrop = match super::backdrop::Backdrop::new(
+            hwnd,
+            self.palette.material,
+            self.palette.backdrop_luminosity(),
+        ) {
+            Ok(backdrop) => Some(backdrop),
+            Err(error) => {
+                // Keep plain transparency if this system cannot host a clipped
+                // backdrop. Never fall back to blur across the whole HWND.
+                eprintln!("could not create capsule backdrop: {error:#}");
+                None
+            }
+        };
     }
 
     /// Prepares geometry for a show; the caller performs the native show

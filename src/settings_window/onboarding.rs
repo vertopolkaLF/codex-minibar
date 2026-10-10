@@ -154,6 +154,7 @@ fn copy_choices(from: &Settings, to: &mut Settings) {
     to.popup_theme = from.popup_theme;
     to.popup_vscode_theme = from.popup_vscode_theme.clone();
     to.popup_vscode_contrast = from.popup_vscode_contrast;
+    to.popup_vscode_tint = from.popup_vscode_tint;
 }
 
 /// A tray widget for every enabled provider that has default tray metrics.

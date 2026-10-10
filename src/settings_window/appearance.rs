@@ -14,7 +14,9 @@ use crate::popup_window::ui::fx;
 use crate::popup_window::ui::theme::{self as popup_theme, Palette, rgb8};
 use crate::settings::{
     AccentColor, AppTheme, BottomBarSize, POPUP_VSCODE_CONTRAST_DEFAULT, POPUP_VSCODE_CONTRAST_MAX,
-    POPUP_VSCODE_CONTRAST_MIN, PopupBackgroundMaterial, PopupCornerRadius, PopupTheme, TimeFormat,
+    POPUP_VSCODE_CONTRAST_MIN, POPUP_VSCODE_TINT_DEFAULT, POPUP_VSCODE_TINT_MAX,
+    POPUP_VSCODE_TINT_MIN, PopupBackgroundMaterial, PopupCornerRadius, PopupTheme, Settings,
+    TimeFormat,
 };
 use crate::vscode_themes::VsCodeTheme;
 
@@ -534,16 +536,58 @@ impl SettingsWindow {
                     .into_any_element(),
             )
             .render(k);
-        // Contrast only tunes VS Code themes, so it glides in with one.
-        let contrast_row = self.vscode_contrast_row(k, cx);
-        let row_divider = || {
+        // These only tune VS Code themes, so they glide in with one; the
+        // tint also needs a translucent backdrop.
+        let contrast_row = self.vscode_percent_row(
+            k,
+            "appearance-vscode-contrast",
+            crate::i18n::tr("popup-theme-contrast"),
+            crate::i18n::tr("popup-theme-contrast-description"),
+            self.settings.popup_vscode_contrast,
+            (
+                POPUP_VSCODE_CONTRAST_MIN,
+                POPUP_VSCODE_CONTRAST_MAX,
+                POPUP_VSCODE_CONTRAST_DEFAULT,
+            ),
+            |settings, value| settings.popup_vscode_contrast = value,
+            cx,
+        );
+        let tint_row = self.vscode_percent_row(
+            k,
+            "appearance-vscode-tint",
+            crate::i18n::tr("popup-theme-tint"),
+            crate::i18n::tr("popup-theme-tint-description"),
+            self.settings.popup_vscode_tint,
+            (
+                POPUP_VSCODE_TINT_MIN,
+                POPUP_VSCODE_TINT_MAX,
+                POPUP_VSCODE_TINT_DEFAULT,
+            ),
+            |settings, value| settings.popup_vscode_tint = value,
+            cx,
+        );
+        let row_divider = |k: &Kit| {
             div()
                 .px(px(kit::ROW_PADDING_X))
                 .child(kit::divider(k))
                 .into_any_element()
         };
-        let contrast_divider = row_divider();
-        let vscode_divider = row_divider();
+        let contrast_divider = row_divider(k);
+        let tint_divider = row_divider(k);
+        let vscode_divider = row_divider(k);
+        let tint = kit::collapsible(
+            k,
+            fx::key("appearance-vscode-tint"),
+            material != PopupBackgroundMaterial::Solid,
+            move |_| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(tint_divider)
+                    .child(tint_row)
+                    .into_any_element()
+            },
+        );
         let contrast = kit::collapsible(
             k,
             fx::key("appearance-vscode-contrast"),
@@ -554,6 +598,7 @@ impl SettingsWindow {
                     .flex_col()
                     .child(contrast_divider)
                     .child(contrast_row)
+                    .children(tint)
                     .into_any_element()
             },
         );
@@ -670,53 +715,55 @@ impl SettingsWindow {
         ]
     }
 
-    /// Contrast slider for VS Code popup themes, with a reset to 100 %.
-    fn vscode_contrast_row(&self, k: &mut Kit, cx: &mut Context<Self>) -> AnyElement {
-        let contrast = self.settings.popup_vscode_contrast;
-        let reset = Button::icon_only(
-            "appearance-vscode-contrast-reset",
-            "arrow-counter-clockwise-bold",
-        )
-        .ghost()
-        .size(ButtonSize::Small)
-        .tooltip(crate::i18n::tr("reset"))
-        .disabled(contrast == POPUP_VSCODE_CONTRAST_DEFAULT)
-        .on_click(Self::h(cx, |this, (), _, cx| {
-            this.edit(cx, |settings| {
-                settings.popup_vscode_contrast = POPUP_VSCODE_CONTRAST_DEFAULT
-            })
-        }))
-        .render(k);
+    /// A percent slider for VS Code popup themes, with a reset to `default`.
+    #[allow(clippy::too_many_arguments)]
+    fn vscode_percent_row(
+        &self,
+        k: &mut Kit,
+        id: &'static str,
+        title: &'static str,
+        description: &'static str,
+        value: u16,
+        (min, max, default): (u16, u16, u16),
+        set: fn(&mut Settings, u16),
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let reset = Button::icon_only(format!("{id}-reset"), "arrow-counter-clockwise-bold")
+            .ghost()
+            .size(ButtonSize::Small)
+            .tooltip(crate::i18n::tr("reset"))
+            .disabled(value == default)
+            .on_click(Self::h(cx, move |this, (), _, cx| {
+                this.edit(cx, move |settings| set(settings, default))
+            }))
+            .render(k);
         let slider = kit::slider(
             k,
-            "appearance-vscode-contrast",
-            f32::from(contrast),
+            id,
+            f32::from(value),
             SliderRange {
-                min: f32::from(POPUP_VSCODE_CONTRAST_MIN),
-                max: f32::from(POPUP_VSCODE_CONTRAST_MAX),
+                min: f32::from(min),
+                max: f32::from(max),
                 step: 5.0,
             },
             160.0,
-            Self::h(cx, |this, value: f32, _, cx| {
-                let value = value.round() as u16;
-                if this.settings.popup_vscode_contrast != value {
-                    this.edit(cx, move |settings| settings.popup_vscode_contrast = value)
+            Self::h(cx, move |this, next: f32, _, cx| {
+                let next = next.round() as u16;
+                if next != value {
+                    this.edit(cx, move |settings| set(settings, next))
                 }
             }),
         );
-        let value_label = kit::text(format!("{contrast}%"), 13.0, k.theme.text_secondary)
+        let value_label = kit::text(format!("{value}%"), 13.0, k.theme.text_secondary)
             .w(px(40.0))
             .text_right()
             .into_any_element();
-        Row::new(
-            "appearance-vscode-contrast",
-            crate::i18n::tr("popup-theme-contrast"),
-        )
-        .description(k, crate::i18n::tr("popup-theme-contrast-description"))
-        .trailing(reset)
-        .trailing(slider)
-        .trailing(value_label)
-        .render(k)
+        Row::new(id, title)
+            .description(k, description)
+            .trailing(reset)
+            .trailing(slider)
+            .trailing(value_label)
+            .render(k)
     }
 
     /// Installed font families, led by the Windows default.

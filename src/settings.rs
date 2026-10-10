@@ -309,6 +309,10 @@ impl PopupBackgroundMaterial {
 pub const POPUP_VSCODE_CONTRAST_MIN: u16 = 50;
 pub const POPUP_VSCODE_CONTRAST_MAX: u16 = 200;
 pub const POPUP_VSCODE_CONTRAST_DEFAULT: u16 = 100;
+/// Range and default of [`Settings::popup_vscode_tint`], in percent.
+pub const POPUP_VSCODE_TINT_MIN: u16 = 0;
+pub const POPUP_VSCODE_TINT_MAX: u16 = 100;
+pub const POPUP_VSCODE_TINT_DEFAULT: u16 = 70;
 
 /// Visual design language of the popup. Settings and onboarding always keep
 /// the Fluent look; only the popup switches themes.
@@ -1755,6 +1759,9 @@ pub struct Settings {
     /// Text and outline contrast of VS Code popup themes in percent; 100
     /// keeps the theme's own colors.
     pub popup_vscode_contrast: u16,
+    /// Opacity in percent of a VS Code theme's background over the Mica or
+    /// Acrylic backdrop.
+    pub popup_vscode_tint: u16,
     /// Outlines around popup cards, controls and the window.
     pub popup_borders: bool,
     /// 12-hour or 24-hour clocks. Missing values follow the Windows locale.
@@ -1836,6 +1843,7 @@ impl Default for Settings {
             popup_theme: PopupTheme::default(),
             popup_vscode_theme: None,
             popup_vscode_contrast: POPUP_VSCODE_CONTRAST_DEFAULT,
+            popup_vscode_tint: POPUP_VSCODE_TINT_DEFAULT,
             popup_borders: true,
             time_format: TimeFormat::from_windows(),
             instances: ProviderKind::ALL
@@ -2048,6 +2056,13 @@ impl Settings {
             .clamp(POPUP_VSCODE_CONTRAST_MIN, POPUP_VSCODE_CONTRAST_MAX);
         if contrast != self.popup_vscode_contrast {
             self.popup_vscode_contrast = contrast;
+            changed = true;
+        }
+        let tint = self
+            .popup_vscode_tint
+            .clamp(POPUP_VSCODE_TINT_MIN, POPUP_VSCODE_TINT_MAX);
+        if tint != self.popup_vscode_tint {
+            self.popup_vscode_tint = tint;
             changed = true;
         }
         let low = self.notifications.low_usage_threshold_percent.clamp(1, 99);

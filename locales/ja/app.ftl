@@ -810,6 +810,8 @@ popup-borders = 枠線
 popup-borders-description = ポップアップ、カード、コントロールに枠線を表示します
 popup-theme-contrast = コントラスト
 popup-theme-contrast-description = VS Code テーマの文字と枠線の強さを調整します
+popup-theme-tint = 色合い
+popup-theme-tint-description = テーマの背景が Mica または Acrylic のガラスをどれだけ覆うかを調整します
 
 # src/settings_window/appearance.rs
 animation-effects = アニメーション効果

@@ -10,8 +10,8 @@ use std::sync::Arc;
 use gpui::{Hsla, Rgba, SharedString};
 
 use crate::settings::{
-    AccentColor, AppTheme, POPUP_VSCODE_CONTRAST_DEFAULT, PopupBackgroundMaterial, PopupTheme,
-    ProviderKind,
+    AccentColor, AppTheme, POPUP_VSCODE_CONTRAST_DEFAULT, POPUP_VSCODE_TINT_DEFAULT,
+    PopupBackgroundMaterial, PopupTheme, ProviderKind,
 };
 use crate::vscode_themes::VsCodeTheme;
 
@@ -178,6 +178,8 @@ pub(crate) struct Palette {
     pub(crate) borders: bool,
     /// Contrast percent applied by [`Palette::with_contrast`].
     pub(crate) contrast: u16,
+    /// Backdrop tint percent applied by [`Palette::with_tint`].
+    pub(crate) tint: u16,
     /// The VS Code theme this palette was mapped from.
     pub(crate) vscode: Option<Arc<VsCodeTheme>>,
 }
@@ -186,6 +188,11 @@ impl Palette {
     /// Luminosity controls backdrop brightness independently of tint opacity,
     /// so a lighter tint can preserve wallpaper hue without washing out on white.
     pub(crate) fn capsule_background(&self, frosted: bool) -> Hsla {
+        // The backdrop keeps the desktop's hue; a VS Code theme's canvas
+        // covers it as much as the user's tint asks.
+        if self.vscode.is_some() && frosted && self.material != PopupBackgroundMaterial::Solid {
+            return self.solid_background.opacity(f32::from(self.tint) / 100.0);
+        }
         match self.material {
             // Opaque #202020 / #F3F3F3 with no backdrop blur behind it.
             PopupBackgroundMaterial::Solid => return self.solid_background,
@@ -209,6 +216,18 @@ impl Palette {
             0.96
         };
         self.solid_background.opacity(opacity)
+    }
+
+    /// Lightness source of the Mica/Acrylic backdrop: a VS Code theme's
+    /// canvas, else the Fluent base (#202020 dark, near-white light).
+    pub(crate) fn backdrop_luminosity(&self) -> (u8, u8, u8) {
+        if self.vscode.is_none() {
+            let level = if self.dark { 32 } else { 245 };
+            return (level, level, level);
+        }
+        let rgb = self.solid_background.to_rgb();
+        let byte = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+        (byte(rgb.r), byte(rgb.g), byte(rgb.b))
     }
 
     /// `vscode` is the theme from [`popup_design`]; a VS Code
@@ -276,6 +295,12 @@ impl Palette {
         ] {
             *color = adjust(*color, weight);
         }
+        self
+    }
+
+    /// Opacity in percent of a VS Code theme's canvas over Mica or Acrylic.
+    pub(crate) fn with_tint(mut self, percent: u16) -> Self {
+        self.tint = percent;
         self
     }
 
@@ -431,6 +456,7 @@ impl Palette {
             material,
             borders: true,
             contrast: POPUP_VSCODE_CONTRAST_DEFAULT,
+            tint: POPUP_VSCODE_TINT_DEFAULT,
             vscode: None,
         }
     }
@@ -491,6 +517,7 @@ impl Palette {
             material,
             borders: true,
             contrast: POPUP_VSCODE_CONTRAST_DEFAULT,
+            tint: POPUP_VSCODE_TINT_DEFAULT,
             vscode: None,
         }
     }
@@ -672,6 +699,7 @@ impl Palette {
             material,
             borders: true,
             contrast: POPUP_VSCODE_CONTRAST_DEFAULT,
+            tint: POPUP_VSCODE_TINT_DEFAULT,
             vscode: Some(theme),
         }
     }

@@ -1190,6 +1190,14 @@ popup-theme-contrast = { "" }
 popup-theme-contrast-description = { "" }
 
 # English source:
+# popup-theme-tint = Tint
+popup-theme-tint = { "" }
+
+# English source:
+# popup-theme-tint-description = How much of the theme's background covers the Mica or Acrylic glass
+popup-theme-tint-description = { "" }
+
+# English source:
 # animation-effects = Animation effects
 animation-effects = { "" }
 
