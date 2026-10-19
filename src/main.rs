@@ -172,6 +172,9 @@ fn show_error(message: &str) {
 }
 
 fn main() {
+    if let Some(code) = codex_minibar::taskbar::run_helper() {
+        std::process::exit(code);
+    }
     if troubleshoot::is_cli_request() {
         if let Err(error) = troubleshoot::launch_cli_picker() {
             show_error(&format!(

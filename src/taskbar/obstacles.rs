@@ -9,8 +9,8 @@
 //! never wait on it.
 //!
 //! The Windows 10 taskbar (also restored by ExplorerPatcher) exposes its app
-//! buttons only through MSAA, so they are read from the task list's
-//! `IAccessible` instead.
+//! buttons and notification icons only through MSAA, so they are read from
+//! the toolbars' `IAccessible` instead.
 
 use std::{
     sync::{
@@ -178,6 +178,9 @@ fn measure(automation: &IUIAutomation) -> Option<(Obstacles, Vec<Bounds>)> {
         if obstacles.cluster.is_none() {
             obstacles.cluster = classic_cluster(taskbar);
         }
+        if tray.is_empty() {
+            tray = classic_tray(taskbar);
+        }
         tray.sort_by_key(|bounds| (bounds.0, bounds.1));
         Some((obstacles, tray))
     }
@@ -251,6 +254,40 @@ fn classic_cluster(taskbar: HWND) -> Option<Bounds> {
         }
     }
     cluster
+}
+
+/// The app icons of the Windows 10 notification area: the buttons of the
+/// first toolbar in `SysPager`; the system icons live in a second one.
+fn classic_tray(taskbar: HWND) -> Vec<Bounds> {
+    let mut icons = Vec::new();
+    let Some(list) = find_child(taskbar, "TrayNotifyWnd")
+        .and_then(|tray| find_child(tray, "SysPager"))
+        .and_then(|pager| find_child(pager, "ToolbarWindow32"))
+    else {
+        return icons;
+    };
+    unsafe {
+        let mut object = std::ptr::null_mut();
+        // OBJID_CLIENT
+        if AccessibleObjectFromWindow(list, 0xFFFF_FFFC, &IAccessible::IID, &mut object).is_err() {
+            return icons;
+        }
+        let list = IAccessible::from_raw(object);
+        for child in 1..=list.accChildCount().unwrap_or(0) {
+            let (mut left, mut top, mut width, mut height) = (0, 0, 0, 0);
+            let child = VARIANT::from(child);
+            if list
+                .accLocation(&mut left, &mut top, &mut width, &mut height, &child)
+                .is_ok()
+                && width > 0
+                && height > 0
+            {
+                icons.push((left, top, left + width, top + height));
+            }
+        }
+    }
+    icons.sort_by_key(|bounds| (bounds.0, bounds.1));
+    icons
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

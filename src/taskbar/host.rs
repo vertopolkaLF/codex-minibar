@@ -1889,6 +1889,12 @@ fn locate(alignment: TaskbarAlignment) -> Option<Geometry> {
             .map(|(_, to)| to);
         let mut origin = POINT { x: 0, y: 0 };
         MapWindowPoints(taskbar, null_mut(), &mut origin, 1);
+        // Notification icons stack in rows on a vertical taskbar, so there
+        // is no strip-shaped room to reserve: stay next to the tray there.
+        let alignment = match alignment {
+            TaskbarAlignment::InTray if vertical => TaskbarAlignment::Tray,
+            alignment => alignment,
+        };
         Some(Geometry {
             taskbar,
             scale,

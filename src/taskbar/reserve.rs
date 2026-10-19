@@ -9,6 +9,10 @@
 //! the notification area; while they are not together on the taskbar the
 //! strip is hidden rather than drawn anywhere else.
 //!
+//! The Windows 10 notification area (also restored by ExplorerPatcher) keeps
+//! no such entries; there a helper process promotes the icons through
+//! Explorer's private interface (see `promote.rs`).
+//!
 //! `Shell_NotifyIcon` and `Shell_NotifyIconGetRect` call into Explorer
 //! synchronously, so they run on their own thread: the host thread shares
 //! Explorer's input queue and must never wait on it.
@@ -38,10 +42,9 @@ use windows_sys::{
                 Shell_NotifyIconGetRect, Shell_NotifyIconW,
             },
             WindowsAndMessaging::{
-                CreateIcon, CreateWindowExW, DefWindowProcW, DestroyIcon, DispatchMessageW,
-                GetMessageW, HICON, MSG, PostMessageW, RegisterClassW, RegisterWindowMessageW,
-                SetTimer, TranslateMessage, WM_APP, WM_TIMER, WNDCLASSW, WS_EX_TOOLWINDOW,
-                WS_POPUP,
+                CreateWindowExW, DefWindowProcW, DestroyIcon, DispatchMessageW, GetMessageW, HICON,
+                MSG, PostMessageW, RegisterClassW, RegisterWindowMessageW, SetTimer,
+                TranslateMessage, WM_APP, WM_TIMER, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
             },
         },
     },
@@ -77,6 +80,11 @@ const MAX_REORDERS: u32 = 3;
 const PROMOTE_EVERY: Duration = Duration::from_secs(5);
 /// How often the promotion is re-applied while an icon is in the overflow.
 const REPROMOTE: Duration = Duration::from_secs(1);
+/// Least time between two Windows 10 promotion helpers.
+const HELPER_EVERY: Duration = Duration::from_secs(10);
+/// Failed helper runs before Windows 10 promotion stops until Explorer
+/// restarts.
+const MAX_HELPER_FAILURES: u32 = 3;
 
 const SETTINGS_KEY: &str = r"Control Panel\NotifyIconSettings";
 
@@ -156,6 +164,11 @@ struct Reserve {
     reorders: u32,
     /// Some icon is in the overflow.
     hidden: bool,
+    /// A Windows 10 promotion helper still running, when the last one
+    /// started and how many failed in a row.
+    helper: Option<super::promote::Run>,
+    helper_started: Option<Instant>,
+    helper_failures: u32,
 }
 
 thread_local! {
@@ -192,10 +205,7 @@ fn run() {
             STARTED.store(false, Ordering::SeqCst);
             return;
         }
-        // A 16×16 icon whose AND mask keeps every pixel of the background.
-        let and_mask = [0xFFu8; 32];
-        let xor_mask = [0u8; 32];
-        let icon = CreateIcon(instance, 16, 16, 1, 1, and_mask.as_ptr(), xor_mask.as_ptr());
+        let icon = blank_icon();
         RESERVE.with(|reserve| {
             *reserve.borrow_mut() = Some(Reserve {
                 window,
@@ -210,6 +220,9 @@ fn run() {
                 entries: 0,
                 reorders: 0,
                 hidden: false,
+                helper: None,
+                helper_started: None,
+                helper_failures: 0,
             })
         });
         TASKBAR_CREATED.store(
@@ -297,6 +310,7 @@ impl Reserve {
         self.pitch = None;
         self.promoted = None;
         self.reorders = 0;
+        self.helper_failures = 0;
         self.changed = Instant::now();
         self.sync_added();
         publish(None);
@@ -346,6 +360,10 @@ impl Reserve {
     }
 
     fn promote(&mut self) {
+        if classic_tray() {
+            self.promote_classic();
+            return;
+        }
         if self.ids.is_empty() || self.promoted.is_some_and(|at| at.elapsed() < PROMOTE_EVERY) {
             return;
         }
@@ -356,6 +374,32 @@ impl Reserve {
         if self.entries >= ids.len() {
             self.promoted = Some(Instant::now());
         }
+    }
+
+    /// Windows 10 has no entries to write; a helper process asks Explorer
+    /// instead (see `promote.rs`). It runs only when icons were added or
+    /// found hidden, at most every [`HELPER_EVERY`], and stops after
+    /// [`MAX_HELPER_FAILURES`] failed runs.
+    fn promote_classic(&mut self) {
+        if let Some(helper) = self.helper.as_mut() {
+            match helper.finished() {
+                None => return,
+                Some(true) => self.helper_failures = 0,
+                Some(false) => self.helper_failures += 1,
+            }
+            self.helper = None;
+        }
+        let due = self.promoted.is_none()
+            && self.helper_failures < MAX_HELPER_FAILURES
+            && self
+                .helper_started
+                .is_none_or(|at| at.elapsed() >= HELPER_EVERY);
+        if self.ids.is_empty() || !due {
+            return;
+        }
+        self.helper = super::promote::Run::start(self.window as isize, &self.ids);
+        self.helper_started = Some(Instant::now());
+        self.promoted = Some(Instant::now());
     }
 
     /// Publishes the block wherever the icons sit together on the taskbar,
@@ -392,7 +436,7 @@ impl Reserve {
         });
         let together = rects
             .windows(2)
-            .all(|pair| (pair[1].0 - pair[0].2).abs() <= 1 && pair[1].1 == pair[0].1);
+            .all(|pair| (pair[1].0 - pair[0].2).abs() <= 2 && pair[1].1 == pair[0].1);
         if on_taskbar && let Some(first) = rects.first() {
             // Only a slot on the taskbar tells its width; the overflow
             // flyout lays icons out on its own grid.
@@ -417,7 +461,8 @@ impl Reserve {
             }
             return;
         };
-        if !on_taskbar || rects.iter().any(|rect| !tray.contains(rect)) {
+        let listed = |rect: &Bounds| tray.iter().any(|other| near(rect, other));
+        if !on_taskbar || !rects.iter().all(listed) {
             // Moved to the overflow: promote them again, which brings them
             // back onto the taskbar.
             if !self.hidden {
@@ -435,7 +480,12 @@ impl Reserve {
             return;
         }
         self.hidden = false;
-        let leading = together && tray.len() >= rects.len() && tray[..rects.len()] == rects[..];
+        let leading = together
+            && tray.len() >= rects.len()
+            && rects
+                .iter()
+                .zip(&tray)
+                .all(|(ours, other)| near(ours, other));
         if leading {
             if self.reorders > 0 {
                 crate::logger::info("Reserved tray icons lead the notification area");
@@ -482,6 +532,53 @@ fn taskbar_bounds() -> Option<Bounds> {
     }
 }
 
+/// The same button, measured two ways that may round differently.
+fn near(a: &Bounds, b: &Bounds) -> bool {
+    (a.0 - b.0).abs() <= 1
+        && (a.1 - b.1).abs() <= 1
+        && (a.2 - b.2).abs() <= 1
+        && (a.3 - b.3).abs() <= 1
+}
+
+/// Width of a notification icon slot on the Windows 10 taskbar, in DIPs.
+const CLASSIC_SLOT_GUESS: f32 = 24.0;
+
+/// Whether Explorer runs the Windows 10 notification area: a Win32 toolbar
+/// inside `SysPager` rather than the XAML one.
+pub(super) fn classic_tray() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        FindWindowExW, FindWindowW, IsWindowVisible,
+    };
+    unsafe {
+        let taskbar = FindWindowW(wide("Shell_TrayWnd").as_ptr(), null_mut());
+        if taskbar.is_null() {
+            return false;
+        }
+        let tray = FindWindowExW(
+            taskbar,
+            null_mut(),
+            wide("TrayNotifyWnd").as_ptr(),
+            null_mut(),
+        );
+        if tray.is_null() {
+            return false;
+        }
+        let pager = FindWindowExW(tray, null_mut(), wide("SysPager").as_ptr(), null_mut());
+        if pager.is_null() {
+            return false;
+        }
+        // Windows 11 keeps an empty SysPager; only the Windows 10 one holds
+        // the icon toolbar.
+        let icons = FindWindowExW(
+            pager,
+            null_mut(),
+            wide("ToolbarWindow32").as_ptr(),
+            null_mut(),
+        );
+        !icons.is_null() && IsWindowVisible(icons) != 0
+    }
+}
+
 /// One slot at the taskbar's DPI.
 fn guess_pitch() -> i32 {
     use windows_sys::Win32::UI::{HiDpi::GetDpiForWindow, WindowsAndMessaging::FindWindowW};
@@ -492,7 +589,53 @@ fn guess_pitch() -> i32 {
         unsafe { GetDpiForWindow(taskbar) }
     };
     let scale = if dpi == 0 { 1.0 } else { dpi as f32 / 96.0 };
-    (SLOT_GUESS * scale).round() as i32
+    let slot = if classic_tray() {
+        CLASSIC_SLOT_GUESS
+    } else {
+        SLOT_GUESS
+    };
+    (slot * scale).round() as i32
+}
+
+/// An invisible 32×32 icon. Its pixels are not fully transparent: the
+/// Windows 11 tray keeps showing whatever image a recycled slot held before
+/// when an icon has nothing to draw, so each pixel keeps 1/255 alpha.
+fn blank_icon() -> HICON {
+    use windows_sys::Win32::Graphics::Gdi::{
+        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateBitmap, CreateDIBSection, DIB_RGB_COLORS,
+        DeleteObject,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CreateIconIndirect, ICONINFO};
+    const SIZE: i32 = 32;
+    unsafe {
+        let mut info: BITMAPINFO = std::mem::zeroed();
+        info.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+        info.bmiHeader.biWidth = SIZE;
+        info.bmiHeader.biHeight = -SIZE;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+        let mut bits = null_mut();
+        let color = CreateDIBSection(null_mut(), &info, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
+        if color.is_null() || bits.is_null() {
+            return null_mut();
+        }
+        // Premultiplied BGRA: black at 1/255 alpha.
+        let pixels = std::slice::from_raw_parts_mut(bits.cast::<u32>(), (SIZE * SIZE) as usize);
+        pixels.fill(0x0100_0000);
+        let mask_bits = vec![0u8; (SIZE * SIZE / 8) as usize];
+        let mask = CreateBitmap(SIZE, SIZE, 1, 1, mask_bits.as_ptr().cast());
+        let icon = CreateIconIndirect(&ICONINFO {
+            fIcon: 1,
+            xHotspot: 0,
+            yHotspot: 0,
+            hbmMask: mask,
+            hbmColor: color,
+        });
+        DeleteObject(mask);
+        DeleteObject(color);
+        icon
+    }
 }
 
 fn publish(bounds: Option<Bounds>) {
