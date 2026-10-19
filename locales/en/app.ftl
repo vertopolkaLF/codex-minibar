@@ -2739,6 +2739,7 @@ taskbar-position = Position
 taskbar-position-description = Where the widgets sit on the taskbar. The start suits centered taskbar icons best.
 taskbar-position-tray = Next to the notification area
 taskbar-position-start = At the start of the taskbar
+taskbar-position-in-tray = Inside the notification area (experimental)
 taskbar-widgets = Widgets
 taskbar-no-widgets = No widgets yet
 taskbar-no-widgets-description = Add a widget to show a quota on the taskbar.

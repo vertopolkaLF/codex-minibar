@@ -86,6 +86,8 @@ const MENU_EXIT: usize = 7;
 
 /// Space between the strip and its anchor, in DIPs.
 const TRAY_MARGIN: f32 = 2.0;
+/// Space kept inside each end of the reserved tray block, in DIPs.
+const RESERVE_PADDING: f32 = 2.0;
 const START_MARGIN: f32 = 6.0;
 
 const HOVER_IN: Duration = Duration::from_millis(100);
@@ -616,6 +618,12 @@ struct Host {
     card: Option<Card>,
     /// Explorer's buttons as last measured.
     obstacles: Option<Obstacles>,
+    /// Screen bounds of the tray block reserved for the strip, as last read.
+    reserved_screen: Option<super::obstacles::Bounds>,
+    /// The reserved block's extent along the taskbar, in client pixels.
+    reserved: Option<(i32, i32)>,
+    /// The last reserved block, where widgets fade out while it is gone.
+    block: Option<(i32, i32)>,
     /// Start of a start-aligned strip, past the widgets button.
     leading: i32,
     /// Since when a first show waits for Explorer's buttons to be measured.
@@ -652,6 +660,9 @@ impl Host {
         Self {
             card: None,
             obstacles: None,
+            reserved_screen: None,
+            reserved: None,
+            block: None,
             leading: 0,
             awaiting_obstacles: None,
             controller,
@@ -706,6 +717,7 @@ impl Host {
         );
         let minute = Utc::now().timestamp() / 60;
         let obstacles = super::obstacles::latest();
+        let reserved = super::reserve::latest();
         let window_lost = !self.window.is_null() && unsafe { IsWindow(self.window) } == 0;
         if window_lost {
             // Explorer restarted and destroyed the child with its taskbar.
@@ -717,6 +729,7 @@ impl Host {
             || appearance != self.appearance
             || minute != self.minute
             || obstacles != self.obstacles
+            || reserved != self.reserved_screen
             || window_lost
             || self
                 .awaiting_obstacles
@@ -780,6 +793,8 @@ impl Host {
             self.teardown();
         }
         if views.is_empty() && self.window.is_null() {
+            super::reserve::request(0);
+            self.reserved = None;
             self.slots.clear();
             return;
         }
@@ -806,7 +821,17 @@ impl Host {
             }
         }
         self.awaiting_obstacles = None;
-        let (leading, available) = free_span(geometry, self.obstacles);
+        self.reserve_space(geometry, &views, metrics);
+        let (leading, available) = match (geometry.alignment, self.reserved) {
+            // Inside the tray the strip only ever shows over its block, and
+            // fades out where it was while the block is gone.
+            (TaskbarAlignment::InTray, Some((start, end))) => (
+                0,
+                ((end - start) as f32 - 2.0 * RESERVE_PADDING * metrics.scale).max(0.0),
+            ),
+            (TaskbarAlignment::InTray, None) => (0, 0.0),
+            _ => free_span(geometry, self.obstacles),
+        };
         self.leading = leading;
         let (views, widths) = match self.renderer.as_mut() {
             Some(renderer) => fit(views, available / metrics.scale, |view| {
@@ -903,6 +928,40 @@ impl Host {
         self.render();
     }
 
+    /// Asks for tray space the full strip fits in and adopts the block
+    /// while its icons sit together on the taskbar. Only a horizontal
+    /// taskbar with the strip inside the tray reserves space.
+    fn reserve_space(&mut self, geometry: Geometry, views: &[WidgetView], metrics: Metrics) {
+        let wanted = match (geometry.alignment, self.renderer.as_mut()) {
+            (TaskbarAlignment::InTray, Some(renderer))
+                if !geometry.edge.vertical() && !views.is_empty() =>
+            {
+                let widths = views
+                    .iter()
+                    .map(|view| renderer.measure(view, metrics).unwrap_or(0.0))
+                    .sum::<f32>();
+                let length = widths
+                    + WIDGET_GAP * views.len().saturating_sub(1) as f32
+                    + 2.0 * RESERVE_PADDING;
+                (length * metrics.scale).ceil() as i32
+            }
+            _ => 0,
+        };
+        super::reserve::request(wanted);
+        self.reserved_screen = if wanted > 0 {
+            super::reserve::latest()
+        } else {
+            None
+        };
+        self.reserved = self
+            .reserved_screen
+            .map(|bounds| geometry.along(bounds))
+            .filter(|(start, end)| *start >= 0 && end > start);
+        if self.reserved.is_some() {
+            self.block = self.reserved;
+        }
+    }
+
     fn click_page(&self) -> crate::settings::TaskbarClick {
         self.config
             .as_ref()
@@ -967,7 +1026,11 @@ impl Host {
 
     fn teardown(&mut self) {
         super::obstacles::set_wanted(false);
+        super::reserve::request(0);
         self.obstacles = None;
+        self.reserved_screen = None;
+        self.reserved = None;
+        self.block = None;
         self.hide();
     }
 
@@ -1127,12 +1190,28 @@ impl Host {
             }
             return;
         }
-        let length = (total * metrics.scale).ceil() as i32;
-        let start = match geometry.alignment {
-            TaskbarAlignment::Tray => {
-                geometry.anchor - (TRAY_MARGIN * metrics.scale).round() as i32 - length
+        // Over a reserved tray block the window covers all of it, so Explorer
+        // never highlights the blank icons, and centers the strip.
+        let reserved = match geometry.alignment {
+            TaskbarAlignment::InTray => self.reserved.or(self.block),
+            _ => None,
+        };
+        let (start, length) = match (reserved, geometry.alignment) {
+            (Some((start, end)), _) => (start, end - start),
+            (None, TaskbarAlignment::InTray) => {
+                self.hide();
+                return;
             }
-            TaskbarAlignment::Start => self.leading,
+            (None, TaskbarAlignment::Tray) => {
+                let length = (total * metrics.scale).ceil() as i32;
+                (
+                    geometry.anchor - (TRAY_MARGIN * metrics.scale).round() as i32 - length,
+                    length,
+                )
+            }
+            (None, TaskbarAlignment::Start) => {
+                (self.leading, (total * metrics.scale).ceil() as i32)
+            }
         };
         let (rect, width, height) = if geometry.edge.vertical() {
             (
@@ -1158,9 +1237,10 @@ impl Host {
             )
         };
         // Tray alignment grows toward the start: content keeps its far end.
-        let shift = match geometry.alignment {
-            TaskbarAlignment::Tray => (length as f32 / metrics.scale - total).max(0.0),
-            TaskbarAlignment::Start => 0.0,
+        let shift = match (reserved, geometry.alignment) {
+            (Some(_), _) => ((length as f32 / metrics.scale - total) / 2.0).max(0.0),
+            (None, TaskbarAlignment::Tray) => (length as f32 / metrics.scale - total).max(0.0),
+            (None, _) => 0.0,
         };
         if !self.ensure_window(geometry, rect) {
             return;
@@ -1209,6 +1289,7 @@ impl Host {
             metrics,
             self.appearance,
             &items,
+            reserved.is_some(),
         ) {
             trace(format!("Taskbar widget paint failed: {error}"));
             return;
@@ -1619,6 +1700,8 @@ fn free_span(geometry: Geometry, obstacles: Option<Obstacles>) -> (i32, f32) {
         .and_then(|obstacles| obstacles.cluster)
         .map(|bounds| geometry.along(bounds));
     match geometry.alignment {
+        // The strip lives in its reserved block instead.
+        TaskbarAlignment::InTray => (0, 0.0),
         TaskbarAlignment::Tray => {
             let end = geometry.anchor - (TRAY_MARGIN * scale).round() as i32;
             // Buttons that reach the tray leave no room rather than all of it.
@@ -1784,7 +1867,7 @@ fn locate(alignment: TaskbarAlignment) -> Option<Geometry> {
         let dpi = GetDpiForWindow(taskbar);
         let scale = if dpi == 0 { 1.0 } else { dpi as f32 / 96.0 };
         let anchor = match alignment {
-            TaskbarAlignment::Tray => {
+            TaskbarAlignment::Tray | TaskbarAlignment::InTray => {
                 let tray = FindWindowExW(
                     taskbar,
                     null_mut(),

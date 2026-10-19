@@ -2740,6 +2740,7 @@ taskbar-position = Position
 taskbar-position-description = Wo die Widgets in der Taskleiste sitzen. Der Anfang eignet sich am besten für zentrierte Taskleistensymbole.
 taskbar-position-tray = Neben dem Infobereich
 taskbar-position-start = Am Anfang der Taskleiste
+taskbar-position-in-tray = Im Infobereich (experimentell)
 taskbar-widgets = Widgets
 taskbar-no-widgets = Noch keine Widgets
 taskbar-no-widgets-description = Fügen Sie ein Widget hinzu, um ein Kontingent in der Taskleiste anzuzeigen.

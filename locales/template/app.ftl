@@ -3933,6 +3933,10 @@ taskbar-position-tray = { "" }
 taskbar-position-start = { "" }
 
 # English source:
+# taskbar-position-in-tray = Inside the notification area (experimental)
+taskbar-position-in-tray = { "" }
+
+# English source:
 # taskbar-widgets = Widgets
 taskbar-widgets = { "" }
 

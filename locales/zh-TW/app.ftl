@@ -1817,6 +1817,7 @@ taskbar-position = 位置
 taskbar-position-description = 小工具在工作列上的位置。開頭最適合置中的工作列圖示。
 taskbar-position-tray = 通知區域旁邊
 taskbar-position-start = 工作列開頭
+taskbar-position-in-tray = 通知區域內（實驗性）
 taskbar-widgets = 小工具
 taskbar-no-widgets = 暫無小工具
 taskbar-no-widgets-description = 新增小工具以在工作列上顯示額度。

@@ -555,6 +555,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                 let exit = pump_taskbar_actions(&settings_tx, &mut ui);
                 if exit || pump_tray_and_dismiss(&tray, &settings_tx, &state, &mut ui) {
                     drop(tray);
+                    crate::taskbar::shutdown();
                     AppState::flush_limits_persistence();
                     state.shutdown_worker();
                     std::process::exit(0);
@@ -596,6 +597,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
             let exit = pump_taskbar_actions(&settings_tx, &mut ui);
             if exit || pump_tray_and_dismiss(&tray, &settings_tx, &state, &mut ui) {
                 drop(tray);
+                crate::taskbar::shutdown();
                 AppState::flush_limits_persistence();
                 state.shutdown_worker();
                 std::process::exit(0);

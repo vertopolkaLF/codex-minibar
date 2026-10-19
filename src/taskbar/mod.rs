@@ -14,6 +14,8 @@ pub(crate) mod model;
 mod obstacles;
 #[cfg(windows)]
 pub(crate) mod render;
+#[cfg(windows)]
+mod reserve;
 
 use std::sync::{
     Mutex,
@@ -114,6 +116,12 @@ pub fn take_actions() -> Vec<Action> {
         .lock()
         .map(|mut actions| std::mem::take(&mut *actions))
         .unwrap_or_default()
+}
+
+/// Gives back the tray space held for the widgets; call before exiting.
+pub fn shutdown() {
+    #[cfg(windows)]
+    reserve::shutdown();
 }
 
 /// Publishes the latest settings. The host thread starts on the first

@@ -121,7 +121,10 @@ fn run() -> Result<()> {
     codex_minibar::game_mode::set_settings_writer(state.settings_tx.clone());
     codex_minibar::updater::install_runtime(Arc::clone(&updates), {
         let state = Arc::clone(&state);
-        move || state.shutdown_worker()
+        move || {
+            codex_minibar::taskbar::shutdown();
+            state.shutdown_worker()
+        }
     });
 
     // Initializes the tray accent before any popup can be shown.

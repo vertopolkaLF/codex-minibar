@@ -2746,6 +2746,7 @@ taskbar-position = Расположение
 taskbar-position-description = Где виджеты находятся на панели задач. Начало панели лучше подходит для значков по центру.
 taskbar-position-tray = Рядом с областью уведомлений
 taskbar-position-start = В начале панели задач
+taskbar-position-in-tray = Внутри области уведомлений (экспериментально)
 taskbar-widgets = Виджеты
 taskbar-no-widgets = Виджетов пока нет
 taskbar-no-widgets-description = Добавьте виджет, чтобы показать лимит на панели задач.

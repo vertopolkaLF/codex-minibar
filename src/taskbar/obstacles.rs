@@ -17,7 +17,7 @@ use std::{
         Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use windows::Win32::{
@@ -52,10 +52,16 @@ fn union(a: Option<Bounds>, b: Bounds) -> Bounds {
 }
 
 const INTERVAL: Duration = Duration::from_secs(2);
+/// Granularity of the wait between measurements, so a requested refresh
+/// does not wait out the whole interval.
+const STEP: Duration = Duration::from_millis(100);
 
 static LATEST: Mutex<Option<Obstacles>> = Mutex::new(None);
+/// Notification icons on the taskbar, in order, and when they were measured.
+static TRAY: Mutex<Option<(Instant, Vec<Bounds>)>> = Mutex::new(None);
 static WANTED: AtomicBool = AtomicBool::new(false);
 static STARTED: AtomicBool = AtomicBool::new(false);
+static REFRESH: AtomicBool = AtomicBool::new(false);
 
 /// Starts or pauses the measurements; the worker starts on first use.
 pub(super) fn set_wanted(wanted: bool) {
@@ -63,6 +69,9 @@ pub(super) fn set_wanted(wanted: bool) {
     if !wanted {
         if let Ok(mut latest) = LATEST.lock() {
             *latest = None;
+        }
+        if let Ok(mut tray) = TRAY.lock() {
+            *tray = None;
         }
         return;
     }
@@ -80,6 +89,17 @@ pub(super) fn latest() -> Option<Obstacles> {
     LATEST.lock().ok().and_then(|latest| *latest)
 }
 
+/// Measures again within a step instead of at the next interval.
+pub(super) fn refresh() {
+    REFRESH.store(true, Ordering::SeqCst);
+}
+
+/// The notification icons shown on the taskbar, leading one first, and when
+/// they were measured.
+pub(super) fn tray_icons() -> Option<(Instant, Vec<Bounds>)> {
+    TRAY.lock().ok().and_then(|tray| tray.clone())
+}
+
 fn run() {
     let automation: Option<IUIAutomation> = unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
@@ -91,15 +111,25 @@ fn run() {
     loop {
         if WANTED.load(Ordering::SeqCst) {
             let measured = measure(&automation);
+            let tray = measured
+                .as_ref()
+                .map(|(_, tray)| (Instant::now(), tray.clone()));
             if let Ok(mut latest) = LATEST.lock() {
-                *latest = measured;
+                *latest = measured.map(|(obstacles, _)| obstacles);
+            }
+            if let Ok(mut latest) = TRAY.lock() {
+                *latest = tray;
             }
         }
-        std::thread::sleep(INTERVAL);
+        let mut waited = Duration::ZERO;
+        while waited < INTERVAL && !REFRESH.swap(false, Ordering::SeqCst) {
+            std::thread::sleep(STEP);
+            waited += STEP;
+        }
     }
 }
 
-fn measure(automation: &IUIAutomation) -> Option<Obstacles> {
+fn measure(automation: &IUIAutomation) -> Option<(Obstacles, Vec<Bounds>)> {
     unsafe {
         let class = "Shell_TrayWnd\0".encode_utf16().collect::<Vec<_>>();
         let taskbar = windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW(
@@ -124,6 +154,7 @@ fn measure(automation: &IUIAutomation) -> Option<Obstacles> {
             .FindAllBuildCache(TreeScope_Descendants, &condition, &cache)
             .ok()?;
         let mut obstacles = Obstacles::default();
+        let mut tray = Vec::new();
         for index in 0..elements.Length().unwrap_or(0) {
             let Ok(element) = elements.GetElement(index) else {
                 continue;
@@ -140,13 +171,15 @@ fn measure(automation: &IUIAutomation) -> Option<Obstacles> {
             match classify(&class, &id) {
                 Some(Kind::Widgets) => obstacles.widgets = Some(union(obstacles.widgets, bounds)),
                 Some(Kind::Cluster) => obstacles.cluster = Some(union(obstacles.cluster, bounds)),
+                Some(Kind::TrayIcon) => tray.push(bounds),
                 None => {}
             }
         }
         if obstacles.cluster.is_none() {
             obstacles.cluster = classic_cluster(taskbar);
         }
-        Some(obstacles)
+        tray.sort_by_key(|bounds| (bounds.0, bounds.1));
+        Some((obstacles, tray))
     }
 }
 
@@ -224,11 +257,16 @@ fn classic_cluster(taskbar: HWND) -> Option<Bounds> {
 enum Kind {
     Widgets,
     Cluster,
+    /// An app's notification icon, not one of the system's.
+    TrayIcon,
 }
 
 fn classify(class: &str, id: &str) -> Option<Kind> {
     if id == "WidgetsButton" {
         return Some(Kind::Widgets);
+    }
+    if id == "NotifyItemIcon" {
+        return Some(Kind::TrayIcon);
     }
     let cluster = class == "Taskbar.TaskListButtonAutomationPeer"
         || class == "ToggleButton"
@@ -255,6 +293,11 @@ mod tests {
             Some(Kind::Widgets)
         );
         assert_eq!(classify("SystemTray.NormalButton", ""), None);
+        assert_eq!(
+            classify("SystemTray.NormalButton", "NotifyItemIcon"),
+            Some(Kind::TrayIcon)
+        );
+        assert_eq!(classify("SystemTray.NormalButton", "SystemTrayIcon"), None);
         assert_eq!(classify("Taskbar.TaskbarFrameAutomationPeer", ""), None);
     }
 }
