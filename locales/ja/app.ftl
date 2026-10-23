@@ -2723,6 +2723,7 @@ taskbar-position = 位置
 taskbar-position-description = タスク バー上のウィジェットの位置です。先頭はアイコンを中央揃えにしている場合に最適です。
 taskbar-position-tray = 通知領域の横
 taskbar-position-start = タスク バーの先頭
+taskbar-position-in-tray = 通知領域の中 (試験的)
 taskbar-widgets = ウィジェット
 taskbar-no-widgets = ウィジェットはまだありません
 taskbar-no-widgets-description = ウィジェットを追加すると、タスク バーに利用枠を表示できます。

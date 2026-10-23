@@ -1821,6 +1821,7 @@ taskbar-position = 位置
 taskbar-position-description = 组件在任务栏上的位置。开头最适合居中的任务栏图标。
 taskbar-position-tray = 通知区域旁边
 taskbar-position-start = 任务栏开头
+taskbar-position-in-tray = 通知区域内（实验性）
 taskbar-widgets = 组件
 taskbar-no-widgets = 暂无组件
 taskbar-no-widgets-description = 添加组件以在任务栏上显示额度。

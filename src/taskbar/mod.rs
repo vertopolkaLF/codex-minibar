@@ -13,7 +13,11 @@ pub(crate) mod model;
 #[cfg(windows)]
 mod obstacles;
 #[cfg(windows)]
+mod promote;
+#[cfg(windows)]
 pub(crate) mod render;
+#[cfg(windows)]
+mod reserve;
 
 use std::sync::{
     Mutex,
@@ -114,6 +118,21 @@ pub fn take_actions() -> Vec<Action> {
         .lock()
         .map(|mut actions| std::mem::take(&mut *actions))
         .unwrap_or_default()
+}
+
+/// Runs the tray icon promotion helper when the process was launched as
+/// one; returns its exit code. Checked before anything else at startup.
+pub fn run_helper() -> Option<i32> {
+    #[cfg(windows)]
+    return promote::run_from_args();
+    #[cfg(not(windows))]
+    None
+}
+
+/// Gives back the tray space held for the widgets; call before exiting.
+pub fn shutdown() {
+    #[cfg(windows)]
+    reserve::shutdown();
 }
 
 /// Publishes the latest settings. The host thread starts on the first

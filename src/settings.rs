@@ -1859,6 +1859,9 @@ pub enum TaskbarAlignment {
     Tray,
     /// At the taskbar's leading edge, where the Windows widgets button lives.
     Start,
+    /// Experimental: inside the notification area, over blank icons that
+    /// reserve the room so app buttons stop before the strip.
+    InTray,
 }
 
 fn new_taskbar_widget_id() -> String {
