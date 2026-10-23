@@ -883,6 +883,7 @@ teal = Teal
 # src/settings_window/customize.rs
 show-edit-button = Show Edit button in bottom bar
 show-edit-button-description = Edit mode reveals grips on Home to drag widgets into a new order. Start it here to keep the bottom bar compact.
+show-edit-button-locked-description = The action bar always shows the Edit button. This switch applies when the action bar is hidden.
 start-editing = Start editing
 
 # src/settings_window/customize.rs
@@ -2947,6 +2948,8 @@ popup-position-description = The position is remembered between sessions.
 popup-reset-position = Reset position
 popup-drag-header = Drag to move
 popup-close = Close panel
+popup-pop-out = Pop out as a floating panel
+popup-dock = Dock back to the taskbar
 
 show-popup-action-bar = Show popup action bar
-show-popup-action-bar-description = Show the app title and action buttons in the regular popup. Floating panels always show this bar.
+show-popup-action-bar-description = Show refresh, settings and layout buttons above the regular popup. Floating panels always show this bar.

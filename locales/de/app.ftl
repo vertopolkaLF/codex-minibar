@@ -867,6 +867,7 @@ teal = Blaugrün
 # src/settings_window/customize.rs
 show-edit-button = Bearbeiten-Schaltfläche in der unteren Leiste anzeigen
 show-edit-button-description = Im Bearbeitungsmodus erscheinen Griffe auf der Startseite, um Widgets neu anzuordnen. Starte ihn hier, um die untere Leiste kompakt zu halten.
+show-edit-button-locked-description = Die Aktionsleiste zeigt die Bearbeiten-Schaltfläche immer an. Dieser Schalter gilt, wenn die Aktionsleiste ausgeblendet ist.
 start-editing = Bearbeitung starten
 
 # src/settings_window/customize.rs
@@ -2948,6 +2949,8 @@ popup-position-description = Die Position wird zwischen Sitzungen gespeichert.
 popup-reset-position = Position zurücksetzen
 popup-drag-header = Zum Verschieben ziehen
 popup-close = Fenster schließen
+popup-pop-out = Als schwebendes Fenster lösen
+popup-dock = Wieder an die Taskleiste andocken
 
 show-popup-action-bar = Aktionsleiste im Popup anzeigen
-show-popup-action-bar-description = App-Titel und Aktionen im normalen Popup anzeigen. Schwebende Fenster zeigen diese Leiste immer.
+show-popup-action-bar-description = Aktualisieren, Einstellungen und Layout-Aktionen im normalen Popup anzeigen. Schwebende Fenster zeigen diese Leiste immer.

@@ -28,11 +28,24 @@ fn source(name: &str) -> Option<&'static str> {
             include_str!("../../../assets/icons/fluent-arrow-download-24-filled.svg")
         }
         "fluent-settings" => include_str!("../../../assets/icons/fluent-settings-20-filled.svg"),
+        "fluent-settings-regular" => {
+            include_str!("../../../assets/icons/fluent-settings-20-regular.svg")
+        }
+        "fluent-refresh-regular" => {
+            include_str!("../../../assets/icons/fluent-arrow-sync-20-regular.svg")
+        }
+        "fluent-edit-regular" => include_str!("../../../assets/icons/fluent-edit-20-regular.svg"),
+        "fluent-checkmark-regular" => {
+            include_str!("../../../assets/icons/fluent-checkmark-20-regular.svg")
+        }
         "fluent-pin" => include_str!("../../../assets/icons/fluent-pin-20-regular.svg"),
         "fluent-layout-column-two" => {
             include_str!("../../../assets/icons/fluent-layout-column-two-20-regular.svg")
         }
         "fluent-pin-filled" => include_str!("../../../assets/icons/fluent-pin-20-filled.svg"),
+        "fluent-window-new" => {
+            include_str!("../../../assets/icons/fluent-window-new-20-regular.svg")
+        }
         "fluent-power" => include_str!("../../../assets/icons/fluent-power-20-filled.svg"),
         "fluent-edit" => include_str!("../../../assets/icons/fluent-edit-20-filled.svg"),
         "fluent-checkmark" => {
@@ -283,6 +296,11 @@ mod tests {
             "fluent-pin",
             "fluent-layout-column-two",
             "fluent-pin-filled",
+            "fluent-window-new",
+            "fluent-settings-regular",
+            "fluent-refresh-regular",
+            "fluent-edit-regular",
+            "fluent-checkmark-regular",
             "fluent-edit",
             "fluent-checkmark",
             "fluent-delete",

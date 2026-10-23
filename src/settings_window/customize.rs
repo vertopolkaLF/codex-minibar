@@ -37,6 +37,9 @@ impl SettingsWindow {
         k: &mut Kit,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
+        // The popup action bar always shows Edit, so the switch only applies
+        // while that bar is hidden.
+        let edit_locked = self.settings.popup_floating || self.settings.show_popup_action_bar;
         let show_edit_button = self.settings.show_edit_home_button;
         let floating = kit::card_of(k, |k| {
             let reset = Button::new(
@@ -94,15 +97,23 @@ impl SettingsWindow {
             let switch = kit::toggle(
                 k,
                 "customize-edit-button",
-                show_edit_button,
-                false,
+                show_edit_button || edit_locked,
+                edit_locked,
                 Self::h(cx, move |this, value: bool, _, cx| {
                     set_shown(this, value, cx)
                 }),
             );
             vec![
                 Row::new("customize-edit-button", crate::i18n::tr("show-edit-button"))
-                    .description(k, crate::i18n::tr("show-edit-button-description"))
+                    .description(
+                        k,
+                        crate::i18n::tr(if edit_locked {
+                            "show-edit-button-locked-description"
+                        } else {
+                            "show-edit-button-description"
+                        }),
+                    )
+                    .disabled(edit_locked)
                     .trailing(start)
                     .trailing(switch)
                     .on_click(Self::h(cx, move |this, (), _, cx| {

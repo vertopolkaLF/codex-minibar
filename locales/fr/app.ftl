@@ -868,6 +868,7 @@ teal = Bleu-vert
 # src/settings_window/customize.rs
 show-edit-button = Afficher le bouton Modifier dans la barre inférieure
 show-edit-button-description = Le mode édition affiche des poignées sur l'accueil pour réordonner les widgets. Lancez-le ici pour garder la barre inférieure compacte.
+show-edit-button-locked-description = La barre d'actions affiche toujours le bouton Modifier. Ce réglage s'applique lorsque la barre d'actions est masquée.
 start-editing = Commencer
 
 # src/settings_window/customize.rs
@@ -2955,6 +2956,8 @@ popup-position-description = La position est conservée entre les sessions.
 popup-reset-position = Réinitialiser la position
 popup-drag-header = Faire glisser pour déplacer
 popup-close = Fermer le panneau
+popup-pop-out = Détacher en panneau flottant
+popup-dock = Réancrer à la barre des tâches
 
 show-popup-action-bar = Afficher la barre d’actions du panneau
-show-popup-action-bar-description = Afficher le titre et les actions dans le panneau normal. Les panneaux flottants affichent toujours cette barre.
+show-popup-action-bar-description = Afficher les actions d'actualisation, de paramètres et de disposition dans le panneau normal. Les panneaux flottants affichent toujours cette barre.

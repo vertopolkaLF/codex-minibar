@@ -3,9 +3,9 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, AppContext, ClickEvent, Context, DragMoveEvent, Hsla, InteractiveElement,
-    IntoElement, ParentElement, Render, ScrollWheelEvent, SharedString, StatefulInteractiveElement,
-    Styled, Transformation, Window, div, px, radians,
+    AnyElement, AppContext, Bounds, ClickEvent, Context, DragMoveEvent, Hsla, InteractiveElement,
+    IntoElement, ParentElement, PathBuilder, Pixels, Render, ScrollWheelEvent, SharedString,
+    StatefulInteractiveElement, Styled, Transformation, Window, canvas, div, point, px, radians,
 };
 
 use super::{
@@ -17,7 +17,6 @@ use super::{
 use crate::popup_window::{model, *};
 
 pub(super) const FLOATING_HEADER_HEIGHT: f32 = 32.0;
-pub(super) const FLOATING_HEADER_ACTIONS_WIDTH: f32 = 112.0;
 
 /// Payload carried while a provider tab is dragged to a new position.
 #[derive(Clone)]
@@ -85,22 +84,23 @@ impl PopupRoot {
     }
 
     pub(super) fn render_floating_header(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        const BUTTON: f32 = 24.0;
+        const GLYPH: f32 = 16.0;
+        const GAP: f32 = 4.0;
+        let floating = self.ui.popup_floating;
         let editing = self.home_editing;
-        let edit_presence = self.fx.toggle(
-            fx::key("compact-edit-presence"),
-            self.ui.show_edit_home_button || editing,
-            fx::NORMAL,
-        );
+        // The action bar always offers Edit; the setting only hides it from
+        // the bottom bar.
         let edit = self.render_action_button(
             "floating-edit-home",
             if editing {
-                "fluent-checkmark"
+                "fluent-checkmark-regular"
             } else {
-                "fluent-edit"
+                "fluent-edit-regular"
             },
             crate::i18n::tr(if editing { "done" } else { "edit-home" }).into(),
-            24.0,
-            16.0,
+            BUTTON,
+            GLYPH,
             editing,
             cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.set_home_editing(!this.home_editing, cx)
@@ -111,65 +111,85 @@ impl PopupRoot {
             "two-columns",
             "fluent-layout-column-two",
             crate::i18n::tr("use-two-columns").into(),
-            24.0,
-            16.0,
+            BUTTON,
+            GLYPH,
             self.ui.popup_two_columns,
             cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_two_columns(cx)),
             cx,
         );
-        let pin = self.render_pin_button(24.0, 16.0, cx);
+        let float = self.render_action_button(
+            "floating-mode",
+            "fluent-window-new",
+            crate::i18n::tr(if floating {
+                "popup-dock"
+            } else {
+                "popup-pop-out"
+            })
+            .into(),
+            BUTTON,
+            GLYPH,
+            floating,
+            cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_floating(cx)),
+            cx,
+        );
+        let refresh = self.render_refresh_button(
+            "header-refresh",
+            "fluent-refresh-regular",
+            BUTTON,
+            GLYPH,
+            cx,
+        );
+        let settings = self.render_action_button(
+            "header-settings",
+            "fluent-settings-regular",
+            crate::i18n::tr("settings").into(),
+            BUTTON,
+            GLYPH,
+            false,
+            cx.listener(|this, _: &ClickEvent, _, _| this.open_settings()),
+            cx,
+        );
+        let pin = self.render_pin_button(BUTTON, GLYPH, cx);
         let close = self.render_action_button(
             "close-popup",
             "fluent-dismiss",
             crate::i18n::tr("popup-close").into(),
-            24.0,
-            16.0,
+            BUTTON,
+            GLYPH,
             false,
             cx.listener(|_, _: &ClickEvent, _, _| crate::popup::hide()),
             cx,
         );
+        // Leading: inset, settings, refresh and edit.
+        // Trailing: two layout buttons, pin and close, then the inset. Both
+        // groups use the same even spacing and stay outside the drag area.
+        // Header glyphs are all the regular weight.
+        self.host.header_leading_width = GAP + BUTTON * 3.0;
+        self.host.header_actions_width = BUTTON * 4.0 + GAP;
         div()
             .relative()
             .size_full()
             .child(
                 div()
+                    .id("floating-header-leading")
                     .absolute()
-                    .left_0()
-                    .right(px(FLOATING_HEADER_ACTIONS_WIDTH))
-                    .h(px(FLOATING_HEADER_HEIGHT))
+                    .left(px(GAP))
+                    .top(px(GAP))
                     .flex()
-                    .items_center()
-                    .pl(px(10.0))
-                    .gap(px(8.0))
-                    .text_size(px(12.0))
-                    .text_color(self.palette.text_secondary)
-                    .child(crate::settings_window::kit::image(
-                        "color/app-icon-32.png",
-                        16.0,
-                    ))
-                    .child("Codex Minibar"),
+                    .child(settings)
+                    .child(refresh)
+                    .child(edit),
             )
             .child(
                 div()
                     .id("floating-header-actions")
                     .absolute()
-                    .right(px(4.0))
-                    .top(px(4.0))
+                    .right(px(GAP))
+                    .top(px(GAP))
                     .flex()
-                    .children((edit_presence > 0.0).then(|| {
-                        div()
-                            .relative()
-                            .flex_none()
-                            .w(px(28.0 * edit_presence))
-                            .h(px(24.0))
-                            .overflow_hidden()
-                            .opacity(edit_presence)
-                            .child(div().absolute().left_0().top_0().child(edit))
-                    }))
                     .child(columns)
-                    .child(div().w(px(4.0)).flex_none())
+                    .child(float)
                     .child(pin)
-                    .child(div().w(px(4.0)).flex_none())
                     .child(close),
             )
             .into_any_element()
@@ -250,28 +270,30 @@ impl PopupRoot {
         let tabs = self.tab_specs();
         let step = button + spacing;
         let content_width = tabs.len() as f32 * step - spacing;
-        // Restore essential controls here when the popup action bar is hidden.
+        // The action bar owns pin, edit, refresh and settings while it is
+        // visible; they slide back into the footer when it is hidden.
         let editing = self.home_editing;
+        let gap = size.action_spacing() as f32;
         let edit_presence = self.fx.toggle(
             fx::key("footer-edit-presence"),
             !self.ui.compact_bar_visible() && (self.ui.show_edit_home_button || editing),
             fx::NORMAL,
         );
-        let pin_presence = self.fx.toggle(
+        let chrome_presence = self.fx.toggle(
             fx::key("footer-pin-presence"),
             !self.ui.compact_bar_visible(),
             fx::NORMAL,
         );
-        let action_count = 2.0
-            + pin_presence
-            + edit_presence
-            + f32::from(u8::from(self.ui.update_version.is_some()));
+        let update_presence = f32::from(u8::from(self.ui.update_version.is_some()));
+        // Edit, pin, refresh, settings and update; each slot carries its gap.
+        let action_count = edit_presence + chrome_presence * 3.0 + update_presence;
+        let actions_width = (action_count * (button + gap) - gap * action_count.min(1.0)).max(0.0);
         let viewport_width = capsule_width
             - 2.0
             - size.tab_padding_left() as f32
             - size.padding_right() as f32
             - size.column_spacing() as f32
-            - (button * action_count + size.action_spacing() as f32 * (action_count - 1.0));
+            - actions_width;
         let max_scroll = (content_width - viewport_width).max(0.0);
         self.tab_scroll = self.tab_scroll.clamp(0.0, max_scroll);
         let scroll = self
@@ -334,10 +356,10 @@ impl PopupRoot {
             }))
             .child(strip);
 
-        let gap = size.action_spacing() as f32;
-        let mut actions = div().flex().flex_row().items_center().flex_none();
+        let glyph = size.icon_glyph_size() as f32;
+        let mut slots: Vec<(f32, AnyElement)> = Vec::with_capacity(5);
         if edit_presence > 0.0 {
-            let button_element = self.render_action_button(
+            let edit = self.render_action_button(
                 "edit-home",
                 if editing {
                     "fluent-checkmark"
@@ -346,70 +368,66 @@ impl PopupRoot {
                 },
                 crate::i18n::tr(if editing { "done" } else { "edit-home" }).into(),
                 button,
-                size.icon_glyph_size() as f32,
+                glyph,
                 editing,
                 cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.set_home_editing(!this.home_editing, cx)
                 }),
                 cx,
             );
-            // Grows in from the left edge of the actions so nothing jumps.
-            actions = actions.child(
-                div()
-                    .relative()
-                    .flex_none()
-                    .w(px((button + gap) * edit_presence))
-                    .h(px(button))
-                    .overflow_hidden()
-                    .opacity(edit_presence)
-                    .child(
-                        div()
-                            .absolute()
-                            .top_0()
-                            .right(px(gap))
-                            .child(button_element),
-                    ),
-            );
+            slots.push((edit_presence, edit));
         }
-        if pin_presence > 0.0 {
-            let pin = self.render_pin_button(button, size.icon_glyph_size() as f32, cx);
-            actions = actions.child(
-                div()
-                    .relative()
-                    .w(px((button + gap) * pin_presence))
-                    .h(px(button))
-                    .overflow_hidden()
-                    .opacity(pin_presence)
-                    .child(div().absolute().left_0().top_0().child(pin)),
-            );
-        }
-        actions = actions
-            .child(self.render_refresh_button(button, size.icon_glyph_size() as f32, cx))
-            .child(div().w(px(gap)).flex_none())
-            .child(self.render_action_button(
+        if chrome_presence > 0.0 {
+            let pin = self.render_pin_button(button, glyph, cx);
+            slots.push((chrome_presence, pin));
+            let refresh =
+                self.render_refresh_button("action-refresh", "fluent-refresh", button, glyph, cx);
+            slots.push((chrome_presence, refresh));
+            let settings = self.render_action_button(
                 "settings",
                 "fluent-settings",
                 crate::i18n::tr("settings").into(),
                 button,
-                size.icon_glyph_size() as f32,
+                glyph,
                 false,
                 cx.listener(|this, _: &ClickEvent, _, _| this.open_settings()),
                 cx,
-            ));
-        if self.ui.update_version.is_some() {
-            actions = actions
-                .child(div().w(px(gap)).flex_none())
-                .child(self.render_action_button(
-                    "update",
-                    "fluent-arrow-download",
-                    crate::i18n::tr("install-update").into(),
-                    button,
-                    size.icon_glyph_size() as f32,
-                    true,
-                    cx.listener(|this, _: &ClickEvent, _, _| this.install_update()),
-                    cx,
-                ));
+            );
+            slots.push((chrome_presence, settings));
         }
+        if self.ui.update_version.is_some() {
+            let update = self.render_action_button(
+                "update",
+                "fluent-arrow-download",
+                crate::i18n::tr("install-update").into(),
+                button,
+                glyph,
+                true,
+                cx.listener(|this, _: &ClickEvent, _, _| this.install_update()),
+                cx,
+            );
+            slots.push((1.0, update));
+        }
+        // Slots grow and shrink in place so neighbors glide instead of
+        // jumping; the last slot's trailing gap is clipped by the width.
+        let actions = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .flex_none()
+            .w(px(actions_width))
+            .h(px(button))
+            .overflow_hidden()
+            .children(slots.into_iter().map(|(presence, element)| {
+                div()
+                    .relative()
+                    .flex_none()
+                    .w(px((button + gap) * presence))
+                    .h(px(button))
+                    .overflow_hidden()
+                    .opacity(presence)
+                    .child(div().absolute().left_0().top_0().child(element))
+            }));
 
         let corner = px((radius - 1.0).max(0.0));
         let bar = div()
@@ -424,13 +442,41 @@ impl PopupRoot {
             .gap(px(size.column_spacing() as f32))
             .border_color(palette.card_stroke)
             .bg(palette.footer_background);
+        // With the action bar beyond the tabs, the page gets rounded corners
+        // where it meets the tab row, matching the row's own rounded edge.
+        // The page sits on the backdrop, so the notches are painted in the
+        // row's color together with the curved border instead of clipping.
+        let top = self.host.placement.top;
+        let notch = (radius - 1.0).max(0.0)
+            * (self.host.header_height / FLOATING_HEADER_HEIGHT).clamp(0.0, 1.0);
         // By a top taskbar the bar caps the capsule instead of closing it.
-        let bar = if self.host.placement.top {
-            bar.border_b_1().rounded_t(corner)
-        } else {
-            bar.border_t_1().rounded_b(corner)
+        let bar = match (top, notch > 0.0) {
+            (true, false) => bar.border_b_1().rounded_t(corner),
+            (true, true) => bar.rounded_t(corner),
+            (false, false) => bar.border_t_1().rounded_b(corner),
+            (false, true) => bar.rounded_b(corner),
         };
-        bar.child(tabs_viewport).child(actions).into_any_element()
+        let bar = bar.relative().child(tabs_viewport).child(actions);
+        if notch <= 0.0 {
+            return bar.into_any_element();
+        }
+        let (fill, stroke) = (palette.footer_background, palette.card_stroke);
+        let corners = canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                paint_page_corners(bounds, notch, top, fill, stroke, window)
+            },
+        )
+        .absolute()
+        .left_0()
+        .right_0()
+        .h(px(notch + 1.0));
+        let corners = if top {
+            corners.bottom(px(-notch))
+        } else {
+            corners.top(px(-notch))
+        };
+        bar.child(corners).into_any_element()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -582,20 +628,24 @@ impl PopupRoot {
 
     fn render_refresh_button(
         &mut self,
+        id: &'static str,
+        glyph_name: &'static str,
         button: f32,
         glyph: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = self.palette.clone();
         let refreshing = self.ui.refreshing;
-        let hover_id = fx::key("action-refresh");
+        let hover_id = fx::key(id);
         let hovered = self.hovered(hover_id);
         let hover = self
             .fx
             .toggle(fx::key(("action-hover", hover_id)), hovered, fx::FASTER);
-        let emphasis = self
-            .fx
-            .toggle(fx::key("refresh-emphasis"), hovered || refreshing, fx::FAST);
+        let emphasis = self.fx.toggle(
+            fx::key(("refresh-emphasis", id)),
+            hovered || refreshing,
+            fx::FAST,
+        );
         let rotation = match (refreshing, self.refresh_started) {
             (true, Some(started)) if self.fx.enabled() => {
                 refresh_rotation_at(started.elapsed()) as f32
@@ -615,7 +665,7 @@ impl PopupRoot {
             )
         };
         let mut element = div()
-            .id("action-refresh")
+            .id(id)
             .relative()
             .size(px(button))
             .flex()
@@ -630,7 +680,7 @@ impl PopupRoot {
         element
             .child(
                 icon(
-                    "fluent-refresh",
+                    glyph_name,
                     glyph,
                     palette.chrome_icon.mix(palette.accent, emphasis),
                 )
@@ -683,5 +733,66 @@ impl PopupRoot {
                 palette.chrome_icon.mix(palette.accent, emphasis),
             ))
             .into_any_element()
+    }
+}
+
+/// Paints the page's rounded corners onto the tab row: two notches in the
+/// row's color and the row border following the curve. The canvas overlaps
+/// the row by one pixel on the page side's opposite edge, where the border
+/// runs.
+fn paint_page_corners(
+    bounds: Bounds<Pixels>,
+    radius: f32,
+    row_above: bool,
+    fill: Hsla,
+    stroke: Hsla,
+    window: &mut Window,
+) {
+    // Cubic Bézier handle length for a quarter circle.
+    const K: f32 = 0.552_284_8;
+    let left = f32::from(bounds.origin.x);
+    let right = left + f32::from(bounds.size.width);
+    let top = f32::from(bounds.origin.y);
+    let height = f32::from(bounds.size.height);
+    // `edge` is where the row starts; `dir` points from it into the page.
+    let (edge, dir) = if row_above {
+        (top + 1.0, 1.0)
+    } else {
+        (top + height - 1.0, -1.0)
+    };
+    let at = |x: f32, y: f32| point(px(x), px(y));
+    let page = |offset: f32| edge + dir * offset;
+    let mut notches = PathBuilder::fill();
+    for (x, side) in [(left, 1.0), (right, -1.0)] {
+        notches.move_to(at(x, page(radius)));
+        notches.line_to(at(x, edge));
+        notches.line_to(at(x + side * radius, edge));
+        notches.cubic_bezier_to(
+            at(x, page(radius)),
+            at(x + side * radius * (1.0 - K), edge),
+            at(x, page(radius * (1.0 - K))),
+        );
+        notches.close();
+    }
+    if let Ok(path) = notches.build() {
+        window.paint_path(path, fill);
+    }
+    // The row border runs half a pixel inside the row.
+    let line = edge - dir * 0.5;
+    let mut border = PathBuilder::stroke(px(1.0));
+    border.move_to(at(left, page(radius)));
+    border.cubic_bezier_to(
+        at(left + radius, line),
+        at(left, page(radius * (1.0 - K))),
+        at(left + radius * (1.0 - K), line),
+    );
+    border.line_to(at(right - radius, line));
+    border.cubic_bezier_to(
+        at(right, page(radius)),
+        at(right - radius * (1.0 - K), line),
+        at(right, page(radius * (1.0 - K))),
+    );
+    if let Ok(path) = border.build() {
+        window.paint_path(path, stroke);
     }
 }

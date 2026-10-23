@@ -139,6 +139,10 @@ pub(super) struct Host {
     #[cfg(windows)]
     pub(super) floating_rect: Option<super::win32::Rect>,
     pub(super) header_height: f32,
+    /// Widths of the header's leading and trailing buttons, excluded from
+    /// the drag area.
+    pub(super) header_leading_width: f32,
+    pub(super) header_actions_width: f32,
     resizing_height: bool,
     reopen_after_hide: bool,
     pub(super) phase: Phase,
@@ -167,6 +171,8 @@ impl Host {
             #[cfg(windows)]
             floating_rect: None,
             header_height: super::footer::FLOATING_HEADER_HEIGHT,
+            header_leading_width: 0.0,
+            header_actions_width: 0.0,
             resizing_height: false,
             reopen_after_hide: false,
             phase: Phase::Hidden,
@@ -1433,10 +1439,11 @@ impl PopupRoot {
             ));
             super::win32::set_drag_header(
                 (self.ui.popup_floating && self.host.phase == Phase::Open).then(|| {
+                    let leading = self.host.header_leading_width;
                     let (left, top, right, bottom) = pixels(
-                        x + CHROME_INSET,
+                        x + CHROME_INSET + leading,
                         y + CHROME_INSET,
-                        (width - CHROME_INSET * 2.0 - super::footer::FLOATING_HEADER_ACTIONS_WIDTH)
+                        (width - CHROME_INSET * 2.0 - leading - self.host.header_actions_width)
                             .max(0.0),
                         self.host.header_height,
                     );
@@ -1695,6 +1702,31 @@ impl PopupRoot {
         if enabled {
             send_command(PopupCommand::Reposition);
         }
+    }
+
+    pub(super) fn toggle_floating(&mut self, cx: &mut Context<Self>) {
+        let floating = !self.ui.popup_floating;
+        if floating {
+            // Like the Settings switch: a floating panel stays on top and open.
+            crate::popup::set_user_pinned(true);
+        }
+        // `popup_floating` stays unchanged locally: the settings broadcast
+        // sees the mode change and re-anchors the panel through its motion.
+        self.persist(
+            cx,
+            move |ui| {
+                if floating {
+                    ui.popup_pinned = true;
+                }
+            },
+            move |settings| {
+                settings.popup_floating = floating;
+                if floating {
+                    settings.popup_pinned = true;
+                }
+            },
+        );
+        send_command(PopupCommand::SyncPin);
     }
 
     pub(super) fn open_settings(&mut self) {

@@ -1470,7 +1470,7 @@ fn announced_reset_rows_track_reception_per_instance() {
     ];
     resets[3]
         .received
-        .insert(codex.id().to_owned(), now - ChronoDuration::hours(1));
+        .insert(codex.id().to_owned(), now - ChronoDuration::minutes(10));
 
     let phases = |provider| {
         visible_announced_resets(&resets, provider, now)
@@ -1485,7 +1485,7 @@ fn announced_reset_rows_track_reception_per_instance() {
             ("missed-banked", AnnouncedResetPhase::Missed),
             (
                 "received",
-                AnnouncedResetPhase::Received(now - ChronoDuration::hours(1))
+                AnnouncedResetPhase::Received(now - ChronoDuration::minutes(10))
             ),
             ("upcoming", AnnouncedResetPhase::Upcoming),
         ]

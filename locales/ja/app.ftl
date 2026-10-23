@@ -864,6 +864,7 @@ teal = 青緑
 # src/settings_window/customize.rs
 show-edit-button = 下部バーに編集ボタンを表示
 show-edit-button-description = 編集モードではホームにハンドルが表示され、ウィジェットをドラッグして並べ替えられます。ここから開始すれば下部バーをすっきり保てます。
+show-edit-button-locked-description = アクションバーには常に編集ボタンが表示されます。このスイッチはアクションバーを非表示にしたときに適用されます。
 start-editing = 編集を開始
 
 # src/settings_window/customize.rs
@@ -2927,6 +2928,8 @@ popup-position-description = 位置は次回の起動時にも復元されます
 popup-reset-position = 位置をリセット
 popup-drag-header = ドラッグして移動
 popup-close = パネルを閉じる
+popup-pop-out = フローティングパネルとして切り離す
+popup-dock = タスクバーに戻す
 
 show-popup-action-bar = ポップアップのアクションバーを表示
-show-popup-action-bar-description = 通常のポップアップにアプリ名と操作ボタンを表示します。フローティングパネルでは常に表示されます。
+show-popup-action-bar-description = 通常のポップアップに更新、設定、レイアウトのボタンを表示します。フローティングパネルでは常に表示されます。

@@ -592,6 +592,7 @@ teal = 青色
 
 show-edit-button = 在底部欄顯示編輯按鈕
 show-edit-button-description = 編輯模式會在首頁上顯示拖曳控點，以便重新排列小工具。從這裡開始編輯可讓底部欄保持簡潔。
+show-edit-button-locked-description = 操作列一律顯示編輯按鈕。此開關在隱藏操作列時生效。
 start-editing = 開始編輯
 
 use-two-columns = 使用雙欄
@@ -2025,6 +2026,8 @@ popup-position-description = 下次啟動時還原面板位置。
 popup-reset-position = 重設位置
 popup-drag-header = 拖曳以移動
 popup-close = 關閉面板
+popup-pop-out = 彈出為浮動面板
+popup-dock = 停靠回工作列
 
 show-popup-action-bar = 顯示彈出面板操作列
-show-popup-action-bar-description = 在一般彈出面板中顯示應用程式名稱和操作按鈕。浮動面板一律顯示此列。
+show-popup-action-bar-description = 在一般彈出面板中顯示重新整理、設定和版面配置按鈕。浮動面板一律顯示此列。

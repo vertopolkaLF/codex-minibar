@@ -595,6 +595,7 @@ teal = Verde azulado
 
 show-edit-button = Mostrar el botón Editar en la barra inferior
 show-edit-button-description = El modo de edición muestra asas en Inicio para arrastrar los widgets a un nuevo orden. Inícialo aquí para mantener compacta la barra inferior.
+show-edit-button-locked-description = La barra de acciones siempre muestra el botón Editar. Este interruptor se aplica cuando la barra de acciones está oculta.
 start-editing = Empezar a editar
 
 use-two-columns = Usar dos columnas
@@ -2046,6 +2047,8 @@ popup-position-description = La posición se recuerda entre sesiones.
 popup-reset-position = Restablecer posición
 popup-drag-header = Arrastra para mover
 popup-close = Cerrar panel
+popup-pop-out = Desacoplar como panel flotante
+popup-dock = Volver a acoplar a la barra de tareas
 
 show-popup-action-bar = Mostrar barra de acciones del panel emergente
-show-popup-action-bar-description = Mostrar el título y las acciones en el panel emergente normal. Los paneles flotantes siempre muestran esta barra.
+show-popup-action-bar-description = Mostrar las acciones de actualizar, ajustes y diseño en el panel emergente normal. Los paneles flotantes siempre muestran esta barra.

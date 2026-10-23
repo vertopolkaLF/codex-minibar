@@ -454,7 +454,7 @@ fn openrouter_account_usage<'a>(
 }
 
 /// How long a detected reset keeps its "Received" row.
-const RECEIVED_RESET_VISIBLE: ChronoDuration = ChronoDuration::hours(6);
+const RECEIVED_RESET_VISIBLE: ChronoDuration = ChronoDuration::minutes(30);
 /// How long a reset that never arrived stays visible after its deadline.
 const MISSED_RESET_VISIBLE: ChronoDuration = ChronoDuration::hours(48);
 const MAX_ANNOUNCED_RESET_ROWS: usize = 3;

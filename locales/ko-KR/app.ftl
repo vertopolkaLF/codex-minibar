@@ -880,6 +880,7 @@ teal = 틸
 # src/settings_window/customize.rs
 show-edit-button = 하단 바에 편집 버튼 표시
 show-edit-button-description = 편집 모드에서는 홈에 그립이 표시되어 위젯을 새로운 순서로 드래그합니다. 하단 막대를 컴팩트하게 유지하려면 여기에서 시작하세요.
+show-edit-button-locked-description = 작업 표시줄에는 항상 편집 버튼이 표시됩니다. 이 스위치는 작업 표시줄을 숨겼을 때 적용됩니다.
 start-editing = 편집 시작
 
 # src/settings_window/customize.rs
@@ -2926,6 +2927,8 @@ popup-position-description = 세션 간에 위치가 저장됩니다.
 popup-reset-position = 위치 초기화
 popup-drag-header = 드래그하여 이동
 popup-close = 패널 닫기
+popup-pop-out = 플로팅 패널로 분리
+popup-dock = 작업 표시줄로 되돌리기
 
 show-popup-action-bar = 팝업 작업 표시줄 표시
-show-popup-action-bar-description = 일반 팝업에 앱 이름과 작업 버튼을 표시합니다. 플로팅 패널에는 항상 표시됩니다.
+show-popup-action-bar-description = 일반 팝업에 새로 고침, 설정, 레이아웃 버튼을 표시합니다. 플로팅 패널에는 항상 표시됩니다.
