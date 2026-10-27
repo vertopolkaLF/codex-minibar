@@ -225,6 +225,7 @@ fn activation_command_for(program: PathBuf) -> Command {
         ACTIVATION_MODEL,
         "--effort=low",
     ]);
+    crate::provider_cli::disable_auto_update(&mut command);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

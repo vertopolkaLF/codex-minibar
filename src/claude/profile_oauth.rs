@@ -82,6 +82,7 @@ fn login_command(executable: &Path, directory: &Path) -> Command {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     super::scope_command(&mut command, Some(directory));
+    crate::provider_cli::disable_auto_update(&mut command);
     command
 }
 

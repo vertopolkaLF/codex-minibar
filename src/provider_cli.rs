@@ -51,6 +51,24 @@ pub(crate) fn executable_candidates(known: &[PathBuf], names: &[&str]) -> Vec<Pa
     candidates
 }
 
+/// Self-updaters in provider CLIs relaunch a detached copy of themselves.
+/// `CREATE_NO_WINDOW` does not reach that copy, so Windows gives it a visible
+/// console that flashes and steals focus. Only Minibar's own launches opt out;
+/// the CLIs still update normally from the user's terminal.
+const AUTO_UPDATE_OPT_OUTS: &[(&str, &str)] = &[
+    // Antigravity accepts only "true".
+    ("AGY_CLI_DISABLE_AUTO_UPDATE", "true"),
+    ("DISABLE_AUTOUPDATER", "1"),
+    ("KIRO_NO_AUTO_UPDATE", "1"),
+];
+
+pub(crate) fn disable_auto_update(command: &mut Command) -> &mut Command {
+    for (key, value) in AUTO_UPDATE_OPT_OUTS {
+        command.env(key, value);
+    }
+    command
+}
+
 pub(crate) fn refresh_session(
     provider: &str,
     candidates: &[PathBuf],
@@ -67,6 +85,7 @@ pub(crate) fn refresh_session(
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        disable_auto_update(&mut command);
 
         #[cfg(windows)]
         {
@@ -117,6 +136,16 @@ mod tests {
         )
         .expect_err("a relative candidate must be rejected");
         assert_eq!(error.to_string(), "Test provider CLI is not installed");
+    }
+
+    #[test]
+    fn launches_opt_out_of_detached_self_updates() {
+        let mut command = Command::new("provider.exe");
+        disable_auto_update(&mut command);
+        let envs: Vec<_> = command.get_envs().collect();
+        for (key, value) in AUTO_UPDATE_OPT_OUTS {
+            assert!(envs.contains(&(key.as_ref(), Some(value.as_ref()))));
+        }
     }
 
     #[test]

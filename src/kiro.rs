@@ -202,6 +202,7 @@ fn cli_identity_account_name(executable: &Path) -> Option<String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    crate::provider_cli::disable_auto_update(&mut command);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
