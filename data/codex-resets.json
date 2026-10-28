@@ -1,12 +1,4 @@
 {
   "schema_version": 2,
-  "resets": [
-    {
-      "id": "forced-2026-10-28T07:00:00Z",
-      "type": "forced",
-      "reset_at": "2026-10-28T07:00:00Z",
-      "source_url": "https://x.com/thsottiaux/status/2115273253711409208",
-      "label": "Day 23 reset"
-    }
-  ]
+  "resets": []
 }
