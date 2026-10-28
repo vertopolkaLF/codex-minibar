@@ -263,7 +263,6 @@ impl SettingsWindow {
             .child(crate::settings::TimeFormat::current().format_hm(now))
             .child(now.format("%d.%m.%Y").to_string());
         let strip = self.taskbar_preview("taskbar-strip".into(), widgets, window);
-        let start = self.settings.taskbar.alignment == TaskbarAlignment::Start;
         let bar = div()
             .h(px(TASKBAR_HEIGHT))
             .w_full()
@@ -274,14 +273,18 @@ impl SettingsWindow {
             .flex()
             .items_center()
             .overflow_hidden();
-        let bar = if start {
-            bar.pl(px(6.0)).children(strip).child(div().flex_1())
-        } else {
-            bar.child(div().flex_1()).children(strip)
+        let caret = div().px(px(6.0)).child(kit::icon("caret-up", 12.0, text));
+        let bar = match self.settings.taskbar.alignment {
+            TaskbarAlignment::Start => bar
+                .pl(px(6.0))
+                .children(strip)
+                .child(div().flex_1())
+                .child(caret),
+            TaskbarAlignment::Tray => bar.child(div().flex_1()).children(strip).child(caret),
+            // Inside the notification area, just past the overflow chevron.
+            TaskbarAlignment::InTray => bar.child(div().flex_1()).child(caret).children(strip),
         };
-        bar.child(div().px(px(6.0)).child(kit::icon("caret-up", 12.0, text)))
-            .child(clock)
-            .into_any_element()
+        bar.child(clock).into_any_element()
     }
 
     /// Opens the editor of the widget `id`, if it still exists.
@@ -344,6 +347,7 @@ impl SettingsWindow {
         let alignment_index = match taskbar.alignment {
             TaskbarAlignment::Tray => 0,
             TaskbarAlignment::Start => 1,
+            TaskbarAlignment::InTray => 2,
         };
         rows.push(kit::card_of(k, |k| {
             vec![
@@ -381,14 +385,15 @@ impl SettingsWindow {
                     kit::options(&[
                         crate::i18n::tr("taskbar-position-tray"),
                         crate::i18n::tr("taskbar-position-start"),
+                        crate::i18n::tr("taskbar-position-in-tray"),
                     ]),
                     alignment_index,
                     false,
                     Self::h(cx, |this, index: usize, _, cx| {
-                        let alignment = if index == 1 {
-                            TaskbarAlignment::Start
-                        } else {
-                            TaskbarAlignment::Tray
+                        let alignment = match index {
+                            1 => TaskbarAlignment::Start,
+                            2 => TaskbarAlignment::InTray,
+                            _ => TaskbarAlignment::Tray,
                         };
                         this.edit(cx, move |settings| settings.taskbar.alignment = alignment);
                     }),
