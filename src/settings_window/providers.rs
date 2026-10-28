@@ -251,13 +251,19 @@ pub(crate) fn provider_install_status(
         ProviderKind::Kiro => {
             unreachable!("Kiro status is resolved before the provider match")
         }
+        // WorkBuddy has no binary or app to detect: its history folder is the
+        // only source and it is read without configuration.
+        ProviderKind::WorkBuddy => (None, None, None),
     };
     ProviderInstallStatus {
         app,
         crew: None,
         cli,
         used,
-        app_applicable: !matches!(provider, ProviderKind::Grok | ProviderKind::CommandCode),
+        app_applicable: !matches!(
+            provider,
+            ProviderKind::Grok | ProviderKind::CommandCode | ProviderKind::WorkBuddy
+        ),
         crew_applicable: false,
         cli_applicable: matches!(
             provider,
