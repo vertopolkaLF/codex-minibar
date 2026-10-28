@@ -46,7 +46,8 @@ impl ProviderInstallStatus {
             ProviderKind::Cursor
             | ProviderKind::OpenCodeZen
             | ProviderKind::OpenCodeGo
-            | ProviderKind::OpenRouter => Self::checking_app(),
+            | ProviderKind::OpenRouter
+            | ProviderKind::WorkBuddy => Self::checking_app(),
         }
     }
 
@@ -668,6 +669,8 @@ fn folder_configs(driver: ProviderKind) -> Vec<FolderConfig> {
             crate::i18n::tr("folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati"),
             r"C:\Users\you\AppData\Roaming\npm",
         )],
+        // WorkBuddy keeps its history in a fixed per-user folder.
+        ProviderKind::WorkBuddy => Vec::new(),
         ProviderKind::Kiro => vec![
             binary(
                 crate::i18n::tr("kiro-ide-folder"),
@@ -725,6 +728,9 @@ fn provider_description(provider: ProviderKind) -> &'static str {
         ProviderKind::CommandCode => {
             crate::i18n::tr("reads-command-code-5h-weekly-and-monthly-credits-from-your-existin")
         }
+        ProviderKind::WorkBuddy => {
+            crate::i18n::tr("reads-workbuddy-token-history-from-your-local-workbuddy-transcripts")
+        }
     }
 }
 
@@ -745,6 +751,7 @@ fn source_labels(provider: ProviderKind) -> (&'static str, &'static str, &'stati
         ProviderKind::Antigravity => (crate::i18n::tr("antigravity-app"), "", "agy CLI"),
         ProviderKind::Grok => ("", "", crate::i18n::tr("grok-cli")),
         ProviderKind::CommandCode => ("", "", crate::i18n::tr("command-code-cli")),
+        ProviderKind::WorkBuddy => ("", "", ""),
         ProviderKind::Kiro => (
             crate::i18n::tr("kiro-ide"),
             crate::i18n::tr("kiro-crew"),

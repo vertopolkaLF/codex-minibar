@@ -725,6 +725,8 @@ pub enum ProviderKind {
     Grok,
     Kiro,
     CommandCode,
+    /// Tencent's agentic IDE/CLI. Local usage only: no quota windows exist.
+    WorkBuddy,
 }
 
 /// When the app backs off to leave CPU, GPU and network to a game.
@@ -900,7 +902,7 @@ fn new_id(prefix: &str) -> String {
 }
 
 impl ProviderKind {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Codex,
         Self::Claude,
         Self::Cursor,
@@ -911,6 +913,7 @@ impl ProviderKind {
         Self::Grok,
         Self::Kiro,
         Self::CommandCode,
+        Self::WorkBuddy,
     ];
 
     pub const fn id(self) -> &'static str {
@@ -925,6 +928,7 @@ impl ProviderKind {
             Self::Grok => "grok",
             Self::Kiro => "kiro",
             Self::CommandCode => "command-code",
+            Self::WorkBuddy => "workbuddy",
         }
     }
 
@@ -940,6 +944,7 @@ impl ProviderKind {
             "grok" => Some(Self::Grok),
             "kiro" => Some(Self::Kiro),
             "command-code" => Some(Self::CommandCode),
+            "workbuddy" => Some(Self::WorkBuddy),
             _ => None,
         }
     }
@@ -956,6 +961,7 @@ impl ProviderKind {
             Self::Grok => "Grok",
             Self::Kiro => "Kiro",
             Self::CommandCode => "Command Code",
+            Self::WorkBuddy => "WorkBuddy",
         }
     }
 

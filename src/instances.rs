@@ -662,7 +662,7 @@ impl Capabilities {
         // primary instance reads it so it is never counted twice.
         let shared_local_history = matches!(
             instance.driver,
-            ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo
+            ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo | ProviderKind::WorkBuddy
         ) && !instance.is_primary();
         Self {
             limits: true,

@@ -317,6 +317,12 @@ fn start_driver_worker(
                 false
             )
         }
+        ProviderKind::WorkBuddy => start_worker!(
+            crate::workbuddy::WorkBuddyClient::new(provider),
+            crate::workbuddy::WorkBuddyClient::new(provider),
+            crate::workbuddy::WorkBuddyClient::new(provider),
+            false
+        ),
     })
 }
 
@@ -411,6 +417,7 @@ fn provider_activation_path(provider: ProviderId, base_path: PathBuf) -> PathBuf
         ProviderKind::Grok => base_path.with_file_name("activation-grok.toml"),
         ProviderKind::Kiro => base_path.with_file_name("activation-kiro.toml"),
         ProviderKind::CommandCode => base_path.with_file_name("activation-command-code.toml"),
+        ProviderKind::WorkBuddy => base_path.with_file_name("activation-workbuddy.toml"),
     }
 }
 
