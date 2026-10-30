@@ -864,6 +864,13 @@ impl Palette {
                     (51, 51, 51)
                 }
             }
+            ProviderKind::WorkBuddy => {
+                if dark {
+                    (77, 124, 254)
+                } else {
+                    (61, 100, 214)
+                }
+            }
         })
     }
 
