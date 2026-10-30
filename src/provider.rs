@@ -214,10 +214,10 @@ fn start_driver_worker(
         };
     }
     Ok(match instance.driver {
-        ProviderKind::Codex if crate::fake::enabled() => start_worker!(
-            crate::fake::FakeCodex,
-            crate::fake::FakeCodex,
-            crate::fake::FakeCodex,
+        driver if crate::fake::serves(driver) => start_worker!(
+            crate::fake::FakeProvider(driver),
+            crate::fake::FakeProvider(driver),
+            crate::fake::FakeProvider(driver),
             true
         ),
         ProviderKind::Codex => {

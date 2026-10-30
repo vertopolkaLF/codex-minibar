@@ -1073,6 +1073,14 @@ impl ToastHost {
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.click(id, cx);
             }))
+            // Middle click closes the card, as it closes a browser tab.
+            .on_mouse_up(
+                gpui::MouseButton::Middle,
+                cx.listener(move |this, _: &gpui::MouseUpEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.dismiss(id, cx);
+                }),
+            )
             // The summary follows the height glide instead of spilling past it.
             .when(summary.is_some(), |card| card.overflow_hidden())
             .child(content)

@@ -2166,6 +2166,11 @@ fn truncate_local_hour(timestamp: DateTime<Local>) -> DateTime<Local> {
 }
 
 fn config_dir() -> Result<PathBuf> {
+    // The sandbox must never read or overwrite the real install's cache.
+    if crate::fake::enabled() {
+        let settings = crate::fake::settings_path();
+        return Ok(settings.parent().unwrap_or(&settings).to_path_buf());
+    }
     ProjectDirs::from("dev", "Codex Minibar", "Codex Minibar")
         .map(|dirs| dirs.config_dir().to_path_buf())
         .context("could not resolve the application config directory")

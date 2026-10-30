@@ -20,6 +20,7 @@ use codex_minibar::{
 };
 
 fn run() -> Result<()> {
+    codex_minibar::banked_reset::mark_process_start();
     notifications::initialize();
     sync_installed_display_version();
     let path = Settings::default_path()?;

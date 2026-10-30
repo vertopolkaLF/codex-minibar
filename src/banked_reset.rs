@@ -26,9 +26,7 @@ pub(crate) fn consume(
     instance: &crate::instances::ProviderInstance,
 ) -> Result<(Outcome, Result<crate::limits::RateLimits>)> {
     match instance.driver {
-        crate::settings::ProviderKind::Codex if crate::fake::enabled() => {
-            Ok(crate::fake::consume())
-        }
+        driver if crate::fake::serves(driver) => crate::fake::consume(driver),
         crate::settings::ProviderKind::Codex => {
             let executable = crate::codex::first_available(instance.binary_path.as_deref())?;
             let client = crate::codex::CodexClient::for_instance(executable, instance);
@@ -51,6 +49,18 @@ pub enum AutoResetChoice {
     ApplyNow(crate::instances::ProviderId),
     /// Do not spend the currently announced credit automatically.
     Skip(crate::instances::ProviderId),
+}
+
+static PROCESS_STARTED: OnceLock<chrono::DateTime<chrono::Utc>> = OnceLock::new();
+
+/// Marks the moment this process started, before workers publish anything.
+/// Quota snapshots sampled earlier were cached by a previous run.
+pub fn mark_process_start() {
+    PROCESS_STARTED.get_or_init(chrono::Utc::now);
+}
+
+pub(crate) fn process_started_at() -> chrono::DateTime<chrono::Utc> {
+    *PROCESS_STARTED.get_or_init(chrono::Utc::now)
 }
 
 static AUTO_RESET_CHOICES: Mutex<Vec<AutoResetChoice>> = Mutex::new(Vec::new());

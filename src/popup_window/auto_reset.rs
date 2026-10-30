@@ -69,6 +69,9 @@ fn dry_run_requested() -> bool {
 }
 
 pub(super) struct AutoReset {
+    /// Snapshots sampled before this are cached from an earlier run. They may
+    /// list a credit that is already spent, so they never trigger anything.
+    started_at: DateTime<Utc>,
     next_check: Instant,
     last_attempt: HashMap<ProviderId, Instant>,
     running: Arc<Mutex<HashSet<ProviderId>>>,
@@ -88,6 +91,7 @@ impl AutoReset {
             crate::logger::info("Automatic resets: dry run, no credit will be redeemed");
         }
         Self {
+            started_at: crate::banked_reset::process_started_at(),
             next_check: Instant::now(),
             last_attempt: HashMap::new(),
             running: Arc::default(),
@@ -111,9 +115,11 @@ impl AutoReset {
             instance.enabled && instance.auto_reset && Capabilities::of(instance).auto_reset
         }) {
             let provider = instance.provider_id();
-            let Some((expires_at, at)) =
-                upcoming(limits.get(provider), settings.auto_reset_lead, utc_now)
-            else {
+            let limits = limits.get(provider);
+            if limits.sampled_at < self.started_at {
+                continue;
+            }
+            let Some((expires_at, at)) = upcoming(limits, settings.auto_reset_lead, utc_now) else {
                 continue;
             };
             if self.warned.insert(provider, expires_at) != Some(expires_at) {
@@ -149,7 +155,8 @@ impl AutoReset {
             if self.dry_run {
                 self.log_plan(provider, limits, settings.auto_reset_lead);
             }
-            if !due(limits, settings.auto_reset_lead, utc_now)
+            if limits.sampled_at < self.started_at
+                || !due(limits, settings.auto_reset_lead, utc_now)
                 || self.skipped.get(&provider).copied() == limits.next_reset_credit_expiration()
                 || self
                     .last_attempt
@@ -234,19 +241,25 @@ impl AutoReset {
         let warnings = self.take_warnings(settings, &limits, utc_now);
         if settings.notifications.auto_reset_upcoming {
             for (provider, minutes) in warnings {
-                use crate::notifications::{Notification, NotificationAction, NotificationKind};
+                use crate::notifications::{
+                    LimitFocus, Notification, NotificationAction, NotificationKind,
+                };
                 crate::logger::info(format!(
                     "{} automatic reset in {minutes} min",
                     provider.qualified_name()
                 ));
+                // The quotas show what the reset is about to clear.
                 crate::notifications::notify(
-                    Notification::new(
+                    Notification::limit(
                         NotificationKind::Warning,
                         &crate::i18n::format(
                             "banked-reset-applies-in-minutes",
                             &[("minutes", minutes.to_string())],
                         ),
                         &provider.qualified_name(),
+                        provider,
+                        limits.get(provider),
+                        LimitFocus::Primary,
                     )
                     .with_action(
                         crate::i18n::tr("apply-reset-now"),
@@ -377,6 +390,7 @@ mod tests {
 
     fn scheduler() -> AutoReset {
         AutoReset {
+            started_at: DateTime::<Utc>::MIN_UTC,
             next_check: Instant::now(),
             last_attempt: HashMap::new(),
             running: Arc::default(),
@@ -385,6 +399,27 @@ mod tests {
             warned: HashMap::new(),
             skipped: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn cached_snapshot_from_an_earlier_run_never_triggers() {
+        let utc = Utc::now();
+        let codex = instance(ProviderKind::Codex, true, true);
+        let provider = codex.provider_id();
+        let settings = settings_with(codex);
+        let mut auto = AutoReset {
+            started_at: utc,
+            ..scheduler()
+        };
+        let mut cached = limits(40, chrono::Duration::minutes(5), utc);
+        cached.sampled_at = utc - chrono::Duration::minutes(1);
+        let stale = ProviderLimits::from_entries([(provider, cached.clone())]);
+        let now = Instant::now();
+        assert!(auto.take_due(&settings, &stale, now, utc).is_empty());
+        assert!(auto.take_warnings(&settings, &stale, utc).is_empty());
+        cached.sampled_at = utc;
+        let live = ProviderLimits::from_entries([(provider, cached)]);
+        assert_eq!(auto.take_due(&settings, &live, now, utc).len(), 1);
     }
 
     #[test]
