@@ -23,6 +23,9 @@ fn run() -> Result<()> {
     notifications::initialize();
     sync_installed_display_version();
     let path = Settings::default_path()?;
+    if codex_minibar::fake::enabled() {
+        codex_minibar::fake::seed_settings()?;
+    }
     codex_minibar::logger::initialize(&path)?;
     if let Err(error) = codex_minibar::pricing::initialize() {
         eprintln!("failed to hydrate pricing catalog: {error:#}");

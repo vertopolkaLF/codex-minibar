@@ -573,6 +573,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
             }
         };
 
+        let mut auto_reset = super::auto_reset::AutoReset::new();
         let mut made_progress = false;
         loop {
             popup::pump_messages();
@@ -597,6 +598,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                 &mut live_settings,
             );
             drain_updates(&mut ui, &mut tray, &mut update_phase, &mut widgets);
+            auto_reset.poll(&live_settings, &state);
             if crate::game_mode::take_transition() {
                 for (provider, commands) in state.worker_commands() {
                     send_refresh_intervals(provider, &commands, &live_settings);

@@ -2049,3 +2049,42 @@ popup-close = Fechar painel
 
 show-popup-action-bar = Mostrar barra de ações do popup
 show-popup-action-bar-description = Mostrar o título e as ações no popup normal. Painéis flutuantes sempre mostram esta barra.
+
+# src/settings_window/activation.rs
+use-banked-resets-automatically = Usar redefinições acumuladas automaticamente
+
+# src/settings_window/activation.rs
+spends-a-banked-reset-shortly-before-it-expires = Aplica uma redefinição acumulada pouco antes de expirar para que ela não seja perdida. Ignorado enquanto os limites não tiverem nada a limpar.
+
+# src/settings_window/activation.rs
+use-before-expiry = Usar antes de expirar
+
+# src/settings_window/activation.rs
+how-long-before-a-banked-reset-expires-it-is-applied = Quanto tempo antes de expirar uma redefinição acumulada é aplicada.
+
+# src/settings_window/providers/page.rs
+automatic-resets = Redefinições automáticas
+
+# src/popup_window/auto_reset.rs
+banked-reset-applied-automatically = Redefinição acumulada aplicada automaticamente
+
+# src/instances.rs
+this-provider-has-no-banked-resets = Este provedor não tem redefinições acumuladas.
+
+# src/popup_window/auto_reset.rs
+banked-reset-applies-in-minutes = A redefinição acumulada será aplicada em { $minutes } min
+
+# src/settings_window/notifications.rs
+before-an-automatic-reset = Antes de uma redefinição automática
+
+# src/settings_window/notifications.rs
+warns-before-a-banked-reset-is-applied-automatically = Avisa 10 minutos antes de uma redefinição acumulada ser aplicada automaticamente.
+
+# src/popup_window/auto_reset.rs
+apply-reset-now = Aplicar agora
+
+# src/popup_window/auto_reset.rs
+skip-automatic-reset = Cancelar
+
+# src/popup_window/auto_reset.rs
+banked-reset-applied = Redefinição acumulada aplicada

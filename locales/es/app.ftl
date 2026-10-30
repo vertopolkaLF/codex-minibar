@@ -2049,3 +2049,42 @@ popup-close = Cerrar panel
 
 show-popup-action-bar = Mostrar barra de acciones del panel emergente
 show-popup-action-bar-description = Mostrar el título y las acciones en el panel emergente normal. Los paneles flotantes siempre muestran esta barra.
+
+# src/settings_window/activation.rs
+use-banked-resets-automatically = Usar restablecimientos acumulados automáticamente
+
+# src/settings_window/activation.rs
+spends-a-banked-reset-shortly-before-it-expires = Aplica un restablecimiento acumulado poco antes de que caduque para no perderlo. Se omite mientras los límites no tengan nada que borrar.
+
+# src/settings_window/activation.rs
+use-before-expiry = Usar antes de caducar
+
+# src/settings_window/activation.rs
+how-long-before-a-banked-reset-expires-it-is-applied = Cuánto tiempo antes de caducar se aplica un restablecimiento acumulado.
+
+# src/settings_window/providers/page.rs
+automatic-resets = Restablecimientos automáticos
+
+# src/popup_window/auto_reset.rs
+banked-reset-applied-automatically = Restablecimiento acumulado aplicado automáticamente
+
+# src/instances.rs
+this-provider-has-no-banked-resets = Este proveedor no tiene restablecimientos acumulados.
+
+# src/popup_window/auto_reset.rs
+banked-reset-applies-in-minutes = El restablecimiento acumulado se aplicará en { $minutes } min
+
+# src/settings_window/notifications.rs
+before-an-automatic-reset = Antes de un restablecimiento automático
+
+# src/settings_window/notifications.rs
+warns-before-a-banked-reset-is-applied-automatically = Avisa 10 minutos antes de aplicar automáticamente un restablecimiento acumulado.
+
+# src/popup_window/auto_reset.rs
+apply-reset-now = Aplicar ahora
+
+# src/popup_window/auto_reset.rs
+skip-automatic-reset = Cancelar
+
+# src/popup_window/auto_reset.rs
+banked-reset-applied = Restablecimiento acumulado aplicado

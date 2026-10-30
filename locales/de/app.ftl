@@ -2951,3 +2951,42 @@ popup-close = Fenster schließen
 
 show-popup-action-bar = Aktionsleiste im Popup anzeigen
 show-popup-action-bar-description = App-Titel und Aktionen im normalen Popup anzeigen. Schwebende Fenster zeigen diese Leiste immer.
+
+# src/settings_window/activation.rs
+use-banked-resets-automatically = Gespeicherte Resets automatisch nutzen
+
+# src/settings_window/activation.rs
+spends-a-banked-reset-shortly-before-it-expires = Wendet einen gespeicherten Reset kurz vor seinem Ablauf an, damit er nicht verfällt. Wird übersprungen, solange die Limits nichts zurückzusetzen haben.
+
+# src/settings_window/activation.rs
+use-before-expiry = Vor Ablauf anwenden
+
+# src/settings_window/activation.rs
+how-long-before-a-banked-reset-expires-it-is-applied = Wie lange vor Ablauf ein gespeicherter Reset angewendet wird.
+
+# src/settings_window/providers/page.rs
+automatic-resets = Automatische Resets
+
+# src/popup_window/auto_reset.rs
+banked-reset-applied-automatically = Gespeicherter Reset automatisch angewendet
+
+# src/instances.rs
+this-provider-has-no-banked-resets = Dieser Anbieter hat keine gespeicherten Resets.
+
+# src/popup_window/auto_reset.rs
+banked-reset-applies-in-minutes = Gespeicherter Reset wird in { $minutes } Min. angewendet
+
+# src/settings_window/notifications.rs
+before-an-automatic-reset = Vor einem automatischen Reset
+
+# src/settings_window/notifications.rs
+warns-before-a-banked-reset-is-applied-automatically = Warnt 10 Minuten, bevor ein gespeicherter Reset automatisch angewendet wird.
+
+# src/popup_window/auto_reset.rs
+apply-reset-now = Jetzt anwenden
+
+# src/popup_window/auto_reset.rs
+skip-automatic-reset = Abbrechen
+
+# src/popup_window/auto_reset.rs
+banked-reset-applied = Gespeicherter Reset angewendet

@@ -2930,3 +2930,42 @@ popup-close = パネルを閉じる
 
 show-popup-action-bar = ポップアップのアクションバーを表示
 show-popup-action-bar-description = 通常のポップアップにアプリ名と操作ボタンを表示します。フローティングパネルでは常に表示されます。
+
+# src/settings_window/activation.rs
+use-banked-resets-automatically = 保存済みリセットを自動で使う
+
+# src/settings_window/activation.rs
+spends-a-banked-reset-shortly-before-it-expires = 保存済みリセットが失効する少し前に適用し、無駄にしないようにします。利用制限に解除するものがない間はスキップします。
+
+# src/settings_window/activation.rs
+use-before-expiry = 失効前に使用
+
+# src/settings_window/activation.rs
+how-long-before-a-banked-reset-expires-it-is-applied = 保存済みリセットを失効のどれくらい前に適用するか。
+
+# src/settings_window/providers/page.rs
+automatic-resets = 自動リセット
+
+# src/popup_window/auto_reset.rs
+banked-reset-applied-automatically = 保存済みリセットを自動で適用しました
+
+# src/instances.rs
+this-provider-has-no-banked-resets = このプロバイダーには保存済みリセットがありません。
+
+# src/popup_window/auto_reset.rs
+banked-reset-applies-in-minutes = { $minutes } 分後に保存済みリセットを適用します
+
+# src/settings_window/notifications.rs
+before-an-automatic-reset = 自動リセットの前
+
+# src/settings_window/notifications.rs
+warns-before-a-banked-reset-is-applied-automatically = 保存済みリセットを自動で適用する 10 分前に通知します。
+
+# src/popup_window/auto_reset.rs
+apply-reset-now = 今すぐ適用
+
+# src/popup_window/auto_reset.rs
+skip-automatic-reset = キャンセル
+
+# src/popup_window/auto_reset.rs
+banked-reset-applied = 保存済みリセットを適用しました

@@ -2957,3 +2957,42 @@ popup-close = Закрыть панель
 
 show-popup-action-bar = Показывать панель действий попапа
 show-popup-action-bar-description = Показывать название приложения и кнопки действий в обычном попапе. В плавающей панели эта строка видна всегда.
+
+# src/settings_window/activation.rs
+use-banked-resets-automatically = Автоматически использовать запасные сбросы
+
+# src/settings_window/activation.rs
+spends-a-banked-reset-shortly-before-it-expires = Применяет запасной сброс незадолго до его истечения, чтобы он не сгорел. Пропускается, пока в лимитах нечего сбрасывать.
+
+# src/settings_window/activation.rs
+use-before-expiry = Применять до истечения
+
+# src/settings_window/activation.rs
+how-long-before-a-banked-reset-expires-it-is-applied = За сколько до истечения запасного сброса он будет применён.
+
+# src/settings_window/providers/page.rs
+automatic-resets = Автоматические сбросы
+
+# src/popup_window/auto_reset.rs
+banked-reset-applied-automatically = Запасной сброс применён автоматически
+
+# src/instances.rs
+this-provider-has-no-banked-resets = У этого провайдера нет запасных сбросов.
+
+# src/popup_window/auto_reset.rs
+banked-reset-applies-in-minutes = Запасной сброс будет применён через { $minutes } мин
+
+# src/settings_window/notifications.rs
+before-an-automatic-reset = Перед автоматическим сбросом
+
+# src/settings_window/notifications.rs
+warns-before-a-banked-reset-is-applied-automatically = Предупреждает за 10 минут до автоматического применения запасного сброса.
+
+# src/popup_window/auto_reset.rs
+apply-reset-now = Применить сейчас
+
+# src/popup_window/auto_reset.rs
+skip-automatic-reset = Отменить
+
+# src/popup_window/auto_reset.rs
+banked-reset-applied = Запасной сброс применён

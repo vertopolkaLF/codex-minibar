@@ -2929,3 +2929,42 @@ popup-close = 패널 닫기
 
 show-popup-action-bar = 팝업 작업 표시줄 표시
 show-popup-action-bar-description = 일반 팝업에 앱 이름과 작업 버튼을 표시합니다. 플로팅 패널에는 항상 표시됩니다.
+
+# src/settings_window/activation.rs
+use-banked-resets-automatically = 적립된 재설정 자동 사용
+
+# src/settings_window/activation.rs
+spends-a-banked-reset-shortly-before-it-expires = 적립된 재설정이 만료되기 직전에 적용해 낭비되지 않게 합니다. 한도에 초기화할 사용량이 없으면 건너뜁니다.
+
+# src/settings_window/activation.rs
+use-before-expiry = 만료 전 사용
+
+# src/settings_window/activation.rs
+how-long-before-a-banked-reset-expires-it-is-applied = 적립된 재설정을 만료 얼마 전에 적용할지 선택합니다.
+
+# src/settings_window/providers/page.rs
+automatic-resets = 자동 재설정
+
+# src/popup_window/auto_reset.rs
+banked-reset-applied-automatically = 적립된 재설정이 자동으로 적용됨
+
+# src/instances.rs
+this-provider-has-no-banked-resets = 이 공급자에는 적립된 재설정이 없습니다.
+
+# src/popup_window/auto_reset.rs
+banked-reset-applies-in-minutes = { $minutes }분 후 적립된 재설정이 적용됩니다
+
+# src/settings_window/notifications.rs
+before-an-automatic-reset = 자동 재설정 전
+
+# src/settings_window/notifications.rs
+warns-before-a-banked-reset-is-applied-automatically = 적립된 재설정이 자동으로 적용되기 10분 전에 알립니다.
+
+# src/popup_window/auto_reset.rs
+apply-reset-now = 지금 적용
+
+# src/popup_window/auto_reset.rs
+skip-automatic-reset = 취소
+
+# src/popup_window/auto_reset.rs
+banked-reset-applied = 적립된 재설정이 적용됨

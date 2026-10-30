@@ -8,7 +8,8 @@ use gpui::{
 use super::kit::{self, Button, Kit, Row, eid};
 use super::window::SettingsWindow;
 use crate::settings::{
-    AutoActivationPause, ProviderId, ProviderInstance, ScheduledActivation, TimeFormat,
+    AutoActivationPause, AutoResetLead, ProviderId, ProviderInstance, ScheduledActivation,
+    TimeFormat,
 };
 
 fn weekday_labels() -> [&'static str; 7] {
@@ -133,6 +134,73 @@ struct RuleView {
 }
 
 impl SettingsWindow {
+    /// Banked reset credits spent automatically shortly before they expire.
+    fn auto_reset_section(
+        &mut self,
+        k: &mut Kit,
+        cx: &mut Context<Self>,
+        instances: &[ProviderInstance],
+    ) -> Vec<AnyElement> {
+        use crate::instances::{Capabilities, Capability};
+        let candidates = instances
+            .iter()
+            .filter(|instance| {
+                matches!(
+                    instance.driver,
+                    crate::settings::ProviderKind::Codex | crate::settings::ProviderKind::Claude
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut rows = vec![kit::section_header(
+            k,
+            crate::i18n::tr("use-banked-resets-automatically"),
+            Some(crate::i18n::tr("spends-a-banked-reset-shortly-before-it-expires").into()),
+            None,
+        )];
+        if candidates.is_empty() {
+            rows.push(kit::caption(
+                k,
+                crate::i18n::tr("add-codex-or-claude-in-providers-first"),
+            ));
+            return rows;
+        }
+        let any_enabled = candidates.iter().any(|instance| instance.auto_reset);
+        let leads = AutoResetLead::ALL.map(|lead| crate::i18n::tr(lead.label_key()));
+        let mut card = vec![kit::dropdown_row(
+            k,
+            "activation-auto-reset-lead",
+            crate::i18n::tr("use-before-expiry"),
+            Some(crate::i18n::tr(
+                "how-long-before-a-banked-reset-expires-it-is-applied",
+            )),
+            kit::options(&leads),
+            self.settings.auto_reset_lead.index(),
+            !any_enabled,
+            Self::h(cx, |this, index: usize, _, cx| {
+                let value = AutoResetLead::from_index(index as i32);
+                this.edit(cx, move |settings| settings.auto_reset_lead = value)
+            }),
+        )];
+        for instance in candidates {
+            let provider = instance.provider_id();
+            let description = (!instance.enabled)
+                .then(|| SharedString::from(crate::i18n::tr("off-in-providers")));
+            card.push(kit::toggle_row_with(
+                k,
+                format!("activation-auto-reset-{}", instance.id),
+                provider.qualified_name(),
+                description,
+                instance.auto_reset,
+                Capabilities::reason(instance, Capability::AutoReset).map(SharedString::from),
+                Self::h(cx, move |this, value: bool, _, cx| {
+                    this.edit_instance(cx, provider, move |instance| instance.auto_reset = value)
+                }),
+            ));
+        }
+        rows.push(kit::card(k, card));
+        rows
+    }
+
     pub(super) fn activation_page(
         &mut self,
         k: &mut Kit,
@@ -186,6 +254,7 @@ impl SettingsWindow {
             }
             rows.push(kit::card(k, automatic));
         }
+        rows.extend(self.auto_reset_section(k, cx, &instances));
 
         let default_provider = activation_providers(&instances).into_iter().next();
         let add_pause = Self::h(cx, move |this, (), _, cx| {

@@ -8,6 +8,7 @@ pub mod codex;
 pub mod commandcode;
 pub mod cursor;
 pub mod discovery;
+pub mod fake;
 pub mod game_mode;
 pub mod grok;
 pub mod hotkey;

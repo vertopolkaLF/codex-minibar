@@ -416,7 +416,7 @@ impl ToastHost {
                     card.last_tick = now;
                 }
                 // A summary is read at leisure: it stays until closed.
-                card.pinned |= notification.summary.is_some();
+                card.pinned |= notification.stays_until_closed();
                 card.notification = notification;
                 card.height = height;
                 card.summary_height = summary_height;
@@ -441,7 +441,7 @@ impl ToastHost {
                 || card.notification.body != notification.body
         });
         self.next_id += 1;
-        let pinned = notification.summary.is_some();
+        let pinned = notification.stays_until_closed();
         self.cards.push(Card {
             id: self.next_id,
             notification,

@@ -38,6 +38,7 @@ use crate::{
 };
 
 mod actions;
+mod auto_reset;
 mod bridge;
 mod formatting;
 mod limits_persist;

@@ -332,6 +332,9 @@ pub struct ProviderInstance {
     pub badge_color: BadgeColor,
     pub show_on_home: bool,
     pub auto_activation: bool,
+    /// Spend a banked reset credit shortly before it expires so it is not
+    /// lost. The lead time is the global `Settings::auto_reset_lead`.
+    pub auto_reset: bool,
     pub usage_stats: bool,
     /// Counts toward the machine-wide Usage tab and Home total spend. Off
     /// keeps collecting for this instance's own page.
@@ -373,6 +376,7 @@ impl ProviderInstance {
             badge_color: BadgeColor::Auto,
             show_on_home: true,
             auto_activation: false,
+            auto_reset: false,
             usage_stats: true,
             in_usage_overview: true,
             refresh_interval: None,
@@ -503,6 +507,10 @@ impl ProviderInstance {
             && self.auto_activation
         {
             self.auto_activation = false;
+            changed = true;
+        }
+        if !Capabilities::of(self).auto_reset && self.auto_reset {
+            self.auto_reset = false;
             changed = true;
         }
         changed
@@ -640,6 +648,7 @@ pub struct Capabilities {
     pub limits: bool,
     pub usage_stats: bool,
     pub auto_activation: bool,
+    pub auto_reset: bool,
     pub sign_in: bool,
     pub config_folder: bool,
     pub multiple_instances: bool,
@@ -649,6 +658,7 @@ pub struct Capabilities {
 pub enum Capability {
     UsageStats,
     AutoActivation,
+    AutoReset,
     SignIn,
     ConfigFolder,
 }
@@ -670,6 +680,8 @@ impl Capabilities {
                 && !manual
                 && !shared_local_history,
             auto_activation: descriptor.supports_activation && !manual,
+            // Redemption needs the CLI login folder (see `banked_reset::consume`).
+            auto_reset: folder_driver && !manual,
             sign_in: folder_driver && !manual,
             config_folder: folder_driver && !manual,
             multiple_instances: descriptor.supports_multiple_instances,
@@ -684,6 +696,7 @@ impl Capabilities {
         match capability {
             Capability::UsageStats => self.usage_stats,
             Capability::AutoActivation => self.auto_activation,
+            Capability::AutoReset => self.auto_reset,
             Capability::SignIn => self.sign_in,
             Capability::ConfigFolder => self.config_folder,
         }
@@ -712,6 +725,7 @@ impl Capabilities {
             Capability::AutoActivation => {
                 crate::i18n::tr("this-provider-has-no-session-window-to-start")
             }
+            Capability::AutoReset => crate::i18n::tr("this-provider-has-no-banked-resets"),
             Capability::SignIn | Capability::ConfigFolder => {
                 crate::i18n::tr("this-provider-does-not-use-a-config-folder")
             }

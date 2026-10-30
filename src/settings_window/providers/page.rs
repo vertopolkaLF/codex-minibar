@@ -1001,6 +1001,20 @@ impl SettingsWindow {
                 }),
             ));
         }
+        // Only these drivers can redeem a banked reset.
+        if matches!(instance.driver, ProviderKind::Codex | ProviderKind::Claude) {
+            rows.push(kit::toggle_row_with(
+                k,
+                format!("provider-{}-auto-reset", provider.id()),
+                crate::i18n::tr("automatic-resets"),
+                Some(crate::i18n::tr("spends-a-banked-reset-shortly-before-it-expires").into()),
+                instance.auto_reset,
+                Capabilities::reason(instance, Capability::AutoReset).map(SharedString::from),
+                Self::h(cx, move |this, value: bool, _, cx| {
+                    this.edit_instance(cx, provider, move |instance| instance.auto_reset = value)
+                }),
+            ));
+        }
         rows.push(kit::toggle_row_with(
             k,
             format!("provider-{}-usage", provider.id()),

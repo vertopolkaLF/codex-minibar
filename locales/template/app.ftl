@@ -4336,3 +4336,55 @@ popup-close = Close panel
 
 show-popup-action-bar = Show popup action bar
 show-popup-action-bar-description = Show the app title and action buttons in the regular popup. Floating panels always show this bar.
+
+# English source:
+# use-banked-resets-automatically = Use banked resets automatically
+use-banked-resets-automatically = { "" }
+
+# English source:
+# spends-a-banked-reset-shortly-before-it-expires = Spends a banked reset shortly before it expires so it isn't lost. Skipped while the limits have nothing to clear.
+spends-a-banked-reset-shortly-before-it-expires = { "" }
+
+# English source:
+# use-before-expiry = Use before expiry
+use-before-expiry = { "" }
+
+# English source:
+# how-long-before-a-banked-reset-expires-it-is-applied = How long before a banked reset expires it is applied.
+how-long-before-a-banked-reset-expires-it-is-applied = { "" }
+
+# English source:
+# automatic-resets = Automatic resets
+automatic-resets = { "" }
+
+# English source:
+# banked-reset-applied-automatically = Banked reset applied automatically
+banked-reset-applied-automatically = { "" }
+
+# English source:
+# this-provider-has-no-banked-resets = This provider has no banked resets.
+this-provider-has-no-banked-resets = { "" }
+
+# English source:
+# banked-reset-applies-in-minutes = Banked reset will be applied in { $minutes } min
+banked-reset-applies-in-minutes = { "" }
+
+# English source:
+# before-an-automatic-reset = Before an automatic reset
+before-an-automatic-reset = { "" }
+
+# English source:
+# warns-before-a-banked-reset-is-applied-automatically = Warns 10 minutes before a banked reset is applied automatically.
+warns-before-a-banked-reset-is-applied-automatically = { "" }
+
+# English source:
+# apply-reset-now = Apply now
+apply-reset-now = { "" }
+
+# English source:
+# skip-automatic-reset = Cancel
+skip-automatic-reset = { "" }
+
+# English source:
+# banked-reset-applied = Banked reset applied
+banked-reset-applied = { "" }

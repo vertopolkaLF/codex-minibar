@@ -26,6 +26,9 @@ pub(crate) fn consume(
     instance: &crate::instances::ProviderInstance,
 ) -> Result<(Outcome, Result<crate::limits::RateLimits>)> {
     match instance.driver {
+        crate::settings::ProviderKind::Codex if crate::fake::enabled() => {
+            Ok(crate::fake::consume())
+        }
         crate::settings::ProviderKind::Codex => {
             let executable = crate::codex::first_available(instance.binary_path.as_deref())?;
             let client = crate::codex::CodexClient::for_instance(executable, instance);
@@ -39,6 +42,25 @@ pub(crate) fn consume(
         }
         _ => bail!("Provider does not support reset credits"),
     }
+}
+
+/// A choice made on the "reset will be applied soon" notification. The
+/// automatic-reset scheduler on the bridge thread picks it up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AutoResetChoice {
+    ApplyNow(crate::instances::ProviderId),
+    /// Do not spend the currently announced credit automatically.
+    Skip(crate::instances::ProviderId),
+}
+
+static AUTO_RESET_CHOICES: Mutex<Vec<AutoResetChoice>> = Mutex::new(Vec::new());
+
+pub fn choose(choice: AutoResetChoice) {
+    AUTO_RESET_CHOICES.lock().unwrap().push(choice);
+}
+
+pub(crate) fn take_choices() -> Vec<AutoResetChoice> {
+    std::mem::take(&mut *AUTO_RESET_CHOICES.lock().unwrap())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -670,6 +670,72 @@ impl ResetAnnouncementRefreshInterval {
     }
 }
 
+/// How long before a banked reset credit expires Minibar spends it on the
+/// user's behalf when automatic resets are on for an instance.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoResetLead {
+    Minutes5,
+    #[default]
+    Minutes30,
+    Hour1,
+    Hours3,
+    Hours6,
+    Hours12,
+    Hours24,
+}
+
+impl AutoResetLead {
+    /// Dropdown order.
+    pub const ALL: [Self; 7] = [
+        Self::Minutes5,
+        Self::Minutes30,
+        Self::Hour1,
+        Self::Hours3,
+        Self::Hours6,
+        Self::Hours12,
+        Self::Hours24,
+    ];
+
+    pub const fn minutes(self) -> i64 {
+        match self {
+            Self::Minutes5 => 5,
+            Self::Minutes30 => 30,
+            Self::Hour1 => 60,
+            Self::Hours3 => 3 * 60,
+            Self::Hours6 => 6 * 60,
+            Self::Hours12 => 12 * 60,
+            Self::Hours24 => 24 * 60,
+        }
+    }
+
+    pub const fn label_key(self) -> &'static str {
+        match self {
+            Self::Minutes5 => "msg-5-minutes",
+            Self::Minutes30 => "msg-30-minutes",
+            Self::Hour1 => "msg-1-hour",
+            Self::Hours3 => "msg-3-hours",
+            Self::Hours6 => "msg-6-hours",
+            Self::Hours12 => "msg-12-hours",
+            Self::Hours24 => "msg-24-hours",
+        }
+    }
+
+    pub fn index(self) -> i32 {
+        Self::ALL
+            .iter()
+            .position(|lead| *lead == self)
+            .map_or(1, |index| index as i32)
+    }
+
+    pub fn from_index(index: i32) -> Self {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| Self::ALL.get(index).copied())
+            .unwrap_or_default()
+    }
+}
+
 impl UsageRefreshInterval {
     pub const fn seconds(self) -> u64 {
         match self {
@@ -2066,6 +2132,8 @@ pub struct NotificationSettings {
     pub follow_do_not_disturb: bool,
     /// Notify when game mode turns on or off.
     pub game_mode_changes: bool,
+    /// Warn shortly before an automatic reset spends a banked reset credit.
+    pub auto_reset_upcoming: bool,
 }
 
 impl Default for NotificationSettings {
@@ -2088,6 +2156,7 @@ impl Default for NotificationSettings {
             sound: true,
             follow_do_not_disturb: true,
             game_mode_changes: false,
+            auto_reset_upcoming: true,
         }
     }
 }
@@ -2170,6 +2239,8 @@ pub struct Settings {
     pub scheduled_activations: Vec<ScheduledActivation>,
     /// Weekly local-time periods that suppress automatic activation per provider.
     pub auto_activation_pauses: Vec<AutoActivationPause>,
+    /// How long before expiry automatic resets spend a banked reset credit.
+    pub auto_reset_lead: AutoResetLead,
     /// Enables the Usage tab, Usage Stats home card, and background usage collection.
     pub usage_stats_enabled: bool,
     pub usage_refresh_interval: UsageRefreshInterval,
@@ -2264,6 +2335,7 @@ impl Default for Settings {
             replace_chatgpt_logo_with_codex: false,
             scheduled_activations: Vec::new(),
             auto_activation_pauses: Vec::new(),
+            auto_reset_lead: AutoResetLead::default(),
             usage_stats_enabled: true,
             usage_refresh_interval: UsageRefreshInterval::default(),
             reset_announcement_refresh_interval: ResetAnnouncementRefreshInterval::default(),
@@ -2324,6 +2396,9 @@ impl Settings {
     }
 
     pub fn default_path() -> Result<PathBuf> {
+        if crate::fake::enabled() {
+            return Ok(crate::fake::settings_path());
+        }
         let dirs = ProjectDirs::from("dev", "Codex Minibar", "Codex Minibar")
             .context("could not resolve the application config directory")?;
         Ok(dirs.config_dir().join("settings.toml"))
@@ -2994,6 +3069,10 @@ impl Settings {
                 .filter_map(|instance| instance.binary_path.as_deref()),
         );
         self.time_format.apply();
+        // The sandbox must never rewrite the real install's login entry.
+        if crate::fake::enabled() {
+            return Ok(());
+        }
         apply_startup_registration(self.start_at_login)
     }
 
@@ -3001,7 +3080,7 @@ impl Settings {
     /// settings still say off, adopt that into settings before we apply them —
     /// otherwise `apply_runtime_effects` would delete the Run value on launch.
     pub fn reconcile_startup_from_registry(&mut self, path: &Path) -> Result<()> {
-        if self.start_at_login || !startup_registration_present()? {
+        if crate::fake::enabled() || self.start_at_login || !startup_registration_present()? {
             return Ok(());
         }
         self.start_at_login = true;

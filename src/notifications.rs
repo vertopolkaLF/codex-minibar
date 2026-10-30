@@ -62,6 +62,8 @@ pub enum NotificationAction {
     OpenUrl(String),
     /// Never treat this executable as a game again.
     IgnoreGame(String),
+    /// Apply or skip an announced automatic reset.
+    AutoReset(crate::banked_reset::AutoResetChoice),
 }
 
 impl NotificationAction {
@@ -85,6 +87,7 @@ impl NotificationAction {
                 }
             }
             NotificationAction::IgnoreGame(path) => crate::game_mode::ignore_game(path),
+            NotificationAction::AutoReset(choice) => crate::banked_reset::choose(choice),
         });
     }
 }
@@ -197,6 +200,15 @@ impl Notification {
             focus,
         }));
         notification
+    }
+
+    /// Cards that wait for a decision or a read stay until closed by hand.
+    pub fn stays_until_closed(&self) -> bool {
+        self.summary.is_some()
+            || self
+                .actions
+                .iter()
+                .any(|(_, action)| matches!(action, NotificationAction::AutoReset(_)))
     }
 
     /// How long the card stays before it leaves on its own. Cards with

@@ -2950,3 +2950,42 @@ popup-close = Close panel
 
 show-popup-action-bar = Show popup action bar
 show-popup-action-bar-description = Show the app title and action buttons in the regular popup. Floating panels always show this bar.
+
+# src/settings_window/activation.rs
+use-banked-resets-automatically = Use banked resets automatically
+
+# src/settings_window/activation.rs
+spends-a-banked-reset-shortly-before-it-expires = Spends a banked reset shortly before it expires so it isn't lost. Skipped while the limits have nothing to clear.
+
+# src/settings_window/activation.rs
+use-before-expiry = Use before expiry
+
+# src/settings_window/activation.rs
+how-long-before-a-banked-reset-expires-it-is-applied = How long before a banked reset expires it is applied.
+
+# src/settings_window/providers/page.rs
+automatic-resets = Automatic resets
+
+# src/popup_window/auto_reset.rs
+banked-reset-applied-automatically = Banked reset applied automatically
+
+# src/instances.rs
+this-provider-has-no-banked-resets = This provider has no banked resets.
+
+# src/popup_window/auto_reset.rs
+banked-reset-applies-in-minutes = Banked reset will be applied in { $minutes } min
+
+# src/settings_window/notifications.rs
+before-an-automatic-reset = Before an automatic reset
+
+# src/settings_window/notifications.rs
+warns-before-a-banked-reset-is-applied-automatically = Warns 10 minutes before a banked reset is applied automatically.
+
+# src/popup_window/auto_reset.rs
+apply-reset-now = Apply now
+
+# src/popup_window/auto_reset.rs
+skip-automatic-reset = Cancel
+
+# src/popup_window/auto_reset.rs
+banked-reset-applied = Banked reset applied

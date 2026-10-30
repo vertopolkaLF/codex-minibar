@@ -2028,3 +2028,42 @@ popup-close = 关闭面板
 
 show-popup-action-bar = 显示弹出面板操作栏
 show-popup-action-bar-description = 在普通弹出面板中显示应用名称和操作按钮。浮动面板始终显示此栏。
+
+# src/settings_window/activation.rs
+use-banked-resets-automatically = 自动使用已储备重置
+
+# src/settings_window/activation.rs
+spends-a-banked-reset-shortly-before-it-expires = 在已储备重置过期前不久自动应用，避免浪费。当限制没有可清除的用量时跳过。
+
+# src/settings_window/activation.rs
+use-before-expiry = 过期前使用
+
+# src/settings_window/activation.rs
+how-long-before-a-banked-reset-expires-it-is-applied = 已储备重置在过期前多久应用。
+
+# src/settings_window/providers/page.rs
+automatic-resets = 自动重置
+
+# src/popup_window/auto_reset.rs
+banked-reset-applied-automatically = 已自动应用已储备重置
+
+# src/instances.rs
+this-provider-has-no-banked-resets = 此提供商没有已储备重置。
+
+# src/popup_window/auto_reset.rs
+banked-reset-applies-in-minutes = 已储备重置将在 { $minutes } 分钟后应用
+
+# src/settings_window/notifications.rs
+before-an-automatic-reset = 自动重置之前
+
+# src/settings_window/notifications.rs
+warns-before-a-banked-reset-is-applied-automatically = 在自动应用已储备重置前 10 分钟提醒。
+
+# src/popup_window/auto_reset.rs
+apply-reset-now = 立即应用
+
+# src/popup_window/auto_reset.rs
+skip-automatic-reset = 取消
+
+# src/popup_window/auto_reset.rs
+banked-reset-applied = 已应用已储备重置

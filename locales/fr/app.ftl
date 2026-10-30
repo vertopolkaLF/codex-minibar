@@ -2958,3 +2958,42 @@ popup-close = Fermer le panneau
 
 show-popup-action-bar = Afficher la barre d’actions du panneau
 show-popup-action-bar-description = Afficher le titre et les actions dans le panneau normal. Les panneaux flottants affichent toujours cette barre.
+
+# src/settings_window/activation.rs
+use-banked-resets-automatically = Utiliser automatiquement les réinitialisations en réserve
+
+# src/settings_window/activation.rs
+spends-a-banked-reset-shortly-before-it-expires = Applique une réinitialisation en réserve peu avant son expiration pour ne pas la perdre. Ignoré tant que les limites n'ont rien à effacer.
+
+# src/settings_window/activation.rs
+use-before-expiry = Utiliser avant l'expiration
+
+# src/settings_window/activation.rs
+how-long-before-a-banked-reset-expires-it-is-applied = Combien de temps avant son expiration une réinitialisation en réserve est appliquée.
+
+# src/settings_window/providers/page.rs
+automatic-resets = Réinitialisations automatiques
+
+# src/popup_window/auto_reset.rs
+banked-reset-applied-automatically = Réinitialisation en réserve appliquée automatiquement
+
+# src/instances.rs
+this-provider-has-no-banked-resets = Ce fournisseur n'a pas de réinitialisations en réserve.
+
+# src/popup_window/auto_reset.rs
+banked-reset-applies-in-minutes = La réinitialisation en réserve sera appliquée dans { $minutes } min
+
+# src/settings_window/notifications.rs
+before-an-automatic-reset = Avant une réinitialisation automatique
+
+# src/settings_window/notifications.rs
+warns-before-a-banked-reset-is-applied-automatically = Prévient 10 minutes avant qu'une réinitialisation en réserve soit appliquée automatiquement.
+
+# src/popup_window/auto_reset.rs
+apply-reset-now = Appliquer maintenant
+
+# src/popup_window/auto_reset.rs
+skip-automatic-reset = Annuler
+
+# src/popup_window/auto_reset.rs
+banked-reset-applied = Réinitialisation en réserve appliquée

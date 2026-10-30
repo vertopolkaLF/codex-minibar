@@ -2929,3 +2929,42 @@ popup-close = Paneli kapat
 
 show-popup-action-bar = Açılır panel eylem çubuğunu göster
 show-popup-action-bar-description = Normal açılır panelde uygulama başlığını ve eylem düğmelerini göster. Yüzen paneller bu çubuğu her zaman gösterir.
+
+# src/settings_window/activation.rs
+use-banked-resets-automatically = Birikmiş sıfırlamaları otomatik kullan
+
+# src/settings_window/activation.rs
+spends-a-banked-reset-shortly-before-it-expires = Birikmiş bir sıfırlamayı boşa gitmemesi için süresi dolmadan kısa süre önce uygular. Limitlerde temizlenecek bir şey yokken atlanır.
+
+# src/settings_window/activation.rs
+use-before-expiry = Süre dolmadan kullan
+
+# src/settings_window/activation.rs
+how-long-before-a-banked-reset-expires-it-is-applied = Birikmiş sıfırlamanın süresi dolmadan ne kadar önce uygulanacağı.
+
+# src/settings_window/providers/page.rs
+automatic-resets = Otomatik sıfırlamalar
+
+# src/popup_window/auto_reset.rs
+banked-reset-applied-automatically = Birikmiş sıfırlama otomatik uygulandı
+
+# src/instances.rs
+this-provider-has-no-banked-resets = Bu sağlayıcının birikmiş sıfırlaması yok.
+
+# src/popup_window/auto_reset.rs
+banked-reset-applies-in-minutes = Birikmiş sıfırlama { $minutes } dk içinde uygulanacak
+
+# src/settings_window/notifications.rs
+before-an-automatic-reset = Otomatik sıfırlamadan önce
+
+# src/settings_window/notifications.rs
+warns-before-a-banked-reset-is-applied-automatically = Birikmiş bir sıfırlama otomatik uygulanmadan 10 dakika önce uyarır.
+
+# src/popup_window/auto_reset.rs
+apply-reset-now = Şimdi uygula
+
+# src/popup_window/auto_reset.rs
+skip-automatic-reset = İptal
+
+# src/popup_window/auto_reset.rs
+banked-reset-applied = Birikmiş sıfırlama uygulandı
