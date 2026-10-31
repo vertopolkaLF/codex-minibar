@@ -4,6 +4,10 @@
 //! renderer, the hover card and the Settings previews all read the same
 //! labels, values and colors.
 
+// The taskbar strip is a Windows Explorer feature; Linux keeps only the
+// settings model it shares with the tray.
+#![cfg_attr(not(windows), allow(dead_code))]
+
 use chrono::{DateTime, Local, Utc};
 
 use crate::{

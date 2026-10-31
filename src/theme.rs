@@ -134,7 +134,8 @@ fn system_accent_ramp() -> Option<AccentRamp> {
     })
 }
 
+/// The desktop accent from the XDG portal (GNOME 47+, KDE Plasma).
 #[cfg(not(windows))]
 fn system_accent_ramp() -> Option<AccentRamp> {
-    None
+    crate::linux::desktop::accent_color().map(AccentRamp::from_base)
 }

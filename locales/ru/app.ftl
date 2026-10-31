@@ -2996,3 +2996,63 @@ skip-automatic-reset = Отменить
 
 # src/popup_window/auto_reset.rs
 banked-reset-applied = Запасной сброс применён
+
+# src/tray.rs
+linux-no-tray-title = Системный трей не найден
+
+# src/tray.rs
+linux-no-tray-body = Включите расширение AppIndicator, чтобы видеть Codex Minibar на панели. Запустите Codex Minibar ещё раз, чтобы открыть его.
+
+# src/settings_window/general.rs
+start-at-login = Запускать при входе в систему
+
+# src/settings_window/general.rs
+linux-popup-shortcut-description = Добавьте в настройках клавиатуры рабочего стола своё сочетание клавиш, запускающее эту команду, чтобы показывать и скрывать окно.
+
+# src/settings_window/general.rs
+copy-command = Скопировать команду
+
+# src/settings_window/general.rs
+command-copied = Команда скопирована
+
+# src/settings_window/about.rs
+linux-about-tagline = Бесплатный компаньон с открытым кодом для лимитов, сбросов и расходов AI-подписок прямо в системном трее.
+
+# src/settings_window/advanced.rs
+linux-save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user = Сохраняет все настройки в файл .toml. Сохранённые ключи остаются зашифрованными на этом компьютере.
+
+# src/settings_window/appearance.rs
+linux-windows = Системный
+
+# src/settings_window/appearance.rs
+linux-windows-follows-your-system-accent = «Системный» следует акцентному цвету рабочего стола.
+
+# src/settings_window/appearance.rs
+linux-windows-default = Системный по умолчанию
+
+# src/settings_window/appearance.rs
+linux-popup-theme-description = Меняет только всплывающее окно. Настройки сохраняют свой вид.
+
+# src/settings_window/appearance.rs
+linux-glide-transitions-in-the-popup-and-settings-windows-own-animation = Плавные переходы во всплывающем окне и настройках. Настройка анимации рабочего стола тоже учитывается.
+
+# src/settings_window/providers/dialog.rs
+linux-saved-in-windows-user-storage-never-in-the-settings-file = Шифруется ключом из системной связки ключей и никогда не попадает в файл настроек.
+
+# src/settings_window/providers/dialog.rs
+linux-credential-saved-in-windows-user-storage = Учётные данные сохранены и зашифрованы системной связкой ключей.
+
+# src/settings_window/providers/dialog.rs
+linux-api-key-saved-in-windows-user-storage = API-ключ сохранён и зашифрован системной связкой ключей.
+
+# src/settings_window/providers/page.rs
+linux-saved-in-windows-user-storage = Зашифровано системной связкой ключей
+
+# src/settings_window/general.rs
+linux-applies-immediately-to-every-app-window-and-notification-auto-fol = Сразу применяется ко всем окнам и уведомлениям. Авто следует языку системы.
+
+# src/settings_window/providers/dialog.rs
+linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = Запускает собственный вход Claude Code для { $name }, передавая папку конфигурации как CLAUDE_CONFIG_DIR. Авторизация остаётся в этой папке, и Claude Code обновляет её.
+
+# src/settings_window/advanced.rs
+linux-add-a-game-description = Игры, запущенные через Steam, и игры из библиотек Steam или Heroic определяются сами. Любую другую программу добавьте здесь.

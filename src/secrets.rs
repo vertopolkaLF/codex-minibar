@@ -11,7 +11,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result, bail};
+#[cfg(windows)]
+use anyhow::bail;
+use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -341,8 +343,8 @@ fn protect(data: &[u8]) -> Result<Vec<u8>> {
 }
 
 #[cfg(not(windows))]
-fn protect(_data: &[u8]) -> Result<Vec<u8>> {
-    bail!("manual provider secrets are only supported on Windows")
+fn protect(data: &[u8]) -> Result<Vec<u8>> {
+    crate::linux::keyring::protect(data)
 }
 
 #[cfg(windows)]
@@ -384,8 +386,8 @@ fn unprotect(data: &[u8]) -> Result<Vec<u8>> {
 }
 
 #[cfg(not(windows))]
-fn unprotect(_data: &[u8]) -> Result<Vec<u8>> {
-    bail!("manual provider secrets are only supported on Windows")
+fn unprotect(data: &[u8]) -> Result<Vec<u8>> {
+    crate::linux::keyring::unprotect(data)
 }
 
 #[cfg(all(test, windows))]

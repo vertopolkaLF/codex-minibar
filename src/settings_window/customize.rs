@@ -47,7 +47,7 @@ impl SettingsWindow {
                 this.edit(cx, |s| s.popup_position = None)
             }))
             .render(k);
-            vec![
+            let mut rows = vec![
                 bool_row(
                     self,
                     k,
@@ -77,7 +77,14 @@ impl SettingsWindow {
                     .description(k, crate::i18n::tr("popup-position-description"))
                     .trailing(reset)
                     .render(k),
-            ]
+            ];
+            // Linux apps cannot move or place their windows on Wayland, so
+            // only the pin (keep open when focus moves away) applies there.
+            if !cfg!(windows) {
+                rows.remove(2);
+                rows.remove(0);
+            }
+            rows
         });
         let layout = kit::card_of(k, |k| {
             // Starting edit mode here works whether or not the bottom bar

@@ -33,11 +33,13 @@ const CATALOG_REFRESH: Duration = Duration::from_secs(60);
 
 /// Install folders of game stores, lowercase. Their launchers live outside
 /// them (or in [`LIBRARY_EXCLUSIONS`]), so browsing a store is not a game.
-const LIBRARY_FOLDERS: [&str; 4] = [
+const LIBRARY_FOLDERS: [&str; 5] = [
     "\\steamapps\\common\\",
     "\\epic games\\",
     "\\gog galaxy\\games\\",
     "\\xboxgames\\",
+    // Heroic (Epic and GOG on Linux) installs under ~/Games/Heroic.
+    "\\games\\heroic\\",
 ];
 const LIBRARY_EXCLUSIONS: [&str; 1] = ["\\epic games\\launcher\\"];
 
@@ -98,6 +100,7 @@ struct Game {
 }
 
 /// The foreground window's process.
+#[cfg(windows)]
 struct Foreground {
     process: os::Process,
     path: String,
@@ -227,7 +230,23 @@ fn evaluate() {
     }
 }
 
+/// Linux has no foreground window to ask about on Wayland: any running
+/// process of this user that counts as a game starts game mode. Steam's
+/// launch environment stands in for Windows' exclusive full screen.
+#[cfg(not(windows))]
+fn foreground_game(lists: &Lists) -> Option<Game> {
+    os::running_processes().into_iter().find_map(|running| {
+        let key = path_key(&running.path);
+        is_game(&key, lists, running.launched_by_steam, catalog_contains).then(|| Game {
+            title: String::new(),
+            process: running.process,
+            path: running.path,
+        })
+    })
+}
+
 /// The foreground process, when it is a game.
+#[cfg(windows)]
 fn foreground_game(lists: &Lists) -> Option<Game> {
     let foreground = os::foreground()?;
     let key = path_key(&foreground.path);
@@ -291,11 +310,14 @@ fn display_name(title: &str, path: &str) -> String {
 }
 
 /// `C:\Games\Hollow Knight\hollow_knight.exe` → `hollow_knight`.
+/// Splits on both `\` and `/` so Windows-style paths work on every platform.
 pub fn file_stem(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_stem()
-        .map(|stem| stem.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.to_owned())
+    let name = path.rsplit(['\\', '/']).next().unwrap_or(path);
+    match name.rfind('.') {
+        Some(dot) if dot > 0 => name[..dot].to_owned(),
+        _ if name.is_empty() => path.to_owned(),
+        _ => name.to_owned(),
+    }
 }
 
 /// Records the activation state and applies a change.
@@ -539,22 +561,68 @@ mod os {
 
 #[cfg(not(windows))]
 mod os {
-    use super::Foreground;
+    use std::path::Path;
 
-    pub(super) struct Process;
+    /// A process identified by pid and start time, so a recycled pid is not
+    /// mistaken for the game that exited.
+    pub(super) struct Process {
+        pid: u32,
+        start_time: u64,
+    }
 
     impl Process {
         pub(super) fn is_running(&self) -> bool {
-            false
+            start_time(self.pid) == Some(self.start_time)
         }
     }
 
-    pub(super) fn foreground() -> Option<Foreground> {
-        None
+    pub(super) struct Running {
+        pub(super) process: Process,
+        pub(super) path: String,
+        pub(super) launched_by_steam: bool,
     }
 
-    pub(super) fn exclusive_full_screen() -> bool {
-        false
+    /// Processes of this user with a readable executable.
+    pub(super) fn running_processes() -> Vec<Running> {
+        let Ok(entries) = std::fs::read_dir("/proc") else {
+            return Vec::new();
+        };
+        // SAFETY: getpid has no preconditions and cannot fail.
+        let own = unsafe { libc::getpid() } as u32;
+        entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
+            .filter(|pid| *pid != own)
+            .filter_map(|pid| {
+                let proc = Path::new("/proc").join(pid.to_string());
+                // Other users' executables are unreadable; skip them.
+                let path = std::fs::read_link(proc.join("exe")).ok()?;
+                let start_time = start_time(pid)?;
+                Some(Running {
+                    process: Process { pid, start_time },
+                    path: path.to_string_lossy().into_owned(),
+                    launched_by_steam: launched_by_steam(&proc),
+                })
+            })
+            .collect()
+    }
+
+    /// Steam starts games with their app id in the environment.
+    fn launched_by_steam(proc: &Path) -> bool {
+        std::fs::read(proc.join("environ")).is_ok_and(|environ| {
+            environ.split(|byte| *byte == 0).any(|variable| {
+                variable
+                    .strip_prefix(b"SteamGameId=")
+                    .is_some_and(|id| !id.is_empty() && id != b"0")
+            })
+        })
+    }
+
+    /// Field 22 of `/proc/<pid>/stat`, after the parenthesized command name.
+    fn start_time(pid: u32) -> Option<u64> {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let after_name = &stat[stat.rfind(')')? + 1..];
+        after_name.split_whitespace().nth(19)?.parse().ok()
     }
 
     pub(super) fn game_bar_catalog() -> Vec<String> {

@@ -2968,3 +2968,63 @@ skip-automatic-reset = 취소
 
 # src/popup_window/auto_reset.rs
 banked-reset-applied = 적립된 재설정이 적용됨
+
+# src/tray.rs
+linux-no-tray-title = 시스템 트레이를 찾을 수 없음
+
+# src/tray.rs
+linux-no-tray-body = 패널에 Codex Minibar를 표시하려면 AppIndicator 확장을 켜세요. Codex Minibar를 다시 실행하면 열립니다.
+
+# src/settings_window/general.rs
+start-at-login = 로그인 시 시작
+
+# src/settings_window/general.rs
+linux-popup-shortcut-description = 데스크톱 키보드 설정에서 이 명령을 실행하는 사용자 지정 단축키를 추가하면 팝업을 표시하거나 숨길 수 있습니다.
+
+# src/settings_window/general.rs
+copy-command = 명령 복사
+
+# src/settings_window/general.rs
+command-copied = 명령을 복사했습니다
+
+# src/settings_window/about.rs
+linux-about-tagline = AI 구독의 사용 한도, 초기화, 지출을 시스템 트레이에서 바로 확인하는 무료 오픈 소스 도우미입니다.
+
+# src/settings_window/advanced.rs
+linux-save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user = 모든 설정을 .toml 파일로 저장합니다. 저장된 키는 이 컴퓨터에 암호화된 상태로 남습니다.
+
+# src/settings_window/appearance.rs
+linux-windows = 시스템
+
+# src/settings_window/appearance.rs
+linux-windows-follows-your-system-accent = 시스템은 데스크톱 강조 색을 따릅니다.
+
+# src/settings_window/appearance.rs
+linux-windows-default = 시스템 기본값
+
+# src/settings_window/appearance.rs
+linux-popup-theme-description = 팝업만 바뀝니다. 설정은 자체 모양을 유지합니다.
+
+# src/settings_window/appearance.rs
+linux-glide-transitions-in-the-popup-and-settings-windows-own-animation = 팝업과 설정에서 부드럽게 전환합니다. 데스크톱의 애니메이션 설정도 따릅니다.
+
+# src/settings_window/providers/dialog.rs
+linux-saved-in-windows-user-storage-never-in-the-settings-file = 시스템 키링의 키로 암호화되며 설정 파일에는 저장되지 않습니다.
+
+# src/settings_window/providers/dialog.rs
+linux-credential-saved-in-windows-user-storage = 자격 증명을 저장했습니다(시스템 키링으로 암호화).
+
+# src/settings_window/providers/dialog.rs
+linux-api-key-saved-in-windows-user-storage = API 키를 저장했습니다(시스템 키링으로 암호화).
+
+# src/settings_window/providers/page.rs
+linux-saved-in-windows-user-storage = 시스템 키링으로 암호화됨
+
+# src/settings_window/general.rs
+linux-applies-immediately-to-every-app-window-and-notification-auto-fol = 모든 앱 창과 알림에 즉시 적용됩니다. 자동은 시스템 언어를 따릅니다.
+
+# src/settings_window/providers/dialog.rs
+linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = 구성 폴더를 CLAUDE_CONFIG_DIR로 지정해 { $name }의 Claude Code 로그인을 실행합니다. 로그인 정보는 해당 폴더에 보관되며 Claude Code가 갱신합니다.
+
+# src/settings_window/advanced.rs
+linux-add-a-game-description = Steam으로 실행한 게임과 Steam 또는 Heroic 라이브러리의 게임은 자동으로 감지됩니다. 다른 프로그램은 여기에 추가하세요.

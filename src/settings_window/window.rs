@@ -596,13 +596,11 @@ impl SettingsWindow {
     fn titlebar(&self, k: &Kit) -> AnyElement {
         let theme = &k.theme;
         let caption = |id, glyph, area, close| kit::caption_button(k, id, glyph, area, close);
-        div()
-            .id("settings-titlebar")
+        kit::window_drag_area(div().id("settings-titlebar"))
             .flex()
             .items_center()
             .h(px(TITLEBAR_HEIGHT))
             .flex_none()
-            .window_control_area(WindowControlArea::Drag)
             .child(
                 div()
                     .flex()
@@ -703,7 +701,7 @@ impl SettingsWindow {
     fn root_sidebar(&mut self, k: &mut Kit, cx: &mut Context<Self>) -> AnyElement {
         let selected_index = Tab::ALL.iter().position(|tab| *tab == self.root_tab);
         let mut list = div().relative().flex().flex_col().gap(px(NAV_ITEM_GAP));
-        for tab in Tab::ALL {
+        for &tab in Tab::ALL {
             let trailing = if tab == Tab::Providers {
                 vec![icon("caret-right", 12.0, k.theme.text_secondary).into_any_element()]
             } else {

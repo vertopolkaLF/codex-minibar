@@ -2067,3 +2067,63 @@ skip-automatic-reset = 取消
 
 # src/popup_window/auto_reset.rs
 banked-reset-applied = 已套用已儲備重置
+
+# src/tray.rs
+linux-no-tray-title = 找不到系統匣
+
+# src/tray.rs
+linux-no-tray-body = 啟用 AppIndicator 擴充功能即可在面板中看到 Codex Minibar。再次啟動 Codex Minibar 即可開啟。
+
+# src/settings_window/general.rs
+start-at-login = 登入時啟動
+
+# src/settings_window/general.rs
+linux-popup-shortcut-description = 在桌面的鍵盤設定中新增執行此命令的自訂快速鍵，即可顯示或隱藏彈出視窗。
+
+# src/settings_window/general.rs
+copy-command = 複製命令
+
+# src/settings_window/general.rs
+command-copied = 已複製命令
+
+# src/settings_window/about.rs
+linux-about-tagline = 免費開源的夥伴應用程式，在系統匣中查看 AI 訂閱的用量限制、重設與花費。
+
+# src/settings_window/advanced.rs
+linux-save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user = 將所有設定儲存到 .toml 檔案。已儲存的金鑰仍加密保存在這台電腦上。
+
+# src/settings_window/appearance.rs
+linux-windows = 系統
+
+# src/settings_window/appearance.rs
+linux-windows-follows-your-system-accent = 「系統」會跟隨桌面強調色。
+
+# src/settings_window/appearance.rs
+linux-windows-default = 系統預設
+
+# src/settings_window/appearance.rs
+linux-popup-theme-description = 僅變更彈出視窗。設定維持自己的外觀。
+
+# src/settings_window/appearance.rs
+linux-glide-transitions-in-the-popup-and-settings-windows-own-animation = 彈出視窗和設定中的平滑轉場。同時遵循桌面本身的動畫設定。
+
+# src/settings_window/providers/dialog.rs
+linux-saved-in-windows-user-storage-never-in-the-settings-file = 使用系統金鑰圈中的金鑰加密，絕不寫入設定檔。
+
+# src/settings_window/providers/dialog.rs
+linux-credential-saved-in-windows-user-storage = 憑證已儲存，並使用系統金鑰圈加密。
+
+# src/settings_window/providers/dialog.rs
+linux-api-key-saved-in-windows-user-storage = API 金鑰已儲存，並使用系統金鑰圈加密。
+
+# src/settings_window/providers/page.rs
+linux-saved-in-windows-user-storage = 已使用系統金鑰圈加密
+
+# src/settings_window/general.rs
+linux-applies-immediately-to-every-app-window-and-notification-auto-fol = 立即套用至所有應用程式視窗和通知。自動依照系統語言。
+
+# src/settings_window/providers/dialog.rs
+linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = 為 { $name } 執行 Claude Code 自身的登入，將其設定資料夾設為 CLAUDE_CONFIG_DIR。登入資訊保留在該資料夾，由 Claude Code 自動續期。
+
+# src/settings_window/advanced.rs
+linux-add-a-game-description = 由 Steam 啟動的遊戲以及 Steam 或 Heroic 收藏庫中的遊戲會自動偵測。其他程式請在此新增。

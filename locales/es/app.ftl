@@ -2088,3 +2088,63 @@ skip-automatic-reset = Cancelar
 
 # src/popup_window/auto_reset.rs
 banked-reset-applied = Restablecimiento acumulado aplicado
+
+# src/tray.rs
+linux-no-tray-title = No se encontró la bandeja del sistema
+
+# src/tray.rs
+linux-no-tray-body = Activa la extensión AppIndicator para ver Codex Minibar en el panel. Vuelve a iniciar Codex Minibar para abrirlo.
+
+# src/settings_window/general.rs
+start-at-login = Iniciar al iniciar sesión
+
+# src/settings_window/general.rs
+linux-popup-shortcut-description = Añade un atajo personalizado en la configuración de teclado de tu escritorio que ejecute este comando para mostrar u ocultar la ventana emergente.
+
+# src/settings_window/general.rs
+copy-command = Copiar comando
+
+# src/settings_window/general.rs
+command-copied = Comando copiado
+
+# src/settings_window/about.rs
+linux-about-tagline = Compañero gratuito y de código abierto para los límites de uso, reinicios y gastos de tus suscripciones de IA, en la bandeja del sistema.
+
+# src/settings_window/advanced.rs
+linux-save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user = Guarda todos los ajustes en un archivo .toml. Las claves guardadas permanecen cifradas en este equipo.
+
+# src/settings_window/appearance.rs
+linux-windows = Sistema
+
+# src/settings_window/appearance.rs
+linux-windows-follows-your-system-accent = Sistema sigue el color de acento de tu escritorio.
+
+# src/settings_window/appearance.rs
+linux-windows-default = Predeterminada del sistema
+
+# src/settings_window/appearance.rs
+linux-popup-theme-description = Solo cambia la ventana emergente. Los ajustes mantienen su propio aspecto.
+
+# src/settings_window/appearance.rs
+linux-glide-transitions-in-the-popup-and-settings-windows-own-animation = Transiciones suaves en la ventana emergente y en los ajustes. También se respeta el ajuste de animaciones de tu escritorio.
+
+# src/settings_window/providers/dialog.rs
+linux-saved-in-windows-user-storage-never-in-the-settings-file = Cifrada con una clave del llavero del sistema, nunca en el archivo de ajustes.
+
+# src/settings_window/providers/dialog.rs
+linux-credential-saved-in-windows-user-storage = Credencial guardada, cifrada con el llavero del sistema.
+
+# src/settings_window/providers/dialog.rs
+linux-api-key-saved-in-windows-user-storage = Clave de API guardada, cifrada con el llavero del sistema.
+
+# src/settings_window/providers/page.rs
+linux-saved-in-windows-user-storage = Cifrada con el llavero del sistema
+
+# src/settings_window/general.rs
+linux-applies-immediately-to-every-app-window-and-notification-auto-fol = Se aplica inmediatamente a todas las ventanas y notificaciones de la aplicación. Automático sigue el idioma del sistema.
+
+# src/settings_window/providers/dialog.rs
+linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = Ejecuta el inicio de sesión de Claude Code para { $name }, usando su carpeta de configuración como CLAUDE_CONFIG_DIR. El inicio de sesión permanece en esa carpeta, donde Claude Code lo mantiene actualizado.
+
+# src/settings_window/advanced.rs
+linux-add-a-game-description = Los juegos iniciados por Steam y los de las bibliotecas de Steam o Heroic se detectan solos. Añade aquí cualquier otro programa.

@@ -3130,7 +3130,7 @@ fn startup_registration_present() -> Result<bool> {
 
 #[cfg(not(windows))]
 fn startup_registration_present() -> Result<bool> {
-    Ok(false)
+    crate::linux::autostart::is_registered()
 }
 
 #[cfg(windows)]
@@ -3200,8 +3200,8 @@ fn apply_startup_registration(enabled: bool) -> Result<()> {
 }
 
 #[cfg(not(windows))]
-fn apply_startup_registration(_enabled: bool) -> Result<()> {
-    Ok(())
+fn apply_startup_registration(enabled: bool) -> Result<()> {
+    crate::linux::autostart::apply(enabled)
 }
 
 /// The `version` a raw settings file claims, or 0 when it has none.

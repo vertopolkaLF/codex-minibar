@@ -14,6 +14,8 @@ mod footer;
 pub(crate) mod fx;
 mod home;
 mod keys;
+#[cfg(not(windows))]
+mod linux_host;
 #[cfg(test)]
 pub(crate) use home::donut_segments;
 #[cfg(windows)]
@@ -22,7 +24,10 @@ mod backdrop;
 mod blur_effect;
 mod root;
 pub(crate) mod theme;
+// In-app cards are Windows-only; Linux posts desktop notifications.
+#[cfg(windows)]
 mod toast;
+#[cfg(windows)]
 mod toast_summary;
 mod tooltip;
 mod usage;
@@ -31,10 +36,13 @@ pub(crate) mod win32;
 
 use std::sync::Arc;
 
+#[cfg(windows)]
 use futures::StreamExt;
+use gpui::Application;
+#[cfg(windows)]
 use gpui::{
-    AppContext, Application, Bounds, WindowBackgroundAppearance, WindowBounds, WindowKind,
-    WindowOptions, point, px, size,
+    AppContext, Bounds, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, point,
+    px, size,
 };
 
 pub(crate) use root::PopupRoot;
@@ -231,80 +239,92 @@ pub(crate) fn start(
     }
 }
 
-fn run(
-    state: Arc<AppState>,
-    mut commands: futures::channel::mpsc::UnboundedReceiver<PopupCommand>,
-) {
+fn run(state: Arc<AppState>, commands: futures::channel::mpsc::UnboundedReceiver<PopupCommand>) {
     Application::new()
         .with_assets(assets::PopupAssets)
         .run(move |cx| {
             theme::register_bundled_fonts(cx);
             crate::settings_window::init(cx);
             let default_font = theme::default_font_family(cx);
-            let settings_state = Arc::clone(&state);
-            // The tray starts hidden. Do not allocate large swap-chain/MSAA
-            // surfaces before the user has even opened the popup.
-            let initial = size(px(1.0), px(1.0));
-            let options = WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds {
-                    origin: point(px(0.0), px(0.0)),
-                    size: initial,
-                })),
-                titlebar: None,
-                focus: false,
-                show: false,
-                kind: WindowKind::PopUp,
-                is_movable: false,
-                is_resizable: false,
-                is_minimizable: false,
-                display_id: None,
-                // Never enable HWND-wide Acrylic: it ignores the capsule's
-                // region. A separate clipped composition visual supplies blur.
-                window_background: WindowBackgroundAppearance::Transparent,
-                app_id: None,
-                window_min_size: None,
-                window_max_size: None,
-                window_decorations: None,
-                tabbing_identifier: None,
-            };
-            let window = match cx.open_window(options, |window, cx| {
-                cx.new(|cx| PopupRoot::new(state, default_font, window, cx))
-            }) {
-                Ok(window) => window,
-                Err(error) => {
-                    eprintln!("could not create the popup window: {error:#}");
-                    return;
-                }
-            };
-
-            cx.spawn(async move |cx| {
-                #[cfg(windows)]
-                {
-                    let hwnd = window
-                        .update(cx, |_, window, _| win32::hwnd_from_window(window))
-                        .ok()
-                        .flatten();
-                    if let Some(hwnd) = hwnd {
-                        win32::configure(hwnd);
-                        let _ = window.update(cx, |root, _, _| {
-                            root.attach_native_host(hwnd);
-                        });
-                        win32::park_hidden(hwnd);
-                        cx.spawn(async move |cx| prewarm(window, cx).await).detach();
-                    }
-                }
-                while let Some(command) = commands.next().await {
-                    if let PopupCommand::Settings(command) = command {
-                        crate::settings_window::handle(command, &settings_state, cx);
-                        continue;
-                    }
-                    handle_command(command, &window, cx);
-                }
-            })
-            .detach();
+            #[cfg(not(windows))]
+            linux_host::start(state, default_font, commands, cx);
+            #[cfg(windows)]
+            open_windows_host(state, default_font, commands, cx);
         });
 }
 
+/// Opens the long-lived popup host window and serves popup commands.
+#[cfg(windows)]
+fn open_windows_host(
+    state: Arc<AppState>,
+    default_font: gpui::SharedString,
+    mut commands: futures::channel::mpsc::UnboundedReceiver<PopupCommand>,
+    cx: &mut gpui::App,
+) {
+    let settings_state = Arc::clone(&state);
+    // The tray starts hidden. Do not allocate large swap-chain/MSAA
+    // surfaces before the user has even opened the popup.
+    let initial = size(px(1.0), px(1.0));
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(Bounds {
+            origin: point(px(0.0), px(0.0)),
+            size: initial,
+        })),
+        titlebar: None,
+        focus: false,
+        show: false,
+        kind: WindowKind::PopUp,
+        is_movable: false,
+        is_resizable: false,
+        is_minimizable: false,
+        display_id: None,
+        // Never enable HWND-wide Acrylic: it ignores the capsule's
+        // region. A separate clipped composition visual supplies blur.
+        window_background: WindowBackgroundAppearance::Transparent,
+        app_id: None,
+        window_min_size: None,
+        window_max_size: None,
+        window_decorations: None,
+        tabbing_identifier: None,
+    };
+    let window = match cx.open_window(options, |window, cx| {
+        cx.new(|cx| PopupRoot::new(state, default_font, window, cx))
+    }) {
+        Ok(window) => window,
+        Err(error) => {
+            eprintln!("could not create the popup window: {error:#}");
+            return;
+        }
+    };
+
+    cx.spawn(async move |cx| {
+        #[cfg(windows)]
+        {
+            let hwnd = window
+                .update(cx, |_, window, _| win32::hwnd_from_window(window))
+                .ok()
+                .flatten();
+            if let Some(hwnd) = hwnd {
+                win32::configure(hwnd);
+                let _ = window.update(cx, |root, _, _| {
+                    root.attach_native_host(hwnd);
+                });
+                win32::park_hidden(hwnd);
+                cx.spawn(async move |cx| prewarm(window, cx).await).detach();
+            }
+        }
+        while let Some(command) = commands.next().await {
+            if let PopupCommand::Settings(command) = command {
+                crate::settings_window::handle(command, &settings_state, cx);
+                continue;
+            }
+            handle_command(command, &window, cx);
+        }
+    })
+    .detach();
+}
+
+#[cfg(windows)]
 fn handle_command(
     command: PopupCommand,
     window: &gpui::WindowHandle<PopupRoot>,
@@ -320,7 +340,7 @@ fn handle_command(
                         || (ui.popup_floating && root.ui.popup_two_columns != ui.popup_two_columns)
                 })
                 .unwrap_or(false);
-            let _ = window.update(cx, |root, window, cx| root.apply_ui(*ui, window, cx));
+            let _ = window.update(cx, |root, window, cx| root.apply_ui(*ui, Some(window), cx));
             #[cfg(windows)]
             {
                 if geometry_changed {
@@ -532,6 +552,7 @@ async fn prewarm(window: gpui::WindowHandle<PopupRoot>, cx: &mut gpui::AsyncApp)
     let _ = window.update(cx, |root, _, cx| root.end_prewarm(cx));
 }
 
+#[cfg(windows)]
 fn root_animations(window: &gpui::WindowHandle<PopupRoot>, cx: &mut gpui::AsyncApp) -> bool {
     window
         .update(cx, |root, _, _| animations_enabled(&root.ui))

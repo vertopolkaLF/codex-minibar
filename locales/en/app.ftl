@@ -2989,3 +2989,63 @@ skip-automatic-reset = Cancel
 
 # src/popup_window/auto_reset.rs
 banked-reset-applied = Banked reset applied
+
+# src/tray.rs
+linux-no-tray-title = No system tray found
+
+# src/tray.rs
+linux-no-tray-body = Enable the AppIndicator extension to see Codex Minibar in the panel. Launch Codex Minibar again to open it.
+
+# src/settings_window/general.rs
+start-at-login = Start at login
+
+# src/settings_window/general.rs
+linux-popup-shortcut-description = Add a custom shortcut in your desktop's keyboard settings that runs this command to show or hide the popup.
+
+# src/settings_window/general.rs
+copy-command = Copy command
+
+# src/settings_window/general.rs
+command-copied = Command copied
+
+# src/settings_window/about.rs
+linux-about-tagline = Free, open-source companion for AI subscription usage limits, resets and spend, right in the system tray.
+
+# src/settings_window/advanced.rs
+linux-save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user = Save every setting to a .toml file. Saved keys stay encrypted on this computer.
+
+# src/settings_window/appearance.rs
+linux-windows = System
+
+# src/settings_window/appearance.rs
+linux-windows-follows-your-system-accent = System follows your desktop accent.
+
+# src/settings_window/appearance.rs
+linux-windows-default = System default
+
+# src/settings_window/appearance.rs
+linux-popup-theme-description = Changes only the popup. Settings keep their own look.
+
+# src/settings_window/appearance.rs
+linux-glide-transitions-in-the-popup-and-settings-windows-own-animation = Glide transitions in the popup and Settings. Your desktop's own animation setting is also respected.
+
+# src/settings_window/providers/dialog.rs
+linux-saved-in-windows-user-storage-never-in-the-settings-file = Encrypted with a key from your system keyring, never in the settings file.
+
+# src/settings_window/providers/dialog.rs
+linux-credential-saved-in-windows-user-storage = Credential saved, encrypted with your system keyring.
+
+# src/settings_window/providers/dialog.rs
+linux-api-key-saved-in-windows-user-storage = API key saved, encrypted with your system keyring.
+
+# src/settings_window/providers/page.rs
+linux-saved-in-windows-user-storage = Encrypted with your system keyring
+
+# src/settings_window/general.rs
+linux-applies-immediately-to-every-app-window-and-notification-auto-fol = Applies immediately to every app window and notification. Auto follows the system language.
+
+# src/settings_window/providers/dialog.rs
+linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = Runs Claude Code's own login for { $name } with its config folder as CLAUDE_CONFIG_DIR. The login stays in that folder, where Claude Code keeps it fresh.
+
+# src/settings_window/advanced.rs
+linux-add-a-game-description = Games launched by Steam and games in Steam or Heroic libraries are detected on their own. Add any other program here.

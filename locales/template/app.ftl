@@ -4388,3 +4388,83 @@ skip-automatic-reset = { "" }
 # English source:
 # banked-reset-applied = Banked reset applied
 banked-reset-applied = { "" }
+
+# English source:
+# linux-no-tray-title = No system tray found
+linux-no-tray-title = { "" }
+
+# English source:
+# linux-no-tray-body = Enable the AppIndicator extension to see Codex Minibar in the panel. Launch Codex Minibar again to open it.
+linux-no-tray-body = { "" }
+
+# English source:
+# start-at-login = Start at login
+start-at-login = { "" }
+
+# English source:
+# linux-popup-shortcut-description = Add a custom shortcut in your desktop's keyboard settings that runs this command to show or hide the popup.
+linux-popup-shortcut-description = { "" }
+
+# English source:
+# copy-command = Copy command
+copy-command = { "" }
+
+# English source:
+# command-copied = Command copied
+command-copied = { "" }
+
+# English source:
+# linux-about-tagline = Free, open-source companion for AI subscription usage limits, resets and spend, right in the system tray.
+linux-about-tagline = { "" }
+
+# English source:
+# linux-save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user = Save every setting to a .toml file. Saved keys stay encrypted on this computer.
+linux-save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user = { "" }
+
+# English source:
+# linux-windows = System
+linux-windows = { "" }
+
+# English source:
+# linux-windows-follows-your-system-accent = System follows your desktop accent.
+linux-windows-follows-your-system-accent = { "" }
+
+# English source:
+# linux-windows-default = System default
+linux-windows-default = { "" }
+
+# English source:
+# linux-popup-theme-description = Changes only the popup. Settings keep their own look.
+linux-popup-theme-description = { "" }
+
+# English source:
+# linux-glide-transitions-in-the-popup-and-settings-windows-own-animation = Glide transitions in the popup and Settings. Your desktop's own animation setting is also respected.
+linux-glide-transitions-in-the-popup-and-settings-windows-own-animation = { "" }
+
+# English source:
+# linux-saved-in-windows-user-storage-never-in-the-settings-file = Encrypted with a key from your system keyring, never in the settings file.
+linux-saved-in-windows-user-storage-never-in-the-settings-file = { "" }
+
+# English source:
+# linux-credential-saved-in-windows-user-storage = Credential saved, encrypted with your system keyring.
+linux-credential-saved-in-windows-user-storage = { "" }
+
+# English source:
+# linux-api-key-saved-in-windows-user-storage = API key saved, encrypted with your system keyring.
+linux-api-key-saved-in-windows-user-storage = { "" }
+
+# English source:
+# linux-saved-in-windows-user-storage = Encrypted with your system keyring
+linux-saved-in-windows-user-storage = { "" }
+
+# English source:
+# linux-applies-immediately-to-every-app-window-and-notification-auto-fol = Applies immediately to every app window and notification. Auto follows the system language.
+linux-applies-immediately-to-every-app-window-and-notification-auto-fol = { "" }
+
+# English source:
+# linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = Runs Claude Code's own login for { $name } with its config folder as CLAUDE_CONFIG_DIR. The login stays in that folder, where Claude Code keeps it fresh.
+linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = { "" }
+
+# English source:
+# linux-add-a-game-description = Games launched by Steam and games in Steam or Heroic libraries are detected on their own. Add any other program here.
+linux-add-a-game-description = { "" }

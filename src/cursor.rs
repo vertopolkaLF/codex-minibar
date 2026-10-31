@@ -47,35 +47,48 @@ pub fn is_installed(explicit: Option<&Path>) -> bool {
 /// Resolves Cursor.exe without opening its profile database. The configured
 /// value is a folder; accepting a file keeps pre-release settings compatible.
 pub fn installation_path(explicit: Option<&Path>) -> Option<PathBuf> {
-    explicit
-        .and_then(|path| {
-            if path.is_file() {
-                Some(path.to_path_buf())
-            } else {
-                let executable = path.join("Cursor.exe");
-                executable.is_file().then_some(executable)
-            }
-        })
-        .or_else(|| {
-            #[cfg(windows)]
-            {
-                let local_app_data = env::var_os("LOCALAPPDATA").map(PathBuf::from);
-                let program_files = env::var_os("ProgramFiles").map(PathBuf::from);
-                local_app_data
+    const EXECUTABLE: &str = if cfg!(windows) {
+        "Cursor.exe"
+    } else {
+        "cursor"
+    };
+    let explicit = explicit.and_then(|path| {
+        if path.is_file() {
+            Some(path.to_path_buf())
+        } else {
+            let executable = path.join(EXECUTABLE);
+            executable.is_file().then_some(executable)
+        }
+    });
+    if explicit.is_some() {
+        return explicit;
+    }
+    #[cfg(windows)]
+    {
+        let local_app_data = env::var_os("LOCALAPPDATA").map(PathBuf::from);
+        let program_files = env::var_os("ProgramFiles").map(PathBuf::from);
+        local_app_data
+            .into_iter()
+            .map(|path| path.join("Programs/Cursor/Cursor.exe"))
+            .chain(
+                program_files
                     .into_iter()
-                    .map(|path| path.join("Programs/Cursor/Cursor.exe"))
-                    .chain(
-                        program_files
-                            .into_iter()
-                            .map(|path| path.join("Cursor/Cursor.exe")),
-                    )
-                    .find(|path| path.is_file())
-            }
-            #[cfg(not(windows))]
-            {
-                None
-            }
-        })
+                    .map(|path| path.join("Cursor/Cursor.exe")),
+            )
+            .find(|path| path.is_file())
+    }
+    #[cfg(not(windows))]
+    {
+        crate::linux::apps::find_app(
+            &["cursor"],
+            &[
+                "/usr/share/cursor/cursor",
+                "/opt/Cursor/cursor",
+                "/opt/cursor/cursor",
+            ],
+            "cursor",
+        )
+    }
 }
 
 pub struct CursorClient {

@@ -1,8 +1,8 @@
 //! General: startup, Usage Stats, the reset feed and provider status pages.
 
 use gpui::{
-    AnyElement, Context, IntoElement, KeyDownEvent, ParentElement, SharedString, Styled, Window,
-    div, px, relative,
+    AnyElement, Context, IntoElement, KeyDownEvent, ParentElement, Styled, Window, div, px,
+    relative,
 };
 
 use super::kit::{self, Button, Kit, Row};
@@ -42,9 +42,11 @@ impl SettingsWindow {
                 k,
                 "general-language",
                 crate::i18n::tr("language"),
-                Some(crate::i18n::tr(
-                    "applies-immediately-to-every-app-window-and-notification-auto-fol",
-                )),
+                Some(crate::i18n::tr(if cfg!(windows) {
+                    "applies-immediately-to-every-app-window-and-notification-auto-fol"
+                } else {
+                    "linux-applies-immediately-to-every-app-window-and-notification-auto-fol"
+                })),
                 kit::options(&crate::i18n::Language::labels()),
                 s.language.index() as i32,
                 false,
@@ -59,7 +61,11 @@ impl SettingsWindow {
             vec![kit::toggle_row(
                 k,
                 "general-startup",
-                crate::i18n::tr("start-with-windows"),
+                if cfg!(windows) {
+                    crate::i18n::tr("start-with-windows")
+                } else {
+                    crate::i18n::tr("start-at-login")
+                },
                 Some(crate::i18n::tr("open-codex-minibar-in-the-tray-when-you-sign-in").into()),
                 start_at_login,
                 Self::h(cx, |this, value: bool, _, cx| {
@@ -212,12 +218,38 @@ impl SettingsWindow {
         ]
     }
 
+    /// Linux: applications cannot grab global keys on Wayland, so the
+    /// shortcut is a desktop keyboard shortcut running the toggle command.
+    #[cfg(not(windows))]
+    fn popup_hotkey_row(&self, k: &mut Kit, cx: &mut Context<Self>) -> AnyElement {
+        let command = crate::linux::instance::toggle_command();
+        let copied = command.clone();
+        Row::new(
+            "general-popup-hotkey-row",
+            crate::i18n::tr("popup-shortcut"),
+        )
+        .description(k, crate::i18n::tr("linux-popup-shortcut-description"))
+        .detail(kit::text(command, 12.0, k.theme.text_secondary).into_any_element())
+        .trailing(
+            Button::icon_only("general-popup-hotkey-copy", "copy")
+                .ghost()
+                .tooltip(crate::i18n::tr("copy-command"))
+                .on_click(Self::h(cx, move |this, (), _, cx| {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(copied.clone()));
+                    this.show_notice(crate::i18n::tr("command-copied"), cx);
+                }))
+                .render(k),
+        )
+        .render(k)
+    }
+
     /// Records the popup shortcut: the button waits for the next combination,
     /// Esc cancels and Backspace or Delete clears it.
+    #[cfg(windows)]
     fn popup_hotkey_row(&self, k: &mut Kit, cx: &mut Context<Self>) -> AnyElement {
         let recording = self.hotkey_recording;
         let current = self.settings.popup_hotkey;
-        let label: SharedString = if recording {
+        let label: gpui::SharedString = if recording {
             crate::i18n::tr("press-a-shortcut").into()
         } else if let Some(hotkey) = current {
             hotkey.label().into()

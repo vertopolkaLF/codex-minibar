@@ -1993,7 +1993,9 @@ impl PopupRoot {
         let remove = self.untrack_button(row, Tone::Danger, false, cx);
         let fingerprint = key.masked.clone().map(|masked| {
             div()
-                .font_family("Consolas")
+                .font_family(crate::settings_window::theme::monospace_family(
+                    "Consolas".into(),
+                ))
                 .child(nowrap(caption(masked, palette.text_tertiary)))
         });
         div()
@@ -2715,7 +2717,9 @@ impl PopupRoot {
                             })
                             .border_1()
                             .border_color(palette.card_stroke)
-                            .font_family("Consolas")
+                            .font_family(crate::settings_window::theme::monospace_family(
+                                "Consolas".into(),
+                            ))
                             .text_size(px(12.5))
                             .line_height(px(18.0))
                             .text_color(palette.text_primary)

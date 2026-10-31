@@ -37,9 +37,11 @@ impl SettingsWindow {
                     "advanced-export",
                     "upload-simple-fill",
                     crate::i18n::tr("export-settings"),
-                    crate::i18n::tr(
-                        "save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user",
-                    ),
+                    crate::i18n::tr(if cfg!(windows) {
+                        "save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user"
+                    } else {
+                        "linux-save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user"
+                    }),
                     Button::new("advanced-export", crate::i18n::tr("export"))
                         .on_click(Self::h(cx, |this, (), _, cx| this.export_settings(cx))),
                 ),
@@ -105,6 +107,7 @@ impl SettingsWindow {
                 Some(crate::i18n::tr("software-rendering-description").into()),
                 software_rendering,
                 Self::h(cx, |this, value: bool, _, cx| {
+                    #[cfg(windows)]
                     gpui::set_software_rendering(value);
                     this.edit(cx, move |settings| settings.software_rendering = value)
                 }),
@@ -141,9 +144,14 @@ impl SettingsWindow {
             performance,
         ];
         page.extend(games);
+        // Software rendering selects WARP, which only exists on Windows.
+        if cfg!(windows) {
+            page.extend([
+                kit::section_heading(k, crate::i18n::tr("rendering")),
+                rendering,
+            ]);
+        }
         page.extend([
-            kit::section_heading(k, crate::i18n::tr("rendering")),
-            rendering,
             kit::section_heading(k, crate::i18n::tr("backup")),
             backup,
             kit::section_heading(k, crate::i18n::tr("data")),
@@ -173,7 +181,11 @@ impl SettingsWindow {
                 "advanced-add-game",
                 "game-controller-fill",
                 crate::i18n::tr("add-a-game"),
-                crate::i18n::tr("add-a-game-description"),
+                if cfg!(windows) {
+                    crate::i18n::tr("add-a-game-description")
+                } else {
+                    crate::i18n::tr("linux-add-a-game-description")
+                },
                 Button::new("advanced-add-game", crate::i18n::tr("add"))
                     .on_click(Self::h(cx, |this, (), _, cx| this.add_game(cx))),
             )];

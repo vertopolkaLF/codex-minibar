@@ -362,10 +362,20 @@ fn window_options(
         is_minimizable: true,
         display_id: None,
         window_background: WindowBackgroundAppearance::Opaque,
-        app_id: Some("CodexMinibar".into()),
+        // Linux matches windows to `codex-minibar.desktop` by this id.
+        app_id: Some(
+            if cfg!(windows) {
+                "CodexMinibar"
+            } else {
+                "codex-minibar"
+            }
+            .into(),
+        ),
         window_min_size: Some(size(px(min.0), px(min.1))),
         window_max_size: Some(size(px(max.0), px(max.1))),
-        window_decorations: None,
+        // Linux: our own caption is the title bar. GPUI would otherwise ask
+        // X11 and KDE window managers for a second, native one.
+        window_decorations: (!cfg!(windows)).then_some(gpui::WindowDecorations::Client),
         tabbing_identifier: None,
     }
 }

@@ -370,40 +370,38 @@ pub fn ide_source_path(explicit: Option<&Path>) -> Option<PathBuf> {
 
 /// Finds the desktop Kiro Crew app across per-user and all-users installs.
 pub fn crew_installation_path(explicit: Option<&Path>) -> Option<PathBuf> {
-    explicit
-        .and_then(|path| executable_from_crew_path(path, true))
-        .or_else(|| {
-            #[cfg(windows)]
-            {
-                let local_app_data = env::var_os("LOCALAPPDATA").map(PathBuf::from);
-                let program_files = env::var_os("ProgramFiles").map(PathBuf::from);
-                let program_files_x86 = env::var_os("ProgramFiles(x86)").map(PathBuf::from);
-                let mut roots = Vec::new();
-                if let Some(root) = local_app_data {
-                    roots.push(root.join("Programs"));
-                }
-                roots.extend(program_files);
-                roots.extend(program_files_x86);
-                roots
+    let explicit = explicit.and_then(|path| executable_from_crew_path(path, true));
+    // Kiro Crew ships for Windows only; elsewhere only a configured path counts.
+    #[cfg(windows)]
+    {
+        explicit.or_else(|| {
+            let local_app_data = env::var_os("LOCALAPPDATA").map(PathBuf::from);
+            let program_files = env::var_os("ProgramFiles").map(PathBuf::from);
+            let program_files_x86 = env::var_os("ProgramFiles(x86)").map(PathBuf::from);
+            let mut roots = Vec::new();
+            if let Some(root) = local_app_data {
+                roots.push(root.join("Programs"));
+            }
+            roots.extend(program_files);
+            roots.extend(program_files_x86);
+            roots
+                .into_iter()
+                .flat_map(|root| {
+                    [
+                        "KiroCrew",
+                        "Kiro Crew",
+                        "KiroCrew Nightly",
+                        "Kiro Crew Nightly",
+                    ]
                     .into_iter()
-                    .flat_map(|root| {
-                        [
-                            "KiroCrew",
-                            "Kiro Crew",
-                            "KiroCrew Nightly",
-                            "Kiro Crew Nightly",
-                        ]
-                        .into_iter()
-                        .map(move |folder| root.join(folder))
-                    })
-                    .chain(registered_crew_install_locations())
-                    .find_map(|path| executable_from_crew_path(&path, false))
-            }
-            #[cfg(not(windows))]
-            {
-                None
-            }
+                    .map(move |folder| root.join(folder))
+                })
+                .chain(registered_crew_install_locations())
+                .find_map(|path| executable_from_crew_path(&path, false))
         })
+    }
+    #[cfg(not(windows))]
+    explicit
 }
 
 fn executable_from_crew_path(path: &Path, allow_explicit_file: bool) -> Option<PathBuf> {
@@ -559,11 +557,6 @@ fn registered_crew_install_locations() -> Vec<PathBuf> {
     locations
 }
 
-#[cfg(not(windows))]
-fn registered_crew_install_locations() -> Vec<PathBuf> {
-    Vec::new()
-}
-
 pub fn cli_path(explicit: Option<&Path>) -> Option<PathBuf> {
     let mut known = Vec::new();
     #[cfg(windows)]
@@ -580,41 +573,46 @@ pub fn cli_path(explicit: Option<&Path>) -> Option<PathBuf> {
 }
 
 pub fn installation_path(explicit: Option<&Path>) -> Option<PathBuf> {
-    explicit
-        .and_then(|path| {
-            if path.is_file() {
-                Some(path.to_path_buf())
-            } else {
-                let executable = path.join("Kiro.exe");
-                executable.is_file().then_some(executable)
-            }
-        })
-        .or_else(|| {
-            #[cfg(windows)]
-            {
-                let local_app_data = env::var_os("LOCALAPPDATA").map(PathBuf::from);
-                let program_files = env::var_os("ProgramFiles").map(PathBuf::from);
-                let program_files_x86 = env::var_os("ProgramFiles(x86)").map(PathBuf::from);
-                local_app_data
+    const EXECUTABLE: &str = if cfg!(windows) { "Kiro.exe" } else { "kiro" };
+    let explicit = explicit.and_then(|path| {
+        if path.is_file() {
+            Some(path.to_path_buf())
+        } else {
+            let executable = path.join(EXECUTABLE);
+            executable.is_file().then_some(executable)
+        }
+    });
+    if explicit.is_some() {
+        return explicit;
+    }
+    #[cfg(windows)]
+    {
+        let local_app_data = env::var_os("LOCALAPPDATA").map(PathBuf::from);
+        let program_files = env::var_os("ProgramFiles").map(PathBuf::from);
+        let program_files_x86 = env::var_os("ProgramFiles(x86)").map(PathBuf::from);
+        local_app_data
+            .into_iter()
+            .map(|path| path.join("Programs/Kiro/Kiro.exe"))
+            .chain(
+                program_files
                     .into_iter()
-                    .map(|path| path.join("Programs/Kiro/Kiro.exe"))
-                    .chain(
-                        program_files
-                            .into_iter()
-                            .map(|path| path.join("Kiro/Kiro.exe")),
-                    )
-                    .chain(
-                        program_files_x86
-                            .into_iter()
-                            .map(|path| path.join("Kiro/Kiro.exe")),
-                    )
-                    .find(|path| path.is_file())
-            }
-            #[cfg(not(windows))]
-            {
-                None
-            }
-        })
+                    .map(|path| path.join("Kiro/Kiro.exe")),
+            )
+            .chain(
+                program_files_x86
+                    .into_iter()
+                    .map(|path| path.join("Kiro/Kiro.exe")),
+            )
+            .find(|path| path.is_file())
+    }
+    #[cfg(not(windows))]
+    {
+        crate::linux::apps::find_app(
+            &["kiro"],
+            &["/usr/share/kiro/kiro", "/opt/Kiro/kiro", "/opt/kiro/kiro"],
+            "kiro",
+        )
+    }
 }
 
 fn state_database_path() -> Option<PathBuf> {

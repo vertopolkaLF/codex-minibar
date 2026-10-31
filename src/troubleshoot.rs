@@ -6,7 +6,9 @@ use std::{
     process::Command,
 };
 
-use anyhow::{Context, Result, bail};
+#[cfg(windows)]
+use anyhow::bail;
+use anyhow::{Context, Result};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AiTool {
@@ -86,6 +88,7 @@ pub fn launch_selected(tool: &AvailableAiTool) -> Result<()> {
     launch_terminal(Some(tool))
 }
 
+#[cfg(windows)]
 fn launch_terminal(selected: Option<&AvailableAiTool>) -> Result<()> {
     let script = script_path()?;
     let prepared = selected
@@ -112,7 +115,6 @@ fn launch_terminal(selected: Option<&AvailableAiTool>) -> Result<()> {
         powershell_args.push(executable.to_string_lossy().into_owned());
     }
 
-    #[cfg(windows)]
     {
         // A terminal launcher such as wt.exe exits before its shell starts.
         // For cached CLIs own the shell child instead, retaining the lease
@@ -148,14 +150,9 @@ fn launch_terminal(selected: Option<&AvailableAiTool>) -> Result<()> {
             .context("open PowerShell terminal")?;
         Ok(())
     }
-
-    #[cfg(not(windows))]
-    {
-        let _ = powershell_args;
-        bail!("troubleshooting terminals are only supported on Windows")
-    }
 }
 
+#[cfg(windows)]
 fn script_path() -> Result<PathBuf> {
     let packaged = env::current_exe()
         .ok()
@@ -176,9 +173,128 @@ fn script_path() -> Result<PathBuf> {
     bail!("troubleshooting script was not found")
 }
 
+/// Linux: runs the embedded bash script in the user's terminal emulator.
+#[cfg(not(windows))]
+fn launch_terminal(selected: Option<&AvailableAiTool>) -> Result<()> {
+    let prepared = selected
+        .filter(|tool| tool.tool == AiTool::Codex)
+        .map(|tool| crate::discovery::prepare(&tool.executable))
+        .transpose()?;
+    let script = linux_script()?;
+    let mut program = vec!["bash".to_owned(), script.to_string_lossy().into_owned()];
+    if let Some(tool) = selected {
+        program.push(tool.tool.id().to_owned());
+        let executable = prepared
+            .as_ref()
+            .map(|cli| cli.path.as_path())
+            .unwrap_or(&tool.executable);
+        program.push(executable.to_string_lossy().into_owned());
+    }
+    let mut child = linux_terminal(&program)?
+        .spawn()
+        .context("open a terminal for troubleshooting")?;
+    // Hold any prepared CLI lease until the terminal closes.
+    std::thread::spawn(move || {
+        let _lease = prepared;
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
+/// Writes the bundled script where the terminal can run it.
+#[cfg(not(windows))]
+fn linux_script() -> Result<PathBuf> {
+    let base = directories::BaseDirs::new().context("resolve the cache directory")?;
+    let directory = base.cache_dir().join("codex-minibar");
+    fs::create_dir_all(&directory).with_context(|| format!("create {}", directory.display()))?;
+    let path = directory.join("troubleshoot.sh");
+    fs::write(&path, include_str!("../assets/troubleshoot.sh"))
+        .with_context(|| format!("write {}", path.display()))?;
+    Ok(path)
+}
+
+/// A terminal emulator command running `program`: `$TERMINAL`, the Debian
+/// `x-terminal-emulator` alternative, then common emulators. Each family
+/// takes the command differently.
+#[cfg(not(windows))]
+fn linux_terminal(program: &[String]) -> Result<Command> {
+    let mut candidates: Vec<PathBuf> = env::var_os("TERMINAL")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .into_iter()
+        .collect();
+    candidates.extend(
+        [
+            "x-terminal-emulator",
+            "ptyxis",
+            "gnome-terminal",
+            "kgx",
+            "konsole",
+            "xfce4-terminal",
+            "alacritty",
+            "kitty",
+            "foot",
+            "wezterm",
+            "xterm",
+        ]
+        .map(PathBuf::from),
+    );
+    let terminal = candidates
+        .into_iter()
+        .find_map(|candidate| {
+            if candidate.is_absolute() {
+                candidate.is_file().then_some(candidate)
+            } else {
+                find_on_path(&candidate.to_string_lossy())
+            }
+        })
+        .context("no terminal emulator was found; set $TERMINAL")?;
+    // `x-terminal-emulator` is a symlink; its target decides the syntax.
+    let resolved = fs::canonicalize(&terminal).unwrap_or_else(|_| terminal.clone());
+    let name = resolved
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut command = Command::new(&terminal);
+    command.args(terminal_prefix(&name)).args(program);
+    Ok(command)
+}
+
+/// Arguments that precede the command for a terminal binary named `name`.
+#[cfg(not(windows))]
+fn terminal_prefix(name: &str) -> &'static [&'static str] {
+    match name {
+        "ptyxis"
+        | "gnome-terminal"
+        | "gnome-terminal.real"
+        | "gnome-terminal.wrapper"
+        | "kgx"
+        | "tilix" => &["--"],
+        "wezterm" | "wezterm-gui" => &["start", "--"],
+        "xfce4-terminal" => &["-x"],
+        "kitty" | "foot" => &[],
+        _ => &["-e"],
+    }
+}
+
 fn find_on_path(name: &str) -> Option<PathBuf> {
     let path = env::var_os("PATH")?;
     env::split_paths(&path)
         .map(|directory| directory.join(name))
         .find(|candidate| fs::canonicalize(candidate).is_ok_and(|path| path.is_file()))
+}
+
+#[cfg(all(test, not(windows)))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminals_receive_the_command_in_their_own_syntax() {
+        assert_eq!(terminal_prefix("ptyxis"), ["--"]);
+        assert_eq!(terminal_prefix("gnome-terminal.wrapper"), ["--"]);
+        assert_eq!(terminal_prefix("wezterm"), ["start", "--"]);
+        assert_eq!(terminal_prefix("kitty"), [] as [&str; 0]);
+        assert_eq!(terminal_prefix("konsole"), ["-e"]);
+        assert_eq!(terminal_prefix("xterm"), ["-e"]);
+    }
 }

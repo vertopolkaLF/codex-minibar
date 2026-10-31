@@ -1,10 +1,11 @@
 //! In-place updates from GitHub Releases portable zip assets.
 
+#[cfg(windows)]
+use std::process::{Command, Stdio};
 use std::{
     fs,
     io::{Read, Write, copy},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::{Arc, Mutex, OnceLock},
     thread,
     time::{Duration, Instant},
@@ -123,6 +124,16 @@ pub fn apply_pending_update() -> Result<()> {
         Ok(runtime) => runtime,
         Err(error) => return Err(report_update_failure(error)),
     };
+    // Linux installs come from distribution packages or AppImages, which
+    // their own tools update; send the user to the release instead.
+    if !cfg!(windows) {
+        let update = runtime
+            .updates
+            .available_update()
+            .context("no update is available")
+            .map_err(report_update_failure)?;
+        return open_url(&update.html_url).map_err(report_update_failure);
+    }
     // A second click while the first one is still downloading.
     if runtime.updates.snapshot() == UpdatePhase::Applying {
         return Ok(());
@@ -327,6 +338,10 @@ fn sync_uninstall_display_version(version: &str) -> Result<()> {
 /// ships: the WinUI runtime, assets dropped since, and leftover update
 /// staging. Zip updates only copy the new package over the install.
 pub fn cleanup_install_dir() {
+    // Linux binaries live in package-managed directories such as /usr/bin.
+    if !cfg!(windows) {
+        return;
+    }
     let dir = match install_dir() {
         Ok(dir) => dir,
         Err(error) => {
@@ -638,6 +653,16 @@ fn check_for_update() -> Result<Option<AvailableUpdate>> {
         return Ok(None);
     }
 
+    // Linux updates are installed from the release page, not in place.
+    if !cfg!(windows) {
+        return Ok(Some(AvailableUpdate {
+            version: remote.to_string(),
+            asset_url: String::new(),
+            html_url: release.html_url,
+            size: None,
+            sha256: None,
+        }));
+    }
     let arch = host_arch();
     let expected_suffix = format!("-{arch}-portable.zip");
     let asset = release
@@ -1037,9 +1062,7 @@ fn shell_execute(target: &std::ffi::OsStr, description: &str) -> Result<()> {
     }
     #[cfg(not(windows))]
     {
-        let _ = target;
-        let _ = description;
-        bail!("opening URLs is only supported on Windows")
+        crate::linux::desktop::open(target).with_context(|| format!("open {description}"))
     }
 }
 

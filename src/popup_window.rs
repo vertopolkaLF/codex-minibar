@@ -80,6 +80,7 @@ pub(crate) enum PopupCommand {
     Show {
         anchor: Option<(i32, i32)>,
         /// Open toward the anchor's end of the taskbar, not the tray's.
+        #[cfg_attr(not(windows), allow(dead_code))]
         beside: bool,
     },
     Hide,
@@ -92,8 +93,10 @@ pub(crate) enum PopupCommand {
     AppearanceChanged,
     Reposition,
     /// Persist a completed native move, then rebuild the host for its new DPI.
+    #[cfg(windows)]
     Moved,
     /// Height drag updates stay in memory; persist only on release/capture loss.
+    #[cfg(windows)]
     ResizeHeight {
         height_dip: f32,
         finished: bool,
@@ -102,10 +105,12 @@ pub(crate) enum PopupCommand {
     },
     /// Another window took the foreground; restore the popup to the top of
     /// the topmost band if it is visible.
+    #[cfg(windows)]
     Raise,
     /// Settings/onboarding window requests, executed on the GPUI thread.
     Settings(crate::settings_window::Command),
     /// An in-app notification for the toast host.
+    #[cfg(windows)]
     Toast(Box<crate::notifications::Notification>),
 }
 

@@ -1,4 +1,4 @@
-//! Process-wide single-instance ownership and activation for Windows.
+//! Process-wide single-instance ownership and activation.
 
 #[cfg(windows)]
 mod platform {
@@ -105,16 +105,4 @@ mod platform {
 pub use platform::{SingleInstance, release_for_update};
 
 #[cfg(not(windows))]
-pub struct SingleInstance;
-
-#[cfg(not(windows))]
-impl SingleInstance {
-    pub fn acquire_or_activate_existing() -> anyhow::Result<Option<Self>> {
-        Ok(Some(Self))
-    }
-
-    pub fn hold(_instance: Self) {}
-}
-
-#[cfg(not(windows))]
-pub fn release_for_update() {}
+pub use crate::linux::instance::{SingleInstance, release_for_update};

@@ -2067,3 +2067,63 @@ skip-automatic-reset = 取消
 
 # src/popup_window/auto_reset.rs
 banked-reset-applied = 已应用已储备重置
+
+# src/tray.rs
+linux-no-tray-title = 未找到系统托盘
+
+# src/tray.rs
+linux-no-tray-body = 启用 AppIndicator 扩展即可在面板中看到 Codex Minibar。再次启动 Codex Minibar 可将其打开。
+
+# src/settings_window/general.rs
+start-at-login = 登录时启动
+
+# src/settings_window/general.rs
+linux-popup-shortcut-description = 在桌面的键盘设置中添加运行此命令的自定义快捷键，即可显示或隐藏弹出窗口。
+
+# src/settings_window/general.rs
+copy-command = 复制命令
+
+# src/settings_window/general.rs
+command-copied = 已复制命令
+
+# src/settings_window/about.rs
+linux-about-tagline = 免费开源的伴侣应用，在系统托盘中查看 AI 订阅的用量限制、重置和花费。
+
+# src/settings_window/advanced.rs
+linux-save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user = 将所有设置保存到 .toml 文件。已保存的密钥仍加密保存在这台电脑上。
+
+# src/settings_window/appearance.rs
+linux-windows = 系统
+
+# src/settings_window/appearance.rs
+linux-windows-follows-your-system-accent = “系统”跟随桌面强调色。
+
+# src/settings_window/appearance.rs
+linux-windows-default = 系统默认
+
+# src/settings_window/appearance.rs
+linux-popup-theme-description = 仅更改弹出窗口。设置保持自己的外观。
+
+# src/settings_window/appearance.rs
+linux-glide-transitions-in-the-popup-and-settings-windows-own-animation = 弹出窗口和设置中的平滑过渡。同时遵循桌面自身的动画设置。
+
+# src/settings_window/providers/dialog.rs
+linux-saved-in-windows-user-storage-never-in-the-settings-file = 使用系统密钥环中的密钥加密，绝不写入设置文件。
+
+# src/settings_window/providers/dialog.rs
+linux-credential-saved-in-windows-user-storage = 凭据已保存，并使用系统密钥环加密。
+
+# src/settings_window/providers/dialog.rs
+linux-api-key-saved-in-windows-user-storage = API 密钥已保存，并使用系统密钥环加密。
+
+# src/settings_window/providers/page.rs
+linux-saved-in-windows-user-storage = 已使用系统密钥环加密
+
+# src/settings_window/general.rs
+linux-applies-immediately-to-every-app-window-and-notification-auto-fol = 立即应用于所有应用窗口和通知。自动跟随系统语言。
+
+# src/settings_window/providers/dialog.rs
+linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = 为 { $name } 运行 Claude Code 自身的登录，将其配置文件夹设为 CLAUDE_CONFIG_DIR。登录信息保留在该文件夹，由 Claude Code 自动续期。
+
+# src/settings_window/advanced.rs
+linux-add-a-game-description = 由 Steam 启动的游戏以及 Steam 或 Heroic 库中的游戏会被自动识别。其他程序请在此添加。

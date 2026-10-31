@@ -2968,3 +2968,63 @@ skip-automatic-reset = İptal
 
 # src/popup_window/auto_reset.rs
 banked-reset-applied = Birikmiş sıfırlama uygulandı
+
+# src/tray.rs
+linux-no-tray-title = Sistem tepsisi bulunamadı
+
+# src/tray.rs
+linux-no-tray-body = Codex Minibar’ı panelde görmek için AppIndicator uzantısını etkinleştirin. Açmak için Codex Minibar’ı yeniden başlatın.
+
+# src/settings_window/general.rs
+start-at-login = Oturum açılışında başlat
+
+# src/settings_window/general.rs
+linux-popup-shortcut-description = Açılır pencereyi göstermek veya gizlemek için masaüstünüzün klavye ayarlarında bu komutu çalıştıran özel bir kısayol ekleyin.
+
+# src/settings_window/general.rs
+copy-command = Komutu kopyala
+
+# src/settings_window/general.rs
+command-copied = Komut kopyalandı
+
+# src/settings_window/about.rs
+linux-about-tagline = Yapay zekâ aboneliklerinin kullanım sınırları, sıfırlamaları ve harcamaları için sistem tepsisinde ücretsiz, açık kaynaklı yardımcı.
+
+# src/settings_window/advanced.rs
+linux-save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user = Tüm ayarları bir .toml dosyasına kaydeder. Kayıtlı anahtarlar bu bilgisayarda şifreli kalır.
+
+# src/settings_window/appearance.rs
+linux-windows = Sistem
+
+# src/settings_window/appearance.rs
+linux-windows-follows-your-system-accent = Sistem, masaüstünüzün vurgu rengini izler.
+
+# src/settings_window/appearance.rs
+linux-windows-default = Sistem varsayılanı
+
+# src/settings_window/appearance.rs
+linux-popup-theme-description = Yalnızca açılır pencereyi değiştirir. Ayarlar kendi görünümünü korur.
+
+# src/settings_window/appearance.rs
+linux-glide-transitions-in-the-popup-and-settings-windows-own-animation = Açılır pencerede ve Ayarlar’da akıcı geçişler. Masaüstünüzün animasyon ayarına da uyulur.
+
+# src/settings_window/providers/dialog.rs
+linux-saved-in-windows-user-storage-never-in-the-settings-file = Sistem anahtarlığınızdaki bir anahtarla şifrelenir, asla ayar dosyasında tutulmaz.
+
+# src/settings_window/providers/dialog.rs
+linux-credential-saved-in-windows-user-storage = Kimlik bilgisi kaydedildi, sistem anahtarlığınızla şifrelendi.
+
+# src/settings_window/providers/dialog.rs
+linux-api-key-saved-in-windows-user-storage = API anahtarı kaydedildi, sistem anahtarlığınızla şifrelendi.
+
+# src/settings_window/providers/page.rs
+linux-saved-in-windows-user-storage = Sistem anahtarlığınızla şifrelenmiş
+
+# src/settings_window/general.rs
+linux-applies-immediately-to-every-app-window-and-notification-auto-fol = Tüm uygulama pencerelerine ve bildirimlere hemen uygulanır. Otomatik seçeneği sistem dilini izler.
+
+# src/settings_window/providers/dialog.rs
+linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = { $name } için Claude Code'un kendi oturum açma işlemini yapılandırma klasörünü CLAUDE_CONFIG_DIR olarak kullanarak çalıştırır. Oturum bu klasörde kalır ve Claude Code tarafından güncel tutulur.
+
+# src/settings_window/advanced.rs
+linux-add-a-game-description = Steam’in başlattığı oyunlar ile Steam veya Heroic kitaplıklarındaki oyunlar kendiliğinden algılanır. Diğer programları buraya ekleyin.

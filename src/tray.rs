@@ -223,9 +223,13 @@ pub(crate) fn system_uses_light_theme() -> bool {
     status == ERROR_SUCCESS && value != 0
 }
 
+/// Whether the panel hosting the tray is light. GNOME-family top bars are
+/// dark in both color schemes; other desktops follow the portal color scheme
+/// and default to light without a preference.
 #[cfg(not(windows))]
 pub(crate) fn system_uses_light_theme() -> bool {
-    true
+    !crate::linux::desktop::panel_always_dark()
+        && crate::linux::desktop::prefers_dark() != Some(true)
 }
 
 fn system_font() -> Option<&'static Font> {
@@ -539,11 +543,40 @@ fn font_candidates() -> Vec<PathBuf> {
             fonts.join("arialbd.ttf"),
         ]);
     }
-    candidates.extend([
-        PathBuf::from("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
-        PathBuf::from("/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
-    ]);
+    // Bold sans faces where Debian/Ubuntu, Fedora and Arch install them.
+    candidates.extend(
+        [
+            "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+            "/usr/share/fonts/google-noto/NotoSans-Bold.ttf",
+            "/usr/share/fonts/noto/NotoSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/liberation-sans/LiberationSans-Bold.ttf",
+            "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        ]
+        .map(PathBuf::from),
+    );
+    #[cfg(not(windows))]
+    candidates.extend(fontconfig_bold_sans());
     candidates
+}
+
+/// Whatever bold sans face fontconfig resolves, for other layouts.
+#[cfg(not(windows))]
+fn fontconfig_bold_sans() -> Option<PathBuf> {
+    let output = std::process::Command::new("fc-match")
+        .args(["--format=%{file}", "sans-serif:bold"])
+        .output()
+        .ok()?;
+    let path = PathBuf::from(String::from_utf8(output.stdout).ok()?.trim());
+    // fontdue reads TrueType/OpenType files, not collections.
+    let usable = path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("ttf") || ext.eq_ignore_ascii_case("otf"));
+    (output.status.success() && usable).then_some(path)
 }
 
 fn render_fallback_lines(lines: &[(String, [u8; 3])], right_align: bool) -> Vec<u8> {
@@ -824,60 +857,349 @@ pub use platform::TrayManager;
 pub use platform::TrayMenuAction;
 
 #[cfg(not(windows))]
-pub struct TrayManager;
+mod platform {
+    //! StatusNotifierItem tray icons (KDE, GNOME with the AppIndicator
+    //! extension, Xfce, Cinnamon, Budgie, wlroots bars). Each widget is its own
+    //! item, like each widget is its own notification-area icon on Windows.
 
-#[cfg(not(windows))]
-impl TrayManager {
-    pub fn new() -> Self {
-        Self
+    use std::{
+        sync::Mutex,
+        time::{Duration, Instant},
+    };
+
+    use anyhow::Result;
+    use ksni::blocking::{Handle, TrayMethods};
+
+    use super::*;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum TrayMenuAction {
+        Update,
+        Settings,
+        Exit,
     }
 
-    pub fn sync(
-        &mut self,
-        _widgets: &[TrayWidget],
-        _limits: &ProviderLimits,
-        _update_available: bool,
-    ) -> anyhow::Result<()> {
-        Ok(())
+    /// Input from the D-Bus tray threads, drained by the bridge thread.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum TrayEvent {
+        /// Primary click at screen coordinates (`0, 0` when the host does
+        /// not report a position).
+        Activate(i32, i32),
+        Menu(TrayMenuAction),
     }
 
-    pub fn rebuild(
-        &mut self,
-        _widgets: &[TrayWidget],
-        _limits: &ProviderLimits,
-        _update_available: bool,
-    ) -> anyhow::Result<()> {
-        Ok(())
+    static EVENTS: Mutex<Vec<TrayEvent>> = Mutex::new(Vec::new());
+
+    fn push(event: TrayEvent) {
+        if let Ok(mut events) = EVENTS.lock() {
+            events.push(event);
+        }
+        crate::linux::wake::wake();
     }
 
-    pub fn len(&self) -> usize {
-        0
+    struct Item {
+        slot: usize,
+        icon: ksni::Icon,
+        tooltip: String,
+        update_available: bool,
     }
 
-    pub fn is_empty(&self) -> bool {
-        true
+    impl ksni::Tray for Item {
+        fn id(&self) -> String {
+            // Hosts remember item placement by id; keep it stable per slot.
+            if self.slot == 0 {
+                "codex-minibar".into()
+            } else {
+                format!("codex-minibar-{}", self.slot)
+            }
+        }
+
+        fn title(&self) -> String {
+            "Codex Minibar".into()
+        }
+
+        fn category(&self) -> ksni::Category {
+            ksni::Category::ApplicationStatus
+        }
+
+        fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+            vec![self.icon.clone()]
+        }
+
+        fn tool_tip(&self) -> ksni::ToolTip {
+            ksni::ToolTip {
+                title: "Codex Minibar".into(),
+                description: self.tooltip.clone(),
+                ..Default::default()
+            }
+        }
+
+        fn activate(&mut self, x: i32, y: i32) {
+            push(TrayEvent::Activate(x, y));
+        }
+
+        fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
+            use ksni::menu::StandardItem;
+            let item = |label: String, action: TrayMenuAction| -> ksni::MenuItem<Self> {
+                StandardItem {
+                    label,
+                    activate: Box::new(move |_: &mut Self| push(TrayEvent::Menu(action))),
+                    ..Default::default()
+                }
+                .into()
+            };
+            let mut items = vec![
+                StandardItem {
+                    label: format!("Codex Minibar - {}", env!("CARGO_PKG_VERSION")),
+                    enabled: false,
+                    ..Default::default()
+                }
+                .into(),
+                ksni::MenuItem::Separator,
+            ];
+            if self.update_available {
+                items.push(item(
+                    crate::i18n::tr("update-available-67fd3a").to_string(),
+                    TrayMenuAction::Update,
+                ));
+            }
+            items.push(item(
+                crate::i18n::tr("settings").to_string(),
+                TrayMenuAction::Settings,
+            ));
+            items.push(item(
+                crate::i18n::tr("exit").to_string(),
+                TrayMenuAction::Exit,
+            ));
+            items
+        }
     }
 
-    pub fn drain_menu_actions(&self) -> Vec<TrayMenuAction> {
-        Vec::new()
+    pub struct TrayManager {
+        items: Vec<Handle<Item>>,
+        last_pixels: Vec<Vec<u8>>,
+        last_tooltips: Vec<String>,
+        update_available: bool,
+        language: crate::i18n::Language,
+        uses_light_theme: bool,
+        next_theme_check: Instant,
+        host_checked: bool,
     }
 
-    pub fn refresh_system_theme(
-        &mut self,
-        _widgets: &[TrayWidget],
-        _limits: &ProviderLimits,
-    ) -> anyhow::Result<()> {
-        Ok(())
+    impl TrayManager {
+        pub fn new() -> Self {
+            Self {
+                items: Vec::new(),
+                last_pixels: Vec::new(),
+                last_tooltips: Vec::new(),
+                update_available: false,
+                language: crate::i18n::current_language(),
+                uses_light_theme: system_uses_light_theme(),
+                next_theme_check: Instant::now(),
+                host_checked: false,
+            }
+        }
+
+        pub fn sync(
+            &mut self,
+            widgets: &[TrayWidget],
+            limits: &ProviderLimits,
+            update_available: bool,
+        ) -> Result<()> {
+            self.uses_light_theme = system_uses_light_theme();
+            self.next_theme_check = Instant::now() + Duration::from_secs(1);
+            crate::taskbar::set_update_available(update_available);
+            let language = crate::i18n::current_language();
+            let menu_changed =
+                self.update_available != update_available || self.language != language;
+            self.language = language;
+            self.update_available = update_available;
+            // No configured widgets is a deliberate state: retain one app icon.
+            let count = widgets.len().max(1);
+            for handle in self.items.drain(count.min(self.items.len())..) {
+                handle.shutdown();
+            }
+            self.last_pixels.truncate(count);
+            self.last_tooltips.truncate(count);
+            while self.items.len() < count {
+                let slot = self.items.len();
+                let widget = widgets.get(slot);
+                let pixels = icon_pixels(widget, limits);
+                let tooltip = tooltip_for(widget, limits);
+                let item = Item {
+                    slot,
+                    icon: icon_from_rgba(&pixels),
+                    tooltip: tooltip.clone(),
+                    update_available,
+                };
+                // Register even before a tray host exists (the shell may start
+                // after us); the item appears as soon as one does.
+                let handle = item
+                    .assume_sni_available(true)
+                    .spawn()
+                    .map_err(|error| anyhow::anyhow!("create tray icon: {error}"))?;
+                self.items.push(handle);
+                self.last_pixels.push(pixels);
+                self.last_tooltips.push(tooltip);
+            }
+            for (slot, handle) in self.items.iter().enumerate() {
+                let widget = widgets.get(slot);
+                let pixels = icon_pixels(widget, limits);
+                let tooltip = tooltip_for(widget, limits);
+                let icon_changed = self.last_pixels[slot] != pixels;
+                let tooltip_changed = self.last_tooltips[slot] != tooltip;
+                if !(icon_changed || tooltip_changed || menu_changed) {
+                    continue;
+                }
+                let icon = icon_changed.then(|| icon_from_rgba(&pixels));
+                let text = tooltip.clone();
+                handle.update(move |item| {
+                    if let Some(icon) = icon {
+                        item.icon = icon;
+                    }
+                    item.tooltip = text;
+                    item.update_available = update_available;
+                });
+                self.last_pixels[slot] = pixels;
+                self.last_tooltips[slot] = tooltip;
+            }
+            if !self.host_checked {
+                self.host_checked = true;
+                warn_when_no_tray_host();
+            }
+            Ok(())
+        }
+
+        /// Repaints when the panel switches between light and dark.
+        pub fn refresh_system_theme(
+            &mut self,
+            widgets: &[TrayWidget],
+            limits: &ProviderLimits,
+        ) -> Result<()> {
+            if Instant::now() < self.next_theme_check {
+                return Ok(());
+            }
+            self.next_theme_check = Instant::now() + Duration::from_secs(1);
+            if system_uses_light_theme() == self.uses_light_theme {
+                return Ok(());
+            }
+            self.sync(widgets, limits, self.update_available)
+        }
+
+        /// Recreates every item so hosts lay them out in the new order.
+        pub fn rebuild(
+            &mut self,
+            widgets: &[TrayWidget],
+            limits: &ProviderLimits,
+            update_available: bool,
+        ) -> Result<()> {
+            for handle in self.items.drain(..) {
+                handle.shutdown();
+            }
+            self.last_pixels.clear();
+            self.last_tooltips.clear();
+            self.sync(widgets, limits, update_available)
+        }
+
+        pub fn len(&self) -> usize {
+            self.items.len()
+        }
+
+        pub fn is_empty(&self) -> bool {
+            self.items.is_empty()
+        }
+
+        pub fn drain_events(&self) -> Vec<TrayEvent> {
+            EVENTS
+                .lock()
+                .map(|mut events| std::mem::take(&mut *events))
+                .unwrap_or_default()
+        }
+    }
+
+    impl Default for TrayManager {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl Drop for TrayManager {
+        fn drop(&mut self) {
+            for handle in self.items.drain(..) {
+                handle.shutdown().wait();
+            }
+        }
+    }
+
+    fn icon_pixels(widget: Option<&TrayWidget>, limits: &ProviderLimits) -> Vec<u8> {
+        widget.map_or_else(
+            || app_icon_pixels().to_vec(),
+            |widget| render_widget(widget, limits),
+        )
+    }
+
+    fn tooltip_for(widget: Option<&TrayWidget>, limits: &ProviderLimits) -> String {
+        widget
+            .map(|widget| widget_tooltip(widget, limits))
+            .unwrap_or_else(|| "Codex Minibar".into())
+    }
+
+    /// RGBA rows to the ARGB32 (network byte order) pixmap SNI expects.
+    fn icon_from_rgba(pixels: &[u8]) -> ksni::Icon {
+        let data = pixels
+            .chunks_exact(4)
+            .flat_map(|pixel| [pixel[3], pixel[0], pixel[1], pixel[2]])
+            .collect();
+        ksni::Icon {
+            width: ICON_SIZE as i32,
+            height: ICON_SIZE as i32,
+            data,
+        }
+    }
+
+    /// Without a StatusNotifierWatcher (stock GNOME without the AppIndicator
+    /// extension) the icons never show. Tell the user how to reach the app.
+    fn warn_when_no_tray_host() {
+        let Some(bus) = crate::linux::desktop::session_bus() else {
+            return;
+        };
+        let has_watcher = bus
+            .call_method(
+                Some("org.freedesktop.DBus"),
+                "/org/freedesktop/DBus",
+                Some("org.freedesktop.DBus"),
+                "NameHasOwner",
+                &("org.kde.StatusNotifierWatcher",),
+            )
+            .ok()
+            .and_then(|reply| reply.body().deserialize::<bool>().ok())
+            .unwrap_or(true);
+        if !has_watcher {
+            crate::logger::info("No StatusNotifierItem host is running; tray icons are hidden");
+            crate::notifications::show(
+                crate::i18n::tr("linux-no-tray-title"),
+                crate::i18n::tr("linux-no-tray-body"),
+            );
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn pixmaps_are_argb_in_network_order() {
+            let mut rgba = vec![0u8; ICON_SIZE * ICON_SIZE * 4];
+            rgba[..4].copy_from_slice(&[10, 20, 30, 40]);
+            let icon = icon_from_rgba(&rgba);
+            assert_eq!(&icon.data[..4], &[40, 10, 20, 30]);
+            assert_eq!(icon.data.len(), rgba.len());
+        }
     }
 }
 
 #[cfg(not(windows))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TrayMenuAction {
-    Update,
-    Settings,
-    Exit,
-}
+pub use platform::{TrayEvent, TrayManager, TrayMenuAction};
 
 #[cfg(test)]
 mod tests {
