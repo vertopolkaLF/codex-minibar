@@ -17,7 +17,7 @@ fn entry_path() -> Result<PathBuf> {
 
 /// The program to start: the AppImage when running from one (its mount
 /// point changes on every launch), otherwise this executable.
-fn executable() -> Result<PathBuf> {
+pub(super) fn executable() -> Result<PathBuf> {
     if let Some(appimage) = std::env::var_os("APPIMAGE").filter(|path| !path.is_empty()) {
         return Ok(PathBuf::from(appimage));
     }
@@ -25,7 +25,7 @@ fn executable() -> Result<PathBuf> {
 }
 
 /// Quotes an argument for a desktop entry `Exec` key.
-fn quote_exec(path: &Path) -> String {
+pub(super) fn quote_exec(path: &Path) -> String {
     let mut quoted = String::from('"');
     for character in path.display().to_string().chars() {
         if matches!(character, '"' | '`' | '$' | '\\') {

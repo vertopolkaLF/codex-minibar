@@ -218,18 +218,70 @@ impl SettingsWindow {
         ]
     }
 
-    /// Linux: applications cannot grab global keys on Wayland, so the
-    /// shortcut is a desktop keyboard shortcut running the toggle command.
+    /// Linux shortcuts are approved and configured by the desktop portal.
     #[cfg(not(windows))]
     fn popup_hotkey_row(&self, k: &mut Kit, cx: &mut Context<Self>) -> AnyElement {
         let command = crate::linux::instance::toggle_command();
         let copied = command.clone();
-        Row::new(
+        let status = crate::linux::shortcuts::snapshot();
+        let enabled = self.settings.linux_popup_shortcut_enabled;
+        let label = if !enabled {
+            crate::i18n::tr("linux-popup-shortcut-choose").to_owned()
+        } else if status.pending {
+            crate::i18n::tr("linux-popup-shortcut-waiting").to_owned()
+        } else {
+            status
+                .trigger
+                .clone()
+                .unwrap_or_else(|| crate::i18n::tr("linux-popup-shortcut-choose").to_owned())
+        };
+        let mut detail = div().flex().flex_col().gap(px(4.0));
+        if status.failed && enabled {
+            detail = detail.child(kit::text(
+                crate::i18n::tr("linux-popup-shortcut-unavailable"),
+                12.0,
+                k.theme.caution,
+            ));
+        }
+        detail = detail
+            .child(kit::text(
+                crate::i18n::tr("linux-popup-shortcut-description"),
+                12.0,
+                k.theme.text_secondary,
+            ))
+            .child(kit::text(command, 12.0, k.theme.text_secondary));
+        let mut row = Row::new(
             "general-popup-hotkey-row",
             crate::i18n::tr("popup-shortcut"),
         )
-        .description(k, crate::i18n::tr("linux-popup-shortcut-description"))
-        .detail(kit::text(command, 12.0, k.theme.text_secondary).into_any_element())
+        .description(
+            k,
+            crate::i18n::tr("linux-popup-shortcut-native-description"),
+        )
+        .detail(detail.into_any_element());
+        if enabled {
+            row = row.trailing(
+                Button::icon_only("general-popup-hotkey-clear", "x-circle-fill")
+                    .ghost()
+                    .tooltip(crate::i18n::tr("clear-shortcut"))
+                    .on_click(Self::h(cx, |this, (), _, cx| {
+                        this.edit(cx, |settings| settings.linux_popup_shortcut_enabled = false)
+                    }))
+                    .render(k),
+            );
+        }
+        row.trailing(
+            Button::new("general-popup-hotkey", label)
+                .disabled(enabled && status.pending)
+                .on_click(Self::h(cx, |this, (), _, cx| {
+                    if this.settings.linux_popup_shortcut_enabled {
+                        crate::linux::shortcuts::configure();
+                    } else {
+                        this.edit(cx, |settings| settings.linux_popup_shortcut_enabled = true);
+                    }
+                }))
+                .render(k),
+        )
         .trailing(
             Button::icon_only("general-popup-hotkey-copy", "copy")
                 .ghost()

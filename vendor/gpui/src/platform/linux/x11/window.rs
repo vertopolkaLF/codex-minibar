@@ -61,6 +61,7 @@ x11rb::atom_manager! {
         _NET_WM_PID,
         _NET_WM_NAME,
         _NET_WM_STATE,
+        _NET_WM_STATE_ABOVE,
         _NET_WM_STATE_MAXIMIZED_VERT,
         _NET_WM_STATE_MAXIMIZED_HORZ,
         _NET_WM_STATE_FULLSCREEN,
@@ -754,8 +755,8 @@ impl Drop for X11Window {
 }
 
 enum WmHintPropertyState {
-    // Remove = 0,
-    // Add = 1,
+    Remove = 0,
+    Add = 1,
     Toggle = 2,
 }
 
@@ -1519,6 +1520,21 @@ impl PlatformWindow for X11Window {
     fn start_window_move(&self) {
         const MOVERESIZE_MOVE: u32 = 8;
         self.send_moveresize(MOVERESIZE_MOVE).log_err();
+    }
+
+    fn set_always_on_top(&self, enabled: bool) {
+        let state = self.0.state.borrow();
+        self.set_wm_hints(
+            || "X11 SendEvent to change always-on-top failed.",
+            if enabled {
+                WmHintPropertyState::Add
+            } else {
+                WmHintPropertyState::Remove
+            },
+            state.atoms._NET_WM_STATE_ABOVE,
+            xproto::AtomEnum::NONE.into(),
+        )
+        .log_err();
     }
 
     fn start_window_resize(&self, edge: ResizeEdge) {

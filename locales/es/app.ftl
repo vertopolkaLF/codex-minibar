@@ -2038,6 +2038,9 @@ time-late = { $time } de retraso
 
 # Floating usage panel
 popup-floating = Panel flotante
+linux-popup-keep-open = Mantener abierto
+linux-popup-keep-open-description = Mantener el panel abierto al cambiar de aplicación. En Wayland, haz clic derecho en la cabecera del panel y elige «Siempre encima» en el menú de ventanas del escritorio, si está disponible.
+linux-popup-unpin = Desanclar panel
 popup-floating-description = Mantén el panel abierto y arrastra su cabecera a otra posición o monitor.
 popup-always-on-top = Siempre visible
 popup-always-on-top-description = Mantener el panel encima de otras aplicaciones y abierto al cambiar de aplicación.
@@ -2148,3 +2151,7 @@ linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = Ejecut
 
 # src/settings_window/advanced.rs
 linux-add-a-game-description = Los juegos iniciados por Steam y los de las bibliotecas de Steam o Heroic se detectan solos. Añade aquí cualquier otro programa.
+linux-popup-shortcut-native-description = Elige un atajo global en el diálogo de permisos de tu escritorio. Los cambios se aplican de inmediato.
+linux-popup-shortcut-choose = Definir atajo
+linux-popup-shortcut-waiting = Esperando al escritorio…
+linux-popup-shortcut-unavailable = El escritorio no pudo configurar el atajo. Reinténtalo o añade el comando siguiente en los ajustes de teclado de tu escritorio.

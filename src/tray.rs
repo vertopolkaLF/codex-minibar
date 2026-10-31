@@ -77,17 +77,24 @@ fn widget_tooltip(widget: &TrayWidget, limits: &ProviderLimits) -> String {
         let Some(provider) = indicator.provider() else {
             continue;
         };
-        let Some(metric) = crate::widget_data::resolve_metric(
+        let metric = crate::widget_data::resolve_metric(
             provider,
             limits.get(provider),
             &indicator.metric_id,
-        ) else {
-            continue;
-        };
-        let value = percent(&metric.window, indicator.limit_value)
+        );
+        let value = metric
+            .as_ref()
+            .and_then(|metric| percent(&metric.window, indicator.limit_value))
             .map(|value| format!("{value}%"))
             .unwrap_or_else(|| "?".into());
-        let item = format!("{} {value}", metric.label);
+        let label = metric.map(|metric| metric.label).unwrap_or_else(|| {
+            provider_registry::metric_label(
+                provider.kind(),
+                limits.get(provider),
+                &indicator.metric_id,
+            )
+        });
+        let item = format!("{label} {value}");
         let source_id = provider.id();
         let title = provider.qualified_name();
         if let Some((_, _, items)) = rows
@@ -318,11 +325,17 @@ pub fn render_widget_with_accent(
         return app_icon_pixels().to_vec();
     }
     let indicators = resolve_indicators(widget, limits, accent);
-    if indicators
-        .iter()
-        .all(|indicator| indicator.displayed_percent.is_none() && indicator.reset.is_none())
-    {
+    if indicators.is_empty() {
         return app_icon_pixels().to_vec();
+    }
+    if matches!(
+        widget.presentation.canonical_percentage(),
+        TrayPresentation::StackedBars | TrayPresentation::NestedRings
+    ) && indicators
+        .iter()
+        .any(|indicator| indicator.displayed_percent.is_none())
+    {
+        return render_percentages(&indicators);
     }
     match widget.presentation.canonical_percentage() {
         TrayPresentation::StackedBars => render_bars(&indicators),
@@ -353,21 +366,25 @@ pub fn render_widget_with_accent(
                 )
             }
         }
-        _ => render_text_lines(
-            &indicators
-                .iter()
-                .map(|indicator| {
-                    (
-                        indicator
-                            .displayed_percent
-                            .map_or_else(|| "?".into(), |value| value.to_string()),
-                        indicator.color,
-                    )
-                })
-                .collect::<Vec<_>>(),
-            true,
-        ),
+        _ => render_percentages(&indicators),
     }
+}
+
+fn render_percentages(indicators: &[ResolvedIndicator]) -> Vec<u8> {
+    render_text_lines(
+        &indicators
+            .iter()
+            .map(|indicator| {
+                (
+                    indicator
+                        .displayed_percent
+                        .map_or_else(|| "?".into(), |value| value.to_string()),
+                    indicator.color,
+                )
+            })
+            .collect::<Vec<_>>(),
+        true,
+    )
 }
 
 /// Draws one line per indicator. Lines share one column centered in the icon,
@@ -874,6 +891,7 @@ mod platform {
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum TrayMenuAction {
+        ShowPopup,
         Update,
         Settings,
         Exit,
@@ -956,6 +974,10 @@ mod platform {
                 }
                 .into(),
                 ksni::MenuItem::Separator,
+                item(
+                    crate::i18n::tr("show").to_string(),
+                    TrayMenuAction::ShowPopup,
+                ),
             ];
             if self.update_available {
                 items.push(item(
@@ -1188,6 +1210,37 @@ mod platform {
         use super::*;
 
         #[test]
+        fn tray_click_and_menu_actions_reach_the_bridge() {
+            use ksni::Tray;
+
+            let mut item = Item {
+                slot: 0,
+                icon: icon_from_rgba(&vec![0; ICON_SIZE * ICON_SIZE * 4]),
+                tooltip: String::new(),
+                update_available: false,
+            };
+            item.activate(120, 30);
+            let menu = item.menu();
+            for position in [2, 3] {
+                let ksni::MenuItem::Standard(action) = &menu[position] else {
+                    panic!("expected a tray menu action");
+                };
+                assert!(action.enabled);
+                (action.activate)(&mut item);
+            }
+            assert_eq!(
+                TrayManager::new().drain_events(),
+                vec![
+                    TrayEvent::Activate(120, 30),
+                    TrayEvent::Menu(TrayMenuAction::ShowPopup),
+                    TrayEvent::Menu(TrayMenuAction::Settings),
+                ]
+            );
+            item.update_available = true;
+            assert_eq!(item.menu().len(), menu.len() + 1);
+        }
+
+        #[test]
         fn pixmaps_are_argb_in_network_order() {
             let mut rgba = vec![0u8; ICON_SIZE * ICON_SIZE * 4];
             rgba[..4].copy_from_slice(&[10, 20, 30, 40]);
@@ -1361,15 +1414,68 @@ mod tests {
     }
 
     #[test]
-    fn uses_app_icon_until_rate_limit_data_arrives() {
+    fn missing_quota_keeps_the_widget_instead_of_using_the_app_icon() {
         let mut widget = TrayWidget::custom_for_provider(crate::instances::ProviderId::from(
             ProviderKind::Codex,
         ));
-        widget.presentation = TrayPresentation::Number;
-        let pixels = render_widget(&widget, &ProviderLimits::default());
-        assert_eq!(pixels.len(), ICON_SIZE * ICON_SIZE * 4);
-        assert!(pixels.chunks_exact(4).any(|pixel| pixel[3] != 0));
-        assert_eq!(pixels, app_icon_pixels());
+        for presentation in [
+            TrayPresentation::Number,
+            TrayPresentation::StackedBars,
+            TrayPresentation::NestedRings,
+            TrayPresentation::ResetTime,
+            TrayPresentation::ResetCountdown,
+        ] {
+            widget.presentation = presentation;
+            let pixels = render_widget(&widget, &ProviderLimits::default());
+            assert_eq!(pixels.len(), ICON_SIZE * ICON_SIZE * 4);
+            assert!(pixels.chunks_exact(4).any(|pixel| pixel[3] != 0));
+            assert_ne!(pixels, app_icon_pixels());
+        }
+        let tooltip = widget_tooltip(&widget, &ProviderLimits::default());
+        assert!(tooltip.contains("Codex"));
+        assert!(tooltip.contains('?'));
+        assert_eq!(
+            render_widget(&TrayWidget::app_icon(), &ProviderLimits::default()),
+            app_icon_pixels()
+        );
+    }
+
+    #[test]
+    fn partially_missing_quota_preserves_available_values() {
+        let limits = ProviderLimits::from_entries([(
+            ProviderKind::Codex.into(),
+            RateLimits {
+                primary: LimitWindow {
+                    used_percent: Some(38),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )]);
+        let mut widget = TrayWidget::custom_for_provider(ProviderKind::Codex.into());
+        widget.indicators.push(crate::settings::TrayIndicator::new(
+            ProviderKind::Claude.into(),
+            "claude.session",
+        ));
+        let indicators = resolve_indicators(&widget, &limits, [100, 100, 100]);
+        assert!(
+            indicators
+                .iter()
+                .any(|value| value.displayed_percent.is_some())
+        );
+        assert!(
+            indicators
+                .iter()
+                .any(|value| value.displayed_percent.is_none())
+        );
+        let expected = render_percentages(&indicators);
+        for presentation in [TrayPresentation::StackedBars, TrayPresentation::NestedRings] {
+            widget.presentation = presentation;
+            assert_eq!(render_widget(&widget, &limits), expected);
+        }
+        let tooltip = widget_tooltip(&widget, &limits);
+        assert!(tooltip.contains('?'));
+        assert!(tooltip.contains("62%"));
     }
 
     #[test]

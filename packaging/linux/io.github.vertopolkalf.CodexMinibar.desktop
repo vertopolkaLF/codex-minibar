@@ -8,7 +8,7 @@ Icon=codex-minibar
 Terminal=false
 Categories=Utility;
 Keywords=codex;claude;cursor;usage;limits;tray;
-StartupWMClass=codex-minibar
+StartupWMClass=io.github.vertopolkalf.CodexMinibar
 StartupNotify=false
 Actions=Toggle;
 

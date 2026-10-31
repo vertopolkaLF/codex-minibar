@@ -2940,6 +2940,9 @@ time-late = { $time } verspätet
 
 # Floating usage panel
 popup-floating = Schwebendes Fenster
+linux-popup-keep-open = Offen halten
+linux-popup-keep-open-description = Das Panel beim Wechseln zwischen Apps offen halten. Unter Wayland mit der rechten Maustaste auf die Kopfzeile klicken und im Fenstermenü des Desktops „Immer im Vordergrund“ wählen, falls verfügbar.
+linux-popup-unpin = Panel lösen
 popup-floating-description = Das Fenster bleibt offen. Ziehen Sie es an der Kopfzeile an eine andere Position oder auf einen anderen Monitor.
 popup-always-on-top = Immer im Vordergrund
 popup-always-on-top-description = Das Fenster über anderen Anwendungen anzeigen und beim App-Wechsel offen halten.
@@ -3050,3 +3053,7 @@ linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = Führt
 
 # src/settings_window/advanced.rs
 linux-add-a-game-description = Von Steam gestartete Spiele und Spiele in Steam- oder Heroic-Bibliotheken werden selbst erkannt. Fügen Sie hier beliebige andere Programme hinzu.
+linux-popup-shortcut-native-description = Wählen Sie im Berechtigungsdialog Ihres Desktops ein globales Tastenkürzel. Änderungen gelten sofort.
+linux-popup-shortcut-choose = Tastenkürzel festlegen
+linux-popup-shortcut-waiting = Warten auf den Desktop…
+linux-popup-shortcut-unavailable = Der Desktop konnte das Tastenkürzel nicht einrichten. Versuchen Sie es erneut oder fügen Sie den folgenden Befehl in den Tastatureinstellungen Ihres Desktops hinzu.

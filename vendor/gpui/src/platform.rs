@@ -80,9 +80,9 @@ pub use semantic_version::SemanticVersion;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use test::*;
 #[cfg(target_os = "windows")]
-pub(crate) use windows::*;
-#[cfg(target_os = "windows")]
 pub use windows::set_software_rendering;
+#[cfg(target_os = "windows")]
+pub(crate) use windows::*;
 
 #[cfg(any(test, feature = "test-support"))]
 pub use test::{TestDispatcher, TestScreenCaptureSource, TestScreenCaptureStream};
@@ -481,6 +481,9 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         answers: &[PromptButton],
     ) -> Option<oneshot::Receiver<usize>>;
     fn activate(&self);
+    fn activate_with_token(&self, _token: String) {
+        self.activate();
+    }
     fn is_active(&self) -> bool;
     fn is_hovered(&self) -> bool;
     fn set_title(&mut self, title: &str);
@@ -535,6 +538,7 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     }
     fn request_decorations(&self, _decorations: WindowDecorations) {}
     fn show_window_menu(&self, _position: Point<Pixels>) {}
+    fn set_always_on_top(&self, _enabled: bool) {}
     fn start_window_move(&self) {}
     fn start_window_resize(&self, _edge: ResizeEdge) {}
     fn window_decorations(&self) -> Decorations {

@@ -2017,6 +2017,9 @@ time-late = 延迟 { $time }
 
 # Floating usage panel
 popup-floating = 浮动面板
+linux-popup-keep-open = 保持打开
+linux-popup-keep-open-description = 切换应用时保持面板打开。在 Wayland 中，右键点击面板标题栏，如果桌面窗口菜单中有“总在最前”，请选择该选项。
+linux-popup-unpin = 取消固定面板
 popup-floating-description = 保持面板打开，拖动标题栏可移动到其他位置或显示器。
 popup-always-on-top = 始终置顶
 popup-always-on-top-description = 将面板显示在其他应用上方，切换应用时保持打开。
@@ -2127,3 +2130,7 @@ linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = 为 { 
 
 # src/settings_window/advanced.rs
 linux-add-a-game-description = 由 Steam 启动的游戏以及 Steam 或 Heroic 库中的游戏会被自动识别。其他程序请在此添加。
+linux-popup-shortcut-native-description = 在桌面的权限对话框中选择全局快捷键。更改会立即生效。
+linux-popup-shortcut-choose = 设置快捷键
+linux-popup-shortcut-waiting = 正在等待桌面响应…
+linux-popup-shortcut-unavailable = 桌面无法配置快捷键。请重试，或在桌面的键盘设置中添加以下命令。

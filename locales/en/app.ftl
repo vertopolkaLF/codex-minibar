@@ -2939,6 +2939,9 @@ time-late = { $time } late
 
 # Floating usage panel
 popup-floating = Floating panel
+linux-popup-keep-open = Keep open
+linux-popup-keep-open-description = Keep the popup open when switching apps. On Wayland, right-click the panel header and choose Always on Top in your desktop's window menu, if available.
+linux-popup-unpin = Unpin panel
 popup-floating-description = Keep the panel open and drag its header to another position or monitor.
 popup-always-on-top = Always on top
 popup-always-on-top-description = Keep the panel above other applications and open when switching apps.
@@ -3001,6 +3004,10 @@ start-at-login = Start at login
 
 # src/settings_window/general.rs
 linux-popup-shortcut-description = Add a custom shortcut in your desktop's keyboard settings that runs this command to show or hide the popup.
+linux-popup-shortcut-native-description = Choose a system-wide shortcut in your desktop's permission dialog. Changes apply immediately.
+linux-popup-shortcut-choose = Set shortcut
+linux-popup-shortcut-waiting = Waiting for your desktop…
+linux-popup-shortcut-unavailable = The desktop could not configure the shortcut. Retry, or add the command below in your desktop's keyboard settings.
 
 # src/settings_window/general.rs
 copy-command = Copy command

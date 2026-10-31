@@ -2273,6 +2273,7 @@ pub struct Settings {
     /// System-wide shortcut that shows or hides the popup. None leaves every
     /// key combination to other applications.
     pub popup_hotkey: Option<crate::hotkey::Hotkey>,
+    pub linux_popup_shortcut_enabled: bool,
     pub tray_widgets: Vec<TrayWidget>,
     /// Widgets drawn inside the Windows taskbar.
     pub taskbar: TaskbarSettings,
@@ -2355,6 +2356,7 @@ impl Default for Settings {
             popup_height_dip: None,
             popup_position: None,
             popup_hotkey: None,
+            linux_popup_shortcut_enabled: false,
             // An empty list intentionally means "show the ordinary app icon".
             tray_widgets: Vec::new(),
             taskbar: TaskbarSettings::default(),
@@ -3985,6 +3987,18 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linux_popup_shortcut_defaults_off_and_roundtrips() {
+        let mut settings: Settings = toml::from_str("onboarding_completed = true").unwrap();
+        assert!(!settings.linux_popup_shortcut_enabled);
+        settings.linux_popup_shortcut_enabled = true;
+        let restored: Settings = toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
+        assert!(restored.linux_popup_shortcut_enabled);
+        settings.linux_popup_shortcut_enabled = false;
+        let restored: Settings = toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
+        assert!(!restored.linux_popup_shortcut_enabled);
+    }
 
     fn id(kind: ProviderKind) -> ProviderId {
         ProviderId::primary(kind)

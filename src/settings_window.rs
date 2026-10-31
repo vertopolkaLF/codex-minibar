@@ -362,15 +362,10 @@ fn window_options(
         is_minimizable: true,
         display_id: None,
         window_background: WindowBackgroundAppearance::Opaque,
-        // Linux matches windows to `codex-minibar.desktop` by this id.
-        app_id: Some(
-            if cfg!(windows) {
-                "CodexMinibar"
-            } else {
-                "codex-minibar"
-            }
-            .into(),
-        ),
+        #[cfg(windows)]
+        app_id: Some("CodexMinibar".into()),
+        #[cfg(not(windows))]
+        app_id: Some(crate::linux::identity::APP_ID.into()),
         window_min_size: Some(size(px(min.0), px(min.1))),
         window_max_size: Some(size(px(max.0), px(max.1))),
         // Linux: our own caption is the title bar. GPUI would otherwise ask

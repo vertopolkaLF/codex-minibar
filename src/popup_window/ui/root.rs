@@ -411,6 +411,7 @@ impl PopupRoot {
                     this.host.was_active = true;
                 } else if std::mem::take(&mut this.host.was_active)
                     && this.host.phase == Phase::Open
+                    && !this.ui.popup_floating
                     && !crate::popup::is_pinned()
                     && !crate::settings_window::is_open()
                 {
@@ -544,6 +545,8 @@ impl PopupRoot {
         cx: &mut Context<Self>,
     ) {
         let accent_changed = ui.accent_color != self.ui.accent_color;
+        #[cfg(not(windows))]
+        let pinned_changed = ui.popup_pinned != self.ui.popup_pinned;
         let same_account = |provider| {
             ui.instance(provider)
                 .zip(self.ui.instance(provider))
@@ -569,6 +572,10 @@ impl PopupRoot {
         crate::theme::set_animations_enabled(self.ui.animations_enabled);
         self.ui.time_format.apply();
         if let Some(window) = window {
+            #[cfg(not(windows))]
+            if pinned_changed {
+                window.set_always_on_top(self.ui.popup_pinned);
+            }
             self.refresh_palette(window);
         }
         if self.ui.refreshing && self.refresh_started.is_none() {

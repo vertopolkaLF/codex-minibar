@@ -1502,8 +1502,6 @@ fn announced_reset_rows_track_reception_per_instance() {
 #[test]
 fn action_bar_visibility_setting_only_controls_the_regular_popup() {
     for floating in [false, true] {
-        // Linux has no floating popup: the setting is ignored there.
-        let effective = floating && cfg!(windows);
         for shown in [false, true] {
             let settings = Settings {
                 popup_floating: floating,
@@ -1511,15 +1509,17 @@ fn action_bar_visibility_setting_only_controls_the_regular_popup() {
                 ..Settings::default()
             };
             let mut ui = UiState::popup_layout_from_settings(&settings);
-            assert_eq!(ui.compact_bar_visible(), effective || shown);
+            assert_eq!(ui.popup_floating, floating);
+            assert_eq!(ui.compact_bar_visible(), floating || shown);
             let updated = Settings {
-                popup_floating: floating,
+                popup_floating: !floating,
                 show_popup_action_bar: !shown,
                 ..settings
             };
             ui.apply_settings(&updated);
+            assert_eq!(ui.popup_floating, !floating);
             assert_eq!(ui.show_popup_action_bar, !shown);
-            assert_eq!(ui.compact_bar_visible(), effective || !shown);
+            assert_eq!(ui.compact_bar_visible(), !floating || !shown);
         }
     }
 }

@@ -969,13 +969,26 @@ fn pump_popup_hotkey(
     // Settings releases the shortcut while it records a new one; the flag
     // cannot outlive the window that set it.
     let recording = crate::hotkey::is_suspended() && crate::settings_window::is_open();
+    #[cfg(windows)]
     if hotkey.sync(settings.popup_hotkey.filter(|_| !recording)) {
         crate::settings_window::refresh_hotkey_status();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = hotkey;
+        crate::linux::shortcuts::sync(settings.linux_popup_shortcut_enabled);
+        if !settings.linux_popup_shortcut_enabled {
+            let _ = crate::hotkey::take_pressed();
+            let _ = crate::linux::shortcuts::take_activation_token();
+            return;
+        }
     }
     if !crate::hotkey::take_pressed() || recording {
         return;
     }
     if popup::is_visible() && !popup::is_closing() {
+        #[cfg(not(windows))]
+        let _ = crate::linux::shortcuts::take_activation_token();
         // Settings uses the popup as a live preview; keep it, as a tray
         // click does.
         if !crate::settings_window::is_open() {
@@ -1150,6 +1163,10 @@ pub(super) fn pump_tray_and_dismiss(
                         popup::show_near(x, y);
                     }
                 }
+            }
+            TrayEvent::Menu(TrayMenuAction::ShowPopup) => {
+                flush_popup_ui(ui);
+                popup::show_near_cursor();
             }
             TrayEvent::Menu(TrayMenuAction::Update) => {
                 // Failures are reported on the update card.

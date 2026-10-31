@@ -520,8 +520,7 @@ impl UiState {
             grouped_tab_selection: settings.grouped_tab_selection.clone(),
             popup_two_columns: settings.popup_two_columns,
             show_popup_action_bar: settings.show_popup_action_bar,
-            // Floating needs window placement, which Linux apps lack.
-            popup_floating: settings.popup_floating && cfg!(windows),
+            popup_floating: settings.popup_floating,
             popup_home_order: settings.popup_home_order.clone(),
             popup_home_right_column: settings.popup_home_right_column.clone(),
             popup_home_card_layouts: settings.popup_home_card_layouts.clone(),
@@ -557,7 +556,7 @@ impl UiState {
         self.show_edit_home_button = settings.show_edit_home_button;
         self.show_popup_action_bar = settings.show_popup_action_bar;
         self.popup_pinned = settings.popup_pinned;
-        self.popup_floating = settings.popup_floating && cfg!(windows);
+        self.popup_floating = settings.popup_floating;
         self.popup_height_dip = settings.popup_height_dip;
         self.popup_position = settings.popup_position.clone();
         self.instances = settings.instances.clone();

@@ -2946,6 +2946,9 @@ time-late = опоздание { $time }
 
 # Floating usage panel
 popup-floating = Плавающая панель
+linux-popup-keep-open = Оставлять открытой
+linux-popup-keep-open-description = Не закрывать панель при переключении приложений. В Wayland нажмите правой кнопкой на заголовок панели и выберите «Поверх остальных» в системном меню окна, если этот пункт доступен.
+linux-popup-unpin = Открепить панель
 popup-floating-description = Панель остаётся открытой; перетаскивайте её за заголовок в любое место или на другой монитор.
 popup-always-on-top = Поверх всех окон
 popup-always-on-top-description = Показывать панель поверх других приложений и не закрывать при переключении между ними.
@@ -3008,6 +3011,10 @@ start-at-login = Запускать при входе в систему
 
 # src/settings_window/general.rs
 linux-popup-shortcut-description = Добавьте в настройках клавиатуры рабочего стола своё сочетание клавиш, запускающее эту команду, чтобы показывать и скрывать окно.
+linux-popup-shortcut-native-description = Выберите глобальное сочетание клавиш в системном диалоге разрешений. Изменения применяются сразу.
+linux-popup-shortcut-choose = Задать сочетание
+linux-popup-shortcut-waiting = Ожидание рабочего стола…
+linux-popup-shortcut-unavailable = Рабочий стол не смог настроить сочетание. Повторите попытку или добавьте команду ниже в настройках клавиатуры рабочего стола.
 
 # src/settings_window/general.rs
 copy-command = Скопировать команду

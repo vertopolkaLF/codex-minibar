@@ -38,6 +38,7 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let show_edit_button = self.settings.show_edit_home_button;
+        let topmost = cfg!(windows) || cx.compositor_name() == "X11";
         let floating = kit::card_of(k, |k| {
             let reset = Button::new(
                 "popup-reset-position",
@@ -68,8 +69,16 @@ impl SettingsWindow {
                     k,
                     cx,
                     "popup-always-on-top",
-                    crate::i18n::tr("popup-always-on-top"),
-                    Some(crate::i18n::tr("popup-always-on-top-description")),
+                    crate::i18n::tr(if topmost {
+                        "popup-always-on-top"
+                    } else {
+                        "linux-popup-keep-open"
+                    }),
+                    Some(crate::i18n::tr(if topmost {
+                        "popup-always-on-top-description"
+                    } else {
+                        "linux-popup-keep-open-description"
+                    })),
                     |s| s.popup_pinned,
                     |s, v| s.popup_pinned = v,
                 ),
@@ -78,11 +87,8 @@ impl SettingsWindow {
                     .trailing(reset)
                     .render(k),
             ];
-            // Linux apps cannot move or place their windows on Wayland, so
-            // only the pin (keep open when focus moves away) applies there.
             if !cfg!(windows) {
                 rows.remove(2);
-                rows.remove(0);
             }
             rows
         });

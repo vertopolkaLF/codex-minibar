@@ -394,12 +394,12 @@ updated = { "" }
 refresh-last-updated-relative = { "" }
 
 # English source:
-# popup-pin = Keep open
-popup-pin = Pin on top and keep open
+# popup-pin = Pin on top and keep open
+popup-pin = { "" }
 
 # English source:
-# popup-unpin = Close when clicking outside
-popup-unpin = Unpin and close on focus loss
+# popup-unpin = Unpin and close on focus loss
+popup-unpin = { "" }
 
 # English source:
 # edit-home = Edit Home
@@ -982,6 +982,70 @@ every-setting-returns-to-its-default-and-the-welcome-flow-opens-a = { "" }
 cancel = { "" }
 
 # English source:
+# use-reset = Use reset
+use-reset = { "" }
+
+# English source:
+# use-reset-short = Use
+use-reset-short = { "" }
+
+# English source:
+# reset-using = Using…
+reset-using = { "" }
+
+# English source:
+# reset-confirm-message = Use one banked reset for this account? This clears eligible rate-limit windows and cannot be undone.
+reset-confirm-message = { "" }
+
+# English source:
+# reset-applied = Reset applied. Your eligible limits have been cleared.
+reset-applied = { "" }
+
+# English source:
+# reset-nothing-to-reset = Nothing to reset right now.
+reset-nothing-to-reset = { "" }
+
+# English source:
+# reset-no-credit = No usable reset credit left.
+reset-no-credit = { "" }
+
+# English source:
+# reset-already-redeemed = This reset was already used.
+reset-already-redeemed = { "" }
+
+# English source:
+# reset-unconfirmed = The reset could not be confirmed. Retry to check the same request.
+reset-unconfirmed = { "" }
+
+# English source:
+# reset-applied-refresh-failed = Reset applied, but the new limits could not be loaded. Refresh to check.
+reset-applied-refresh-failed = { "" }
+
+# English source:
+# reset-in-progress = A reset is already in progress for this account.
+reset-in-progress = { "" }
+
+# English source:
+# reset-cooldown = Resets are cooling down. Try again later.
+reset-cooldown = { "" }
+
+# English source:
+# reset-rate-limited = Too many reset requests. Try again later.
+reset-rate-limited = { "" }
+
+# English source:
+# reset-sign-in-again = Sign in to Claude again to use resets.
+reset-sign-in-again = { "" }
+
+# English source:
+# reset-cli-login-required = Use the matching Claude CLI login to redeem resets.
+reset-cli-login-required = { "" }
+
+# English source:
+# reset-invalid-grant = Claude returned an invalid reset credit.
+reset-invalid-grant = { "" }
+
+# English source:
 # windows = Windows
 windows = { "" }
 
@@ -1010,8 +1074,6 @@ accent-color = { "" }
 windows-follows-your-system-accent = { "" }
 
 # English source:
-
-# English source:
 # font = Font
 font = { "" }
 
@@ -1026,10 +1088,6 @@ no-matching-fonts = { "" }
 # English source:
 # windows-default = Windows default
 windows-default = { "" }
-
-# English source:
-
-# English source:
 
 # English source:
 # monochrome = Monochrome
@@ -3310,347 +3368,277 @@ range-90d = { "" }
 # home-usage-title = Usage
 home-usage-title = { "" }
 
-# OpenRouter key administration
-
 # English source:
 # could-not-reach-openrouter = Could not reach OpenRouter
 could-not-reach-openrouter = { "" }
-
 
 # English source:
 # openrouter-keys-title = Keys
 openrouter-keys-title = { "" }
 
-
 # English source:
 # openrouter-keys-new = New key
 openrouter-keys-new = { "" }
-
 
 # English source:
 # openrouter-keys-new-title = New key
 openrouter-keys-new-title = { "" }
 
-
 # English source:
 # openrouter-keys-back = Back
 openrouter-keys-back = { "" }
-
 
 # English source:
 # openrouter-keys-updating = Updating…
 openrouter-keys-updating = { "" }
 
-
 # English source:
 # openrouter-keys-loading = Loading keys…
 openrouter-keys-loading = { "" }
-
 
 # English source:
 # openrouter-keys-load-failed = Could not load keys
 openrouter-keys-load-failed = { "" }
 
-
 # English source:
 # openrouter-keys-retry = Retry
 openrouter-keys-retry = { "" }
-
 
 # English source:
 # openrouter-keys-empty = This account has no keys yet.
 openrouter-keys-empty = { "" }
 
-
 # English source:
 # openrouter-keys-this-app = This app
 openrouter-keys-this-app = { "" }
-
 
 # English source:
 # openrouter-keys-no-limit = No limit
 openrouter-keys-no-limit = { "" }
 
-
 # English source:
 # openrouter-keys-of-limit = { $amount } of { $limit }
 openrouter-keys-of-limit = { "" }
-
 
 # English source:
 # openrouter-keys-resets-daily = resets daily
 openrouter-keys-resets-daily = { "" }
 
-
 # English source:
 # openrouter-keys-resets-weekly = resets weekly
 openrouter-keys-resets-weekly = { "" }
-
 
 # English source:
 # openrouter-keys-resets-monthly = resets monthly
 openrouter-keys-resets-monthly = { "" }
 
-
 # English source:
 # openrouter-keys-expires-on = expires { $date }
 openrouter-keys-expires-on = { "" }
-
 
 # English source:
 # openrouter-keys-expired-on = expired { $date }
 openrouter-keys-expired-on = { "" }
 
-
 # English source:
 # openrouter-keys-today = today { $amount }
 openrouter-keys-today = { "" }
-
 
 # English source:
 # openrouter-keys-usage-breakdown = Today { $today } · week { $week } · month { $month } · total { $total }
 openrouter-keys-usage-breakdown = { "" }
 
-
 # English source:
 # openrouter-keys-show-all = Show all { $count } keys
 openrouter-keys-show-all = { "" }
-
 
 # English source:
 # openrouter-keys-show-fewer = Show fewer
 openrouter-keys-show-fewer = { "" }
 
-
 # English source:
 # openrouter-keys-spending-limit = Spending limit
 openrouter-keys-spending-limit = { "" }
-
 
 # English source:
 # openrouter-keys-limit-hint = Leave empty for no limit.
 openrouter-keys-limit-hint = { "" }
 
-
 # English source:
 # openrouter-keys-resets = Resets
 openrouter-keys-resets = { "" }
-
 
 # English source:
 # openrouter-keys-reset-never = Never
 openrouter-keys-reset-never = { "" }
 
-
 # English source:
 # openrouter-keys-reset-daily = Daily
 openrouter-keys-reset-daily = { "" }
-
 
 # English source:
 # openrouter-keys-reset-weekly = Weekly
 openrouter-keys-reset-weekly = { "" }
 
-
 # English source:
 # openrouter-keys-reset-monthly = Monthly
 openrouter-keys-reset-monthly = { "" }
-
 
 # English source:
 # openrouter-keys-byok = Count BYOK usage toward limit
 openrouter-keys-byok = { "" }
 
-
 # English source:
 # openrouter-keys-enabled = Enabled
 openrouter-keys-enabled = { "" }
-
 
 # English source:
 # openrouter-keys-delete = Delete
 openrouter-keys-delete = { "" }
 
-
 # English source:
 # openrouter-keys-delete-tracked = Minibar also stops tracking it.
 openrouter-keys-delete-tracked = { "" }
-
 
 # English source:
 # openrouter-keys-saving = Saving…
 openrouter-keys-saving = { "" }
 
-
 # English source:
 # openrouter-keys-delete-title = Delete “{ $name }”?
 openrouter-keys-delete-title = { "" }
-
 
 # English source:
 # openrouter-keys-delete-message = Anything still using this key stops working right away. This can't be undone; disabling the key is reversible.
 openrouter-keys-delete-message = { "" }
 
-
 # English source:
 # openrouter-keys-keep = Keep key
 openrouter-keys-keep = { "" }
-
 
 # English source:
 # openrouter-keys-delete-confirm = Delete key
 openrouter-keys-delete-confirm = { "" }
 
-
 # English source:
 # openrouter-keys-deleting = Deleting…
 openrouter-keys-deleting = { "" }
-
 
 # English source:
 # openrouter-keys-name = Name
 openrouter-keys-name = { "" }
 
-
 # English source:
 # openrouter-keys-name-placeholder = e.g. laptop-cursor
 openrouter-keys-name-placeholder = { "" }
-
 
 # English source:
 # openrouter-keys-name-required = Enter a name for the key.
 openrouter-keys-name-required = { "" }
 
-
 # English source:
 # openrouter-keys-invalid-amount = Enter a dollar amount like 25 or 12.50.
 openrouter-keys-invalid-amount = { "" }
-
 
 # English source:
 # openrouter-keys-expires = Expires
 openrouter-keys-expires = { "" }
 
-
 # English source:
 # openrouter-keys-expires-1-hour = 1 hour
 openrouter-keys-expires-1-hour = { "" }
-
 
 # English source:
 # openrouter-keys-expires-1-day = 1 day
 openrouter-keys-expires-1-day = { "" }
 
-
 # English source:
 # openrouter-keys-expires-7-days = 7 days
 openrouter-keys-expires-7-days = { "" }
-
 
 # English source:
 # openrouter-keys-expires-30-days = 30 days
 openrouter-keys-expires-30-days = { "" }
 
-
 # English source:
 # openrouter-keys-expires-90-days = 90 days
 openrouter-keys-expires-90-days = { "" }
-
 
 # English source:
 # openrouter-keys-expires-180-days = 180 days
 openrouter-keys-expires-180-days = { "" }
 
-
 # English source:
 # openrouter-keys-expires-1-year = 1 year
 openrouter-keys-expires-1-year = { "" }
-
 
 # English source:
 # openrouter-keys-expires-never = No expiration
 openrouter-keys-expires-never = { "" }
 
-
 # English source:
 # openrouter-keys-track = Track this key in Minibar
 openrouter-keys-track = { "" }
-
 
 # English source:
 # openrouter-keys-create = Create key
 openrouter-keys-create = { "" }
 
-
 # English source:
 # openrouter-keys-creating = Creating…
 openrouter-keys-creating = { "" }
-
 
 # English source:
 # openrouter-keys-created = Key created
 openrouter-keys-created = { "" }
 
-
 # English source:
 # openrouter-keys-copy = Copy key
 openrouter-keys-copy = { "" }
-
 
 # English source:
 # openrouter-keys-copied = Copied
 openrouter-keys-copied = { "" }
 
-
 # English source:
 # openrouter-keys-done = Done
 openrouter-keys-done = { "" }
-
 
 # English source:
 # openrouter-keys-once-title = You won't see this key again
 openrouter-keys-once-title = { "" }
 
-
 # English source:
 # openrouter-keys-once-message = OpenRouter shows a new key only once. Copy it now.
 openrouter-keys-once-message = { "" }
-
 
 # English source:
 # openrouter-keys-pinned = The popup stays open until you press Done.
 openrouter-keys-pinned = { "" }
 
-
 # English source:
 # openrouter-keys-tracking = Adding the key to Minibar…
 openrouter-keys-tracking = { "" }
-
 
 # English source:
 # openrouter-keys-tracked = Minibar now tracks this key.
 openrouter-keys-tracked = { "" }
 
-
 # English source:
 # openrouter-keys-track-failed = Could not add the key to Minibar: { $error }
 openrouter-keys-track-failed = { "" }
-
 
 # English source:
 # openrouter-keys-no-management-key = This account has no management key.
 openrouter-keys-no-management-key = { "" }
 
-
 # English source:
 # openrouter-keys-management-key-rejected = OpenRouter rejected the management key. Replace it in Settings.
 openrouter-keys-management-key-rejected = { "" }
 
-
 # English source:
 # openrouter-keys-not-a-management-key = This key can't manage other keys. Use a management key.
 openrouter-keys-not-a-management-key = { "" }
-
 
 # English source:
 # openrouter-keys-key-not-found = This key no longer exists.
@@ -3687,71 +3675,6 @@ notification-sounds = { "" }
 # English source:
 # plays-a-short-sound-with-each-notification = Plays a short sound with each notification
 plays-a-short-sound-with-each-notification = { "" }
-
-
-# English source:
-# use-reset = Use reset
-use-reset = { "" }
-
-# English source:
-# use-reset-short = Use
-use-reset-short = { "" }
-
-# English source:
-# reset-using = Using…
-reset-using = { "" }
-
-# English source:
-# reset-confirm-message = Use one banked reset for this account? This clears eligible rate-limit windows and cannot be undone.
-reset-confirm-message = { "" }
-
-# English source:
-# reset-applied = Reset applied. Your eligible limits have been cleared.
-reset-applied = { "" }
-
-# English source:
-# reset-nothing-to-reset = Nothing to reset right now.
-reset-nothing-to-reset = { "" }
-
-# English source:
-# reset-no-credit = No usable reset credit left.
-reset-no-credit = { "" }
-
-# English source:
-# reset-already-redeemed = This reset was already used.
-reset-already-redeemed = { "" }
-
-# English source:
-# reset-unconfirmed = The reset could not be confirmed. Retry to check the same request.
-reset-unconfirmed = { "" }
-
-# English source:
-# reset-applied-refresh-failed = Reset applied, but the new limits could not be loaded. Refresh to check.
-reset-applied-refresh-failed = { "" }
-
-# English source:
-# reset-in-progress = A reset is already in progress for this account.
-reset-in-progress = { "" }
-
-# English source:
-# reset-cooldown = Resets are cooling down. Try again later.
-reset-cooldown = { "" }
-
-# English source:
-# reset-rate-limited = Too many reset requests. Try again later.
-reset-rate-limited = { "" }
-
-# English source:
-# reset-sign-in-again = Sign in to Claude again to use resets.
-reset-sign-in-again = { "" }
-
-# English source:
-# reset-cli-login-required = Use the matching Claude CLI login to redeem resets.
-reset-cli-login-required = { "" }
-
-# English source:
-# reset-invalid-grant = Claude returned an invalid reset credit.
-reset-invalid-grant = { "" }
 
 # English source:
 # update-downloading = Downloading update
@@ -3873,6 +3796,7 @@ a-short-summary-of-the-release-once-it-s-installed = { "" }
 # view = View
 view = { "" }
 
+# English source:
 # popup-shortcut = Popup shortcut
 popup-shortcut = { "" }
 
@@ -3960,7 +3884,6 @@ taskbar-show-provider-icon = { "" }
 # taskbar-style-glance = Glance
 taskbar-style-glance = { "" }
 
-
 # English source:
 # taskbar-style-glance-hint = The provider icon beside two lines of text, like the weather button.
 taskbar-style-glance-hint = { "" }
@@ -3972,7 +3895,6 @@ taskbar-style-rings-hint = { "" }
 # English source:
 # taskbar-style-bars-hint = Thin progress bars stacked beside the provider icon.
 taskbar-style-bars-hint = { "" }
-
 
 # English source:
 # taskbar-menu-open = Open Codex Minibar
@@ -4001,7 +3923,6 @@ taskbar-card-resets = { "" }
 # English source:
 # taskbar-card-no-data = Waiting for data
 taskbar-card-no-data = { "" }
-
 
 # English source:
 # short-5h = 5h
@@ -4323,19 +4244,55 @@ label-possible-reset-before-when-within-countdown = { "" }
 # time-late = { $time } late
 time-late = { "" }
 
-# Floating usage panel
-popup-floating = Floating panel
-popup-floating-description = Keep the panel open and drag its header to another position or monitor.
-popup-always-on-top = Always on top
-popup-always-on-top-description = Keep the panel above other applications and open when switching apps.
-popup-position = Panel position
-popup-position-description = The position is remembered between sessions.
-popup-reset-position = Reset position
-popup-drag-header = Drag to move
-popup-close = Close panel
+# English source:
+# popup-floating = Floating panel
+popup-floating = { "" }
+# linux-popup-keep-open = Keep open
+linux-popup-keep-open = { "" }
+# linux-popup-keep-open-description = Keep the popup open when switching apps. On Wayland, right-click the panel header and choose Always on Top in your desktop's window menu, if available.
+linux-popup-keep-open-description = { "" }
+# linux-popup-unpin = Unpin panel
+linux-popup-unpin = { "" }
 
-show-popup-action-bar = Show popup action bar
-show-popup-action-bar-description = Show the app title and action buttons in the regular popup. Floating panels always show this bar.
+# English source:
+# popup-floating-description = Keep the panel open and drag its header to another position or monitor.
+popup-floating-description = { "" }
+
+# English source:
+# popup-always-on-top = Always on top
+popup-always-on-top = { "" }
+
+# English source:
+# popup-always-on-top-description = Keep the panel above other applications and open when switching apps.
+popup-always-on-top-description = { "" }
+
+# English source:
+# popup-position = Panel position
+popup-position = { "" }
+
+# English source:
+# popup-position-description = The position is remembered between sessions.
+popup-position-description = { "" }
+
+# English source:
+# popup-reset-position = Reset position
+popup-reset-position = { "" }
+
+# English source:
+# popup-drag-header = Drag to move
+popup-drag-header = { "" }
+
+# English source:
+# popup-close = Close panel
+popup-close = { "" }
+
+# English source:
+# show-popup-action-bar = Show popup action bar
+show-popup-action-bar = { "" }
+
+# English source:
+# show-popup-action-bar-description = Show the app title and action buttons in the regular popup. Floating panels always show this bar.
+show-popup-action-bar-description = { "" }
 
 # English source:
 # use-banked-resets-automatically = Use banked resets automatically
@@ -4404,6 +4361,22 @@ start-at-login = { "" }
 # English source:
 # linux-popup-shortcut-description = Add a custom shortcut in your desktop's keyboard settings that runs this command to show or hide the popup.
 linux-popup-shortcut-description = { "" }
+
+# English source:
+# linux-popup-shortcut-native-description = Choose a system-wide shortcut in your desktop's permission dialog. Changes apply immediately.
+linux-popup-shortcut-native-description = { "" }
+
+# English source:
+# linux-popup-shortcut-choose = Set shortcut
+linux-popup-shortcut-choose = { "" }
+
+# English source:
+# linux-popup-shortcut-waiting = Waiting for your desktop…
+linux-popup-shortcut-waiting = { "" }
+
+# English source:
+# linux-popup-shortcut-unavailable = The desktop could not configure the shortcut. Retry, or add the command below in your desktop's keyboard settings.
+linux-popup-shortcut-unavailable = { "" }
 
 # English source:
 # copy-command = Copy command

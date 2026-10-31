@@ -186,6 +186,12 @@ pub fn take_pressed() -> bool {
     PRESSED.swap(false, Ordering::SeqCst)
 }
 
+#[cfg(not(windows))]
+pub(crate) fn notify_pressed() {
+    PRESSED.store(true, Ordering::SeqCst);
+    crate::linux::wake::wake();
+}
+
 /// Owns the registration. Must live on, and be dropped by, the thread whose
 /// message queue receives `WM_HOTKEY` (the bridge thread).
 #[derive(Default)]

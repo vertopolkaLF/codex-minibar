@@ -2947,6 +2947,9 @@ time-late = { $time } de retard
 
 # Floating usage panel
 popup-floating = Panneau flottant
+linux-popup-keep-open = Garder ouvert
+linux-popup-keep-open-description = Garder le panneau ouvert lors du changement d’application. Sous Wayland, faites un clic droit sur son en-tête et choisissez « Toujours au premier plan » dans le menu de fenêtre du bureau, si disponible.
+linux-popup-unpin = Détacher le panneau
 popup-floating-description = Gardez le panneau ouvert et faites glisser son en-tête vers une autre position ou un autre écran.
 popup-always-on-top = Toujours au premier plan
 popup-always-on-top-description = Garder le panneau au-dessus des autres applications et ouvert lors du changement d’application.
@@ -3057,3 +3060,7 @@ linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = Exécu
 
 # src/settings_window/advanced.rs
 linux-add-a-game-description = Les jeux lancés par Steam et ceux des bibliothèques Steam ou Heroic sont détectés automatiquement. Ajoutez ici tout autre programme.
+linux-popup-shortcut-native-description = Choisissez un raccourci global dans la boîte de dialogue d’autorisation du bureau. Les modifications s’appliquent immédiatement.
+linux-popup-shortcut-choose = Définir le raccourci
+linux-popup-shortcut-waiting = En attente du bureau…
+linux-popup-shortcut-unavailable = Le bureau n’a pas pu configurer le raccourci. Réessayez ou ajoutez la commande ci-dessous dans les paramètres du clavier de votre bureau.

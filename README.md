@@ -265,14 +265,23 @@ most panels show it out of the box. On GNOME, enable the **AppIndicator and KSta
 Support** extension (Ubuntu ships it enabled). Without a tray, launch `codex-minibar` again
 to open the popup.
 
+Click the tray icon to toggle the popup. On panels that open a menu instead (such as
+GNOME AppIndicator), choose **Show** to open the popup or **Settings** to open Settings.
+Closing the popup or Settings leaves the app running in the tray.
+
 Differences from Windows:
 
 - **Popup placement.** On X11 the popup opens next to the tray icon. Wayland does not let apps
   place their windows, so the compositor positions it. The popup closes when it loses focus or
   you press Esc, unless it is pinned.
-- **Global shortcut.** Wayland apps cannot grab keys. Add a custom shortcut in your desktop's
-  keyboard settings that runs `codex-minibar --toggle`; **Settings → General** shows the exact
-  command.
+- **Global shortcut.** In **Settings → General → Popup shortcut**, choose **Set shortcut**
+  and approve the desktop's shortcut dialog. The desktop remembers the chosen combination;
+  enabling, changing and removing it take effect immediately. Desktops without the Global
+  Shortcuts portal can use a custom keyboard shortcut running `codex-minibar --toggle`;
+  the same settings row shows the exact command and a copy button.
+  Native shortcut registration uses the desktop ID `io.github.vertopolkalf.CodexMinibar`.
+  Starting an unpackaged binary creates a matching launcher
+  in the XDG user applications directory if no installed entry exists.
 - **Secrets.** API keys and saved sessions are encrypted with a key kept in your login keyring
   (Secret Service). Without a keyring service the key is kept in a file only you can read.
 - **Notifications** go to your desktop's notification server and follow its Do Not Disturb.
@@ -280,8 +289,15 @@ Differences from Windows:
   libraries.
 - **Updates** link to the release page; install them with your package manager or the new
   tarball.
+- **Floating panel.** Enable it in Settings → Customize to keep the popup open when
+  switching apps and drag its header to move it. Wayland lets the compositor place
+  new windows, so saved panel positions are only available on Windows. On X11,
+  the pin also requests Always on Top from the window manager. On Wayland, it is
+  labeled Keep open: stacking is controlled by the desktop. Right-click the panel
+  header to open the native window menu and select Always on Top where available
+  (including GNOME). This desktop-owned state is separate from the Keep open setting.
 - **Windows-only features:** taskbar widgets, the Command Palette and Stream Deck integrations,
-  Acrylic/Mica backgrounds, the floating popup, reading the Claude desktop app's token cache
+  Acrylic/Mica backgrounds, reading the Claude desktop app's token cache
   and reusing the Antigravity Windows sign-in.
 
 ## Updating

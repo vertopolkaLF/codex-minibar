@@ -31,8 +31,8 @@ mkdir -p "$dist"
 install_tree() {
     local prefix="$1"
     install -Dm755 "$binary" "$prefix/bin/codex-minibar"
-    install -Dm644 packaging/linux/codex-minibar.desktop \
-        "$prefix/share/applications/codex-minibar.desktop"
+    install -Dm644 packaging/linux/io.github.vertopolkalf.CodexMinibar.desktop \
+        "$prefix/share/applications/io.github.vertopolkalf.CodexMinibar.desktop"
     for size in 16 24 32 48 64 128 256 512; do
         install -Dm644 "assets/icons/app-icon-$size.png" \
             "$prefix/share/icons/hicolor/${size}x${size}/apps/codex-minibar.png"

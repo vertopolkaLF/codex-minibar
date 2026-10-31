@@ -8,9 +8,9 @@
 //! close just like they do on Windows.
 //!
 //! On X11 the window opens next to the tray click. Wayland clients cannot
-//! position windows; the compositor places it. Either way the popup closes
-//! when it loses focus or Escape is pressed, since Wayland gives clients no
-//! global pointer input to detect outside clicks with.
+//! position windows; the compositor places it. Floating panels stay open
+//! on focus loss and use compositor-driven header dragging. Regular popups
+//! close on focus loss unless pinned.
 
 use std::sync::Arc;
 
@@ -127,12 +127,12 @@ impl Host {
             // X11 never focuses PopUp (notification-type) windows, and
             // focus is how the popup learns about outside clicks.
             kind: WindowKind::Normal,
-            is_movable: false,
+            is_movable: true,
             is_resizable: false,
             is_minimizable: false,
             display_id: None,
             window_background: WindowBackgroundAppearance::Transparent,
-            app_id: Some("codex-minibar".into()),
+            app_id: Some(crate::linux::identity::APP_ID.into()),
             window_min_size: None,
             window_max_size: None,
             // The capsule draws its own rounded frame.
@@ -161,13 +161,14 @@ impl Host {
         };
         let _ = window.update(cx, |root, window, cx| {
             root.begin_show(monitor, placement, window, cx);
-            window.activate_window();
+            window.set_always_on_top(root.ui.popup_pinned);
+            activate_window(window);
         });
     }
 
     fn activate(&self, cx: &mut AsyncApp) {
         if let Some(window) = self.window {
-            let _ = window.update(cx, |_, window, _| window.activate_window());
+            let _ = window.update(cx, |_, window, _| activate_window(window));
         }
     }
 
@@ -184,6 +185,14 @@ impl Host {
             self.window = None;
             let _ = window.update(cx, |_, window, _| window.remove_window());
         }
+    }
+}
+
+fn activate_window(window: &gpui::Window) {
+    if let Some(token) = crate::linux::shortcuts::take_activation_token() {
+        window.activate_window_with_token(token);
+    } else {
+        window.activate_window();
     }
 }
 

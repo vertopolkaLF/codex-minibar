@@ -2918,6 +2918,9 @@ time-late = { $time } gecikti
 
 # Floating usage panel
 popup-floating = Yüzen panel
+linux-popup-keep-open = Açık tut
+linux-popup-keep-open-description = Uygulamalar arasında geçiş yaparken paneli açık tut. Wayland'de panel başlığına sağ tıklayıp varsa masaüstünün pencere menüsünden «Her zaman üstte» seçeneğini seçin.
+linux-popup-unpin = Panelin sabitlemesini kaldır
 popup-floating-description = Paneli açık tutun ve başlığını başka bir konuma veya monitöre sürükleyin.
 popup-always-on-top = Her zaman üstte
 popup-always-on-top-description = Paneli diğer uygulamaların üzerinde ve uygulama değiştirirken açık tut.
@@ -3028,3 +3031,7 @@ linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = { $nam
 
 # src/settings_window/advanced.rs
 linux-add-a-game-description = Steam’in başlattığı oyunlar ile Steam veya Heroic kitaplıklarındaki oyunlar kendiliğinden algılanır. Diğer programları buraya ekleyin.
+linux-popup-shortcut-native-description = Masaüstünüzün izin penceresinden sistem genelinde bir kısayol seçin. Değişiklikler hemen uygulanır.
+linux-popup-shortcut-choose = Kısayol ayarla
+linux-popup-shortcut-waiting = Masaüstü bekleniyor…
+linux-popup-shortcut-unavailable = Masaüstü kısayolu yapılandıramadı. Yeniden deneyin veya aşağıdaki komutu masaüstünüzün klavye ayarlarına ekleyin.

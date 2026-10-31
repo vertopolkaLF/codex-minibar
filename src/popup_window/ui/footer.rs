@@ -68,6 +68,7 @@ struct TabSpec {
 impl PopupRoot {
     fn render_pin_button(&mut self, button: f32, glyph: f32, cx: &mut Context<Self>) -> AnyElement {
         let pinned = self.ui.popup_pinned;
+        let topmost = cfg!(windows) || cx.compositor_name() == "X11";
         self.render_action_button(
             "pin",
             if pinned {
@@ -75,11 +76,21 @@ impl PopupRoot {
             } else {
                 "fluent-pin"
             },
-            crate::i18n::tr(if pinned { "popup-unpin" } else { "popup-pin" }).into(),
+            crate::i18n::tr(match (topmost, pinned) {
+                (true, true) => "popup-unpin",
+                (true, false) => "popup-pin",
+                (false, true) => "linux-popup-unpin",
+                (false, false) => "linux-popup-keep-open",
+            })
+            .into(),
             button,
             glyph,
             pinned,
-            cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_user_pin(cx)),
+            cx.listener(|this, _: &ClickEvent, _window, cx| {
+                this.toggle_user_pin(cx);
+                #[cfg(not(windows))]
+                _window.set_always_on_top(this.ui.popup_pinned);
+            }),
             cx,
         )
     }
@@ -128,27 +139,40 @@ impl PopupRoot {
             cx.listener(|_, _: &ClickEvent, _, _| crate::popup::hide()),
             cx,
         );
+        let title = div()
+            .absolute()
+            .left_0()
+            .right(px(FLOATING_HEADER_ACTIONS_WIDTH))
+            .h(px(FLOATING_HEADER_HEIGHT))
+            .flex()
+            .items_center()
+            .pl(px(10.0))
+            .gap(px(8.0))
+            .text_size(px(12.0))
+            .text_color(self.palette.text_secondary)
+            .child(crate::settings_window::kit::image(
+                "color/app-icon-32.png",
+                16.0,
+            ))
+            .child("Codex Minibar");
+        #[cfg(not(windows))]
+        let title = title
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, window, _| {
+                    if this.ui.popup_floating {
+                        window.start_window_move();
+                    }
+                }),
+            )
+            .on_mouse_down(gpui::MouseButton::Right, |event, window, cx| {
+                window.show_window_menu(event.position);
+                cx.stop_propagation();
+            });
         div()
             .relative()
             .size_full()
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .right(px(FLOATING_HEADER_ACTIONS_WIDTH))
-                    .h(px(FLOATING_HEADER_HEIGHT))
-                    .flex()
-                    .items_center()
-                    .pl(px(10.0))
-                    .gap(px(8.0))
-                    .text_size(px(12.0))
-                    .text_color(self.palette.text_secondary)
-                    .child(crate::settings_window::kit::image(
-                        "color/app-icon-32.png",
-                        16.0,
-                    ))
-                    .child("Codex Minibar"),
-            )
+            .child(title)
             .child(
                 div()
                     .id("floating-header-actions")

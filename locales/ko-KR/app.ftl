@@ -2918,6 +2918,9 @@ time-late = { $time } 지연
 
 # Floating usage panel
 popup-floating = 플로팅 패널
+linux-popup-keep-open = 열린 상태 유지
+linux-popup-keep-open-description = 앱을 전환할 때 패널을 열린 상태로 유지합니다. Wayland에서는 패널 헤더를 오른쪽 클릭하고 데스크톱 창 메뉴에 «항상 위» 항목이 있으면 선택하세요.
+linux-popup-unpin = 패널 고정 해제
 popup-floating-description = 패널을 열어 두고 헤더를 드래그하여 위치나 모니터를 변경합니다.
 popup-always-on-top = 항상 위에 표시
 popup-always-on-top-description = 패널을 다른 앱 위에 표시하고 앱을 전환해도 열린 상태로 유지합니다.
@@ -3028,3 +3031,7 @@ linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = 구성
 
 # src/settings_window/advanced.rs
 linux-add-a-game-description = Steam으로 실행한 게임과 Steam 또는 Heroic 라이브러리의 게임은 자동으로 감지됩니다. 다른 프로그램은 여기에 추가하세요.
+linux-popup-shortcut-native-description = 데스크톱의 권한 대화 상자에서 전역 단축키를 선택하세요. 변경 사항은 즉시 적용됩니다.
+linux-popup-shortcut-choose = 단축키 설정
+linux-popup-shortcut-waiting = 데스크톱 응답 대기 중…
+linux-popup-shortcut-unavailable = 데스크톱에서 단축키를 설정하지 못했습니다. 다시 시도하거나 데스크톱의 키보드 설정에 아래 명령을 추가하세요.
