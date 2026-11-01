@@ -2927,6 +2927,17 @@ popup-always-on-top-description = 패널을 다른 앱 위에 표시하고 앱�
 popup-position = 패널 위치
 popup-position-description = 세션 간에 위치가 저장됩니다.
 popup-reset-position = 위치 초기화
+popup-placement = 팝업 위치
+popup-placement-description = 화면에서 팝업이 열리는 위치입니다. 자동은 트레이나 작업 표시줄 옆에 엽니다.
+popup-placement-auto = 자동
+popup-placement-top-left = 왼쪽 위
+popup-placement-top-center = 가운데 위
+popup-placement-top-right = 오른쪽 위
+popup-placement-bottom-left = 왼쪽 아래
+popup-placement-bottom-center = 가운데 아래
+popup-placement-bottom-right = 오른쪽 아래
+linux-popup-placement-description = 화면에서 팝업이 열리는 위치입니다.
+linux-popup-placement-wayland = Wayland에서는 데스크톱이 창 위치를 정하므로 이 설정은 X11 세션에서만 적용됩니다.
 popup-drag-header = 드래그하여 이동
 popup-close = 패널 닫기
 

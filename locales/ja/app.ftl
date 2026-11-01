@@ -2928,6 +2928,17 @@ popup-always-on-top-description = パネルを他のアプリより手前に表�
 popup-position = パネルの位置
 popup-position-description = 位置は次回の起動時にも復元されます。
 popup-reset-position = 位置をリセット
+popup-placement = ポップアップの位置
+popup-placement-description = 画面上でポップアップを開く位置です。自動では通知領域やタスクバーの近くに開きます。
+popup-placement-auto = 自動
+popup-placement-top-left = 左上
+popup-placement-top-center = 上中央
+popup-placement-top-right = 右上
+popup-placement-bottom-left = 左下
+popup-placement-bottom-center = 下中央
+popup-placement-bottom-right = 右下
+linux-popup-placement-description = 画面上でポップアップを開く位置です。
+linux-popup-placement-wayland = Wayland ではウィンドウを開く位置をデスクトップが決めるため、この設定は X11 セッションでのみ有効です。
 popup-drag-header = ドラッグして移動
 popup-close = パネルを閉じる
 

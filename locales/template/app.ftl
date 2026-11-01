@@ -4279,6 +4279,50 @@ popup-position-description = { "" }
 popup-reset-position = { "" }
 
 # English source:
+# popup-placement = Popup position
+popup-placement = { "" }
+
+# English source:
+# popup-placement-description = Where the popup opens on the screen. Automatic opens it by the tray or taskbar.
+popup-placement-description = { "" }
+
+# English source:
+# popup-placement-auto = Automatic
+popup-placement-auto = { "" }
+
+# English source:
+# popup-placement-top-left = Top left
+popup-placement-top-left = { "" }
+
+# English source:
+# popup-placement-top-center = Top center
+popup-placement-top-center = { "" }
+
+# English source:
+# popup-placement-top-right = Top right
+popup-placement-top-right = { "" }
+
+# English source:
+# popup-placement-bottom-left = Bottom left
+popup-placement-bottom-left = { "" }
+
+# English source:
+# popup-placement-bottom-center = Bottom center
+popup-placement-bottom-center = { "" }
+
+# English source:
+# popup-placement-bottom-right = Bottom right
+popup-placement-bottom-right = { "" }
+
+# English source:
+# linux-popup-placement-description = Where the popup opens on the screen.
+linux-popup-placement-description = { "" }
+
+# English source:
+# linux-popup-placement-wayland = Wayland desktops choose where windows open, so this only applies in X11 sessions.
+linux-popup-placement-wayland = { "" }
+
+# English source:
 # popup-drag-header = Drag to move
 popup-drag-header = { "" }
 

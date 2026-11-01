@@ -78,6 +78,7 @@ static PENDING_POPUP_VIEW: Mutex<Option<PendingPopupView>> = Mutex::new(None);
 pub(crate) enum PopupCommand {
     Publish(Box<UiState>),
     Show {
+        #[cfg_attr(not(windows), allow(dead_code))]
         anchor: Option<(i32, i32)>,
         /// Open toward the anchor's end of the taskbar, not the tray's.
         #[cfg_attr(not(windows), allow(dead_code))]

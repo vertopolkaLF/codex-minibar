@@ -7,7 +7,7 @@
 //! those windows, so pages, measurements and cached snapshots survive a
 //! close just like they do on Windows.
 //!
-//! On X11 the window opens next to the tray click. Wayland clients cannot
+//! On X11 the window opens at the configured position. Wayland clients cannot
 //! position windows; the compositor places it. Floating panels stay open
 //! on focus loss and use compositor-driven header dragging. Regular popups
 //! close on focus loss unless pinned.
@@ -22,6 +22,7 @@ use gpui::{
 
 use super::{Monitor, Placement, PopupRoot, Rect};
 use crate::popup_window::{AppState, PopupCommand};
+use crate::settings::PopupPlacement;
 
 /// Room left for top and bottom panels, which GPUI does not report.
 const PANEL_RESERVE: i32 = 40;
@@ -62,8 +63,20 @@ impl Host {
         match command {
             PopupCommand::Publish(ui) => match self.window {
                 Some(window) => {
+                    // GPUI cannot move an open window: open it again in the
+                    // new spot. Only X11 honors the position at all.
+                    let moved = !crate::linux::is_wayland()
+                        && window
+                            .update(cx, |root, _, _| {
+                                root.ui.popup_placement != ui.popup_placement
+                            })
+                            .unwrap_or(false);
                     let _ =
                         window.update(cx, |root, window, cx| root.apply_ui(*ui, Some(window), cx));
+                    if moved {
+                        let _ = self.root.update(cx, |root, cx| root.begin_hide(cx));
+                        crate::popup::show_near_cursor();
+                    }
                 }
                 None => {
                     let _ = self
@@ -71,7 +84,7 @@ impl Host {
                         .update(cx, |root, cx| root.apply_ui(*ui, None, cx));
                 }
             },
-            PopupCommand::Show { anchor, .. } => self.show(anchor, cx),
+            PopupCommand::Show { .. } => self.show(cx),
             PopupCommand::Hide => {
                 let _ = self.root.update(cx, |root, cx| root.begin_hide(cx));
             }
@@ -101,7 +114,7 @@ impl Host {
         }
     }
 
-    fn show(&mut self, anchor: Option<(i32, i32)>, cx: &mut AsyncApp) {
+    fn show(&mut self, cx: &mut AsyncApp) {
         if self.window.is_some() {
             self.activate(cx);
             return;
@@ -109,13 +122,13 @@ impl Host {
         let Ok(monitor) = cx.update(|cx| primary_monitor(cx)) else {
             return;
         };
-        let Ok((width, height)) = self
-            .root
-            .update(cx, |root, cx| root.prepare_linux_open(monitor, cx))
-        else {
+        let Ok((width, height, placement)) = self.root.update(cx, |root, cx| {
+            let (width, height) = root.prepare_linux_open(monitor, cx);
+            (width, height, root.ui.popup_placement)
+        }) else {
             return;
         };
-        let origin = window_origin(monitor, anchor, (width, height));
+        let origin = window_origin(monitor, placement, (width, height));
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds {
                 origin: point(px(origin.0 as f32), px(origin.1 as f32)),
@@ -158,6 +171,7 @@ impl Host {
         let placement = Placement {
             left: true,
             top: true,
+            center: false,
         };
         let _ = window.update(cx, |root, window, cx| {
             root.begin_show(monitor, placement, window, cx);
@@ -227,34 +241,23 @@ fn primary_monitor(cx: &App) -> Monitor {
     }
 }
 
-/// Where the window opens on X11 (Wayland compositors ignore it): beside the
-/// tray click, on the half of the screen the click came from, or in the
-/// top-right corner where most Linux panels keep their tray.
-fn window_origin(monitor: Monitor, anchor: Option<(i32, i32)>, size: (f32, f32)) -> (i32, i32) {
-    let margin = crate::popup::EDGE_MARGIN_PX;
+/// Where the window opens on X11; Wayland compositors ignore it.
+fn window_origin(monitor: Monitor, placement: PopupPlacement, size: (f32, f32)) -> (i32, i32) {
     let work = monitor.work;
-    let (width, height) = (size.0.round() as i32, size.1.round() as i32);
-    let max_left = (work.right - margin - width).max(work.left);
-    let max_top = (work.bottom - margin - height).max(work.top);
-    let Some((x, y)) = anchor.filter(|anchor| *anchor != (0, 0)) else {
-        return (max_left, work.top + margin);
-    };
-    let left = (x - width / 2).clamp((work.left + margin).min(max_left), max_left);
-    let center_y = monitor.bounds.top + monitor.bounds.height() / 2;
-    let top = if y < center_y {
-        work.top + margin
-    } else {
-        max_top
-    };
-    (left, top)
+    placement.resolved().origin(
+        (work.left, work.top, work.right, work.bottom),
+        crate::popup::EDGE_MARGIN_PX,
+        (size.0.round() as i32, size.1.round() as i32),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn monitor() -> Monitor {
-        Monitor {
+    #[test]
+    fn opens_at_the_configured_spot_and_auto_is_top_right() {
+        let monitor = Monitor {
             bounds: Rect {
                 left: 0,
                 top: 0,
@@ -268,29 +271,19 @@ mod tests {
                 bottom: 1040,
             },
             dpi: 96,
-        }
-    }
-
-    #[test]
-    fn opens_top_right_without_a_click_position() {
-        assert_eq!(window_origin(monitor(), None, (380.0, 600.0)), (1520, 60));
+        };
+        let size = (380.0, 600.0);
         assert_eq!(
-            window_origin(monitor(), Some((0, 0)), (380.0, 600.0)),
+            window_origin(monitor, PopupPlacement::Auto, size),
             (1520, 60)
         );
-    }
-
-    #[test]
-    fn follows_the_tray_click_and_stays_on_screen() {
-        // A top-panel tray near the right edge.
         assert_eq!(
-            window_origin(monitor(), Some((1900, 10)), (380.0, 600.0)),
-            (1520, 60)
+            window_origin(monitor, PopupPlacement::TopLeft, size),
+            (20, 60)
         );
-        // A bottom-panel tray near the left edge.
         assert_eq!(
-            window_origin(monitor(), Some((30, 1070)), (380.0, 600.0)),
-            (20, 420)
+            window_origin(monitor, PopupPlacement::BottomCenter, size),
+            (770, 420)
         );
     }
 }

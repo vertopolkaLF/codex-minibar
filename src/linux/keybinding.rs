@@ -59,10 +59,40 @@ const NAMED_KEYS: &[(&str, &str, &str)] = &[
     ("`", "grave", "`"),
 ];
 
+/// GPUI reports Shift plus a symbol key as the produced symbol, with Shift
+/// cleared. Shortcuts name the key itself: `~` is Shift and the grave key.
+const SHIFTED_KEYS: &[(&str, &str)] = &[
+    ("~", "`"),
+    ("!", "1"),
+    ("@", "2"),
+    ("#", "3"),
+    ("$", "4"),
+    ("%", "5"),
+    ("^", "6"),
+    ("&", "7"),
+    ("*", "8"),
+    ("(", "9"),
+    (")", "0"),
+    ("_", "-"),
+    ("+", "="),
+    ("{", "["),
+    ("}", "]"),
+    ("|", "\\"),
+    (":", ";"),
+    ("\"", "'"),
+    ("<", ","),
+    (">", "."),
+    ("?", "/"),
+];
+
 impl Accelerator {
     /// Builds an accelerator from a GPUI key press. `None` for keys a desktop
     /// shortcut cannot use (bare modifiers, media keys, dead keys).
     pub fn from_press(key: &str, ctrl: bool, alt: bool, shift: bool, logo: bool) -> Option<Self> {
+        let (key, shift) = match SHIFTED_KEYS.iter().find(|(symbol, _)| *symbol == key) {
+            Some((_, base)) => (*base, true),
+            None => (key, shift),
+        };
         let keysym = if let Some((_, keysym, _)) = NAMED_KEYS.iter().find(|(name, ..)| *name == key)
         {
             (*keysym).to_owned()
@@ -187,8 +217,18 @@ pub fn current() -> Option<Accelerator> {
     Accelerator::parse(&unquote(&value)?)
 }
 
-/// Installs, replaces (`Some`) or removes (`None`) the popup shortcut.
+/// Installs, replaces (`Some`) or removes (`None`) the popup shortcut, and
+/// confirms the desktop now reports exactly that.
 pub fn save(accelerator: Option<&Accelerator>) -> Result<()> {
+    write(accelerator)?;
+    let stored = current();
+    if stored.as_ref() != accelerator {
+        bail!("the desktop reports {stored:?} after writing {accelerator:?}");
+    }
+    Ok(())
+}
+
+fn write(accelerator: Option<&Accelerator>) -> Result<()> {
     let mut list = paths()?;
     match accelerator {
         Some(accelerator) => {
@@ -313,6 +353,18 @@ mod tests {
         assert_eq!(accelerator.to_gtk(), "<Super><Shift>Page_Down");
         assert_eq!(accelerator.label(), "Shift+Super+Page Down");
         assert_eq!(Accelerator::parse(&accelerator.to_gtk()), Some(accelerator));
+    }
+
+    #[test]
+    fn shifted_symbols_name_the_key_with_shift() {
+        // GPUI clears Shift and reports the symbol it produced.
+        let accelerator = press("~", true, false, false, false).unwrap();
+        assert_eq!(accelerator.to_gtk(), "<Control><Shift>grave");
+        assert_eq!(accelerator.label(), "Ctrl+Shift+`");
+        let accelerator = press("!", true, false, false, false).unwrap();
+        assert_eq!(accelerator.to_gtk(), "<Control><Shift>1");
+        let accelerator = press("?", false, true, false, false).unwrap();
+        assert_eq!(accelerator.to_gtk(), "<Alt><Shift>slash");
     }
 
     #[test]

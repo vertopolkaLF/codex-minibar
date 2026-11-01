@@ -2955,6 +2955,17 @@ popup-always-on-top-description = Показывать панель поверх
 popup-position = Положение панели
 popup-position-description = Положение сохраняется между запусками.
 popup-reset-position = Сбросить положение
+popup-placement = Положение окна
+popup-placement-description = Где окно открывается на экране. Автоматически: рядом с областью уведомлений или панелью задач.
+popup-placement-auto = Автоматически
+popup-placement-top-left = Сверху слева
+popup-placement-top-center = Сверху по центру
+popup-placement-top-right = Сверху справа
+popup-placement-bottom-left = Снизу слева
+popup-placement-bottom-center = Снизу по центру
+popup-placement-bottom-right = Снизу справа
+linux-popup-placement-description = Где окно открывается на экране.
+linux-popup-placement-wayland = На Wayland место для окон выбирает рабочий стол, поэтому настройка действует только в сеансах X11.
 popup-drag-header = Перетащите, чтобы переместить
 popup-close = Закрыть панель
 

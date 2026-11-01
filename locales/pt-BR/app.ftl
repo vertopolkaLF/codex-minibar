@@ -2047,6 +2047,17 @@ popup-always-on-top-description = Manter o painel acima de outros aplicativos e 
 popup-position = Posição do painel
 popup-position-description = A posição é lembrada entre sessões.
 popup-reset-position = Redefinir posição
+popup-placement = Posição da janela
+popup-placement-description = Onde a janela abre na tela. Automático abre perto da bandeja ou da barra de tarefas.
+popup-placement-auto = Automático
+popup-placement-top-left = Superior esquerdo
+popup-placement-top-center = Superior central
+popup-placement-top-right = Superior direito
+popup-placement-bottom-left = Inferior esquerdo
+popup-placement-bottom-center = Inferior central
+popup-placement-bottom-right = Inferior direito
+linux-popup-placement-description = Onde a janela abre na tela.
+linux-popup-placement-wayland = No Wayland, o ambiente de trabalho decide onde as janelas abrem, então isso só se aplica a sessões X11.
 popup-drag-header = Arraste para mover
 popup-close = Fechar painel
 

@@ -271,8 +271,9 @@ Closing the popup or Settings leaves the app running in the tray.
 
 Differences from Windows:
 
-- **Popup placement.** On X11 the popup opens next to the tray icon. Wayland does not let apps
-  place their windows, so the compositor positions it. The popup closes when it loses focus or
+- **Popup placement.** The popup is a floating panel by default. On X11, **Settings → Customize →
+  Popup position** picks one of six spots on the screen. Wayland does not let apps place their
+  windows, so the desktop positions it there and that option is disabled. The popup closes when it loses focus or
   you press Esc, unless it is pinned.
 - **Global shortcut.** On GNOME-based desktops (GNOME, Ubuntu, Pop!_OS, Budgie), **Settings →
   General → Popup shortcut** opens a dialog: press the combination you want and choose

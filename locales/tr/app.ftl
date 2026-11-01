@@ -2927,6 +2927,17 @@ popup-always-on-top-description = Paneli diğer uygulamaların üzerinde ve uygu
 popup-position = Panel konumu
 popup-position-description = Konum oturumlar arasında hatırlanır.
 popup-reset-position = Konumu sıfırla
+popup-placement = Pencere konumu
+popup-placement-description = Pencerenin ekranda açılacağı yer. Otomatik, sistem tepsisinin veya görev çubuğunun yanında açar.
+popup-placement-auto = Otomatik
+popup-placement-top-left = Sol üst
+popup-placement-top-center = Üst orta
+popup-placement-top-right = Sağ üst
+popup-placement-bottom-left = Sol alt
+popup-placement-bottom-center = Alt orta
+popup-placement-bottom-right = Sağ alt
+linux-popup-placement-description = Pencerenin ekranda açılacağı yer.
+linux-popup-placement-wayland = Wayland'de pencerelerin nerede açılacağına masaüstü karar verir, bu nedenle bu ayar yalnızca X11 oturumlarında geçerlidir.
 popup-drag-header = Taşımak için sürükleyin
 popup-close = Paneli kapat
 

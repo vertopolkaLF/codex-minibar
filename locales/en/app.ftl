@@ -2948,6 +2948,17 @@ popup-always-on-top-description = Keep the panel above other applications and op
 popup-position = Panel position
 popup-position-description = The position is remembered between sessions.
 popup-reset-position = Reset position
+popup-placement = Popup position
+popup-placement-description = Where the popup opens on the screen. Automatic opens it by the tray or taskbar.
+popup-placement-auto = Automatic
+popup-placement-top-left = Top left
+popup-placement-top-center = Top center
+popup-placement-top-right = Top right
+popup-placement-bottom-left = Bottom left
+popup-placement-bottom-center = Bottom center
+popup-placement-bottom-right = Bottom right
+linux-popup-placement-description = Where the popup opens on the screen.
+linux-popup-placement-wayland = Wayland desktops choose where windows open, so this only applies in X11 sessions.
 popup-drag-header = Drag to move
 popup-close = Close panel
 

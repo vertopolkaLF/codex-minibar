@@ -1239,11 +1239,16 @@ impl PopupRoot {
                 })
                 .unwrap_or_else(|| {
                     let monitor = super::win32::monitor_for_point(anchor.0, anchor.1);
+                    if self.ui.popup_placement != crate::settings::PopupPlacement::Auto {
+                        let (x, y) = self.fixed_floating_origin(monitor);
+                        return (monitor, x, y);
+                    }
                     let rect = super::host_rect(
                         monitor,
                         super::Placement {
                             left: false,
                             top: true,
+                            center: false,
                         },
                     );
                     (monitor, rect.left + crate::popup::EDGE_MARGIN_PX, rect.top)
@@ -1251,6 +1256,7 @@ impl PopupRoot {
             self.host.placement = super::Placement {
                 left: true,
                 top: true,
+                center: false,
             };
             let rect = super::floating_host_rect(monitor, x, y, self.ui.popup_two_columns);
             self.host.floating_rect = Some(rect);
@@ -1264,7 +1270,8 @@ impl PopupRoot {
                 super::win32::monitor_for_point(anchor.0, anchor.1)
             };
             if !preserve_corner {
-                self.host.placement = super::Placement::for_anchor(monitor, anchor, beside);
+                self.host.placement = super::Placement::fixed(self.ui.popup_placement)
+                    .unwrap_or_else(|| super::Placement::for_anchor(monitor, anchor, beside));
             }
             self.host.floating_rect = None;
             (monitor, super::host_rect(monitor, self.host.placement))
@@ -1272,6 +1279,21 @@ impl PopupRoot {
         self.host.monitor = Some(monitor);
         self.host.scale = monitor.scale() as f32;
         rect
+    }
+
+    /// Where a floating panel opens in the configured spot of `monitor`.
+    #[cfg(windows)]
+    fn fixed_floating_origin(&self, monitor: super::Monitor) -> (i32, i32) {
+        let pixels = |dip: f32| (f64::from(dip) * monitor.scale()).round() as i32;
+        let work = monitor.work;
+        self.ui.popup_placement.origin(
+            (work.left, work.top, work.right, work.bottom),
+            crate::popup::EDGE_MARGIN_PX,
+            (
+                pixels(self.target_width(self.pager.current)),
+                pixels(self.target_height(self.pager.current)),
+            ),
+        )
     }
 
     #[cfg(windows)]
@@ -1292,7 +1314,12 @@ impl PopupRoot {
         rect: super::win32::Rect,
         cx: &mut Context<Self>,
     ) {
-        if self.ui.popup_floating && self.ui.popup_position.is_none() {
+        // A fixed spot is recomputed per open, for the panel's height then;
+        // only a drag replaces it.
+        if self.ui.popup_floating
+            && self.ui.popup_position.is_none()
+            && self.ui.popup_placement == crate::settings::PopupPlacement::Auto
+        {
             self.persist_floating_origin(rect, cx);
         }
     }
@@ -1681,6 +1708,17 @@ impl PopupRoot {
     /// along its slide toward the screen edge of the placement's side.
     fn capsule_position(&self, viewport: (f32, f32), size: (f32, f32), offset: f32) -> (f32, f32) {
         let margin = self.host.margin();
+        if self.host.placement.center {
+            // No side edge is near: slide through the top or bottom edge.
+            let travel = self.center_slide(size, offset);
+            let x = ((viewport.0 - size.0) / 2.0).max(0.0);
+            let y = if self.host.placement.top {
+                -travel
+            } else {
+                (viewport.1 - size.1).max(0.0) + travel
+            };
+            return (x, y);
+        }
         let x = if self.host.placement.left {
             margin - offset
         } else {
@@ -1692,6 +1730,12 @@ impl PopupRoot {
             (viewport.1 - size.1).max(0.0)
         };
         (x, y)
+    }
+
+    /// The horizontal slide `offset`, in the vertical travel of a centered
+    /// capsule: fully slid out either way when the capsule just left the host.
+    fn center_slide(&self, size: (f32, f32), offset: f32) -> f32 {
+        offset * size.1 / (size.0 + self.host.margin()).max(1.0)
     }
 
     // ----- hover / tooltip helpers -------------------------------------------
@@ -2229,11 +2273,16 @@ impl Render for PopupRoot {
         let chrome_width = (capsule_w - CHROME_INSET * 2.0).max(0.0);
         // The chrome stands on the host edge by the taskbar: the bottom edge
         // normally, the top edge (where the capsule hangs from) by a top bar.
+        let chrome_slide = if self.host.placement.center {
+            self.center_slide((capsule_w, capsule_h), offset)
+        } else {
+            0.0
+        };
         let chrome_y = move |element: gpui::Stateful<gpui::Div>, offset: f32| {
             if chrome_on_top {
                 element.top(px(capsule_y + CHROME_INSET + offset))
             } else {
-                element.bottom(px(CHROME_INSET + offset))
+                element.bottom(px(CHROME_INSET + offset - chrome_slide))
             }
         };
         let left_side = self.host.placement.left;

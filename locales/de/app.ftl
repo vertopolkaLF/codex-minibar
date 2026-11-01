@@ -2949,6 +2949,17 @@ popup-always-on-top-description = Das Fenster über anderen Anwendungen anzeigen
 popup-position = Fensterposition
 popup-position-description = Die Position wird zwischen Sitzungen gespeichert.
 popup-reset-position = Position zurücksetzen
+popup-placement = Position des Fensters
+popup-placement-description = Wo das Fenster auf dem Bildschirm geöffnet wird. Automatisch öffnet es neben dem Infobereich oder der Taskleiste.
+popup-placement-auto = Automatisch
+popup-placement-top-left = Oben links
+popup-placement-top-center = Oben Mitte
+popup-placement-top-right = Oben rechts
+popup-placement-bottom-left = Unten links
+popup-placement-bottom-center = Unten Mitte
+popup-placement-bottom-right = Unten rechts
+linux-popup-placement-description = Wo das Fenster auf dem Bildschirm geöffnet wird.
+linux-popup-placement-wayland = Unter Wayland bestimmt der Desktop, wo Fenster geöffnet werden. Diese Einstellung gilt daher nur in X11-Sitzungen.
 popup-drag-header = Zum Verschieben ziehen
 popup-close = Fenster schließen
 

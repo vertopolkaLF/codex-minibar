@@ -99,15 +99,26 @@ pub(crate) fn animations_enabled(ui: &UiState) -> bool {
     ui.animations_enabled && crate::popup::system_animations_enabled()
 }
 
-/// Which corner of the work area the popup stands in.
+/// Which spot of the work area the popup stands in: a corner, or the middle
+/// of the top or bottom edge when `center` is set (`left` is then ignored).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Placement {
     pub(crate) left: bool,
     pub(crate) top: bool,
+    pub(crate) center: bool,
 }
 
 #[cfg(windows)]
 impl Placement {
+    /// The spot a fixed popup position stands in; `None` follows the tray.
+    pub(crate) fn fixed(placement: crate::settings::PopupPlacement) -> Option<Self> {
+        (placement != crate::settings::PopupPlacement::Auto).then(|| Self {
+            left: placement.is_left(),
+            top: placement.is_top(),
+            center: placement.is_center(),
+        })
+    }
+
     /// The corner by the taskbar: the tray's end by default, or the end
     /// nearest `anchor` when the popup opens `beside` a taskbar widget.
     pub(crate) fn for_anchor(monitor: Monitor, anchor: (i32, i32), beside: bool) -> Self {
@@ -119,6 +130,7 @@ impl Placement {
         Self {
             left: edge == Edge::Left || (edge != Edge::Right && beside && anchor.0 < center_x),
             top: edge == Edge::Top || (vertical && beside && anchor.1 < center_y),
+            center: false,
         }
     }
 }
@@ -180,7 +192,10 @@ pub(crate) fn host_rect(monitor: Monitor, placement: Placement) -> win32::Rect {
     let height = (f64::from(monitor.bounds.height()) * crate::popup::POPUP_SCREEN_HEIGHT_FRACTION)
         .round() as i32;
     let work = monitor.work;
-    let (left, right) = if placement.left {
+    let (left, right) = if placement.center {
+        let left = work.left + (work.width() - width) / 2;
+        (left, left + width)
+    } else if placement.left {
         (work.left, work.left + width)
     } else {
         (work.right - width, work.right)
@@ -337,6 +352,7 @@ fn handle_command(
                 .update(cx, |root, _, _| {
                     root.ui.popup_floating != ui.popup_floating
                         || root.ui.popup_position != ui.popup_position
+                        || root.ui.popup_placement != ui.popup_placement
                         || (ui.popup_floating && root.ui.popup_two_columns != ui.popup_two_columns)
                 })
                 .unwrap_or(false);
@@ -630,7 +646,14 @@ mod tests {
             } else {
                 rect(0, 0, 1920, 1032)
             });
-            let host = super::host_rect(monitor, Placement { left: false, top });
+            let host = super::host_rect(
+                monitor,
+                Placement {
+                    left: false,
+                    top,
+                    center: false,
+                },
+            );
             assert_eq!(host.height(), monitor.bounds.height());
             if top {
                 assert_eq!(host.top, monitor.work.top + crate::popup::EDGE_MARGIN_PX);
@@ -655,6 +678,7 @@ mod tests {
         let left = Placement {
             left: true,
             top: false,
+            center: false,
         };
         assert_eq!(Placement::for_anchor(bottom, (100, 1050), true), left);
         assert_eq!(Placement::for_anchor(bottom, (1500, 1050), true), tray);
@@ -665,6 +689,7 @@ mod tests {
             Placement {
                 left: true,
                 top: true,
+                center: false,
             }
         );
         let side = monitor(rect(62, 0, 1920, 1080));
@@ -674,6 +699,7 @@ mod tests {
             Placement {
                 left: true,
                 top: true,
+                center: false,
             }
         );
     }
@@ -695,6 +721,7 @@ mod tests {
             Placement {
                 left: true,
                 top: false,
+                center: false,
             }
         );
         // A bottom dock plus a top taskbar.
@@ -705,6 +732,7 @@ mod tests {
             Placement {
                 left: false,
                 top: true,
+                center: false,
             }
         );
     }

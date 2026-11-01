@@ -435,6 +435,7 @@ pub(crate) struct UiState {
     pub(super) popup_floating: bool,
     pub(super) popup_height_dip: Option<u32>,
     pub(super) popup_position: Option<crate::settings::PopupPosition>,
+    pub(super) popup_placement: crate::settings::PopupPlacement,
     /// Every configured instance in display order, enabled or not.
     pub(super) instances: Vec<ProviderInstance>,
     pub(super) popup_tab_mode: PopupTabMode,
@@ -491,6 +492,7 @@ impl Default for UiState {
             popup_floating: false,
             popup_height_dip: None,
             popup_position: None,
+            popup_placement: crate::settings::PopupPlacement::default(),
             instances: Settings::default().instances,
             popup_tab_mode: PopupTabMode::default(),
             grouped_tab_selection: Default::default(),
@@ -559,6 +561,7 @@ impl UiState {
         self.popup_floating = settings.popup_floating;
         self.popup_height_dip = settings.popup_height_dip;
         self.popup_position = settings.popup_position.clone();
+        self.popup_placement = settings.popup_placement;
         self.instances = settings.instances.clone();
         self.popup_tab_mode = settings.popup_tab_mode;
         self.grouped_tab_selection = settings.grouped_tab_selection.clone();

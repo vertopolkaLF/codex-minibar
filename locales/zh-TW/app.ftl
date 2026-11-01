@@ -2026,6 +2026,17 @@ popup-always-on-top-description = 將面板顯示在其他應用程式上方，�
 popup-position = 面板位置
 popup-position-description = 下次啟動時還原面板位置。
 popup-reset-position = 重設位置
+popup-placement = 彈出視窗位置
+popup-placement-description = 彈出視窗在螢幕上開啟的位置。「自動」會在系統匣或工作列旁開啟。
+popup-placement-auto = 自動
+popup-placement-top-left = 左上
+popup-placement-top-center = 頂部置中
+popup-placement-top-right = 右上
+popup-placement-bottom-left = 左下
+popup-placement-bottom-center = 底部置中
+popup-placement-bottom-right = 右下
+linux-popup-placement-description = 彈出視窗在螢幕上開啟的位置。
+linux-popup-placement-wayland = 在 Wayland 上，視窗的開啟位置由桌面決定，因此此設定僅在 X11 工作階段中生效。
 popup-drag-header = 拖曳以移動
 popup-close = 關閉面板
 

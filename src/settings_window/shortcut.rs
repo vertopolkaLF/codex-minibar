@@ -72,6 +72,9 @@ impl SettingsWindow {
         row.trailing(
             Button::new("general-popup-hotkey", label)
                 .on_click(Self::h(cx, |this, (), window, cx| {
+                    // The shortcut may have been edited in the desktop's own
+                    // settings since this window opened.
+                    this.desktop_shortcut.current = keybinding::current();
                     this.shortcut_dialog = Some(ShortcutDialog {
                         pending: this.desktop_shortcut.current.clone(),
                         ..ShortcutDialog::default()
@@ -139,11 +142,17 @@ impl SettingsWindow {
             let _ = this.update(cx, |this, cx| {
                 match result {
                     Ok(()) => {
+                        crate::logger::info(format!(
+                            "Popup shortcut saved: {}",
+                            value
+                                .as_ref()
+                                .map_or("none".to_owned(), Accelerator::to_gtk)
+                        ));
                         this.desktop_shortcut.current = value;
                         this.shortcut_dialog = None;
                     }
                     Err(error) => {
-                        eprintln!("failed to save the popup shortcut: {error:#}");
+                        crate::logger::info(format!("Popup shortcut not saved: {error:#}"));
                         if let Some(dialog) = this.shortcut_dialog.as_mut() {
                             dialog.saving = false;
                             dialog.failed = true;
