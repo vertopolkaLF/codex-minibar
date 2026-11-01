@@ -115,10 +115,12 @@ fetch_tool() {
     fi
 }
 
-# Libraries that are not on every desktop. The graphics, display and font
-# libraries (Vulkan, Wayland, X11, fontconfig) and glibc must come from the
-# host: they match its drivers and configuration.
-appimage_libraries="libssl.so.3 libcrypto.so.3 libbz2.so.1.0 libzstd.so.1 libxkbcommon.so.0 libxkbcommon-x11.so.0 libxcb-xkb.so.1"
+# Linked libraries that must come from the host: glibc and the toolchain
+# runtimes (host graphics drivers load newer ones than a bundled copy) and the
+# X11 client stack. Everything else the binary links is bundled, because which
+# libraries are linked differs between build systems. Vulkan, Wayland and
+# fontconfig are loaded at runtime, so they stay on the host too.
+appimage_host_libraries='^(ld-linux-x86-64|libc|libm|libdl|libpthread|librt|libresolv|libgcc_s|libstdc\+\+|libz|libxcb|libXau|libXdmcp|libbsd|libmd)\.so'
 
 build_appimage() {
     local appdir="$stage/CodexMinibar.AppDir"
@@ -132,17 +134,19 @@ build_appimage() {
 
     install_tree "$appdir/usr"
     mkdir -p "$appdir/usr/lib"
+    if ldd "$binary" | grep -q 'not found'; then
+        ldd "$binary" >&2
+        exit 1
+    fi
     local library path
-    for library in $appimage_libraries; do
-        path="$(ldd "$binary" | awk -v name="$library" '$1 == name { print $3 }')"
-        if [ -z "$path" ]; then
-            echo "$binary does not link $library; update appimage_libraries" >&2
-            exit 1
+    while read -r library path; do
+        if [[ "$library" =~ $appimage_host_libraries ]]; then
+            continue
         fi
         cp -L "$path" "$appdir/usr/lib/$library"
         chmod 755 "$appdir/usr/lib/$library"
         patchelf --set-rpath '$ORIGIN' "$appdir/usr/lib/$library"
-    done
+    done < <(ldd "$binary" | awk '$2 == "=>" { print $1, $3 }')
     # An rpath instead of LD_LIBRARY_PATH: the app starts provider CLIs, and
     # those must not inherit these libraries.
     patchelf --set-rpath '$ORIGIN/../lib' "$appdir/usr/bin/codex-minibar"
