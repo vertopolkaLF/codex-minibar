@@ -2729,6 +2729,10 @@ pub(crate) fn scrollbar(k: &Kit, handle: &gpui::ScrollHandle) -> Option<AnyEleme
 }
 
 /// A title bar caption button (minimize, maximize, close).
+///
+/// Windows hit-tests these through `window_control_area`. GPUI ignores that
+/// on Linux, and GNOME draws no server-side frame, so there the buttons act
+/// on click and draw Phosphor icons instead of the Segoe glyph font.
 pub(crate) fn caption_button(
     k: &Kit,
     id: &'static str,
@@ -2743,25 +2747,62 @@ pub(crate) fn caption_button(
         theme.subtle_hover
     };
     let (el, t) = hoverable(k, div().id(id), hover_key(id));
-    el.w(px(46.0))
+    let color = if close {
+        theme.text.mix(gpui::white(), t)
+    } else {
+        theme.text
+    };
+    let el = el
+        .w(px(46.0))
         .h_full()
         .flex()
         .items_center()
         .justify_center()
         .text_size(px(10.0))
+        .text_color(color)
+        .bg(blend(gpui::transparent_black(), hover, t));
+    #[cfg(windows)]
+    let el = el
         .font_family(theme.icon_font.clone())
-        .text_color(if close {
-            theme.text.mix(gpui::white(), t)
-        } else {
-            theme.text
-        })
-        .bg(blend(gpui::transparent_black(), hover, t))
         .window_control_area(area)
         // Occlude the drag area beneath so the button, not the caption,
         // wins the non-client hit test.
         .occlude()
-        .child(glyph)
-        .into_any_element()
+        .child(glyph);
+    #[cfg(not(windows))]
+    let el = {
+        let _ = glyph;
+        let name = match area {
+            gpui::WindowControlArea::Min => "minus",
+            gpui::WindowControlArea::Max => "copy",
+            _ => "x",
+        };
+        el.occlude()
+            // Keep the press from starting a window move underneath.
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(move |_, window, _| match area {
+                gpui::WindowControlArea::Min => window.minimize_window(),
+                gpui::WindowControlArea::Max => window.zoom_window(),
+                _ => window.remove_window(),
+            })
+            .child(icon(name, 12.0, color))
+    };
+    el.into_any_element()
+}
+
+/// Makes `element` drag its window: native hit testing on Windows, an
+/// interactive move on Linux.
+pub(crate) fn window_drag_area(element: gpui::Stateful<gpui::Div>) -> gpui::Stateful<gpui::Div> {
+    #[cfg(windows)]
+    {
+        element.window_control_area(gpui::WindowControlArea::Drag)
+    }
+    #[cfg(not(windows))]
+    {
+        element.on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
+            window.start_window_move()
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------

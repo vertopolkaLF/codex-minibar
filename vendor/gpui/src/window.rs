@@ -1749,6 +1749,12 @@ impl Window {
         self.platform_window.show_window_menu(position)
     }
 
+    /// Request or remove above-normal stacking on X11. Other backends leave
+    /// stacking unchanged; standard Wayland has no equivalent client request.
+    pub fn set_always_on_top(&self, enabled: bool) {
+        self.platform_window.set_always_on_top(enabled)
+    }
+
     /// Tells the compositor to take control of window movement (Wayland and X11)
     ///
     /// Events may not be received during a move operation.
@@ -4113,6 +4119,11 @@ impl Window {
     /// Focus the current window and bring it to the foreground at the platform level.
     pub fn activate_window(&self) {
         self.platform_window.activate();
+    }
+
+    /// Activates the window using a desktop-provided activation token when supported.
+    pub fn activate_window_with_token(&self, token: String) {
+        self.platform_window.activate_with_token(token);
     }
 
     /// Minimize the current window at the platform level.

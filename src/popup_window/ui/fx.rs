@@ -394,6 +394,7 @@ impl Fx {
 
     /// 0 → 1 from the first frame `id` is seen, then 1: content that arrives
     /// while the popup is open grows in instead of popping.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub(crate) fn appear(&mut self, id: u64, duration: Duration) -> f32 {
         if !self.tweens.contains_key(&id) {
             self.snap(id, 0.0);

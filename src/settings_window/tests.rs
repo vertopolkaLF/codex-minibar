@@ -3,7 +3,7 @@ use crate::settings::{ProviderInstance, ProviderKind, Settings};
 
 #[test]
 fn tab_tags_are_unique() {
-    let mut tags = Tab::ALL.map(Tab::tag).to_vec();
+    let mut tags = Tab::ALL.iter().map(|tab| tab.tag()).collect::<Vec<_>>();
     tags.sort_unstable();
     tags.dedup();
     assert_eq!(tags.len(), Tab::ALL.len());

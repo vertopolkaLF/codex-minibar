@@ -22,6 +22,8 @@ pub(crate) struct Theme {
     pub(crate) dark: bool,
     pub(crate) font: SharedString,
     pub(crate) mono_font: SharedString,
+    /// Segoe glyph font for caption buttons; Linux draws Phosphor icons.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub(crate) icon_font: SharedString,
     pub(crate) window_bg: Hsla,
     pub(crate) layer: Hsla,
@@ -111,13 +113,22 @@ impl Fonts {
         };
         Self {
             text: crate::popup_window::ui::theme::default_font_family(cx),
-            mono: pick(&["Cascadia Mono", "Consolas"], "Consolas"),
+            mono: monospace_family(pick(&["Cascadia Mono", "Consolas"], "Consolas")),
             icons: pick(
                 &["Segoe Fluent Icons", "Segoe MDL2 Assets"],
                 "Segoe MDL2 Assets",
             ),
         }
     }
+}
+
+/// Linux: the desktop's monospace font instead of the Windows faces.
+pub(crate) fn monospace_family(windows: SharedString) -> SharedString {
+    #[cfg(not(windows))]
+    if let Some(family) = crate::linux::desktop::monospace_font_family() {
+        return family.into();
+    }
+    windows
 }
 
 impl Theme {

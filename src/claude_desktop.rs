@@ -82,6 +82,7 @@ fn config_roots() -> Vec<PathBuf> {
     roots
 }
 
+#[cfg(any(windows, test))]
 fn is_store_package_name(name: &str) -> bool {
     name.starts_with("Claude_") && name.ends_with("pzs8sxrjxfjjc")
 }

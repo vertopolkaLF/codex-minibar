@@ -21,7 +21,8 @@ pub(crate) enum Tab {
 
 impl Tab {
     /// Sidebar order.
-    pub(crate) const ALL: [Tab; 12] = [
+    #[cfg(windows)]
+    pub(crate) const ALL: &[Tab] = &[
         Tab::General,
         Tab::Providers,
         Tab::Popup,
@@ -33,6 +34,22 @@ impl Tab {
         Tab::Advanced,
         Tab::Log,
         Tab::Integrations,
+        Tab::About,
+    ];
+
+    /// Sidebar order. The taskbar strip lives inside Explorer, and the
+    /// integrations (Stream Deck, Command Palette) are Windows apps.
+    #[cfg(not(windows))]
+    pub(crate) const ALL: &[Tab] = &[
+        Tab::General,
+        Tab::Providers,
+        Tab::Popup,
+        Tab::Schedule,
+        Tab::Tray,
+        Tab::Notifications,
+        Tab::Appearance,
+        Tab::Advanced,
+        Tab::Log,
         Tab::About,
     ];
 

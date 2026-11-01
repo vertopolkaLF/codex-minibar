@@ -2946,12 +2946,26 @@ time-late = опоздание { $time }
 
 # Floating usage panel
 popup-floating = Плавающая панель
+linux-popup-keep-open = Оставлять открытой
+linux-popup-keep-open-description = Не закрывать панель при переключении приложений. В Wayland нажмите правой кнопкой на заголовок панели и выберите «Поверх остальных» в системном меню окна, если этот пункт доступен.
+linux-popup-unpin = Открепить панель
 popup-floating-description = Панель остаётся открытой; перетаскивайте её за заголовок в любое место или на другой монитор.
 popup-always-on-top = Поверх всех окон
 popup-always-on-top-description = Показывать панель поверх других приложений и не закрывать при переключении между ними.
 popup-position = Положение панели
 popup-position-description = Положение сохраняется между запусками.
 popup-reset-position = Сбросить положение
+popup-placement = Положение окна
+popup-placement-description = Где окно открывается на экране. Автоматически: рядом с областью уведомлений или панелью задач.
+popup-placement-auto = Автоматически
+popup-placement-top-left = Сверху слева
+popup-placement-top-center = Сверху по центру
+popup-placement-top-right = Сверху справа
+popup-placement-bottom-left = Снизу слева
+popup-placement-bottom-center = Снизу по центру
+popup-placement-bottom-right = Снизу справа
+linux-popup-placement-description = Где окно открывается на экране.
+linux-popup-placement-wayland = На Wayland место для окон выбирает рабочий стол, поэтому настройка действует только в сеансах X11.
 popup-drag-header = Перетащите, чтобы переместить
 popup-close = Закрыть панель
 
@@ -2996,3 +3010,68 @@ skip-automatic-reset = Отменить
 
 # src/popup_window/auto_reset.rs
 banked-reset-applied = Запасной сброс применён
+
+# src/tray.rs
+linux-no-tray-title = Системный трей не найден
+
+# src/tray.rs
+linux-no-tray-body = Включите расширение AppIndicator, чтобы видеть Codex Minibar на панели. Запустите Codex Minibar ещё раз, чтобы открыть его.
+
+# src/settings_window/general.rs
+start-at-login = Запускать при входе в систему
+
+# src/settings_window/general.rs
+linux-popup-shortcut-description = Добавьте в настройках клавиатуры рабочего стола своё сочетание клавиш, запускающее эту команду, чтобы показывать и скрывать окно.
+linux-popup-shortcut-native-description = Сохраняется в настройках клавиатуры рабочего стола. Изменения применяются сразу.
+linux-popup-shortcut-choose = Задать сочетание
+linux-popup-shortcut-dialog-hint = Нажмите нужное сочетание клавиш. Оно сохранится как пользовательское сочетание в настройках клавиатуры рабочего стола.
+linux-popup-shortcut-needs-modifier = Добавьте Ctrl, Alt или Super либо используйте F13–F24.
+linux-popup-shortcut-save-failed = Рабочий стол не принял сочетание. Повторите попытку или добавьте команду в его настройках клавиатуры.
+
+# src/settings_window/general.rs
+copy-command = Скопировать команду
+
+# src/settings_window/general.rs
+command-copied = Команда скопирована
+
+# src/settings_window/about.rs
+linux-about-tagline = Бесплатный компаньон с открытым кодом для лимитов, сбросов и расходов AI-подписок прямо в системном трее.
+
+# src/settings_window/advanced.rs
+linux-save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user = Сохраняет все настройки в файл .toml. Сохранённые ключи остаются зашифрованными на этом компьютере.
+
+# src/settings_window/appearance.rs
+linux-windows = Системный
+
+# src/settings_window/appearance.rs
+linux-windows-follows-your-system-accent = «Системный» следует акцентному цвету рабочего стола.
+
+# src/settings_window/appearance.rs
+linux-windows-default = Системный по умолчанию
+
+# src/settings_window/appearance.rs
+linux-popup-theme-description = Меняет только всплывающее окно. Настройки сохраняют свой вид.
+
+# src/settings_window/appearance.rs
+linux-glide-transitions-in-the-popup-and-settings-windows-own-animation = Плавные переходы во всплывающем окне и настройках. Настройка анимации рабочего стола тоже учитывается.
+
+# src/settings_window/providers/dialog.rs
+linux-saved-in-windows-user-storage-never-in-the-settings-file = Шифруется ключом из системной связки ключей и никогда не попадает в файл настроек.
+
+# src/settings_window/providers/dialog.rs
+linux-credential-saved-in-windows-user-storage = Учётные данные сохранены и зашифрованы системной связкой ключей.
+
+# src/settings_window/providers/dialog.rs
+linux-api-key-saved-in-windows-user-storage = API-ключ сохранён и зашифрован системной связкой ключей.
+
+# src/settings_window/providers/page.rs
+linux-saved-in-windows-user-storage = Зашифровано системной связкой ключей
+
+# src/settings_window/general.rs
+linux-applies-immediately-to-every-app-window-and-notification-auto-fol = Сразу применяется ко всем окнам и уведомлениям. Авто следует языку системы.
+
+# src/settings_window/providers/dialog.rs
+linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = Запускает собственный вход Claude Code для { $name }, передавая папку конфигурации как CLAUDE_CONFIG_DIR. Авторизация остаётся в этой папке, и Claude Code обновляет её.
+
+# src/settings_window/advanced.rs
+linux-add-a-game-description = Игры, запущенные через Steam, и игры из библиотек Steam или Heroic определяются сами. Любую другую программу добавьте здесь.

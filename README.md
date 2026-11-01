@@ -5,7 +5,7 @@
 <h1 align="center">Codex Minibar</h1>
 
 <p align="center">
-  <b>Free, open-source Windows tray companion for AI subscription usage limits with configurable tray widgets, a compact usage popup, notifications, auto-start, in-place updates, and local history.</b>
+  <b>Free, open-source Windows and Linux tray companion for AI subscription usage limits with configurable tray widgets, a compact usage popup, notifications, auto-start, in-place updates, and local history.</b>
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/github/downloads/vertopolkalf/codex-minibar/total?style=flat-square" alt="Downloads">
-  <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-blue?style=flat-square" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011%20%7C%20Linux-blue?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/Rust-2024-orange?style=flat-square" alt="Rust edition">
   <img src="https://img.shields.io/badge/UI-GPUI-green?style=flat-square" alt="UI framework">
 </p>
@@ -134,7 +134,8 @@ See spending per key and manage OpenRouter API keys from the popup's OpenRouter 
 
 ## Requirements
 
-- Windows 10 or Windows 11 (64-bit ARM or x64).
+- Windows 10 or Windows 11 (64-bit ARM or x64), or a 64-bit Linux desktop (x64) with a
+  system tray (see [Linux](#linux)).
 - A locally installed and authenticated supported provider, or an OpenRouter API key.
 
 The app does not copy provider credentials into its ordinary settings file. It talks to the local
@@ -250,6 +251,57 @@ The command scans for Codex and Claude Code, asks which one should investigate, 
 a terminal with the shared Codex Minibar troubleshooting prompt. The same handoff is
 available from **Settings → Log → Run Troubleshoot with AI**.
 
+## Linux
+
+Codex Minibar also runs on Linux desktops under Wayland and X11. Download from the
+[latest release](https://github.com/vertopolkaLF/codex-minibar/releases/latest):
+
+- **Debian/Ubuntu:** `sudo apt install ./codex-minibar_<version>_amd64.deb`
+- **Any distribution, no install:** make `codex-minibar-<version>-linux-x64.AppImage` executable
+  and run it.
+- **Other distributions:** extract `codex-minibar-<version>-linux-x64.tar.gz` and run
+  `./install.sh` to install into `~/.local`, or run `bin/codex-minibar` in place.
+
+The tray icon uses the StatusNotifierItem protocol. KDE Plasma, Xfce, Cinnamon, Budgie and
+most panels show it out of the box. On GNOME, enable the **AppIndicator and KStatusNotifierItem
+Support** extension (Ubuntu ships it enabled). Without a tray, launch `codex-minibar` again
+to open the popup.
+
+Click the tray icon to toggle the popup. On panels that open a menu instead (such as
+GNOME AppIndicator), choose **Show** to open the popup or **Settings** to open Settings.
+Closing the popup or Settings leaves the app running in the tray.
+
+Differences from Windows:
+
+- **Popup placement.** The popup is a floating panel by default. On X11, **Settings → Customize →
+  Popup position** picks one of six spots on the screen. Wayland does not let apps place their
+  windows, so the desktop positions it there and that option is disabled. The popup closes when it loses focus or
+  you press Esc, unless it is pinned.
+- **Global shortcut.** On GNOME-based desktops (GNOME, Ubuntu, Pop!_OS, Budgie), **Settings →
+  General → Popup shortcut** opens a dialog: press the combination you want and choose
+  **Save**. Minibar writes it into the desktop's own keyboard settings as a custom shortcut
+  running `codex-minibar --toggle`, so it appears in the desktop's shortcut list and the
+  desktop checks it for conflicts. Removing it deletes that entry. No shortcut is installed
+  until you set one. On other desktops, add a custom shortcut running `codex-minibar --toggle`
+  yourself; the same settings row shows the exact command and a copy button.
+- **Secrets.** API keys and saved sessions are encrypted with a key kept in your login keyring
+  (Secret Service). Without a keyring service the key is kept in a file only you can read.
+- **Notifications** go to your desktop's notification server and follow its Do Not Disturb.
+- **Game mode** detects games launched by Steam and games installed in Steam or Heroic
+  libraries.
+- **Updates** link to the release page; install them with your package manager or the new
+  tarball.
+- **Floating panel.** Enable it in Settings → Customize to keep the popup open when
+  switching apps and drag its header to move it. Wayland lets the compositor place
+  new windows, so saved panel positions are only available on Windows. On X11,
+  the pin also requests Always on Top from the window manager. On Wayland, it is
+  labeled Keep open: stacking is controlled by the desktop. Right-click the panel
+  header to open the native window menu and select Always on Top where available
+  (including GNOME). This desktop-owned state is separate from the Keep open setting.
+- **Windows-only features:** taskbar widgets, the Command Palette and Stream Deck integrations,
+  Acrylic/Mica backgrounds, reading the Claude desktop app's token cache
+  and reusing the Antigravity Windows sign-in.
+
 ## Updating
 
 By default, Codex Minibar checks GitHub Releases for updates and can install a matching
@@ -282,6 +334,16 @@ To build distributable Windows packages, run:
 
 This produces architecture-specific portable ZIP files and NSIS installers under `dist/`.
 
+On Linux, install the build dependencies (Debian/Ubuntu shown) and use plain Cargo:
+
+```sh
+sudo apt install build-essential pkg-config libxkbcommon-dev libxkbcommon-x11-dev \
+  libwayland-dev libx11-dev libx11-xcb-dev libxcb1-dev libxcb-xkb-dev libvulkan-dev \
+  libfontconfig-dev libfreetype-dev libdbus-1-dev libssl-dev libzstd-dev patchelf
+cargo test --all-targets --all-features --locked
+./build-linux.sh   # dist/<version>/: tarball, .deb and AppImage
+```
+
 ## Development
 
 Every window is rendered with [GPUI](https://gpui.rs) on one dedicated UI thread: the tray
@@ -289,7 +351,9 @@ popup, the Settings window and the first-launch onboarding. Settings controls (t
 dropdowns, sliders, text inputs, dialogs) live in `src/settings_window/kit.rs` and
 `src/settings_window/input.rs`. No UI framework runtime is redistributed; the release
 package is the executable plus its `assets` folder.
-CI checks formatting, lints, and tests on Windows.
+CI checks formatting, lints, and tests on Windows and Linux. Linux desktop integration
+(tray, notifications, portal settings, keyring, autostart, single instance) lives in
+`src/linux/`.
 
 ### Stream Deck companion
 

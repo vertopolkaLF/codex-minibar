@@ -28,6 +28,12 @@ fn run() -> Result<()> {
         codex_minibar::fake::seed_settings()?;
     }
     codex_minibar::logger::initialize(&path)?;
+    #[cfg(not(windows))]
+    if let Err(error) =
+        futures::executor::block_on(codex_minibar::linux::identity::register_portal())
+    {
+        codex_minibar::logger::info(format!("Linux desktop portal identity: {error:#}"));
+    }
     if let Err(error) = codex_minibar::pricing::initialize() {
         eprintln!("failed to hydrate pricing catalog: {error:#}");
     }

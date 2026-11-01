@@ -302,9 +302,17 @@ pub fn notify(notification: Notification) {
             notification.title, notification.body
         ));
     }
+    #[cfg(windows)]
     crate::popup_window::send_command(crate::popup_window::PopupCommand::Toast(Box::new(
         notification,
     )));
+    // Linux windows cannot be click-through or (on Wayland) placed in a
+    // corner, so cards go to the desktop's notification server instead.
+    #[cfg(not(windows))]
+    {
+        let silent = !SOUND_ENABLED.load(Ordering::Relaxed) || quiet_reason(false).is_some();
+        crate::linux::notify::post(notification, silent);
+    }
 }
 
 /// An informational notification.
@@ -412,16 +420,17 @@ fn update_available(version: &str, release_url: &str) -> Notification {
             crate::i18n::tr("a-new-release-is-ready-to-install")
         ),
     );
-    notification.actions = vec![
-        (
+    // Linux updates come from the release page (see `apply_pending_update`).
+    if cfg!(windows) {
+        notification.actions.push((
             crate::i18n::tr("update-now").to_owned(),
             NotificationAction::InstallUpdate,
-        ),
-        (
-            crate::i18n::tr("what-s-new").to_owned(),
-            NotificationAction::OpenUrl(release_url.to_owned()),
-        ),
-    ];
+        ));
+    }
+    notification.actions.push((
+        crate::i18n::tr("what-s-new").to_owned(),
+        NotificationAction::OpenUrl(release_url.to_owned()),
+    ));
     notification
 }
 
@@ -464,6 +473,7 @@ fn show_activation(
 /// Plays the sound of `notification` unless sounds are off, quiet hours are
 /// on, or Windows says the user is presenting, gaming full screen or
 /// otherwise busy.
+#[cfg(windows)]
 pub(crate) fn play_sound(notification: &Notification) {
     // Cards that still show during quiet hours do so silently.
     if !SOUND_ENABLED.load(Ordering::Relaxed) || quiet_reason(false).is_some() {

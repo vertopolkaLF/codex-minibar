@@ -470,7 +470,12 @@ impl SettingsWindow {
                             "signed-in-as-identity",
                             &[("identity", identity.to_string())],
                         ),
-                        (Some(_), None) => crate::i18n::tr("saved-in-windows-user-storage").into(),
+                        (Some(_), None) => (if cfg!(windows) {
+                            crate::i18n::tr("saved-in-windows-user-storage")
+                        } else {
+                            crate::i18n::tr("linux-saved-in-windows-user-storage")
+                        })
+                        .into(),
                         (None, _) => {
                             crate::i18n::tr("paste-a-sessionkey-or-an-oauth-access-token").into()
                         }
@@ -1092,7 +1097,14 @@ impl SettingsWindow {
             .icon(kit::row_icon(k, "key-fill"));
         let row = match saved_key {
             Some(key) => row
-                .description(k, crate::i18n::tr("saved-in-windows-user-storage"))
+                .description(
+                    k,
+                    if cfg!(windows) {
+                        crate::i18n::tr("saved-in-windows-user-storage")
+                    } else {
+                        crate::i18n::tr("linux-saved-in-windows-user-storage")
+                    },
+                )
                 .trailing(masked(k, crate::secrets::masked_hint(&key)))
                 .trailing(kit::more_menu(
                     k,

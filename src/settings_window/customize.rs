@@ -7,7 +7,9 @@ use gpui::{
 
 use super::kit::{self, Button, Kit, Row};
 use super::window::SettingsWindow;
-use crate::settings::{PopupTabMode, ProviderInstance, Settings, TotalSpendPresentation};
+use crate::settings::{
+    PopupPlacement, PopupTabMode, ProviderInstance, Settings, TotalSpendPresentation,
+};
 
 fn bool_row(
     this: &SettingsWindow,
@@ -38,6 +40,7 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let show_edit_button = self.settings.show_edit_home_button;
+        let topmost = cfg!(windows) || cx.compositor_name() == "X11";
         let floating = kit::card_of(k, |k| {
             let reset = Button::new(
                 "popup-reset-position",
@@ -47,7 +50,7 @@ impl SettingsWindow {
                 this.edit(cx, |s| s.popup_position = None)
             }))
             .render(k);
-            vec![
+            let mut rows = vec![
                 bool_row(
                     self,
                     k,
@@ -68,16 +71,59 @@ impl SettingsWindow {
                     k,
                     cx,
                     "popup-always-on-top",
-                    crate::i18n::tr("popup-always-on-top"),
-                    Some(crate::i18n::tr("popup-always-on-top-description")),
+                    crate::i18n::tr(if topmost {
+                        "popup-always-on-top"
+                    } else {
+                        "linux-popup-keep-open"
+                    }),
+                    Some(crate::i18n::tr(if topmost {
+                        "popup-always-on-top-description"
+                    } else {
+                        "linux-popup-keep-open-description"
+                    })),
                     |s| s.popup_pinned,
                     |s, v| s.popup_pinned = v,
+                ),
+                kit::dropdown_row(
+                    k,
+                    "popup-placement",
+                    crate::i18n::tr("popup-placement"),
+                    Some(crate::i18n::tr(if cfg!(windows) {
+                        "popup-placement-description"
+                    } else if topmost {
+                        "linux-popup-placement-description"
+                    } else {
+                        "linux-popup-placement-wayland"
+                    })),
+                    PopupPlacement::choices()
+                        .iter()
+                        .map(|placement| SharedString::from(placement.label()))
+                        .collect(),
+                    PopupPlacement::choices()
+                        .iter()
+                        .position(|placement| {
+                            *placement == self.settings.popup_placement.resolved()
+                        })
+                        .map_or(-1, |index| index as i32),
+                    !topmost,
+                    Self::h(cx, |this, index: usize, _, cx| {
+                        let placement = PopupPlacement::choices()[index];
+                        // The new spot replaces wherever the panel was dragged.
+                        this.edit(cx, move |s| {
+                            s.popup_placement = placement;
+                            s.popup_position = None;
+                        })
+                    }),
                 ),
                 Row::new("popup-position", crate::i18n::tr("popup-position"))
                     .description(k, crate::i18n::tr("popup-position-description"))
                     .trailing(reset)
                     .render(k),
-            ]
+            ];
+            if !cfg!(windows) {
+                rows.remove(3);
+            }
+            rows
         });
         let layout = kit::card_of(k, |k| {
             // Starting edit mode here works whether or not the bottom bar

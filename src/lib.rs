@@ -16,6 +16,8 @@ pub mod i18n;
 pub mod instances;
 pub mod kiro;
 pub mod limits;
+#[cfg(not(windows))]
+pub mod linux;
 pub mod logger;
 pub mod notifications;
 pub mod opencode;

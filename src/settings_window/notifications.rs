@@ -117,7 +117,7 @@ impl SettingsWindow {
             ]
         });
         let delivery = kit::card_of(k, |k| {
-            vec![
+            let mut rows = vec![
                 kit::toggle_row(
                     k,
                     "notif-sound",
@@ -138,7 +138,13 @@ impl SettingsWindow {
                         this.edit(cx, move |s| s.notifications.follow_do_not_disturb = value)
                     }),
                 ),
-            ]
+            ];
+            // Linux posts to the desktop's notification server, which applies
+            // its own Do Not Disturb to every bubble.
+            if !cfg!(windows) {
+                rows.pop();
+            }
+            rows
         });
         let low = self.threshold_card(
             k,

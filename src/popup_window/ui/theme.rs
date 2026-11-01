@@ -60,6 +60,11 @@ pub(crate) fn rgb8((r, g, b): (u8, u8, u8)) -> Hsla {
 /// The default UI family: Segoe UI Variable on Windows 11, Segoe UI on older
 /// systems that do not ship the variable font.
 pub(crate) fn default_font_family(cx: &gpui::App) -> SharedString {
+    // Linux: the desktop's own interface font.
+    #[cfg(not(windows))]
+    if let Some(family) = crate::linux::desktop::ui_font_family() {
+        return family.into();
+    }
     let names = cx.text_system().all_font_names();
     ["Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI"]
         .into_iter()
@@ -262,6 +267,7 @@ impl Palette {
 
     /// Lightness source of the Mica/Acrylic backdrop: a VS Code theme's
     /// canvas, else the Fluent base (#202020 dark, near-white light).
+    #[cfg(windows)]
     pub(crate) fn backdrop_luminosity(&self) -> (u8, u8, u8) {
         if self.vscode.is_none() {
             let level = if self.dark { 32 } else { 245 };
@@ -997,7 +1003,7 @@ mod tests {
         Palette::vscode(
             Arc::new(theme),
             PopupBackgroundMaterial::Solid,
-            "Segoe UI".into(),
+            if cfg!(windows) { "Segoe UI" } else { "Sans" }.into(),
         )
     }
 

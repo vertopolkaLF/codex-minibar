@@ -82,3 +82,24 @@ https://github.com/janekbaraniewski/openusage - OpenUsage. Local-first usage/quo
 When you need icons, download them from iocnify. Icon pack - Phosphor Icons for settings window, Fluent UI Icons for the popup icons
 
 All layout shifts have to be animated, respect the user's preference for animations.
+
+## Linux
+
+The app also targets Linux (X11 and Wayland). `cfg(not(windows))` code is the Linux
+build; desktop integration lives in `src/linux/` (StatusNotifierItem tray via `ksni`,
+freedesktop notifications, XDG portal settings, Secret Service key for secrets,
+XDG autostart, single-instance socket with `--toggle`). On Linux run plain Cargo
+(`cargo check --locked`, `cargo test --all-targets --all-features --locked`,
+`cargo clippy --all-targets --all-features --locked -- -D warnings`); package with
+`./build-linux.sh`.
+
+Every change must keep both platforms compiling and Clippy-clean. From Linux, check
+Windows with `CARGO_TARGET_DIR=target/win-check cargo clippy --target
+x86_64-pc-windows-gnu --all-targets --all-features -- -D warnings` (needs the
+`x86_64-pc-windows-gnu` Rust target and mingw-w64).
+
+The Linux popup is a window opened per show and sized to the capsule
+(`popup_window/ui/linux_host.rs`); GPUI cannot hide windows or make transparent
+areas click-through there, and Wayland apps cannot place windows. It closes on focus
+loss and Escape. Hide Windows-only settings on Linux instead of leaving inert
+controls, and give user-visible text that names Windows a `linux-` variant.

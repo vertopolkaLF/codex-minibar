@@ -247,7 +247,7 @@ impl X11ClientStatePtr {
         }
         state.cursor_styles.remove(&x_window);
 
-        if state.windows.is_empty() {
+        if state.windows.is_empty() && !cfg!(feature = "keep-alive") {
             state.common.signal.stop();
         }
     }

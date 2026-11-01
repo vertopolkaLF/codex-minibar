@@ -2947,12 +2947,26 @@ time-late = { $time } de retard
 
 # Floating usage panel
 popup-floating = Panneau flottant
+linux-popup-keep-open = Garder ouvert
+linux-popup-keep-open-description = Garder le panneau ouvert lors du changement d’application. Sous Wayland, faites un clic droit sur son en-tête et choisissez « Toujours au premier plan » dans le menu de fenêtre du bureau, si disponible.
+linux-popup-unpin = Détacher le panneau
 popup-floating-description = Gardez le panneau ouvert et faites glisser son en-tête vers une autre position ou un autre écran.
 popup-always-on-top = Toujours au premier plan
 popup-always-on-top-description = Garder le panneau au-dessus des autres applications et ouvert lors du changement d’application.
 popup-position = Position du panneau
 popup-position-description = La position est conservée entre les sessions.
 popup-reset-position = Réinitialiser la position
+popup-placement = Position de la fenêtre
+popup-placement-description = Où la fenêtre s’ouvre à l’écran. Automatique l’ouvre près de la zone de notification ou de la barre des tâches.
+popup-placement-auto = Automatique
+popup-placement-top-left = En haut à gauche
+popup-placement-top-center = En haut au centre
+popup-placement-top-right = En haut à droite
+popup-placement-bottom-left = En bas à gauche
+popup-placement-bottom-center = En bas au centre
+popup-placement-bottom-right = En bas à droite
+linux-popup-placement-description = Où la fenêtre s’ouvre à l’écran.
+linux-popup-placement-wayland = Sous Wayland, le bureau choisit où s’ouvrent les fenêtres : ce réglage ne s’applique donc qu’aux sessions X11.
 popup-drag-header = Faire glisser pour déplacer
 popup-close = Fermer le panneau
 
@@ -2997,3 +3011,68 @@ skip-automatic-reset = Annuler
 
 # src/popup_window/auto_reset.rs
 banked-reset-applied = Réinitialisation en réserve appliquée
+
+# src/tray.rs
+linux-no-tray-title = Aucune zone de notification trouvée
+
+# src/tray.rs
+linux-no-tray-body = Activez l’extension AppIndicator pour voir Codex Minibar dans le panneau. Relancez Codex Minibar pour l’ouvrir.
+
+# src/settings_window/general.rs
+start-at-login = Lancer à l’ouverture de session
+
+# src/settings_window/general.rs
+linux-popup-shortcut-description = Ajoutez un raccourci personnalisé dans les paramètres clavier de votre bureau qui exécute cette commande pour afficher ou masquer la fenêtre.
+
+# src/settings_window/general.rs
+copy-command = Copier la commande
+
+# src/settings_window/general.rs
+command-copied = Commande copiée
+
+# src/settings_window/about.rs
+linux-about-tagline = Compagnon gratuit et open source pour les limites d’utilisation, réinitialisations et dépenses de vos abonnements IA, directement dans la zone de notification.
+
+# src/settings_window/advanced.rs
+linux-save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user = Enregistre tous les réglages dans un fichier .toml. Les clés enregistrées restent chiffrées sur cet ordinateur.
+
+# src/settings_window/appearance.rs
+linux-windows = Système
+
+# src/settings_window/appearance.rs
+linux-windows-follows-your-system-accent = « Système » suit la couleur d’accentuation de votre bureau.
+
+# src/settings_window/appearance.rs
+linux-windows-default = Par défaut du système
+
+# src/settings_window/appearance.rs
+linux-popup-theme-description = Ne modifie que la fenêtre. Les réglages gardent leur propre apparence.
+
+# src/settings_window/appearance.rs
+linux-glide-transitions-in-the-popup-and-settings-windows-own-animation = Transitions fluides dans la fenêtre et les réglages. Le réglage d’animation de votre bureau est aussi respecté.
+
+# src/settings_window/providers/dialog.rs
+linux-saved-in-windows-user-storage-never-in-the-settings-file = Chiffré avec une clé du trousseau système, jamais dans le fichier de réglages.
+
+# src/settings_window/providers/dialog.rs
+linux-credential-saved-in-windows-user-storage = Identifiant enregistré, chiffré avec le trousseau système.
+
+# src/settings_window/providers/dialog.rs
+linux-api-key-saved-in-windows-user-storage = Clé API enregistrée, chiffrée avec le trousseau système.
+
+# src/settings_window/providers/page.rs
+linux-saved-in-windows-user-storage = Chiffré avec le trousseau système
+
+# src/settings_window/general.rs
+linux-applies-immediately-to-every-app-window-and-notification-auto-fol = S'applique immédiatement à toutes les fenêtres et notifications. « Automatique » suit la langue du système.
+
+# src/settings_window/providers/dialog.rs
+linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = Exécute la propre connexion de Claude Code pour { $name } avec son dossier de configuration sous la forme CLAUDE_CONFIG_DIR. La connexion reste dans ce dossier, où Claude Code la conserve.
+
+# src/settings_window/advanced.rs
+linux-add-a-game-description = Les jeux lancés par Steam et ceux des bibliothèques Steam ou Heroic sont détectés automatiquement. Ajoutez ici tout autre programme.
+linux-popup-shortcut-native-description = Enregistré dans les paramètres clavier de votre bureau. Les modifications s’appliquent immédiatement.
+linux-popup-shortcut-choose = Définir le raccourci
+linux-popup-shortcut-dialog-hint = Appuyez sur la combinaison de touches souhaitée. Elle sera enregistrée comme raccourci personnalisé dans les paramètres clavier de votre bureau.
+linux-popup-shortcut-needs-modifier = Incluez Ctrl, Alt ou Super, ou utilisez F13–F24.
+linux-popup-shortcut-save-failed = Le bureau n’a pas accepté le raccourci. Réessayez ou ajoutez la commande dans ses paramètres clavier.

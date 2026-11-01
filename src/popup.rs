@@ -41,6 +41,7 @@ const SHOW_GRACE_MS: i64 = 200;
 static POPUP_VISIBLE: AtomicBool = AtomicBool::new(false);
 static POPUP_CLOSING: AtomicBool = AtomicBool::new(false);
 static BUTTON_WAS_DOWN: AtomicBool = AtomicBool::new(false);
+#[cfg(windows)]
 static ESCAPE_WAS_DOWN: AtomicBool = AtomicBool::new(false);
 static IGNORE_OUTSIDE_UNTIL_MS: AtomicI64 = AtomicI64::new(0);
 /// Independent owners of popup dismissal suppression.
@@ -107,6 +108,7 @@ pub(crate) fn is_pinned() -> bool {
     is_reveal_pinned() || is_user_pinned() || DRAGGING.load(Ordering::SeqCst)
 }
 
+#[cfg(windows)]
 pub(crate) fn set_dragging(dragging: bool) {
     DRAGGING.store(dragging, Ordering::SeqCst);
 }
@@ -142,7 +144,12 @@ pub fn corner_radius_dip() -> i32 {
     CORNER_RADIUS_DIP.load(Ordering::SeqCst)
 }
 
+/// The popup's background material. Linux has no backdrop blur behind GPUI
+/// windows, so translucent materials would show the desktop unblurred.
 pub fn background_material() -> PopupBackgroundMaterial {
+    if !cfg!(windows) {
+        return PopupBackgroundMaterial::Solid;
+    }
     PopupBackgroundMaterial::from_index(i32::from(POPUP_BACKGROUND_MATERIAL.load(Ordering::SeqCst)))
 }
 
@@ -204,6 +211,27 @@ pub fn show_on_primary() {
     show_near(x, y);
 }
 
+/// When focus loss last dismissed the popup (Linux).
+#[cfg(not(windows))]
+static FOCUS_DISMISSED_AT_MS: AtomicI64 = AtomicI64::new(0);
+
+/// Linux: the popup lost focus. Clicking the tray icon to close it takes
+/// focus first, so remember when, and let that click's activation be ignored
+/// instead of reopening the popup.
+#[cfg(not(windows))]
+pub(crate) fn dismiss_on_focus_loss() {
+    FOCUS_DISMISSED_AT_MS.store(now_ms(), Ordering::SeqCst);
+    hide();
+}
+
+/// Whether focus loss closed the popup within the last moment, so a tray
+/// click arriving now was meant to close it.
+#[cfg(not(windows))]
+pub(crate) fn just_dismissed_by_focus_loss() -> bool {
+    const WINDOW_MS: i64 = 500;
+    now_ms() - FOCUS_DISMISSED_AT_MS.load(Ordering::SeqCst) < WINDOW_MS
+}
+
 pub fn hide() {
     if !is_visible() || is_closing() {
         return;
@@ -238,9 +266,10 @@ pub fn system_animations_enabled() -> bool {
     ok == 0 || enabled != 0
 }
 
+/// The desktop's animation switch (GNOME "Animations", read via the portal).
 #[cfg(not(windows))]
 pub fn system_animations_enabled() -> bool {
-    true
+    crate::linux::desktop::animations_enabled().unwrap_or(true)
 }
 
 pub fn animations_enabled() -> bool {
@@ -286,9 +315,10 @@ pub fn wait_for_messages(timeout: std::time::Duration) {
     }
 }
 
+/// Tray, notification and activation events call [`crate::linux::wake::wake`].
 #[cfg(not(windows))]
 pub fn wait_for_messages(timeout: std::time::Duration) {
-    std::thread::sleep(timeout);
+    crate::linux::wake::wait(timeout);
 }
 
 #[cfg(windows)]

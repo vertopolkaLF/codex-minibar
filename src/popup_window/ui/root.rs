@@ -156,6 +156,7 @@ pub(super) struct Host {
     pub(super) offset: f32,
     pub(super) last_region: Option<(i32, i32, i32, i32, i32)>,
     /// Capsule pixels last published for outside-click tests.
+    #[cfg(windows)]
     last_surface: Option<(i32, i32, i32, i32)>,
     pub(super) scale: f32,
     /// Previous frame of the open slide; long gaps are not counted as motion.
@@ -166,6 +167,10 @@ pub(super) struct Host {
     open_hold_frames: u32,
     /// Whether any open from hidden has happened since launch.
     opened_once: bool,
+    /// Linux: the window has had focus since it was shown, so losing it
+    /// is an outside click rather than the compositor not focusing it yet.
+    #[cfg(not(windows))]
+    pub(super) was_active: bool,
 }
 
 impl Host {
@@ -187,12 +192,15 @@ impl Host {
             width: Spring::at(f64::from(crate::popup::POPUP_WIDTH)),
             offset: 0.0,
             last_region: None,
+            #[cfg(windows)]
             last_surface: None,
             scale: 1.0,
             slide_frame: None,
             prewarm_frames: 0,
             open_hold_frames: 0,
             opened_once: false,
+            #[cfg(not(windows))]
+            was_active: false,
         }
     }
 
@@ -232,19 +240,29 @@ impl Host {
             }
             #[cfg(not(windows))]
             {
-                (f64::from(monitor.bounds.height()) / monitor.scale()
-                    * crate::popup::POPUP_SCREEN_HEIGHT_FRACTION) as f32
+                (f64::from(monitor.work.height() - crate::popup::EDGE_MARGIN_PX * 2)
+                    / monitor.scale()) as f32
             }
         })
     }
 
+    /// Gap between the capsule and the screen edge inside the host. On Linux
+    /// the window is the capsule; the gap lies outside it.
     pub(super) fn margin(&self) -> f32 {
-        crate::popup::EDGE_MARGIN_PX as f32 / self.scale.max(0.5)
+        if cfg!(windows) {
+            crate::popup::EDGE_MARGIN_PX as f32 / self.scale.max(0.5)
+        } else {
+            0.0
+        }
     }
 }
 
 /// Baseline height before the first content measurement.
 const INITIAL_HEIGHT: f32 = 300.0;
+
+/// Windows slides the capsule in and out of a fixed technical host. On Linux
+/// the window is the capsule, so the compositor animates map and unmap.
+const SLIDES_IN: bool = cfg!(windows);
 
 /// Last measured Home block and column bounds (window coordinates).
 #[derive(Default)]
@@ -359,10 +377,63 @@ pub(crate) struct PopupRoot {
 }
 
 impl PopupRoot {
+    #[cfg(windows)]
     pub(crate) fn new(
         state: Arc<AppState>,
         default_font: SharedString,
         window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut root = Self::detached(state, default_font, system_dark(window), cx);
+        root.attach_window(window, cx);
+        root
+    }
+
+    /// Subscribes to the window currently hosting the popup. Linux opens a
+    /// new window on every show; the entity and its state outlive them.
+    pub(crate) fn attach_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let appearance = cx.observe_window_appearance(window, |this, window, cx| {
+            this.refresh_palette(window);
+            cx.notify();
+        });
+        // Alt+F4 on the focused popup dismisses it; the HWND must survive.
+        window.on_window_should_close(cx, |_, _| {
+            crate::popup::hide();
+            false
+        });
+        self._subscriptions = vec![appearance];
+        #[cfg(not(windows))]
+        {
+            // Wayland gives clients no global pointer or keyboard input:
+            // losing focus is the outside click, and Escape arrives here.
+            let activation = cx.observe_window_activation(window, |this, window, _| {
+                if window.is_window_active() {
+                    this.host.was_active = true;
+                } else if std::mem::take(&mut this.host.was_active)
+                    && this.host.phase == Phase::Open
+                    && !this.ui.popup_floating
+                    && !crate::popup::is_pinned()
+                    && !crate::settings_window::is_open()
+                {
+                    crate::popup::dismiss_on_focus_loss();
+                }
+            });
+            let escape = cx.observe_keystrokes(|_, event, _, _| {
+                if event.keystroke.key == "escape"
+                    && crate::popup::is_visible()
+                    && !crate::popup::is_pinned()
+                {
+                    crate::popup::hide();
+                }
+            });
+            self._subscriptions.extend([activation, escape]);
+        }
+    }
+
+    pub(crate) fn detached(
+        state: Arc<AppState>,
+        default_font: SharedString,
+        system_dark: bool,
         cx: &mut Context<Self>,
     ) -> Self {
         let ui = initial_ui_state(&state);
@@ -371,7 +442,7 @@ impl PopupRoot {
             theme::popup_design(ui.popup_theme, ui.popup_vscode_theme.as_deref());
         let dark = theme::palette_dark(
             vscode.as_deref(),
-            theme::resolve_dark(ui.theme, system_dark(window)),
+            theme::resolve_dark(ui.theme, system_dark),
         );
         let palette = Palette::new(
             popup_theme,
@@ -385,15 +456,6 @@ impl PopupRoot {
         .with_tint(ui.popup_vscode_tint)
         .with_borders(ui.popup_borders)
         .with_window_border(ui.popup_window_border);
-        let appearance = cx.observe_window_appearance(window, |this, window, cx| {
-            this.refresh_palette(window);
-            cx.notify();
-        });
-        // Alt+F4 on the focused popup dismisses it; the HWND must survive.
-        window.on_window_should_close(cx, |_, _| {
-            crate::popup::hide();
-            false
-        });
         let clock = cx.spawn(async move |this: WeakEntity<Self>, cx| {
             loop {
                 cx.background_executor()
@@ -466,7 +528,7 @@ impl PopupRoot {
             body_presence: Vec::new(),
             capsule_origin: Point::default(),
             capsule_size: (0.0, 0.0),
-            _subscriptions: vec![appearance],
+            _subscriptions: Vec::new(),
             _clock: Some(clock),
             scrollbar_timer: None,
         }
@@ -474,8 +536,17 @@ impl PopupRoot {
 
     // ----- external updates -------------------------------------------------
 
-    pub(crate) fn apply_ui(&mut self, ui: UiState, window: &mut Window, cx: &mut Context<Self>) {
+    /// `window` is `None` while Linux has no popup window open; the palette
+    /// is then rebuilt by the next show.
+    pub(crate) fn apply_ui(
+        &mut self,
+        ui: UiState,
+        window: Option<&Window>,
+        cx: &mut Context<Self>,
+    ) {
         let accent_changed = ui.accent_color != self.ui.accent_color;
+        #[cfg(not(windows))]
+        let pinned_changed = ui.popup_pinned != self.ui.popup_pinned;
         let same_account = |provider| {
             ui.instance(provider)
                 .zip(self.ui.instance(provider))
@@ -500,7 +571,13 @@ impl PopupRoot {
         }
         crate::theme::set_animations_enabled(self.ui.animations_enabled);
         self.ui.time_format.apply();
-        self.refresh_palette(window);
+        if let Some(window) = window {
+            #[cfg(not(windows))]
+            if pinned_changed {
+                window.set_always_on_top(self.ui.popup_pinned);
+            }
+            self.refresh_palette(window);
+        }
         if self.ui.refreshing && self.refresh_started.is_none() {
             self.refresh_started = Some(Instant::now());
         } else if !self.ui.refreshing {
@@ -562,6 +639,7 @@ impl PopupRoot {
 
     /// The popup's design for another surface (the notification host) with
     /// its own system appearance, on an opaque background.
+    #[cfg(windows)]
     pub(super) fn palette_for(&self, system_dark: bool) -> Palette {
         let (popup_theme, vscode) =
             theme::popup_design(self.ui.popup_theme, self.ui.popup_vscode_theme.as_deref());
@@ -785,6 +863,64 @@ impl PopupRoot {
         cx: &mut Context<Self>,
     ) -> Option<super::ShowPlan> {
         let hwnd = self.host.hwnd?;
+        self.open_requested_view(cx);
+        let was_hidden = matches!(self.host.phase, Phase::Hidden | Phase::Prewarm);
+        let anchor = anchor.unwrap_or_else(|| {
+            let rect = super::win32::window_rect(hwnd);
+            (rect.right - 1, rect.bottom - 1)
+        });
+        self.prepare_show_header();
+        let rect = self.prepare_geometry(Some(anchor), beside);
+        self.remember_floating_origin(rect, cx);
+        self.start_show(window, cx);
+        Some(super::ShowPlan {
+            hwnd,
+            rect,
+            first_show: was_hidden,
+        })
+    }
+
+    /// Linux: prepares a show into a freshly opened window on `monitor`.
+    /// The window is the capsule, so there is no technical host geometry and
+    /// the compositor animates the window's appearance.
+    #[cfg(not(windows))]
+    pub(crate) fn begin_show(
+        &mut self,
+        monitor: super::Monitor,
+        placement: super::Placement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_requested_view(cx);
+        self.prepare_show_header();
+        self.host.monitor = Some(monitor);
+        self.host.placement = placement;
+        self.host.scale = window.scale_factor();
+        self.host.was_active = window.is_window_active();
+        self.start_show(window, cx);
+    }
+
+    /// Linux: selects the requested page on `monitor` and returns the
+    /// capsule size the new window opens at.
+    #[cfg(not(windows))]
+    pub(crate) fn prepare_linux_open(
+        &mut self,
+        monitor: super::Monitor,
+        cx: &mut Context<Self>,
+    ) -> (f32, f32) {
+        self.host.monitor = Some(monitor);
+        self.host.scale = monitor.scale() as f32;
+        self.open_requested_view(cx);
+        self.prepare_show_header();
+        let width = self.target_width(self.pager.current);
+        let height = self
+            .target_height(self.pager.current)
+            .min(self.host.max_height());
+        (width, height)
+    }
+
+    /// A fresh open starts directly on the page a caller asked for.
+    fn open_requested_view(&mut self, cx: &mut Context<Self>) {
         if let Some(view) = take_popup_view_request() {
             let view = match view {
                 PendingPopupView::Home => Some(PopupView::Home),
@@ -795,27 +931,27 @@ impl PopupRoot {
                 && self.view_available(view)
                 && view != self.pager.current
             {
-                // A fresh open starts directly on the requested page.
                 self.pager = reduce_pager(self.pager.clone(), PagerAction::Select(view));
                 self.finish_pager_animation_now();
                 self.on_page_entered(self.pager.current);
             }
         }
-        let already_visible = matches!(self.host.phase, Phase::Open | Phase::Opening(_));
-        if !already_visible {
+    }
+
+    fn prepare_show_header(&mut self) {
+        if !matches!(self.host.phase, Phase::Open | Phase::Opening(_)) {
             self.host.header_height = if self.ui.compact_bar_visible() {
                 super::footer::FLOATING_HEADER_HEIGHT
             } else {
                 0.0
             };
         }
+    }
+
+    /// Refreshes data and starts the open motion once geometry is known.
+    fn start_show(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let already_visible = matches!(self.host.phase, Phase::Open | Phase::Opening(_));
         let was_hidden = matches!(self.host.phase, Phase::Hidden | Phase::Prewarm);
-        let anchor = anchor.unwrap_or_else(|| {
-            let rect = super::win32::window_rect(hwnd);
-            (rect.right - 1, rect.bottom - 1)
-        });
-        let rect = self.prepare_geometry(Some(anchor), beside);
-        self.remember_floating_origin(rect, cx);
         // The system accent can change while the popup is hidden.
         self.accent = theme::accent_ramp(self.ui.accent_color);
         self.refresh_palette(window);
@@ -837,7 +973,7 @@ impl PopupRoot {
             let target_width = self.target_width(self.pager.current);
             self.host.width.snap(f64::from(target_width));
             self.host.open_hold_frames = 0;
-            self.host.phase = if super::animations_enabled(&self.ui) {
+            self.host.phase = if super::animations_enabled(&self.ui) && SLIDES_IN {
                 if closing_offset.is_none() {
                     self.host.open_hold_frames = if self.host.opened_once {
                         OPEN_HOLD_FRAMES
@@ -877,11 +1013,6 @@ impl PopupRoot {
         }
         crate::popup::set_lifecycle(true, false);
         cx.notify();
-        Some(super::ShowPlan {
-            hwnd,
-            rect,
-            first_show: was_hidden,
-        })
     }
 
     /// Prepares an invisible launch-time render at full host size, so the
@@ -923,12 +1054,14 @@ impl PopupRoot {
 
     /// The prewarm rendered enough frames and its usage snapshots landed, or
     /// a real open already took over.
+    #[cfg(windows)]
     pub(crate) fn prewarm_settled(&self) -> bool {
         self.host.phase != Phase::Prewarm
             || (self.host.prewarm_frames >= PREWARM_FRAMES + PREWARM_EXPOSED_FRAMES
                 && self.snapshots.values().all(|cache| cache.pending.is_none()))
     }
 
+    #[cfg(windows)]
     pub(crate) fn end_prewarm(&mut self, cx: &mut Context<Self>) {
         if self.host.phase == Phase::Prewarm {
             self.finish_hide(cx);
@@ -955,7 +1088,7 @@ impl PopupRoot {
             Phase::Hidden | Phase::Prewarm | Phase::Closing(..) => {}
             _ => {
                 let from = self.host.offset;
-                if super::animations_enabled(&self.ui) {
+                if super::animations_enabled(&self.ui) && SLIDES_IN {
                     self.host.phase = Phase::Closing(Instant::now(), from);
                     crate::popup::set_lifecycle(true, true);
                 } else {
@@ -967,6 +1100,7 @@ impl PopupRoot {
         }
     }
 
+    #[cfg_attr(not(windows), allow(unused_variables))]
     fn finish_hide(&mut self, cx: &mut Context<Self>) {
         let reopen = std::mem::take(&mut self.host.reopen_after_hide);
         self.host.phase = Phase::Hidden;
@@ -1105,11 +1239,16 @@ impl PopupRoot {
                 })
                 .unwrap_or_else(|| {
                     let monitor = super::win32::monitor_for_point(anchor.0, anchor.1);
+                    if self.ui.popup_placement != crate::settings::PopupPlacement::Auto {
+                        let (x, y) = self.fixed_floating_origin(monitor);
+                        return (monitor, x, y);
+                    }
                     let rect = super::host_rect(
                         monitor,
                         super::Placement {
                             left: false,
                             top: true,
+                            center: false,
                         },
                     );
                     (monitor, rect.left + crate::popup::EDGE_MARGIN_PX, rect.top)
@@ -1117,6 +1256,7 @@ impl PopupRoot {
             self.host.placement = super::Placement {
                 left: true,
                 top: true,
+                center: false,
             };
             let rect = super::floating_host_rect(monitor, x, y, self.ui.popup_two_columns);
             self.host.floating_rect = Some(rect);
@@ -1130,7 +1270,8 @@ impl PopupRoot {
                 super::win32::monitor_for_point(anchor.0, anchor.1)
             };
             if !preserve_corner {
-                self.host.placement = super::Placement::for_anchor(monitor, anchor, beside);
+                self.host.placement = super::Placement::fixed(self.ui.popup_placement)
+                    .unwrap_or_else(|| super::Placement::for_anchor(monitor, anchor, beside));
             }
             self.host.floating_rect = None;
             (monitor, super::host_rect(monitor, self.host.placement))
@@ -1138,6 +1279,21 @@ impl PopupRoot {
         self.host.monitor = Some(monitor);
         self.host.scale = monitor.scale() as f32;
         rect
+    }
+
+    /// Where a floating panel opens in the configured spot of `monitor`.
+    #[cfg(windows)]
+    fn fixed_floating_origin(&self, monitor: super::Monitor) -> (i32, i32) {
+        let pixels = |dip: f32| (f64::from(dip) * monitor.scale()).round() as i32;
+        let work = monitor.work;
+        self.ui.popup_placement.origin(
+            (work.left, work.top, work.right, work.bottom),
+            crate::popup::EDGE_MARGIN_PX,
+            (
+                pixels(self.target_width(self.pager.current)),
+                pixels(self.target_height(self.pager.current)),
+            ),
+        )
     }
 
     #[cfg(windows)]
@@ -1158,7 +1314,12 @@ impl PopupRoot {
         rect: super::win32::Rect,
         cx: &mut Context<Self>,
     ) {
-        if self.ui.popup_floating && self.ui.popup_position.is_none() {
+        // A fixed spot is recomputed per open, for the panel's height then;
+        // only a drag replaces it.
+        if self.ui.popup_floating
+            && self.ui.popup_position.is_none()
+            && self.ui.popup_placement == crate::settings::PopupPlacement::Auto
+        {
             self.persist_floating_origin(rect, cx);
         }
     }
@@ -1272,6 +1433,7 @@ impl PopupRoot {
         popup_height_bounds(content, chrome, self.host.max_height())
     }
 
+    #[cfg(windows)]
     pub(super) fn resize_height(
         &mut self,
         height_dip: f32,
@@ -1546,6 +1708,17 @@ impl PopupRoot {
     /// along its slide toward the screen edge of the placement's side.
     fn capsule_position(&self, viewport: (f32, f32), size: (f32, f32), offset: f32) -> (f32, f32) {
         let margin = self.host.margin();
+        if self.host.placement.center {
+            // No side edge is near: slide through the top or bottom edge.
+            let travel = self.center_slide(size, offset);
+            let x = ((viewport.0 - size.0) / 2.0).max(0.0);
+            let y = if self.host.placement.top {
+                -travel
+            } else {
+                (viewport.1 - size.1).max(0.0) + travel
+            };
+            return (x, y);
+        }
         let x = if self.host.placement.left {
             margin - offset
         } else {
@@ -1557,6 +1730,12 @@ impl PopupRoot {
             (viewport.1 - size.1).max(0.0)
         };
         (x, y)
+    }
+
+    /// The horizontal slide `offset`, in the vertical travel of a centered
+    /// capsule: fully slid out either way when the capsule just left the host.
+    fn center_slide(&self, size: (f32, f32), offset: f32) -> f32 {
+        offset * size.1 / (size.0 + self.host.margin()).max(1.0)
     }
 
     // ----- hover / tooltip helpers -------------------------------------------
@@ -1975,10 +2154,22 @@ impl Render for PopupRoot {
         if !self.host.visible() {
             return div().id("popup-root").size_full();
         }
+        // Linux: the window is the capsule. Follow its size springs, so page
+        // and layout changes still glide; the compositor draws nothing else.
+        #[cfg(not(windows))]
+        let capsule_h = {
+            let capsule_h = capsule_h.min(self.host.max_height());
+            let wanted = gpui::size(px(capsule_w.round()), px(capsule_h.round()));
+            if window.viewport_size() != wanted {
+                window.resize(wanted);
+            }
+            capsule_h
+        };
         let viewport = window.viewport_size();
         let viewport_w = f32::from(viewport.width);
         let viewport_h = f32::from(viewport.height);
         // A top/side taskbar can leave less work area than 80% of the monitor.
+        #[cfg(windows)]
         let capsule_h = capsule_h.min(viewport_h);
         let (capsule_x, capsule_y) =
             self.capsule_position((viewport_w, viewport_h), (capsule_w, capsule_h), offset);
@@ -2082,11 +2273,16 @@ impl Render for PopupRoot {
         let chrome_width = (capsule_w - CHROME_INSET * 2.0).max(0.0);
         // The chrome stands on the host edge by the taskbar: the bottom edge
         // normally, the top edge (where the capsule hangs from) by a top bar.
+        let chrome_slide = if self.host.placement.center {
+            self.center_slide((capsule_w, capsule_h), offset)
+        } else {
+            0.0
+        };
         let chrome_y = move |element: gpui::Stateful<gpui::Div>, offset: f32| {
             if chrome_on_top {
                 element.top(px(capsule_y + CHROME_INSET + offset))
             } else {
-                element.bottom(px(CHROME_INSET + offset))
+                element.bottom(px(CHROME_INSET + offset - chrome_slide))
             }
         };
         let left_side = self.host.placement.left;

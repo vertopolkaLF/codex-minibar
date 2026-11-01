@@ -2161,6 +2161,97 @@ impl Default for NotificationSettings {
     }
 }
 
+/// Where the popup opens. `Auto` follows the tray and taskbar, which only
+/// Windows can locate; the others are fixed spots of the work area.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PopupPlacement {
+    #[default]
+    Auto,
+    TopLeft,
+    TopCenter,
+    TopRight,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+}
+
+impl PopupPlacement {
+    const ALL: [Self; 7] = [
+        Self::Auto,
+        Self::TopLeft,
+        Self::TopCenter,
+        Self::TopRight,
+        Self::BottomLeft,
+        Self::BottomCenter,
+        Self::BottomRight,
+    ];
+
+    /// The choices Settings offers on this platform.
+    pub fn choices() -> &'static [Self] {
+        if cfg!(windows) {
+            &Self::ALL
+        } else {
+            &Self::ALL[1..]
+        }
+    }
+
+    /// `Auto` means nothing on Linux, where a settings file can still carry it.
+    pub fn resolved(self) -> Self {
+        if self == Self::Auto && !cfg!(windows) {
+            Self::TopRight
+        } else {
+            self
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => crate::i18n::tr("popup-placement-auto"),
+            Self::TopLeft => crate::i18n::tr("popup-placement-top-left"),
+            Self::TopCenter => crate::i18n::tr("popup-placement-top-center"),
+            Self::TopRight => crate::i18n::tr("popup-placement-top-right"),
+            Self::BottomLeft => crate::i18n::tr("popup-placement-bottom-left"),
+            Self::BottomCenter => crate::i18n::tr("popup-placement-bottom-center"),
+            Self::BottomRight => crate::i18n::tr("popup-placement-bottom-right"),
+        }
+    }
+
+    pub fn is_left(self) -> bool {
+        matches!(self, Self::TopLeft | Self::BottomLeft)
+    }
+
+    pub fn is_center(self) -> bool {
+        matches!(self, Self::TopCenter | Self::BottomCenter)
+    }
+
+    pub fn is_top(self) -> bool {
+        matches!(self, Self::TopLeft | Self::TopCenter | Self::TopRight)
+    }
+
+    /// Top-left of a `size` box in this spot of the work area
+    /// (`left, top, right, bottom`), `margin` away from its edges. `Auto` has
+    /// no spot of its own and lands in the top-right corner.
+    pub fn origin(self, work: (i32, i32, i32, i32), margin: i32, size: (i32, i32)) -> (i32, i32) {
+        let (left, top, right, bottom) = work;
+        let max_x = (right - margin - size.0).max(left);
+        let max_y = (bottom - margin - size.1).max(top);
+        let x = if self.is_left() {
+            (left + margin).min(max_x)
+        } else if self.is_center() {
+            (left + (right - left - size.0) / 2).max(left)
+        } else {
+            max_x
+        };
+        let y = if self.is_top() || self == Self::Auto {
+            (top + margin).min(max_y)
+        } else {
+            max_y
+        };
+        (x, y)
+    }
+}
+
 /// Floating panel origin in screen pixels. Monitor/DIP metadata is retained
 /// for settings compatibility; restoring never adjusts the screen coordinates.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2270,6 +2361,9 @@ pub struct Settings {
     /// User-selected popup height in DIPs, shared by tray and floating modes.
     pub popup_height_dip: Option<u32>,
     pub popup_position: Option<PopupPosition>,
+    /// Where the popup opens. A dragged floating panel stays at `popup_position`
+    /// until this is changed or the position is reset.
+    pub popup_placement: PopupPlacement,
     /// System-wide shortcut that shows or hides the popup. None leaves every
     /// key combination to other applications.
     pub popup_hotkey: Option<crate::hotkey::Hotkey>,
@@ -2350,10 +2444,16 @@ impl Default for Settings {
             show_account_name: false,
             show_edit_home_button: true,
             show_popup_action_bar: true,
-            popup_pinned: false,
-            popup_floating: false,
+            popup_pinned: !cfg!(windows),
+            // Linux has no tray position to open beside.
+            popup_floating: !cfg!(windows),
             popup_height_dip: None,
             popup_position: None,
+            popup_placement: if cfg!(windows) {
+                PopupPlacement::Auto
+            } else {
+                PopupPlacement::TopRight
+            },
             popup_hotkey: None,
             // An empty list intentionally means "show the ordinary app icon".
             tray_widgets: Vec::new(),
@@ -3130,7 +3230,7 @@ fn startup_registration_present() -> Result<bool> {
 
 #[cfg(not(windows))]
 fn startup_registration_present() -> Result<bool> {
-    Ok(false)
+    crate::linux::autostart::is_registered()
 }
 
 #[cfg(windows)]
@@ -3200,8 +3300,8 @@ fn apply_startup_registration(enabled: bool) -> Result<()> {
 }
 
 #[cfg(not(windows))]
-fn apply_startup_registration(_enabled: bool) -> Result<()> {
-    Ok(())
+fn apply_startup_registration(enabled: bool) -> Result<()> {
+    crate::linux::autostart::apply(enabled)
 }
 
 /// The `version` a raw settings file claims, or 0 when it has none.
@@ -3986,6 +4086,52 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn popup_placement_spots_stay_inside_the_work_area() {
+        use PopupPlacement::*;
+        let work = (0, 40, 1920, 1040);
+        for (placement, expected) in [
+            (TopLeft, (20, 60)),
+            (TopCenter, (770, 60)),
+            (TopRight, (1520, 60)),
+            (BottomLeft, (20, 420)),
+            (BottomCenter, (770, 420)),
+            (BottomRight, (1520, 420)),
+            (Auto, (1520, 60)),
+        ] {
+            assert_eq!(placement.origin(work, 20, (380, 600)), expected);
+        }
+        // Taller and wider than the work area: pinned to its top-left.
+        for placement in PopupPlacement::ALL {
+            assert_eq!(placement.origin(work, 20, (3000, 2000)), (0, 40));
+        }
+    }
+
+    #[test]
+    fn popup_placement_auto_is_windows_only_and_roundtrips() {
+        assert_eq!(
+            PopupPlacement::choices().contains(&PopupPlacement::Auto),
+            cfg!(windows)
+        );
+        assert_eq!(
+            PopupPlacement::Auto.resolved() == PopupPlacement::Auto,
+            cfg!(windows)
+        );
+        assert_eq!(
+            PopupPlacement::BottomLeft.resolved(),
+            PopupPlacement::BottomLeft
+        );
+        let defaults = Settings::default();
+        assert_eq!(defaults.popup_floating, !cfg!(windows));
+        assert!(PopupPlacement::choices().contains(&defaults.popup_placement));
+        let settings = Settings {
+            popup_placement: PopupPlacement::BottomCenter,
+            ..Settings::default()
+        };
+        let restored: Settings = toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.popup_placement, PopupPlacement::BottomCenter);
+    }
+
     fn id(kind: ProviderKind) -> ProviderId {
         ProviderId::primary(kind)
     }
@@ -4541,9 +4687,9 @@ enabled = ["codex", "claude"]
     }
 
     #[test]
-    fn floating_panel_settings_default_to_tray_and_round_trip() {
+    fn floating_panel_settings_default_per_platform_and_round_trip() {
         let mut settings: Settings = toml::from_str("onboarding_completed = true").unwrap();
-        assert!(!settings.popup_floating);
+        assert_eq!(settings.popup_floating, !cfg!(windows));
         assert!(settings.popup_position.is_none());
         assert_eq!(settings.popup_height_dip, None);
         settings.popup_height_dip = Some(900);

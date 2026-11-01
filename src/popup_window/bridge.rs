@@ -961,6 +961,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
 
 /// Keeps the popup shortcut registered as configured and toggles the popup
 /// when it is pressed, the same way a tray click does.
+#[cfg(windows)]
 fn pump_popup_hotkey(
     hotkey: &mut crate::hotkey::Registration,
     settings: &Settings,
@@ -986,6 +987,11 @@ fn pump_popup_hotkey(
         popup::show_near_cursor();
     }
 }
+
+/// Linux has no in-process hotkey: the desktop runs `codex-minibar --toggle`,
+/// which the single-instance socket delivers (`linux::instance`).
+#[cfg(not(windows))]
+fn pump_popup_hotkey(_: &mut crate::hotkey::Registration, _: &Settings, _: &mut UiState) {}
 
 /// Clicks and menu choices from the taskbar widgets.
 /// Performs the widgets' actions; returns whether the app should exit.
@@ -1120,13 +1126,55 @@ pub(super) fn pump_tray_and_dismiss(
     false
 }
 
+/// Tray input arrives from the StatusNotifierItem threads. Outside clicks
+/// and Escape are handled by the popup window itself (focus loss and key
+/// events): Linux clients cannot observe global input on Wayland.
 #[cfg(not(windows))]
 pub(super) fn pump_tray_and_dismiss(
-    _tray: &TrayManager,
+    tray: &TrayManager,
     _settings_tx: &Sender<Settings>,
     _state: &AppState,
-    _ui: &mut UiState,
+    ui: &mut UiState,
 ) -> bool {
+    use crate::tray::TrayEvent;
+
+    for event in tray.drain_events() {
+        match event {
+            TrayEvent::Activate(x, y) => {
+                if popup::is_visible() && !popup::is_closing() {
+                    // Settings uses the popup as a live preview.
+                    if !crate::settings_window::is_open() {
+                        popup::hide();
+                    }
+                } else if popup::just_dismissed_by_focus_loss() {
+                    // The click that closed the popup by taking its focus.
+                } else {
+                    flush_popup_ui(ui);
+                    if (x, y) == (0, 0) {
+                        popup::show_near_cursor();
+                    } else {
+                        popup::show_near(x, y);
+                    }
+                }
+            }
+            TrayEvent::Menu(TrayMenuAction::ShowPopup) => {
+                flush_popup_ui(ui);
+                popup::show_near_cursor();
+            }
+            TrayEvent::Menu(TrayMenuAction::Update) => {
+                // Failures are reported on the update card.
+                let _ = crate::updater::apply_pending_update();
+            }
+            TrayEvent::Menu(TrayMenuAction::Settings) => {
+                flush_popup_ui(ui);
+                if !popup::is_visible() || popup::is_closing() {
+                    popup::show_near_cursor();
+                }
+                crate::settings_window::open();
+            }
+            TrayEvent::Menu(TrayMenuAction::Exit) => return true,
+        }
+    }
     false
 }
 

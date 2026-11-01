@@ -262,6 +262,15 @@ impl Drop for ConnectionSlot {
 }
 
 /// 128 bits from the OS CSPRNG, hex encoded.
+#[cfg(not(windows))]
+fn generate_token() -> io::Result<String> {
+    let mut bytes = [0u8; 16];
+    crate::linux::random_bytes(&mut bytes)?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+/// 128 bits from the OS CSPRNG, hex encoded.
+#[cfg(windows)]
 fn generate_token() -> io::Result<String> {
     use windows_sys::Win32::Security::Cryptography::{
         BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom,

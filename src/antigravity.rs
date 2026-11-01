@@ -18,6 +18,7 @@ use crate::{
     worker::{Activator, LimitProvider, UsageProvider},
 };
 
+#[cfg(windows)]
 const CREDENTIAL_TARGET: &str = "gemini:antigravity";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const API_BASE: &str = "https://cloudcode-pa.googleapis.com";

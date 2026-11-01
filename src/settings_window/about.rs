@@ -48,7 +48,11 @@ impl SettingsWindow {
                     .text_size(px(14.0))
                     .line_height(px(20.0))
                     .text_color(theme.text_secondary)
-                    .child(crate::i18n::tr("about-tagline")),
+                    .child(if cfg!(windows) {
+                        crate::i18n::tr("about-tagline")
+                    } else {
+                        crate::i18n::tr("linux-about-tagline")
+                    }),
             )
             .child(
                 div()

@@ -147,6 +147,8 @@ fn source(name: &str) -> Option<&'static str> {
         "user-fill" => include_str!("../../../assets/icons/ph-user-fill.svg"),
         "warning-fill" => include_str!("../../../assets/icons/ph-warning-fill.svg"),
         "x-circle-fill" => include_str!("../../../assets/icons/ph-x-circle-fill.svg"),
+        "minus" => include_str!("../../../assets/icons/ph-minus.svg"),
+        "x" => include_str!("../../../assets/icons/ph-x.svg"),
         _ => return None,
     })
 }
