@@ -3032,7 +3032,8 @@ linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = 構成
 
 # src/settings_window/advanced.rs
 linux-add-a-game-description = Steam から起動したゲームと、Steam や Heroic のライブラリにあるゲームは自動で検出されます。その他のプログラムはここで追加してください。
-linux-popup-shortcut-native-description = デスクトップの許可ダイアログでグローバルショートカットを選択します。変更はすぐに反映されます。
+linux-popup-shortcut-native-description = デスクトップのキーボード設定に保存されます。変更はすぐに反映されます。
 linux-popup-shortcut-choose = ショートカットを設定
-linux-popup-shortcut-waiting = デスクトップの応答を待っています…
-linux-popup-shortcut-unavailable = デスクトップでショートカットを設定できませんでした。再試行するか、デスクトップのキーボード設定に以下のコマンドを追加してください。
+linux-popup-shortcut-dialog-hint = 使用したいキーの組み合わせを押してください。デスクトップのキーボード設定にカスタムショートカットとして保存されます。
+linux-popup-shortcut-needs-modifier = Ctrl、Alt、Super のいずれかを含めるか、F13～F24 を使用してください。
+linux-popup-shortcut-save-failed = デスクトップがショートカットを受け付けませんでした。再試行するか、キーボード設定でコマンドを追加してください。

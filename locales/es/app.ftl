@@ -2151,7 +2151,8 @@ linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = Ejecut
 
 # src/settings_window/advanced.rs
 linux-add-a-game-description = Los juegos iniciados por Steam y los de las bibliotecas de Steam o Heroic se detectan solos. Añade aquí cualquier otro programa.
-linux-popup-shortcut-native-description = Elige un atajo global en el diálogo de permisos de tu escritorio. Los cambios se aplican de inmediato.
+linux-popup-shortcut-native-description = Se guarda en los ajustes de teclado de tu escritorio. Los cambios se aplican de inmediato.
 linux-popup-shortcut-choose = Definir atajo
-linux-popup-shortcut-waiting = Esperando al escritorio…
-linux-popup-shortcut-unavailable = El escritorio no pudo configurar el atajo. Reinténtalo o añade el comando siguiente en los ajustes de teclado de tu escritorio.
+linux-popup-shortcut-dialog-hint = Pulsa la combinación de teclas que quieras usar. Se guardará como atajo personalizado en los ajustes de teclado de tu escritorio.
+linux-popup-shortcut-needs-modifier = Incluye Ctrl, Alt o Super, o usa F13–F24.
+linux-popup-shortcut-save-failed = El escritorio no aceptó el atajo. Reinténtalo o añade el comando en sus ajustes de teclado.

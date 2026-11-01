@@ -274,14 +274,13 @@ Differences from Windows:
 - **Popup placement.** On X11 the popup opens next to the tray icon. Wayland does not let apps
   place their windows, so the compositor positions it. The popup closes when it loses focus or
   you press Esc, unless it is pinned.
-- **Global shortcut.** In **Settings → General → Popup shortcut**, choose **Set shortcut**
-  and approve the desktop's shortcut dialog. The desktop remembers the chosen combination;
-  enabling, changing and removing it take effect immediately. Desktops without the Global
-  Shortcuts portal can use a custom keyboard shortcut running `codex-minibar --toggle`;
-  the same settings row shows the exact command and a copy button.
-  Native shortcut registration uses the desktop ID `io.github.vertopolkalf.CodexMinibar`.
-  Starting an unpackaged binary creates a matching launcher
-  in the XDG user applications directory if no installed entry exists.
+- **Global shortcut.** On GNOME-based desktops (GNOME, Ubuntu, Pop!_OS, Budgie), **Settings →
+  General → Popup shortcut** opens a dialog: press the combination you want and choose
+  **Save**. Minibar writes it into the desktop's own keyboard settings as a custom shortcut
+  running `codex-minibar --toggle`, so it appears in the desktop's shortcut list and the
+  desktop checks it for conflicts. Removing it deletes that entry. No shortcut is installed
+  until you set one. On other desktops, add a custom shortcut running `codex-minibar --toggle`
+  yourself; the same settings row shows the exact command and a copy button.
 - **Secrets.** API keys and saved sessions are encrypted with a key kept in your login keyring
   (Secret Service). Without a keyring service the key is kept in a file only you can read.
 - **Notifications** go to your desktop's notification server and follow its Do Not Disturb.

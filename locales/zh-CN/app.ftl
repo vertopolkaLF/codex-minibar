@@ -2130,7 +2130,8 @@ linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = 为 { 
 
 # src/settings_window/advanced.rs
 linux-add-a-game-description = 由 Steam 启动的游戏以及 Steam 或 Heroic 库中的游戏会被自动识别。其他程序请在此添加。
-linux-popup-shortcut-native-description = 在桌面的权限对话框中选择全局快捷键。更改会立即生效。
+linux-popup-shortcut-native-description = 保存在桌面的键盘设置中。更改会立即生效。
 linux-popup-shortcut-choose = 设置快捷键
-linux-popup-shortcut-waiting = 正在等待桌面响应…
-linux-popup-shortcut-unavailable = 桌面无法配置快捷键。请重试，或在桌面的键盘设置中添加以下命令。
+linux-popup-shortcut-dialog-hint = 按下要使用的组合键。它将作为自定义快捷键保存到桌面的键盘设置中。
+linux-popup-shortcut-needs-modifier = 请包含 Ctrl、Alt 或 Super，或使用 F13–F24。
+linux-popup-shortcut-save-failed = 桌面未接受该快捷键。请重试，或在其键盘设置中添加命令。

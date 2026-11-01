@@ -189,7 +189,7 @@ impl Host {
 }
 
 fn activate_window(window: &gpui::Window) {
-    if let Some(token) = crate::linux::shortcuts::take_activation_token() {
+    if let Some(token) = crate::linux::instance::take_activation_token() {
         window.activate_window_with_token(token);
     } else {
         window.activate_window();

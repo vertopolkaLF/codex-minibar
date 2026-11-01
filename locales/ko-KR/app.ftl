@@ -3031,7 +3031,8 @@ linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = 구성
 
 # src/settings_window/advanced.rs
 linux-add-a-game-description = Steam으로 실행한 게임과 Steam 또는 Heroic 라이브러리의 게임은 자동으로 감지됩니다. 다른 프로그램은 여기에 추가하세요.
-linux-popup-shortcut-native-description = 데스크톱의 권한 대화 상자에서 전역 단축키를 선택하세요. 변경 사항은 즉시 적용됩니다.
+linux-popup-shortcut-native-description = 데스크톱의 키보드 설정에 저장됩니다. 변경 사항은 즉시 적용됩니다.
 linux-popup-shortcut-choose = 단축키 설정
-linux-popup-shortcut-waiting = 데스크톱 응답 대기 중…
-linux-popup-shortcut-unavailable = 데스크톱에서 단축키를 설정하지 못했습니다. 다시 시도하거나 데스크톱의 키보드 설정에 아래 명령을 추가하세요.
+linux-popup-shortcut-dialog-hint = 사용할 키 조합을 누르세요. 데스크톱의 키보드 설정에 사용자 지정 단축키로 저장됩니다.
+linux-popup-shortcut-needs-modifier = Ctrl, Alt 또는 Super를 포함하거나 F13–F24를 사용하세요.
+linux-popup-shortcut-save-failed = 데스크톱에서 단축키를 받아들이지 않았습니다. 다시 시도하거나 키보드 설정에서 명령을 추가하세요.

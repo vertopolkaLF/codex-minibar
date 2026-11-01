@@ -112,6 +112,11 @@ pub(crate) struct SettingsWindow {
     pub(super) hotkey_recording: bool,
     /// The last combination pressed while recording had no modifier.
     pub(super) hotkey_rejected: bool,
+    /// The popup shortcut as the desktop has it, and its open dialog.
+    #[cfg(not(windows))]
+    pub(super) desktop_shortcut: super::shortcut::DesktopShortcut,
+    #[cfg(not(windows))]
+    pub(super) shortcut_dialog: Option<super::shortcut::ShortcutDialog>,
     /// Dialogs that are open or still playing their exit transition.
     pub(super) overlays: Overlays,
     pub(super) tray_previews: super::tray::PreviewCache,
@@ -238,6 +243,10 @@ impl SettingsWindow {
             confirm_reset: false,
             hotkey_recording: false,
             hotkey_rejected: false,
+            #[cfg(not(windows))]
+            desktop_shortcut: super::shortcut::DesktopShortcut::load(),
+            #[cfg(not(windows))]
+            shortcut_dialog: None,
             overlays: Overlays::default(),
             tray_previews: Default::default(),
             taskbar_previews: Default::default(),
@@ -561,6 +570,11 @@ impl SettingsWindow {
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.record_hotkey(event, cx) {
+            cx.stop_propagation();
+            return;
+        }
+        #[cfg(not(windows))]
+        if self.record_shortcut(event, cx) {
             cx.stop_propagation();
             return;
         }
@@ -1382,6 +1396,10 @@ impl Render for SettingsWindow {
         if let Some(overlay) = self.open_vsx_overlay(&mut k, window, cx) {
             overlays.push(overlay);
         }
+        #[cfg(not(windows))]
+        if let Some(overlay) = self.shortcut_overlay(&mut k, cx) {
+            overlays.push(overlay);
+        }
         k.end_frame(window);
         let theme = k.theme.clone();
         self.kit = k;
@@ -1448,6 +1466,8 @@ pub(super) struct Overlays {
     )>,
     pub(super) reset: kit::Presence<()>,
     pub(super) open_vsx: kit::Presence<()>,
+    #[cfg(not(windows))]
+    pub(super) shortcut: kit::Presence<super::shortcut::ShortcutDialog>,
 }
 
 /// Drag payload for reordering providers in the sidebar.

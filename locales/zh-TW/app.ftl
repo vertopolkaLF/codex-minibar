@@ -2130,7 +2130,8 @@ linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = 為 { 
 
 # src/settings_window/advanced.rs
 linux-add-a-game-description = 由 Steam 啟動的遊戲以及 Steam 或 Heroic 收藏庫中的遊戲會自動偵測。其他程式請在此新增。
-linux-popup-shortcut-native-description = 在桌面的權限對話框中選擇全域快捷鍵。變更會立即生效。
+linux-popup-shortcut-native-description = 儲存在桌面的鍵盤設定中。變更會立即生效。
 linux-popup-shortcut-choose = 設定快捷鍵
-linux-popup-shortcut-waiting = 正在等待桌面回應…
-linux-popup-shortcut-unavailable = 桌面無法設定快捷鍵。請重試，或在桌面的鍵盤設定中新增以下命令。
+linux-popup-shortcut-dialog-hint = 按下要使用的組合鍵。它會作為自訂快捷鍵儲存到桌面的鍵盤設定中。
+linux-popup-shortcut-needs-modifier = 請包含 Ctrl、Alt 或 Super，或使用 F13–F24。
+linux-popup-shortcut-save-failed = 桌面未接受該快捷鍵。請重試，或在其鍵盤設定中新增命令。

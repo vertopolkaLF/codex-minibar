@@ -3004,10 +3004,11 @@ start-at-login = Start at login
 
 # src/settings_window/general.rs
 linux-popup-shortcut-description = Add a custom shortcut in your desktop's keyboard settings that runs this command to show or hide the popup.
-linux-popup-shortcut-native-description = Choose a system-wide shortcut in your desktop's permission dialog. Changes apply immediately.
+linux-popup-shortcut-native-description = Saved in your desktop's keyboard settings. Changes apply immediately.
 linux-popup-shortcut-choose = Set shortcut
-linux-popup-shortcut-waiting = Waiting for your desktop…
-linux-popup-shortcut-unavailable = The desktop could not configure the shortcut. Retry, or add the command below in your desktop's keyboard settings.
+linux-popup-shortcut-dialog-hint = Press the key combination you want to use. It is saved as a custom shortcut in your desktop's keyboard settings.
+linux-popup-shortcut-needs-modifier = Include Ctrl, Alt or Super, or use F13–F24.
+linux-popup-shortcut-save-failed = Your desktop did not accept the shortcut. Try again, or add the command in its keyboard settings.
 
 # src/settings_window/general.rs
 copy-command = Copy command

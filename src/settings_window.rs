@@ -41,6 +41,8 @@ mod notifications;
 mod onboarding;
 mod persistence;
 mod providers;
+#[cfg(not(windows))]
+mod shortcut;
 mod taskbar;
 pub(crate) mod theme;
 mod tray;
@@ -91,6 +93,7 @@ pub(crate) enum Command {
     DiscoveredBricks(BTreeMap<String, String>),
     OpenRouter(OpenRouterSettingsSnapshot),
     /// The popup shortcut's registration status changed.
+    #[cfg(windows)]
     HotkeyStatus,
     /// Open Settings on the Taskbar page, with one widget's editor open.
     OpenTaskbar(Option<String>),
@@ -149,6 +152,7 @@ pub(crate) fn is_open() -> bool {
 }
 
 /// Repaint Settings after the popup shortcut was (un)registered.
+#[cfg(windows)]
 pub(crate) fn refresh_hotkey_status() {
     if SETTINGS_OPEN.load(Ordering::SeqCst) {
         post(Command::HotkeyStatus);
@@ -273,6 +277,7 @@ pub(crate) fn handle(command: Command, state: &Arc<AppState>, cx: &mut AsyncApp)
             root.openrouter = snapshot;
             cx.notify();
         }),
+        #[cfg(windows)]
         Command::HotkeyStatus => with_settings_window(cx, |_, cx| cx.notify()),
         Command::OpenTaskbar(widget) => {
             if focus_existing(&ONBOARDING_WINDOW, cx) {

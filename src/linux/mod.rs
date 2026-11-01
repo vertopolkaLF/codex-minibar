@@ -9,9 +9,10 @@ pub mod autostart;
 pub mod desktop;
 pub mod identity;
 pub mod instance;
+pub mod keybinding;
 pub mod keyring;
 pub mod notify;
-pub mod shortcuts;
+
 pub mod wake;
 
 use std::io::Read;

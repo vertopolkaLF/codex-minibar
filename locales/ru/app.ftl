@@ -3011,10 +3011,11 @@ start-at-login = Запускать при входе в систему
 
 # src/settings_window/general.rs
 linux-popup-shortcut-description = Добавьте в настройках клавиатуры рабочего стола своё сочетание клавиш, запускающее эту команду, чтобы показывать и скрывать окно.
-linux-popup-shortcut-native-description = Выберите глобальное сочетание клавиш в системном диалоге разрешений. Изменения применяются сразу.
+linux-popup-shortcut-native-description = Сохраняется в настройках клавиатуры рабочего стола. Изменения применяются сразу.
 linux-popup-shortcut-choose = Задать сочетание
-linux-popup-shortcut-waiting = Ожидание рабочего стола…
-linux-popup-shortcut-unavailable = Рабочий стол не смог настроить сочетание. Повторите попытку или добавьте команду ниже в настройках клавиатуры рабочего стола.
+linux-popup-shortcut-dialog-hint = Нажмите нужное сочетание клавиш. Оно сохранится как пользовательское сочетание в настройках клавиатуры рабочего стола.
+linux-popup-shortcut-needs-modifier = Добавьте Ctrl, Alt или Super либо используйте F13–F24.
+linux-popup-shortcut-save-failed = Рабочий стол не принял сочетание. Повторите попытку или добавьте команду в его настройках клавиатуры.
 
 # src/settings_window/general.rs
 copy-command = Скопировать команду

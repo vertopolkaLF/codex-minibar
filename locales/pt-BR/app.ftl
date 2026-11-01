@@ -2151,7 +2151,8 @@ linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = Execut
 
 # src/settings_window/advanced.rs
 linux-add-a-game-description = Jogos iniciados pelo Steam e jogos das bibliotecas do Steam ou Heroic são detectados sozinhos. Adicione aqui qualquer outro programa.
-linux-popup-shortcut-native-description = Escolha um atalho global na janela de permissões do seu ambiente de trabalho. As alterações são aplicadas imediatamente.
+linux-popup-shortcut-native-description = Salvo nas configurações de teclado do seu ambiente de trabalho. As alterações são aplicadas imediatamente.
 linux-popup-shortcut-choose = Definir atalho
-linux-popup-shortcut-waiting = Aguardando o ambiente de trabalho…
-linux-popup-shortcut-unavailable = O ambiente de trabalho não conseguiu configurar o atalho. Tente novamente ou adicione o comando abaixo nas configurações de teclado do seu ambiente de trabalho.
+linux-popup-shortcut-dialog-hint = Pressione a combinação de teclas que deseja usar. Ela será salva como atalho personalizado nas configurações de teclado do seu ambiente de trabalho.
+linux-popup-shortcut-needs-modifier = Inclua Ctrl, Alt ou Super, ou use F13–F24.
+linux-popup-shortcut-save-failed = O ambiente de trabalho não aceitou o atalho. Tente novamente ou adicione o comando nas configurações de teclado dele.

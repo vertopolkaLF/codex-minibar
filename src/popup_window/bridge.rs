@@ -961,6 +961,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
 
 /// Keeps the popup shortcut registered as configured and toggles the popup
 /// when it is pressed, the same way a tray click does.
+#[cfg(windows)]
 fn pump_popup_hotkey(
     hotkey: &mut crate::hotkey::Registration,
     settings: &Settings,
@@ -969,26 +970,13 @@ fn pump_popup_hotkey(
     // Settings releases the shortcut while it records a new one; the flag
     // cannot outlive the window that set it.
     let recording = crate::hotkey::is_suspended() && crate::settings_window::is_open();
-    #[cfg(windows)]
     if hotkey.sync(settings.popup_hotkey.filter(|_| !recording)) {
         crate::settings_window::refresh_hotkey_status();
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = hotkey;
-        crate::linux::shortcuts::sync(settings.linux_popup_shortcut_enabled);
-        if !settings.linux_popup_shortcut_enabled {
-            let _ = crate::hotkey::take_pressed();
-            let _ = crate::linux::shortcuts::take_activation_token();
-            return;
-        }
     }
     if !crate::hotkey::take_pressed() || recording {
         return;
     }
     if popup::is_visible() && !popup::is_closing() {
-        #[cfg(not(windows))]
-        let _ = crate::linux::shortcuts::take_activation_token();
         // Settings uses the popup as a live preview; keep it, as a tray
         // click does.
         if !crate::settings_window::is_open() {
@@ -999,6 +987,11 @@ fn pump_popup_hotkey(
         popup::show_near_cursor();
     }
 }
+
+/// Linux has no in-process hotkey: the desktop runs `codex-minibar --toggle`,
+/// which the single-instance socket delivers (`linux::instance`).
+#[cfg(not(windows))]
+fn pump_popup_hotkey(_: &mut crate::hotkey::Registration, _: &Settings, _: &mut UiState) {}
 
 /// Clicks and menu choices from the taskbar widgets.
 /// Performs the widgets' actions; returns whether the app should exit.

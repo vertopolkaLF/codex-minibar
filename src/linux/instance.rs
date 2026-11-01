@@ -7,8 +7,11 @@
 //! `FindWindow` activation on Windows.
 //!
 //! `codex-minibar --toggle` asks it to toggle the popup instead. Bound to a
-//! keyboard shortcut in the desktop's settings, that is the global hotkey on
-//! Wayland, where applications cannot grab keys themselves.
+//! keyboard shortcut in the desktop's settings (`linux::keybinding` installs
+//! it), that is the global hotkey on Wayland, where applications cannot grab
+//! keys themselves. The desktop hands the launched command an
+//! `XDG_ACTIVATION_TOKEN`; it travels with the request so the popup may take
+//! focus.
 
 use std::{
     fs::{File, OpenOptions},
@@ -22,13 +25,17 @@ use std::{
     },
     path::PathBuf,
     sync::Mutex,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
 
 const ACTIVATE: &[u8] = b"activate\n";
-const TOGGLE: &[u8] = b"toggle\n";
+const TOGGLE: &str = "toggle";
+/// Longest request line: the verb and an activation token.
+const MAX_REQUEST: u64 = 512;
+const TOKEN_LIFETIME: Duration = Duration::from_secs(5);
+static ACTIVATION_TOKEN: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 /// The command-line flag that toggles the running popup.
 pub const TOGGLE_FLAG: &str = "--toggle";
 
@@ -115,7 +122,15 @@ fn activate_existing(socket_path: &std::path::Path) {
                 .skip(1)
                 .any(|argument| argument == TOGGLE_FLAG);
             let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-            let _ = stream.write_all(if toggle { TOGGLE } else { ACTIVATE });
+            let request = if toggle {
+                match activation_token_from_env() {
+                    Some(token) => format!("{TOGGLE} {token}\n").into_bytes(),
+                    None => format!("{TOGGLE}\n").into_bytes(),
+                }
+            } else {
+                ACTIVATE.to_vec()
+            };
+            let _ = stream.write_all(&request);
         }
         Err(error) => eprintln!("could not reach the running Codex Minibar: {error}"),
     }
@@ -125,16 +140,59 @@ fn serve(listener: UnixListener) {
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-        let mut request = Vec::with_capacity(16);
-        if (&mut stream).take(16).read_to_end(&mut request).is_err() {
+        let mut request = Vec::with_capacity(64);
+        if (&mut stream)
+            .take(MAX_REQUEST)
+            .read_to_end(&mut request)
+            .is_err()
+        {
             continue;
         }
         if request == ACTIVATE {
             activate();
-        } else if request == TOGGLE {
+        } else if let Some(token) = parse_toggle(&request) {
+            if let (Some(token), Ok(mut pending)) = (token, ACTIVATION_TOKEN.lock()) {
+                *pending = Some((token, Instant::now()));
+            }
             toggle();
         }
     }
+}
+
+/// The token the desktop gave the launched `--toggle` process, if any.
+fn activation_token_from_env() -> Option<String> {
+    std::env::var("XDG_ACTIVATION_TOKEN")
+        .ok()
+        .filter(|token| is_token(token))
+}
+
+fn is_token(token: &str) -> bool {
+    !token.is_empty()
+        && token.len() <= 256
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+}
+
+/// `Some(token)` for a toggle request, `None` for anything else.
+fn parse_toggle(request: &[u8]) -> Option<Option<String>> {
+    let line = std::str::from_utf8(request).ok()?.strip_suffix('\n')?;
+    let rest = line.strip_prefix(TOGGLE)?;
+    if rest.is_empty() {
+        return Some(None);
+    }
+    let token = rest.strip_prefix(' ')?;
+    is_token(token).then(|| Some(token.to_owned()))
+}
+
+/// A focus token received with the latest toggle, valid once and briefly.
+pub fn take_activation_token() -> Option<String> {
+    ACTIVATION_TOKEN
+        .lock()
+        .ok()?
+        .take()
+        .filter(|(_, received)| received.elapsed() < TOKEN_LIFETIME)
+        .map(|(token, _)| token)
 }
 
 /// The shell command that toggles the popup, for a desktop keyboard
@@ -157,6 +215,8 @@ pub fn toggle_command() -> String {
 /// Like a tray click: closes the popup, or opens it.
 fn toggle() {
     if crate::popup::is_visible() && !crate::popup::is_closing() {
+        // Nothing opens, so nothing needs the focus token.
+        let _ = take_activation_token();
         if !crate::settings_window::is_open() {
             crate::popup::hide();
         }
@@ -175,4 +235,23 @@ fn activate() {
         crate::popup::show_near_cursor();
     }
     super::wake::wake();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toggle_requests_carry_an_optional_valid_focus_token() {
+        assert_eq!(parse_toggle(b"toggle\n"), Some(None));
+        assert_eq!(
+            parse_toggle(b"toggle abc-123_x.y:z\n"),
+            Some(Some("abc-123_x.y:z".to_owned()))
+        );
+        assert_eq!(parse_toggle(b"toggle \n"), None);
+        assert_eq!(parse_toggle(b"toggle a b\n"), None);
+        assert_eq!(parse_toggle(b"toggle abc"), None);
+        assert_eq!(parse_toggle(b"togglex\n"), None);
+        assert_eq!(parse_toggle(ACTIVATE), None);
+    }
 }

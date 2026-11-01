@@ -3053,7 +3053,8 @@ linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = Führt
 
 # src/settings_window/advanced.rs
 linux-add-a-game-description = Von Steam gestartete Spiele und Spiele in Steam- oder Heroic-Bibliotheken werden selbst erkannt. Fügen Sie hier beliebige andere Programme hinzu.
-linux-popup-shortcut-native-description = Wählen Sie im Berechtigungsdialog Ihres Desktops ein globales Tastenkürzel. Änderungen gelten sofort.
+linux-popup-shortcut-native-description = Wird in den Tastatureinstellungen Ihres Desktops gespeichert. Änderungen gelten sofort.
 linux-popup-shortcut-choose = Tastenkürzel festlegen
-linux-popup-shortcut-waiting = Warten auf den Desktop…
-linux-popup-shortcut-unavailable = Der Desktop konnte das Tastenkürzel nicht einrichten. Versuchen Sie es erneut oder fügen Sie den folgenden Befehl in den Tastatureinstellungen Ihres Desktops hinzu.
+linux-popup-shortcut-dialog-hint = Drücken Sie die gewünschte Tastenkombination. Sie wird als benutzerdefiniertes Kürzel in den Tastatureinstellungen Ihres Desktops gespeichert.
+linux-popup-shortcut-needs-modifier = Verwenden Sie Strg, Alt oder Super oder nutzen Sie F13–F24.
+linux-popup-shortcut-save-failed = Der Desktop hat das Tastenkürzel nicht übernommen. Versuchen Sie es erneut oder fügen Sie den Befehl in den Tastatureinstellungen hinzu.

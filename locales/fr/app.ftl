@@ -3060,7 +3060,8 @@ linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = Exécu
 
 # src/settings_window/advanced.rs
 linux-add-a-game-description = Les jeux lancés par Steam et ceux des bibliothèques Steam ou Heroic sont détectés automatiquement. Ajoutez ici tout autre programme.
-linux-popup-shortcut-native-description = Choisissez un raccourci global dans la boîte de dialogue d’autorisation du bureau. Les modifications s’appliquent immédiatement.
+linux-popup-shortcut-native-description = Enregistré dans les paramètres clavier de votre bureau. Les modifications s’appliquent immédiatement.
 linux-popup-shortcut-choose = Définir le raccourci
-linux-popup-shortcut-waiting = En attente du bureau…
-linux-popup-shortcut-unavailable = Le bureau n’a pas pu configurer le raccourci. Réessayez ou ajoutez la commande ci-dessous dans les paramètres du clavier de votre bureau.
+linux-popup-shortcut-dialog-hint = Appuyez sur la combinaison de touches souhaitée. Elle sera enregistrée comme raccourci personnalisé dans les paramètres clavier de votre bureau.
+linux-popup-shortcut-needs-modifier = Incluez Ctrl, Alt ou Super, ou utilisez F13–F24.
+linux-popup-shortcut-save-failed = Le bureau n’a pas accepté le raccourci. Réessayez ou ajoutez la commande dans ses paramètres clavier.

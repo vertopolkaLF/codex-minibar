@@ -3031,7 +3031,8 @@ linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = { $nam
 
 # src/settings_window/advanced.rs
 linux-add-a-game-description = Steam’in başlattığı oyunlar ile Steam veya Heroic kitaplıklarındaki oyunlar kendiliğinden algılanır. Diğer programları buraya ekleyin.
-linux-popup-shortcut-native-description = Masaüstünüzün izin penceresinden sistem genelinde bir kısayol seçin. Değişiklikler hemen uygulanır.
+linux-popup-shortcut-native-description = Masaüstünüzün klavye ayarlarına kaydedilir. Değişiklikler hemen uygulanır.
 linux-popup-shortcut-choose = Kısayol ayarla
-linux-popup-shortcut-waiting = Masaüstü bekleniyor…
-linux-popup-shortcut-unavailable = Masaüstü kısayolu yapılandıramadı. Yeniden deneyin veya aşağıdaki komutu masaüstünüzün klavye ayarlarına ekleyin.
+linux-popup-shortcut-dialog-hint = Kullanmak istediğiniz tuş birleşimine basın. Masaüstünüzün klavye ayarlarında özel kısayol olarak kaydedilir.
+linux-popup-shortcut-needs-modifier = Ctrl, Alt veya Super ekleyin ya da F13–F24 kullanın.
+linux-popup-shortcut-save-failed = Masaüstü kısayolu kabul etmedi. Yeniden deneyin veya komutu klavye ayarlarına ekleyin.
