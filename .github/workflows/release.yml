@@ -115,7 +115,7 @@ jobs:
             pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
             libx11-dev libx11-xcb-dev libxcb1-dev libxcb-xkb-dev \
             libvulkan-dev libfontconfig-dev libfreetype-dev libdbus-1-dev \
-            libssl-dev libzstd-dev
+            libssl-dev libzstd-dev patchelf
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -129,7 +129,7 @@ jobs:
       - name: Fetch dependencies
         run: cargo fetch --locked
 
-      - name: Build tarball and .deb
+      - name: Build tarball, .deb and AppImage
         run: ./build-linux.sh
 
       - name: Upload build artifacts

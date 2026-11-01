@@ -257,6 +257,8 @@ Codex Minibar also runs on Linux desktops under Wayland and X11. Download from t
 [latest release](https://github.com/vertopolkaLF/codex-minibar/releases/latest):
 
 - **Debian/Ubuntu:** `sudo apt install ./codex-minibar_<version>_amd64.deb`
+- **Any distribution, no install:** make `codex-minibar-<version>-linux-x64.AppImage` executable
+  and run it.
 - **Other distributions:** extract `codex-minibar-<version>-linux-x64.tar.gz` and run
   `./install.sh` to install into `~/.local`, or run `bin/codex-minibar` in place.
 
@@ -337,9 +339,9 @@ On Linux, install the build dependencies (Debian/Ubuntu shown) and use plain Car
 ```sh
 sudo apt install build-essential pkg-config libxkbcommon-dev libxkbcommon-x11-dev \
   libwayland-dev libx11-dev libx11-xcb-dev libxcb1-dev libxcb-xkb-dev libvulkan-dev \
-  libfontconfig-dev libfreetype-dev libdbus-1-dev libssl-dev libzstd-dev
+  libfontconfig-dev libfreetype-dev libdbus-1-dev libssl-dev libzstd-dev patchelf
 cargo test --all-targets --all-features --locked
-./build-linux.sh   # dist/<version>/: tarball and .deb
+./build-linux.sh   # dist/<version>/: tarball, .deb and AppImage
 ```
 
 ## Development
