@@ -3047,3 +3047,6 @@ linux-popup-shortcut-choose = Kısayol ayarla
 linux-popup-shortcut-dialog-hint = Kullanmak istediğiniz tuş birleşimine basın. Masaüstünüzün klavye ayarlarında özel kısayol olarak kaydedilir.
 linux-popup-shortcut-needs-modifier = Ctrl, Alt veya Super ekleyin ya da F13–F24 kullanın.
 linux-popup-shortcut-save-failed = Masaüstü kısayolu kabul etmedi. Yeniden deneyin veya komutu klavye ayarlarına ekleyin.
+# src/settings_window/providers.rs
+linux-reads-subscription-quota-from-your-existing-official-agy-windows = Mevcut resmî agy oturumunuzdan abonelik kotasını okur.
+linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = agy çalıştırılabilir dosyasını içeren klasör. Otomatik bulmak için boş bırakın.

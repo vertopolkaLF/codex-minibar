@@ -3076,3 +3076,6 @@ linux-popup-shortcut-choose = Définir le raccourci
 linux-popup-shortcut-dialog-hint = Appuyez sur la combinaison de touches souhaitée. Elle sera enregistrée comme raccourci personnalisé dans les paramètres clavier de votre bureau.
 linux-popup-shortcut-needs-modifier = Incluez Ctrl, Alt ou Super, ou utilisez F13–F24.
 linux-popup-shortcut-save-failed = Le bureau n’a pas accepté le raccourci. Réessayez ou ajoutez la commande dans ses paramètres clavier.
+# src/settings_window/providers.rs
+linux-reads-subscription-quota-from-your-existing-official-agy-windows = Lit le quota d'abonnement à partir de votre connexion officielle agy existante.
+linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Dossier contenant l'exécutable agy. Laissez vide pour le retrouver automatiquement.

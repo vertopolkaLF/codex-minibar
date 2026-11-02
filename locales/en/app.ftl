@@ -3068,3 +3068,6 @@ linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = Runs C
 
 # src/settings_window/advanced.rs
 linux-add-a-game-description = Games launched by Steam and games in Steam or Heroic libraries are detected on their own. Add any other program here.
+# src/settings_window/providers.rs
+linux-reads-subscription-quota-from-your-existing-official-agy-windows = Reads subscription quota from your existing official agy sign-in.
+linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Folder with the agy executable. Leave empty to find it automatically.

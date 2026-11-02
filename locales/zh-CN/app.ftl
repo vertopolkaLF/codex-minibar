@@ -2146,3 +2146,6 @@ linux-popup-shortcut-choose = 设置快捷键
 linux-popup-shortcut-dialog-hint = 按下要使用的组合键。它将作为自定义快捷键保存到桌面的键盘设置中。
 linux-popup-shortcut-needs-modifier = 请包含 Ctrl、Alt 或 Super，或使用 F13–F24。
 linux-popup-shortcut-save-failed = 桌面未接受该快捷键。请重试，或在其键盘设置中添加命令。
+# src/settings_window/providers.rs
+linux-reads-subscription-quota-from-your-existing-official-agy-windows = 通过现有的官方 agy 登录读取订阅额度。
+linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = 包含 agy 可执行文件的文件夹。留空以自动查找。

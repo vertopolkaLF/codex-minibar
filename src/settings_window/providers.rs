@@ -655,8 +655,18 @@ fn folder_configs(driver: ProviderKind) -> Vec<FolderConfig> {
         )],
         ProviderKind::Antigravity => vec![binary(
             crate::i18n::tr("agy-cli-folder"),
-            crate::i18n::tr("folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut"),
-            r"C:\Users\you\AppData\Local\agy\bin",
+            if cfg!(windows) {
+                crate::i18n::tr("folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut")
+            } else {
+                crate::i18n::tr(
+                    "linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut",
+                )
+            },
+            if cfg!(windows) {
+                r"C:\Users\you\AppData\Local\agy\bin"
+            } else {
+                "~/.local/bin"
+            },
         )],
         ProviderKind::Grok => vec![binary(
             crate::i18n::tr("grok-cli-folder"),
@@ -713,9 +723,11 @@ fn provider_description(provider: ProviderKind) -> &'static str {
         ProviderKind::OpenRouter => {
             crate::i18n::tr("reads-api-key-usage-and-spend-limits-a-management-key-also-enable")
         }
-        ProviderKind::Antigravity => {
-            crate::i18n::tr("reads-subscription-quota-from-your-existing-official-agy-windows")
-        }
+        ProviderKind::Antigravity => crate::i18n::tr(if cfg!(windows) {
+            "reads-subscription-quota-from-your-existing-official-agy-windows"
+        } else {
+            "linux-reads-subscription-quota-from-your-existing-official-agy-windows"
+        }),
         ProviderKind::Grok => {
             crate::i18n::tr("reads-supergrok-subscription-credits-from-your-existing-official")
         }

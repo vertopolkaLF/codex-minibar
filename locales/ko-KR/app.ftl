@@ -3047,3 +3047,6 @@ linux-popup-shortcut-choose = 단축키 설정
 linux-popup-shortcut-dialog-hint = 사용할 키 조합을 누르세요. 데스크톱의 키보드 설정에 사용자 지정 단축키로 저장됩니다.
 linux-popup-shortcut-needs-modifier = Ctrl, Alt 또는 Super를 포함하거나 F13–F24를 사용하세요.
 linux-popup-shortcut-save-failed = 데스크톱에서 단축키를 받아들이지 않았습니다. 다시 시도하거나 키보드 설정에서 명령을 추가하세요.
+# src/settings_window/providers.rs
+linux-reads-subscription-quota-from-your-existing-official-agy-windows = 기존 공식 agy 로그인에서 구독 할당량을 읽습니다.
+linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = agy 실행 파일이 포함된 폴더입니다. 자동으로 찾으려면 비워두세요.
