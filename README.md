@@ -125,6 +125,8 @@ See spending per key and manage OpenRouter API keys from the popup's OpenRouter 
 - An optional Stream Deck companion with quota keys that open the popup or a provider tab and
   launch Minibar when it is not running.
 - An optional global keyboard shortcut that shows or hides the popup from anywhere.
+- `codex-minibar status` prints the running app's quotas as text, JSON, a Waybar module or a
+  Polybar/i3blocks line, for status bars and scripts. See [Status bars and scripts](#status-bars-and-scripts).
 - Start with Windows, update in place from GitHub Releases, and keep usage history locally.
 - Automatic Codex discovery with an override for a custom executable path.
 - Settings import and export, and a live software rendering option for systems where GPU
@@ -156,7 +158,8 @@ Kiro's plan appears on its provider card. The account label uses Kiro's display 
 then its email address, and follows the **Show account name** preference. Redacted values are hidden.
 
 For Antigravity, run `agy` and complete its normal sign-in once; Minibar reads that existing
-Windows Credential Manager session and never stores it in app settings. For Grok, run `grok login`;
+session from Windows Credential Manager, or from the login keyring (Secret Service) on Linux,
+and never stores it in app settings. For Grok, run `grok login`;
 Minibar reads the official CLI auth cache. If either session expires, refresh it in the official CLI.
 For Command Code, run `cmdc login`; Minibar reads the API key the CLI stores in
 `~/.commandcode/auth.json` and only calls the CLI's own read-only billing endpoints. The monthly
@@ -259,6 +262,10 @@ Codex Minibar also runs on Linux desktops under Wayland and X11. Download from t
 - **Debian/Ubuntu:** `sudo apt install ./codex-minibar_<version>_amd64.deb`
 - **Any distribution, no install:** make `codex-minibar-<version>-linux-x64.AppImage` executable
   and run it.
+- **Fedora/openSUSE:** `sudo dnf install ./codex-minibar-<version>-1.x86_64.rpm`
+  (or `sudo zypper install ...`).
+- **Arch Linux:** build the `PKGBUILD` attached to each release with `makepkg -si`
+  (it packages the release tarball as `codex-minibar-bin`).
 - **Other distributions:** extract `codex-minibar-<version>-linux-x64.tar.gz` and run
   `./install.sh` to install into `~/.local`, or run `bin/codex-minibar` in place.
 
@@ -298,9 +305,85 @@ Differences from Windows:
   labeled Keep open: stacking is controlled by the desktop. Right-click the panel
   header to open the native window menu and select Always on Top where available
   (including GNOME). This desktop-owned state is separate from the Keep open setting.
+- **Panel widgets instead of taskbar widgets.** The packages install a GNOME Shell extension
+  and a Plasma 6 widget that show your quotas in the panel. See
+  [Panel widgets](#panel-widgets).
 - **Windows-only features:** taskbar widgets, the Command Palette and Stream Deck integrations,
-  Acrylic/Mica backgrounds, reading the Claude desktop app's token cache
-  and reusing the Antigravity Windows sign-in.
+  Acrylic/Mica backgrounds and reading the Claude desktop app's token cache.
+
+### Panel widgets
+
+Both widgets read the running app, show each enabled provider's default quotas in the app's
+language and remaining/used preference, and color a quota that is nearly used up. Click a
+provider in their menus to open the popup on its tab.
+
+- **GNOME Shell (45 and later):** the `.deb` and `.rpm` install the extension system-wide and
+  `install.sh` installs it into `~/.local`. Log out and back in once, then run
+  `gnome-extensions enable codex-minibar@vertopolkalf.github.io` or turn on **Codex Minibar**
+  in the Extensions app. From a source checkout, copy
+  `integrations/gnome-shell/codex-minibar@vertopolkalf.github.io` into
+  `~/.local/share/gnome-shell/extensions/`. It updates the moment a quota changes.
+- **KDE Plasma 6:** right-click the panel, choose **Add or Manage Widgets** and add
+  **Codex Minibar**. From a source checkout, run
+  `kpackagetool6 --type Plasma/Applet --install integrations/kde-plasma/io.github.vertopolkalf.codexminibar`.
+  The widget runs `codex-minibar status --json` every 30 seconds; for an AppImage, set its
+  path under **Configure Codex Minibar**. Middle-click the widget to toggle the popup.
+
+Other clients can use the app's session D-Bus service `io.github.vertopolkalf.CodexMinibar`
+(object `/io/github/vertopolkalf/CodexMinibar`, interface
+`io.github.vertopolkalf.CodexMinibar1`): `Status()` returns the same JSON as
+`codex-minibar status --json`, the `Changed(s)` signal carries it whenever it changes, and
+`Toggle(s activation_token)`, `ShowProvider(s id)` and `Refresh()` control the app.
+
+```bash
+gdbus call --session --dest io.github.vertopolkalf.CodexMinibar --object-path /io/github/vertopolkalf/CodexMinibar --method io.github.vertopolkalf.CodexMinibar1.Status
+```
+
+### Status bars and scripts
+
+`codex-minibar status` asks the running app for its quotas and prints them. It works on
+Windows too, but is most useful with Linux status bars such as Waybar, Polybar and i3blocks.
+
+```text
+codex-minibar status [--format text|json|waybar|polybar] [--provider ID]... [--watch [SECONDS]]
+                     [--warning PERCENT] [--critical PERCENT]
+```
+
+- `--format text` (default) prints a block per provider with every quota and its reset.
+- `--json` prints the full report, including raw percentages and reset times.
+- `--waybar` prints a [Waybar custom module](https://github.com/Alexays/Waybar/wiki/Module:-Custom)
+  object: one-line text, a tooltip with every quota, a `percentage` of the most used default
+  quota and a `normal`, `warning`, `critical` or `offline` class.
+- `--polybar` prints one plain line, for Polybar, i3blocks or a tmux status line.
+- `--provider` limits the output to providers or accounts by id (`codex`, `claude`, `claude-2`).
+- `--watch` keeps printing a new line every 30 seconds, or the given interval, so a bar
+  needs no polling of its own.
+
+Waybar:
+
+```json
+"custom/minibar": {
+    "exec": "codex-minibar status --waybar --watch",
+    "return-type": "json"
+}
+```
+
+```css
+#custom-minibar.warning { color: #f6d32d; }
+#custom-minibar.critical { color: #ff7b63; }
+```
+
+Polybar:
+
+```ini
+[module/minibar]
+type = custom/script
+exec = codex-minibar status --polybar --watch
+tail = true
+```
+
+Without a running app, text and JSON exit with status 1, and the Waybar and Polybar formats
+print an empty module so the bar hides it.
 
 ## Updating
 
@@ -352,8 +435,10 @@ dropdowns, sliders, text inputs, dialogs) live in `src/settings_window/kit.rs` a
 `src/settings_window/input.rs`. No UI framework runtime is redistributed; the release
 package is the executable plus its `assets` folder.
 CI checks formatting, lints, and tests on Windows and Linux. Linux desktop integration
-(tray, notifications, portal settings, keyring, autostart, single instance) lives in
-`src/linux/`.
+(tray, notifications, portal settings, keyring, autostart, single instance, the D-Bus status
+service) lives in `src/linux/`. `codex-minibar status` is `src/status.rs`; it and the D-Bus
+service share one report, served to the CLI over the same loopback bridge as Stream Deck
+(`src/streamdeck.rs`). The GNOME Shell extension and Plasma widget live in `integrations/`.
 
 ### Stream Deck companion
 
