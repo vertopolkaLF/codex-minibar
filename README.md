@@ -118,7 +118,9 @@ See spending per key and manage OpenRouter API keys from the popup's OpenRouter 
 - Optionally start Codex automatically to activate a fresh five-hour window, plan activations
   ahead, and set provider-specific quiet periods, such as keeping a work Claude session inactive
   on weekends.
-- Usage pace indicators show whether you are burning a window faster than it resets.
+- Usage pace indicators show whether you are burning a window faster than it resets, and
+  their tooltip forecasts when the limit runs out at that pace. An optional notification warns
+  once per window when the 5-hour or weekly limit would run out well before it resets.
 - Kiro's monthly included credits and reset date, and Claude cloud-session credit balances.
 - Command Code's five-hour, weekly and monthly credit windows, plus any purchased top-up balance.
 - Warnings before a Claude login stops renewing.

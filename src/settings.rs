@@ -2114,6 +2114,9 @@ pub struct NotificationSettings {
     pub weekly_low_usage_enabled: bool,
     /// Remaining weekly-percent threshold for low-usage notifications (1–99).
     pub weekly_low_usage_threshold_percent: u8,
+    /// Notify once per window when the pace so far would use up the
+    /// 5-hour or weekly limit well before it resets.
+    pub runs_out_early: bool,
     /// Toast when a newer application release is discovered.
     pub update_available: bool,
     /// Read the public GitHub feed containing announced Codex forced resets.
@@ -2148,6 +2151,7 @@ impl Default for NotificationSettings {
             low_usage_threshold_percent: 20,
             weekly_low_usage_enabled: true,
             weekly_low_usage_threshold_percent: 20,
+            runs_out_early: true,
             update_available: true,
             forced_reset_feed_enabled: true,
             forced_reset_notifications: true,

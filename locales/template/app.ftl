@@ -43,6 +43,22 @@ name-5-hour = { "" }
 label-limit-is-low = { "" }
 
 # English source:
+# runs-out-in = Runs out in { $time }
+runs-out-in = { "" }
+
+# English source:
+# label-may-run-out-in = { $label } may run out in { $time }
+label-may-run-out-in = { "" }
+
+# English source:
+# warn-before-a-limit-runs-out = Before a limit runs out
+warn-before-a-limit-runs-out = { "" }
+
+# English source:
+# warn-before-a-limit-runs-out-description = Warns once per window when your pace so far would use up the 5-hour or weekly limit well before it resets.
+warn-before-a-limit-runs-out-description = { "" }
+
+# English source:
 # expired-at-time = expired at { $time }
 expired-at-time = { "" }
 
@@ -3153,8 +3169,16 @@ folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = { "" }
 folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = { "" }
 
 # English source:
+# linux-folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = Folder with the grok executable. Leave empty to find it automatically.
+linux-folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = { "" }
+
+# English source:
 # folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = Folder with cmdc.cmd or cmdc.ps1. Leave empty to find it automatically.
 folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = { "" }
+
+# English source:
+# linux-folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = Folder with the cmdc executable. Leave empty to find it automatically.
+linux-folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = { "" }
 
 # English source:
 # folder-containing-kiro-exe-or-the-executable-itself-leave-empty-t = Folder containing Kiro.exe, or the executable itself. Leave empty to find it automatically.

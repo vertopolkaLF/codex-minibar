@@ -172,6 +172,18 @@ impl SettingsWindow {
             |s, v| s.notifications.weekly_low_usage_enabled = v,
             |s, v| s.notifications.weekly_low_usage_threshold_percent = v,
         );
+        let forecast = kit::card_of(k, |k| {
+            vec![kit::toggle_row(
+                k,
+                "notif-runs-out-early",
+                crate::i18n::tr("warn-before-a-limit-runs-out"),
+                Some(crate::i18n::tr("warn-before-a-limit-runs-out-description").into()),
+                n.runs_out_early,
+                Self::h(cx, |this, value: bool, _, cx| {
+                    this.edit(cx, move |s| s.notifications.runs_out_early = value)
+                }),
+            )]
+        });
         // How notifications behave comes first, then what they are about.
         vec![
             delivery,
@@ -180,6 +192,7 @@ impl SettingsWindow {
             kit::section_heading(k, crate::i18n::tr("low-usage")),
             low,
             weekly,
+            forecast,
             kit::section_heading(k, crate::i18n::tr("news-and-status")),
             news,
         ]

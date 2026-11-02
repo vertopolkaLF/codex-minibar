@@ -11,6 +11,10 @@ const FIVE_HOUR_WINDOW_MINUTES: u32 = 5 * 60;
 /// independently. Keep this small so a real active window is not mistaken for
 /// an unactivated one.
 const UNACTIVATED_RESET_TOLERANCE: Duration = Duration::minutes(5);
+/// A forecast needs this much of a window behind it: early in a window one
+/// burst of work extrapolates to absurd run-out times.
+const FORECAST_MIN_ELAPSED: Duration = Duration::minutes(15);
+const FORECAST_MIN_ELAPSED_SHARE: f64 = 0.05;
 
 /// Provider field name for Codex Plus Luna Reserve (`additional_rate_limits`).
 pub const GPT_RESERVE_LIMIT_ID: &str = "gpt-reserve";
@@ -134,6 +138,9 @@ pub struct PaceTip {
     pub percent: f64,
     /// Actual used percentage minus the expected even-burn percentage.
     pub delta_percent: f64,
+    /// When the limit runs out at the window's average pace so far, if that
+    /// is before it resets. See [`LimitWindow::runs_out_at`].
+    pub runs_out_at: Option<DateTime<Utc>>,
 }
 
 /// Direction of usage relative to an even burn.
@@ -163,13 +170,29 @@ impl PaceTip {
         format!("{}%", self.delta_percent.abs().round() as u32)
     }
 
-    /// Full CodexBar-style description, used for tooltips.
+    /// Full CodexBar-style description, used for tooltips: `12% in deficit`,
+    /// followed by `Runs out in 1h 20m` when the pace empties the limit
+    /// before it resets.
     pub fn summary(self) -> String {
+        self.summary_at(Utc::now())
+    }
+
+    fn summary_at(self, now: DateTime<Utc>) -> String {
         let delta = (self.delta_percent.abs().round() as u32).to_string();
-        match self.trend() {
+        let pace = match self.trend() {
             PaceTrend::OnPace => crate::i18n::tr("on-pace").into(),
             PaceTrend::Deficit => crate::i18n::format("delta-in-deficit", &[("delta", delta)]),
             PaceTrend::Reserve => crate::i18n::format("delta-in-reserve", &[("delta", delta)]),
+        };
+        match self.runs_out_at {
+            Some(at) => format!(
+                "{pace} \u{00b7} {}",
+                crate::i18n::format(
+                    "runs-out-in",
+                    &[("time", crate::taskbar::model::countdown(at, now))]
+                )
+            ),
+            None => pace,
         }
     }
 }
@@ -227,6 +250,37 @@ impl LimitWindow {
         Some(((elapsed / duration_secs) * 100.0).clamp(0.0, 100.0))
     }
 
+    /// When this window runs out if usage continues at its average pace so
+    /// far, or `None` when that pace lasts until the reset (or there is too
+    /// little of the window behind it to tell).
+    ///
+    /// The average over the whole window, not the latest samples: providers
+    /// report whole percents, so short-term rates are mostly rounding noise.
+    pub fn runs_out_at(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        let duration_minutes = self.duration_minutes.filter(|&minutes| minutes > 0)?;
+        let resets_at = self.resets_at?;
+        let used = f64::from(self.used_percent?);
+        if used <= 0.0 || used >= 100.0 {
+            return None;
+        }
+        let duration_secs = f64::from(duration_minutes) * 60.0;
+        let until_reset = (resets_at - now).num_milliseconds() as f64 / 1000.0;
+        if until_reset <= 0.0 || until_reset > duration_secs {
+            return None;
+        }
+        let elapsed = duration_secs - until_reset;
+        let min_elapsed = (FORECAST_MIN_ELAPSED.num_seconds() as f64)
+            .max(duration_secs * FORECAST_MIN_ELAPSED_SHARE);
+        if elapsed < min_elapsed {
+            return None;
+        }
+        let until_empty = (100.0 - used) * elapsed / used;
+        if until_empty >= until_reset {
+            return None;
+        }
+        Some(now + Duration::milliseconds((until_empty * 1000.0) as i64))
+    }
+
     /// Progress-bar pace tip for session and weekly bars.
     pub fn pace_tip(&self, show_used: bool, now: DateTime<Utc>) -> Option<PaceTip> {
         let expected_used = self.expected_used_percent(now)?;
@@ -244,6 +298,7 @@ impl LimitWindow {
         Some(PaceTip {
             percent: percent.clamp(0.0, 100.0),
             delta_percent: actual_used - expected_used,
+            runs_out_at: self.runs_out_at(now),
         })
     }
 }
@@ -491,10 +546,81 @@ mod tests {
             "10% in reserve"
         );
 
+        // 92% used with an hour left also runs out before the reset; that
+        // part of the summary is covered by `pace_summary_adds_the_run_out_time`.
         let (deficit, now) = window_with_hour_left(92);
+        let tip = deficit.pace_tip(false, now).unwrap();
         assert_eq!(
-            deficit.pace_tip(false, now).unwrap().summary(),
+            PaceTip {
+                runs_out_at: None,
+                ..tip
+            }
+            .summary_at(now),
             "12% in deficit"
+        );
+    }
+
+    #[test]
+    fn runs_out_at_extrapolates_the_window_average() {
+        // 4h of a 5h window gone, 92% used: 8% more takes 4h * 8 / 92.
+        let (window, now) = window_with_hour_left(92);
+        let at = window.runs_out_at(now).unwrap();
+        let expected = (4.0 * 3600.0 * 8.0 / 92.0) as i64;
+        assert!(((at - now).num_seconds() - expected).abs() <= 1);
+
+        // Half used with 80% of the window gone lasts until the reset.
+        let (window, now) = window_with_hour_left(50);
+        assert_eq!(window.runs_out_at(now), None);
+        // Exactly on an even burn reaches 100% at the reset, not before.
+        let (window, now) = window_with_hour_left(80);
+        assert_eq!(window.runs_out_at(now), None);
+    }
+
+    #[test]
+    fn runs_out_at_needs_usage_and_enough_of_the_window() {
+        let now = Utc.with_ymd_and_hms(2026, 7, 12, 15, 0, 0).unwrap();
+        let window = |used, left_minutes| LimitWindow {
+            used_percent: Some(used),
+            resets_at: Some(now + Duration::minutes(left_minutes)),
+            duration_minutes: Some(300),
+        };
+        // 10 minutes into a 5h window is too early to extrapolate 30%.
+        assert_eq!(window(30, 290).runs_out_at(now), None);
+        // 15 minutes in (the 5% share of 5h) it is not.
+        assert!(window(30, 285).runs_out_at(now).is_some());
+        assert_eq!(window(0, 100).runs_out_at(now), None);
+        assert_eq!(window(100, 100).runs_out_at(now), None);
+        // A reset in the past or beyond the window is stale data.
+        assert_eq!(window(90, -5).runs_out_at(now), None);
+        assert_eq!(window(90, 400).runs_out_at(now), None);
+        let unknown = LimitWindow {
+            duration_minutes: None,
+            ..window(90, 60)
+        };
+        assert_eq!(unknown.runs_out_at(now), None);
+
+        // A week: 60% used after 2 of 7 days runs out on day 3⅓.
+        let weekly = LimitWindow {
+            used_percent: Some(60),
+            resets_at: Some(now + Duration::days(5)),
+            duration_minutes: Some(10_080),
+        };
+        let at = weekly.runs_out_at(now).unwrap();
+        assert_eq!((at - now).num_hours(), 32);
+    }
+
+    #[test]
+    fn pace_summary_adds_the_run_out_time() {
+        let (window, now) = window_with_hour_left(92);
+        let tip = window.pace_tip(false, now).unwrap();
+        assert_eq!(
+            tip.summary_at(now),
+            "12% in deficit \u{00b7} Runs out in 20m"
+        );
+        let (window, now) = window_with_hour_left(70);
+        assert_eq!(
+            window.pace_tip(false, now).unwrap().summary_at(now),
+            "10% in reserve"
         );
     }
 

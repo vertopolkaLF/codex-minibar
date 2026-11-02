@@ -20,6 +20,10 @@ weekly-limit-reset = Limite semanal redefinido
 name-5-hour = { $name } · 5 horas
 
 label-limit-is-low = O limite de { $label } está baixo
+runs-out-in = Esgota em { $time }
+label-may-run-out-in = { $label } pode esgotar em { $time }
+warn-before-a-limit-runs-out = Antes de um limite esgotar
+warn-before-a-limit-runs-out-description = Avisa uma vez por janela quando o seu ritmo até agora esgotaria o limite de 5 horas ou semanal bem antes de ele ser redefinido.
 
 expired-at-time = expirou às { $time }
 
@@ -1517,9 +1521,11 @@ folder-with-cursor-exe-leave-empty-to-find-it-automatically-usage = Pasta com Cu
 folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Pasta com agy.exe, agy.cmd ou agy.ps1. Deixe em branco para encontrar automaticamente.
 
 folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = Pasta com grok.exe, grok.cmd ou grok.ps1. Deixe em branco para encontrar automaticamente.
+linux-folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = Pasta com o executável grok. Deixe em branco para encontrar automaticamente.
 
 # src/settings_window/providers.rs
 folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = Pasta com cmdc.cmd ou cmdc.ps1. Deixe em branco para encontrar automaticamente.
+linux-folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = Pasta com o executável cmdc. Deixe em branco para encontrar automaticamente.
 
 folder-containing-kiro-exe-or-the-executable-itself-leave-empty-t = Pasta com Kiro.exe ou o próprio executável. Deixe em branco para encontrar automaticamente.
 

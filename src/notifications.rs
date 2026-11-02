@@ -509,6 +509,9 @@ pub struct LimitNotificationTracker {
     /// `resets_at` of the window we already notified for low primary usage.
     low_usage_notified_primary: Option<DateTime<Utc>>,
     low_usage_notified_secondary: Option<DateTime<Utc>>,
+    /// `resets_at` of the window we already warned would run out early.
+    runs_out_notified_primary: Option<DateTime<Utc>>,
+    runs_out_notified_secondary: Option<DateTime<Utc>>,
     /// Shown in toasts instead of the provider name, to tell apart several
     /// accounts of one provider.
     name: Option<String>,
@@ -637,6 +640,25 @@ impl LimitNotificationTracker {
             );
         }
 
+        if settings.runs_out_early {
+            maybe_notify_runs_out(
+                &crate::i18n::format("name-5-hour", &[("name", name.to_string())]),
+                (&name, provider, limits, LimitFocus::Primary),
+                &limits.primary,
+                &mut self.runs_out_notified_primary,
+                now,
+            );
+            if can_notify_weekly(limits) {
+                maybe_notify_runs_out(
+                    &secondary_limit_label(limits, &name),
+                    (&name, provider, limits, LimitFocus::Secondary),
+                    &limits.secondary,
+                    &mut self.runs_out_notified_secondary,
+                    now,
+                );
+            }
+        }
+
         self.capture(limits);
         LimitNotificationResult {
             primary_reset: primary_reset && notify_five_hour_reset,
@@ -733,6 +755,63 @@ fn maybe_notify_low_usage(
     ));
 }
 
+/// Warns that the pace so far empties `window` well before it resets.
+fn maybe_notify_runs_out(
+    label: &str,
+    (name, provider, limits, focus): (&str, ProviderId, &RateLimits, LimitFocus),
+    window: &crate::limits::LimitWindow,
+    already_notified_for: &mut Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) {
+    let Some(runs_out_at) = take_runs_out_notification(window, already_notified_for, now) else {
+        return;
+    };
+    notify(Notification::limit(
+        NotificationKind::Warning,
+        &crate::i18n::format(
+            "label-may-run-out-in",
+            &[
+                ("label", label.to_string()),
+                ("time", crate::taskbar::model::countdown(runs_out_at, now)),
+            ],
+        ),
+        name,
+        provider,
+        limits,
+        focus,
+    ));
+}
+
+/// Shortest gap between the forecast run-out and the reset worth a warning:
+/// a limit that empties a few minutes early is not news.
+fn runs_out_lead(duration_minutes: u32) -> Duration {
+    Duration::minutes(15).max(Duration::minutes(i64::from(duration_minutes) / 10))
+}
+
+/// Claims the one run-out warning allowed per window, returning when the
+/// window runs out.
+fn take_runs_out_notification(
+    window: &crate::limits::LimitWindow,
+    already_notified_for: &mut Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    let resets_at = window.resets_at?;
+    let duration_minutes = window.duration_minutes?;
+    // `resets_at` jitters by seconds between samples; only a deadline that
+    // moved by a real window advance is a new window.
+    if already_notified_for.is_some_and(|notified| {
+        (reset_minute(resets_at) - reset_minute(notified)).abs() < NEW_WINDOW_MINIMUM_ADVANCE
+    }) {
+        return None;
+    }
+    let runs_out_at = window.runs_out_at(now)?;
+    if resets_at - runs_out_at < runs_out_lead(duration_minutes) {
+        return None;
+    }
+    *already_notified_for = Some(resets_at);
+    Some(runs_out_at)
+}
+
 /// Claims the one low-usage notification allowed for a rate-limit window.
 fn take_low_usage_notification(
     remaining: Option<u8>,
@@ -777,6 +856,61 @@ mod tests {
     use crate::limits::LimitWindow;
 
     use super::*;
+
+    #[test]
+    fn runs_out_warning_fires_once_per_window_with_enough_lead() {
+        let now = Utc.with_ymd_and_hms(2026, 7, 12, 15, 0, 0).unwrap();
+        let session = |used, left_minutes| LimitWindow {
+            used_percent: Some(used),
+            resets_at: Some(now + Duration::minutes(left_minutes)),
+            duration_minutes: Some(300),
+        };
+        let mut notified = None;
+
+        // 2h in, 80% used: empties in 30m, 2.5h before the reset.
+        let busy = session(80, 180);
+        let at = take_runs_out_notification(&busy, &mut notified, now).unwrap();
+        assert_eq!((at - now).num_minutes(), 30);
+        assert_eq!(notified, busy.resets_at);
+        // Once per window, even when the deadline jitters by seconds.
+        let jittered = LimitWindow {
+            resets_at: busy.resets_at.map(|at| at + Duration::seconds(40)),
+            ..busy.clone()
+        };
+        assert_eq!(
+            take_runs_out_notification(&jittered, &mut notified, now),
+            None
+        );
+        // The next window warns again.
+        let next = session(80, 180 + 300);
+        let next_now = now + Duration::minutes(300);
+        assert!(take_runs_out_notification(&next, &mut notified, next_now).is_some());
+    }
+
+    #[test]
+    fn runs_out_warning_skips_slow_burns_and_near_misses() {
+        let now = Utc.with_ymd_and_hms(2026, 7, 12, 15, 0, 0).unwrap();
+        let session = |used, left_minutes| LimitWindow {
+            used_percent: Some(used),
+            resets_at: Some(now + Duration::minutes(left_minutes)),
+            duration_minutes: Some(300),
+        };
+        let mut notified = None;
+        // Lasts until the reset.
+        assert_eq!(
+            take_runs_out_notification(&session(40, 120), &mut notified, now),
+            None
+        );
+        // 4h in, 85% used: empties 18m early, under the 30m lead of a 5h window.
+        assert_eq!(
+            take_runs_out_notification(&session(85, 60), &mut notified, now),
+            None
+        );
+        assert_eq!(notified, None);
+        assert_eq!(runs_out_lead(300), Duration::minutes(30));
+        assert_eq!(runs_out_lead(60), Duration::minutes(15));
+        assert_eq!(runs_out_lead(10_080), Duration::minutes(1_008));
+    }
 
     #[test]
     fn free_plan_suppresses_weekly_notifications() {

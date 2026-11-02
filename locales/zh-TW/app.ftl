@@ -20,6 +20,10 @@ weekly-limit-reset = 每週額度已重置
 name-5-hour = { $name } · 5 小時
 
 label-limit-is-low = { $label } 剩餘額度不足
+runs-out-in = { $time } 後用盡
+label-may-run-out-in = { $label } 可能在 { $time } 後用盡
+warn-before-a-limit-runs-out = 額度用盡之前
+warn-before-a-limit-runs-out-description = 依目前的使用速度，若 5 小時或每週額度會在重置前很久用盡，則每個週期提醒一次。
 
 expired-at-time = 已於 { $time } 到期
 
@@ -1499,9 +1503,11 @@ folder-with-cursor-exe-leave-empty-to-find-it-automatically-usage = 包含 Curso
 folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = 包含 agy.exe、agy.cmd 或 agy.ps1 的資料夾。留空以自動查詢。
 
 folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = 包含 grok.exe、grok.cmd 或 grok.ps1 的資料夾。留空以自動查詢。
+linux-folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = 包含 grok 可執行檔的資料夾。留空以自動查詢。
 
 # src/settings_window/providers.rs
 folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = 包含 cmdc.cmd 或 cmdc.ps1 的資料夾。留空以自動查詢。
+linux-folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = 包含 cmdc 可執行檔的資料夾。留空以自動查詢。
 
 folder-containing-kiro-exe-or-the-executable-itself-leave-empty-t = 包含 Kiro.exe 的資料夾或可執行檔案本身。留空以自動查詢。
 

@@ -20,6 +20,10 @@ weekly-limit-reset = Límite semanal restablecido
 name-5-hour = { $name } · 5 horas
 
 label-limit-is-low = El límite de { $label } está bajo
+runs-out-in = Se agota en { $time }
+label-may-run-out-in = { $label } podría agotarse en { $time }
+warn-before-a-limit-runs-out = Antes de que se agote un límite
+warn-before-a-limit-runs-out-description = Avisa una vez por ventana cuando tu ritmo actual agotaría el límite de 5 horas o semanal mucho antes de que se restablezca.
 
 expired-at-time = caducó a las { $time }
 
@@ -1517,9 +1521,11 @@ folder-with-cursor-exe-leave-empty-to-find-it-automatically-usage = Carpeta con 
 folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Carpeta con agy.exe, agy.cmd o agy.ps1. Déjalo vacío para encontrarla automáticamente.
 
 folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = Carpeta con grok.exe, grok.cmd o grok.ps1. Déjalo vacío para encontrarla automáticamente.
+linux-folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = Carpeta con el ejecutable grok. Déjalo vacío para encontrarlo automáticamente.
 
 # src/settings_window/providers.rs
 folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = Carpeta con cmdc.cmd o cmdc.ps1. Déjalo vacío para encontrarla automáticamente.
+linux-folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = Carpeta con el ejecutable cmdc. Déjalo vacío para encontrarlo automáticamente.
 
 folder-containing-kiro-exe-or-the-executable-itself-leave-empty-t = Carpeta con Kiro.exe o el propio ejecutable. Déjalo vacío para encontrarlo automáticamente.
 

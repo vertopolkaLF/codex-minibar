@@ -30,6 +30,10 @@ name-5-hour = { $name } 5時間
 
 # src/notifications.rs
 label-limit-is-low = { $label } の利用枠の残量が少なくなっています
+runs-out-in = あと { $time } で上限に達します
+label-may-run-out-in = { $label } はあと { $time } で上限に達する可能性があります
+warn-before-a-limit-runs-out = 利用枠を使い切る前
+warn-before-a-limit-runs-out-description = これまでのペースで 5 時間または週間の利用枠をリセットよりかなり前に使い切りそうなとき、枠ごとに 1 回通知します。
 
 # src/popup_window/formatting.rs
 expired-at-time = 期限切れ: { $time }
@@ -2205,9 +2209,11 @@ folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = agy.exe、ag
 
 # application
 folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = grok.exe、grok.cmd、または grok.ps1 のフォルダー。自動的に検索されるようにするには、空のままにします。
+linux-folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = grok 実行ファイルのフォルダー。自動的に検索されるようにするには、空のままにします。
 
 # src/settings_window/providers.rs
 folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = cmdc.cmd または cmdc.ps1 のフォルダー。自動的に検索されるようにするには、空のままにします。
+linux-folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = cmdc 実行ファイルのフォルダー。自動的に検索されるようにするには、空のままにします。
 
 # application
 folder-containing-kiro-exe-or-the-executable-itself-leave-empty-t = Kiro.exe を含むフォルダー、または実行可能ファイル自体。自動的に検索されるようにするには、空のままにします。
