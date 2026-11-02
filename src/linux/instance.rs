@@ -151,10 +151,7 @@ fn serve(listener: UnixListener) {
         if request == ACTIVATE {
             activate();
         } else if let Some(token) = parse_toggle(&request) {
-            if let (Some(token), Ok(mut pending)) = (token, ACTIVATION_TOKEN.lock()) {
-                *pending = Some((token, Instant::now()));
-            }
-            toggle();
+            toggle_with_token(token);
         }
     }
 }
@@ -210,6 +207,18 @@ pub fn toggle_command() -> String {
         program
     };
     format!("{program} {TOGGLE_FLAG}")
+}
+
+/// Toggles the popup for an outside request, such as `--toggle` or the
+/// D-Bus service, with the desktop's focus token for it when there is one.
+pub(crate) fn toggle_with_token(token: Option<String>) {
+    if let (Some(token), Ok(mut pending)) = (
+        token.filter(|token| is_token(token)),
+        ACTIVATION_TOKEN.lock(),
+    ) {
+        *pending = Some((token, Instant::now()));
+    }
+    toggle();
 }
 
 /// Like a tray click: closes the popup, or opens it.
