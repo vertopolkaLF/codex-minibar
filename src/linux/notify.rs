@@ -9,7 +9,10 @@
 
 use std::{
     collections::HashMap,
-    sync::{Mutex, OnceLock},
+    sync::{
+        Mutex, OnceLock,
+        mpsc::{self, Sender},
+    },
 };
 
 use zbus::zvariant::Value;
@@ -34,14 +37,23 @@ fn state() -> &'static Mutex<State> {
 }
 
 /// Shows `notification` as a desktop notification, without its sound when
-/// `silent`. Runs the D-Bus call on a short-lived thread: callers include the
-/// GPUI thread.
+/// `silent`. Runs the D-Bus call on a worker thread, because callers include
+/// the GPUI thread. One thread keeps the cards in order: a keyed card can only
+/// replace an earlier one once that one's server id has arrived.
 pub fn post(notification: Notification, silent: bool) {
-    std::thread::spawn(move || {
-        if let Err(error) = send(&notification, silent) {
-            crate::logger::info(format!("desktop notification failed: {error:#}"));
-        }
+    static QUEUE: OnceLock<Sender<(Notification, bool)>> = OnceLock::new();
+    let queue = QUEUE.get_or_init(|| {
+        let (sender, receiver) = mpsc::channel::<(Notification, bool)>();
+        std::thread::spawn(move || {
+            for (notification, silent) in receiver {
+                if let Err(error) = send(&notification, silent) {
+                    crate::logger::info(format!("desktop notification failed: {error:#}"));
+                }
+            }
+        });
+        sender
     });
+    let _ = queue.send((notification, silent));
 }
 
 fn send(notification: &Notification, silent: bool) -> anyhow::Result<()> {

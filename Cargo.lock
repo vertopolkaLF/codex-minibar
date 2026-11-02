@@ -1008,6 +1008,7 @@ dependencies = [
  "chrono",
  "csv",
  "directories",
+ "flate2",
  "fluent-bundle",
  "fluent-syntax",
  "font8x8",
@@ -1028,6 +1029,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "smallvec",
+ "tar",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "tray-icon",
@@ -5900,6 +5902,16 @@ dependencies = [
  "core-foundation-sys",
  "libc",
  "objc",
+]
+
+[[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
 ]
 
 [[package]]
