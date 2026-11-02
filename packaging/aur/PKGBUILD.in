@@ -9,7 +9,7 @@ arch=('x86_64')
 url='https://github.com/vertopolkaLF/codex-minibar'
 license=('Apache-2.0')
 # GPUI loads xkbcommon, Wayland, X11 and Vulkan at runtime.
-depends=('glibc' 'gcc-libs' 'openssl' 'zlib' 'zstd' 'bzip2' 'dbus'
+depends=('glibc' 'gcc-libs' 'openssl' 'zlib' 'zstd' 'xz' 'dbus'
          'libxkbcommon' 'libxkbcommon-x11' 'wayland' 'libx11' 'libxcb'
          'vulkan-icd-loader' 'fontconfig' 'freetype2')
 optdepends=('xdg-desktop-portal: desktop settings, accent color and autostart'

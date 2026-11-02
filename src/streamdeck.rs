@@ -89,6 +89,10 @@ const IO_TIMEOUT: Duration = Duration::from_secs(3);
 /// Commands that must be executed by the existing tray/UI bridge thread.
 #[derive(Clone, Debug)]
 pub enum Command {
+    #[cfg(not(windows))]
+    ShowProvider {
+        provider: ProviderId,
+    },
     OpenPopup {
         provider: Option<ProviderId>,
     },

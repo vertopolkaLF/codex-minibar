@@ -66,9 +66,7 @@ impl Service {
     fn show_provider(&self, id: &str) -> fdo::Result<()> {
         let provider = ProviderId::lookup(id)
             .ok_or_else(|| fdo::Error::InvalidArgs(format!("unknown provider: {id}")))?;
-        self.send(Command::OpenPopup {
-            provider: Some(provider),
-        })
+        self.send(Command::ShowProvider { provider })
     }
 
     fn refresh(&self) -> fdo::Result<()> {

@@ -259,9 +259,10 @@ pub fn run_cli() -> i32 {
     loop {
         let result = fetch_report().map(|report| filter(report, &options.providers));
         let line = render(&result, &options);
-        if writeln!(stdout, "{line}")
-            .and_then(|()| stdout.flush())
-            .is_err()
+        if !(line.is_empty() && matches!(options.format, Format::Text))
+            && writeln!(stdout, "{line}")
+                .and_then(|()| stdout.flush())
+                .is_err()
         {
             // The bar closed the pipe.
             return 0;

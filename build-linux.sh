@@ -106,7 +106,7 @@ Priority: optional
 Architecture: $debarch
 Maintainer: vertopolkaLF <noreply@github.com>
 Installed-Size: $installed_size
-Depends: libc6, libssl3t64 | libssl3, zlib1g, libzstd1, libbz2-1.0, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libx11-xcb1, libxcb1, libvulkan1, mesa-vulkan-drivers | vulkan-icd, libfontconfig1, libfreetype6
+Depends: libc6, libssl3t64 | libssl3, zlib1g, libzstd1, liblzma5, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libx11-xcb1, libxcb1, libvulkan1, mesa-vulkan-drivers | vulkan-icd, libfontconfig1, libfreetype6
 Recommends: xdg-desktop-portal, gnome-shell-extension-appindicator | plasma-workspace
 Homepage: https://github.com/vertopolkaLF/codex-minibar
 Description: Tray companion for monitoring AI tools usage

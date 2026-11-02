@@ -359,6 +359,9 @@ codex-minibar status [--format text|json|waybar|polybar] [--provider ID]... [--w
 - `--watch` keeps printing a new line every 30 seconds, or the given interval, so a bar
   needs no polling of its own.
 
+Without `--watch`, all formats exit with status 1 when the app is unavailable.
+With `--watch`, the command keeps running and reconnects automatically.
+
 Waybar:
 
 ```json

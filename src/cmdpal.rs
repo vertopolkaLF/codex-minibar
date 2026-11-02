@@ -39,6 +39,7 @@ const SEPARATOR: &str = " \u{00b7} ";
 struct Published {
     widgets: Vec<TaskbarWidget>,
     colored_icons: bool,
+    indicators: Vec<crate::settings::TrayIndicator>,
 }
 
 static PUBLISHED: Mutex<Option<Published>> = Mutex::new(None);
@@ -49,6 +50,11 @@ pub fn publish_settings(settings: &Settings) {
         *published = Some(Published {
             widgets: settings.command_palette.widgets.clone(),
             colored_icons: settings.use_colored_provider_icons,
+            indicators: settings
+                .tray_widgets
+                .iter()
+                .flat_map(|widget| widget.indicators.iter().cloned())
+                .collect(),
         });
     }
 }
@@ -109,17 +115,41 @@ pub struct Payload {
     pub providers: Vec<ProviderSummary>,
 }
 
+/// Match each default quota to the first tray indicator for that account.
+fn summary_widget(
+    provider: ProviderId,
+    indicators: &[crate::settings::TrayIndicator],
+) -> TaskbarWidget {
+    let mut widget = TaskbarWidget {
+        reset: TaskbarResetDisplay::Countdown,
+        ..TaskbarWidget::for_provider(provider)
+    };
+    for indicator in &mut widget.indicators {
+        if let Some(configured) = indicators.iter().find(|configured| {
+            configured.provider_id == indicator.provider_id
+                && configured.metric_id == indicator.metric_id
+        }) {
+            indicator.limit_value = configured.limit_value;
+        }
+    }
+    widget
+}
+
 /// Bands and summaries for the current limits and published settings.
 pub fn payload(limits: &ProviderLimits) -> Payload {
-    let (widgets, colored_icons) = PUBLISHED
+    let (widgets, colored_icons, indicators) = PUBLISHED
         .lock()
         .ok()
         .and_then(|published| {
-            published
-                .as_ref()
-                .map(|published| (published.widgets.clone(), published.colored_icons))
+            published.as_ref().map(|published| {
+                (
+                    published.widgets.clone(),
+                    published.colored_icons,
+                    published.indicators.clone(),
+                )
+            })
         })
-        .unwrap_or_else(|| (Vec::new(), true));
+        .unwrap_or_else(|| (Vec::new(), true, Vec::new()));
     let accent = crate::theme::current_accent_rgb();
     let appearance = |light| Appearance {
         light,
@@ -168,10 +198,7 @@ pub fn payload(limits: &ProviderLimits) -> Payload {
                 .is_empty()
         })
         .filter_map(|provider| {
-            let widget = TaskbarWidget {
-                reset: TaskbarResetDisplay::Countdown,
-                ..TaskbarWidget::for_provider(provider)
-            };
+            let widget = summary_widget(provider, &indicators);
             let light = model::resolve(&widget, limits, appearance(true));
             let dark = model::resolve(&widget, limits, appearance(false));
             let icon = icons(&light, &dark);
@@ -654,6 +681,26 @@ mod tests {
             show_pace: false,
             card: Vec::new(),
         }
+    }
+
+    #[test]
+    fn summaries_follow_live_per_quota_preferences() {
+        let provider = ProviderId::lookup("codex").unwrap();
+        let defaults = summary_widget(provider, &[]);
+        let mut configured = defaults.indicators[0].clone();
+        configured.limit_value = LimitValue::Used;
+        let used = summary_widget(provider, &[configured.clone()]);
+        assert_eq!(used.indicators[0].limit_value, LimitValue::Used);
+        assert_eq!(used.indicators[1].limit_value, LimitValue::Remaining);
+        configured.provider_id = "claude".into();
+        assert_eq!(
+            summary_widget(provider, &[configured]).indicators[0].limit_value,
+            LimitValue::Remaining
+        );
+        assert_eq!(
+            summary_widget(provider, &[]).indicators[0].limit_value,
+            LimitValue::Remaining
+        );
     }
 
     #[test]
