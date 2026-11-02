@@ -30,6 +30,10 @@ name-5-hour = { $name } 5 heures
 
 # src/notifications.rs
 label-limit-is-low = Le quota restant de { $label } est faible
+runs-out-in = Épuisé dans { $time }
+label-may-run-out-in = { $label } pourrait être épuisé dans { $time }
+warn-before-a-limit-runs-out = Avant qu'une limite soit épuisée
+warn-before-a-limit-runs-out-description = Avertit une fois par fenêtre lorsque votre rythme actuel épuiserait la limite de 5 heures ou hebdomadaire bien avant sa réinitialisation.
 
 # src/popup_window/formatting.rs
 expired-at-time = expiré à { $time }
@@ -2229,9 +2233,11 @@ folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Dossier avec
 
 # application
 folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = Dossier avec grok.exe, grok.cmd ou grok.ps1. Laissez vide pour le retrouver automatiquement.
+linux-folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = Dossier contenant l'exécutable grok. Laissez vide pour le retrouver automatiquement.
 
 # src/settings_window/providers.rs
 folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = Dossier avec cmdc.cmd ou cmdc.ps1. Laissez vide pour le retrouver automatiquement.
+linux-folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = Dossier contenant l'exécutable cmdc. Laissez vide pour le retrouver automatiquement.
 
 # application
 folder-containing-kiro-exe-or-the-executable-itself-leave-empty-t = Dossier contenant Kiro.exe, ou l'exécutable lui-même. Laissez vide pour le retrouver automatiquement.

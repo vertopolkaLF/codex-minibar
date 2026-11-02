@@ -660,13 +660,29 @@ fn folder_configs(driver: ProviderKind) -> Vec<FolderConfig> {
         )],
         ProviderKind::Grok => vec![binary(
             crate::i18n::tr("grok-cli-folder"),
-            crate::i18n::tr("folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it"),
-            r"C:\Users\you\.grok\bin",
+            crate::i18n::tr(if cfg!(windows) {
+                "folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it"
+            } else {
+                "linux-folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it"
+            }),
+            if cfg!(windows) {
+                r"C:\Users\you\.grok\bin"
+            } else {
+                "~/.grok/bin"
+            },
         )],
         ProviderKind::CommandCode => vec![binary(
             crate::i18n::tr("command-code-cli-folder"),
-            crate::i18n::tr("folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati"),
-            r"C:\Users\you\AppData\Roaming\npm",
+            crate::i18n::tr(if cfg!(windows) {
+                "folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati"
+            } else {
+                "linux-folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati"
+            }),
+            if cfg!(windows) {
+                r"C:\Users\you\AppData\Roaming\npm"
+            } else {
+                "~/.npm-global/bin"
+            },
         )],
         ProviderKind::Kiro => vec![
             binary(

@@ -41,6 +41,7 @@ const WEEKLY_MINUTES: u32 = 7 * 24 * 60;
 const MONTHLY_MINUTES: u32 = 30 * 24 * 60;
 /// `cmd` itself is deliberately absent: on Windows it would resolve to
 /// `cmd.exe`. The npm package installs these aliases next to it.
+#[cfg(windows)]
 const CLI_NAMES: &[&str] = &[
     "cmdc.cmd",
     "cmdc.ps1",
@@ -50,6 +51,9 @@ const CLI_NAMES: &[&str] = &[
     "commandcode.cmd",
     "commandcode.ps1",
 ];
+/// npm installs these launchers into its global `bin` directory.
+#[cfg(not(windows))]
+const CLI_NAMES: &[&str] = &["cmdc", "command-code", "commandcode"];
 pub(crate) const MONTHLY_LIMIT_ID: &str = "monthly";
 const LOCAL_HISTORY_DAYS: i64 = 365;
 const HOURLY_HISTORY_HOURS: i64 = 48;
@@ -191,12 +195,31 @@ pub fn cli_available(explicit: Option<&Path>) -> Option<PathBuf> {
         .next()
 }
 
+#[cfg(windows)]
 fn npm_launchers() -> Vec<PathBuf> {
     let Some(appdata) = std::env::var_os("APPDATA") else {
         return Vec::new();
     };
     let npm = PathBuf::from(appdata).join("npm");
     CLI_NAMES.iter().map(|name| npm.join(name)).collect()
+}
+
+/// npm's global `bin` directories that a desktop session's `PATH` often
+/// lacks: `$NPM_CONFIG_PREFIX`, the common user prefixes and `/usr/local`.
+#[cfg(not(windows))]
+fn npm_launchers() -> Vec<PathBuf> {
+    let home = BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf());
+    let directories = [
+        std::env::var_os("NPM_CONFIG_PREFIX").map(|prefix| PathBuf::from(prefix).join("bin")),
+        home.as_ref().map(|home| home.join(".npm-global/bin")),
+        home.as_ref().map(|home| home.join(".local/bin")),
+        Some(PathBuf::from("/usr/local/bin")),
+    ];
+    directories
+        .into_iter()
+        .flatten()
+        .flat_map(|directory| CLI_NAMES.iter().map(move |name| directory.join(name)))
+        .collect()
 }
 
 fn auth_path() -> Option<PathBuf> {
@@ -791,7 +814,7 @@ mod tests {
     fn never_resolves_the_windows_cmd_shell() {
         assert!(!CLI_NAMES.iter().any(|name| name.starts_with("cmd.")));
         let directory = tempfile::tempdir().unwrap();
-        let launcher = directory.path().join("cmdc.cmd");
+        let launcher = directory.path().join(CLI_NAMES[0]);
         fs::write(&launcher, b"fixture").unwrap();
         assert_eq!(
             cli_available(Some(directory.path())),

@@ -30,6 +30,10 @@ name-5-hour = { $name }: 5 часов
 
 # src/notifications.rs
 label-limit-is-low = Остаток лимита «{ $label }» низкий
+runs-out-in = Закончится через { $time }
+label-may-run-out-in = Лимит «{ $label }» может закончиться через { $time }
+warn-before-a-limit-runs-out = Перед тем как лимит закончится
+warn-before-a-limit-runs-out-description = Предупреждает один раз за окно, если при текущем темпе 5-часовой или недельный лимит закончится задолго до сброса.
 
 # src/popup_window/formatting.rs
 expired-at-time = истёк в { $time }
@@ -2245,9 +2249,11 @@ folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Папка �
 
 # application
 folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = Папка с grok.exe, grok.cmd или grok.ps1. Оставьте пустым для автоматического поиска.
+linux-folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = Папка с исполняемым файлом grok. Оставьте пустым для автоматического поиска.
 
 # src/settings_window/providers.rs
 folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = Папка с cmdc.cmd или cmdc.ps1. Оставьте пустым для автоматического поиска.
+linux-folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = Папка с исполняемым файлом cmdc. Оставьте пустым для автоматического поиска.
 
 # application
 folder-containing-kiro-exe-or-the-executable-itself-leave-empty-t = Папка с Kiro.exe или сам исполняемый файл. Оставьте пустым для автоматического поиска.

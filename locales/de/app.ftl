@@ -30,6 +30,10 @@ name-5-hour = { $name } 5 Stunden
 
 # src/notifications.rs
 label-limit-is-low = Für { $label } bleibt wenig Kontingent
+runs-out-in = Aufgebraucht in { $time }
+label-may-run-out-in = { $label } könnte in { $time } aufgebraucht sein
+warn-before-a-limit-runs-out = Bevor ein Limit aufgebraucht ist
+warn-before-a-limit-runs-out-description = Warnt einmal pro Zeitfenster, wenn Ihr bisheriges Tempo das 5-Stunden- oder Wochenlimit lange vor dem Zurücksetzen aufbrauchen würde.
 
 # src/popup_window/formatting.rs
 expired-at-time = abgelaufen um { $time }
@@ -2223,9 +2227,11 @@ folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Ordner mit a
 
 # application
 folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = Ordner mit grok.exe, grok.cmd oder grok.ps1. Lassen Sie das Feld leer, damit es automatisch gefunden wird.
+linux-folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = Ordner mit der ausführbaren grok-Datei. Lassen Sie das Feld leer, damit sie automatisch gefunden wird.
 
 # src/settings_window/providers.rs
 folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = Ordner mit cmdc.cmd oder cmdc.ps1. Lassen Sie das Feld leer, damit es automatisch gefunden wird.
+linux-folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = Ordner mit der ausführbaren cmdc-Datei. Lassen Sie das Feld leer, damit sie automatisch gefunden wird.
 
 # application
 folder-containing-kiro-exe-or-the-executable-itself-leave-empty-t = Ordner, der Kiro.exe oder die ausführbare Datei selbst enthält. Lassen Sie das Feld leer, damit es automatisch gefunden wird.

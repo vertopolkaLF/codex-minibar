@@ -30,6 +30,10 @@ name-5-hour = { $name } 5시간
 
 # src/notifications.rs
 label-limit-is-low = { $label } 한도가 낮습니다.
+runs-out-in = { $time } 후 소진
+label-may-run-out-in = { $label } 한도가 { $time } 후 소진될 수 있습니다
+warn-before-a-limit-runs-out = 한도가 소진되기 전
+warn-before-a-limit-runs-out-description = 지금까지의 사용 속도로 5시간 또는 주간 한도가 재설정 훨씬 전에 소진될 것 같으면 기간마다 한 번 알립니다.
 
 # src/popup_window/formatting.rs
 expired-at-time = { $time }에 만료됨
@@ -2221,9 +2225,11 @@ folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = agy.exe, agy
 
 # application
 folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = grok.exe, grok.cmd 또는 grok.ps1이 포함된 폴더입니다. 자동으로 찾으려면 비워두세요.
+linux-folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = grok 실행 파일이 포함된 폴더입니다. 자동으로 찾으려면 비워두세요.
 
 # src/settings_window/providers.rs
 folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = cmdc.cmd 또는 cmdc.ps1이 포함된 폴더입니다. 자동으로 찾으려면 비워두세요.
+linux-folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = cmdc 실행 파일이 포함된 폴더입니다. 자동으로 찾으려면 비워두세요.
 
 # application
 folder-containing-kiro-exe-or-the-executable-itself-leave-empty-t = Kiro.exe 또는 실행 파일 자체가 포함된 폴더입니다. 자동으로 찾으려면 비워두세요.

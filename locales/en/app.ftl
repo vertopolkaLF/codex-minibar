@@ -30,6 +30,10 @@ name-5-hour = { $name } 5-hour
 
 # src/notifications.rs
 label-limit-is-low = { $label } limit is low
+runs-out-in = Runs out in { $time }
+label-may-run-out-in = { $label } may run out in { $time }
+warn-before-a-limit-runs-out = Before a limit runs out
+warn-before-a-limit-runs-out-description = Warns once per window when your pace so far would use up the 5-hour or weekly limit well before it resets.
 
 # src/popup_window/formatting.rs
 expired-at-time = expired at { $time }
@@ -2239,9 +2243,11 @@ folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Folder with 
 
 # application
 folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = Folder with grok.exe, grok.cmd, or grok.ps1. Leave empty to find it automatically.
+linux-folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = Folder with the grok executable. Leave empty to find it automatically.
 
 # src/settings_window/providers.rs
 folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = Folder with cmdc.cmd or cmdc.ps1. Leave empty to find it automatically.
+linux-folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = Folder with the cmdc executable. Leave empty to find it automatically.
 
 # application
 folder-containing-kiro-exe-or-the-executable-itself-leave-empty-t = Folder containing Kiro.exe, or the executable itself. Leave empty to find it automatically.

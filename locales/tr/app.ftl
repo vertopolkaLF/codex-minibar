@@ -30,6 +30,10 @@ name-5-hour = { $name } 5 saatlik
 
 # src/notifications.rs
 label-limit-is-low = { $label } limiti azalıyor
+runs-out-in = { $time } içinde tükenir
+label-may-run-out-in = { $label } { $time } içinde tükenebilir
+warn-before-a-limit-runs-out = Bir limit tükenmeden önce
+warn-before-a-limit-runs-out-description = Şimdiye kadarki hızınız 5 saatlik veya haftalık limiti sıfırlanmadan çok önce tüketecekse her pencerede bir kez uyarır.
 
 # src/popup_window/formatting.rs
 expired-at-time = { $time } itibarıyla süresi doldu
@@ -2221,9 +2225,11 @@ folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = agy.exe, agy
 
 # application
 folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = grok.exe, grok.cmd veya grok.ps1 içeren klasör. Otomatik bulmak için boş bırakın.
+linux-folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = grok çalıştırılabilir dosyasını içeren klasör. Otomatik bulmak için boş bırakın.
 
 # src/settings_window/providers.rs
 folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = cmdc.cmd veya cmdc.ps1 içeren klasör. Otomatik bulmak için boş bırakın.
+linux-folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = cmdc çalıştırılabilir dosyasını içeren klasör. Otomatik bulmak için boş bırakın.
 
 # application
 folder-containing-kiro-exe-or-the-executable-itself-leave-empty-t = Kiro.exe içeren klasör veya yürütülebilir dosyanın kendisi. Otomatik bulmak için boş bırakın.
