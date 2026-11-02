@@ -12,6 +12,7 @@ pub mod instance;
 pub mod keybinding;
 pub mod keyring;
 pub mod notify;
+pub mod update;
 
 pub mod wake;
 

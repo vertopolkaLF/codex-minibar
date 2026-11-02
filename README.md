@@ -289,8 +289,8 @@ Differences from Windows:
 - **Notifications** go to your desktop's notification server and follow its Do Not Disturb.
 - **Game mode** detects games launched by Steam and games installed in Steam or Heroic
   libraries.
-- **Updates** link to the release page; install them with your package manager or the new
-  tarball.
+- **Updates** install in place for the AppImage and the tarball, when their location is
+  writable. The `.deb` links to the release page; install it with your package manager.
 - **Floating panel.** Enable it in Settings → Customize to keep the popup open when
   switching apps and drag its header to move it. Wayland lets the compositor place
   new windows, so saved panel positions are only available on Windows. On X11,

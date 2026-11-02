@@ -1,4 +1,5 @@
-//! In-place updates from GitHub Releases portable zip assets.
+//! In-place updates from GitHub Releases: portable zip assets on Windows, the
+//! AppImage or tarball on Linux (see [`crate::linux::update`]).
 
 #[cfg(windows)]
 use std::process::{Command, Stdio};
@@ -124,14 +125,11 @@ pub fn apply_pending_update() -> Result<()> {
         Ok(runtime) => runtime,
         Err(error) => return Err(report_update_failure(error)),
     };
-    // Linux installs come from distribution packages or AppImages, which
-    // their own tools update; send the user to the release instead.
-    if !cfg!(windows) {
-        let update = runtime
-            .updates
-            .available_update()
-            .context("no update is available")
-            .map_err(report_update_failure)?;
+    // Installs this build cannot replace itself, such as distribution
+    // packages: send the user to the release instead.
+    if let Some(update) = runtime.updates.available_update()
+        && update.asset_url.is_empty()
+    {
         return open_url(&update.html_url).map_err(report_update_failure);
     }
     // A second click while the first one is still downloading.
@@ -158,7 +156,12 @@ fn report_update_failure(error: anyhow::Error) -> anyhow::Error {
 /// How long the "Restarting" step stays up before the process exits.
 const RESTART_NOTICE: Duration = Duration::from_millis(600);
 /// Minimum spacing of progress updates sent to the update card.
-const PROGRESS_INTERVAL: Duration = Duration::from_millis(80);
+const PROGRESS_INTERVAL: Duration = if cfg!(windows) {
+    Duration::from_millis(80)
+} else {
+    // Each update is a round trip to the desktop's notification server.
+    Duration::from_millis(500)
+};
 
 /// Rate-limits progress updates; the final one always goes through.
 struct ProgressThrottle(Option<Instant>);
@@ -187,7 +190,7 @@ fn megabytes(bytes: u64) -> String {
 }
 
 /// Before the first byte arrives the bar sweeps under the version.
-fn report_download_started(version: &str) {
+pub(crate) fn report_download_started(version: &str) {
     notifications::show_update_progress(
         crate::i18n::tr("update-downloading"),
         &format!("Codex Minibar {version}"),
@@ -218,7 +221,7 @@ fn report_download(downloaded: u64, total: Option<u64>) {
     notifications::show_update_progress(crate::i18n::tr("update-downloading"), &body, progress);
 }
 
-fn report_unpack(done: usize, total: usize) {
+pub(crate) fn report_unpack(done: usize, total: usize) {
     notifications::show_update_progress(
         crate::i18n::tr("update-installing"),
         crate::i18n::tr("update-unpacking"),
@@ -230,12 +233,20 @@ fn report_unpack(done: usize, total: usize) {
     );
 }
 
-fn report_restart() {
-    notifications::show_update_progress(
-        crate::i18n::tr("update-restarting"),
-        crate::i18n::tr("update-restarting-body"),
-        notifications::Progress::Fraction(1.0),
-    );
+pub(crate) fn report_restart() {
+    let title = crate::i18n::tr("update-restarting");
+    let body = crate::i18n::tr("update-restarting-body");
+    if cfg!(windows) {
+        notifications::show_update_progress(title, body, notifications::Progress::Fraction(1.0));
+    } else {
+        // A desktop notification outlives this process and the next one cannot
+        // replace it, so this card must not be a progress card, which stays
+        // until replaced.
+        notifications::notify(
+            notifications::Notification::new(notifications::NotificationKind::Update, title, body)
+                .keyed(notifications::UPDATE_PROGRESS_KEY),
+        );
+    }
 }
 
 /// Opens the GitHub release page for the pending update, or the releases index.
@@ -338,7 +349,9 @@ fn sync_uninstall_display_version(version: &str) -> Result<()> {
 /// ships: the WinUI runtime, assets dropped since, and leftover update
 /// staging. Zip updates only copy the new package over the install.
 pub fn cleanup_install_dir() {
-    // Linux binaries live in package-managed directories such as /usr/bin.
+    // Linux has no install directory to sweep, only interrupted downloads.
+    #[cfg(not(windows))]
+    crate::linux::update::remove_stale_staging();
     if !cfg!(windows) {
         return;
     }
@@ -460,8 +473,18 @@ fn remove_update_staging(staging: &Path) -> usize {
     removed + usize::from(fs::remove_dir(staging).is_ok())
 }
 
+/// Beside the app on Windows, where the helper script writes it. Linux keeps it
+/// with the settings: an AppImage's own directory is a read-only mount.
+pub(crate) fn update_success_marker() -> Result<PathBuf> {
+    if cfg!(windows) {
+        Ok(install_dir()?.join(UPDATE_SUCCESS_MARKER))
+    } else {
+        Ok(crate::settings::Settings::default_path()?.with_file_name(UPDATE_SUCCESS_MARKER))
+    }
+}
+
 fn take_post_update_success_marker() -> Result<Option<String>> {
-    let path = install_dir()?.join(UPDATE_SUCCESS_MARKER);
+    let path = update_success_marker()?;
     if !path.exists() {
         return Ok(None);
     }
@@ -563,7 +586,11 @@ impl UpdateController {
                         .as_deref()
                         != Some(update.version.as_str());
                 if should_notify {
-                    notifications::show_update_available(&update.version, &update.html_url);
+                    notifications::show_update_available(
+                        &update.version,
+                        &update.html_url,
+                        !update.asset_url.is_empty(),
+                    );
                     self.inner
                         .lock()
                         .expect("update controller lock")
@@ -653,16 +680,15 @@ fn check_for_update() -> Result<Option<AvailableUpdate>> {
         return Ok(None);
     }
 
-    // Linux updates are installed from the release page, not in place.
-    if !cfg!(windows) {
-        return Ok(Some(AvailableUpdate {
-            version: remote.to_string(),
-            asset_url: String::new(),
-            html_url: release.html_url,
-            size: None,
-            sha256: None,
-        }));
-    }
+    #[cfg(windows)]
+    let update = portable_zip_update(&release, &remote)?;
+    #[cfg(not(windows))]
+    let update = linux_update(&release, &remote);
+    Ok(Some(update))
+}
+
+#[cfg(windows)]
+fn portable_zip_update(release: &GhRelease, version: &Version) -> Result<AvailableUpdate> {
     let arch = host_arch();
     let expected_suffix = format!("-{arch}-portable.zip");
     let asset = release
@@ -675,14 +701,50 @@ fn check_for_update() -> Result<Option<AvailableUpdate>> {
                 release.tag_name
             )
         })?;
+    Ok(available_update(release, version, Some(asset)))
+}
 
-    Ok(Some(AvailableUpdate {
-        version: remote.to_string(),
-        asset_url: asset.browser_download_url.clone(),
-        html_url: release.html_url,
-        size: asset.size,
-        sha256: asset.digest.as_deref().and_then(parse_sha256_digest),
-    }))
+/// Without a matching asset the update is still announced, and installing it
+/// opens the release page.
+#[cfg(not(windows))]
+fn linux_update(release: &GhRelease, version: &Version) -> AvailableUpdate {
+    let suffix = crate::linux::update::asset_suffix(host_arch());
+    available_update(
+        release,
+        version,
+        select_linux_asset(&release.assets, suffix.as_deref()),
+    )
+}
+
+/// The asset to install on Linux. Installing replaces the running program, so
+/// an asset without a published checksum does not qualify.
+#[cfg(not(windows))]
+fn select_linux_asset<'a>(assets: &'a [GhAsset], suffix: Option<&str>) -> Option<&'a GhAsset> {
+    let suffix = suffix?;
+    assets.iter().find(|asset| {
+        asset.name.ends_with(suffix)
+            && asset
+                .digest
+                .as_deref()
+                .and_then(parse_sha256_digest)
+                .is_some()
+    })
+}
+
+fn available_update(
+    release: &GhRelease,
+    version: &Version,
+    asset: Option<&GhAsset>,
+) -> AvailableUpdate {
+    AvailableUpdate {
+        version: version.to_string(),
+        asset_url: asset.map_or_else(String::new, |asset| asset.browser_download_url.clone()),
+        html_url: release.html_url.clone(),
+        size: asset.and_then(|asset| asset.size),
+        sha256: asset
+            .and_then(|asset| asset.digest.as_deref())
+            .and_then(parse_sha256_digest),
+    }
 }
 
 fn parse_release_version(tag: &str) -> Result<Version> {
@@ -725,6 +787,35 @@ fn install_dir() -> Result<PathBuf> {
         })
 }
 
+/// Downloads the update's asset with progress on the update card, and verifies
+/// it against the published checksum if there is one.
+pub(crate) fn download_package(update: &AvailableUpdate, destination: &Path) -> Result<()> {
+    let limit = update.size.map_or(MAX_UPDATE_DOWNLOAD_BYTES, |size| {
+        size.min(MAX_UPDATE_DOWNLOAD_BYTES)
+    });
+    let mut throttle = ProgressThrottle::new();
+    let digest = download_file_limited(
+        &update.asset_url,
+        destination,
+        limit,
+        &mut |downloaded, length| {
+            let total = update.size.or(length);
+            if throttle.ready(total == Some(downloaded)) {
+                report_download(downloaded, total);
+            }
+        },
+    )?;
+    if let Some(expected) = &update.sha256
+        && !digest.eq_ignore_ascii_case(expected)
+    {
+        let _ = fs::remove_file(destination);
+        bail!("update package checksum mismatch (expected {expected}, got {digest})");
+    }
+    Ok(())
+}
+
+// Only reachable on Windows; see `apply_portable_zip`.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn install_dir_writable(dir: &Path) -> bool {
     let probe = dir.join(".codex-minibar-update-write-test");
     match fs::write(&probe, b"") {
@@ -737,6 +828,16 @@ fn install_dir_writable(dir: &Path) -> bool {
 }
 
 fn apply_update(update: &AvailableUpdate) -> Result<()> {
+    #[cfg(windows)]
+    return apply_portable_zip(update);
+    #[cfg(not(windows))]
+    return crate::linux::update::install(update);
+}
+
+// Only reachable on Windows, but it keeps compiling and its tests keep running
+// on Linux.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn apply_portable_zip(update: &AvailableUpdate) -> Result<()> {
     report_download_started(&update.version);
     let install_dir = install_dir()?;
     if !install_dir_writable(&install_dir) {
@@ -757,27 +858,7 @@ fn apply_update(update: &AvailableUpdate) -> Result<()> {
         .with_context(|| format!("create update staging at {}", run_dir.display()))?;
 
     let zip_path = run_dir.join("package.zip");
-    let limit = update.size.map_or(MAX_UPDATE_DOWNLOAD_BYTES, |size| {
-        size.min(MAX_UPDATE_DOWNLOAD_BYTES)
-    });
-    let mut throttle = ProgressThrottle::new();
-    let digest = download_file_limited(
-        &update.asset_url,
-        &zip_path,
-        limit,
-        &mut |downloaded, length| {
-            let total = update.size.or(length);
-            if throttle.ready(total == Some(downloaded)) {
-                report_download(downloaded, total);
-            }
-        },
-    )?;
-    if let Some(expected) = &update.sha256
-        && !digest.eq_ignore_ascii_case(expected)
-    {
-        let _ = fs::remove_file(&zip_path);
-        bail!("update package checksum mismatch (expected {expected}, got {digest})");
-    }
+    download_package(update, &zip_path)?;
     let extracted = run_dir.join("extracted");
     fs::create_dir_all(&extracted).context("create extraction directory")?;
     let mut throttle = ProgressThrottle::new();
@@ -1069,6 +1150,49 @@ fn shell_execute(target: &std::ffi::OsStr, description: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(windows))]
+    fn asset(name: &str, digest: Option<&str>) -> GhAsset {
+        GhAsset {
+            name: name.into(),
+            browser_download_url: format!("https://example.test/{name}"),
+            size: Some(1),
+            digest: digest.map(str::to_owned),
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn linux_asset_needs_the_suffix_and_a_checksum() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let assets = [
+            asset("codex-minibar-2.0.0-x64-portable.zip", Some(&digest)),
+            asset("codex-minibar-2.0.0-linux-x64.tar.gz", None),
+            asset("codex-minibar-2.0.0-linux-x64.AppImage", Some(&digest)),
+        ];
+        let select = |suffix| select_linux_asset(&assets, suffix).map(|a| a.name.as_str());
+        assert_eq!(
+            select(Some("-linux-x64.AppImage")),
+            Some("codex-minibar-2.0.0-linux-x64.AppImage")
+        );
+        assert_eq!(select(Some("-linux-x64.tar.gz")), None);
+        assert_eq!(select(Some("-linux-arm64.AppImage")), None);
+        assert_eq!(select(None), None);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_linux_release_without_an_asset_falls_back_to_its_page() {
+        let release = GhRelease {
+            tag_name: "v2.0.0".into(),
+            html_url: "https://example.test/release".into(),
+            assets: Vec::new(),
+        };
+        let update = linux_update(&release, &Version::new(2, 0, 0));
+        assert!(update.asset_url.is_empty());
+        assert_eq!(update.html_url, release.html_url);
+        assert_eq!(update.version, "2.0.0");
+    }
 
     #[test]
     fn cleanup_removes_files_from_older_releases() {

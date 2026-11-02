@@ -330,8 +330,8 @@ pub fn show_error(title: &str, body: &str) {
 }
 
 /// A discovered app update with install and release-notes buttons.
-pub fn show_update_available(version: &str, release_url: &str) {
-    notify(update_available(version, release_url));
+pub fn show_update_available(version: &str, release_url: &str, installable: bool) {
+    notify(update_available(version, release_url, installable));
 }
 
 /// Moves the update card to the next step, creating it on the first one.
@@ -411,7 +411,7 @@ pub fn show_provider_incident(
     notify(notification);
 }
 
-fn update_available(version: &str, release_url: &str) -> Notification {
+fn update_available(version: &str, release_url: &str, installable: bool) -> Notification {
     let mut notification = Notification::new(
         NotificationKind::Update,
         crate::i18n::tr("update-available-67fd3a"),
@@ -420,8 +420,8 @@ fn update_available(version: &str, release_url: &str) -> Notification {
             crate::i18n::tr("a-new-release-is-ready-to-install")
         ),
     );
-    // Linux updates come from the release page (see `apply_pending_update`).
-    if cfg!(windows) {
+    // Otherwise the update comes from the release page linked below.
+    if installable {
         notification.actions.push((
             crate::i18n::tr("update-now").to_owned(),
             NotificationAction::InstallUpdate,
