@@ -2,10 +2,13 @@
 # Builds the Linux release packages into dist/<version>/:
 #   codex-minibar-<version>-linux-<arch>.tar.gz  (binary, desktop entry, icons)
 #   codex-minibar_<version>_<debarch>.deb        (Debian/Ubuntu package)
+#   codex-minibar-<version>-<rpmrelease>.<rpmarch>.rpm (Fedora/openSUSE package)
 #   codex-minibar-<version>-linux-<arch>.AppImage (portable, x64 only)
+#   PKGBUILD                                     (Arch User Repository, for the tarball)
 #
 # Usage: ./build-linux.sh [--skip-build]
-# Requires: cargo; dpkg-deb for the .deb; patchelf and curl for the AppImage.
+# Requires: cargo; dpkg-deb for the .deb; rpmbuild for the .rpm; patchelf and
+# curl for the AppImage.
 # A missing packaging tool skips its package, except in CI, where it fails.
 #
 # An AppImage runs on systems at least as new as the one that built it (glibc
@@ -17,8 +20,8 @@ cd "$root"
 
 version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
 case "$(uname -m)" in
-    x86_64) arch=x64 debarch=amd64 ;;
-    aarch64) arch=arm64 debarch=arm64 ;;
+    x86_64) arch=x64 debarch=amd64 rpmarch=x86_64 ;;
+    aarch64) arch=arm64 debarch=arm64 rpmarch=aarch64 ;;
     *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
@@ -52,6 +55,20 @@ install_tree() {
     install -Dm644 LICENSE "$prefix/share/doc/codex-minibar/LICENSE"
     install -Dm644 THIRD_PARTY_NOTICES.md \
         "$prefix/share/doc/codex-minibar/THIRD_PARTY_NOTICES.md"
+    # Panel widgets: a GNOME Shell extension and a Plasma 6 widget. Installed
+    # where each desktop looks for them; users enable them themselves.
+    local extension=codex-minibar@vertopolkalf.github.io
+    local plasmoid=io.github.vertopolkalf.codexminibar
+    local file
+    for file in metadata.json extension.js stylesheet.css; do
+        install -Dm644 "integrations/gnome-shell/$extension/$file" \
+            "$prefix/share/gnome-shell/extensions/$extension/$file"
+    done
+    for file in metadata.json contents/config/config.qml contents/config/main.xml \
+        contents/ui/configGeneral.qml contents/ui/main.qml; do
+        install -Dm644 "integrations/kde-plasma/$plasmoid/$file" \
+            "$prefix/share/plasma/plasmoids/$plasmoid/$file"
+    done
 }
 
 # Portable tarball: extract anywhere, or into ~/.local for a per-user install.
@@ -89,7 +106,7 @@ Priority: optional
 Architecture: $debarch
 Maintainer: vertopolkaLF <noreply@github.com>
 Installed-Size: $installed_size
-Depends: libc6, libssl3t64 | libssl3, zlib1g, libzstd1, libbz2-1.0, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libx11-xcb1, libxcb1, libvulkan1, mesa-vulkan-drivers | vulkan-icd, libfontconfig1, libfreetype6
+Depends: libc6, libssl3t64 | libssl3, zlib1g, libzstd1, liblzma5, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libx11-xcb1, libxcb1, libvulkan1, mesa-vulkan-drivers | vulkan-icd, libfontconfig1, libfreetype6
 Recommends: xdg-desktop-portal, gnome-shell-extension-appindicator | plasma-workspace
 Homepage: https://github.com/vertopolkaLF/codex-minibar
 Description: Tray companion for monitoring AI tools usage
@@ -99,6 +116,70 @@ CONTROL
     deb="$dist/codex-minibar_${version}_${debarch}.deb"
     dpkg-deb --root-owner-group --build "$deb_root" "$deb" >/dev/null
     echo "Built $deb"
+}
+
+build_rpm() {
+    local topdir="$stage/rpm"
+    local rpm_root="$stage/rpm-root"
+    install_tree "$rpm_root/usr"
+    mkdir -p "$topdir"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+    # Libraries the binary links are found by rpm's automatic dependencies.
+    # GPUI loads xkbcommon, Wayland, X11 and Vulkan at runtime, so those are
+    # listed by name; the names resolve on Fedora and openSUSE alike.
+    cat > "$topdir/SPECS/codex-minibar.spec" <<SPEC
+Name:           codex-minibar
+Version:        $version
+Release:        1
+Summary:        Tray companion for monitoring AI tools usage
+License:        Apache-2.0
+URL:            https://github.com/vertopolkaLF/codex-minibar
+Requires:       libxkbcommon.so.0()(64bit)
+Requires:       libxkbcommon-x11.so.0()(64bit)
+Requires:       libwayland-client.so.0()(64bit)
+Requires:       libX11-xcb.so.1()(64bit)
+Requires:       libvulkan.so.1()(64bit)
+Requires:       libfontconfig.so.1()(64bit)
+Requires:       libfreetype.so.6()(64bit)
+Recommends:     xdg-desktop-portal
+
+%global debug_package %{nil}
+%global __strip /bin/true
+
+%description
+Codex Minibar shows usage limits, resets and spend of AI coding tools
+(Codex, Claude Code, Cursor, OpenRouter and more) in the system tray.
+
+%install
+cp -a "$rpm_root/." "%{buildroot}/"
+
+%files
+%license /usr/share/doc/codex-minibar/LICENSE
+/usr/bin/codex-minibar
+/usr/share/applications/io.github.vertopolkalf.CodexMinibar.desktop
+/usr/share/icons/hicolor/*/apps/codex-minibar.png
+%dir /usr/share/doc/codex-minibar
+/usr/share/doc/codex-minibar/THIRD_PARTY_NOTICES.md
+/usr/share/gnome-shell/extensions/codex-minibar@vertopolkalf.github.io
+/usr/share/plasma/plasmoids/io.github.vertopolkalf.codexminibar
+SPEC
+    rpmbuild --quiet -bb --target "$rpmarch" \
+        --define "_topdir $topdir" \
+        --define "_build_id_links none" \
+        "$topdir/SPECS/codex-minibar.spec" >/dev/null
+    local rpm="$dist/codex-minibar-$version-1.$rpmarch.rpm"
+    cp "$topdir/RPMS/$rpmarch/codex-minibar-$version-1.$rpmarch.rpm" "$rpm"
+    echo "Built $rpm"
+}
+
+# The Arch User Repository recipe for codex-minibar-bin, pinned to this
+# tarball. Publish it (with `makepkg --printsrcinfo > .SRCINFO`) to the AUR
+# after the release is out.
+write_pkgbuild() {
+    local sha256
+    sha256="$(sha256sum "$tarball" | cut -d' ' -f1)"
+    sed -e "s/@VERSION@/$version/g" -e "s/@SHA256@/$sha256/g" \
+        packaging/aur/PKGBUILD.in > "$dist/PKGBUILD"
+    echo "Wrote $dist/PKGBUILD"
 }
 
 # Pinned build tools, verified before they run.
@@ -167,6 +248,16 @@ if command -v dpkg-deb >/dev/null 2>&1; then
     build_deb
 else
     skip_package "dpkg-deb not found; skipping the .deb"
+fi
+
+if command -v rpmbuild >/dev/null 2>&1; then
+    build_rpm
+else
+    skip_package "rpmbuild not found; skipping the .rpm"
+fi
+
+if [ "$arch" = x64 ]; then
+    write_pkgbuild
 fi
 
 if [ "$arch" != x64 ]; then

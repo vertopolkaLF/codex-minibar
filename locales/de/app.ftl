@@ -3069,3 +3069,6 @@ linux-popup-shortcut-choose = Tastenkürzel festlegen
 linux-popup-shortcut-dialog-hint = Drücken Sie die gewünschte Tastenkombination. Sie wird als benutzerdefiniertes Kürzel in den Tastatureinstellungen Ihres Desktops gespeichert.
 linux-popup-shortcut-needs-modifier = Verwenden Sie Strg, Alt oder Super oder nutzen Sie F13–F24.
 linux-popup-shortcut-save-failed = Der Desktop hat das Tastenkürzel nicht übernommen. Versuchen Sie es erneut oder fügen Sie den Befehl in den Tastatureinstellungen hinzu.
+# src/settings_window/providers.rs
+linux-reads-subscription-quota-from-your-existing-official-agy-windows = Liest das Abonnementkontingent aus Ihrer bestehenden offiziellen agy-Anmeldung.
+linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Ordner mit der ausführbaren agy-Datei. Lassen Sie das Feld leer, damit sie automatisch gefunden wird.

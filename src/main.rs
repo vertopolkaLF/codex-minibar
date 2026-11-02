@@ -179,6 +179,9 @@ fn show_error(message: &str) {
 }
 
 fn main() {
+    if codex_minibar::status::is_cli_request() {
+        std::process::exit(codex_minibar::status::run_cli());
+    }
     if troubleshoot::is_cli_request() {
         if let Err(error) = troubleshoot::launch_cli_picker() {
             show_error(&format!(

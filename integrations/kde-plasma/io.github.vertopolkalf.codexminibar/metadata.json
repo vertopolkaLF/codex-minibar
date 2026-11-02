@@ -1,0 +1,19 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "vertopolkaLF"
+            }
+        ],
+        "Category": "System Information",
+        "Description": "AI subscription quotas from the running Codex Minibar app",
+        "Icon": "codex-minibar",
+        "Id": "io.github.vertopolkalf.codexminibar",
+        "License": "Apache-2.0",
+        "Name": "Codex Minibar",
+        "Version": "1.0",
+        "Website": "https://github.com/vertopolkaLF/codex-minibar"
+    },
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

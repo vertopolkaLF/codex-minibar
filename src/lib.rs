@@ -36,6 +36,7 @@ pub mod secrets;
 pub mod settings;
 pub mod settings_window;
 pub mod single_instance;
+pub mod status;
 pub mod store;
 pub mod streamdeck;
 pub mod taskbar;

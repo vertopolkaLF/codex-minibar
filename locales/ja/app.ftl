@@ -3048,3 +3048,6 @@ linux-popup-shortcut-choose = ショートカットを設定
 linux-popup-shortcut-dialog-hint = 使用したいキーの組み合わせを押してください。デスクトップのキーボード設定にカスタムショートカットとして保存されます。
 linux-popup-shortcut-needs-modifier = Ctrl、Alt、Super のいずれかを含めるか、F13～F24 を使用してください。
 linux-popup-shortcut-save-failed = デスクトップがショートカットを受け付けませんでした。再試行するか、キーボード設定でコマンドを追加してください。
+# src/settings_window/providers.rs
+linux-reads-subscription-quota-from-your-existing-official-agy-windows = 既存の公式 agy サインインからサブスクリプション クォータを読み取ります。
+linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = agy 実行ファイルのフォルダー。自動的に検索されるようにするには、空のままにします。

@@ -5,6 +5,13 @@ for Rust, designed to support a wide variety of applications.
 
 ## Getting Started
 
+### Local Wayland geometry fix
+
+Programmatic resize reports surface-local window geometry in logical units,
+matching configure handling. Desktop position and device-pixel scaling must not
+enter this rectangle: KWin uses it for interactive moves and can otherwise clip
+the window outside its buffer.
+
 ### Local tray application support
 
 The local `keep-alive` feature keeps the Linux Wayland and X11 event loops running

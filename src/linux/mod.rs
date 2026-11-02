@@ -6,6 +6,7 @@
 
 pub mod apps;
 pub mod autostart;
+pub mod dbus;
 pub mod desktop;
 pub mod identity;
 pub mod instance;

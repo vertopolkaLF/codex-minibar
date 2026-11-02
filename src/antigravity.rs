@@ -1,4 +1,5 @@
-//! Antigravity subscription quota using the official `agy` Windows session.
+//! Antigravity subscription quota using the official `agy` session: Windows
+//! Credential Manager on Windows, the Secret Service login keyring on Linux.
 
 use std::{
     env,
@@ -18,15 +19,21 @@ use crate::{
     worker::{Activator, LimitProvider, UsageProvider},
 };
 
-#[cfg(windows)]
-const CREDENTIAL_TARGET: &str = "gemini:antigravity";
+/// `agy` stores its session with go-keyring under this service and user:
+/// the Windows credential target is `service:user`, and the Secret Service
+/// item carries them as `service` and `username` attributes.
+const CREDENTIAL_SERVICE: &str = "gemini";
+const CREDENTIAL_USER: &str = "antigravity";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const API_BASE: &str = "https://cloudcode-pa.googleapis.com";
 const QUOTA_API_BASE: &str = "https://daily-cloudcode-pa.googleapis.com";
 // The generic client identity returns model availability, including synthetic
 // full quotas. The Hub client family exposes Antigravity subscription usage.
 const USER_AGENT: &str = "antigravity/hub/2.9.1 windows/amd64";
+#[cfg(windows)]
 const CLI_NAMES: &[&str] = &["agy.exe", "agy.cmd", "agy.ps1", "agy.bat"];
+#[cfg(not(windows))]
+const CLI_NAMES: &[&str] = &["agy"];
 
 pub struct AntigravityClient {
     agent: ureq::Agent,
@@ -148,6 +155,11 @@ fn cli_candidates(explicit: Option<&Path>) -> Vec<PathBuf> {
     if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
         known.push(PathBuf::from(local_app_data).join("agy/bin/agy.exe"));
     }
+    #[cfg(not(windows))]
+    if let Some(home) = env::var_os("HOME").map(PathBuf::from) {
+        known.push(home.join(".local/bin/agy"));
+        known.push(home.join(".agy/bin/agy"));
+    }
     provider_cli::candidates_from(explicit, known, CLI_NAMES)
 }
 
@@ -157,6 +169,7 @@ fn is_desktop_app_name(path: &Path) -> bool {
         .is_some_and(|name| {
             name.eq_ignore_ascii_case("Antigravity.exe")
                 || name.eq_ignore_ascii_case("Antigravity IDE.exe")
+                || (cfg!(not(windows)) && name == "antigravity")
         })
 }
 
@@ -164,11 +177,27 @@ fn desktop_app_in(directory: &Path) -> Option<PathBuf> {
     [
         directory.join("Antigravity.exe"),
         directory.join("Antigravity IDE.exe"),
+        directory.join("antigravity"),
     ]
     .into_iter()
     .find(|path| path.is_file())
 }
 
+#[cfg(not(windows))]
+fn known_desktop_app() -> Option<PathBuf> {
+    let home = env::var_os("HOME").map(PathBuf::from);
+    [
+        Some(PathBuf::from("/usr/share/antigravity/antigravity")),
+        Some(PathBuf::from("/opt/Antigravity/antigravity")),
+        Some(PathBuf::from("/opt/antigravity/antigravity")),
+        home.map(|home| home.join(".local/share/antigravity/antigravity")),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|path| path.is_file())
+}
+
+#[cfg(windows)]
 fn known_desktop_app() -> Option<PathBuf> {
     let local_app_data = env::var_os("LOCALAPPDATA").map(PathBuf::from)?;
     let programs = local_app_data.join("Programs");
@@ -261,7 +290,7 @@ fn credential_blob() -> Result<Vec<u8>> {
         CRED_TYPE_GENERIC, CREDENTIALW, CredFree, CredReadW,
     };
 
-    let target = CREDENTIAL_TARGET
+    let target = format!("{CREDENTIAL_SERVICE}:{CREDENTIAL_USER}")
         .encode_utf16()
         .chain(Some(0))
         .collect::<Vec<_>>();
@@ -281,9 +310,54 @@ fn credential_blob() -> Result<Vec<u8>> {
     Ok(blob)
 }
 
+/// The `agy` session from the login keyring, or from the token file `agy`
+/// writes where no Secret Service runs.
 #[cfg(not(windows))]
 fn credential_blob() -> Result<Vec<u8>> {
-    bail!("official Antigravity session reuse is available on Windows")
+    if let Some(blob) = futures::executor::block_on(keyring_blob()) {
+        return Ok(blob);
+    }
+    if let Some(blob) = token_file_paths()
+        .into_iter()
+        .find_map(|path| std::fs::read(path).ok())
+        .filter(|blob| !blob.iter().all(u8::is_ascii_whitespace))
+    {
+        return Ok(blob);
+    }
+    bail!("official Antigravity session not found; run `agy` and sign in")
+}
+
+#[cfg(not(windows))]
+async fn keyring_blob() -> Option<Vec<u8>> {
+    let keyring = oo7::Keyring::new().await.ok()?;
+    // A locked keyring prompts once, as it would for `agy` itself.
+    keyring.unlock().await.ok()?;
+    let items = keyring
+        .search_items(&vec![
+            ("service", CREDENTIAL_SERVICE),
+            ("username", CREDENTIAL_USER),
+        ])
+        .await
+        .ok()?;
+    for item in items {
+        if item.unlock().await.is_err() {
+            continue;
+        }
+        if let Ok(secret) = item.secret().await
+            && !secret.is_empty()
+        {
+            return Some(secret.to_vec());
+        }
+    }
+    None
+}
+
+#[cfg(not(windows))]
+fn token_file_paths() -> Vec<PathBuf> {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| vec![home.join(".gemini/antigravity-cli/antigravity-oauth-token")])
+        .unwrap_or_default()
 }
 
 #[derive(Clone)]
@@ -907,7 +981,7 @@ mod tests {
     #[test]
     fn prefers_an_explicit_cli_folder_over_desktop_app_names() {
         let directory = tempfile::tempdir().unwrap();
-        let cli = directory.path().join("agy.exe");
+        let cli = directory.path().join(CLI_NAMES[0]);
         let app = directory.path().join("Antigravity.exe");
         std::fs::write(&cli, b"cli").unwrap();
         std::fs::write(&app, b"app").unwrap();

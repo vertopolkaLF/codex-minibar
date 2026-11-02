@@ -79,7 +79,7 @@ fn download_latest_plugin() -> anyhow::Result<PathBuf> {
 }
 
 pub const PROTOCOL_VERSION: u32 = 1;
-const ENDPOINT_FILE_NAME: &str = "streamdeck-bridge.json";
+pub(crate) const ENDPOINT_FILE_NAME: &str = "streamdeck-bridge.json";
 const LOOPBACK_HOST: &str = "127.0.0.1";
 /// Requests are one small JSON line; anything longer is hostile or broken.
 const MAX_REQUEST_BYTES: u64 = 16 * 1024;
@@ -89,6 +89,10 @@ const IO_TIMEOUT: Duration = Duration::from_secs(3);
 /// Commands that must be executed by the existing tray/UI bridge thread.
 #[derive(Clone, Debug)]
 pub enum Command {
+    #[cfg(not(windows))]
+    ShowProvider {
+        provider: ProviderId,
+    },
     OpenPopup {
         provider: Option<ProviderId>,
     },
@@ -118,6 +122,10 @@ enum Request {
         token: String,
     },
     OpenSettings {
+        token: String,
+    },
+    /// The report `codex-minibar status` prints.
+    Status {
         token: String,
     },
 }
@@ -153,6 +161,11 @@ enum Response {
         #[serde(flatten)]
         payload: crate::cmdpal::Payload,
     },
+    Status {
+        ok: bool,
+        protocol: u32,
+        report: crate::status::Report,
+    },
     Accepted {
         ok: bool,
     },
@@ -186,6 +199,8 @@ struct MetricInfo {
 /// the same thread as tray activation and avoids a second application runtime.
 pub fn start_server(state: Arc<AppState>) -> mpsc::Receiver<Command> {
     let (commands_tx, commands_rx) = mpsc::channel();
+    #[cfg(not(windows))]
+    crate::linux::dbus::start(Arc::clone(&state), commands_tx.clone());
     thread::spawn(move || {
         let endpoint_path = match Settings::default_path() {
             Ok(path) => path.with_file_name(ENDPOINT_FILE_NAME),
@@ -349,7 +364,8 @@ fn handle_request(
         | Request::Refresh { token }
         | Request::OpenPopup { token, .. }
         | Request::Palette { token }
-        | Request::OpenSettings { token } => token,
+        | Request::OpenSettings { token }
+        | Request::Status { token } => token,
     };
     if token != expected_token {
         return Response::Error {
@@ -365,6 +381,11 @@ fn handle_request(
             providers: build_catalog(state),
         },
         Request::Snapshot { .. } => build_snapshot(state),
+        Request::Status { .. } => Response::Status {
+            ok: true,
+            protocol: PROTOCOL_VERSION,
+            report: status_report(state),
+        },
         Request::Palette { .. } => {
             let limits = state
                 .limits
@@ -456,6 +477,18 @@ fn build_catalog(state: &AppState) -> Vec<ProviderInfo> {
             }
         })
         .collect()
+}
+
+/// The report `codex-minibar status` and the Linux D-Bus service publish.
+pub(crate) fn status_report(state: &AppState) -> crate::status::Report {
+    // Built from a copy: the D-Bus service polls this, and building can
+    // rasterize provider marks, so workers must not wait on the lock.
+    let limits = state
+        .limits
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    crate::status::report(&limits)
 }
 
 fn build_snapshot(state: &AppState) -> Response {

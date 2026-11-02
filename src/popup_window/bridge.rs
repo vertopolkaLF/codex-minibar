@@ -512,6 +512,14 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                             let _ = commands.send(WorkerCommand::Refresh);
                         }
                     }
+                    #[cfg(not(windows))]
+                    crate::streamdeck::Command::ShowProvider { provider } => {
+                        crate::popup_window::request_provider_view(provider);
+                        flush_popup_ui(ui);
+                        if !popup::is_visible() || popup::is_closing() {
+                            popup::show_on_primary();
+                        }
+                    }
                     crate::streamdeck::Command::OpenPopup { provider } => {
                         if popup::is_visible() && !popup::is_closing() {
                             // Match tray-click toggle: a second press dismisses

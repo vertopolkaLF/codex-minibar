@@ -3075,3 +3075,6 @@ linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = Зап
 
 # src/settings_window/advanced.rs
 linux-add-a-game-description = Игры, запущенные через Steam, и игры из библиотек Steam или Heroic определяются сами. Любую другую программу добавьте здесь.
+# src/settings_window/providers.rs
+linux-reads-subscription-quota-from-your-existing-official-agy-windows = Читает лимиты подписки из существующей официальной авторизации agy.
+linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Папка с исполняемым файлом agy. Оставьте пустым для автоматического поиска.

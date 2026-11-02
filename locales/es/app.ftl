@@ -2167,3 +2167,6 @@ linux-popup-shortcut-choose = Definir atajo
 linux-popup-shortcut-dialog-hint = Pulsa la combinación de teclas que quieras usar. Se guardará como atajo personalizado en los ajustes de teclado de tu escritorio.
 linux-popup-shortcut-needs-modifier = Incluye Ctrl, Alt o Super, o usa F13–F24.
 linux-popup-shortcut-save-failed = El escritorio no aceptó el atajo. Reinténtalo o añade el comando en sus ajustes de teclado.
+# src/settings_window/providers.rs
+linux-reads-subscription-quota-from-your-existing-official-agy-windows = Lee la cuota de suscripción desde tu inicio de sesión oficial actual de agy.
+linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Carpeta con el ejecutable agy. Déjalo vacío para encontrarlo automáticamente.
