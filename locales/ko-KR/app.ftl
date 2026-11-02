@@ -2722,6 +2722,7 @@ taskbar-position = 위치
 taskbar-position-description = 작업 표시줄의 위젯 위치입니다. 시작은 중앙 작업 표시줄 아이콘에 가장 적합합니다.
 taskbar-position-tray = 알림 영역 옆
 taskbar-position-start = 작업 표시줄 시작 부분
+taskbar-position-in-tray = 알림 영역 안 (실험적)
 taskbar-widgets = 위젯
 taskbar-no-widgets = 아직 위젯이 없습니다
 taskbar-no-widgets-description = 작업 표시줄에 할당량을 표시하는 위젯을 추가합니다.

@@ -1208,14 +1208,15 @@ impl Renderer {
         metrics: Metrics,
         appearance: Appearance,
         items: &[Item<'_>],
+        backdrop: bool,
     ) -> windows::core::Result<()> {
         self.set_dpi(metrics.scale)?;
-        let result = self.paint_once(hdc, size, metrics, appearance, items);
+        let result = self.paint_once(hdc, size, metrics, appearance, items, backdrop);
         if let Err(error) = &result
             && error.code() == windows::Win32::Foundation::D2DERR_RECREATE_TARGET
         {
             self.recreate()?;
-            return self.paint_once(hdc, size, metrics, appearance, items);
+            return self.paint_once(hdc, size, metrics, appearance, items, backdrop);
         }
         result
     }
@@ -1227,6 +1228,7 @@ impl Renderer {
         metrics: Metrics,
         appearance: Appearance,
         items: &[Item<'_>],
+        backdrop: bool,
     ) -> windows::core::Result<()> {
         let bounds = RECT {
             left: 0,
@@ -1242,7 +1244,10 @@ impl Renderer {
         unsafe {
             self.target.BindDC(HDC(hdc), &bounds).ok()?;
             self.target.BeginDraw();
-            self.target.Clear(Some(&color([0, 0, 0], 0.0)));
+            // A barely-there backdrop keeps the whole window hit-testable;
+            // fully transparent pixels of a layered window let clicks through.
+            let alpha = if backdrop { 1.0 / 255.0 } else { 0.0 };
+            self.target.Clear(Some(&color([0, 0, 0], alpha)));
         }
         for (item, content) in items.iter().zip(contents) {
             self.paint_item(item, content, metrics, appearance);
@@ -2060,7 +2065,7 @@ pub(crate) fn snapshot(
         }
         let previous = SelectObject(dc, dib);
         let painted = renderer
-            .paint(dc, (width, height), metrics, appearance, &items)
+            .paint(dc, (width, height), metrics, appearance, &items, false)
             .is_ok();
         let pixels = std::slice::from_raw_parts(bits as *const u8, (width * height * 4) as usize);
         let rgba = painted.then(|| {

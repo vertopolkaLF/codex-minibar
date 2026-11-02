@@ -2751,6 +2751,7 @@ taskbar-position = Position
 taskbar-position-description = Où les widgets se placent dans la barre des tâches. Le début convient mieux aux icônes centrées.
 taskbar-position-tray = À côté de la zone de notification
 taskbar-position-start = Au début de la barre des tâches
+taskbar-position-in-tray = Dans la zone de notification (expérimental)
 taskbar-widgets = Widgets
 taskbar-no-widgets = Aucun widget pour le moment
 taskbar-no-widgets-description = Ajoutez un widget pour afficher un quota dans la barre des tâches.
