@@ -30,6 +30,7 @@ name-5-hour = { $name } 5 heures
 
 # src/notifications.rs
 label-limit-is-low = Le quota restant de { $label } est faible
+label-limit-reset = Limite { $label } réinitialisée
 
 # src/popup_window/formatting.rs
 expired-at-time = expiré à { $time }
@@ -3076,3 +3077,36 @@ linux-popup-shortcut-choose = Définir le raccourci
 linux-popup-shortcut-dialog-hint = Appuyez sur la combinaison de touches souhaitée. Elle sera enregistrée comme raccourci personnalisé dans les paramètres clavier de votre bureau.
 linux-popup-shortcut-needs-modifier = Incluez Ctrl, Alt ou Super, ou utilisez F13–F24.
 linux-popup-shortcut-save-failed = Le bureau n’a pas accepté le raccourci. Réessayez ou ajoutez la commande dans ses paramètres clavier.
+
+# src/provider_registry.rs (new providers)
+beta = Bêta
+beta-provider-tooltip = Nouveau dans Minibar et encore peu testé. Signalez sur GitHub tout ce qui semble incorrect.
+premium-requests = Requêtes premium
+chat = Chat
+mcp-tools = MCP
+edit-predictions = Prédictions de modification
+github-token = Jeton GitHub
+minibar-forgets-the-saved-token-of-name-copilot = Minibar oublie le jeton enregistré de { $v0 }. Il continue de fonctionner avec une connexion Copilot dans votre éditeur.
+minibar-forgets-the-saved-key-of-name = Minibar oublie la clé enregistrée de { $v0 }.
+api-key-from-the-environment = Clé API de l'environnement
+copilot-editor-sign-in = Connexion Copilot dans votre éditeur
+zed-sign-in = Connexion de l'éditeur Zed
+copilot-provider-description = Lit les quotas de requêtes premium et de chat de Copilot depuis la connexion Copilot de votre éditeur ou un jeton GitHub.
+zai-provider-description = Lit les quotas de 5 heures, hebdomadaires et MCP d'un Z.ai GLM Coding Plan avec une clé API.
+kimi-provider-description = Lit les quotas de 5 heures, hebdomadaires et mensuels de Kimi Code avec une clé API Kimi Code.
+deepseek-provider-description = Lit le solde de l'API DeepSeek avec une clé API.
+zed-provider-description = Lit les prédictions de modification et l'offre Zed depuis la connexion de l'éditeur Zed.
+needs-a-copilot-sign-in-or-a-github-token = Nécessite une connexion Copilot ou un jeton GitHub
+needs-a-github-token = Nécessite un jeton GitHub
+sign-in-to-zed-first = Connectez-vous d'abord à Zed
+using-the-zed-editor-sign-in = Utilise la connexion de l'éditeur Zed
+using-the-copilot-sign-in-from-your-editor = Utilise la connexion Copilot de votre éditeur
+using-an-api-key-from-the-environment = Utilise une clé API de l'environnement
+optional-only-needed-without-a-copilot-sign-in-in-your-editor = Facultatif. Nécessaire uniquement sans connexion Copilot dans votre éditeur.
+add-the-api-key-of-the-account-to-track-or-set-env = Ajoutez la clé API du compte à suivre, ou définissez { $env } avant de lancer Minibar.
+found-a-copilot-sign-in-on-this-pc = Connexion Copilot trouvée sur ce PC.
+not-found-sign-in-to-copilot-in-your-editor-or-add-a-token-later = Introuvable. Connectez-vous à Copilot dans votre éditeur ou ajoutez un jeton GitHub plus tard.
+found-an-api-key = Clé API trouvée.
+add-its-api-key-in-providers-after-setup = Ajoutez sa clé API dans Fournisseurs après la configuration.
+found-a-zed-sign-in-on-this-pc = Connexion Zed trouvée sur ce PC.
+not-found-sign-in-to-zed-before-enabling-it = Introuvable. Connectez-vous à Zed avant de l'activer.

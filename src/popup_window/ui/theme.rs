@@ -863,7 +863,12 @@ impl Palette {
                 }
             }
             ProviderKind::Kiro => (151, 125, 255),
-            ProviderKind::CommandCode => {
+            ProviderKind::DeepSeek => (77, 107, 254),
+            ProviderKind::Zed => (8, 76, 207),
+            ProviderKind::CommandCode
+            | ProviderKind::Copilot
+            | ProviderKind::Zai
+            | ProviderKind::Kimi => {
                 if dark {
                     (255, 255, 255)
                 } else {

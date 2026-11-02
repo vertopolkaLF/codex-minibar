@@ -323,6 +323,36 @@ fn start_driver_worker(
                 false
             )
         }
+        ProviderKind::Copilot => start_worker!(
+            crate::copilot::CopilotClient::new(provider),
+            crate::copilot::CopilotClient::new(provider),
+            crate::copilot::CopilotActivator,
+            false
+        ),
+        ProviderKind::Zai => start_worker!(
+            crate::zai::ZaiClient::new(provider),
+            crate::zai::ZaiClient::new(provider),
+            crate::zai::ZaiActivator,
+            false
+        ),
+        ProviderKind::Kimi => start_worker!(
+            crate::kimi::KimiClient::new(provider),
+            crate::kimi::KimiClient::new(provider),
+            crate::kimi::KimiActivator,
+            false
+        ),
+        ProviderKind::DeepSeek => start_worker!(
+            crate::deepseek::DeepSeekClient::new(provider),
+            crate::deepseek::DeepSeekClient::new(provider),
+            crate::deepseek::DeepSeekActivator,
+            false
+        ),
+        ProviderKind::Zed => start_worker!(
+            crate::zed::ZedClient::new(),
+            crate::zed::ZedClient::new(),
+            crate::zed::ZedActivator,
+            false
+        ),
     })
 }
 
@@ -417,6 +447,11 @@ fn provider_activation_path(provider: ProviderId, base_path: PathBuf) -> PathBuf
         ProviderKind::Grok => base_path.with_file_name("activation-grok.toml"),
         ProviderKind::Kiro => base_path.with_file_name("activation-kiro.toml"),
         ProviderKind::CommandCode => base_path.with_file_name("activation-command-code.toml"),
+        ProviderKind::Copilot => base_path.with_file_name("activation-copilot.toml"),
+        ProviderKind::Zai => base_path.with_file_name("activation-zai.toml"),
+        ProviderKind::Kimi => base_path.with_file_name("activation-kimi.toml"),
+        ProviderKind::DeepSeek => base_path.with_file_name("activation-deepseek.toml"),
+        ProviderKind::Zed => base_path.with_file_name("activation-zed.toml"),
     }
 }
 

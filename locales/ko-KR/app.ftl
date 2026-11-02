@@ -30,6 +30,7 @@ name-5-hour = { $name } 5시간
 
 # src/notifications.rs
 label-limit-is-low = { $label } 한도가 낮습니다.
+label-limit-reset = { $label } 한도 재설정
 
 # src/popup_window/formatting.rs
 expired-at-time = { $time }에 만료됨
@@ -3047,3 +3048,36 @@ linux-popup-shortcut-choose = 단축키 설정
 linux-popup-shortcut-dialog-hint = 사용할 키 조합을 누르세요. 데스크톱의 키보드 설정에 사용자 지정 단축키로 저장됩니다.
 linux-popup-shortcut-needs-modifier = Ctrl, Alt 또는 Super를 포함하거나 F13–F24를 사용하세요.
 linux-popup-shortcut-save-failed = 데스크톱에서 단축키를 받아들이지 않았습니다. 다시 시도하거나 키보드 설정에서 명령을 추가하세요.
+
+# src/provider_registry.rs (new providers)
+beta = 베타
+beta-provider-tooltip = Minibar에 새로 추가되어 아직 많은 계정으로 테스트되지 않았습니다. 이상한 점이 있으면 GitHub에 알려 주세요.
+premium-requests = 프리미엄 요청
+chat = 채팅
+mcp-tools = MCP
+edit-predictions = 편집 예측
+github-token = GitHub 토큰
+minibar-forgets-the-saved-token-of-name-copilot = Minibar가 { $v0 }의 저장된 토큰을 삭제합니다. 편집기의 Copilot 로그인으로 계속 작동합니다.
+minibar-forgets-the-saved-key-of-name = Minibar가 { $v0 }의 저장된 키를 삭제합니다.
+api-key-from-the-environment = 환경 변수의 API 키
+copilot-editor-sign-in = 편집기의 Copilot 로그인
+zed-sign-in = Zed 편집기 로그인
+copilot-provider-description = 편집기의 Copilot 로그인 또는 GitHub 토큰으로 Copilot 프리미엄 요청 및 채팅 할당량을 읽습니다.
+zai-provider-description = API 키로 Z.ai GLM Coding Plan의 5시간, 주간 및 MCP 할당량을 읽습니다.
+kimi-provider-description = Kimi Code API 키로 Kimi Code의 5시간, 주간 및 월간 할당량을 읽습니다.
+deepseek-provider-description = API 키로 DeepSeek API 잔액을 읽습니다.
+zed-provider-description = Zed 편집기 로그인으로 Zed 편집 예측과 요금제를 읽습니다.
+needs-a-copilot-sign-in-or-a-github-token = Copilot 로그인 또는 GitHub 토큰이 필요합니다
+needs-a-github-token = GitHub 토큰이 필요합니다
+sign-in-to-zed-first = 먼저 Zed에 로그인하세요
+using-the-zed-editor-sign-in = Zed 편집기 로그인 사용 중
+using-the-copilot-sign-in-from-your-editor = 편집기의 Copilot 로그인 사용 중
+using-an-api-key-from-the-environment = 환경 변수의 API 키 사용 중
+optional-only-needed-without-a-copilot-sign-in-in-your-editor = 선택 사항. 편집기에 Copilot 로그인이 없을 때만 필요합니다.
+add-the-api-key-of-the-account-to-track-or-set-env = 추적할 계정의 API 키를 추가하거나 Minibar를 시작하기 전에 { $env }를 설정하세요.
+found-a-copilot-sign-in-on-this-pc = 이 PC에서 Copilot 로그인을 찾았습니다.
+not-found-sign-in-to-copilot-in-your-editor-or-add-a-token-later = 찾을 수 없습니다. 편집기에서 Copilot에 로그인하거나 나중에 GitHub 토큰을 추가하세요.
+found-an-api-key = API 키를 찾았습니다.
+add-its-api-key-in-providers-after-setup = 설정 후 제공자에서 API 키를 추가하세요.
+found-a-zed-sign-in-on-this-pc = 이 PC에서 Zed 로그인을 찾았습니다.
+not-found-sign-in-to-zed-before-enabling-it = 찾을 수 없습니다. 사용하기 전에 Zed에 로그인하세요.

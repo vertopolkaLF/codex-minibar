@@ -43,6 +43,10 @@ name-5-hour = { "" }
 label-limit-is-low = { "" }
 
 # English source:
+# label-limit-reset = { $label } limit reset
+label-limit-reset = { "" }
+
+# English source:
 # expired-at-time = expired at { $time }
 expired-at-time = { "" }
 
@@ -4489,3 +4493,127 @@ linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = { "" }
 # English source:
 # linux-add-a-game-description = Games launched by Steam and games in Steam or Heroic libraries are detected on their own. Add any other program here.
 linux-add-a-game-description = { "" }
+
+# English source:
+# beta = Beta
+beta = { "" }
+
+# English source:
+# beta-provider-tooltip = New in Minibar and not yet tested with many accounts. Please report anything that looks wrong on GitHub.
+beta-provider-tooltip = { "" }
+
+# English source:
+# premium-requests = Premium requests
+premium-requests = { "" }
+
+# English source:
+# chat = Chat
+chat = { "" }
+
+# English source:
+# mcp-tools = MCP
+mcp-tools = { "" }
+
+# English source:
+# edit-predictions = Edit predictions
+edit-predictions = { "" }
+
+# English source:
+# github-token = GitHub token
+github-token = { "" }
+
+# English source:
+# minibar-forgets-the-saved-token-of-name-copilot = Minibar forgets the saved token of { $v0 }. It keeps working with a Copilot sign-in in your editor.
+minibar-forgets-the-saved-token-of-name-copilot = { "" }
+
+# English source:
+# minibar-forgets-the-saved-key-of-name = Minibar forgets the saved key of { $v0 }.
+minibar-forgets-the-saved-key-of-name = { "" }
+
+# English source:
+# api-key-from-the-environment = API key from the environment
+api-key-from-the-environment = { "" }
+
+# English source:
+# copilot-editor-sign-in = Copilot sign-in in your editor
+copilot-editor-sign-in = { "" }
+
+# English source:
+# zed-sign-in = Zed editor sign-in
+zed-sign-in = { "" }
+
+# English source:
+# copilot-provider-description = Reads Copilot premium-request and chat quotas from the Copilot sign-in in your editor or a GitHub token.
+copilot-provider-description = { "" }
+
+# English source:
+# zai-provider-description = Reads the 5-hour, weekly and MCP quotas of a Z.ai GLM Coding Plan with an API key.
+zai-provider-description = { "" }
+
+# English source:
+# kimi-provider-description = Reads the 5-hour, weekly and monthly Kimi Code quotas with a Kimi Code API key.
+kimi-provider-description = { "" }
+
+# English source:
+# deepseek-provider-description = Reads the DeepSeek API balance with an API key.
+deepseek-provider-description = { "" }
+
+# English source:
+# zed-provider-description = Reads Zed edit predictions and plan from the Zed editor's sign-in.
+zed-provider-description = { "" }
+
+# English source:
+# needs-a-copilot-sign-in-or-a-github-token = Needs a Copilot sign-in or a GitHub token
+needs-a-copilot-sign-in-or-a-github-token = { "" }
+
+# English source:
+# needs-a-github-token = Needs a GitHub token
+needs-a-github-token = { "" }
+
+# English source:
+# sign-in-to-zed-first = Sign in to Zed first
+sign-in-to-zed-first = { "" }
+
+# English source:
+# using-the-zed-editor-sign-in = Using the Zed editor sign-in
+using-the-zed-editor-sign-in = { "" }
+
+# English source:
+# using-the-copilot-sign-in-from-your-editor = Using the Copilot sign-in from your editor
+using-the-copilot-sign-in-from-your-editor = { "" }
+
+# English source:
+# using-an-api-key-from-the-environment = Using an API key from the environment
+using-an-api-key-from-the-environment = { "" }
+
+# English source:
+# optional-only-needed-without-a-copilot-sign-in-in-your-editor = Optional. Only needed without a Copilot sign-in in your editor.
+optional-only-needed-without-a-copilot-sign-in-in-your-editor = { "" }
+
+# English source:
+# add-the-api-key-of-the-account-to-track-or-set-env = Add the API key of the account to track, or set { $env } before starting Minibar.
+add-the-api-key-of-the-account-to-track-or-set-env = { "" }
+
+# English source:
+# found-a-copilot-sign-in-on-this-pc = Found a Copilot sign-in on this PC.
+found-a-copilot-sign-in-on-this-pc = { "" }
+
+# English source:
+# not-found-sign-in-to-copilot-in-your-editor-or-add-a-token-later = Not found. Sign in to Copilot in your editor, or add a GitHub token later.
+not-found-sign-in-to-copilot-in-your-editor-or-add-a-token-later = { "" }
+
+# English source:
+# found-an-api-key = Found an API key.
+found-an-api-key = { "" }
+
+# English source:
+# add-its-api-key-in-providers-after-setup = Add its API key in Providers after setup.
+add-its-api-key-in-providers-after-setup = { "" }
+
+# English source:
+# found-a-zed-sign-in-on-this-pc = Found a Zed sign-in on this PC.
+found-a-zed-sign-in-on-this-pc = { "" }
+
+# English source:
+# not-found-sign-in-to-zed-before-enabling-it = Not found. Sign in to Zed before enabling it.
+not-found-sign-in-to-zed-before-enabling-it = { "" }

@@ -180,6 +180,16 @@ pub(crate) fn limit_labels(kind: ProviderKind) -> (&'static str, &'static str, &
             crate::i18n::tr("credits"),
             crate::i18n::tr("credits"),
         ),
+        ProviderKind::Copilot => (
+            crate::i18n::tr("premium-requests"),
+            crate::i18n::tr("premium-requests"),
+            crate::i18n::tr("chat"),
+        ),
+        ProviderKind::Zed => (
+            crate::i18n::tr("edit-predictions"),
+            crate::i18n::tr("edit-predictions"),
+            crate::i18n::tr("edit-predictions"),
+        ),
         _ => (
             crate::i18n::tr("monthly"),
             crate::i18n::tr("msg-5h-session-de7ce8"),

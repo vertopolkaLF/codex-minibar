@@ -193,8 +193,16 @@ fn driver_card(
     .selected(selected);
     if blocked.is_some() {
         card = card.trailing(kit::chip(k, crate::i18n::tr("added")));
-    } else if let Some(on_click) = on_click {
-        card = card.on_click(on_click);
+    } else {
+        if crate::provider_registry::descriptor(driver).beta {
+            card = card.trailing(kit::beta_chip(
+                k,
+                format!("dlg-driver-beta-{}", driver.id()),
+            ));
+        }
+        if let Some(on_click) = on_click {
+            card = card.on_click(on_click);
+        }
     }
     let card = card.render(k).when(blocked.is_some(), |el| el.opacity(0.5));
     let card = match blocked {
@@ -799,11 +807,16 @@ impl SettingsWindow {
                     k,
                     crate::i18n::format("for", &[("v0", (instance_name(provider)).to_string())]),
                 ));
+                let (label, placeholder) = match provider.kind() {
+                    ProviderKind::Copilot => (crate::i18n::tr("github-token"), "gho_…"),
+                    ProviderKind::Zai | ProviderKind::Kimi => (crate::i18n::tr("api-key"), ""),
+                    _ => (crate::i18n::tr("api-key"), "sk-…"),
+                };
                 fields.push(self.dialog_input(
                     k,
                     FIELD_KEY,
-                    crate::i18n::tr("api-key"),
-                    "sk-…",
+                    label,
+                    placeholder,
                     "",
                     true,
                     Some(crate::i18n::tr(if cfg!(windows) {
@@ -829,7 +842,15 @@ impl SettingsWindow {
                 fields.push(kit::caption(
                     k,
                     crate::i18n::format(
-                        "minibar-forgets-the-saved-key-of-it-keeps-working-with-opencode",
+                        match provider.kind() {
+                            ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
+                                "minibar-forgets-the-saved-key-of-it-keeps-working-with-opencode"
+                            }
+                            ProviderKind::Copilot => {
+                                "minibar-forgets-the-saved-token-of-name-copilot"
+                            }
+                            _ => "minibar-forgets-the-saved-key-of-name",
+                        },
                         &[("v0", (instance_name(provider)).to_string())],
                     ),
                 ));

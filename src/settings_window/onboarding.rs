@@ -52,6 +52,11 @@ fn detected_providers(settings: &Settings) -> [bool; DRIVERS] {
             ProviderKind::Antigravity => crate::antigravity::is_installed(path),
             ProviderKind::Grok => crate::grok::is_installed(path),
             ProviderKind::CommandCode => crate::commandcode::is_installed(path),
+            ProviderKind::Copilot => crate::copilot::is_installed() || has_api_key(&instance),
+            ProviderKind::Zai | ProviderKind::Kimi | ProviderKind::DeepSeek => {
+                has_api_key(&instance)
+            }
+            ProviderKind::Zed => crate::zed::is_installed(),
             ProviderKind::Kiro => crate::kiro::source_is_ready(
                 path,
                 instance.kiro_crew_path.as_deref(),
@@ -59,6 +64,13 @@ fn detected_providers(settings: &Settings) -> [bool; DRIVERS] {
             ),
         }
     })
+}
+
+fn has_api_key(instance: &ProviderInstance) -> bool {
+    crate::provider_keys::resolve(instance.provider_id())
+        .ok()
+        .flatten()
+        .is_some()
 }
 
 /// What the provider step says about each driver.
@@ -94,6 +106,20 @@ fn detection_note(driver: ProviderKind, found: bool) -> &'static str {
         }
         (ProviderKind::Kiro, true) => {
             crate::i18n::tr("found-kiro-ide-kiro-crew-or-a-signed-in-kiro-cli")
+        }
+        (ProviderKind::Copilot, true) => crate::i18n::tr("found-a-copilot-sign-in-on-this-pc"),
+        (ProviderKind::Copilot, false) => {
+            crate::i18n::tr("not-found-sign-in-to-copilot-in-your-editor-or-add-a-token-later")
+        }
+        (ProviderKind::Zai | ProviderKind::Kimi | ProviderKind::DeepSeek, true) => {
+            crate::i18n::tr("found-an-api-key")
+        }
+        (ProviderKind::Zai | ProviderKind::Kimi | ProviderKind::DeepSeek, false) => {
+            crate::i18n::tr("add-its-api-key-in-providers-after-setup")
+        }
+        (ProviderKind::Zed, true) => crate::i18n::tr("found-a-zed-sign-in-on-this-pc"),
+        (ProviderKind::Zed, false) => {
+            crate::i18n::tr("not-found-sign-in-to-zed-before-enabling-it")
         }
         (ProviderKind::Kiro, false) => {
             crate::i18n::tr("not-found-install-kiro-ide-or-kiro-crew-or-sign-in-to-kiro-cli")
@@ -509,6 +535,12 @@ impl OnboardingWindow {
             )
             .icon(mark)
             .description(k, detection_note(driver, found));
+            if crate::provider_registry::descriptor(driver).beta {
+                row = row.trailing(kit::beta_chip(
+                    k,
+                    format!("onboarding-beta-{}", driver.id()),
+                ));
+            }
             if found {
                 row = row.trailing(kit::chip(k, crate::i18n::tr("detected")));
             }

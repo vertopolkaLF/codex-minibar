@@ -30,6 +30,7 @@ name-5-hour = { $name } 5時間
 
 # src/notifications.rs
 label-limit-is-low = { $label } の利用枠の残量が少なくなっています
+label-limit-reset = { $label } の利用枠がリセットされました
 
 # src/popup_window/formatting.rs
 expired-at-time = 期限切れ: { $time }
@@ -3048,3 +3049,36 @@ linux-popup-shortcut-choose = ショートカットを設定
 linux-popup-shortcut-dialog-hint = 使用したいキーの組み合わせを押してください。デスクトップのキーボード設定にカスタムショートカットとして保存されます。
 linux-popup-shortcut-needs-modifier = Ctrl、Alt、Super のいずれかを含めるか、F13～F24 を使用してください。
 linux-popup-shortcut-save-failed = デスクトップがショートカットを受け付けませんでした。再試行するか、キーボード設定でコマンドを追加してください。
+
+# src/provider_registry.rs (new providers)
+beta = ベータ
+beta-provider-tooltip = Minibar に新しく追加され、まだ多くのアカウントで検証されていません。おかしな点があれば GitHub で報告してください。
+premium-requests = プレミアム リクエスト
+chat = チャット
+mcp-tools = MCP
+edit-predictions = 編集予測
+github-token = GitHub トークン
+minibar-forgets-the-saved-token-of-name-copilot = Minibar は { $v0 } の保存済みトークンを削除します。エディターの Copilot サインインがあれば引き続き動作します。
+minibar-forgets-the-saved-key-of-name = Minibar は { $v0 } の保存済みキーを削除します。
+api-key-from-the-environment = 環境変数の API キー
+copilot-editor-sign-in = エディターの Copilot サインイン
+zed-sign-in = Zed エディターのサインイン
+copilot-provider-description = エディターの Copilot サインインまたは GitHub トークンから、Copilot のプレミアム リクエストとチャットの利用枠を読み取ります。
+zai-provider-description = API キーで Z.ai GLM Coding Plan の 5 時間・週間・MCP の利用枠を読み取ります。
+kimi-provider-description = Kimi Code の API キーで、Kimi Code の 5 時間・週間・月間の利用枠を読み取ります。
+deepseek-provider-description = API キーで DeepSeek API の残高を読み取ります。
+zed-provider-description = Zed エディターのサインインから、Zed の編集予測とプランを読み取ります。
+needs-a-copilot-sign-in-or-a-github-token = Copilot のサインインまたは GitHub トークンが必要です
+needs-a-github-token = GitHub トークンが必要です
+sign-in-to-zed-first = 先に Zed にサインインしてください
+using-the-zed-editor-sign-in = Zed エディターのサインインを使用中
+using-the-copilot-sign-in-from-your-editor = エディターの Copilot サインインを使用中
+using-an-api-key-from-the-environment = 環境変数の API キーを使用中
+optional-only-needed-without-a-copilot-sign-in-in-your-editor = 任意。エディターで Copilot にサインインしていない場合のみ必要です。
+add-the-api-key-of-the-account-to-track-or-set-env = 追跡するアカウントの API キーを追加するか、Minibar を起動する前に { $env } を設定してください。
+found-a-copilot-sign-in-on-this-pc = この PC で Copilot のサインインが見つかりました。
+not-found-sign-in-to-copilot-in-your-editor-or-add-a-token-later = 見つかりません。エディターで Copilot にサインインするか、後で GitHub トークンを追加してください。
+found-an-api-key = API キーが見つかりました。
+add-its-api-key-in-providers-after-setup = セットアップ後に「プロバイダー」で API キーを追加してください。
+found-a-zed-sign-in-on-this-pc = この PC で Zed のサインインが見つかりました。
+not-found-sign-in-to-zed-before-enabling-it = 見つかりません。有効にする前に Zed にサインインしてください。

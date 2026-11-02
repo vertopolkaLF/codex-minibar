@@ -554,6 +554,21 @@ pub(crate) fn chip(k: &Kit, label: impl Into<SharedString>) -> AnyElement {
         .into_any_element()
 }
 
+/// The `Beta` chip of a provider that still needs testing, explained on hover.
+pub(crate) fn beta_chip(k: &Kit, id: impl Into<SharedString>) -> AnyElement {
+    let chip = div()
+        .id(gpui::ElementId::Name(id.into()))
+        .px(px(6.0))
+        .py(px(1.0))
+        .rounded(px(5.0))
+        .bg(k.theme.accent_soft)
+        .text_size(px(11.0))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(k.theme.accent_text)
+        .child(crate::i18n::tr("beta"));
+    with_tooltip(k, chip, crate::i18n::tr("beta-provider-tooltip")).into_any_element()
+}
+
 /// An instance badge plate as drawn in the popup and sidebar.
 pub(crate) fn badge_plate(k: &Kit, badge: &crate::instances::Badge) -> AnyElement {
     let (bg, fg) = k.theme.badge(badge.color);

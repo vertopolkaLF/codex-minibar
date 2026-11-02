@@ -18,6 +18,28 @@ enum Dot {
     Caution,
 }
 
+/// What the API key row says while no key is saved.
+fn missing_key_description(instance: &ProviderInstance) -> String {
+    if !instance.is_primary() {
+        return crate::i18n::tr("add-the-key-of-the-account-this-instance-tracks").into();
+    }
+    match instance.driver {
+        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
+            crate::i18n::tr("optional-only-needed-without-opencode-sign-in-on-this-pc").into()
+        }
+        ProviderKind::Copilot => {
+            crate::i18n::tr("optional-only-needed-without-a-copilot-sign-in-in-your-editor").into()
+        }
+        driver => match crate::provider_keys::environment_names(driver).first() {
+            Some(name) => crate::i18n::format(
+                "add-the-api-key-of-the-account-to-track-or-set-env",
+                &[("env", (*name).to_owned())],
+            ),
+            None => crate::i18n::tr("add-the-key-of-the-account-this-instance-tracks").into(),
+        },
+    }
+}
+
 /// One-line status shared by the page header and the sidebar dot.
 fn status_line(
     instance: &ProviderInstance,
@@ -70,6 +92,14 @@ fn status_line(
                     crate::i18n::tr("needs-an-api-key").to_owned()
                 }
             }
+            ProviderKind::Copilot if instance.is_primary() => {
+                crate::i18n::tr("needs-a-copilot-sign-in-or-a-github-token").to_owned()
+            }
+            ProviderKind::Copilot => crate::i18n::tr("needs-a-github-token").to_owned(),
+            ProviderKind::Zai | ProviderKind::Kimi | ProviderKind::DeepSeek => {
+                crate::i18n::tr("needs-an-api-key").to_owned()
+            }
+            ProviderKind::Zed => crate::i18n::tr("sign-in-to-zed-first").to_owned(),
             _ => crate::i18n::tr("not-found-set-its-folder-under-runtime").to_owned(),
         },
         ProviderReadiness::Ready => match provider {
@@ -79,6 +109,24 @@ fn status_line(
                 } else {
                     crate::i18n::tr("using-opencode-sign-in-or-local-history").to_owned()
                 }
+            }
+            ProviderKind::Zed => crate::i18n::tr("using-the-zed-editor-sign-in").to_owned(),
+            ProviderKind::Copilot
+            | ProviderKind::Zai
+            | ProviderKind::Kimi
+            | ProviderKind::DeepSeek => {
+                let saved = crate::provider_keys::manual_key(instance.provider_id())
+                    .ok()
+                    .flatten()
+                    .is_some_and(|key| !key.trim().is_empty());
+                crate::i18n::tr(if saved {
+                    "using-a-saved-api-key"
+                } else if provider == ProviderKind::Copilot {
+                    "using-the-copilot-sign-in-from-your-editor"
+                } else {
+                    "using-an-api-key-from-the-environment"
+                })
+                .to_owned()
             }
             _ => {
                 let (app, crew, cli) = source_labels(provider);
@@ -239,6 +287,9 @@ impl SettingsWindow {
         status_row = status_row.child(kit::text(status_text, 13.0, theme.text_secondary));
         if crate::instances::Capabilities::of(instance).limits_only() {
             status_row = status_row.child(kit::chip(k, crate::i18n::tr("limits-only")));
+        }
+        if crate::provider_registry::descriptor(instance.driver).beta {
+            status_row = status_row.child(kit::beta_chip(k, "provider-beta"));
         }
         let color = if instance.enabled {
             theme.brand(instance.driver)
@@ -445,8 +496,8 @@ impl SettingsWindow {
         match instance.driver {
             ProviderKind::Claude | ProviderKind::Codex => {}
             ProviderKind::OpenRouter => return self.openrouter_section(instance, k, cx),
-            ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
-                return self.opencode_key_section(instance, k, cx);
+            driver if crate::provider_keys::uses_api_key(driver) => {
+                return self.api_key_section(instance, k, cx);
             }
             _ => return Vec::new(),
         }
@@ -565,7 +616,15 @@ impl SettingsWindow {
     ) -> Vec<AnyElement> {
         let provider = instance.provider_id();
         let driver = instance.driver;
-        if driver == ProviderKind::OpenRouter {
+        if matches!(
+            driver,
+            ProviderKind::OpenRouter
+                | ProviderKind::Copilot
+                | ProviderKind::Zai
+                | ProviderKind::Kimi
+                | ProviderKind::DeepSeek
+                | ProviderKind::Zed
+        ) {
             return Vec::new();
         }
         let mut out = vec![kit::section_header(
@@ -1082,19 +1141,23 @@ impl SettingsWindow {
         kit::row_card(k, row)
     }
 
-    fn opencode_key_section(
+    fn api_key_section(
         &mut self,
         instance: &ProviderInstance,
         k: &mut Kit,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let provider = instance.provider_id();
-        let saved_key = crate::opencode::manual_key(provider)
+        let saved_key = crate::provider_keys::manual_key(provider)
             .ok()
             .flatten()
             .filter(|value| !value.trim().is_empty());
-        let row = Row::new("opencode-api-key", crate::i18n::tr("api-key"))
-            .icon(kit::row_icon(k, "key-fill"));
+        let label = if instance.driver == ProviderKind::Copilot {
+            crate::i18n::tr("github-token")
+        } else {
+            crate::i18n::tr("api-key")
+        };
+        let row = Row::new("opencode-api-key", label).icon(kit::row_icon(k, "key-fill"));
         let row = match saved_key {
             Some(key) => row
                 .description(
@@ -1128,14 +1191,7 @@ impl SettingsWindow {
                     }),
                 )),
             None => row
-                .description(
-                    k,
-                    if instance.is_primary() {
-                        crate::i18n::tr("optional-only-needed-without-opencode-sign-in-on-this-pc")
-                    } else {
-                        crate::i18n::tr("add-the-key-of-the-account-this-instance-tracks")
-                    },
-                )
+                .description(k, missing_key_description(instance))
                 .trailing(
                     Button::new("opencode-add-key", crate::i18n::tr("add-api-key"))
                         .with_icon("plus-bold")

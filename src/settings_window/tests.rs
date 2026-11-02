@@ -57,7 +57,7 @@ fn instances(mask: u32, extra_claude: bool) -> Vec<ProviderInstance> {
 fn provider_nav_keeps_identity_and_order_for_every_enabled_combination() {
     for extra_claude in [false, true] {
         let count = instances(0, extra_claude).len();
-        for mask in 0..(1_u32 << count) {
+        for mask in crate::instances::test_masks(count) {
             let instances = instances(mask, extra_claude);
             let (enabled, disabled) = provider_nav_order(&instances);
             let expected: Vec<_> = instances
