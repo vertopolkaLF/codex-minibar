@@ -30,6 +30,7 @@ name-5-hour = { $name } 5 saatlik
 
 # src/notifications.rs
 label-limit-is-low = { $label } limiti azalıyor
+label-limit-reset = { $label } limiti sıfırlandı
 
 # src/popup_window/formatting.rs
 expired-at-time = { $time } itibarıyla süresi doldu
@@ -3047,3 +3048,36 @@ linux-popup-shortcut-choose = Kısayol ayarla
 linux-popup-shortcut-dialog-hint = Kullanmak istediğiniz tuş birleşimine basın. Masaüstünüzün klavye ayarlarında özel kısayol olarak kaydedilir.
 linux-popup-shortcut-needs-modifier = Ctrl, Alt veya Super ekleyin ya da F13–F24 kullanın.
 linux-popup-shortcut-save-failed = Masaüstü kısayolu kabul etmedi. Yeniden deneyin veya komutu klavye ayarlarına ekleyin.
+
+# src/provider_registry.rs (new providers)
+beta = Beta
+beta-provider-tooltip = Minibar'a yeni eklendi ve henüz çok hesapla test edilmedi. Yanlış görünen her şeyi GitHub'da bildirin.
+premium-requests = Premium istekler
+chat = Sohbet
+mcp-tools = MCP
+edit-predictions = Düzenleme tahminleri
+github-token = GitHub belirteci
+minibar-forgets-the-saved-token-of-name-copilot = Minibar, { $v0 } için kaydedilen belirteci unutur. Düzenleyicinizdeki Copilot oturumuyla çalışmaya devam eder.
+minibar-forgets-the-saved-key-of-name = Minibar, { $v0 } için kaydedilen anahtarı unutur.
+api-key-from-the-environment = Ortamdan alınan API anahtarı
+copilot-editor-sign-in = Düzenleyicinizdeki Copilot oturumu
+zed-sign-in = Zed düzenleyici oturumu
+copilot-provider-description = Copilot premium istek ve sohbet kotalarını düzenleyicinizdeki Copilot oturumundan veya bir GitHub belirtecinden okur.
+zai-provider-description = Bir API anahtarıyla Z.ai GLM Coding Plan'ın 5 saatlik, haftalık ve MCP kotalarını okur.
+kimi-provider-description = Bir Kimi Code API anahtarıyla Kimi Code'un 5 saatlik, haftalık ve aylık kotalarını okur.
+deepseek-provider-description = Bir API anahtarıyla DeepSeek API bakiyesini okur.
+zed-provider-description = Zed düzenleme tahminlerini ve planını Zed düzenleyici oturumundan okur.
+needs-a-copilot-sign-in-or-a-github-token = Copilot oturumu veya GitHub belirteci gerekir
+needs-a-github-token = GitHub belirteci gerekir
+sign-in-to-zed-first = Önce Zed'de oturum açın
+using-the-zed-editor-sign-in = Zed düzenleyici oturumu kullanılıyor
+using-the-copilot-sign-in-from-your-editor = Düzenleyicinizdeki Copilot oturumu kullanılıyor
+using-an-api-key-from-the-environment = Ortamdaki bir API anahtarı kullanılıyor
+optional-only-needed-without-a-copilot-sign-in-in-your-editor = İsteğe bağlı. Yalnızca düzenleyicinizde Copilot oturumu yoksa gerekir.
+add-the-api-key-of-the-account-to-track-or-set-env = İzlenecek hesabın API anahtarını ekleyin veya Minibar'ı başlatmadan önce { $env } değişkenini ayarlayın.
+found-a-copilot-sign-in-on-this-pc = Bu bilgisayarda bir Copilot oturumu bulundu.
+not-found-sign-in-to-copilot-in-your-editor-or-add-a-token-later = Bulunamadı. Düzenleyicinizde Copilot'ta oturum açın veya daha sonra bir GitHub belirteci ekleyin.
+found-an-api-key = Bir API anahtarı bulundu.
+add-its-api-key-in-providers-after-setup = Kurulumdan sonra API anahtarını Sağlayıcılar bölümünde ekleyin.
+found-a-zed-sign-in-on-this-pc = Bu bilgisayarda bir Zed oturumu bulundu.
+not-found-sign-in-to-zed-before-enabling-it = Bulunamadı. Etkinleştirmeden önce Zed'de oturum açın.

@@ -60,6 +60,9 @@ pub struct ProviderDescriptor {
     pub metrics: &'static [MetricDescriptor],
     /// Ordered metrics used by onboarding and the provider preset.
     pub default_tray_metrics: &'static [&'static str],
+    /// New or rarely tested drivers, labeled Beta in Settings until users
+    /// confirm them against real accounts.
+    pub beta: bool,
 }
 
 const CODEX_METRICS: &[MetricDescriptor] = &[
@@ -210,6 +213,70 @@ const COMMAND_CODE_METRICS: &[MetricDescriptor] = &[
     },
 ];
 
+const COPILOT_METRICS: &[MetricDescriptor] = &[
+    MetricDescriptor {
+        id: "copilot.premium",
+        label: "Premium requests",
+        label_key: "premium-requests",
+        source: MetricSource::Primary,
+    },
+    MetricDescriptor {
+        id: "copilot.chat",
+        label: "Chat",
+        label_key: "chat",
+        source: MetricSource::Secondary,
+    },
+];
+
+const ZAI_METRICS: &[MetricDescriptor] = &[
+    MetricDescriptor {
+        id: "zai.session",
+        label: "5h session",
+        label_key: "msg-5h-session",
+        source: MetricSource::Primary,
+    },
+    MetricDescriptor {
+        id: "zai.weekly",
+        label: "Weekly",
+        label_key: "weekly",
+        source: MetricSource::Secondary,
+    },
+    MetricDescriptor {
+        id: "zai.mcp",
+        label: "MCP",
+        label_key: "mcp-tools",
+        source: MetricSource::Additional(crate::zai::MCP_LIMIT_ID),
+    },
+];
+
+const KIMI_METRICS: &[MetricDescriptor] = &[
+    MetricDescriptor {
+        id: "kimi.session",
+        label: "5h session",
+        label_key: "msg-5h-session",
+        source: MetricSource::Primary,
+    },
+    MetricDescriptor {
+        id: "kimi.weekly",
+        label: "Weekly",
+        label_key: "weekly",
+        source: MetricSource::Secondary,
+    },
+    MetricDescriptor {
+        id: "kimi.monthly",
+        label: "Monthly",
+        label_key: "monthly",
+        source: MetricSource::Additional(crate::kimi::MONTHLY_LIMIT_ID),
+    },
+];
+
+const ZED_METRICS: &[MetricDescriptor] = &[MetricDescriptor {
+    id: "zed.predictions",
+    label: "Edit predictions",
+    label_key: "edit-predictions",
+    source: MetricSource::Primary,
+}];
+
 pub const PROVIDERS: &[ProviderDescriptor] = &[
     ProviderDescriptor {
         kind: ProviderKind::Codex,
@@ -221,6 +288,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         include_in_total_spend: true,
         supports_multiple_instances: true,
         metrics: CODEX_METRICS,
+        beta: false,
         default_tray_metrics: &["codex.session", "codex.weekly"],
     },
     ProviderDescriptor {
@@ -233,6 +301,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         include_in_total_spend: true,
         supports_multiple_instances: true,
         metrics: CLAUDE_METRICS,
+        beta: false,
         default_tray_metrics: &["claude.session", "claude.weekly"],
     },
     ProviderDescriptor {
@@ -245,6 +314,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         include_in_total_spend: true,
         supports_multiple_instances: false,
         metrics: CURSOR_METRICS,
+        beta: false,
         default_tray_metrics: &["cursor.auto", "cursor.api"],
     },
     ProviderDescriptor {
@@ -257,6 +327,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         include_in_total_spend: true,
         supports_multiple_instances: true,
         metrics: OPENCODE_ZEN_METRICS,
+        beta: true,
         default_tray_metrics: &[],
     },
     ProviderDescriptor {
@@ -269,6 +340,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         include_in_total_spend: true,
         supports_multiple_instances: true,
         metrics: OPENCODE_GO_METRICS,
+        beta: true,
         default_tray_metrics: &[
             "opencode-go.session",
             "opencode-go.weekly",
@@ -285,6 +357,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         include_in_total_spend: true,
         supports_multiple_instances: true,
         metrics: OPENROUTER_METRICS,
+        beta: false,
         default_tray_metrics: &["openrouter.limit"],
     },
     ProviderDescriptor {
@@ -297,6 +370,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         include_in_total_spend: false,
         supports_multiple_instances: false,
         metrics: ANTIGRAVITY_METRICS,
+        beta: false,
         default_tray_metrics: &["antigravity.gemini", "antigravity.thirdParty"],
     },
     ProviderDescriptor {
@@ -309,6 +383,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         include_in_total_spend: false,
         supports_multiple_instances: false,
         metrics: GROK_METRICS,
+        beta: false,
         default_tray_metrics: &["grok.credits"],
     },
     ProviderDescriptor {
@@ -321,6 +396,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         include_in_total_spend: false,
         supports_multiple_instances: false,
         metrics: KIRO_METRICS,
+        beta: false,
         default_tray_metrics: &["kiro.additional.credits"],
     },
     ProviderDescriptor {
@@ -333,7 +409,73 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         include_in_total_spend: true,
         supports_multiple_instances: false,
         metrics: COMMAND_CODE_METRICS,
+        beta: false,
         default_tray_metrics: &["command-code.session", "command-code.weekly"],
+    },
+    ProviderDescriptor {
+        kind: ProviderKind::Copilot,
+        id: "copilot",
+        display_name: "Copilot",
+        icon: "copilot",
+        brand_rgb: (139, 148, 158),
+        supports_activation: false,
+        include_in_total_spend: false,
+        supports_multiple_instances: true,
+        metrics: COPILOT_METRICS,
+        beta: true,
+        default_tray_metrics: &["copilot.premium"],
+    },
+    ProviderDescriptor {
+        kind: ProviderKind::Zai,
+        id: "zai",
+        display_name: "Z.ai",
+        icon: "zai",
+        brand_rgb: (92, 92, 92),
+        supports_activation: false,
+        include_in_total_spend: false,
+        supports_multiple_instances: true,
+        metrics: ZAI_METRICS,
+        beta: true,
+        default_tray_metrics: &["zai.session", "zai.weekly"],
+    },
+    ProviderDescriptor {
+        kind: ProviderKind::Kimi,
+        id: "kimi",
+        display_name: "Kimi",
+        icon: "kimi",
+        brand_rgb: (92, 92, 92),
+        supports_activation: false,
+        include_in_total_spend: false,
+        supports_multiple_instances: true,
+        metrics: KIMI_METRICS,
+        beta: true,
+        default_tray_metrics: &["kimi.session", "kimi.weekly"],
+    },
+    ProviderDescriptor {
+        kind: ProviderKind::DeepSeek,
+        id: "deepseek",
+        display_name: "DeepSeek",
+        icon: "deepseek",
+        brand_rgb: (77, 107, 254),
+        supports_activation: false,
+        include_in_total_spend: false,
+        supports_multiple_instances: true,
+        metrics: &[],
+        beta: true,
+        default_tray_metrics: &[],
+    },
+    ProviderDescriptor {
+        kind: ProviderKind::Zed,
+        id: "zed",
+        display_name: "Zed",
+        icon: "zed",
+        brand_rgb: (8, 76, 207),
+        supports_activation: false,
+        include_in_total_spend: false,
+        supports_multiple_instances: false,
+        metrics: ZED_METRICS,
+        beta: true,
+        default_tray_metrics: &["zed.predictions"],
     },
 ];
 
@@ -377,7 +519,12 @@ pub fn light_surface_brand_rgb(provider: ProviderKind) -> (u8, u8, u8) {
         ProviderKind::Antigravity => (32, 96, 205),
         ProviderKind::Grok => (51, 51, 51),
         ProviderKind::Kiro => (105, 78, 198),
-        ProviderKind::CommandCode => (51, 51, 51),
+        ProviderKind::CommandCode
+        | ProviderKind::Copilot
+        | ProviderKind::Zai
+        | ProviderKind::Kimi => (51, 51, 51),
+        ProviderKind::DeepSeek => (77, 107, 254),
+        ProviderKind::Zed => (8, 76, 207),
     }
 }
 
@@ -387,7 +534,13 @@ pub fn light_surface_brand_rgb(provider: ProviderKind) -> (u8, u8, u8) {
 /// on light cards via [`light_surface_brand_rgb`].
 pub fn dark_surface_brand_rgb(provider: ProviderKind) -> (u8, u8, u8) {
     match provider {
-        ProviderKind::Cursor | ProviderKind::Grok | ProviderKind::CommandCode => (255, 255, 255),
+        ProviderKind::Cursor
+        | ProviderKind::Grok
+        | ProviderKind::CommandCode
+        | ProviderKind::Copilot
+        | ProviderKind::Zai
+        | ProviderKind::Kimi => (255, 255, 255),
+        ProviderKind::Zed => (90, 150, 255),
         _ => descriptor(provider).brand_rgb,
     }
 }
@@ -443,6 +596,11 @@ pub fn supports_banked_resets(provider: ProviderKind) -> bool {
             | ProviderKind::Grok
             | ProviderKind::Kiro
             | ProviderKind::CommandCode
+            | ProviderKind::Copilot
+            | ProviderKind::Zai
+            | ProviderKind::Kimi
+            | ProviderKind::DeepSeek
+            | ProviderKind::Zed
     )
 }
 
@@ -454,6 +612,10 @@ pub fn supports_credits(provider: ProviderKind) -> bool {
             | ProviderKind::Antigravity
             | ProviderKind::Grok
             | ProviderKind::Kiro
+            | ProviderKind::Copilot
+            | ProviderKind::Zai
+            | ProviderKind::Kimi
+            | ProviderKind::Zed
     )
 }
 
@@ -461,7 +623,14 @@ pub fn supports_credits(provider: ProviderKind) -> bool {
 pub fn supports_usage_stats(provider: ProviderKind) -> bool {
     !matches!(
         provider,
-        ProviderKind::Antigravity | ProviderKind::Grok | ProviderKind::Kiro
+        ProviderKind::Antigravity
+            | ProviderKind::Grok
+            | ProviderKind::Kiro
+            | ProviderKind::Copilot
+            | ProviderKind::Zai
+            | ProviderKind::Kimi
+            | ProviderKind::DeepSeek
+            | ProviderKind::Zed
     )
 }
 
@@ -801,6 +970,30 @@ mod tests {
     #[test]
     fn registry_covers_every_provider_exactly_once() {
         assert_eq!(PROVIDERS.len(), ProviderKind::ALL.len());
+        let beta = PROVIDERS
+            .iter()
+            .filter(|provider| provider.beta)
+            .map(|provider| provider.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            beta,
+            [
+                ProviderKind::OpenCodeZen,
+                ProviderKind::OpenCodeGo,
+                ProviderKind::Copilot,
+                ProviderKind::Zai,
+                ProviderKind::Kimi,
+                ProviderKind::DeepSeek,
+                ProviderKind::Zed,
+            ]
+        );
+        for provider in PROVIDERS {
+            assert!(
+                crate::popup_window::ui::assets::svg_source(provider.icon).is_some(),
+                "{} has no bundled mark",
+                provider.id
+            );
+        }
         for provider in ProviderKind::ALL {
             assert_eq!(
                 PROVIDERS

@@ -20,6 +20,7 @@ weekly-limit-reset = 每周额度已重置
 name-5-hour = { $name } · 5 小时
 
 label-limit-is-low = { $label } 剩余额度不足
+label-limit-reset = { $label } 额度已重置
 
 expired-at-time = 已于 { $time } 到期
 
@@ -2146,3 +2147,36 @@ linux-popup-shortcut-choose = 设置快捷键
 linux-popup-shortcut-dialog-hint = 按下要使用的组合键。它将作为自定义快捷键保存到桌面的键盘设置中。
 linux-popup-shortcut-needs-modifier = 请包含 Ctrl、Alt 或 Super，或使用 F13–F24。
 linux-popup-shortcut-save-failed = 桌面未接受该快捷键。请重试，或在其键盘设置中添加命令。
+
+# src/provider_registry.rs (new providers)
+beta = 测试版
+beta-provider-tooltip = Minibar 新增的提供商，尚未经过大量账号测试。如有异常，请在 GitHub 上反馈。
+premium-requests = 高级请求
+chat = 聊天
+mcp-tools = MCP
+edit-predictions = 编辑预测
+github-token = GitHub 令牌
+minibar-forgets-the-saved-token-of-name-copilot = Minibar 将删除 { $v0 } 已保存的令牌。若编辑器中已登录 Copilot，仍可继续使用。
+minibar-forgets-the-saved-key-of-name = Minibar 将删除 { $v0 } 已保存的密钥。
+api-key-from-the-environment = 来自环境变量的 API 密钥
+copilot-editor-sign-in = 编辑器中的 Copilot 登录
+zed-sign-in = Zed 编辑器登录
+copilot-provider-description = 通过编辑器中的 Copilot 登录或 GitHub 令牌读取 Copilot 高级请求和聊天额度。
+zai-provider-description = 使用 API 密钥读取 Z.ai GLM Coding Plan 的 5 小时、每周和 MCP 额度。
+kimi-provider-description = 使用 Kimi Code API 密钥读取 Kimi Code 的 5 小时、每周和每月额度。
+deepseek-provider-description = 使用 API 密钥读取 DeepSeek API 余额。
+zed-provider-description = 通过 Zed 编辑器登录读取 Zed 编辑预测和套餐。
+needs-a-copilot-sign-in-or-a-github-token = 需要 Copilot 登录或 GitHub 令牌
+needs-a-github-token = 需要 GitHub 令牌
+sign-in-to-zed-first = 请先登录 Zed
+using-the-zed-editor-sign-in = 正在使用 Zed 编辑器登录
+using-the-copilot-sign-in-from-your-editor = 正在使用编辑器中的 Copilot 登录
+using-an-api-key-from-the-environment = 正在使用环境变量中的 API 密钥
+optional-only-needed-without-a-copilot-sign-in-in-your-editor = 可选。仅在编辑器中未登录 Copilot 时需要。
+add-the-api-key-of-the-account-to-track-or-set-env = 添加要跟踪账号的 API 密钥，或在启动 Minibar 前设置 { $env }。
+found-a-copilot-sign-in-on-this-pc = 在此电脑上找到了 Copilot 登录。
+not-found-sign-in-to-copilot-in-your-editor-or-add-a-token-later = 未找到。请在编辑器中登录 Copilot，或稍后添加 GitHub 令牌。
+found-an-api-key = 找到了 API 密钥。
+add-its-api-key-in-providers-after-setup = 设置完成后，请在“提供商”中添加其 API 密钥。
+found-a-zed-sign-in-on-this-pc = 在此电脑上找到了 Zed 登录。
+not-found-sign-in-to-zed-before-enabling-it = 未找到。启用前请先登录 Zed。

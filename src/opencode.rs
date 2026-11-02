@@ -94,10 +94,6 @@ pub(crate) fn apply_manual_key(
     secrets::apply_with_rollback(&[(name, value.map(str::to_owned))])
 }
 
-pub(crate) fn restore_manual_key(rollback: secrets::EncodedRollback) -> Result<()> {
-    rollback.restore()
-}
-
 pub fn key_is_configured(provider: ProviderId) -> bool {
     manual_key(provider)
         .ok()

@@ -41,9 +41,15 @@ Codex Minibar reads quota data from locally authenticated provider sessions and 
 
 Click the tray icon for a native popup with the current plan, five-hour and weekly windows,
 credits, reset countdowns and usage pace of every enabled provider: Codex, Claude, Cursor,
-OpenCode Zen, OpenCode Go, OpenRouter, Antigravity, Grok, Kiro, and Command Code. Providers are
-enabled independently in **Settings → Providers** and refresh independently. Antigravity, Grok,
-Kiro and Command Code show subscription quota rather than unrelated API billing.
+OpenCode Zen, OpenCode Go, OpenRouter, Antigravity, Grok, Kiro, Command Code, GitHub Copilot,
+Z.ai, Kimi, DeepSeek and Zed. Providers are enabled independently in **Settings → Providers** and
+refresh independently. Antigravity, Grok, Kiro and Command Code show subscription quota rather than
+unrelated API billing.
+
+Providers marked **Beta** in Settings (Copilot, Z.ai, Kimi, DeepSeek, Zed, OpenCode Zen and
+OpenCode Go) are new or rarely tested against real accounts. They are ported from
+[CodexBar](https://github.com/steipete/CodexBar)'s implementations; please
+[report](https://github.com/vertopolkaLF/codex-minibar/issues) anything that looks wrong.
 
 ### Several accounts and your own Home
 
@@ -165,6 +171,22 @@ shows only the rolling windows. Usage statistics come from the CLI's local sessi
 `~/.commandcode/projects`, using the credit cost the CLI recorded for each response; transcripts
 written by CLI versions that did not record token usage contribute nothing.
 Browser-session access is not used.
+
+The Beta providers read:
+
+- **GitHub Copilot:** premium-request and chat quotas of the GitHub account signed in to Copilot
+  in your editor (`github-copilot/apps.json`, written by the VS Code, JetBrains and Neovim
+  extensions), or of a GitHub token you paste in Settings.
+- **Z.ai:** the 5-hour, weekly and MCP quotas of a GLM Coding Plan, with an API key from z.ai or
+  open.bigmodel.cn (or `Z_AI_API_KEY`).
+- **Kimi:** the 5-hour, weekly and monthly Kimi Code quotas, with a Kimi Code API key (or
+  `KIMI_CODE_API_KEY`).
+- **DeepSeek:** the API balance, with an API key (or `DEEPSEEK_API_KEY`).
+- **Zed:** edit predictions used this billing period and the plan, from the Zed editor's own
+  sign-in (Windows Credential Manager or the Linux login keyring). Sign in from Zed first.
+
+Pasted keys and tokens are encrypted like other saved credentials and never written to the
+settings file. Each keyed provider supports several accounts.
 
 ### Add another Codex account
 

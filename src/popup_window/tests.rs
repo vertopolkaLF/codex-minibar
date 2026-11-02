@@ -1060,7 +1060,7 @@ fn instance_fixture() -> Settings {
 fn every_enabled_instance_combination_has_matching_tabs() {
     let base = instance_fixture();
     let count = base.instances.len();
-    for mask in 0..(1_u32 << count) {
+    for mask in crate::instances::test_masks(count) {
         let mut settings = base.clone();
         for (index, instance) in settings.instances.iter_mut().enumerate() {
             instance.enabled = mask & (1 << index) != 0;

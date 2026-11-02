@@ -46,7 +46,12 @@ impl ProviderInstallStatus {
             ProviderKind::Cursor
             | ProviderKind::OpenCodeZen
             | ProviderKind::OpenCodeGo
-            | ProviderKind::OpenRouter => Self::checking_app(),
+            | ProviderKind::OpenRouter
+            | ProviderKind::Copilot
+            | ProviderKind::Zai
+            | ProviderKind::Kimi
+            | ProviderKind::DeepSeek
+            | ProviderKind::Zed => Self::checking_app(),
         }
     }
 
@@ -139,6 +144,44 @@ pub(crate) fn instance_install_status(instance: &ProviderInstance) -> ProviderIn
                 ..provider_install_status(instance.driver, "")
             }
         }
+        ProviderKind::Copilot | ProviderKind::Zai | ProviderKind::Kimi | ProviderKind::DeepSeek => {
+            let saved = crate::provider_keys::manual_key(provider)
+                .ok()
+                .flatten()
+                .is_some_and(|key| !key.trim().is_empty());
+            let environment = !saved
+                && crate::provider_keys::resolve(provider)
+                    .ok()
+                    .flatten()
+                    .is_some();
+            let editor = !saved
+                && !environment
+                && instance.driver == ProviderKind::Copilot
+                && provider.is_primary()
+                && crate::copilot::is_installed();
+            let detail = if saved {
+                Some(crate::i18n::tr("saved-api-key"))
+            } else if environment {
+                Some(crate::i18n::tr("api-key-from-the-environment"))
+            } else if editor {
+                Some(crate::i18n::tr("copilot-editor-sign-in"))
+            } else {
+                None
+            };
+            ProviderInstallStatus {
+                app: detail.map(Into::into),
+                used: detail.map(|_| ProviderInstallSource::App),
+                ..provider_install_status(instance.driver, "")
+            }
+        }
+        ProviderKind::Zed => {
+            let detected = crate::zed::is_installed();
+            ProviderInstallStatus {
+                app: detected.then(|| crate::i18n::tr("zed-sign-in").into()),
+                used: detected.then_some(ProviderInstallSource::App),
+                ..provider_install_status(ProviderKind::Zed, "")
+            }
+        }
         ProviderKind::Claude if instance.uses_manual_credential() => {
             let detected = crate::claude::load_manual_credential(&instance.id)
                 .ok()
@@ -216,7 +259,12 @@ pub(crate) fn provider_install_status(
                 detected.then(|| crate::i18n::tr("opencode-auth-json-or-local-database").into());
             (detail, None, detected.then_some(ProviderInstallSource::App))
         }
-        ProviderKind::OpenRouter => (None, None, None),
+        ProviderKind::OpenRouter
+        | ProviderKind::Copilot
+        | ProviderKind::Zai
+        | ProviderKind::Kimi
+        | ProviderKind::DeepSeek
+        | ProviderKind::Zed => (None, None, None),
         ProviderKind::Antigravity => {
             let app = crate::antigravity::desktop_app(configured_folder);
             let cli = crate::antigravity::cli_available(configured_folder);
@@ -493,9 +541,9 @@ fn persist_opencode_manual_key(
     provider: ProviderId,
     value: Option<String>,
 ) -> anyhow::Result<()> {
-    let rollback = crate::opencode::apply_manual_key(provider, value.as_deref())?;
+    let rollback = crate::provider_keys::apply_manual_key(provider, value.as_deref())?;
     if let Err(error) = bump_credentials(settings_tx, provider) {
-        return match crate::opencode::restore_manual_key(rollback) {
+        return match crate::provider_keys::restore_manual_key(rollback) {
             Ok(()) => Err(error),
             Err(rollback_error) => Err(anyhow::anyhow!(
                 "could not save credential revision ({error:#}); restoring the protected key also failed ({rollback_error:#})"
@@ -534,9 +582,14 @@ fn forget_instance_secrets(instance: &ProviderInstance) {
                 eprintln!("failed to delete the Claude credential: {error:#}");
             }
         }
-        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
-            if let Err(error) = crate::opencode::save_manual_key(provider, None) {
-                eprintln!("failed to delete the OpenCode key: {error:#}");
+        ProviderKind::OpenCodeZen
+        | ProviderKind::OpenCodeGo
+        | ProviderKind::Copilot
+        | ProviderKind::Zai
+        | ProviderKind::Kimi
+        | ProviderKind::DeepSeek => {
+            if let Err(error) = crate::provider_keys::save_manual_key(provider, None) {
+                eprintln!("failed to delete the saved API key: {error:#}");
             }
         }
         ProviderKind::OpenRouter => {
@@ -693,9 +746,14 @@ fn folder_configs(driver: ProviderKind) -> Vec<FolderConfig> {
                 placeholder: r"C:\Users\you\AppData\Local\kiro-cli",
             },
         ],
-        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo | ProviderKind::OpenRouter => {
-            Vec::new()
-        }
+        ProviderKind::OpenCodeZen
+        | ProviderKind::OpenCodeGo
+        | ProviderKind::OpenRouter
+        | ProviderKind::Copilot
+        | ProviderKind::Zai
+        | ProviderKind::Kimi
+        | ProviderKind::DeepSeek
+        | ProviderKind::Zed => Vec::new(),
     }
 }
 
@@ -725,6 +783,11 @@ fn provider_description(provider: ProviderKind) -> &'static str {
         ProviderKind::CommandCode => {
             crate::i18n::tr("reads-command-code-5h-weekly-and-monthly-credits-from-your-existin")
         }
+        ProviderKind::Copilot => crate::i18n::tr("copilot-provider-description"),
+        ProviderKind::Zai => crate::i18n::tr("zai-provider-description"),
+        ProviderKind::Kimi => crate::i18n::tr("kimi-provider-description"),
+        ProviderKind::DeepSeek => crate::i18n::tr("deepseek-provider-description"),
+        ProviderKind::Zed => crate::i18n::tr("zed-provider-description"),
     }
 }
 
@@ -750,9 +813,14 @@ fn source_labels(provider: ProviderKind) -> (&'static str, &'static str, &'stati
             crate::i18n::tr("kiro-crew"),
             crate::i18n::tr("kiro-cli"),
         ),
-        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo | ProviderKind::OpenRouter => {
-            ("", "", "")
-        }
+        ProviderKind::OpenCodeZen
+        | ProviderKind::OpenCodeGo
+        | ProviderKind::OpenRouter
+        | ProviderKind::Copilot
+        | ProviderKind::Zai
+        | ProviderKind::Kimi
+        | ProviderKind::DeepSeek
+        | ProviderKind::Zed => ("", "", ""),
     }
 }
 

@@ -791,6 +791,12 @@ pub enum ProviderKind {
     Grok,
     Kiro,
     CommandCode,
+    Copilot,
+    Zai,
+    Kimi,
+    #[serde(rename = "deepseek")]
+    DeepSeek,
+    Zed,
 }
 
 /// When the app backs off to leave CPU, GPU and network to a game.
@@ -966,7 +972,7 @@ fn new_id(prefix: &str) -> String {
 }
 
 impl ProviderKind {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 15] = [
         Self::Codex,
         Self::Claude,
         Self::Cursor,
@@ -977,6 +983,11 @@ impl ProviderKind {
         Self::Grok,
         Self::Kiro,
         Self::CommandCode,
+        Self::Copilot,
+        Self::Zai,
+        Self::Kimi,
+        Self::DeepSeek,
+        Self::Zed,
     ];
 
     pub const fn id(self) -> &'static str {
@@ -991,6 +1002,11 @@ impl ProviderKind {
             Self::Grok => "grok",
             Self::Kiro => "kiro",
             Self::CommandCode => "command-code",
+            Self::Copilot => "copilot",
+            Self::Zai => "zai",
+            Self::Kimi => "kimi",
+            Self::DeepSeek => "deepseek",
+            Self::Zed => "zed",
         }
     }
 
@@ -1006,6 +1022,11 @@ impl ProviderKind {
             "grok" => Some(Self::Grok),
             "kiro" => Some(Self::Kiro),
             "command-code" => Some(Self::CommandCode),
+            "copilot" => Some(Self::Copilot),
+            "zai" => Some(Self::Zai),
+            "kimi" => Some(Self::Kimi),
+            "deepseek" => Some(Self::DeepSeek),
+            "zed" => Some(Self::Zed),
             _ => None,
         }
     }
@@ -1022,6 +1043,11 @@ impl ProviderKind {
             Self::Grok => "Grok",
             Self::Kiro => "Kiro",
             Self::CommandCode => "Command Code",
+            Self::Copilot => "Copilot",
+            Self::Zai => "Z.ai",
+            Self::Kimi => "Kimi",
+            Self::DeepSeek => "DeepSeek",
+            Self::Zed => "Zed",
         }
     }
 
@@ -4778,8 +4804,12 @@ enabled = ["codex", "claude"]
 
     #[test]
     fn provider_drag_preserves_hidden_slots_for_every_membership_and_pair() {
-        let original = Settings::default().provider_ids();
-        for mask in 0..(1_u32 << original.len()) {
+        let defaults = Settings::default();
+        let original = defaults.provider_ids();
+        // Every from/to pair runs per mask, so fewer memberships than the
+        // other combination tests: each alone, pairs, all, none and every
+        // subset of the first eight.
+        for mask in crate::instances::test_masks_with(original.len(), 8) {
             let visible: Vec<_> = original
                 .iter()
                 .enumerate()
@@ -4788,7 +4818,7 @@ enabled = ["codex", "claude"]
                 .collect();
             for from in &original {
                 for to in &original {
-                    let mut settings = Settings::default();
+                    let mut settings = defaults.clone();
                     let changed = settings.reorder_providers(*from, *to, &visible);
                     let expected_change =
                         from != to && visible.contains(from) && visible.contains(to);

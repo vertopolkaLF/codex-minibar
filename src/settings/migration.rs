@@ -303,9 +303,14 @@ fn instances_from_legacy(legacy: &LegacyV38) -> Migrated {
                 kiro_cli_path: legacy.kiro_cli_path.clone(),
                 ..base
             }),
-            ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo | ProviderKind::CommandCode => {
-                instances.push(base)
-            }
+            ProviderKind::OpenCodeZen
+            | ProviderKind::OpenCodeGo
+            | ProviderKind::CommandCode
+            | ProviderKind::Copilot
+            | ProviderKind::Zai
+            | ProviderKind::Kimi
+            | ProviderKind::DeepSeek
+            | ProviderKind::Zed => instances.push(base),
         }
     }
 

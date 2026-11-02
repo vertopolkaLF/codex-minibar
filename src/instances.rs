@@ -733,9 +733,48 @@ impl Capabilities {
     }
 }
 
+/// Enabled-instance masks for combination tests: every subset of the first
+/// 12 instances, and for all of them each one alone, every
+/// pair, all but one or two, all and none. Testing every subset of every
+/// instance doubles the run time with each provider added.
+#[cfg(test)]
+pub(crate) fn test_masks(count: usize) -> Vec<u32> {
+    test_masks_with(count, 12)
+}
+
+/// [`test_masks`] with every subset of only the first `exhaustive` slots, for
+/// tests that do more work per mask.
+#[cfg(test)]
+pub(crate) fn test_masks_with(count: usize, exhaustive: usize) -> Vec<u32> {
+    assert!(count < 32);
+    let all = (1_u32 << count) - 1;
+    let mut masks = std::collections::BTreeSet::new();
+    masks.extend(0..(1_u32 << count.min(exhaustive)));
+    for first in 0..count {
+        for second in first..count {
+            let pair = (1 << first) | (1 << second);
+            masks.insert(pair);
+            masks.insert(all & !pair);
+        }
+    }
+    masks.insert(all);
+    masks.into_iter().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_masks_cover_singles_pairs_all_and_none() {
+        let masks = test_masks(17);
+        let all = (1_u32 << 17) - 1;
+        for must in [0, all, 1 << 16, (1 << 3) | (1 << 15), all & !(1 << 14)] {
+            assert!(masks.contains(&must), "{must:b}");
+        }
+        assert!(masks.len() < 5_000);
+        assert_eq!(test_masks(5).len(), 32);
+    }
 
     #[test]
     fn badges_use_initials_or_first_letters_and_honor_overrides() {

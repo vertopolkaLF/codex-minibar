@@ -9,7 +9,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::{DateTime, Duration, Timelike, Utc};
 
 use crate::limits::RateLimits;
-use crate::{instances::ProviderId, settings::NotificationSettings};
+use crate::{
+    instances::ProviderId,
+    settings::{NotificationSettings, ProviderKind},
+};
 
 /// App User Model ID of the process (taskbar identity of its windows).
 pub const AUMID: &str = "dev.CodexMinibar";
@@ -577,7 +580,12 @@ impl LimitNotificationTracker {
             if settings.limits_changed && !defer_primary_reset && notify_five_hour_reset {
                 notify(Notification::limit(
                     NotificationKind::Reset,
-                    crate::i18n::tr("msg-5-hour-limit-reset"),
+                    &match window_label(provider.kind(), LimitFocus::Primary) {
+                        Some(label) => {
+                            crate::i18n::format("label-limit-reset", &[("label", label.to_owned())])
+                        }
+                        None => crate::i18n::tr("msg-5-hour-limit-reset").to_owned(),
+                    },
                     &name,
                     provider,
                     limits,
@@ -592,7 +600,12 @@ impl LimitNotificationTracker {
             if settings.limits_changed {
                 notify(Notification::limit(
                     NotificationKind::Reset,
-                    crate::i18n::tr("weekly-limit-reset"),
+                    &match window_label(provider.kind(), LimitFocus::Secondary) {
+                        Some(label) => {
+                            crate::i18n::format("label-limit-reset", &[("label", label.to_owned())])
+                        }
+                        None => crate::i18n::tr("weekly-limit-reset").to_owned(),
+                    },
                     &name,
                     provider,
                     limits,
@@ -604,7 +617,10 @@ impl LimitNotificationTracker {
         if settings.low_usage_enabled {
             let threshold = settings.low_usage_threshold_percent;
             maybe_notify_low_usage(
-                &crate::i18n::format("name-5-hour", &[("name", name.to_string())]),
+                &match window_label(provider.kind(), LimitFocus::Primary) {
+                    Some(label) => format!("{name} {label}"),
+                    None => crate::i18n::format("name-5-hour", &[("name", name.to_string())]),
+                },
                 (&name, provider, limits, LimitFocus::Primary),
                 limits.primary.remaining_percent(),
                 limits.primary.resets_at,
@@ -620,7 +636,10 @@ impl LimitNotificationTracker {
         }
         if settings.weekly_low_usage_enabled && can_notify_weekly(limits) {
             let threshold = settings.weekly_low_usage_threshold_percent;
-            let label = secondary_limit_label(limits, &name);
+            let label = match window_label(provider.kind(), LimitFocus::Secondary) {
+                Some(label) => format!("{name} {label}"),
+                None => secondary_limit_label(limits, &name),
+            };
             maybe_notify_low_usage(
                 &label,
                 (&name, provider, limits, LimitFocus::Secondary),
@@ -685,6 +704,17 @@ fn reset_minute(reset: DateTime<Utc>) -> DateTime<Utc> {
         .with_second(0)
         .and_then(|value| value.with_nanosecond(0))
         .unwrap_or(reset)
+}
+
+/// What a provider calls a window that is neither a 5-hour session nor a
+/// week, for toast titles; `None` keeps the 5-hour and weekly wording.
+fn window_label(provider: ProviderKind, focus: LimitFocus) -> Option<&'static str> {
+    match (provider, focus) {
+        (ProviderKind::Copilot, LimitFocus::Primary) => Some(crate::i18n::tr("premium-requests")),
+        (ProviderKind::Copilot, LimitFocus::Secondary) => Some(crate::i18n::tr("chat")),
+        (ProviderKind::Zed, LimitFocus::Primary) => Some(crate::i18n::tr("edit-predictions")),
+        _ => None,
+    }
 }
 
 fn can_notify_weekly(limits: &RateLimits) -> bool {
@@ -777,6 +807,27 @@ mod tests {
     use crate::limits::LimitWindow;
 
     use super::*;
+
+    #[test]
+    fn monthly_and_period_windows_keep_their_own_names_in_toasts() {
+        assert_eq!(
+            window_label(ProviderKind::Copilot, LimitFocus::Primary),
+            Some("Premium requests")
+        );
+        assert_eq!(
+            window_label(ProviderKind::Copilot, LimitFocus::Secondary),
+            Some("Chat")
+        );
+        assert_eq!(
+            window_label(ProviderKind::Zed, LimitFocus::Primary),
+            Some("Edit predictions")
+        );
+        // Session-and-week providers keep the 5-hour and weekly wording.
+        for kind in [ProviderKind::Codex, ProviderKind::Zai, ProviderKind::Kimi] {
+            assert_eq!(window_label(kind, LimitFocus::Primary), None);
+            assert_eq!(window_label(kind, LimitFocus::Secondary), None);
+        }
+    }
 
     #[test]
     fn free_plan_suppresses_weekly_notifications() {

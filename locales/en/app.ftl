@@ -30,6 +30,7 @@ name-5-hour = { $name } 5-hour
 
 # src/notifications.rs
 label-limit-is-low = { $label } limit is low
+label-limit-reset = { $label } limit reset
 
 # src/popup_window/formatting.rs
 expired-at-time = expired at { $time }
@@ -3068,3 +3069,36 @@ linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = Runs C
 
 # src/settings_window/advanced.rs
 linux-add-a-game-description = Games launched by Steam and games in Steam or Heroic libraries are detected on their own. Add any other program here.
+
+# src/provider_registry.rs (new providers)
+beta = Beta
+beta-provider-tooltip = New in Minibar and not yet tested with many accounts. Please report anything that looks wrong on GitHub.
+premium-requests = Premium requests
+chat = Chat
+mcp-tools = MCP
+edit-predictions = Edit predictions
+github-token = GitHub token
+minibar-forgets-the-saved-token-of-name-copilot = Minibar forgets the saved token of { $v0 }. It keeps working with a Copilot sign-in in your editor.
+minibar-forgets-the-saved-key-of-name = Minibar forgets the saved key of { $v0 }.
+api-key-from-the-environment = API key from the environment
+copilot-editor-sign-in = Copilot sign-in in your editor
+zed-sign-in = Zed editor sign-in
+copilot-provider-description = Reads Copilot premium-request and chat quotas from the Copilot sign-in in your editor or a GitHub token.
+zai-provider-description = Reads the 5-hour, weekly and MCP quotas of a Z.ai GLM Coding Plan with an API key.
+kimi-provider-description = Reads the 5-hour, weekly and monthly Kimi Code quotas with a Kimi Code API key.
+deepseek-provider-description = Reads the DeepSeek API balance with an API key.
+zed-provider-description = Reads Zed edit predictions and plan from the Zed editor's sign-in.
+needs-a-copilot-sign-in-or-a-github-token = Needs a Copilot sign-in or a GitHub token
+needs-a-github-token = Needs a GitHub token
+sign-in-to-zed-first = Sign in to Zed first
+using-the-zed-editor-sign-in = Using the Zed editor sign-in
+using-the-copilot-sign-in-from-your-editor = Using the Copilot sign-in from your editor
+using-an-api-key-from-the-environment = Using an API key from the environment
+optional-only-needed-without-a-copilot-sign-in-in-your-editor = Optional. Only needed without a Copilot sign-in in your editor.
+add-the-api-key-of-the-account-to-track-or-set-env = Add the API key of the account to track, or set { $env } before starting Minibar.
+found-a-copilot-sign-in-on-this-pc = Found a Copilot sign-in on this PC.
+not-found-sign-in-to-copilot-in-your-editor-or-add-a-token-later = Not found. Sign in to Copilot in your editor, or add a GitHub token later.
+found-an-api-key = Found an API key.
+add-its-api-key-in-providers-after-setup = Add its API key in Providers after setup.
+found-a-zed-sign-in-on-this-pc = Found a Zed sign-in on this PC.
+not-found-sign-in-to-zed-before-enabling-it = Not found. Sign in to Zed before enabling it.
