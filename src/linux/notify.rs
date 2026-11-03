@@ -77,7 +77,7 @@ fn send(notification: &Notification, silent: bool) -> anyhow::Result<()> {
         _ => 1,
     };
     hints.insert("urgency", Value::from(urgency));
-    hints.insert("desktop-entry", Value::from("codex-minibar"));
+    hints.insert("desktop-entry", Value::from(super::identity::APP_ID));
     // Progress ticks replace the bubble many times; never chime for them.
     if silent || notification.progress.is_some() {
         hints.insert("suppress-sound", Value::from(true));
