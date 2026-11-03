@@ -269,6 +269,9 @@ Codex Minibar also runs on Linux desktops under Wayland and X11. Download from t
 - **Other distributions:** extract `codex-minibar-<version>-linux-x64.tar.gz` and run
   `./install.sh` to install into `~/.local`, or run `bin/codex-minibar` in place.
 
+Portable AppImage and tarball installs also need `xdg-utils` for opening links
+and files in the default browser or file manager.
+
 The tray icon uses the StatusNotifierItem protocol. KDE Plasma, Xfce, Cinnamon, Budgie and
 most panels show it out of the box. On GNOME, enable the **AppIndicator and KStatusNotifierItem
 Support** extension (Ubuntu ships it enabled). Without a tray, launch `codex-minibar` again
