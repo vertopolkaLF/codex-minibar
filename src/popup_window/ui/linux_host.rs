@@ -65,7 +65,10 @@ impl Host {
                 Some(window) => {
                     // GPUI cannot move an open window: open it again in the
                     // new spot. Only X11 honors the position at all.
-                    let moved = !crate::linux::is_wayland()
+                    let uses_x11 = cx
+                        .update(|cx| cx.compositor_name() == "X11")
+                        .unwrap_or(false);
+                    let moved = uses_x11
                         && window
                             .update(cx, |root, _, _| {
                                 root.ui.popup_placement != ui.popup_placement
