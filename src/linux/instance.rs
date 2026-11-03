@@ -30,7 +30,7 @@ use std::{
 
 use anyhow::{Context, Result};
 
-const ACTIVATE: &[u8] = b"activate\n";
+const ACTIVATE: &str = "activate";
 const TOGGLE: &str = "toggle";
 /// Longest request line: the verb and an activation token.
 const MAX_REQUEST: u64 = 512;
@@ -122,14 +122,8 @@ fn activate_existing(socket_path: &std::path::Path) {
                 .skip(1)
                 .any(|argument| argument == TOGGLE_FLAG);
             let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-            let request = if toggle {
-                match activation_token_from_env() {
-                    Some(token) => format!("{TOGGLE} {token}\n").into_bytes(),
-                    None => format!("{TOGGLE}\n").into_bytes(),
-                }
-            } else {
-                ACTIVATE.to_vec()
-            };
+            let verb = if toggle { TOGGLE } else { ACTIVATE };
+            let request = activation_request(verb, activation_token_from_env().as_deref());
             let _ = stream.write_all(&request);
         }
         Err(error) => eprintln!("could not reach the running Codex Minibar: {error}"),
@@ -148,15 +142,23 @@ fn serve(listener: UnixListener) {
         {
             continue;
         }
-        if request == ACTIVATE {
+        if let Some(token) = parse_request(&request, ACTIVATE) {
+            set_activation_token(token);
             activate();
-        } else if let Some(token) = parse_toggle(&request) {
+        } else if let Some(token) = parse_request(&request, TOGGLE) {
             toggle_with_token(token);
         }
     }
 }
 
-/// The token the desktop gave the launched `--toggle` process, if any.
+fn activation_request(verb: &str, token: Option<&str>) -> Vec<u8> {
+    match token.filter(|token| is_token(token)) {
+        Some(token) => format!("{verb} {token}\n").into_bytes(),
+        None => format!("{verb}\n").into_bytes(),
+    }
+}
+
+/// The token the desktop gave the launched process, if any.
 fn activation_token_from_env() -> Option<String> {
     std::env::var("XDG_ACTIVATION_TOKEN")
         .ok()
@@ -171,10 +173,10 @@ fn is_token(token: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
 }
 
-/// `Some(token)` for a toggle request, `None` for anything else.
-fn parse_toggle(request: &[u8]) -> Option<Option<String>> {
+/// `Some(token)` for the requested verb, `None` for anything else.
+fn parse_request(request: &[u8], verb: &str) -> Option<Option<String>> {
     let line = std::str::from_utf8(request).ok()?.strip_suffix('\n')?;
-    let rest = line.strip_prefix(TOGGLE)?;
+    let rest = line.strip_prefix(verb)?;
     if rest.is_empty() {
         return Some(None);
     }
@@ -182,7 +184,7 @@ fn parse_toggle(request: &[u8]) -> Option<Option<String>> {
     is_token(token).then(|| Some(token.to_owned()))
 }
 
-/// A focus token received with the latest toggle, valid once and briefly.
+/// A focus token received with the latest activation request, valid once and briefly.
 pub fn take_activation_token() -> Option<String> {
     ACTIVATION_TOKEN
         .lock()
@@ -212,13 +214,16 @@ fn quote_command_argument(program: &str) -> String {
 /// Toggles the popup for an outside request, such as `--toggle` or the
 /// D-Bus service, with the desktop's focus token for it when there is one.
 pub(crate) fn toggle_with_token(token: Option<String>) {
-    if let (Some(token), Ok(mut pending)) = (
-        token.filter(|token| is_token(token)),
-        ACTIVATION_TOKEN.lock(),
-    ) {
-        *pending = Some((token, Instant::now()));
-    }
+    set_activation_token(token);
     toggle();
+}
+
+fn set_activation_token(token: Option<String>) {
+    if let Ok(mut pending) = ACTIVATION_TOKEN.lock() {
+        *pending = token
+            .filter(|token| is_token(token))
+            .map(|token| (token, Instant::now()));
+    }
 }
 
 /// Like a tray click: closes the popup, or opens it.
@@ -240,7 +245,8 @@ fn toggle() {
 fn activate() {
     if crate::settings_window::is_open() {
         crate::settings_window::open();
-    } else if !crate::popup::is_visible() || crate::popup::is_closing() {
+    } else {
+        // Show also activates an already visible (for example pinned) popup.
         crate::popup::show_near_cursor();
     }
     super::wake::wake();
@@ -260,16 +266,44 @@ mod tests {
     }
 
     #[test]
+    fn focus_tokens_are_consumed_once_and_replaced_by_each_request() {
+        set_activation_token(Some("first".into()));
+        assert_eq!(take_activation_token().as_deref(), Some("first"));
+        assert_eq!(take_activation_token(), None);
+        set_activation_token(Some("stale".into()));
+        set_activation_token(None);
+        assert_eq!(take_activation_token(), None);
+        set_activation_token(Some("stale".into()));
+        set_activation_token(Some("invalid token".into()));
+        assert_eq!(take_activation_token(), None);
+    }
+
+    #[test]
+    fn launcher_and_shortcut_requests_preserve_focus_tokens() {
+        for verb in [ACTIVATE, TOGGLE] {
+            for token in [None, Some("desktop-token:123")] {
+                let request = activation_request(verb, token);
+                assert_eq!(
+                    parse_request(&request, verb),
+                    Some(token.map(str::to_owned))
+                );
+            }
+            assert_eq!(parse_request(b"activatex\n", verb), None);
+            assert_eq!(parse_request(b"activate token\nextra\n", verb), None);
+        }
+    }
+
+    #[test]
     fn toggle_requests_carry_an_optional_valid_focus_token() {
-        assert_eq!(parse_toggle(b"toggle\n"), Some(None));
+        assert_eq!(parse_request(b"toggle\n", TOGGLE), Some(None));
         assert_eq!(
-            parse_toggle(b"toggle abc-123_x.y:z\n"),
+            parse_request(b"toggle abc-123_x.y:z\n", TOGGLE),
             Some(Some("abc-123_x.y:z".to_owned()))
         );
-        assert_eq!(parse_toggle(b"toggle \n"), None);
-        assert_eq!(parse_toggle(b"toggle a b\n"), None);
-        assert_eq!(parse_toggle(b"toggle abc"), None);
-        assert_eq!(parse_toggle(b"togglex\n"), None);
-        assert_eq!(parse_toggle(ACTIVATE), None);
+        assert_eq!(parse_request(b"toggle \n", TOGGLE), None);
+        assert_eq!(parse_request(b"toggle a b\n", TOGGLE), None);
+        assert_eq!(parse_request(b"toggle abc", TOGGLE), None);
+        assert_eq!(parse_request(b"togglex\n", TOGGLE), None);
+        assert_eq!(parse_request(b"activate\n", TOGGLE), None);
     }
 }

@@ -318,6 +318,15 @@ fn with_settings_window(
     }
 }
 
+fn activate_window(window: &gpui::Window) {
+    #[cfg(not(windows))]
+    if let Some(token) = crate::linux::instance::take_activation_token() {
+        window.activate_window_with_token(token);
+        return;
+    }
+    window.activate_window();
+}
+
 fn focus_existing<V: 'static>(
     slot: &'static std::thread::LocalKey<RefCell<Option<WindowHandle<V>>>>,
     cx: &mut AsyncApp,
@@ -326,7 +335,7 @@ fn focus_existing<V: 'static>(
         return false;
     };
     let alive = handle
-        .update(cx, |_, window, _| window.activate_window())
+        .update(cx, |_, window, _| activate_window(window))
         .is_ok();
     if !alive {
         slot.with(|slot| slot.borrow_mut().take());
@@ -398,7 +407,7 @@ fn open_settings_window(state: Arc<AppState>, cx: &mut AsyncApp) {
         Ok(Ok(handle)) => {
             SETTINGS_OPEN.store(true, Ordering::SeqCst);
             SETTINGS_WINDOW.with(|slot| *slot.borrow_mut() = Some(handle));
-            let _ = handle.update(cx, |_, window, _| window.activate_window());
+            let _ = handle.update(cx, |_, window, _| activate_window(window));
         }
         Ok(Err(error)) => eprintln!("Could not open settings window: {error:#}"),
         Err(error) => eprintln!("Could not open settings window: {error:#}"),
@@ -430,7 +439,7 @@ fn open_onboarding_window(state: Arc<AppState>, cx: &mut AsyncApp) {
             if !crate::popup::is_visible() || crate::popup::is_closing() {
                 crate::popup::show_on_primary();
             }
-            let _ = handle.update(cx, |_, window, _| window.activate_window());
+            let _ = handle.update(cx, |_, window, _| activate_window(window));
         }
         Ok(Err(error)) => eprintln!("Could not open onboarding: {error:#}"),
         Err(error) => eprintln!("Could not open onboarding: {error:#}"),
