@@ -29,6 +29,22 @@ struct State {
     keyed: HashMap<&'static str, u32>,
     /// Buttons of bubbles that may still be clicked.
     actions: HashMap<u32, Vec<NotificationAction>>,
+    /// Focus grants sent immediately before a notification is invoked.
+    activation_tokens: HashMap<u32, String>,
+}
+
+impl State {
+    fn remember_activation_token(&mut self, id: u32, token: String) {
+        if self.actions.contains_key(&id) {
+            self.activation_tokens.insert(id, token);
+        }
+    }
+
+    fn close(&mut self, id: u32) {
+        self.actions.remove(&id);
+        self.activation_tokens.remove(&id);
+        self.keyed.retain(|_, keyed| *keyed != id);
+    }
 }
 
 fn state() -> &'static Mutex<State> {
@@ -198,8 +214,15 @@ fn run_action_listener() -> anyhow::Result<()> {
                 if let Ok((id, _reason)) = message.body().deserialize::<(u32, u32)>()
                     && let Ok(mut state) = state().lock()
                 {
-                    state.actions.remove(&id);
-                    state.keyed.retain(|_, keyed| *keyed != id);
+                    state.close(id);
+                }
+                continue;
+            }
+            Some("ActivationToken") => {
+                if let Ok((id, token)) = message.body().deserialize::<(u32, String)>()
+                    && let Ok(mut state) = state().lock()
+                {
+                    state.remember_activation_token(id, token);
                 }
                 continue;
             }
@@ -209,9 +232,12 @@ fn run_action_listener() -> anyhow::Result<()> {
         let Ok((id, key)) = message.body().deserialize::<(u32, String)>() else {
             continue;
         };
+        let token = state()
+            .lock()
+            .ok()
+            .and_then(|mut state| state.activation_tokens.remove(&id));
         if key == DEFAULT_ACTION {
-            crate::popup::show_near_cursor();
-            super::wake::wake();
+            super::instance::show_with_token(token);
             continue;
         }
         let action = key
@@ -235,6 +261,25 @@ fn run_action_listener() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notification_focus_tokens_are_scoped_to_live_notifications() {
+        let mut state = State::default();
+        state.actions.insert(1, Vec::new());
+        state.actions.insert(2, Vec::new());
+        state.keyed.insert("progress", 1);
+        state.remember_activation_token(1, "first".into());
+        state.remember_activation_token(2, "second".into());
+        state.remember_activation_token(3, "unknown".into());
+        assert!(!state.activation_tokens.contains_key(&3));
+        assert_eq!(state.activation_tokens.remove(&1).as_deref(), Some("first"));
+        assert_eq!(state.activation_tokens.remove(&1), None);
+        state.close(2);
+        assert_eq!(state.activation_tokens.remove(&2), None);
+        assert!(!state.actions.contains_key(&2));
+        state.close(1);
+        assert!(!state.keyed.contains_key("progress"));
+    }
 
     #[test]
     fn plain_text_servers_receive_original_text_without_visible_entities() {

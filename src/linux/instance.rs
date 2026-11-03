@@ -253,6 +253,14 @@ pub(crate) fn toggle_with_token(token: Option<String>) {
     toggle();
 }
 
+/// Shows the popup after a notification click using the desktop's focus grant.
+/// Unlike a toggle, clicking a notification must keep an open popup visible.
+pub(crate) fn show_with_token(token: Option<String>) {
+    set_activation_token(token);
+    crate::popup::show_near_cursor();
+    super::wake::wake();
+}
+
 fn set_activation_token(token: Option<String>) {
     if let Ok(mut pending) = ACTIVATION_TOKEN.lock() {
         *pending = token
