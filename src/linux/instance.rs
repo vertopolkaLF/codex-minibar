@@ -19,7 +19,7 @@ use std::{
     os::{
         fd::AsRawFd,
         unix::{
-            fs::OpenOptionsExt,
+            fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
             net::{UnixListener, UnixStream},
         },
     },
@@ -28,7 +28,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 
 const ACTIVATE: &str = "activate";
 const TOGGLE: &str = "toggle";
@@ -40,22 +40,44 @@ static ACTIVATION_TOKEN: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 pub const TOGGLE_FLAG: &str = "--toggle";
 
 /// `$XDG_RUNTIME_DIR` (per-user, `0700`), or a per-user temp directory.
-fn runtime_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").filter(|dir| !dir.is_empty()) {
-        return PathBuf::from(dir);
+fn runtime_dir() -> Result<PathBuf> {
+    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+    {
+        return Ok(dir);
     }
     // SAFETY: getuid has no preconditions and cannot fail.
     let uid = unsafe { libc::getuid() };
-    std::env::temp_dir().join(format!("codex-minibar-{uid}"))
+    let dir = std::env::temp_dir().join(format!("codex-minibar-{uid}"));
+    prepare_fallback_dir(&dir, uid)?;
+    Ok(dir)
 }
 
-fn paths() -> (PathBuf, PathBuf) {
+fn prepare_fallback_dir(dir: &std::path::Path, uid: u32) -> Result<()> {
+    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error).context("create single-instance runtime directory"),
+    }
+    let metadata = std::fs::symlink_metadata(dir).context("inspect runtime directory")?;
+    ensure!(
+        metadata.is_dir() && metadata.uid() == uid,
+        "runtime directory must be owned by the current user and must not be a symlink"
+    );
+    // Repair the app-owned fallback created by older versions with default
+    // permissions. Never change permissions on the desktop's runtime dir.
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+        .context("make single-instance runtime directory private")
+}
+
+fn paths() -> Result<(PathBuf, PathBuf)> {
     let suffix = if crate::fake::enabled() { "-fake" } else { "" };
-    let dir = runtime_dir();
-    (
+    let dir = runtime_dir()?;
+    Ok((
         dir.join(format!("codex-minibar{suffix}.lock")),
         dir.join(format!("codex-minibar{suffix}.sock")),
-    )
+    ))
 }
 
 pub struct SingleInstance(File);
@@ -65,7 +87,7 @@ static HOLDER: Mutex<Option<File>> = Mutex::new(None);
 impl SingleInstance {
     /// Returns `None` after asking the primary process to show itself.
     pub fn acquire_or_activate_existing() -> Result<Option<Self>> {
-        let (lock_path, socket_path) = paths();
+        let (lock_path, socket_path) = paths()?;
         if let Some(parent) = lock_path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create {}", parent.display()))?;
@@ -77,9 +99,7 @@ impl SingleInstance {
             .mode(0o600)
             .open(&lock_path)
             .with_context(|| format!("open {}", lock_path.display()))?;
-        // SAFETY: the descriptor stays valid for the lifetime of `file`.
-        let locked = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
-        if !locked {
+        if !try_lock(&file).context("lock single-instance file")? {
             activate_existing(&socket_path);
             return Ok(None);
         }
@@ -112,6 +132,21 @@ impl SingleInstance {
 pub fn release_for_update() {
     if let Ok(mut holder) = HOLDER.lock() {
         holder.take();
+    }
+}
+
+fn try_lock(file: &File) -> std::io::Result<bool> {
+    loop {
+        // SAFETY: the descriptor stays valid for the lifetime of `file`.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(true);
+        }
+        let error = std::io::Error::last_os_error();
+        match error.kind() {
+            std::io::ErrorKind::Interrupted => continue,
+            std::io::ErrorKind::WouldBlock => return Ok(false),
+            _ => return Err(error),
+        }
     }
 }
 
@@ -255,6 +290,34 @@ fn activate() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fallback_runtime_directory_is_private_and_rejects_symlinks() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("runtime");
+        // SAFETY: getuid has no preconditions.
+        let uid = unsafe { libc::getuid() };
+        prepare_fallback_dir(&dir, uid).unwrap();
+        assert_eq!(std::fs::metadata(&dir).unwrap().mode() & 0o777, 0o700);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        prepare_fallback_dir(&dir, uid).unwrap();
+        assert_eq!(std::fs::metadata(&dir).unwrap().mode() & 0o777, 0o700);
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(&dir, &link).unwrap();
+        assert!(prepare_fallback_dir(&link, uid).is_err());
+        assert!(prepare_fallback_dir(&dir, uid.wrapping_add(1)).is_err());
+    }
+
+    #[test]
+    fn only_lock_contention_reports_an_existing_instance() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let first = OpenOptions::new().write(true).open(file.path()).unwrap();
+        let second = OpenOptions::new().write(true).open(file.path()).unwrap();
+        assert!(try_lock(&first).unwrap());
+        assert!(!try_lock(&second).unwrap());
+        drop(first);
+        assert!(try_lock(&second).unwrap());
+    }
 
     #[test]
     fn shortcut_paths_are_always_shell_quoted() {
