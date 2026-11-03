@@ -3,7 +3,8 @@
 //! `org.freedesktop.portal.Settings` exposes the color scheme on every
 //! portal backend and, on GNOME (and desktops reusing its schemas), the
 //! `org.gnome.desktop.interface` keys such as `enable-animations`. Values are
-//! cached briefly because the popup asks for them on every frame.
+//! initialized synchronously, then refreshed off-thread because the popup
+//! asks for them on every frame.
 
 use std::{
     sync::{Mutex, OnceLock},
@@ -17,6 +18,21 @@ const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
 const SETTINGS_INTERFACE: &str = "org.freedesktop.portal.Settings";
 /// How long a portal answer is reused before asking again.
 const CACHE_TTL: Duration = Duration::from_secs(1);
+const SETTINGS_TIMEOUT: Duration = Duration::from_millis(500);
+
+// A separate connection bounds optional settings calls without imposing the
+// same deadline on notifications and other desktop services.
+fn settings_bus() -> Option<&'static Connection> {
+    static BUS: OnceLock<Option<Connection>> = OnceLock::new();
+    BUS.get_or_init(|| {
+        zbus::blocking::connection::Builder::session()
+            .ok()?
+            .method_timeout(SETTINGS_TIMEOUT)
+            .build()
+            .ok()
+    })
+    .as_ref()
+}
 
 /// The process-wide session bus connection, or `None` without a session bus.
 pub fn session_bus() -> Option<&'static Connection> {
@@ -34,7 +50,7 @@ pub fn session_bus() -> Option<&'static Connection> {
 /// Reads one portal setting. Portals before version 2 only offer `Read`,
 /// which wraps the value in an extra variant.
 fn read_setting(namespace: &str, key: &str) -> Option<OwnedValue> {
-    let bus = session_bus()?;
+    let bus = settings_bus()?;
     let call = |method: &str| {
         bus.call_method(
             Some(PORTAL_NAME),
@@ -59,21 +75,50 @@ fn read_setting(namespace: &str, key: &str) -> Option<OwnedValue> {
 struct Cached<T> {
     value: Option<T>,
     read_at: Option<Instant>,
+    refreshing: bool,
 }
 
-fn cached<T: Copy>(slot: &Mutex<Cached<T>>, read: impl FnOnce() -> Option<T>) -> Option<T> {
-    let Ok(mut slot) = slot.lock() else {
-        return read();
+fn cached<T: Copy + PartialEq + Send + 'static>(
+    slot: &'static Mutex<Cached<T>>,
+    read: impl FnOnce() -> Option<T> + Send + 'static,
+) -> Option<T> {
+    let Ok(mut cache) = slot.lock() else {
+        return None;
     };
-    if slot
-        .read_at
-        .is_some_and(|read_at| read_at.elapsed() < CACHE_TTL)
-    {
-        return slot.value;
+    // The first answer must be available before the first window is painted.
+    if cache.read_at.is_none() {
+        cache.value = read();
+        cache.read_at = Some(Instant::now());
+        return cache.value;
     }
-    slot.value = read();
-    slot.read_at = Some(Instant::now());
-    slot.value
+    if !cache.refreshing && cache.read_at.is_some_and(|at| at.elapsed() >= CACHE_TTL) {
+        cache.refreshing = true;
+        let spawned = std::thread::Builder::new()
+            .name("desktop-settings".into())
+            .spawn(move || {
+                let value = read();
+                let changed = if let Ok(mut cache) = slot.lock() {
+                    let changed = cache.value != value;
+                    cache.value = value;
+                    cache.read_at = Some(Instant::now());
+                    cache.refreshing = false;
+                    changed
+                } else {
+                    false
+                };
+                if changed {
+                    crate::popup_window::send_command(
+                        crate::popup_window::PopupCommand::AppearanceChanged,
+                    );
+                    super::wake::wake();
+                }
+            });
+        if spawned.is_err() {
+            cache.refreshing = false;
+            cache.read_at = Some(Instant::now());
+        }
+    }
+    cache.value
 }
 
 /// The desktop's color-scheme preference: `Some(true)` for dark,
@@ -82,6 +127,7 @@ pub fn prefers_dark() -> Option<bool> {
     static CACHE: Mutex<Cached<bool>> = Mutex::new(Cached {
         value: None,
         read_at: None,
+        refreshing: false,
     });
     cached(&CACHE, || {
         let scheme =
@@ -99,6 +145,7 @@ pub fn animations_enabled() -> Option<bool> {
     static CACHE: Mutex<Cached<bool>> = Mutex::new(Cached {
         value: None,
         read_at: None,
+        refreshing: false,
     });
     cached(&CACHE, || {
         bool::try_from(read_setting(
@@ -114,6 +161,7 @@ pub fn accent_color() -> Option<(u8, u8, u8)> {
     static CACHE: Mutex<Cached<(u8, u8, u8)>> = Mutex::new(Cached {
         value: None,
         read_at: None,
+        refreshing: false,
     });
     cached(&CACHE, || {
         let value = read_setting("org.freedesktop.appearance", "accent-color")?;
@@ -202,6 +250,59 @@ pub fn open(target: &std::ffi::OsStr) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initial_setting_is_ready_before_returning() {
+        let cache: &'static Mutex<Cached<i32>> = Box::leak(Box::new(Mutex::new(Cached {
+            value: None,
+            read_at: None,
+            refreshing: false,
+        })));
+        assert_eq!(cached(cache, || Some(7)), Some(7));
+        assert_eq!(
+            cached(cache, || panic!("fresh cache must not read")),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn expired_settings_refresh_without_blocking_or_duplicate_reads() {
+        use std::sync::mpsc;
+        let cache: &'static Mutex<Cached<i32>> = Box::leak(Box::new(Mutex::new(Cached {
+            value: Some(7),
+            read_at: Some(Instant::now() - CACHE_TTL),
+            refreshing: false,
+        })));
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        // The reader cannot finish until this call has returned and the test
+        // releases it. No timing threshold is needed to prove nonblocking.
+        assert_eq!(
+            cached(cache, move || {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Some(9)
+            }),
+            Some(7)
+        );
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            cached(cache, || panic!("refresh already in flight")),
+            Some(7)
+        );
+        // Wait for the worker's cache update by taking the mutex after it has
+        // published, rather than relying on arbitrary sleeps.
+        release_tx.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while cache.lock().unwrap().refreshing {
+            assert!(Instant::now() < deadline, "refresh did not complete");
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            cached(cache, || panic!("fresh cache must not read")),
+            Some(9)
+        );
+    }
 
     #[test]
     fn font_names_drop_their_size() {

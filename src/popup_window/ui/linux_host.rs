@@ -104,6 +104,9 @@ impl Host {
                     .update(cx, |root, cx| root.set_home_editing(true, cx));
             }
             PopupCommand::AppearanceChanged => {
+                // Portal refreshes finish off-thread. Repaint Settings and
+                // onboarding too, so their next frame uses the new preference.
+                let _ = cx.update(|cx| cx.refresh_windows());
                 if let Some(window) = self.window {
                     let _ =
                         window.update(cx, |root, window, cx| root.appearance_changed(window, cx));
