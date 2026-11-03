@@ -25,6 +25,7 @@ const DEFAULT_ACTION: &str = "default";
 
 #[derive(Default)]
 struct State {
+    server: Option<String>,
     /// Server ids of keyed cards, so an update replaces the same bubble.
     keyed: HashMap<&'static str, u32>,
     /// Buttons of bubbles that may still be clicked.
@@ -34,6 +35,15 @@ struct State {
 }
 
 impl State {
+    fn use_server(&mut self, server: Option<&str>) {
+        if server.is_none() || self.server.as_deref() != server {
+            self.keyed.clear();
+            self.actions.clear();
+            self.activation_tokens.clear();
+            self.server = server.map(str::to_owned);
+        }
+    }
+
     fn remember_activation_token(&mut self, id: u32, token: String) {
         if self.actions.contains_key(&id) {
             self.activation_tokens.insert(id, token);
@@ -78,7 +88,10 @@ fn send(notification: &Notification, silent: bool) -> anyhow::Result<()> {
     listen_for_actions();
     // Capabilities belong to the current server, which can change when the
     // desktop restarts or the user switches notification daemons.
-    let markup = supports_markup(bus);
+    let (server, markup) = server_capabilities(bus);
+    if let Ok(mut state) = state().lock() {
+        state.use_server(server.as_deref());
+    }
     let replaces = notification
         .key
         .and_then(|key| state().lock().ok()?.keyed.get(key).copied())
@@ -114,7 +127,9 @@ fn send(notification: &Notification, silent: bool) -> anyhow::Result<()> {
         -1
     };
     let reply = bus.call_method(
-        Some(NAME),
+        // Pin the request to the owner whose capabilities and IDs we read.
+        // If it exits, fail rather than replace an unrelated new server's ID.
+        Some(server.as_deref().unwrap_or(NAME)),
         PATH,
         Some(NAME),
         "Notify",
@@ -131,6 +146,8 @@ fn send(notification: &Notification, silent: bool) -> anyhow::Result<()> {
     )?;
     let id: u32 = reply.body().deserialize()?;
     if let Ok(mut state) = state().lock() {
+        let header = reply.header();
+        state.use_server(header.sender().map(|sender| sender.as_str()));
         if let Some(key) = notification.key {
             state.keyed.insert(key, id);
         }
@@ -159,13 +176,20 @@ fn body(notification: &Notification) -> String {
     }
 }
 
-fn supports_markup(bus: &zbus::blocking::Connection) -> bool {
-    bus.call_method(Some(NAME), PATH, Some(NAME), "GetCapabilities", &())
+fn server_capabilities(bus: &zbus::blocking::Connection) -> (Option<String>, bool) {
+    let Ok(reply) = bus.call_method(Some(NAME), PATH, Some(NAME), "GetCapabilities", &()) else {
+        // Without an identified owner, never reuse cached notification IDs.
+        return (None, true);
+    };
+    let server = reply.header().sender().map(|sender| sender.to_string());
+    let markup = reply
+        .body()
+        .deserialize::<Vec<String>>()
         .ok()
-        .and_then(|reply| reply.body().deserialize::<Vec<String>>().ok())
         // On a failed capability query retain conservative escaping, so a
         // markup-capable server never interprets provider text as HTML.
-        .is_none_or(|capabilities| capabilities.iter().any(|cap| cap == "body-markup"))
+        .is_none_or(|capabilities| capabilities.iter().any(|cap| cap == "body-markup"));
+    (server, markup)
 }
 
 fn format_body(text: &str, markup: bool) -> String {
@@ -209,19 +233,25 @@ fn run_action_listener() -> anyhow::Result<()> {
     // processing the close; separate threads can discard it first.
     for message in proxy.receive_all_signals()? {
         let header = message.header();
+        // Signals queued by the previous daemon must not remove or invoke
+        // records whose numeric IDs have already been reused by a new one.
+        let Ok(mut state) = state().lock() else {
+            continue;
+        };
+        if state.server.is_none()
+            || state.server.as_deref() != header.sender().map(|sender| sender.as_str())
+        {
+            continue;
+        }
         match header.member().map(|member| member.as_str()) {
             Some("NotificationClosed") => {
-                if let Ok((id, _reason)) = message.body().deserialize::<(u32, u32)>()
-                    && let Ok(mut state) = state().lock()
-                {
+                if let Ok((id, _reason)) = message.body().deserialize::<(u32, u32)>() {
                     state.close(id);
                 }
                 continue;
             }
             Some("ActivationToken") => {
-                if let Ok((id, token)) = message.body().deserialize::<(u32, String)>()
-                    && let Ok(mut state) = state().lock()
-                {
+                if let Ok((id, token)) = message.body().deserialize::<(u32, String)>() {
                     state.remember_activation_token(id, token);
                 }
                 continue;
@@ -232,25 +262,17 @@ fn run_action_listener() -> anyhow::Result<()> {
         let Ok((id, key)) = message.body().deserialize::<(u32, String)>() else {
             continue;
         };
-        let token = state()
-            .lock()
-            .ok()
-            .and_then(|mut state| state.activation_tokens.remove(&id));
+        let token = state.activation_tokens.remove(&id);
         if key == DEFAULT_ACTION {
+            drop(state);
             super::instance::show_with_token(token);
             continue;
         }
         let action = key
             .strip_prefix('a')
             .and_then(|index| index.parse::<usize>().ok())
-            .and_then(|index| {
-                state()
-                    .lock()
-                    .ok()?
-                    .actions
-                    .get(&id)
-                    .and_then(|actions| actions.get(index).cloned())
-            });
+            .and_then(|index| state.actions.get(&id)?.get(index).cloned());
+        drop(state);
         if let Some(action) = action {
             action.run();
         }
@@ -261,6 +283,26 @@ fn run_action_listener() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn daemon_changes_invalidate_ids_actions_and_focus_grants() {
+        let mut state = State::default();
+        state.use_server(Some(":1.10"));
+        state.keyed.insert("progress", 1);
+        state.actions.insert(1, Vec::new());
+        state.remember_activation_token(1, "old-token".into());
+        state.use_server(Some(":1.10"));
+        assert_eq!(state.keyed.get("progress"), Some(&1));
+        assert!(state.actions.contains_key(&1));
+        state.use_server(Some(":1.11"));
+        assert!(state.keyed.is_empty());
+        assert!(state.actions.is_empty());
+        assert!(state.activation_tokens.is_empty());
+        state.keyed.insert("progress", 1);
+        state.use_server(None);
+        assert!(state.keyed.is_empty());
+        assert_eq!(state.server, None);
+    }
 
     #[test]
     fn notification_focus_tokens_are_scoped_to_live_notifications() {
