@@ -195,18 +195,18 @@ pub fn take_activation_token() -> Option<String> {
 /// The shell command that toggles the popup, for a desktop keyboard
 /// shortcut. AppImages are addressed by their file, not the mount point.
 pub fn toggle_command() -> String {
-    let program = std::env::var_os("APPIMAGE")
-        .filter(|path| !path.is_empty())
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::current_exe().ok())
+    let program = super::autostart::executable()
+        .ok()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "codex-minibar".into());
-    let program = if program.contains(|c: char| c.is_whitespace() || c == '\'') {
-        format!("'{}'", program.replace('\'', "'\\''"))
-    } else {
-        program
-    };
+    let program = quote_command_argument(&program);
     format!("{program} {TOGGLE_FLAG}")
+}
+
+// GNOME parses this with GLib shell quoting. Quote every path, including
+// paths containing metacharacters without whitespace.
+fn quote_command_argument(program: &str) -> String {
+    format!("'{}'", program.replace('\'', "'\\''"))
 }
 
 /// Toggles the popup for an outside request, such as `--toggle` or the
@@ -249,6 +249,15 @@ fn activate() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shortcut_paths_are_always_shell_quoted() {
+        assert_eq!(quote_command_argument("/opt/$apps/a;b"), "'/opt/$apps/a;b'");
+        assert_eq!(
+            quote_command_argument("/opt/it's/minibar"),
+            "'/opt/it'\\''s/minibar'"
+        );
+    }
 
     #[test]
     fn toggle_requests_carry_an_optional_valid_focus_token() {

@@ -87,8 +87,8 @@ mod tests {
             std::fs::read_to_string(directory.path().join("applications").join(DESKTOP_FILE))
                 .unwrap();
         assert!(entry.contains("Name=Codex Minibar\n"));
-        assert!(entry.contains("Exec=\"/opt/My \\$Apps/100%%/minibar\"\n"));
-        assert!(entry.contains("Exec=\"/opt/My \\$Apps/100%%/minibar\" --toggle\n"));
+        assert!(entry.contains("Exec=\"/opt/My \\\\$Apps/100%%/minibar\"\n"));
+        assert!(entry.contains("Exec=\"/opt/My \\\\$Apps/100%%/minibar\" --toggle\n"));
         ensure_entry_in(directory.path(), &[], Path::new("/different/binary")).unwrap();
         assert_eq!(
             std::fs::read_to_string(directory.path().join("applications").join(DESKTOP_FILE))
