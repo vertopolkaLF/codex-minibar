@@ -60,6 +60,9 @@ fn send(notification: &Notification, silent: bool) -> anyhow::Result<()> {
     let bus =
         super::desktop::session_bus().ok_or_else(|| anyhow::anyhow!("no D-Bus session bus"))?;
     listen_for_actions();
+    // Capabilities belong to the current server, which can change when the
+    // desktop restarts or the user switches notification daemons.
+    let markup = supports_markup(bus);
     let replaces = notification
         .key
         .and_then(|key| state().lock().ok()?.keyed.get(key).copied())
@@ -104,7 +107,7 @@ fn send(notification: &Notification, silent: bool) -> anyhow::Result<()> {
             replaces,
             "codex-minibar",
             notification.title.as_str(),
-            escape_markup(&body(notification)),
+            format_body(&body(notification), markup),
             actions,
             hints,
             expire_timeout,
@@ -137,6 +140,23 @@ fn body(notification: &Notification) -> String {
         quotas
     } else {
         format!("{}\n{quotas}", notification.body)
+    }
+}
+
+fn supports_markup(bus: &zbus::blocking::Connection) -> bool {
+    bus.call_method(Some(NAME), PATH, Some(NAME), "GetCapabilities", &())
+        .ok()
+        .and_then(|reply| reply.body().deserialize::<Vec<String>>().ok())
+        // On a failed capability query retain conservative escaping, so a
+        // markup-capable server never interprets provider text as HTML.
+        .is_none_or(|capabilities| capabilities.iter().any(|cap| cap == "body-markup"))
+}
+
+fn format_body(text: &str, markup: bool) -> String {
+    if markup {
+        escape_markup(text)
+    } else {
+        text.to_owned()
     }
 }
 
@@ -215,6 +235,16 @@ fn run_action_listener() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_text_servers_receive_original_text_without_visible_entities() {
+        let text = "Usage < 10% & reset > 1h";
+        assert_eq!(format_body(text, false), text);
+        assert_eq!(
+            format_body(text, true),
+            "Usage &lt; 10% &amp; reset &gt; 1h"
+        );
+    }
 
     #[test]
     fn markup_is_escaped() {

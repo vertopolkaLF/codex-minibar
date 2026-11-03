@@ -37,11 +37,17 @@ fn settings_bus() -> Option<&'static Connection> {
 /// The process-wide session bus connection, or `None` without a session bus.
 pub fn session_bus() -> Option<&'static Connection> {
     static BUS: OnceLock<Option<Connection>> = OnceLock::new();
-    BUS.get_or_init(|| match Connection::session() {
-        Ok(connection) => Some(connection),
-        Err(error) => {
-            crate::logger::info(format!("D-Bus session bus unavailable: {error}"));
-            None
+    BUS.get_or_init(|| {
+        match zbus::blocking::connection::Builder::session().and_then(|builder| {
+            // Optional desktop services must not stall notification delivery or
+            // tray integration indefinitely when a daemon stops responding.
+            builder.method_timeout(Duration::from_secs(5)).build()
+        }) {
+            Ok(connection) => Some(connection),
+            Err(error) => {
+                crate::logger::info(format!("D-Bus session bus unavailable: {error}"));
+                None
+            }
         }
     })
     .as_ref()
