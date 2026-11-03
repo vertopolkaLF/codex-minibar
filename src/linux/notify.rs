@@ -168,20 +168,24 @@ fn run_action_listener() -> anyhow::Result<()> {
     let bus =
         super::desktop::session_bus().ok_or_else(|| anyhow::anyhow!("no D-Bus session bus"))?;
     let proxy = zbus::blocking::Proxy::new(bus, NAME, PATH, NAME)?;
-    let mut closed = proxy.receive_signal("NotificationClosed")?;
-    let invoked = proxy.receive_signal("ActionInvoked")?;
-    // Forget bubbles the server closed so their actions are not retained.
-    std::thread::spawn(move || {
-        for message in &mut closed {
-            if let Ok((id, _reason)) = message.body().deserialize::<(u32, u32)>()
-                && let Ok(mut state) = state().lock()
-            {
-                state.actions.remove(&id);
-                state.keyed.retain(|_, keyed| *keyed != id);
+    // A server commonly emits ActionInvoked immediately before
+    // NotificationClosed. One ordered stream must clone the action before
+    // processing the close; separate threads can discard it first.
+    for message in proxy.receive_all_signals()? {
+        let header = message.header();
+        match header.member().map(|member| member.as_str()) {
+            Some("NotificationClosed") => {
+                if let Ok((id, _reason)) = message.body().deserialize::<(u32, u32)>()
+                    && let Ok(mut state) = state().lock()
+                {
+                    state.actions.remove(&id);
+                    state.keyed.retain(|_, keyed| *keyed != id);
+                }
+                continue;
             }
+            Some("ActionInvoked") => {}
+            _ => continue,
         }
-    });
-    for message in invoked {
         let Ok((id, key)) = message.body().deserialize::<(u32, String)>() else {
             continue;
         };
