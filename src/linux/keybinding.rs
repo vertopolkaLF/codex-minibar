@@ -263,7 +263,8 @@ fn entry_schema() -> String {
 }
 
 fn paths() -> Result<Vec<String>> {
-    Ok(quoted_strings(&gsettings(&["get", MEDIA_KEYS, LIST_KEY])?))
+    quoted_strings(&gsettings(&["get", MEDIA_KEYS, LIST_KEY])?)
+        .context("parse desktop shortcut list; leaving existing shortcuts unchanged")
 }
 
 fn write_paths(paths: &[String]) -> Result<()> {
@@ -309,29 +310,76 @@ fn variant_string(value: &str) -> String {
     text
 }
 
-/// The single-quoted strings of GVariant text such as `['/a/', '/b/']`.
-fn quoted_strings(text: &str) -> Vec<String> {
+/// Parses the string-array output of `gsettings get`. Never recover a
+/// partial list: writing it back would silently remove unrelated shortcuts.
+fn quoted_strings(text: &str) -> Option<Vec<String>> {
+    let text = text.trim();
+    let text = text.strip_prefix("@as").unwrap_or(text).trim();
+    let text = text.strip_prefix('[')?.strip_suffix(']')?;
+    let mut chars = text.chars().peekable();
     let mut strings = Vec::new();
-    let mut chars = text.chars();
+    loop {
+        while chars.peek().is_some_and(|c| c.is_whitespace()) {
+            chars.next();
+        }
+        if chars.peek().is_none() {
+            return Some(strings);
+        }
+        strings.push(parse_string(&mut chars)?);
+        while chars.peek().is_some_and(|c| c.is_whitespace()) {
+            chars.next();
+        }
+        match chars.next() {
+            None => return Some(strings),
+            Some(',') => {}
+            _ => return None,
+        }
+    }
+}
+
+fn parse_string(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<String> {
+    let quote = chars.next()?;
+    if !matches!(quote, '\'' | '"') {
+        return None;
+    }
+    let mut value = String::new();
     while let Some(c) = chars.next() {
-        if c != '\'' {
+        if c == quote {
+            return (!value.contains('\0')).then_some(value);
+        }
+        if c != '\\' {
+            value.push(c);
             continue;
         }
-        let mut value = String::new();
-        while let Some(c) = chars.next() {
-            match c {
-                '\\' => value.extend(chars.next()),
-                '\'' => break,
-                c => value.push(c),
+        let escaped = match chars.next()? {
+            '\n' => continue,
+            'a' => '\x07',
+            'b' => '\x08',
+            'f' => '\x0c',
+            'n' => '\n',
+            'r' => '\r',
+            't' => '\t',
+            'v' => '\x0b',
+            c @ ('u' | 'U') => {
+                let mut code = 0u32;
+                for _ in 0..if c == 'u' { 4 } else { 8 } {
+                    code = code
+                        .checked_mul(16)?
+                        .checked_add(chars.next()?.to_digit(16)?)?;
+                }
+                char::from_u32(code)?
             }
-        }
-        strings.push(value);
+            c => c,
+        };
+        value.push(escaped);
     }
-    strings
+    None
 }
 
 fn unquote(text: &str) -> Option<String> {
-    quoted_strings(text).into_iter().next()
+    let mut chars = text.trim().chars().peekable();
+    let value = parse_string(&mut chars)?;
+    chars.all(char::is_whitespace).then_some(value)
 }
 
 #[cfg(test)]
@@ -392,13 +440,43 @@ mod tests {
     }
 
     #[test]
+    fn desktop_lists_preserve_both_quote_styles_and_unicode_escapes() {
+        assert_eq!(
+            quoted_strings(r#"@as ["/it's/", '/other/', '/caf\u00e9/']"#).unwrap(),
+            vec!["/it's/", "/other/", "/café/"]
+        );
+        let original = "a \"quoted\" path \\with\ncontrols";
+        assert_eq!(
+            unquote(&variant_string(original)).as_deref(),
+            Some(original)
+        );
+        assert_eq!(unquote(r#"'\U0001f600'"#).as_deref(), Some("😀"));
+    }
+
+    #[test]
+    fn malformed_desktop_lists_never_produce_a_partial_replacement() {
+        for malformed in [
+            "['/keep/',",
+            "['/keep/', 42]",
+            "['/keep/' '/lost/']",
+            "['/keep/', '/unterminated]",
+            r#"['/keep/', '\uZZZZ']"#,
+            "not a list",
+        ] {
+            assert!(quoted_strings(malformed).is_none(), "{malformed}");
+        }
+        assert!(unquote("'binding' extra").is_none());
+        assert!(unquote(r#"'\u0000'"#).is_none());
+    }
+
+    #[test]
     fn gvariant_text_round_trips_quotes_and_paths() {
         assert_eq!(variant_string(r#"a "b" \c"#), r#""a \"b\" \\c""#);
         assert_eq!(
-            quoted_strings("['/one/', '/it\\'s/']"),
+            quoted_strings("['/one/', '/it\\'s/']").unwrap(),
             vec!["/one/".to_owned(), "/it's/".to_owned()]
         );
-        assert!(quoted_strings("@as []").is_empty());
+        assert!(quoted_strings("@as []").unwrap().is_empty());
         assert_eq!(unquote("'<Control>m'").as_deref(), Some("<Control>m"));
         assert_eq!(unquote("''").as_deref(), Some(""));
     }
