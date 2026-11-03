@@ -57,14 +57,11 @@ fn with_key_file(
 fn load_keyring(allow_create: bool) -> Result<Zeroizing<[u8; KEY_LEN]>> {
     let keyring = futures::executor::block_on(oo7::Keyring::new());
     if let Ok(keyring) = &keyring
-        && let Some(key) = futures::executor::block_on(read_keyring(keyring))
+        && let Some(key) = futures::executor::block_on(read_keyring(keyring))?
     {
         return Ok(key);
     }
-    ensure!(
-        allow_create,
-        "provider secrets key is unavailable; unlock the login keyring and retry"
-    );
+    ensure_key_creation_allowed(allow_create, crate::secrets::has_stored_secrets)?;
     let mut key = Zeroizing::new([0u8; KEY_LEN]);
     super::random_bytes(key.as_mut()).context("generate secrets key")?;
     match &keyring {
@@ -82,23 +79,53 @@ fn load_keyring(allow_create: bool) -> Result<Zeroizing<[u8; KEY_LEN]>> {
     Ok(key)
 }
 
-async fn read_keyring(keyring: &oo7::Keyring) -> Option<Zeroizing<[u8; KEY_LEN]>> {
-    keyring.unlock().await.ok()?;
-    let items = keyring.search_items(&attributes()).await.ok()?;
+fn ensure_key_creation_allowed(
+    allow_create: bool,
+    has_secrets: impl FnOnce() -> Result<bool>,
+) -> Result<()> {
+    ensure!(
+        allow_create,
+        "provider secrets key is unavailable; unlock the login keyring and retry"
+    );
+    ensure!(
+        !has_secrets()?,
+        "saved provider secrets already exist but their key is unavailable; unlock the login keyring and retry"
+    );
+    Ok(())
+}
+
+async fn read_keyring(keyring: &oo7::Keyring) -> Result<Option<Zeroizing<[u8; KEY_LEN]>>> {
+    keyring
+        .unlock()
+        .await
+        .context("unlock provider secrets keyring")?;
+    let items = keyring
+        .search_items(&attributes())
+        .await
+        .context("search provider secrets keyring")?;
+    let mut failure = None;
     for item in items {
-        if item.unlock().await.is_err() {
-            continue;
-        }
-        let Ok(secret) = item.secret().await else {
-            continue;
-        };
-        if secret.len() == KEY_LEN {
+        let result: Result<Zeroizing<[u8; KEY_LEN]>> = async {
+            item.unlock().await.context("unlock provider secrets key")?;
+            let secret = item.secret().await.context("read provider secrets key")?;
+            ensure!(
+                secret.len() == KEY_LEN,
+                "login keyring contains an invalid provider secrets key"
+            );
             let mut key = Zeroizing::new([0u8; KEY_LEN]);
             key.copy_from_slice(&secret);
-            return Some(key);
+            Ok(key)
+        }
+        .await;
+        match result {
+            Ok(key) => return Ok(Some(key)),
+            Err(error) => failure = Some(error),
         }
     }
-    None
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(None),
+    }
 }
 
 async fn write_keyring(keyring: &oo7::Keyring, key: &[u8; KEY_LEN]) -> Result<()> {
@@ -203,6 +230,18 @@ fn open(key: &[u8; KEY_LEN], data: &[u8]) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_keys_are_only_allowed_for_writes_without_existing_credentials() {
+        assert!(ensure_key_creation_allowed(true, || Ok(false)).is_ok());
+        assert!(ensure_key_creation_allowed(true, || Ok(true)).is_err());
+        assert!(
+            ensure_key_creation_allowed(true, || Err(anyhow!("cannot read secret store"))).is_err()
+        );
+        assert!(
+            ensure_key_creation_allowed(false, || panic!("reads must not create keys")).is_err()
+        );
+    }
 
     #[test]
     fn fallback_key_remains_authoritative_when_keyring_availability_changes() {

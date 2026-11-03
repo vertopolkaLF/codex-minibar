@@ -178,6 +178,13 @@ fn apply_changes(file: &mut SecretFile, changes: &[(String, Option<String>)]) ->
     Ok(())
 }
 
+/// Called during Linux key initialization, including under `OPERATIONS`.
+/// Do not acquire that lock again: only inspect the atomically stored file.
+#[cfg(not(windows))]
+pub(crate) fn has_stored_secrets() -> Result<bool> {
+    Ok(read_secret_file(&path()?)?.is_some_and(|file| !file.values.is_empty()))
+}
+
 fn read_secret_file(path: &Path) -> Result<Option<SecretFile>> {
     let raw = match fs::read_to_string(path) {
         Ok(raw) => raw,
