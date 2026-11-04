@@ -206,10 +206,24 @@ fn launch_terminal(selected: Option<&AvailableAiTool>) -> Result<()> {
 fn linux_script() -> Result<PathBuf> {
     let base = directories::BaseDirs::new().context("resolve the cache directory")?;
     let directory = base.cache_dir().join("codex-minibar");
-    fs::create_dir_all(&directory).with_context(|| format!("create {}", directory.display()))?;
+    linux_script_in(&directory)
+}
+
+#[cfg(not(windows))]
+fn linux_script_in(directory: &Path) -> Result<PathBuf> {
+    use std::io::Write;
+    fs::create_dir_all(directory).with_context(|| format!("create {}", directory.display()))?;
     let path = directory.join("troubleshoot.sh");
-    fs::write(&path, include_str!("../assets/troubleshoot.sh"))
-        .with_context(|| format!("write {}", path.display()))?;
+    // Bash may still be reading a previous invocation's script. Publish a
+    // complete replacement rather than truncating that reader's inode.
+    let mut staged =
+        tempfile::NamedTempFile::new_in(directory).context("stage troubleshooting script")?;
+    staged
+        .write_all(include_bytes!("../assets/troubleshoot.sh"))
+        .context("write troubleshooting script")?;
+    staged
+        .persist(&path)
+        .with_context(|| format!("replace {}", path.display()))?;
     Ok(path)
 }
 
@@ -301,6 +315,29 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
 #[cfg(all(test, not(windows)))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn script_publication_does_not_truncate_an_active_readers_file() {
+        use std::{io::Read, os::unix::fs::symlink};
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("troubleshoot.sh");
+        fs::write(&path, "previous script").unwrap();
+        let mut reader = fs::File::open(&path).unwrap();
+        assert_eq!(linux_script_in(root.path()).unwrap(), path);
+        let mut previous = String::new();
+        reader.read_to_string(&mut previous).unwrap();
+        assert_eq!(previous, "previous script");
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            include_bytes!("../assets/troubleshoot.sh")
+        );
+        fs::remove_file(&path).unwrap();
+        let outside = root.path().join("unrelated");
+        fs::write(&outside, "unchanged").unwrap();
+        symlink(&outside, &path).unwrap();
+        linux_script_in(root.path()).unwrap();
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "unchanged");
+    }
 
     #[test]
     fn explicit_diagnostic_cli_wins_over_path_and_preserves_unix_path_bytes() {
