@@ -555,13 +555,31 @@ pub(crate) fn collect_codex_session_files(root: &Path) -> Result<Vec<(PathBuf, S
 }
 
 fn collect_session_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    collect_session_files_in(root, files, &mut BTreeSet::new())
+}
+
+fn collect_session_files_in(
+    root: &Path,
+    files: &mut Vec<PathBuf>,
+    visited: &mut BTreeSet<PathBuf>,
+) -> Result<()> {
+    let Ok(identity) = root.canonicalize() else {
+        return Ok(());
+    };
+    if !visited.insert(identity) {
+        return Ok(());
+    }
     let Ok(entries) = fs::read_dir(root) else {
         return Ok(());
     };
+    // Stable ordering keeps the chosen path deterministic when several
+    // directory symlinks point to the same logs.
+    let mut entries = entries.collect::<std::io::Result<Vec<_>>>()?;
+    entries.sort_by_key(|entry| entry.path());
     for entry in entries {
-        let path = entry?.path();
+        let path = entry.path();
         if path.is_dir() {
-            collect_session_files(&path, files)?;
+            collect_session_files_in(&path, files, visited)?;
         } else if path
             .extension()
             .is_some_and(|extension| extension == "jsonl")
@@ -1337,6 +1355,24 @@ fn collect_claude_session_files(roots: &[PathBuf]) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn session_scan_follows_linked_directories_once_and_stops_cycles() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let logs = root.path().join("logs");
+        let external = root.path().join("external");
+        fs::create_dir(&logs).unwrap();
+        fs::create_dir(&external).unwrap();
+        fs::write(external.join("session.jsonl"), "fixture").unwrap();
+        symlink(&external, logs.join("a-link")).unwrap();
+        symlink(&external, logs.join("b-link")).unwrap();
+        symlink(&logs, external.join("cycle")).unwrap();
+        let mut files = Vec::new();
+        collect_session_files(&logs, &mut files).unwrap();
+        assert_eq!(files, vec![logs.join("a-link/session.jsonl")]);
+    }
 
     #[test]
     fn reads_per_request_token_usage() {
