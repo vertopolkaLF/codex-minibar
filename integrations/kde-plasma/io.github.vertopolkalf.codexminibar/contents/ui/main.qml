@@ -51,7 +51,10 @@ PlasmoidItem {
         if (!provider.icon) {
             return "";
         }
-        return "file://" + (darkPanel ? provider.icon.dark : provider.icon.light);
+        const path = darkPanel ? provider.icon.dark : provider.icon.light;
+        // Paths from the report are filesystem paths, not pre-encoded URLs.
+        // Encode components so #, ? and % remain part of the filename.
+        return path ? "file://" + path.split("/").map(encodeURIComponent).join("/") : "";
     }
 
     function shellQuote(text) {
