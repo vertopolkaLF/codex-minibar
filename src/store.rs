@@ -1152,7 +1152,7 @@ impl ProviderStore {
     pub(crate) fn load_claude_scan_offsets(
         &self,
         provider: ProviderId,
-    ) -> Result<Option<BTreeMap<String, u64>>> {
+    ) -> Result<Option<ClaudeScanOffsets>> {
         let flags = self.provider_flags(provider)?;
         let version = flags
             .get("cache_version")
@@ -1163,9 +1163,14 @@ impl ProviderStore {
         }
         let mut statement = self
             .conn
-            .prepare("SELECT path, offset FROM scan_files WHERE provider = ?1")?;
+            .prepare("SELECT path, offset, meta_json FROM scan_files WHERE provider = ?1")?;
         let rows = statement.query_map(params![provider.id()], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+            let raw: String = row.get(2)?;
+            let meta: ClaudeFileMeta = serde_json::from_str(&raw).unwrap_or_default();
+            Ok((
+                row.get::<_, String>(0)?,
+                (row.get::<_, i64>(1)? as u64, meta.file_identity),
+            ))
         })?;
         Ok(Some(rows.collect::<rusqlite::Result<_>>()?))
     }
@@ -1185,17 +1190,23 @@ impl ProviderStore {
         {
             let mut statement = self
                 .conn
-                .prepare("SELECT path, offset FROM scan_files WHERE provider = ?1")?;
+                .prepare("SELECT path, offset, meta_json FROM scan_files WHERE provider = ?1")?;
             let rows = statement.query_map(params![provider.id()], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)? as u64,
+                    row.get::<_, String>(2)?,
+                ))
             })?;
             for row in rows {
-                let (path, offset) = row?;
+                let (path, offset, raw) = row?;
+                let meta: ClaudeFileMeta = serde_json::from_str(&raw).unwrap_or_default();
                 scanned.insert(path.clone());
                 files.insert(
                     path,
                     CachedClaudeSessionFile {
                         offset,
+                        file_identity: meta.file_identity,
                         entries: Vec::new(),
                         persisted: None,
                         cwd: None,
@@ -1289,9 +1300,9 @@ impl ProviderStore {
             {
                 let mut scan = tx.prepare(
                     "INSERT INTO scan_files(provider, path, offset, meta_json)
-                     VALUES(?1, ?2, ?3, '{}')
-                     ON CONFLICT(provider, path) DO UPDATE SET offset=excluded.offset
-                     WHERE offset IS NOT excluded.offset",
+                     VALUES(?1, ?2, ?3, ?4)
+                     ON CONFLICT(provider, path) DO UPDATE SET offset=excluded.offset, meta_json=excluded.meta_json
+                     WHERE offset IS NOT excluded.offset OR meta_json IS NOT excluded.meta_json",
                 )?;
                 let mut events = tx.prepare(
                     "INSERT INTO usage_events(
@@ -1329,7 +1340,10 @@ impl ProviderStore {
                         OR model IS NOT excluded.model",
                 )?;
                 for (path, file) in cache.files.iter().filter(|(_, file)| pending(file)) {
-                    scan.execute(params![provider.id(), path, file.offset as i64])?;
+                    let meta = serde_json::to_string(&ClaudeFileMeta {
+                        file_identity: file.file_identity.clone(),
+                    })?;
+                    scan.execute(params![provider.id(), path, file.offset as i64, meta])?;
                     let first_new = match file.persisted {
                         Some((_, stored)) if stored <= file.entries.len() => stored,
                         _ => 0,
@@ -2063,6 +2077,13 @@ fn delete_stale_event_rows(
     Ok(())
 }
 
+type ClaudeScanOffsets = BTreeMap<String, (u64, Option<String>)>;
+
+#[derive(Default, Serialize, Deserialize)]
+struct ClaudeFileMeta {
+    file_identity: Option<String>,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct CodexFileMeta {
     #[serde(default)]
@@ -2788,6 +2809,7 @@ mod tests {
                 "/p/a.jsonl".into(),
                 CachedClaudeSessionFile {
                     offset: 10,
+                    file_identity: Some("7:99".into()),
                     entries: vec![entry("m1"), entry("m2")],
                     persisted: None,
                     ..Default::default()
@@ -2797,6 +2819,14 @@ mod tests {
         store.save_claude_cache(claude, &cache).unwrap();
 
         let mut cache = store.load_claude_cache(claude).unwrap();
+        assert_eq!(
+            cache.files["/p/a.jsonl"].file_identity.as_deref(),
+            Some("7:99")
+        );
+        assert_eq!(
+            store.load_claude_scan_offsets(claude).unwrap().unwrap()["/p/a.jsonl"],
+            (10, Some("7:99".into()))
+        );
         let before = store.conn.total_changes();
         store.save_claude_cache(claude, &cache).unwrap();
         assert_eq!(store.conn.total_changes(), before);

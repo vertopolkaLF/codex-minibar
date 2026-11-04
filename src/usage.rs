@@ -812,6 +812,8 @@ pub(crate) struct ClaudeUsageCache {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct CachedClaudeSessionFile {
+    #[serde(default)]
+    pub(crate) file_identity: Option<String>,
     /// Number of complete JSONL bytes incorporated into `entries`.
     pub(crate) offset: u64,
     pub(crate) entries: Vec<CachedClaudeUsageEntry>,
@@ -966,8 +968,13 @@ fn claude_logs_unchanged(
     Ok(files.iter().all(|path| {
         offsets
             .get(path.to_string_lossy().as_ref())
-            .is_some_and(|&offset| fs::metadata(path).is_ok_and(|meta| meta.len() == offset))
+            .is_some_and(|(offset, identity)| claude_log_matches_scan(path, *offset, identity))
     }))
+}
+
+fn claude_log_matches_scan(path: &Path, offset: u64, identity: &Option<String>) -> bool {
+    fs::metadata(path)
+        .is_ok_and(|meta| meta.len() == offset && session_file_identity(&meta) == *identity)
 }
 
 pub(crate) fn statistics_from_claude_cache(
@@ -1133,12 +1140,20 @@ fn claude_entry_should_replace(
 }
 
 fn scan_claude_file_delta(path: &Path, cached: &mut CachedClaudeSessionFile) -> Result<()> {
-    let file_size = fs::metadata(path)
-        .with_context(|| format!("read metadata for {}", path.display()))?
-        .len();
-    if file_size < cached.offset {
+    let metadata =
+        fs::metadata(path).with_context(|| format!("read metadata for {}", path.display()))?;
+    let file_size = metadata.len();
+    let identity = session_file_identity(&metadata);
+    let replaced = identity.is_some() && cached.file_identity != identity;
+    if file_size < cached.offset || replaced {
         cached.offset = 0;
         cached.entries.clear();
+        cached.persisted = None;
+        cached.cwd = None;
+        cached.cwd_persisted = false;
+    }
+    if cached.file_identity != identity {
+        cached.file_identity = identity;
         cached.persisted = None;
     }
     if file_size == cached.offset {
@@ -1417,6 +1432,38 @@ mod tests {
         let mut files = Vec::new();
         collect_session_files(&logs, &mut files).unwrap();
         assert_eq!(files, vec![logs.join("a-link/session.jsonl")]);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn claude_same_length_replacement_invalidates_fast_path_and_rebuilds_events() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("claude.jsonl");
+        let line = r#"{"type":"assistant","cwd":"/old","timestamp":"2026-07-14T10:00:00Z","message":{"id":"m1","model":"claude-sonnet-4-20250514","usage":{"output_tokens":0,"input_tokens":10}}}"#;
+        fs::write(&path, format!("{line}\n")).unwrap();
+        let mut cached = CachedClaudeSessionFile::default();
+        scan_claude_file_delta(&path, &mut cached).unwrap();
+        let identity = cached.file_identity.clone();
+        let offset = cached.offset;
+        assert!(claude_log_matches_scan(&path, offset, &identity));
+        let replacement = root.path().join("replacement");
+        fs::write(
+            &replacement,
+            format!(
+                "{}\n",
+                line.replace("/old", "/new")
+                    .replace(":10}", ":20}")
+                    .replace("m1", "m2")
+            ),
+        )
+        .unwrap();
+        fs::rename(replacement, &path).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().len(), offset);
+        assert!(!claude_log_matches_scan(&path, offset, &identity));
+        scan_claude_file_delta(&path, &mut cached).unwrap();
+        assert_eq!(cached.entries.len(), 1);
+        assert_eq!(cached.entries[0].usage.input_tokens, 20);
+        assert_eq!(cached.cwd.as_deref(), Some("/new"));
     }
 
     #[test]
