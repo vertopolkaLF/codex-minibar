@@ -245,10 +245,29 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
         if entry.file_type().context("read file type")?.is_dir() {
             copy_tree(&entry.path(), &target)?;
         } else {
-            fs::copy(entry.path(), &target)
-                .with_context(|| format!("write {}", target.display()))?;
+            copy_resource(&entry.path(), &target)?;
         }
     }
+    Ok(())
+}
+
+/// Desktop shells may read launchers and widgets while they are updated.
+/// Publish complete files by rename, replacing a file symlink itself rather
+/// than truncating its target outside the installation.
+fn copy_resource(source: &Path, target: &Path) -> Result<()> {
+    let parent = target
+        .parent()
+        .context("resolve update resource directory")?;
+    let staged = tempfile::NamedTempFile::new_in(parent).context("stage update resource")?;
+    fs::copy(source, staged.path()).with_context(|| format!("stage {}", target.display()))?;
+    staged
+        .as_file()
+        .sync_all()
+        .context("flush update resource")?;
+    staged
+        .persist(target)
+        .map_err(|error| error.error)
+        .with_context(|| format!("replace {}", target.display()))?;
     Ok(())
 }
 
@@ -342,6 +361,47 @@ mod tests {
         let mut builder = tar::Builder::new(encoder);
         build(&mut builder);
         builder.into_inner().unwrap().finish().unwrap();
+    }
+
+    #[test]
+    fn resource_updates_publish_complete_files_and_preserve_permissions() {
+        use std::io::Read;
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let target = dir.path().join("target");
+        touch(&source, "new launcher");
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o644)).unwrap();
+        touch(&target, "old launcher");
+        let mut reader = fs::File::open(&target).unwrap();
+        copy_resource(&source, &target).unwrap();
+        let mut old = String::new();
+        reader.read_to_string(&mut old).unwrap();
+        assert_eq!(old, "old launcher");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "new launcher");
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+    }
+
+    #[test]
+    fn resource_updates_replace_file_symlinks_without_writing_their_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let external = dir.path().join("external");
+        let target = dir.path().join("target");
+        touch(&source, "new resource");
+        touch(&external, "unrelated file");
+        std::os::unix::fs::symlink(&external, &target).unwrap();
+        copy_resource(&source, &target).unwrap();
+        assert_eq!(fs::read_to_string(&external).unwrap(), "unrelated file");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "new resource");
+        assert!(
+            !fs::symlink_metadata(&target)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[test]
