@@ -122,16 +122,54 @@ pub fn apply(enabled: bool) -> Result<()> {
             _ => Ok(()),
         };
     }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-    }
-    std::fs::write(&path, entry(&executable()?))
-        .with_context(|| format!("write {}", path.display()))
+    write_entry(&path, &executable()?)
+}
+
+fn write_entry(path: &Path, executable: &Path) -> Result<()> {
+    use std::io::Write;
+    let parent = path.parent().context("autostart entry has no parent")?;
+    std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    let mut staged = tempfile::NamedTempFile::new_in(parent).context("stage autostart entry")?;
+    staged
+        .write_all(entry(executable).as_bytes())
+        .context("write autostart entry")?;
+    staged
+        .as_file()
+        .sync_all()
+        .context("flush autostart entry")?;
+    staged
+        .persist(path)
+        .with_context(|| format!("replace {}", path.display()))?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn autostart_replacement_preserves_open_readers_and_does_not_follow_symlinks() {
+        use std::{io::Read, os::unix::fs::symlink};
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("autostart/app.desktop");
+        write_entry(&path, Path::new("/old/program")).unwrap();
+        let mut reader = std::fs::File::open(&path).unwrap();
+        write_entry(&path, Path::new("/new/program")).unwrap();
+        let mut old = String::new();
+        reader.read_to_string(&mut old).unwrap();
+        assert_eq!(old, entry(Path::new("/old/program")));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            entry(Path::new("/new/program"))
+        );
+        std::fs::remove_file(&path).unwrap();
+        let outside = root.path().join("unrelated.desktop");
+        std::fs::write(&outside, "unchanged").unwrap();
+        symlink(&outside, &path).unwrap();
+        write_entry(&path, Path::new("/new/program")).unwrap();
+        assert_eq!(std::fs::read_to_string(outside).unwrap(), "unchanged");
+        assert!(entry_enabled(&std::fs::read_to_string(&path).unwrap()));
+    }
 
     #[test]
     fn autostart_status_honors_desktop_entry_groups_and_whitespace() {
