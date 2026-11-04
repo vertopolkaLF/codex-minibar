@@ -8,7 +8,6 @@
 
 use std::{
     collections::BTreeMap,
-    env,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -65,8 +64,8 @@ pub fn installation_path(explicit: Option<&Path>) -> Option<PathBuf> {
     }
     #[cfg(windows)]
     {
-        let local_app_data = env::var_os("LOCALAPPDATA").map(PathBuf::from);
-        let program_files = env::var_os("ProgramFiles").map(PathBuf::from);
+        let local_app_data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+        let program_files = std::env::var_os("ProgramFiles").map(PathBuf::from);
         local_app_data
             .into_iter()
             .map(|path| path.join("Programs/Cursor/Cursor.exe"))
@@ -584,9 +583,8 @@ impl CursorAuth {
 }
 
 fn cursor_state_db() -> PathBuf {
-    env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .or_else(|| directories::BaseDirs::new().map(|dirs| dirs.config_dir().to_path_buf()))
+    directories::BaseDirs::new()
+        .map(|dirs| dirs.config_dir().to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."))
         .join("Cursor/User/globalStorage/state.vscdb")
 }
