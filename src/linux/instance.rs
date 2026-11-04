@@ -29,11 +29,13 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 
 const ACTIVATE: &str = "activate";
 const TOGGLE: &str = "toggle";
 /// Longest request line: the verb and an activation token.
-const MAX_REQUEST: u64 = 512;
+const MAX_REQUEST: u64 = 8192;
+const MAX_TOKEN_BYTES: usize = 4096;
 const TOKEN_LIFETIME: Duration = Duration::from_secs(5);
 static ACTIVATION_TOKEN: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 /// The command-line flag that toggles the running popup.
@@ -219,7 +221,21 @@ fn serve(listener: UnixListener) {
 
 fn activation_request(verb: &str, token: Option<&str>) -> Vec<u8> {
     match token.filter(|token| is_token(token)) {
-        Some(token) => format!("{verb} {token}\n").into_bytes(),
+        // Retain the old wire form when possible, so a newly installed CLI
+        // can still activate a primary process from the previous release.
+        Some(token)
+            if token.len() <= 256
+                && token.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+                }) =>
+        {
+            format!("{verb} {token}\n").into_bytes()
+        }
+        Some(token) => format!(
+            "{verb}-token {}\n",
+            URL_SAFE_NO_PAD.encode(token.as_bytes())
+        )
+        .into_bytes(),
         None => format!("{verb}\n").into_bytes(),
     }
 }
@@ -232,16 +248,25 @@ fn activation_token_from_env() -> Option<String> {
 }
 
 fn is_token(token: &str) -> bool {
-    !token.is_empty()
-        && token.len() <= 256
-        && token
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+    // Wayland activation tokens are opaque UTF-8 strings, not identifiers.
+    !token.is_empty() && token.len() <= MAX_TOKEN_BYTES && !token.contains('\0')
 }
 
 /// `Some(token)` for the requested verb, `None` for anything else.
 fn parse_request(request: &[u8], verb: &str) -> Option<Option<String>> {
+    if request.len() > MAX_REQUEST as usize {
+        return None;
+    }
     let line = std::str::from_utf8(request).ok()?.strip_suffix('\n')?;
+    if let Some(encoded) = line.strip_prefix(&format!("{verb}-token ")) {
+        let token = String::from_utf8(URL_SAFE_NO_PAD.decode(encoded).ok()?).ok()?;
+        return is_token(&token).then_some(Some(token));
+    }
+    // Accept requests from an older installed CLI, whose framing only
+    // supports a single-line token.
+    if line.contains(['\n', '\r']) {
+        return None;
+    }
     let rest = line.strip_prefix(verb)?;
     if rest.is_empty() {
         return Some(None);
@@ -426,8 +451,36 @@ mod tests {
         set_activation_token(None);
         assert_eq!(take_activation_token(), None);
         set_activation_token(Some("stale".into()));
-        set_activation_token(Some("invalid token".into()));
+        set_activation_token(Some("invalid\0token".into()));
         assert_eq!(take_activation_token(), None);
+    }
+
+    #[test]
+    fn opaque_focus_tokens_round_trip_without_changing_socket_framing() {
+        for verb in [ACTIVATE, TOGGLE] {
+            for token in [
+                "{uuid}/grant+value=",
+                "token with spaces",
+                "строка\nс\tтокеном",
+            ] {
+                let request = activation_request(verb, Some(token));
+                assert_eq!(request.iter().filter(|byte| **byte == b'\n').count(), 1);
+                assert_eq!(parse_request(&request, verb), Some(Some(token.to_owned())));
+            }
+            assert_eq!(
+                parse_request(format!("{verb}-token invalid*\n").as_bytes(), verb),
+                None
+            );
+            assert_eq!(
+                parse_request(
+                    activation_request(verb, Some(&"x".repeat(MAX_TOKEN_BYTES))).as_slice(),
+                    verb
+                ),
+                Some(Some("x".repeat(MAX_TOKEN_BYTES)))
+            );
+        }
+        assert!(!is_token("a\0b"));
+        assert!(!is_token(&"x".repeat(MAX_TOKEN_BYTES + 1)));
     }
 
     #[test]
@@ -453,7 +506,10 @@ mod tests {
             Some(Some("abc-123_x.y:z".to_owned()))
         );
         assert_eq!(parse_request(b"toggle \n", TOGGLE), None);
-        assert_eq!(parse_request(b"toggle a b\n", TOGGLE), None);
+        assert_eq!(
+            parse_request(b"toggle a b\n", TOGGLE),
+            Some(Some("a b".into()))
+        );
         assert_eq!(parse_request(b"toggle abc", TOGGLE), None);
         assert_eq!(parse_request(b"togglex\n", TOGGLE), None);
         assert_eq!(parse_request(b"activate\n", TOGGLE), None);
