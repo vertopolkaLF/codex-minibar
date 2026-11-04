@@ -21,7 +21,7 @@ PlasmoidItem {
     readonly property string objectPath: "/io/github/vertopolkalf/CodexMinibar"
     readonly property string interfaceName: "io.github.vertopolkalf.CodexMinibar1"
     readonly property string executable: Plasmoid.configuration.executable || "codex-minibar"
-    readonly property string statusCommand: executable + " status --json"
+    readonly property string statusCommand: shellQuote(executable) + " status --json"
 
     property var providers: []
     property bool running: false
