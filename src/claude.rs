@@ -133,7 +133,7 @@ fn common_launcher_dirs() -> Vec<PathBuf> {
 }
 
 fn explicit_launcher(path: &Path) -> Option<PathBuf> {
-    if path.is_file() {
+    if is_cli_launcher(path) {
         return Some(path.to_path_buf());
     }
     launcher_in(path)
@@ -147,7 +147,18 @@ fn launcher_in(directory: &Path) -> Option<PathBuf> {
     names
         .into_iter()
         .map(|name| directory.join(name))
-        .find(|path| path.is_file())
+        .find(|path| is_cli_launcher(path))
+}
+
+fn is_cli_launcher(path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        path.is_file()
+    }
+    #[cfg(not(windows))]
+    {
+        crate::linux::apps::is_executable(path)
+    }
 }
 
 /// Starts Claude Code's five-hour window with the smallest supported prompt.
@@ -1781,6 +1792,38 @@ mod tests {
 
     use super::*;
 
+    #[cfg(not(windows))]
+    #[test]
+    fn unusable_unix_launchers_do_not_shadow_working_claude_installations() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let root = tempfile::tempdir().unwrap();
+        let bad = root.path().join("bad");
+        let good = root.path().join("good");
+        let alias = root.path().join("alias");
+        for directory in [&bad, &good, &alias] {
+            fs::create_dir(directory).unwrap();
+        }
+        fs::write(bad.join("claude"), b"unfinished download").unwrap();
+        let executable = good.join("claude");
+        fs::write(&executable, b"fixture").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        let dirs = [bad.clone(), good.clone()];
+        assert_eq!(find_cli(None, &dirs, &[]), Some(executable.clone()));
+        assert_eq!(
+            find_cli(Some(&bad), &[], std::slice::from_ref(&good)),
+            Some(executable.clone())
+        );
+        assert_eq!(
+            find_cli(Some(&bad.join("claude")), &dirs, &[]),
+            Some(executable.clone())
+        );
+        symlink(&executable, alias.join("claude")).unwrap();
+        assert_eq!(
+            find_cli(Some(&alias), &dirs, &[]),
+            Some(alias.join("claude"))
+        );
+    }
+
     #[test]
     fn finds_native_cli_when_path_is_missing_and_honors_overrides() {
         let root = tempfile::tempdir().unwrap();
@@ -1794,6 +1837,12 @@ mod tests {
         for directory in [&native, &on_path, &explicit] {
             fs::create_dir_all(directory).unwrap();
             fs::write(directory.join(name), b"fixture, never executed").unwrap();
+            #[cfg(not(windows))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(directory.join(name), fs::Permissions::from_mode(0o755))
+                    .unwrap();
+            }
         }
         let common = std::slice::from_ref(&native);
         assert_eq!(find_cli(None, &[], common), Some(native.join(name)));
