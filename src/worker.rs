@@ -1106,10 +1106,11 @@ mod tests {
     }
 
     #[test]
-    fn successful_partial_result_still_pauses_worker_after_429() {
-        struct PartialProvider;
+    fn automatic_resume_refresh_preserves_pause_after_a_partial_429_result() {
+        struct PartialProvider(Arc<std::sync::atomic::AtomicUsize>);
         impl LimitProvider for PartialProvider {
             fn read_limits(&mut self) -> Result<RateLimits> {
+                self.0.fetch_add(1, Ordering::SeqCst);
                 Ok(limits_at(15, 0))
             }
             fn take_rate_limit_response(&mut self) -> bool {
@@ -1124,9 +1125,11 @@ mod tests {
         let pause = Arc::new(Mutex::new(ProviderRateLimitPause::default()));
         let task_pause = Arc::clone(&pause);
         let ready = Arc::new(AtomicBool::new(false));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let task_calls = Arc::clone(&calls);
         let task = thread::spawn(move || {
             run_limit_task(
-                PartialProvider,
+                PartialProvider(task_calls),
                 CountingActivator(0),
                 state_path,
                 false,
@@ -1150,8 +1153,13 @@ mod tests {
                 .try_iter()
                 .any(|event| matches!(event, WorkerEvent::LimitsUpdated(_)))
         );
+        // FIFO processing must handle the resume before shutdown. A resume
+        // incorrectly treated as manual refresh would make a second request
+        // on the next loop iteration, before it can consume Shutdown.
+        commands_tx.send(WorkerCommand::RefreshAutomatic).unwrap();
         commands_tx.send(WorkerCommand::Shutdown).unwrap();
         task.join().unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
