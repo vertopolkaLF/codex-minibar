@@ -1,5 +1,4 @@
 use std::{
-    fs::OpenOptions,
     io::Write,
     path::{Path, PathBuf},
     sync::OnceLock,
@@ -60,6 +59,10 @@ fn ensure_entry_in(data_home: &Path, data_dirs: &[PathBuf], executable: &Path) -
                 .write_all(entry.as_bytes())
                 .context("write managed desktop entry")?;
             staged
+                .as_file()
+                .sync_all()
+                .context("flush managed desktop entry")?;
+            staged
                 .persist(&path)
                 .context("replace managed desktop entry")?;
         }
@@ -74,16 +77,20 @@ fn ensure_entry_in(data_home: &Path, data_dirs: &[PathBuf], executable: &Path) -
     let directory = data_home.join("applications");
     std::fs::create_dir_all(&directory).context("create desktop entry directory")?;
     let path = directory.join(DESKTOP_FILE);
-    let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
-        Err(error) => return Err(error).context("create desktop entry for portal identity"),
-    };
-    if let Err(error) = file.write_all(entry.as_bytes()) {
-        let _ = std::fs::remove_file(&path);
-        return Err(error).context("write desktop entry for portal identity");
+    let mut file = tempfile::NamedTempFile::new_in(&directory)
+        .context("stage desktop entry for portal identity")?;
+    file.write_all(entry.as_bytes())
+        .context("write desktop entry for portal identity")?;
+    file.as_file()
+        .sync_all()
+        .context("flush desktop entry for portal identity")?;
+    // Publish complete contents without replacing an entry created since
+    // the search above. Never expose a partial launcher to desktop services.
+    match file.persist_noclobber(&path) {
+        Ok(_) => Ok(()),
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(error.error).context("create desktop entry for portal identity"),
     }
-    Ok(())
 }
 
 pub(super) fn desktop_entry(template: &str, executable: &Path) -> String {
@@ -146,6 +153,27 @@ mod tests {
         std::fs::write(&path, &custom).unwrap();
         ensure_entry_in(root.path(), &[], Path::new("/new/portable/program")).unwrap();
         assert_eq!(std::fs::read_to_string(path).unwrap(), custom);
+    }
+
+    #[test]
+    fn a_user_symlink_is_preserved_even_when_its_target_has_a_managed_marker() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("applications");
+        std::fs::create_dir(&directory).unwrap();
+        let target = root.path().join("chosen.desktop");
+        let contents = format!("[Desktop Entry]\n{MANAGED}\nExec=/chosen/program\n");
+        std::fs::write(&target, &contents).unwrap();
+        let link = directory.join(DESKTOP_FILE);
+        symlink(&target, &link).unwrap();
+        ensure_entry_in(root.path(), &[], Path::new("/new/program")).unwrap();
+        assert!(
+            std::fs::symlink_metadata(link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_to_string(target).unwrap(), contents);
     }
 
     #[test]
