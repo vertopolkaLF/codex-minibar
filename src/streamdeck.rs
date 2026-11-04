@@ -97,6 +97,8 @@ pub enum Command {
         provider: Option<ProviderId>,
     },
     RefreshData,
+    #[cfg(not(windows))]
+    RefreshAfterResume,
     /// Settings on the Command Palette page.
     OpenCommandPaletteSettings,
 }
@@ -201,6 +203,8 @@ pub fn start_server(state: Arc<AppState>) -> mpsc::Receiver<Command> {
     let (commands_tx, commands_rx) = mpsc::channel();
     #[cfg(not(windows))]
     crate::linux::dbus::start(Arc::clone(&state), commands_tx.clone());
+    #[cfg(not(windows))]
+    crate::linux::resume::start(commands_tx.clone());
     thread::spawn(move || {
         let endpoint_path = match Settings::default_path() {
             Ok(path) => path.with_file_name(ENDPOINT_FILE_NAME),

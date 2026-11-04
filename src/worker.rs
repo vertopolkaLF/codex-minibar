@@ -170,6 +170,8 @@ pub trait Activator: Send + 'static {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WorkerCommand {
     Refresh,
+    /// Reschedule a regular poll without bypassing provider backoff.
+    RefreshAutomatic,
     /// Wakes the sibling task after this provider's shared 429 cooldown changes.
     RateLimitPauseChanged,
     ClearUsageData(u64),
@@ -452,6 +454,9 @@ fn start_worker_with_channels(
                     let _ = limit_commands.send(WorkerCommand::Refresh);
                     let _ = usage_commands.send(WorkerCommand::Refresh);
                 }
+                WorkerCommand::RefreshAutomatic => {
+                    let _ = limit_commands.send(WorkerCommand::RefreshAutomatic);
+                }
                 WorkerCommand::RateLimitPauseChanged => {}
                 WorkerCommand::ClearUsageData(generation) => {
                     let _ = usage_commands.send(WorkerCommand::ClearUsageData(generation));
@@ -644,6 +649,7 @@ fn run_limit_task(
                         );
                 }
             }
+            Ok(WorkerCommand::RefreshAutomatic) => next_poll = Instant::now(),
             Ok(WorkerCommand::Refresh) => manual_refresh_requested = true,
             Ok(WorkerCommand::RateLimitPauseChanged) => {}
             Err(RecvTimeoutError::Timeout) => {}
@@ -716,6 +722,7 @@ fn run_usage_task_with_rate_limit(
                 usage_refresh_interval = interval.max(Duration::from_secs(60));
             }
             Ok(WorkerCommand::Refresh)
+            | Ok(WorkerCommand::RefreshAutomatic)
             | Ok(WorkerCommand::RateLimitPauseChanged)
             | Ok(WorkerCommand::SetLimitRefreshInterval(_))
             | Ok(WorkerCommand::SetAutomaticActivation(_))
@@ -888,6 +895,7 @@ fn run_usage_task_with_rate_limit(
                 next_refresh = Instant::now();
             }
             Err(RecvTimeoutError::Timeout) => {}
+            Ok(WorkerCommand::RefreshAutomatic) => {}
             Ok(WorkerCommand::Refresh) => manual_refresh_requested = true,
             Ok(WorkerCommand::ClearUsageData(generation)) => {
                 let _ = events.send(WorkerEvent::UsageDataCleared(generation));

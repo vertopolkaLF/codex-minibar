@@ -14,6 +14,7 @@ pub mod keybinding;
 pub mod keyring;
 pub(crate) mod login_child;
 pub mod notify;
+pub(crate) mod resume;
 pub mod update;
 
 pub mod wake;

@@ -507,6 +507,12 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
         let drain_streamdeck = |ui: &UiState| {
             while let Ok(command) = streamdeck_rx.try_recv() {
                 match command {
+                    #[cfg(not(windows))]
+                    crate::streamdeck::Command::RefreshAfterResume => {
+                        for (_, commands) in state.worker_commands() {
+                            let _ = commands.send(WorkerCommand::RefreshAutomatic);
+                        }
+                    }
                     crate::streamdeck::Command::RefreshData => {
                         for (_, commands) in state.worker_commands() {
                             let _ = commands.send(WorkerCommand::Refresh);
