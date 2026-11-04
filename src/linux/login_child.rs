@@ -1,4 +1,4 @@
-//! Own a login CLI and its process group until it exits or is cancelled.
+//! Own an authentication CLI and its process group until it exits or is cancelled.
 
 use std::{
     io,

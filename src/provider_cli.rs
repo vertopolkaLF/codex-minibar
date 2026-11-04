@@ -93,7 +93,11 @@ pub(crate) fn refresh_session(
             command.creation_flags(0x0800_0000);
         }
 
-        let mut child = match command.spawn() {
+        #[cfg(windows)]
+        let spawned = command.spawn();
+        #[cfg(not(windows))]
+        let spawned = crate::linux::login_child::LoginChild::spawn(command);
+        let mut child = match spawned {
             Ok(child) => child,
             Err(error) if error.kind() == ErrorKind::NotFound => continue,
             Err(_) => bail!("{provider} session refresh could not start"),
@@ -125,6 +129,47 @@ pub(crate) fn refresh_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn refresh_timeout_terminates_the_cli_helper_process() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let cli = root.path().join("refresh-cli");
+        let pid_file = root.path().join("helper.pid");
+        fs::write(&cli, "#!/bin/sh\nsleep 3 &\necho $! > \"$1\"\nwait\n").unwrap();
+        fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).unwrap();
+        let error = refresh_session(
+            "Fixture",
+            &[cli],
+            &[pid_file.to_str().unwrap()],
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("timed out"));
+        let pid: u32 = fs::read_to_string(pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            // A killed orphan can briefly remain a zombie until init reaps it.
+            let running = fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+                !stat
+                    .rsplit_once(')')
+                    .unwrap()
+                    .1
+                    .trim_start()
+                    .starts_with('Z')
+            });
+            if !running {
+                break;
+            }
+            assert!(Instant::now() < deadline, "refresh helper survived timeout");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
 
     #[test]
     fn relative_refresh_candidates_are_never_launched() {
