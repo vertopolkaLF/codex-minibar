@@ -7,6 +7,7 @@
 #   PKGBUILD                                     (Arch User Repository, for the tarball)
 #
 # Usage: ./build-linux.sh [--skip-build]
+# Honors CARGO_TARGET_DIR for the release binary, including --skip-build.
 # Requires: cargo; dpkg-deb for the .deb; rpmbuild for the .rpm; patchelf and
 # curl for the AppImage.
 # A missing packaging tool skips its package, except in CI, where it fails.
@@ -29,7 +30,7 @@ if [ "${1:-}" != "--skip-build" ]; then
     cargo build --release --locked
 fi
 
-binary="target/release/codex-minibar"
+binary="${CARGO_TARGET_DIR:-target}/release/codex-minibar"
 dist="dist/$version"
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
