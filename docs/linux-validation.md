@@ -54,6 +54,11 @@ An X11 application inside a Wayland session must be recorded as X11/XWayland.
   `desktop-file-validate`.
 - Test AppImage updates and distribution-managed installs separately. Package
   manager installations must not be replaced by the in-place updater.
+- For a direct portable-binary launch without an installed desktop entry,
+  test moving the binary and launching it again. Newly generated entries marked
+  `X-CodexMinibar-Managed=true` should update both commands. Unmarked entries
+  (including legacy generated entries) and symlinks must remain untouched.
+  Removing the marker opts a generated entry out of automatic maintenance.
 - In a disposable test session, cover absent portals, absent Secret Service and
   a locked keyring. Missing optional services must not prevent reaching Settings.
   Previously saved secrets must not be silently replaced when their key is unavailable.

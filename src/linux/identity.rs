@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 
 pub const APP_ID: &str = "io.github.vertopolkalf.CodexMinibar";
 const DESKTOP_FILE: &str = "io.github.vertopolkalf.CodexMinibar.desktop";
+const MANAGED: &str = "X-CodexMinibar-Managed=true";
 const DESKTOP_ENTRY: &str =
     include_str!("../../packaging/linux/io.github.vertopolkalf.CodexMinibar.desktop");
 
@@ -39,6 +40,31 @@ fn ensure_desktop_entry() -> Result<()> {
 }
 
 fn ensure_entry_in(data_home: &Path, data_dirs: &[PathBuf], executable: &Path) -> Result<()> {
+    let path = data_home.join("applications").join(DESKTOP_FILE);
+    let entry = desktop_entry(DESKTOP_ENTRY, executable).replacen(
+        "[Desktop Entry]\n",
+        &format!("[Desktop Entry]\n{MANAGED}\n"),
+        1,
+    );
+    // Only entries explicitly created and owned by this application may be
+    // refreshed after moving a portable binary. Preserve custom entries,
+    // symlinks and package-manager launchers.
+    if std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_file())
+        && let Ok(previous) = std::fs::read_to_string(&path)
+        && previous.lines().any(|line| line == MANAGED)
+    {
+        if previous != entry {
+            let mut staged = tempfile::NamedTempFile::new_in(path.parent().unwrap())
+                .context("stage managed desktop entry")?;
+            staged
+                .write_all(entry.as_bytes())
+                .context("write managed desktop entry")?;
+            staged
+                .persist(&path)
+                .context("replace managed desktop entry")?;
+        }
+        return Ok(());
+    }
     if std::iter::once(data_home)
         .chain(data_dirs.iter().map(PathBuf::as_path))
         .any(|directory| directory.join("applications").join(DESKTOP_FILE).is_file())
@@ -48,7 +74,6 @@ fn ensure_entry_in(data_home: &Path, data_dirs: &[PathBuf], executable: &Path) -
     let directory = data_home.join("applications");
     std::fs::create_dir_all(&directory).context("create desktop entry directory")?;
     let path = directory.join(DESKTOP_FILE);
-    let entry = desktop_entry(DESKTOP_ENTRY, executable);
     let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
@@ -103,11 +128,24 @@ mod tests {
         assert!(entry.contains("Exec=\"/opt/My \\\\$Apps/100%%/minibar\"\n"));
         assert!(entry.contains("Exec=\"/opt/My \\\\$Apps/100%%/minibar\" --toggle\n"));
         ensure_entry_in(directory.path(), &[], Path::new("/different/binary")).unwrap();
-        assert_eq!(
+        let updated =
             std::fs::read_to_string(directory.path().join("applications").join(DESKTOP_FILE))
-                .unwrap(),
-            entry
-        );
+                .unwrap();
+        assert!(updated.contains("Exec=\"/different/binary\"\n"));
+        assert!(updated.contains("Exec=\"/different/binary\" --toggle\n"));
+        assert!(updated.contains(MANAGED));
+    }
+
+    #[test]
+    fn existing_unmanaged_user_desktop_entry_is_preserved() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("applications");
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join(DESKTOP_FILE);
+        let custom = desktop_entry(DESKTOP_ENTRY, Path::new("/user/chosen/program"));
+        std::fs::write(&path, &custom).unwrap();
+        ensure_entry_in(root.path(), &[], Path::new("/new/portable/program")).unwrap();
+        assert_eq!(std::fs::read_to_string(path).unwrap(), custom);
     }
 
     #[test]
