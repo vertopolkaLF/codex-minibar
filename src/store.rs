@@ -917,6 +917,7 @@ impl ProviderStore {
                     path,
                     CachedSessionFile {
                         offset,
+                        file_identity: meta.file_identity,
                         daily: Vec::new(),
                         current_model: meta.current_model,
                         fast_service_tier: meta.fast_service_tier,
@@ -1044,6 +1045,7 @@ impl ProviderStore {
                 )?;
                 for (path, file) in cache.files.iter().filter(|(_, file)| !file.persisted) {
                     let meta = serde_json::to_string(&CodexFileMeta {
+                        file_identity: file.file_identity.clone(),
                         current_model: file.current_model.clone(),
                         fast_service_tier: file.fast_service_tier,
                         last_usage_signature: file.last_usage_signature.clone(),
@@ -2063,6 +2065,8 @@ fn delete_stale_event_rows(
 
 #[derive(Default, Serialize, Deserialize)]
 struct CodexFileMeta {
+    #[serde(default)]
+    file_identity: Option<String>,
     current_model: Option<String>,
     #[serde(default)]
     fast_service_tier: bool,
@@ -2721,11 +2725,22 @@ mod tests {
         let store = test_store(&dir.path().join("test.sqlite"));
         let codex = id(ProviderKind::Codex);
         let mut cache = sample_codex_cache();
+        cache
+            .files
+            .get_mut("sessions/sample.jsonl")
+            .unwrap()
+            .file_identity = Some("7:42".into());
         let other = cache.files["sessions/sample.jsonl"].clone();
         cache.files.insert("sessions/other.jsonl".into(), other);
         store.save_codex_cache(codex, &cache).unwrap();
 
         let mut cache = store.load_codex_cache(codex).unwrap();
+        assert_eq!(
+            cache.files["sessions/sample.jsonl"]
+                .file_identity
+                .as_deref(),
+            Some("7:42")
+        );
         assert_eq!(cache.files.len(), 2);
         track_file_writes(&store);
         {

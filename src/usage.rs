@@ -130,6 +130,8 @@ pub(crate) struct UsageCache {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct CachedSessionFile {
+    #[serde(default)]
+    pub(crate) file_identity: Option<String>,
     /// Number of complete JSONL bytes already incorporated into `daily`.
     pub(crate) offset: u64,
     pub(crate) daily: Vec<DailyTokenUsage>,
@@ -422,19 +424,37 @@ pub(crate) struct FileDelta {
     pub rebuilt: bool,
 }
 
+fn session_file_identity(metadata: &fs::Metadata) -> Option<String> {
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some(format!("{}:{}", metadata.dev(), metadata.ino()))
+    }
+    #[cfg(windows)]
+    {
+        let _ = metadata;
+        None
+    }
+}
+
 pub(crate) fn scan_file_delta(
     path: &Path,
     source: &str,
     cached: &mut CachedSessionFile,
 ) -> Result<FileDelta> {
     let mut events = Vec::new();
-    let file_size = fs::metadata(path)
-        .with_context(|| format!("read metadata for {}", path.display()))?
-        .len();
-    let rebuilt = cached.offset == 0 || file_size < cached.offset;
-    if file_size < cached.offset {
-        // Codex rewrote/truncated a session log. Its old aggregate is invalid.
+    let metadata =
+        fs::metadata(path).with_context(|| format!("read metadata for {}", path.display()))?;
+    let file_size = metadata.len();
+    let identity = session_file_identity(&metadata);
+    let replaced = identity.is_some() && cached.file_identity != identity;
+    let rebuilt = cached.offset == 0 || file_size < cached.offset || replaced;
+    if file_size < cached.offset || replaced {
         cached.reset_scan_state();
+    }
+    if cached.file_identity != identity {
+        cached.file_identity = identity;
+        cached.persisted = false;
     }
     if file_size == cached.offset {
         backfill_codex_cwd(path, cached);
@@ -1691,6 +1711,29 @@ mod tests {
         assert!(delta.rebuilt);
         assert_eq!(delta.events.len(), 1);
         assert_eq!(cached.daily[0].usage.total_tokens(), 10);
+        assert_eq!(cached.daily[0].usage.requests, 1);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn replacing_a_codex_log_at_the_same_length_rebuilds_cached_usage() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("session.jsonl");
+        let line = "{\"timestamp\":\"2026-07-14T10:00:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":10}}}}\n";
+        let line =
+            format!("{{\"type\":\"turn_context\",\"payload\":{{\"model\":\"gpt-5.4\"}}}}\n{line}");
+        fs::write(&path, &line).unwrap();
+        let mut cached = CachedSessionFile::default();
+        scan_file_delta(&path, "source", &mut cached).unwrap();
+        let previous_identity = cached.file_identity.clone();
+        let replacement = root.path().join("replacement");
+        fs::write(&replacement, line.replace(":10}", ":20}")).unwrap();
+        assert_eq!(fs::metadata(&replacement).unwrap().len(), cached.offset);
+        fs::rename(replacement, &path).unwrap();
+        let delta = scan_file_delta(&path, "source", &mut cached).unwrap();
+        assert!(delta.rebuilt);
+        assert_ne!(cached.file_identity, previous_identity);
+        assert_eq!(cached.daily[0].usage.input_tokens, 20);
         assert_eq!(cached.daily[0].usage.requests, 1);
     }
 
