@@ -239,11 +239,19 @@ fn linux_terminal(program: &[String]) -> Result<Command> {
         ]
         .map(PathBuf::from),
     );
+    linux_terminal_from(program, candidates)
+}
+
+#[cfg(not(windows))]
+fn linux_terminal_from(
+    program: &[String],
+    candidates: impl IntoIterator<Item = PathBuf>,
+) -> Result<Command> {
     let terminal = candidates
         .into_iter()
         .find_map(|candidate| {
             if candidate.is_absolute() {
-                candidate.is_file().then_some(candidate)
+                crate::linux::apps::is_executable(&candidate).then_some(candidate)
             } else {
                 find_on_path(&candidate.to_string_lossy())
             }
@@ -277,6 +285,12 @@ fn terminal_prefix(name: &str) -> &'static [&'static str] {
     }
 }
 
+#[cfg(not(windows))]
+fn find_on_path(name: &str) -> Option<PathBuf> {
+    crate::linux::apps::on_path(name)
+}
+
+#[cfg(windows)]
 fn find_on_path(name: &str) -> Option<PathBuf> {
     let path = env::var_os("PATH")?;
     env::split_paths(&path)
@@ -287,6 +301,41 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
 #[cfg(all(test, not(windows)))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_selection_skips_unusable_files_and_preserves_command_arguments() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let bad = root.path().join("unusable-terminal");
+        let good = root.path().join("konsole");
+        fs::write(&bad, b"not executable").unwrap();
+        fs::write(&good, b"fixture, never launched").unwrap();
+        fs::set_permissions(&good, fs::Permissions::from_mode(0o755)).unwrap();
+        let program = [
+            "bash".to_owned(),
+            "/tmp/path with spaces/script.sh".to_owned(),
+        ];
+        let command = linux_terminal_from(&program, [bad.clone(), good.clone()]).unwrap();
+        assert_eq!(command.get_program(), good.as_os_str());
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            ["-e", "bash", "/tmp/path with spaces/script.sh"]
+        );
+        assert!(linux_terminal_from(&program, [bad]).is_err());
+    }
+
+    #[test]
+    fn terminal_alternatives_use_the_resolved_emulators_argument_syntax() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let root = tempfile::tempdir().unwrap();
+        let terminal = root.path().join("foot");
+        fs::write(&terminal, b"fixture, never launched").unwrap();
+        fs::set_permissions(&terminal, fs::Permissions::from_mode(0o755)).unwrap();
+        let alias = root.path().join("x-terminal-emulator");
+        symlink(&terminal, &alias).unwrap();
+        let command = linux_terminal_from(&["bash".to_owned()], [alias]).unwrap();
+        assert_eq!(command.get_args().collect::<Vec<_>>(), ["bash"]);
+    }
 
     #[test]
     fn terminals_receive_the_command_in_their_own_syntax() {
