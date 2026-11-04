@@ -50,6 +50,9 @@ impl LoginChild {
     }
 
     pub(crate) fn wait(&mut self) -> io::Result<ExitStatus> {
+        // Match std::process::Child::wait: EOF must reach a CLI waiting on
+        // input before we wait for it. The wrapper owns this pipe separately.
+        drop(self.stdin.take());
         let status = self.child.wait()?;
         self.running = false;
         Ok(status)
@@ -114,5 +117,23 @@ mod tests {
         let (child, reader) = process_tree();
         drop(child);
         assert_descendant_pipe_closed(reader);
+    }
+
+    #[test]
+    fn waiting_closes_the_owned_stdin_before_waiting_for_exit() {
+        let mut command = Command::new("/bin/bash");
+        command
+            .args(["-c", "read -r -t 5 ignored"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = LoginChild::spawn(command).unwrap();
+        let started = std::time::Instant::now();
+        assert!(!child.wait().unwrap().success());
+        assert!(child.stdin.is_none());
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "child waited for input instead of receiving EOF"
+        );
     }
 }
