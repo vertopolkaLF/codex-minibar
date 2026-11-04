@@ -5,7 +5,7 @@
 use std::env;
 use std::{
     fs,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read, Seek},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -197,10 +197,17 @@ fn cli_identity_account_name(executable: &Path) -> Option<String> {
     }
 
     let mut command = Command::new(executable);
+    command.args(["whoami", "--format", "json"]);
+    cli_identity_from_command(command, Duration::from_secs(5))
+}
+
+fn cli_identity_from_command(mut command: Command, timeout: Duration) -> Option<String> {
+    // A file avoids filling a pipe while waiting for exit, and does not wait
+    // for EOF from helpers that inherit the CLI output descriptor.
+    let mut stdout = tempfile::tempfile().ok()?;
     command
-        .args(["whoami", "--format", "json"])
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
+        .stdout(stdout.try_clone().ok()?)
         .stderr(Stdio::null());
     crate::provider_cli::disable_auto_update(&mut command);
     #[cfg(windows)]
@@ -209,19 +216,21 @@ fn cli_identity_account_name(executable: &Path) -> Option<String> {
         command.creation_flags(0x0800_0000);
     }
 
-    let mut child = command.spawn().ok()?;
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut child = crate::provider_cli::spawn_command(command).ok()?;
+    let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
                 if !status.success() {
                     return None;
                 }
-                let output = child.wait_with_output().ok()?;
-                if !output.status.success() {
+                stdout.rewind().ok()?;
+                let mut output = Vec::new();
+                stdout.take(1024 * 1024 + 1).read_to_end(&mut output).ok()?;
+                if output.len() > 1024 * 1024 {
                     return None;
                 }
-                let response: Value = serde_json::from_slice(&output.stdout).ok()?;
+                let response: Value = serde_json::from_slice(&output).ok()?;
                 let user = response
                     .get("userInfo")
                     .or_else(|| response.get("user_info"))
@@ -1211,6 +1220,26 @@ fn month_duration_minutes(resets_at: DateTime<Utc>) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn cli_identity_reads_large_output_without_filling_a_pipe() {
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-c",
+            "printf '%131072s{\"userInfo\":{\"email\":\"fixture@example.com\"}}' ' '",
+        ]);
+        assert_eq!(
+            cli_identity_from_command(command, Duration::from_secs(2)).as_deref(),
+            Some("fixture@example.com")
+        );
+        let mut oversized = Command::new("/bin/sh");
+        oversized.args(["-c", "printf '%1048577s{}' ' '"]);
+        assert_eq!(
+            cli_identity_from_command(oversized, Duration::from_secs(2)),
+            None
+        );
+    }
 
     #[test]
     fn cli_auth_cache_requires_a_fresh_token_and_never_updates_the_database() {
