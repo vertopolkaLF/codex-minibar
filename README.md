@@ -287,7 +287,7 @@ Differences from Windows:
   Popup position** picks one of six spots on the screen. Wayland does not let apps place their
   windows, so the desktop positions it there and that option is disabled. The popup closes when it loses focus or
   you press Esc, unless it is pinned.
-- **Global shortcut.** On GNOME-based desktops (GNOME, Ubuntu, Pop!_OS, Budgie), **Settings →
+- **Global shortcut.** In GNOME sessions (including Ubuntu's GNOME session), **Settings →
   General → Popup shortcut** opens a dialog: press the combination you want and choose
   **Save**. Minibar writes it into the desktop's own keyboard settings as a custom shortcut
   running `codex-minibar --toggle`, so it appears in the desktop's shortcut list and the
@@ -311,6 +311,8 @@ Differences from Windows:
 - **Panel widgets instead of taskbar widgets.** The packages install a GNOME Shell extension
   and a Plasma 6 widget that show your quotas in the panel. See
   [Panel widgets](#panel-widgets).
+
+For release testing across desktops, see the [Linux validation matrix](docs/linux-validation.md).
 - **Windows-only features:** taskbar widgets, the Command Palette and Stream Deck integrations,
   Acrylic/Mica backgrounds and reading the Claude desktop app's token cache.
 
