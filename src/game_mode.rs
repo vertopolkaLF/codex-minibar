@@ -627,15 +627,90 @@ mod os {
         })
     }
 
-    /// Field 22 of `/proc/<pid>/stat`, after the parenthesized command name.
+    /// Field 22 of `/proc/<pid>/stat`, only while the process is alive.
     fn start_time(pid: u32) -> Option<u64> {
-        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-        let after_name = &stat[stat.rfind(')')? + 1..];
-        after_name.split_whitespace().nth(19)?.parse().ok()
+        let stat = std::fs::read(format!("/proc/{pid}/stat")).ok()?;
+        live_start_time(&stat)
+    }
+
+    fn live_start_time(stat: &[u8]) -> Option<u64> {
+        // comm can contain spaces, parentheses and arbitrary Unix bytes.
+        // Only the fields after its closing parenthesis are ASCII numbers.
+        let after_name = &stat[stat.iter().rposition(|byte| *byte == b')')? + 1..];
+        let mut fields = after_name
+            .split(u8::is_ascii_whitespace)
+            .filter(|field| !field.is_empty());
+        match fields.next()? {
+            [b'Z' | b'X' | b'x'] => return None,
+            [_] => {}
+            _ => return None,
+        }
+        std::str::from_utf8(fields.nth(18)?).ok()?.parse().ok()
     }
 
     pub(super) fn game_bar_catalog() -> Vec<String> {
         Vec::new()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn proc_stat_handles_arbitrary_names_and_excludes_exited_processes() {
+            for state in [b'R', b'S', b'T', b'Z', b'X', b'x'] {
+                let mut stat = b"123 (name-\xff with ) parentheses) ".to_vec();
+                stat.push(state);
+                stat.extend_from_slice(format!(" {} 12345 0", ["0"; 18].join(" ")).as_bytes());
+                assert_eq!(
+                    live_start_time(&stat),
+                    match state {
+                        b'Z' | b'X' | b'x' => None,
+                        _ => Some(12345),
+                    }
+                );
+            }
+            assert_eq!(live_start_time(b"123 (truncated) S 0"), None);
+        }
+
+        #[test]
+        fn an_unreaped_child_no_longer_counts_as_a_running_game() {
+            use std::{
+                process::{Command, Stdio},
+                time::{Duration, Instant},
+            };
+            let mut child = Command::new("/bin/sh")
+                .args(["-c", "read ignored"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let process = Process {
+                pid: child.id(),
+                start_time: start_time(child.id()).unwrap(),
+            };
+            assert!(process.is_running());
+            drop(child.stdin.take());
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while process.is_running() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let stopped = !process.is_running();
+            let still_in_proc = Path::new(&format!("/proc/{}/stat", child.id())).is_file();
+            if !stopped {
+                let _ = child.kill();
+            }
+            child.wait().unwrap();
+            assert!(
+                stopped,
+                "an exited but unreaped child still counted as running"
+            );
+            assert!(
+                still_in_proc,
+                "the test must cover a process still present in /proc"
+            );
+        }
     }
 }
 
