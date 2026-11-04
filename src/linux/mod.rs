@@ -12,6 +12,7 @@ pub mod identity;
 pub mod instance;
 pub mod keybinding;
 pub mod keyring;
+pub(crate) mod login_child;
 pub mod notify;
 pub mod update;
 
